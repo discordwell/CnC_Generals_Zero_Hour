@@ -1,0 +1,38 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`BIG golden fixtures > round-trips a realistic multi-entry archive > archive-entry-metadata 1`] = `
+[
+  {
+    "path": "Art/Textures/BCTank.tga",
+    "size": 1024,
+  },
+  {
+    "path": "Art/Textures/BCTank_N.dds",
+    "size": 2048,
+  },
+  {
+    "path": "Art/W3D/BCTank.w3d",
+    "size": 4096,
+  },
+  {
+    "path": "Art/W3D/BCTank_SKL.w3d",
+    "size": 512,
+  },
+  {
+    "path": "Data/INI/Object/USA/BCTank.ini",
+    "size": 256,
+  },
+  {
+    "path": "Data/INI/GameData.ini",
+    "size": 128,
+  },
+  {
+    "path": "Maps/USAvsCHN/USAvsCHN.map",
+    "size": 8192,
+  },
+  {
+    "path": "Data/Scripts/Scripts.scb",
+    "size": 64,
+  },
+]
+`;

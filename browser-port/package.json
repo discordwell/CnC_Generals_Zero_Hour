@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:ini": "vitest run --reporter=verbose packages/core/src/ini packages/ini-data/src",
+    "test:converters": "vitest run --reporter=verbose tools/*/src",
     "lint": "eslint 'packages/*/src/**/*.ts' 'tools/*/src/**/*.ts'",
     "typecheck": "tsc --build",
     "clean": "rm -rf packages/*/dist tools/*/dist",

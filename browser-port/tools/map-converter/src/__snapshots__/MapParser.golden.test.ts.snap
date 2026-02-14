@@ -1,0 +1,92 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`MAP golden fixtures > object properties snapshot correctly > map-objects 1`] = `
+[
+  {
+    "angle": 0,
+    "flags": 1,
+    "position": {
+      "x": 100,
+      "y": 200,
+      "z": 0,
+    },
+    "templateName": "USATankCrusader",
+  },
+  {
+    "angle": 180,
+    "flags": 2,
+    "position": {
+      "x": 500,
+      "y": 300,
+      "z": 6,
+    },
+    "templateName": "ChinaOverlord",
+  },
+  {
+    "angle": 270,
+    "flags": 3,
+    "position": {
+      "x": 800,
+      "y": 100,
+      "z": 0,
+    },
+    "templateName": "GLAScorpion",
+  },
+]
+`;
+
+exports[`MAP golden fixtures > trigger polygon vertices snapshot correctly > map-triggers 1`] = `
+[
+  {
+    "id": 1,
+    "isWaterArea": false,
+    "name": "PlayerStart_0",
+    "pointCount": 4,
+    "points": [
+      {
+        "x": 0,
+        "y": 0,
+        "z": 0,
+      },
+      {
+        "x": 100,
+        "y": 0,
+        "z": 0,
+      },
+      {
+        "x": 100,
+        "y": 100,
+        "z": 0,
+      },
+      {
+        "x": 0,
+        "y": 100,
+        "z": 0,
+      },
+    ],
+  },
+  {
+    "id": 2,
+    "isWaterArea": true,
+    "name": "WaterZone",
+    "pointCount": 3,
+    "points": [
+      {
+        "x": 200,
+        "y": 200,
+        "z": 0,
+      },
+      {
+        "x": 300,
+        "y": 200,
+        "z": 0,
+      },
+      {
+        "x": 250,
+        "y": 300,
+        "z": 0,
+      },
+    ],
+  },
+]
+`;
