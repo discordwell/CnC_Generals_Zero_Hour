@@ -11,17 +11,19 @@ const STORE_NAME = 'assets';
 
 export class CacheStore {
   private db: IDBDatabase | null = null;
+  private openPromise: Promise<void> | null = null;
 
   constructor(
     private readonly dbName: string,
     private readonly maxSize: number,
   ) {}
 
-  /** Open (or create) the IndexedDB database. */
+  /** Open (or create) the IndexedDB database. Safe to call concurrently. */
   async open(): Promise<void> {
     if (this.db) return;
+    if (this.openPromise) return this.openPromise;
 
-    return new Promise((resolve, reject) => {
+    this.openPromise = new Promise<void>((resolve, reject) => {
       const request = indexedDB.open(this.dbName, 1);
 
       request.onupgradeneeded = () => {
@@ -37,9 +39,12 @@ export class CacheStore {
       };
 
       request.onerror = () => {
+        this.openPromise = null;
         reject(request.error);
       };
     });
+
+    return this.openPromise;
   }
 
   /**
@@ -55,13 +60,13 @@ export class CacheStore {
 
     // Hash-based invalidation: if the expected hash changed, evict stale entry
     if (expectedHash && entry.hash !== expectedHash) {
-      this.txDelete(db, path).catch(() => {});
+      this.txDelete(db, path).catch((e) => console.warn('Cache invalidation failed:', e));
       return null;
     }
 
     // Update last accessed timestamp (fire-and-forget)
     entry.lastAccessed = Date.now();
-    this.txPut(db, entry).catch(() => {});
+    this.txPut(db, entry).catch((e) => console.warn('Cache timestamp update failed:', e));
 
     return entry;
   }
@@ -80,7 +85,7 @@ export class CacheStore {
 
     await this.txPut(db, entry);
     // Evict if over budget (fire-and-forget)
-    this.evictIfNeeded(db).catch(() => {});
+    this.evictIfNeeded(db).catch((e) => console.warn('Cache eviction failed:', e));
   }
 
   /** Delete a single entry. */

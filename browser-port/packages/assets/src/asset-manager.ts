@@ -12,7 +12,7 @@
 import type { Subsystem } from '@generals/core';
 import type { AssetHandle, AssetManagerConfig, ProgressCallback } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
-import { AssetFetchError, AssetIntegrityError } from './errors.js';
+import { AssetFetchError, AssetIntegrityError, AssetNotFoundError } from './errors.js';
 import { sha256Hex } from './hash.js';
 import { RuntimeManifest, loadManifest } from './manifest-loader.js';
 import { CacheStore } from './cache.js';
@@ -106,14 +106,14 @@ export class AssetManager implements Subsystem {
     paths: string[],
     onProgress?: ProgressCallback,
   ): Promise<AssetHandle<ArrayBuffer>[]> {
-    let completedBytes = 0;
-    const totalEstimate = paths.length; // Each counts as 1 unit for progress
+    let completedCount = 0;
+    const totalCount = paths.length;
 
     const handles = await Promise.all(
       paths.map(async (path) => {
         const handle = await this.loadRaw(path);
-        completedBytes++;
-        onProgress?.(completedBytes, totalEstimate);
+        completedCount++;
+        onProgress?.(completedCount, totalCount);
         return handle;
       }),
     );
@@ -126,8 +126,15 @@ export class AssetManager implements Subsystem {
   // ===========================================================================
 
   private async loadRaw(path: string, onProgress?: ProgressCallback): Promise<AssetHandle<ArrayBuffer>> {
+    this.validatePath(path);
+
     const manifestEntry = this.manifest?.getByOutputPath(path);
     const expectedHash = manifestEntry?.outputHash ?? null;
+
+    // If manifest is loaded and integrity checks are on, require the path to be known
+    if (this.manifest && this.config.integrityChecks && !manifestEntry) {
+      throw new AssetNotFoundError(path);
+    }
 
     // 1. Check IndexedDB cache
     if (this.cache) {
@@ -138,8 +145,9 @@ export class AssetManager implements Subsystem {
       }
     }
 
-    // 2. Fetch with in-flight deduplication
-    const data = await this.fetchDeduped(path, onProgress);
+    // 2. Fetch with in-flight deduplication (clone buffer to prevent detach issues)
+    const shared = await this.fetchDeduped(path, onProgress);
+    const data = this.inflight.has(path) ? shared.slice(0) : shared;
 
     // 3. Integrity check
     let actualHash: string | null = null;
@@ -152,12 +160,11 @@ export class AssetManager implements Subsystem {
 
     // 4. Cache write (fire-and-forget)
     if (this.cache && actualHash) {
-      this.cache.put(path, data, actualHash).catch(() => {});
+      this.cache.put(path, data, actualHash).catch((e) => console.warn('Cache write failed:', e));
     } else if (this.cache && !actualHash) {
-      // Hash wasn't computed for integrity — compute it for cache keying
       sha256Hex(data).then((hash) => {
-        this.cache?.put(path, data, hash).catch(() => {});
-      }).catch(() => {});
+        this.cache?.put(path, data, hash).catch((e) => console.warn('Cache write failed:', e));
+      }).catch((e) => console.warn('Hash computation for cache failed:', e));
     }
 
     return { path, data, hash: actualHash, cached: false };
@@ -226,6 +233,12 @@ export class AssetManager implements Subsystem {
     }
 
     return result.buffer as ArrayBuffer;
+  }
+
+  private validatePath(path: string): void {
+    if (path.includes('..') || path.startsWith('/') || /^[a-z]+:\/\//i.test(path)) {
+      throw new AssetFetchError(path, 0);
+    }
   }
 
   private resolveUrl(path: string): string {

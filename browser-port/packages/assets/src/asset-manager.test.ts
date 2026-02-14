@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { AssetManager } from './asset-manager.js';
-import { AssetFetchError, AssetIntegrityError } from './errors.js';
+import { AssetFetchError, AssetIntegrityError, AssetNotFoundError } from './errors.js';
 import { sha256Hex } from './hash.js';
 import type { ConversionManifest } from '@generals/core';
 
@@ -28,6 +28,18 @@ function makeManifest(entries: ConversionManifest['entries']): ConversionManifes
   };
 }
 
+function makeMapEntry(outputHash: string): ConversionManifest['entries'][0] {
+  return {
+    sourcePath: 'maps/Alpine.map',
+    sourceHash: 'src-hash',
+    outputPath: 'maps/Alpine.json',
+    outputHash,
+    converter: 'map-converter',
+    converterVersion: '1.0.0',
+    timestamp: '2025-01-01T00:00:00.000Z',
+  };
+}
+
 describe('AssetManager', () => {
   const originalFetch = globalThis.fetch;
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -50,8 +62,14 @@ describe('AssetManager', () => {
     manifestEntries?: ConversionManifest['entries'];
     manifest404?: boolean;
     cacheEnabled?: boolean;
+    integrityChecks?: boolean;
   } = {}) {
-    const { manifestEntries = [], manifest404 = false, cacheEnabled = false } = opts;
+    const {
+      manifestEntries = [],
+      manifest404 = false,
+      cacheEnabled = false,
+      integrityChecks = true,
+    } = opts;
 
     const manifest = makeManifest(manifestEntries);
 
@@ -70,7 +88,7 @@ describe('AssetManager', () => {
 
     return new AssetManager({
       cacheEnabled,
-      integrityChecks: true,
+      integrityChecks,
       dbName: 'test-am-' + Math.random(),
     });
   }
@@ -93,7 +111,7 @@ describe('AssetManager', () => {
 
   describe('loadJSON', () => {
     it('loads and parses JSON', async () => {
-      const am = createManager();
+      const am = createManager({ manifest404: true });
       await am.init();
 
       const handle = await am.loadJSON<{ heightmap: { width: number } }>('maps/Alpine.json');
@@ -107,7 +125,7 @@ describe('AssetManager', () => {
 
   describe('loadArrayBuffer', () => {
     it('loads raw ArrayBuffer', async () => {
-      const am = createManager();
+      const am = createManager({ manifest404: true });
       await am.init();
 
       const handle = await am.loadArrayBuffer('maps/Alpine.json');
@@ -121,15 +139,7 @@ describe('AssetManager', () => {
   describe('integrity checks', () => {
     it('passes when hash matches', async () => {
       const am = createManager({
-        manifestEntries: [{
-          sourcePath: 'maps/Alpine.map',
-          sourceHash: 'src-hash',
-          outputPath: 'maps/Alpine.json',
-          outputHash: mapHash,
-          converter: 'map-converter',
-          converterVersion: '1.0.0',
-          timestamp: '2025-01-01T00:00:00.000Z',
-        }],
+        manifestEntries: [makeMapEntry(mapHash)],
       });
       await am.init();
 
@@ -141,15 +151,7 @@ describe('AssetManager', () => {
 
     it('throws AssetIntegrityError on hash mismatch', async () => {
       const am = createManager({
-        manifestEntries: [{
-          sourcePath: 'maps/Alpine.map',
-          sourceHash: 'src-hash',
-          outputPath: 'maps/Alpine.json',
-          outputHash: 'wrong-hash',
-          converter: 'map-converter',
-          converterVersion: '1.0.0',
-          timestamp: '2025-01-01T00:00:00.000Z',
-        }],
+        manifestEntries: [makeMapEntry('wrong-hash')],
       });
       await am.init();
 
@@ -157,11 +159,59 @@ describe('AssetManager', () => {
 
       am.dispose();
     });
+
+    it('throws AssetNotFoundError for unknown paths when manifest is loaded', async () => {
+      const am = createManager({ manifestEntries: [] });
+      await am.init();
+
+      await expect(am.loadArrayBuffer('unknown/file.bin')).rejects.toThrow(AssetNotFoundError);
+
+      am.dispose();
+    });
+
+    it('allows unknown paths when manifest is not loaded', async () => {
+      const am = createManager({ manifest404: true });
+      await am.init();
+
+      const handle = await am.loadArrayBuffer('maps/Alpine.json');
+      expect(handle.data.byteLength).toBeGreaterThan(0);
+
+      am.dispose();
+    });
+  });
+
+  describe('path validation', () => {
+    it('rejects path traversal', async () => {
+      const am = createManager({ manifest404: true });
+      await am.init();
+
+      await expect(am.loadArrayBuffer('../../etc/passwd')).rejects.toThrow(AssetFetchError);
+
+      am.dispose();
+    });
+
+    it('rejects absolute paths', async () => {
+      const am = createManager({ manifest404: true });
+      await am.init();
+
+      await expect(am.loadArrayBuffer('/etc/passwd')).rejects.toThrow(AssetFetchError);
+
+      am.dispose();
+    });
+
+    it('rejects protocol URLs', async () => {
+      const am = createManager({ manifest404: true });
+      await am.init();
+
+      await expect(am.loadArrayBuffer('https://evil.com/payload')).rejects.toThrow(AssetFetchError);
+
+      am.dispose();
+    });
   });
 
   describe('fetch errors', () => {
     it('throws AssetFetchError on HTTP error', async () => {
-      const am = createManager();
+      const am = createManager({ manifest404: true });
       await am.init();
 
       fetchMock.mockImplementation((_url: string) => {
@@ -174,7 +224,7 @@ describe('AssetManager', () => {
     });
 
     it('throws AssetFetchError on network failure', async () => {
-      const am = createManager();
+      const am = createManager({ manifest404: true });
       await am.init();
 
       fetchMock.mockImplementation(() => Promise.reject(new TypeError('Network error')));
@@ -187,7 +237,7 @@ describe('AssetManager', () => {
 
   describe('in-flight deduplication', () => {
     it('deduplicates simultaneous requests for same path', async () => {
-      const am = createManager();
+      const am = createManager({ manifest404: true });
       await am.init();
 
       // Track how many fetch calls hit the asset URL
@@ -207,7 +257,9 @@ describe('AssetManager', () => {
       ]);
 
       expect(assetFetchCount).toBe(1);
-      expect(h1.data).toBe(h2.data); // Same ArrayBuffer instance
+      // Data should be equivalent but not necessarily same instance (clone on dedup)
+      expect(new TextDecoder().decode(h1.data)).toBe(mapJSON);
+      expect(new TextDecoder().decode(h2.data)).toBe(mapJSON);
 
       am.dispose();
     });
@@ -217,15 +269,7 @@ describe('AssetManager', () => {
     it('serves from cache on second load', async () => {
       const am = createManager({
         cacheEnabled: true,
-        manifestEntries: [{
-          sourcePath: 'maps/Alpine.map',
-          sourceHash: 'src-hash',
-          outputPath: 'maps/Alpine.json',
-          outputHash: mapHash,
-          converter: 'map-converter',
-          converterVersion: '1.0.0',
-          timestamp: '2025-01-01T00:00:00.000Z',
-        }],
+        manifestEntries: [makeMapEntry(mapHash)],
       });
       await am.init();
 
