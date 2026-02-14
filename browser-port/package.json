@@ -31,6 +31,7 @@
     "@playwright/test": "^1.48.0",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
+    "fake-indexeddb": "^6.2.5",
     "prettier": "^3.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
@@ -39,8 +40,8 @@
     "vitest": "^2.1.0"
   },
   "dependencies": {
-    "three": "^0.170.0",
-    "@types/three": "^0.170.0"
+    "@types/three": "^0.170.0",
+    "three": "^0.170.0"
   },
   "engines": {
     "node": ">=20.0.0"

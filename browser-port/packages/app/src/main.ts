@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { GameLoop, SubsystemRegistry } from '@generals/core';
+import { AssetManager } from '@generals/assets';
 import { TerrainVisual, WaterVisual } from '@generals/terrain';
 import type { MapDataJSON } from '@generals/terrain';
 import { InputManager, RTSCamera } from '@generals/input';
@@ -76,6 +77,12 @@ async function init(): Promise<void> {
 
   const subsystems = new SubsystemRegistry();
 
+  // Asset Manager (first — must init before any asset loads)
+  const assets = new AssetManager({
+    manifestUrl: 'assets/manifest.json',
+  });
+  subsystems.register(assets);
+
   // Input
   const inputManager = new InputManager(canvas);
   subsystems.register(inputManager);
@@ -108,10 +115,13 @@ async function init(): Promise<void> {
 
   if (mapPath) {
     try {
-      const response = await fetch(mapPath);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      mapData = await response.json() as MapDataJSON;
+      const handle = await assets.loadJSON<MapDataJSON>(mapPath, (loaded, total) => {
+        const pct = total > 0 ? Math.round(50 + (loaded / total) * 20) : 60;
+        setLoadingProgress(pct, 'Loading map data...');
+      });
+      mapData = handle.data;
       loadedFromJSON = true;
+      console.log(`Map loaded via AssetManager (cached: ${handle.cached}, hash: ${handle.hash ?? 'n/a'})`);
     } catch (err) {
       console.warn(`Failed to load map "${mapPath}":`, err);
       console.log('Falling back to procedural demo terrain.');
