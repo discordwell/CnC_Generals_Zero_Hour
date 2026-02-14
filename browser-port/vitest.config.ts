@@ -19,7 +19,12 @@ export default defineConfig({
   },
   test: {
     globals: true,
-    include: ['packages/*/src/**/*.test.ts', 'packages/*/src/**/*.spec.ts'],
+    include: [
+      'packages/*/src/**/*.test.ts',
+      'packages/*/src/**/*.spec.ts',
+      'tools/*/src/**/*.test.ts',
+      'tools/*/src/**/*.spec.ts',
+    ],
     coverage: {
       provider: 'v8',
       include: ['packages/*/src/**/*.ts'],
