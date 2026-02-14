@@ -1,3 +1,11 @@
-// @generals/ini-data — Stage placeholder
-// This package will be implemented in a later stage.
-export {};
+export { IniDataRegistry } from './registry.js';
+export type {
+  ObjectDef,
+  WeaponDef,
+  ArmorDef,
+  UpgradeDef,
+  ScienceDef,
+  FactionDef,
+  RegistryStats,
+  RegistryError,
+} from './registry.js';

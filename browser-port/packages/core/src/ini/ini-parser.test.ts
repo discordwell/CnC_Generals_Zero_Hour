@@ -112,4 +112,239 @@ End
     const result = parseIni(source);
     expect(result.blocks[0]!.fields['DamagePercent']).toBe(0.5);
   });
+
+  // ==================== New Phase 1 tests ====================
+
+  describe('#define macro substitution', () => {
+    it('substitutes a simple define', () => {
+      const source = `
+#define TANK_HEALTH 300.0
+Object TestTank
+  MaxHealth = TANK_HEALTH
+End
+`;
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks[0]!.fields['MaxHealth']).toBe(300.0);
+    });
+
+    it('substitutes multiple defines', () => {
+      const source = `
+#define HP 500
+#define SIDE America
+Object TestTank
+  MaxHealth = HP
+  Side = SIDE
+End
+`;
+      const result = parseIni(source);
+      expect(result.blocks[0]!.fields['MaxHealth']).toBe(500);
+      expect(result.blocks[0]!.fields['Side']).toBe('America');
+    });
+
+    it('returns defines in result', () => {
+      const source = `
+#define MY_VAL 42
+Object Foo
+  X = 1
+End
+`;
+      const result = parseIni(source);
+      expect(result.defines.get('MY_VAL')).toBe('42');
+    });
+
+    it('accepts pre-existing defines from options', () => {
+      const source = `
+Object TestTank
+  MaxHealth = EXTERNAL_HP
+End
+`;
+      const result = parseIni(source, {
+        defines: new Map([['EXTERNAL_HP', '999']]),
+      });
+      expect(result.blocks[0]!.fields['MaxHealth']).toBe(999);
+    });
+  });
+
+  describe('#include directive', () => {
+    it('records include paths without resolver', () => {
+      const source = `
+#include "weapons.ini"
+Object TestTank
+  Side = America
+End
+`;
+      const result = parseIni(source);
+      expect(result.includes).toContain('weapons.ini');
+      expect(result.blocks).toHaveLength(1);
+    });
+
+    it('resolves includes with callback', () => {
+      const weaponsIni = `
+Weapon TankGun
+  Damage = 50
+End
+`;
+      const source = `
+#include "weapons.ini"
+Object TestTank
+  Side = America
+End
+`;
+      const result = parseIni(source, {
+        resolveInclude: (path) => path === 'weapons.ini' ? weaponsIni : null,
+      });
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks).toHaveLength(2);
+      expect(result.blocks[0]!.type).toBe('Weapon');
+      expect(result.blocks[1]!.type).toBe('Object');
+    });
+
+    it('reports error for missing include', () => {
+      const source = `
+#include "missing.ini"
+Object Foo
+  X = 1
+End
+`;
+      const result = parseIni(source, {
+        resolveInclude: () => null,
+      });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.message).toContain('not found');
+    });
+
+    it('detects circular includes', () => {
+      const source = `
+#include "self.ini"
+Object Foo
+  X = 1
+End
+`;
+      const result = parseIni(source, {
+        filePath: 'self.ini',
+        resolveInclude: () => source,
+      });
+      expect(result.errors.some((e) => e.message.includes('Circular'))).toBe(true);
+    });
+
+    it('propagates defines across includes', () => {
+      const base = `
+#define BASE_HP 100
+`;
+      const main = `
+#include "base.ini"
+Object TestTank
+  MaxHealth = BASE_HP
+End
+`;
+      const result = parseIni(main, {
+        filePath: 'main.ini',
+        resolveInclude: (path) => path === 'base.ini' ? base : null,
+      });
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks[0]!.fields['MaxHealth']).toBe(100);
+    });
+  });
+
+  describe('singleton blocks', () => {
+    it('parses GameData without name', () => {
+      const source = `
+GameData
+  MaxCameraHeight = 800.0
+  MinCameraHeight = 120.0
+End
+`;
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks).toHaveLength(1);
+      expect(result.blocks[0]!.type).toBe('GameData');
+      expect(result.blocks[0]!.name).toBe('');
+      expect(result.blocks[0]!.fields['MaxCameraHeight']).toBe(800.0);
+    });
+  });
+
+  describe('+= additive fields', () => {
+    it('appends to existing array field', () => {
+      const source = `
+Object TestUnit
+  KindOf = VEHICLE SELECTABLE
+  KindOf += CAN_ATTACK
+End
+`;
+      const result = parseIni(source);
+      expect(result.blocks[0]!.fields['KindOf']).toEqual([
+        'VEHICLE', 'SELECTABLE', 'CAN_ATTACK',
+      ]);
+    });
+
+    it('creates new array from += on undefined field', () => {
+      const source = `
+Object TestUnit
+  KindOf += VEHICLE
+End
+`;
+      const result = parseIni(source);
+      expect(result.blocks[0]!.fields['KindOf']).toBe('VEHICLE');
+    });
+  });
+
+  describe('AddModule / RemoveModule / ReplaceModule', () => {
+    it('parses AddModule as sub-block', () => {
+      const source = `
+ChildObject AdvancedTank : BaseTank
+  AddModule ModuleTag_New
+    MaxHealth = 999
+  End
+End
+`;
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      const child = result.blocks[0]!;
+      expect(child.blocks).toHaveLength(1);
+      expect(child.blocks[0]!.type).toBe('AddModule');
+      expect(child.blocks[0]!.name).toBe('ModuleTag_New');
+      expect(child.blocks[0]!.fields['MaxHealth']).toBe(999);
+    });
+
+    it('parses RemoveModule as directive', () => {
+      const source = `
+ChildObject AdvancedTank : BaseTank
+  RemoveModule ModuleTag_Old
+End
+`;
+      const result = parseIni(source);
+      const child = result.blocks[0]!;
+      expect(child.blocks).toHaveLength(1);
+      expect(child.blocks[0]!.type).toBe('RemoveModule');
+      expect(child.blocks[0]!.name).toBe('ModuleTag_Old');
+    });
+
+    it('parses ReplaceModule as sub-block', () => {
+      const source = `
+ChildObject AdvancedTank : BaseTank
+  ReplaceModule ModuleTag_02
+    MaxHealth = 500
+  End
+End
+`;
+      const result = parseIni(source);
+      const child = result.blocks[0]!;
+      expect(child.blocks).toHaveLength(1);
+      expect(child.blocks[0]!.type).toBe('ReplaceModule');
+      expect(child.blocks[0]!.name).toBe('ModuleTag_02');
+      expect(child.blocks[0]!.fields['MaxHealth']).toBe(500);
+    });
+  });
+
+  describe('file context in errors', () => {
+    it('includes file path in error', () => {
+      const source = `
+UnknownDirective Foo
+`;
+      const result = parseIni(source, { filePath: 'test.ini' });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.file).toBe('test.ini');
+    });
+  });
 });
