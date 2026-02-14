@@ -36,8 +36,15 @@ export class AssetManager implements Subsystem {
   // ===========================================================================
 
   async init(): Promise<void> {
-    // Load manifest (returns null on 404 — graceful fallback)
-    this.manifest = await loadManifest(this.resolveUrl(this.config.manifestUrl));
+    // Load manifest with graceful fallback.
+    // In browser dev/demo mode the manifest may not exist yet, so we continue
+    // in asset-only fallback mode when it cannot be loaded.
+    try {
+      this.manifest = await loadManifest(this.resolveUrl(this.config.manifestUrl));
+    } catch (error) {
+      console.warn('AssetManager: manifest unavailable, proceeding without manifest.', error);
+      this.manifest = null;
+    }
 
     // Open IndexedDB cache
     if (this.config.cacheEnabled) {

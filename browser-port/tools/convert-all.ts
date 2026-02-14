@@ -18,7 +18,10 @@
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { addManifestEntry, createManifest, parseManifest, serializeManifest } from '@generals/core';
+import type { IniDataBundle, RegistryStats } from '@generals/ini-data';
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -120,15 +123,119 @@ function findFiles(dir: string, ext: string): string[] {
 
 const TOOLS_DIR = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
 
-function runTool(tool: string, args: string[]): void {
+function runTool(tool: string, args: string[]): boolean {
   const toolPath = path.join(TOOLS_DIR, tool, 'src', 'cli.ts');
   try {
     execFileSync('npx', ['tsx', toolPath, ...args], {
       stdio: 'inherit',
       cwd: path.resolve(TOOLS_DIR, '..'),
     });
+    return true;
   } catch {
     console.error(`  ⚠ Tool ${tool} failed for args: ${args.join(' ')}`);
+    return false;
+  }
+}
+
+function sha256Hex(data: string): string {
+  return createHash('sha256').update(data).digest('hex');
+}
+
+function ensureBundle(value: unknown): value is IniDataBundle {
+  if (typeof value !== 'object' || value === null) return false;
+
+  const bundle = value as Partial<IniDataBundle>;
+  return (
+    Array.isArray(bundle.objects)
+    && Array.isArray(bundle.weapons)
+    && Array.isArray(bundle.armors)
+    && Array.isArray(bundle.upgrades)
+    && Array.isArray(bundle.sciences)
+    && Array.isArray(bundle.factions)
+    && Array.isArray(bundle.errors)
+    && Array.isArray(bundle.unsupportedBlockTypes)
+    && typeof bundle.stats === 'object'
+    && bundle.stats !== null
+  );
+}
+
+function readBundle(pathToFile: string): IniDataBundle | null {
+  if (!fs.existsSync(pathToFile)) return null;
+
+  const text = fs.readFileSync(pathToFile, 'utf-8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  return ensureBundle(parsed) ? parsed : null;
+}
+
+function mergeByName<T extends { name: string }>(left: T[], right: T[]): T[] {
+  const byName = new Map<string, T>();
+  for (const item of left) {
+    byName.set(item.name, item);
+  }
+  for (const item of right) {
+    byName.set(item.name, item);
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function combineLists(left: string[], right: string[]): string[] {
+  return [...left, ...right].sort();
+}
+
+function mergeStats(bundle: IniDataBundle): RegistryStats {
+  return {
+    objects: bundle.objects.length,
+    weapons: bundle.weapons.length,
+    armors: bundle.armors.length,
+    upgrades: bundle.upgrades.length,
+    sciences: bundle.sciences.length,
+    factions: bundle.factions.length,
+    unresolvedInheritance: bundle.errors.filter((entry) => entry.type === 'unresolved_parent').length,
+    totalBlocks: bundle.objects.length + bundle.weapons.length + bundle.armors.length + bundle.upgrades.length + bundle.sciences.length + bundle.factions.length,
+  };
+}
+
+function mergeBundles(baseBundle: IniDataBundle, patchBundle: IniDataBundle): IniDataBundle {
+  const merged: IniDataBundle = {
+    objects: mergeByName(baseBundle.objects, patchBundle.objects),
+    weapons: mergeByName(baseBundle.weapons, patchBundle.weapons),
+    armors: mergeByName(baseBundle.armors, patchBundle.armors),
+    upgrades: mergeByName(baseBundle.upgrades, patchBundle.upgrades),
+    sciences: mergeByName(baseBundle.sciences, patchBundle.sciences),
+    factions: mergeByName(baseBundle.factions, patchBundle.factions),
+    errors: [...baseBundle.errors, ...patchBundle.errors],
+    unsupportedBlockTypes: combineLists(
+      baseBundle.unsupportedBlockTypes,
+      patchBundle.unsupportedBlockTypes,
+    ),
+    stats: {
+      objects: 0,
+      weapons: 0,
+      armors: 0,
+      upgrades: 0,
+      sciences: 0,
+      factions: 0,
+      unresolvedInheritance: 0,
+      totalBlocks: 0,
+    },
+  };
+  merged.stats = mergeStats(merged);
+  return merged;
+}
+
+function mergeManifest(manifest: ReturnType<typeof createManifest>, manifestPath: string): void {
+  if (!fs.existsSync(manifestPath)) return;
+
+  const parsed = parseManifest(fs.readFileSync(manifestPath, 'utf-8'));
+  if (!parsed) return;
+
+  for (const entry of parsed.entries) {
+    addManifestEntry(manifest, entry);
   }
 }
 
@@ -199,18 +306,95 @@ function stepConvertMaps(gameDir: string, outputDir: string): void {
 function stepParseIni(gameDir: string, outputDir: string): void {
   console.log('\n═══ Step 5/5: Parsing INI game data ═══\n');
   const iniDir = path.join(outputDir, 'data');
+  const extractedDir = path.join(outputDir, '_extracted');
+  const manifestDir = path.join(outputDir, 'manifests');
+  const iniManifestPath = path.join(manifestDir, 'ini.json');
+  const gameManifestPath = path.join(manifestDir, 'ini-game.json');
+  const extractedManifestPath = path.join(manifestDir, 'ini-extracted.json');
+  const gameBundlePath = path.join(iniDir, 'bundle-game.json');
+  const extractedBundlePath = path.join(iniDir, '_extracted', 'bundle.json');
+  const mergedBundlePath = path.join(iniDir, 'ini-bundle.json');
+  fs.mkdirSync(manifestDir, { recursive: true });
 
   // INI files from game dir and extracted .big
   const gameInis = findFiles(gameDir, '.ini');
-  const extractedInis = findFiles(path.join(outputDir, '_extracted'), '.ini');
+  const extractedInis = findFiles(extractedDir, '.ini');
   const allInis = [...new Set([...gameInis, ...extractedInis])];
   console.log(`Found ${allInis.length} .ini file(s)`);
 
-  for (const file of allInis) {
-    const relPath = path.relative(gameDir, file);
-    const outPath = path.join(iniDir, relPath.replace(/\.ini$/i, '.json'));
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    runTool('ini-parser', ['--input', file, '--output', outPath]);
+  if (gameInis.length > 0) {
+    runTool('ini-parser', [
+      '--dir',
+      gameDir,
+      '--output',
+      iniDir,
+      '--base-dir',
+      gameDir,
+      '--manifest',
+      gameManifestPath,
+      '--bundle',
+      gameBundlePath,
+    ]);
+  }
+
+  if (extractedInis.length > 0) {
+    const extractedIniDir = path.join(iniDir, '_extracted');
+    runTool('ini-parser', [
+      '--dir',
+      extractedDir,
+      '--output',
+      extractedIniDir,
+      '--base-dir',
+      extractedDir,
+      '--manifest',
+      extractedManifestPath,
+      '--bundle',
+      extractedBundlePath,
+    ]);
+  }
+
+  const manifest = createManifest();
+  mergeManifest(manifest, gameManifestPath);
+  mergeManifest(manifest, extractedManifestPath);
+
+  if (allInis.length > 0) {
+    const gameBundle = gameInis.length > 0 ? readBundle(gameBundlePath) : null;
+    const extractedBundle = extractedInis.length > 0 ? readBundle(extractedBundlePath) : null;
+    let mergedBundle: IniDataBundle | null = null;
+
+    if (gameBundle) {
+      mergedBundle = gameBundle;
+    }
+
+    if (extractedBundle) {
+      if (mergedBundle) {
+        mergedBundle = mergeBundles(mergedBundle, extractedBundle);
+      } else {
+        mergedBundle = extractedBundle;
+      }
+    }
+
+    if (mergedBundle) {
+      const serialized = JSON.stringify(mergedBundle, null, 2) + '\n';
+      fs.writeFileSync(mergedBundlePath, serialized);
+      const outputHash = sha256Hex(serialized);
+      mergedBundle.stats = mergeStats(mergedBundle);
+      addManifestEntry(manifest, {
+        sourcePath: 'data/ini-bundle.json',
+        sourceHash: outputHash,
+        outputPath: path.relative(process.cwd(), mergedBundlePath),
+        outputHash,
+        converter: 'convert-all',
+        converterVersion: '1.0.0',
+        timestamp: new Date().toISOString(),
+      });
+      console.log(`INI data bundle written to ${mergedBundlePath}`);
+    }
+  }
+
+  if (allInis.length > 0) {
+    fs.writeFileSync(iniManifestPath, serializeManifest(manifest));
+    console.log(`Conversion manifest written to ${iniManifestPath}`);
   }
 }
 

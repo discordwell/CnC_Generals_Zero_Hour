@@ -19,6 +19,7 @@ export interface ObjectDef {
   fields: Record<string, IniValue>;
   blocks: IniBlock[];
   resolved: boolean;
+  hasUnresolvedParent?: boolean;
 }
 
 export interface WeaponDef {
@@ -65,6 +66,19 @@ export interface RegistryError {
   blockType: string;
   name: string;
   detail: string;
+  file?: string;
+}
+
+export interface IniDataBundle {
+  objects: ObjectDef[];
+  weapons: WeaponDef[];
+  armors: ArmorDef[];
+  upgrades: UpgradeDef[];
+  sciences: ScienceDef[];
+  factions: FactionDef[];
+  stats: RegistryStats;
+  errors: RegistryError[];
+  unsupportedBlockTypes: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -83,9 +97,9 @@ export class IniDataRegistry {
   private unsupportedBlockTypes = new Set<string>();
 
   /** Load parsed INI blocks (from CLI JSON output or parseIni result). */
-  loadBlocks(blocks: IniBlock[]): void {
+  loadBlocks(blocks: IniBlock[], sourcePath?: string): void {
     for (const block of blocks) {
-      this.indexBlock(block);
+      this.indexBlock(block, sourcePath);
     }
   }
 
@@ -96,6 +110,56 @@ export class IniDataRegistry {
       if (obj.parent && !obj.resolved) {
         this.resolveObjectChain(name, new Set());
       }
+    }
+  }
+
+  /** Load prebuilt registry state from an INI data bundle. */
+  loadBundle(bundle: IniDataBundle): void {
+    this.objects.clear();
+    this.weapons.clear();
+    this.armors.clear();
+    this.upgrades.clear();
+    this.sciences.clear();
+    this.factions.clear();
+    this.errors.length = 0;
+    this.unsupportedBlockTypes.clear();
+
+    for (const object of bundle.objects) {
+      this.objects.set(object.name, {
+        ...object,
+        fields: { ...object.fields },
+        blocks: [...object.blocks],
+        kindOf: object.kindOf ? [...object.kindOf] : undefined,
+      });
+    }
+
+    for (const weapon of bundle.weapons) {
+      this.weapons.set(weapon.name, {
+        ...weapon,
+        fields: { ...weapon.fields },
+        blocks: [...weapon.blocks],
+      });
+    }
+
+    for (const armor of bundle.armors) {
+      this.armors.set(armor.name, { ...armor, fields: { ...armor.fields } });
+    }
+
+    for (const upgrade of bundle.upgrades) {
+      this.upgrades.set(upgrade.name, { ...upgrade, fields: { ...upgrade.fields } });
+    }
+
+    for (const science of bundle.sciences) {
+      this.sciences.set(science.name, { ...science, fields: { ...science.fields } });
+    }
+
+    for (const faction of bundle.factions) {
+      this.factions.set(faction.name, { ...faction, fields: { ...faction.fields } });
+    }
+
+    this.errors.push(...bundle.errors);
+    for (const unsupported of bundle.unsupportedBlockTypes) {
+      this.unsupportedBlockTypes.add(unsupported);
     }
   }
 
@@ -121,13 +185,32 @@ export class IniDataRegistry {
     return results;
   }
 
+  getObject(name: string): ObjectDef | undefined {
+    return this.objects.get(name);
+  }
+
+  getWeapon(name: string): WeaponDef | undefined {
+    return this.weapons.get(name);
+  }
+
+  getArmor(name: string): ArmorDef | undefined {
+    return this.armors.get(name);
+  }
+
+  getUpgrade(name: string): UpgradeDef | undefined {
+    return this.upgrades.get(name);
+  }
+
+  getScience(name: string): ScienceDef | undefined {
+    return this.sciences.get(name);
+  }
+
+  getFaction(name: string): FactionDef | undefined {
+    return this.factions.get(name);
+  }
+
   /** Get summary statistics. */
   getStats(): RegistryStats {
-    let unresolvedInheritance = 0;
-    for (const obj of this.objects.values()) {
-      if (obj.parent && !obj.resolved) unresolvedInheritance++;
-    }
-
     return {
       objects: this.objects.size,
       weapons: this.weapons.size,
@@ -135,7 +218,7 @@ export class IniDataRegistry {
       upgrades: this.upgrades.size,
       sciences: this.sciences.size,
       factions: this.factions.size,
-      unresolvedInheritance,
+      unresolvedInheritance: this.getUnresolvedInheritanceCount(),
       totalBlocks: this.objects.size + this.weapons.size + this.armors.size +
         this.upgrades.size + this.sciences.size + this.factions.size,
     };
@@ -146,15 +229,49 @@ export class IniDataRegistry {
     return [...this.unsupportedBlockTypes].sort();
   }
 
+  /** Export a deterministic compatibility-friendly bundle. */
+  toBundle(): IniDataBundle {
+    const stats = this.getStats();
+
+    return {
+      objects: [...this.objects.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      weapons: [...this.weapons.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      armors: [...this.armors.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      upgrades: [...this.upgrades.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      sciences: [...this.sciences.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      factions: [...this.factions.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      stats,
+      errors: [...this.errors],
+      unsupportedBlockTypes: this.getUnsupportedBlockTypes(),
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Private
   // -------------------------------------------------------------------------
 
-  private indexBlock(block: IniBlock): void {
+  private indexBlock(block: IniBlock, sourcePath?: string): void {
+    const addDefinition = <T extends { name: string }>(
+      collection: Map<string, T>,
+      blockType: string,
+      definition: T,
+    ): void => {
+      if (collection.has(definition.name)) {
+        this.errors.push({
+          type: 'duplicate',
+          blockType,
+          name: definition.name,
+          detail: `Duplicate definition for ${blockType} "${definition.name}" in ${sourcePath ?? 'unknown source'}`,
+          file: sourcePath,
+        });
+      }
+      collection.set(definition.name, definition);
+    };
+
     switch (block.type) {
       case 'Object':
       case 'ChildObject':
-        this.objects.set(block.name, {
+        addDefinition(this.objects, block.type, {
           name: block.name,
           parent: block.parent,
           side: extractString(block.fields['Side']),
@@ -166,7 +283,7 @@ export class IniDataRegistry {
         break;
 
       case 'Weapon':
-        this.weapons.set(block.name, {
+        addDefinition(this.weapons, block.type, {
           name: block.name,
           parent: block.parent,
           fields: block.fields,
@@ -175,21 +292,21 @@ export class IniDataRegistry {
         break;
 
       case 'Armor':
-        this.armors.set(block.name, {
+        addDefinition(this.armors, block.type, {
           name: block.name,
           fields: block.fields,
         });
         break;
 
       case 'Upgrade':
-        this.upgrades.set(block.name, {
+        addDefinition(this.upgrades, block.type, {
           name: block.name,
           fields: block.fields,
         });
         break;
 
       case 'Science':
-        this.sciences.set(block.name, {
+        addDefinition(this.sciences, block.type, {
           name: block.name,
           fields: block.fields,
         });
@@ -197,7 +314,7 @@ export class IniDataRegistry {
 
       case 'PlayerTemplate':
       case 'Faction':
-        this.factions.set(block.name, {
+        addDefinition(this.factions, block.type, {
           name: block.name,
           side: extractString(block.fields['Side']),
           fields: block.fields,
@@ -243,10 +360,25 @@ export class IniDataRegistry {
       case 'ControlBarResizer':
       case 'ShellMenuScheme':
       case 'MiscAudio':
+      case 'LocomotorSet':
+      case 'ClientBehavior':
+      case 'ClientUpdate':
+      case 'WeaponSet':
+      case 'Draw':
+      case 'Body':
+      case 'ArmorSet':
+      case 'AI':
         break;
 
       default:
         this.unsupportedBlockTypes.add(block.type);
+        this.errors.push({
+          type: 'unsupported_block',
+          blockType: block.type,
+          name: block.name,
+          detail: `Unsupported block type: ${block.type}`,
+          file: sourcePath,
+        });
         break;
     }
   }
@@ -255,12 +387,15 @@ export class IniDataRegistry {
     const obj = this.objects.get(name);
     if (!obj) return undefined;
     if (obj.resolved) return obj;
+
     if (visited.has(name)) {
+      obj.hasUnresolvedParent = true;
+      obj.resolved = true;
       this.errors.push({
         type: 'unresolved_parent',
         blockType: 'Object',
         name,
-        detail: `Circular inheritance detected`,
+        detail: 'Circular inheritance detected',
       });
       return obj;
     }
@@ -274,28 +409,36 @@ export class IniDataRegistry {
 
     const parent = this.resolveObjectChain(obj.parent, visited);
     if (!parent) {
+      obj.hasUnresolvedParent = true;
+      obj.resolved = true;
       this.errors.push({
         type: 'unresolved_parent',
         blockType: 'Object',
         name,
         detail: `Parent "${obj.parent}" not found`,
       });
-      obj.resolved = true; // Mark as resolved to avoid re-processing
       return obj;
     }
 
     // Merge: parent fields are defaults, child fields override
-    const mergedFields = { ...parent.fields, ...obj.fields };
-    const mergedBlocks = [...parent.blocks, ...obj.blocks];
+    obj.fields = { ...parent.fields, ...obj.fields };
+    obj.blocks = [...parent.blocks, ...obj.blocks];
 
     // Inherit side and kindOf if not set
     if (!obj.side && parent.side) obj.side = parent.side;
     if (!obj.kindOf && parent.kindOf) obj.kindOf = parent.kindOf;
 
-    obj.fields = mergedFields;
-    obj.blocks = mergedBlocks;
     obj.resolved = true;
+    obj.hasUnresolvedParent = false;
     return obj;
+  }
+
+  private getUnresolvedInheritanceCount(): number {
+    let count = 0;
+    for (const obj of this.objects.values()) {
+      if (obj.hasUnresolvedParent) count++;
+    }
+    return count;
   }
 }
 

@@ -8,4 +8,5 @@ export type {
   FactionDef,
   RegistryStats,
   RegistryError,
+  IniDataBundle,
 } from './registry.js';

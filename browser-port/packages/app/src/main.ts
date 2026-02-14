@@ -12,6 +12,7 @@ import { AssetManager } from '@generals/assets';
 import { TerrainVisual, WaterVisual } from '@generals/terrain';
 import type { MapDataJSON } from '@generals/terrain';
 import { InputManager, RTSCamera } from '@generals/input';
+import { IniDataRegistry, type IniDataBundle } from '@generals/ini-data';
 
 // ============================================================================
 // Loading screen
@@ -101,7 +102,41 @@ async function init(): Promise<void> {
 
   await subsystems.initAll();
 
+  // ========================================================================
+  // Game data (INI bundle)
+  // ========================================================================
+
+  const iniDataRegistry = new IniDataRegistry();
+  let iniDataInfo = 'INI data bundle not loaded';
+  try {
+    const bundleHandle = await assets.loadJSON<IniDataBundle>('data/ini-bundle.json', (loaded, total) => {
+      const pct = total > 0 ? Math.round(40 + (loaded / total) * 8) : 48;
+      setLoadingProgress(pct, 'Loading INI bundle...');
+    });
+    iniDataRegistry.loadBundle(bundleHandle.data);
+    iniDataInfo = `INI bundle loaded from ${bundleHandle.cached ? 'cache' : 'network'} ` +
+      `(${bundleHandle.data.stats.objects} objects, ${bundleHandle.data.stats.weapons} weapons)`;
+  } catch {
+    try {
+      const response = await fetch('assets/data/ini-bundle.json');
+      if (response.ok) {
+        const bundle = (await response.json()) as IniDataBundle;
+        iniDataRegistry.loadBundle(bundle);
+        iniDataInfo = `INI bundle loaded via fetch fallback (${bundle.stats.objects} objects, ${bundle.stats.weapons} weapons)`;
+      } else {
+        console.warn('INI data bundle unavailable, continuing with fallback data path.');
+      }
+    } catch (fallbackErr) {
+      console.warn('INI data bundle unavailable, continuing without bundle.', fallbackErr);
+    }
+  }
+
+  const iniDataStats = iniDataRegistry.getStats();
+  setLoadingProgress(48, 'Game data ready');
+
   setLoadingProgress(50, 'Loading terrain...');
+  const dataSuffix = ` | INI: ${iniDataStats.objects} objects, ${iniDataStats.weapons} weapons`;
+  console.log(`Game data status: ${iniDataInfo}`);
 
   // ========================================================================
   // Load terrain (map JSON or procedural demo)
@@ -211,7 +246,7 @@ async function init(): Promise<void> {
         : 'none';
       const wireInfo = terrainVisual.isWireframe() ? ' [wireframe]' : '';
       debugInfo.textContent =
-        `FPS: ${displayFps} | Map: ${mapInfo}${wireInfo} | Frame: ${gameLoop.getFrameNumber()}`;
+        `FPS: ${displayFps} | Map: ${mapInfo}${wireInfo}${dataSuffix} | Frame: ${gameLoop.getFrameNumber()}`;
     },
   });
 

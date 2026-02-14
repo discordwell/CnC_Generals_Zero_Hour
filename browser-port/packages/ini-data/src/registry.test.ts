@@ -138,6 +138,26 @@ describe('IniDataRegistry', () => {
     });
   });
 
+  describe('lookup helpers', () => {
+    it('gets object by name', () => {
+      registry.loadBlocks([
+        makeBlock('Object', 'TankA', { Side: 'America' }),
+      ]);
+
+      expect(registry.getObject('TankA')?.name).toBe('TankA');
+      expect(registry.getWeapon('Missing Weapon')).toBeUndefined();
+    });
+
+    it('tracks duplicate definitions as warnings', () => {
+      registry.loadBlocks([makeBlock('Object', 'TankA', { Side: 'America' })]);
+      registry.loadBlocks([makeBlock('Object', 'TankA', { Side: 'China' })]);
+
+      expect(registry.errors).toHaveLength(1);
+      expect(registry.errors[0]!.type).toBe('duplicate');
+      expect(registry.objects.get('TankA')?.side).toBe('China');
+    });
+  });
+
   describe('resolveInheritance', () => {
     it('merges parent fields into child', () => {
       registry.loadBlocks([
@@ -225,6 +245,84 @@ describe('IniDataRegistry', () => {
       expect(stats.sciences).toBe(1);
       expect(stats.factions).toBe(1);
       expect(stats.totalBlocks).toBe(7);
+    });
+  });
+
+  describe('toBundle', () => {
+    it('returns deterministic sorted arrays', () => {
+      registry.loadBlocks([
+        makeBlock('Object', 'TankZ', { Side: 'America' }),
+        makeBlock('Object', 'TankA', { Side: 'China' }),
+        makeBlock('Weapon', 'GunC', {}),
+        makeBlock('Weapon', 'GunA', {}),
+      ]);
+
+      const bundle = registry.toBundle();
+
+      expect(bundle.objects[0]!.name).toBe('TankA');
+      expect(bundle.objects[1]!.name).toBe('TankZ');
+      expect(bundle.weapons[0]!.name).toBe('GunA');
+      expect(bundle.weapons[1]!.name).toBe('GunC');
+      expect(bundle.stats.objects).toBe(2);
+      expect(bundle.stats.weapons).toBe(2);
+    });
+  });
+
+  describe('loadBundle', () => {
+    it('restores registry state from a deterministic bundle', () => {
+      const bundle = {
+        objects: [
+          {
+            name: 'TankA',
+            side: 'America',
+            fields: { Side: 'America', MaxHealth: 100 },
+            blocks: [],
+            resolved: true,
+          },
+        ],
+        weapons: [
+          { name: 'Gun', fields: { Damage: 50 }, blocks: [] },
+        ],
+        armors: [
+          { name: 'HeavyArmor', fields: { MAX_DAMAGE: 10 } },
+        ],
+        upgrades: [
+          { name: 'UpgradeA', fields: { BuildTime: 10 } },
+        ],
+        sciences: [
+          { name: 'ScienceA', fields: { SciencePurchasePointCost: 1 } },
+        ],
+        factions: [
+          { name: 'FactionUSA', side: 'America', fields: { Name: 'USA' } },
+        ],
+        stats: {
+          objects: 1,
+          weapons: 1,
+          armors: 1,
+          upgrades: 1,
+          sciences: 1,
+          factions: 1,
+          unresolvedInheritance: 0,
+          totalBlocks: 5,
+        },
+        errors: [
+          {
+            type: 'duplicate',
+            blockType: 'Weapon',
+            name: 'Gun',
+            detail: 'existing weapon kept',
+          },
+        ],
+        unsupportedBlockTypes: ['CommandButton'],
+      };
+
+      registry.loadBundle(bundle);
+
+      expect(registry.objects.get('TankA')?.side).toBe('America');
+      expect(registry.weapons.get('Gun')?.fields['Damage']).toBe(50);
+      expect(registry.getUnsupportedBlockTypes()).toEqual(['CommandButton']);
+      expect(registry.errors).toHaveLength(1);
+      expect(registry.errors[0]!.type).toBe('duplicate');
     });
   });
 
