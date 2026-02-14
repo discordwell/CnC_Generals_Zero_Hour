@@ -78,9 +78,7 @@ interface NavigationGrid {
 const PATHFIND_CELL_SIZE = MAP_XY_FACTOR;
 const COST_ORTHOGONAL = 10;
 const COST_DIAGONAL = 14;
-const COST_CLIFF = COST_DIAGONAL * 7;
-const COST_RUBBLE = COST_DIAGONAL;
-const CLIFF_HEIGHT_DELTA = MAP_XY_FACTOR * 0.9;
+const CLIFF_HEIGHT_DELTA = 9.8;
 const MAX_PATH_COST = 1e9;
 const MAX_SEARCH_NODES = 500_000;
 const MAX_RECONSTRUCT_STEPS = 2_000;
@@ -522,8 +520,10 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (this.mapHeightmap) {
-      const clampedX = clamp(hitPoint.x, 0, this.mapHeightmap.worldWidth);
-      const clampedZ = clamp(hitPoint.z, 0, this.mapHeightmap.worldDepth);
+      const maxWorldX = Math.max(0, this.mapHeightmap.worldWidth - 0.0001);
+      const maxWorldZ = Math.max(0, this.mapHeightmap.worldDepth - 0.0001);
+      const clampedX = clamp(hitPoint.x, 0, maxWorldX);
+      const clampedZ = clamp(hitPoint.z, 0, maxWorldZ);
       return {
         x: clampedX,
         z: clampedZ,
@@ -626,11 +626,11 @@ export class GameLogicSubsystem implements Subsystem {
 
     const effectiveStart = startCandidate;
 
-    if (effectiveStart.x === goalCellX && effectiveStart.z === goalCellZ) {
-      return [];
-    }
-
-    const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, movementProfile);
+    const goalProfile = {
+      ...movementProfile,
+      canCrossCliff: false,
+    };
+    const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, goalProfile);
     if (!effectiveGoal) {
       return [];
     }
@@ -653,7 +653,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     gCost[startIndex] = 0;
-    fCost[startIndex] = this.pathHeuristic(startCellX, startCellZ, effectiveGoal.x, effectiveGoal.z);
+    fCost[startIndex] = this.pathHeuristic(effectiveStart.x, effectiveStart.z, effectiveGoal.x, effectiveGoal.z);
     open.push(startIndex);
     inOpen[startIndex] = 1;
 
@@ -685,8 +685,23 @@ export class GameLogicSubsystem implements Subsystem {
 
       if (currentIndex === goalIndex) {
         const pathCells = this.reconstructPath(parent, startIndex, goalIndex);
+        if (grid.pinched[goalIndex] === 1) {
+          const goalParentIndex = parent[goalIndex];
+          if (goalParentIndex >= 0 && grid.pinched[goalParentIndex] === 0) {
+            pathCells.pop();
+          }
+        }
         const smoothed = this.smoothCellPath(pathCells, movementProfile);
-        return smoothed.map((cell) => this.gridToWorld(cell.x, cell.z));
+        const pathWorld = smoothed.map((cell) => this.gridToWorld(cell.x, cell.z));
+        if (pathWorld.length === 0) {
+          return [{ x: startX, z: startZ }];
+        }
+
+        const first = pathWorld[0]!;
+        if (Math.abs(first.x - startX) > 0.0001 || Math.abs(first.z - startZ) > 0.0001) {
+          pathWorld.unshift({ x: startX, z: startZ });
+        }
+        return pathWorld;
       }
 
       const [currentCellX, currentCellZ] = this.gridFromIndex(currentIndex);
@@ -703,14 +718,12 @@ export class GameLogicSubsystem implements Subsystem {
         }
 
         const isDiagonal = deltaX[i] !== 0 && deltaZ[i] !== 0;
-        if (
-          isDiagonal
-          && !(
-            this.canOccupyCell(currentCellX + deltaX[i], currentCellZ, movementProfile, grid)
-            && this.canOccupyCell(currentCellX, currentCellZ + deltaZ[i], movementProfile, grid)
-          )
-        ) {
-          continue;
+        if (isDiagonal) {
+          const sidePassable1 = this.canOccupyCell(currentCellX + deltaX[i], currentCellZ, movementProfile, grid);
+          const sidePassable2 = this.canOccupyCell(currentCellX, currentCellZ + deltaZ[i], movementProfile, grid);
+          if (!sidePassable1 && !sidePassable2) {
+            continue;
+          }
         }
 
         const neighborIndex = neighborZ * grid.width + neighborX;
@@ -725,13 +738,24 @@ export class GameLogicSubsystem implements Subsystem {
         const moveCost = this.pathCost(currentCellX, currentCellZ, neighborX, neighborZ, grid, movementProfile);
         let stepCost = moveCost;
         if (parentCellIndex >= 0) {
-          const deltaPrevX = parentCellX! - currentCellX;
-          const deltaPrevZ = parentCellZ! - currentCellZ;
-          const deltaNowX = currentCellX - neighborX;
-          const deltaNowZ = currentCellZ - neighborZ;
+          const grandParentIndex = parent[parentCellIndex];
+          if (grandParentIndex >= 0) {
+            const [grandCellX, grandCellZ] = this.gridFromIndex(grandParentIndex);
+            const prevDirX = parentCellX! - currentCellX;
+            const prevDirZ = parentCellZ! - currentCellZ;
+            const nextDirX = grandCellX - parentCellX!;
+            const nextDirY = grandCellZ - parentCellZ!;
 
-          if (deltaPrevX !== deltaNowX || deltaPrevZ !== deltaNowZ) {
-            stepCost += 8;
+            if (prevDirX !== nextDirX || prevDirZ !== nextDirY) {
+              const dot = prevDirX * nextDirX + prevDirZ * nextDirY;
+              if (dot > 0) {
+                stepCost += 4;
+              } else if (dot === 0) {
+                stepCost += 8;
+              } else {
+                stepCost += 16;
+              }
+            }
           }
         }
 
@@ -766,10 +790,10 @@ export class GameLogicSubsystem implements Subsystem {
 
     return {
       canCrossWater: false,
-      canCrossCliff: false,
+      canCrossCliff: true,
       canCrossRubble: false,
       canPassObstacle: false,
-      avoidPinched: true,
+      avoidPinched: false,
     };
   }
 
@@ -796,22 +820,32 @@ export class GameLogicSubsystem implements Subsystem {
       return MAX_PATH_COST;
     }
 
-    if (type === NAV_CLIFF) {
-      cost += COST_CLIFF;
-    } else if (type === NAV_RUBBLE) {
-      cost += COST_RUBBLE;
+    if (type === NAV_CLIFF && grid.pinched[index] === 0) {
+      const fromWorldX = fromX * MAP_XY_FACTOR;
+      const fromWorldZ = fromZ * MAP_XY_FACTOR;
+      const toWorldX = toX * MAP_XY_FACTOR;
+      const toWorldZ = toZ * MAP_XY_FACTOR;
+      if (this.mapHeightmap && Math.abs(
+        this.mapHeightmap.getWorldHeight(fromWorldX, fromWorldZ)
+        - this.mapHeightmap.getWorldHeight(toWorldX, toWorldZ),
+      ) < MAP_XY_FACTOR) {
+        cost += 7 * COST_DIAGONAL;
+      }
     }
     if (grid.pinched[index] === 1) {
       cost += COST_ORTHOGONAL;
     }
+
     return cost;
   }
 
   private pathHeuristic(cellX: number, cellZ: number, targetX: number, targetZ: number): number {
     const dx = Math.abs(cellX - targetX);
     const dz = Math.abs(cellZ - targetZ);
-    const diagonal = Math.min(dx, dz);
-    return COST_DIAGONAL * diagonal + COST_ORTHOGONAL * (dx + dz - 2 * diagonal);
+    if (dx > dz) {
+      return COST_ORTHOGONAL * dx + (COST_ORTHOGONAL * dz) / 2;
+    }
+    return COST_ORTHOGONAL * dz + (COST_ORTHOGONAL * dx) / 2;
   }
 
   private reconstructPath(parent: Int32Array, startIndex: number, goalIndex: number): { x: number; z: number }[] {
@@ -845,6 +879,7 @@ export class GameLogicSubsystem implements Subsystem {
     let anchor = 0;
     let candidate = 2;
     smoothed.push(cells[0]!);
+    const optimizeProfile: PathfindingProfile = { ...profile, avoidPinched: true };
 
     while (anchor < cells.length - 1) {
       if (candidate >= cells.length) {
@@ -856,7 +891,7 @@ export class GameLogicSubsystem implements Subsystem {
         break;
       }
 
-      if (this.gridLineClear(cells[anchor]!, cells[candidate]!, this.navigationGrid, profile)) {
+      if (this.gridLineClear(cells[anchor]!, cells[candidate]!, this.navigationGrid, optimizeProfile)) {
         candidate += 1;
       } else {
         smoothed.push(cells[candidate - 1]!);
@@ -900,10 +935,9 @@ export class GameLogicSubsystem implements Subsystem {
         return false;
       }
       if (nextX !== x && nextZ !== z) {
-        if (
-          !this.canOccupyCell(nextX, z, profile, grid)
-          || !this.canOccupyCell(x, nextZ, profile, grid)
-        ) {
+        const sidePassable1 = this.canOccupyCell(nextX, z, profile, grid);
+        const sidePassable2 = this.canOccupyCell(x, nextZ, profile, grid);
+        if (!sidePassable1 && !sidePassable2) {
           return false;
         }
       }
@@ -920,7 +954,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     const index = cellZ * nav.width + cellX;
     const terrain = nav.terrainType[index];
-
+    if (nav.blocked[index] === 1 && !profile.canPassObstacle) {
+      return false;
+    }
     if (terrain === NAV_OBSTACLE) {
       return !!profile.canPassObstacle;
     }
@@ -978,16 +1014,18 @@ export class GameLogicSubsystem implements Subsystem {
   private buildNavigationGrid(mapData: MapDataJSON | null, heightmap: HeightmapGrid | null): NavigationGrid | null {
     if (!mapData || !heightmap) return null;
 
-    const total = heightmap.width * heightmap.height;
+    const cellWidth = Math.max(1, heightmap.width - 1);
+    const cellHeight = Math.max(1, heightmap.height - 1);
+    const total = cellWidth * cellHeight;
     const terrainType = new Uint8Array(total);
     const blocked = new Uint8Array(total);
     const pinched = new Uint8Array(total);
 
-    const waterCells = this.buildWaterCellsFromTriggers(mapData, heightmap);
+    const waterCells = this.buildWaterCellsFromTriggers(mapData, heightmap, cellWidth, cellHeight);
 
-    for (let z = 0; z < heightmap.height; z++) {
-      for (let x = 0; x < heightmap.width; x++) {
-        const index = z * heightmap.width + x;
+    for (let z = 0; z < cellHeight; z++) {
+      for (let x = 0; x < cellWidth; x++) {
+        const index = z * cellWidth + x;
         if (waterCells[index]) {
           terrainType[index] = NAV_WATER;
           continue;
@@ -1009,12 +1047,13 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // Expand cliff zones once to neighboring cells and mark those as pinched, similar in spirit to
-    // the source implementation's "pinched -> cliff" treatment.
+    // Expand cliff zones one cell to mark adjacent passable cells as pinched, then
+    // convert those pinched clear cells to cliff and add a second pinched border around
+    // every cliff cell, matching the source pathfinder's classifyMap sequence.
     const expand1 = new Uint8Array(total);
-    for (let z = 0; z < heightmap.height; z++) {
-      for (let x = 0; x < heightmap.width; x++) {
-        const index = z * heightmap.width + x;
+    for (let z = 0; z < cellHeight; z++) {
+      for (let x = 0; x < cellWidth; x++) {
+        const index = z * cellWidth + x;
         if (terrainType[index] !== NAV_CLIFF) {
           continue;
         }
@@ -1023,7 +1062,7 @@ export class GameLogicSubsystem implements Subsystem {
             if (!this.isMapCellInBounds(kx, kz)) {
               continue;
             }
-            const nIndex = kz * heightmap.width + kx;
+            const nIndex = kz * cellWidth + kx;
             if (terrainType[nIndex] === NAV_CLEAR) {
               expand1[nIndex] = 1;
             }
@@ -1036,21 +1075,24 @@ export class GameLogicSubsystem implements Subsystem {
         pinched[i] = 1;
       }
     }
-    for (let z = 0; z < heightmap.height; z++) {
-      for (let x = 0; x < heightmap.width; x++) {
-        const index = z * heightmap.width + x;
+    for (let i = 0; i < total; i++) {
+      if (pinched[i] === 1 && terrainType[i] === NAV_CLEAR) {
+        terrainType[i] = NAV_CLIFF;
+      }
+    }
+    for (let z = 0; z < cellHeight; z++) {
+      for (let x = 0; x < cellWidth; x++) {
+        const index = z * cellWidth + x;
         if (!pinched[index]) {
           continue;
         }
-        if (terrainType[index] === NAV_CLIFF) {
-          continue;
-        }
+        terrainType[index] = NAV_CLIFF;
         for (let kx = x - 1; kx <= x + 1; kx++) {
           for (let kz = z - 1; kz <= z + 1; kz++) {
             if (!this.isMapCellInBounds(kx, kz)) {
               continue;
             }
-            const nIndex = kz * heightmap.width + kx;
+            const nIndex = kz * cellWidth + kx;
             if (terrainType[nIndex] === NAV_CLEAR) {
               pinched[nIndex] = 1;
             }
@@ -1060,8 +1102,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const grid: NavigationGrid = {
-      width: heightmap.width,
-      height: heightmap.height,
+      width: cellWidth,
+      height: cellHeight,
       terrainType,
       blocked,
       pinched,
@@ -1081,9 +1123,72 @@ export class GameLogicSubsystem implements Subsystem {
           if (!this.isMapCellInBounds(x, z)) {
             continue;
           }
-          const obstacleIndex = z * heightmap.width + x;
+          const obstacleIndex = z * grid.width + x;
           blocked[obstacleIndex] = 1;
           terrainType[obstacleIndex] = NAV_OBSTACLE;
+        }
+      }
+    }
+
+    for (let z = 0; z < grid.height; z++) {
+      for (let x = 0; x < grid.width; x++) {
+        const index = z * grid.width + x;
+        if (terrainType[index] !== NAV_CLEAR || blocked[index] === 1) {
+          continue;
+        }
+
+        let totalOpenCount = 0;
+        let orthogonalOpenCount = 0;
+        for (let kx = x - 1; kx <= x + 1; kx++) {
+          for (let kz = z - 1; kz <= z + 1; kz++) {
+            if (!this.isMapCellInBounds(kx, kz)) {
+              continue;
+            }
+            if (kx === x && kz === z) {
+              continue;
+            }
+            const adjacentIndex = kz * grid.width + kx;
+            if (terrainType[adjacentIndex] === NAV_CLEAR && blocked[adjacentIndex] === 0) {
+              totalOpenCount++;
+              if (kx === x || kz === z) {
+                orthogonalOpenCount++;
+              }
+            }
+          }
+        }
+        if (orthogonalOpenCount < 2 || totalOpenCount < 4) {
+          blocked[index] = 1;
+        }
+      }
+    }
+
+    // Match source behavior: clear cells orthogonally touching obstacles are pinched but not blocked.
+    for (let z = 0; z < grid.height; z++) {
+      for (let x = 0; x < grid.width; x++) {
+        const index = z * grid.width + x;
+        if (terrainType[index] !== NAV_CLEAR || blocked[index] === 1) {
+          continue;
+        }
+        let touchesObstacle = false;
+        for (let kx = x - 1; kx <= x + 1; kx++) {
+          for (let kz = z - 1; kz <= z + 1; kz++) {
+            if (!this.isMapCellInBounds(kx, kz)) {
+              continue;
+            }
+            if (kx === x || kz === z) {
+              const obstacleIndex = kz * grid.width + kx;
+              if (blocked[obstacleIndex] === 1) {
+                touchesObstacle = true;
+                break;
+              }
+            }
+          }
+          if (touchesObstacle) {
+            break;
+          }
+        }
+        if (touchesObstacle) {
+          pinched[index] = 1;
         }
       }
     }
@@ -1091,8 +1196,13 @@ export class GameLogicSubsystem implements Subsystem {
     return grid;
   }
 
-  private buildWaterCellsFromTriggers(mapData: MapDataJSON, heightmap: HeightmapGrid): Uint8Array {
-    const waterCells = new Uint8Array(heightmap.width * heightmap.height);
+  private buildWaterCellsFromTriggers(
+    mapData: MapDataJSON,
+    heightmap: HeightmapGrid,
+    cellWidth = heightmap.width - 1,
+    cellHeight = heightmap.height - 1,
+  ): Uint8Array {
+    const waterCells = new Uint8Array(cellWidth * cellHeight);
     const waterPolygons = mapData.triggers.filter((trigger) => trigger.isWaterArea || trigger.isRiver)
       .map((trigger) => ({
         points: trigger.points,
@@ -1102,12 +1212,19 @@ export class GameLogicSubsystem implements Subsystem {
         maxZ: Math.max(...trigger.points.map((point) => point.y)),
       }));
 
-    for (let z = 0; z < heightmap.height; z++) {
-      for (let x = 0; x < heightmap.width; x++) {
-        const worldX = x * PATHFIND_CELL_SIZE;
-        const worldZ = z * PATHFIND_CELL_SIZE;
-        const index = z * heightmap.width + x;
-        if (this.isWaterAt(worldX, worldZ, waterPolygons)) {
+    for (let z = 0; z < cellHeight; z++) {
+      for (let x = 0; x < cellWidth; x++) {
+        const index = z * cellWidth + x;
+        const worldX0 = x * PATHFIND_CELL_SIZE;
+        const worldZ0 = z * PATHFIND_CELL_SIZE;
+        const worldX1 = worldX0 + PATHFIND_CELL_SIZE;
+        const worldZ1 = worldZ0 + PATHFIND_CELL_SIZE;
+        if (
+          this.isWaterAt(worldX0, worldZ0, waterPolygons)
+          || this.isWaterAt(worldX1, worldZ0, waterPolygons)
+          || this.isWaterAt(worldX1, worldZ1, waterPolygons)
+          || this.isWaterAt(worldX0, worldZ1, waterPolygons)
+        ) {
           waterCells[index] = 1;
         }
       }
@@ -1167,9 +1284,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!this.mapHeightmap) return false;
     return (
       cellX >= 0 &&
-      cellX < this.mapHeightmap.width &&
+      cellX < this.mapHeightmap.width - 1 &&
       cellZ >= 0 &&
-      cellZ < this.mapHeightmap.height
+      cellZ < this.mapHeightmap.height - 1
     );
   }
 
@@ -1191,9 +1308,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private gridToWorld(cellX: number, cellZ: number): VectorXZ {
+    const halfCell = MAP_XY_FACTOR / 2;
     return {
-      x: cellX * MAP_XY_FACTOR,
-      z: cellZ * MAP_XY_FACTOR,
+      x: cellX * MAP_XY_FACTOR + halfCell,
+      z: cellZ * MAP_XY_FACTOR + halfCell,
     };
   }
 

@@ -9,7 +9,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./ralph-loop.sh --count <N> --prompt <PROMPT> [--session-id <SESSION_ID>] [--non-interactive] [--log-file <PATH>] -- [codex args...]
+  ./ralph-loop.sh --count <N> --prompt <PROMPT> [--session-id <SESSION_ID>] [--non-interactive] [--sandbox <read-only|workspace-write|danger-full-access>] [--bypass-sandbox] [--log-file <PATH>] -- [codex args...]
 
 Examples:
   ./ralph-loop.sh --count 5 --prompt "Please continue from where you left off."
@@ -17,6 +17,8 @@ Examples:
   ./ralph-loop.sh --count 5 --prompt "Please continue." --session-id <SESSION_ID> -- --no-alt-screen
   ./ralph-loop.sh --count 5 --prompt "Please continue." --session-id <SESSION_ID> --non-interactive -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --log-file /tmp/ralph-loop.log
+  ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --sandbox danger-full-access -- -c model="gpt-5.3-codex-spark"
+  ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --bypass-sandbox -- -c model="gpt-5.3-codex-spark"
 EOF
   exit 1
 }
@@ -28,6 +30,8 @@ sleep_seconds=0
 session_id=""
 interactive=1
 log_file=""
+codex_sandbox=""
+bypass_sandbox=0
 run_id="$(date +%s)"
 
 while [[ $# -gt 0 ]]; do
@@ -48,9 +52,25 @@ while [[ $# -gt 0 ]]; do
       session_id="$2"
       shift 2
       ;;
+    --sandbox)
+      codex_sandbox="$2"
+      case "$codex_sandbox" in
+        read-only|workspace-write|danger-full-access)
+          ;;
+        *)
+          echo "Error: --sandbox must be read-only, workspace-write, or danger-full-access." >&2
+          usage
+          ;;
+      esac
+      shift 2
+      ;;
     --log-file)
       log_file="$2"
       shift 2
+      ;;
+    --bypass-sandbox)
+      bypass_sandbox=1
+      shift
       ;;
     --non-interactive)
       interactive=0
@@ -105,6 +125,16 @@ else
     start_codex_cmd=(codex exec)
     resume_codex_cmd=(codex exec resume --last)
   fi
+fi
+
+if [[ -n "$codex_sandbox" ]]; then
+  start_codex_cmd=("${start_codex_cmd[@]:0:1}" -s "$codex_sandbox" "${start_codex_cmd[@]:1}")
+  resume_codex_cmd=("${resume_codex_cmd[@]:0:1}" -s "$codex_sandbox" "${resume_codex_cmd[@]:1}")
+fi
+
+if (( bypass_sandbox )); then
+  start_codex_cmd=("${start_codex_cmd[@]:0:1}" --dangerously-bypass-approvals-and-sandbox "${start_codex_cmd[@]:1}")
+  resume_codex_cmd=("${resume_codex_cmd[@]:0:1}" --dangerously-bypass-approvals-and-sandbox "${resume_codex_cmd[@]:1}")
 fi
 
 if (( ${#codex_args[@]} > 0 )); then
