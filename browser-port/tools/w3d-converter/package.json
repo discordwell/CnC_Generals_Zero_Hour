@@ -1,0 +1,7 @@
+{
+  "name": "@generals/tool-w3d-converter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/cli.ts"
+}
