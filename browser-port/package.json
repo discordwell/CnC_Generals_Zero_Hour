@@ -20,7 +20,9 @@
     "convert:ini": "tsx tools/ini-parser/src/cli.ts",
     "convert:w3d": "tsx tools/w3d-converter/src/cli.ts",
     "convert:big": "tsx tools/big-extractor/src/cli.ts",
-    "convert:map": "tsx tools/map-converter/src/cli.ts"
+    "convert:map": "tsx tools/map-converter/src/cli.ts",
+    "convert:texture": "tsx tools/texture-converter/src/cli.ts",
+    "convert:all": "tsx tools/convert-all.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
