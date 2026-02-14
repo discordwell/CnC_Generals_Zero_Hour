@@ -15,7 +15,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "lint": "eslint 'packages/*/src/**/*.ts' 'tools/*/src/**/*.ts'",
-    "typecheck": "tsc --build --noEmit",
+    "typecheck": "tsc --build",
     "clean": "rm -rf packages/*/dist tools/*/dist",
     "convert:ini": "tsx tools/ini-parser/src/cli.ts",
     "convert:w3d": "tsx tools/w3d-converter/src/cli.ts",

@@ -163,7 +163,7 @@ describe('HeightmapGrid', () => {
         }
       }
       const hm = new HeightmapGrid(4, 4, 0, data);
-      const [nx, ny, _nz] = hm.getNormal(1, 1);
+      const [nx, ny] = hm.getNormal(1, 1);
       // Slope goes uphill in +X, so normal should tilt in -X
       expect(nx).toBeLessThan(0);
       expect(ny).toBeGreaterThan(0);

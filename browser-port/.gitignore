@@ -11,6 +11,10 @@ tools/*/src/**/*.js
 tools/*/src/**/*.js.map
 tools/*/src/**/*.d.ts
 tools/*/src/**/*.d.ts.map
+tools/convert-all.js
+tools/convert-all.js.map
+tools/convert-all.d.ts
+tools/convert-all.d.ts.map
 vite.config.js
 vite.config.js.map
 vite.config.d.ts
@@ -19,6 +23,13 @@ vitest.config.js
 vitest.config.js.map
 vitest.config.d.ts
 vitest.config.d.ts.map
+playwright.config.js
+playwright.config.js.map
+playwright.config.d.ts
+playwright.config.d.ts.map
+
+# Playwright
+test-results/
 
 # Raw game assets (user must provide)
 assets/

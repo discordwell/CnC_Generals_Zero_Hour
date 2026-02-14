@@ -424,7 +424,7 @@ describe('DataChunkReader', () => {
 
       // ASCII_STRING
       off = writeInt32(view, off, (4 << 8) | 3);
-      off = writePrefixedAscii(view, off, 'hi');
+      writePrefixedAscii(view, off, 'hi');
 
       const reader = new DataChunkReader(buffer);
       const dict = reader.readDict();

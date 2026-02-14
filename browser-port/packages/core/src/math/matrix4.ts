@@ -1,4 +1,3 @@
-// @ts-nocheck — all indexed accesses are to valid offsets of a 16-element Float64Array
 import { Vector3 } from './vector3.js';
 
 /**
@@ -66,15 +65,15 @@ export class Matrix4 {
     const be = b.elements;
     const e = this.elements;
 
-    const a00 = ae[0], a01 = ae[4], a02 = ae[8],  a03 = ae[12];
-    const a10 = ae[1], a11 = ae[5], a12 = ae[9],  a13 = ae[13];
-    const a20 = ae[2], a21 = ae[6], a22 = ae[10], a23 = ae[14];
-    const a30 = ae[3], a31 = ae[7], a32 = ae[11], a33 = ae[15];
+    const a00 = ae[0]!, a01 = ae[4]!, a02 = ae[8]!,  a03 = ae[12]!;
+    const a10 = ae[1]!, a11 = ae[5]!, a12 = ae[9]!,  a13 = ae[13]!;
+    const a20 = ae[2]!, a21 = ae[6]!, a22 = ae[10]!, a23 = ae[14]!;
+    const a30 = ae[3]!, a31 = ae[7]!, a32 = ae[11]!, a33 = ae[15]!;
 
-    const b00 = be[0], b01 = be[4], b02 = be[8],  b03 = be[12];
-    const b10 = be[1], b11 = be[5], b12 = be[9],  b13 = be[13];
-    const b20 = be[2], b21 = be[6], b22 = be[10], b23 = be[14];
-    const b30 = be[3], b31 = be[7], b32 = be[11], b33 = be[15];
+    const b00 = be[0]!, b01 = be[4]!, b02 = be[8]!,  b03 = be[12]!;
+    const b10 = be[1]!, b11 = be[5]!, b12 = be[9]!,  b13 = be[13]!;
+    const b20 = be[2]!, b21 = be[6]!, b22 = be[10]!, b23 = be[14]!;
+    const b30 = be[3]!, b31 = be[7]!, b32 = be[11]!, b33 = be[15]!;
 
     e[0]  = a00 * b00 + a01 * b10 + a02 * b20 + a03 * b30;
     e[4]  = a00 * b01 + a01 * b11 + a02 * b21 + a03 * b31;
@@ -103,9 +102,9 @@ export class Matrix4 {
   transformPoint(v: Readonly<Vector3>, out = new Vector3()): Vector3 {
     const e = this.elements;
     const x = v.x, y = v.y, z = v.z;
-    out.x = e[0] * x + e[4] * y + e[8]  * z + e[12];
-    out.y = e[1] * x + e[5] * y + e[9]  * z + e[13];
-    out.z = e[2] * x + e[6] * y + e[10] * z + e[14];
+    out.x = e[0]! * x + e[4]! * y + e[8]!  * z + e[12]!;
+    out.y = e[1]! * x + e[5]! * y + e[9]!  * z + e[13]!;
+    out.z = e[2]! * x + e[6]! * y + e[10]! * z + e[14]!;
     return out;
   }
 
@@ -113,9 +112,9 @@ export class Matrix4 {
   transformDirection(v: Readonly<Vector3>, out = new Vector3()): Vector3 {
     const e = this.elements;
     const x = v.x, y = v.y, z = v.z;
-    out.x = e[0] * x + e[4] * y + e[8]  * z;
-    out.y = e[1] * x + e[5] * y + e[9]  * z;
-    out.z = e[2] * x + e[6] * y + e[10] * z;
+    out.x = e[0]! * x + e[4]! * y + e[8]!  * z;
+    out.y = e[1]! * x + e[5]! * y + e[9]!  * z;
+    out.z = e[2]! * x + e[6]! * y + e[10]! * z;
     return out;
   }
 
@@ -129,9 +128,9 @@ export class Matrix4 {
 
   getTranslation(out = new Vector3()): Vector3 {
     const e = this.elements;
-    out.x = e[12];
-    out.y = e[13];
-    out.z = e[14];
+    out.x = e[12]!;
+    out.y = e[13]!;
+    out.z = e[14]!;
     return out;
   }
 
@@ -191,10 +190,10 @@ export class Matrix4 {
 
   determinant(): number {
     const e = this.elements;
-    const a00 = e[0], a01 = e[4], a02 = e[8],  a03 = e[12];
-    const a10 = e[1], a11 = e[5], a12 = e[9],  a13 = e[13];
-    const a20 = e[2], a21 = e[6], a22 = e[10], a23 = e[14];
-    const a30 = e[3], a31 = e[7], a32 = e[11], a33 = e[15];
+    const a00 = e[0]!, a01 = e[4]!, a02 = e[8]!,  a03 = e[12]!;
+    const a10 = e[1]!, a11 = e[5]!, a12 = e[9]!,  a13 = e[13]!;
+    const a20 = e[2]!, a21 = e[6]!, a22 = e[10]!, a23 = e[14]!;
+    const a30 = e[3]!, a31 = e[7]!, a32 = e[11]!, a33 = e[15]!;
 
     return (
       a00 * (a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31)) -
@@ -206,10 +205,10 @@ export class Matrix4 {
 
   invert(): this {
     const e = this.elements;
-    const a00 = e[0], a01 = e[4], a02 = e[8],  a03 = e[12];
-    const a10 = e[1], a11 = e[5], a12 = e[9],  a13 = e[13];
-    const a20 = e[2], a21 = e[6], a22 = e[10], a23 = e[14];
-    const a30 = e[3], a31 = e[7], a32 = e[11], a33 = e[15];
+    const a00 = e[0]!, a01 = e[4]!, a02 = e[8]!,  a03 = e[12]!;
+    const a10 = e[1]!, a11 = e[5]!, a12 = e[9]!,  a13 = e[13]!;
+    const a20 = e[2]!, a21 = e[6]!, a22 = e[10]!, a23 = e[14]!;
+    const a30 = e[3]!, a31 = e[7]!, a32 = e[11]!, a33 = e[15]!;
 
     const b00 = a00 * a11 - a01 * a10;
     const b01 = a00 * a12 - a02 * a10;
@@ -251,12 +250,12 @@ export class Matrix4 {
   transpose(): this {
     const e = this.elements;
     let tmp: number;
-    tmp = e[1];  e[1]  = e[4];  e[4]  = tmp;
-    tmp = e[2];  e[2]  = e[8];  e[8]  = tmp;
-    tmp = e[3];  e[3]  = e[12]; e[12] = tmp;
-    tmp = e[6];  e[6]  = e[9];  e[9]  = tmp;
-    tmp = e[7];  e[7]  = e[13]; e[13] = tmp;
-    tmp = e[11]; e[11] = e[14]; e[14] = tmp;
+    tmp = e[1]!;  e[1]  = e[4]!;  e[4]  = tmp;
+    tmp = e[2]!;  e[2]  = e[8]!;  e[8]  = tmp;
+    tmp = e[3]!;  e[3]  = e[12]!; e[12] = tmp;
+    tmp = e[6]!;  e[6]  = e[9]!;  e[9]  = tmp;
+    tmp = e[7]!;  e[7]  = e[13]!; e[13] = tmp;
+    tmp = e[11]!; e[11] = e[14]!; e[14] = tmp;
     return this;
   }
 
