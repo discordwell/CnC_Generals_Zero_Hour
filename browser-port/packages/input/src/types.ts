@@ -60,6 +60,14 @@ export interface InputState {
   readonly wheelDelta: number;
   /** Whether middle mouse button is currently held. */
   readonly middleMouseDown: boolean;
+  /** Whether left mouse button is currently held. */
+  readonly leftMouseDown: boolean;
+  /** Whether right mouse button is currently held. */
+  readonly rightMouseDown: boolean;
+  /** Left click occurred this frame. */
+  readonly leftMouseClick: boolean;
+  /** Right click occurred this frame. */
+  readonly rightMouseClick: boolean;
   /** Middle mouse drag delta since last frame (pixels). */
   readonly middleDragDx: number;
   readonly middleDragDy: number;

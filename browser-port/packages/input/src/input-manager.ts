@@ -20,6 +20,10 @@ export class InputManager implements Subsystem {
   // Mouse
   private _mouseX = 0;
   private _mouseY = 0;
+  private _mouseClientX = 0;
+  private _mouseClientY = 0;
+  private _viewportWidth = 1;
+  private _viewportHeight = 1;
   private _pointerInCanvas = true;
 
   // Wheel
@@ -27,6 +31,10 @@ export class InputManager implements Subsystem {
 
   // Middle mouse drag
   private _middleMouseDown = false;
+  private _leftMouseDown = false;
+  private _rightMouseDown = false;
+  private _leftMouseClick = false;
+  private _rightMouseClick = false;
   private _middleDragDx = 0;
   private _middleDragDy = 0;
   private _lastMiddleX = 0;
@@ -61,8 +69,9 @@ export class InputManager implements Subsystem {
     };
 
     this._onMouseMove = (e) => {
-      this._mouseX = e.clientX;
-      this._mouseY = e.clientY;
+      this._mouseClientX = e.clientX;
+      this._mouseClientY = e.clientY;
+      this.updateCanvasMousePosition();
 
       if (this._middleMouseDown) {
         this._middleDragDx += e.clientX - this._lastMiddleX;
@@ -82,18 +91,32 @@ export class InputManager implements Subsystem {
     };
 
     this._onMouseDown = (e) => {
+      this._mouseClientX = e.clientX;
+      this._mouseClientY = e.clientY;
+      this.updateCanvasMousePosition();
       if (e.button === 1) {
         // Middle mouse button
         e.preventDefault();
         this._middleMouseDown = true;
         this._lastMiddleX = e.clientX;
         this._lastMiddleY = e.clientY;
+      } else if (e.button === 0) {
+        this._leftMouseDown = true;
+        this._leftMouseClick = true;
+      } else if (e.button === 2) {
+        this._rightMouseDown = true;
+        this._rightMouseClick = true;
+        e.preventDefault();
       }
     };
 
     this._onMouseUp = (e) => {
       if (e.button === 1) {
         this._middleMouseDown = false;
+      } else if (e.button === 0) {
+        this._leftMouseDown = false;
+      } else if (e.button === 2) {
+        this._rightMouseDown = false;
       }
     };
 
@@ -127,14 +150,19 @@ export class InputManager implements Subsystem {
    * Call this once per frame before the camera update.
    */
   getState(): InputState {
+    this.updateCanvasMousePosition();
     return {
       keysDown: this._keysDown,
       mouseX: this._mouseX,
       mouseY: this._mouseY,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
+      viewportWidth: this._viewportWidth,
+      viewportHeight: this._viewportHeight,
       wheelDelta: this._wheelDelta,
       middleMouseDown: this._middleMouseDown,
+      leftMouseDown: this._leftMouseDown,
+      rightMouseDown: this._rightMouseDown,
+      leftMouseClick: this._leftMouseClick,
+      rightMouseClick: this._rightMouseClick,
       middleDragDx: this._middleDragDx,
       middleDragDy: this._middleDragDy,
       pointerInCanvas: this._pointerInCanvas,
@@ -148,12 +176,18 @@ export class InputManager implements Subsystem {
     this._wheelDelta = 0;
     this._middleDragDx = 0;
     this._middleDragDy = 0;
+    this._leftMouseClick = false;
+    this._rightMouseClick = false;
   }
 
   reset(): void {
     this._keysDown.clear();
     this._wheelDelta = 0;
     this._middleMouseDown = false;
+    this._leftMouseDown = false;
+    this._rightMouseDown = false;
+    this._leftMouseClick = false;
+    this._rightMouseClick = false;
     this._middleDragDx = 0;
     this._middleDragDy = 0;
   }
@@ -170,4 +204,19 @@ export class InputManager implements Subsystem {
     this.canvas.removeEventListener('contextmenu', this._onContextMenu);
     this._keysDown.clear();
   }
+
+  private updateCanvasMousePosition(): void {
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.max(1, rect.width);
+    const height = Math.max(1, rect.height);
+    this._viewportWidth = width;
+    this._viewportHeight = height;
+
+    this._mouseX = clamp(this._mouseClientX - rect.left, 0, width);
+    this._mouseY = clamp(this._mouseClientY - rect.top, 0, height);
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

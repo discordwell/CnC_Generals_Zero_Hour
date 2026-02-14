@@ -15,6 +15,7 @@
     { "path": "../assets" },
     { "path": "../terrain" },
     { "path": "../input" },
-    { "path": "../ini-data" }
+    { "path": "../ini-data" },
+    { "path": "../game-logic" }
   ]
 }

@@ -13,6 +13,7 @@ import { TerrainVisual, WaterVisual } from '@generals/terrain';
 import type { MapDataJSON } from '@generals/terrain';
 import { InputManager, RTSCamera } from '@generals/input';
 import { IniDataRegistry, type IniDataBundle } from '@generals/ini-data';
+import { GameLogicSubsystem } from '@generals/game-logic';
 
 // ============================================================================
 // Loading screen
@@ -100,6 +101,10 @@ async function init(): Promise<void> {
   const waterVisual = new WaterVisual(scene);
   subsystems.register(waterVisual);
 
+  // Game logic + object visuals
+  const gameLogic = new GameLogicSubsystem(scene);
+  subsystems.register(gameLogic);
+
   await subsystems.initAll();
 
   // ========================================================================
@@ -175,14 +180,25 @@ async function init(): Promise<void> {
 
   // Load water surfaces
   waterVisual.loadFromMapData(mapData);
+  const heightmap = terrainVisual.getHeightmap();
+  if (!heightmap) {
+    throw new Error('Failed to initialize terrain heightmap');
+  }
+
+  const objectPlacement = gameLogic.loadMapObjects(mapData, iniDataRegistry, heightmap);
+  if (objectPlacement.unresolvedObjects > 0) {
+    console.warn(
+      `Object resolve summary: ${objectPlacement.resolvedObjects}/${objectPlacement.spawnedObjects} objects resolved`,
+    );
+  }
+  const objectStatus = ` | Objects: ${objectPlacement.spawnedObjects}/${objectPlacement.totalObjects} ` +
+    `(unresolved: ${objectPlacement.unresolvedObjects})`;
 
   setLoadingProgress(70, 'Configuring camera...');
 
   // ========================================================================
   // Camera setup
   // ========================================================================
-
-  const heightmap = terrainVisual.getHeightmap()!;
 
   // Set camera height query for terrain following
   rtsCamera.setHeightQuery((x, z) => heightmap.getInterpolatedHeight(x, z));
@@ -220,8 +236,11 @@ async function init(): Promise<void> {
 
   gameLoop.start({
     onSimulationStep(_frameNumber: number, dt: number) {
+      const inputState = inputManager.getState();
+      gameLogic.handlePointerInput(inputState, camera);
+
       // Feed input to camera
-      rtsCamera.setInputState(inputManager.getState());
+      rtsCamera.setInputState(inputState);
 
       // Update all subsystems (InputManager resets accumulators,
       // RTSCamera processes input, WaterVisual animates UVs)
@@ -245,8 +264,10 @@ async function init(): Promise<void> {
         ? `${hm.width}x${hm.height}`
         : 'none';
       const wireInfo = terrainVisual.isWireframe() ? ' [wireframe]' : '';
+      const selectedInfo = gameLogic.getSelectedEntityId();
       debugInfo.textContent =
-        `FPS: ${displayFps} | Map: ${mapInfo}${wireInfo}${dataSuffix} | Frame: ${gameLoop.getFrameNumber()}`;
+        `FPS: ${displayFps} | Map: ${mapInfo}${wireInfo}${dataSuffix}${objectStatus} | Sel: ` +
+        `${selectedInfo === null ? 'none' : `#${selectedInfo}`} | Frame: ${gameLoop.getFrameNumber()}`;
     },
   });
 
@@ -269,9 +290,10 @@ async function init(): Promise<void> {
     '%c C&C Generals: Zero Hour — Browser Edition ',
     'background: #1a1a2e; color: #c9a84c; font-size: 16px; padding: 8px;',
   );
-  console.log('Stage 3: Terrain rendering & RTS camera active.');
+  console.log('Stage 3: Terrain + map entities bootstrapped.');
   console.log(`Terrain: ${heightmap.width}x${heightmap.height} (${mapPath ?? 'procedural demo'})`);
-  console.log('Controls: WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
+  console.log(`Placed ${objectPlacement.spawnedObjects}/${objectPlacement.totalObjects} objects from map data.`);
+  console.log('Controls: LMB=select, RMB=move, WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
 }
 
 init().catch((err) => {
