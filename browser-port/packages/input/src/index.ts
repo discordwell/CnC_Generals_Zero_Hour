@@ -1,3 +1,4 @@
-// @generals/input — Stage placeholder
-// This package will be implemented in a later stage.
-export {};
+export * from './types.js';
+export { InputManager } from './input-manager.js';
+export { RTSCamera } from './rts-camera.js';
+export type { HeightQueryFn } from './rts-camera.js';

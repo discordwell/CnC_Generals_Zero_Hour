@@ -1,12 +1,16 @@
 /**
  * C&C Generals: Zero Hour — Browser Port
  *
- * Application entry point. Initializes all engine subsystems, sets up
- * the Three.js renderer, and starts the game loop.
+ * Application entry point. Wires subsystems: InputManager, RTSCamera,
+ * TerrainVisual, WaterVisual. Loads either a converted map JSON
+ * (via ?map=path.json URL param) or a procedural demo terrain.
  */
 
 import * as THREE from 'three';
-import { GameLoop, SubsystemRegistry, Vector3 } from '@generals/core';
+import { GameLoop, SubsystemRegistry } from '@generals/core';
+import { TerrainVisual, WaterVisual } from '@generals/terrain';
+import type { MapDataJSON } from '@generals/terrain';
+import { InputManager, RTSCamera } from '@generals/input';
 
 // ============================================================================
 // Loading screen
@@ -38,165 +42,145 @@ async function init(): Promise<void> {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setClearColor(0x1a1a2e);
 
-  setLoadingProgress(30, 'Setting up scene...');
+  setLoadingProgress(20, 'Setting up scene...');
 
-  // Basic scene setup — will be replaced by terrain renderer in Stage 3
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x333344, 0.002);
+  scene.fog = new THREE.FogExp2(0x87a5b5, 0.0008);
 
-  // RTS camera (looking down at an angle)
+  // Camera
   const camera = new THREE.PerspectiveCamera(
     45,
     window.innerWidth / window.innerHeight,
     1,
     5000,
   );
-  camera.position.set(0, 300, 300);
-  camera.lookAt(0, 0, 0);
 
   // Lighting
-  const ambientLight = new THREE.AmbientLight(0x404060, 0.6);
+  const ambientLight = new THREE.AmbientLight(0x607080, 0.7);
   scene.add(ambientLight);
 
-  const directionalLight = new THREE.DirectionalLight(0xfff4e0, 1.2);
-  directionalLight.position.set(200, 400, 200);
-  directionalLight.castShadow = true;
-  scene.add(directionalLight);
+  const sunLight = new THREE.DirectionalLight(0xfff4e0, 1.3);
+  sunLight.position.set(200, 400, 200);
+  sunLight.castShadow = true;
+  scene.add(sunLight);
 
-  setLoadingProgress(50, 'Creating placeholder terrain...');
+  // Hemisphere light for natural sky/ground coloring
+  const hemiLight = new THREE.HemisphereLight(0x88aacc, 0x445533, 0.4);
+  scene.add(hemiLight);
 
-  // Placeholder terrain grid — will be replaced by heightmap renderer
-  const gridSize = 512;
-  const gridDivisions = 64;
-  const terrainGeometry = new THREE.PlaneGeometry(
-    gridSize,
-    gridSize,
-    gridDivisions,
-    gridDivisions,
-  );
-  terrainGeometry.rotateX(-Math.PI / 2);
+  setLoadingProgress(30, 'Initializing subsystems...');
 
-  // Add some height variation to the placeholder
-  const positions = terrainGeometry.attributes.position!;
-  for (let i = 0; i < positions.count; i++) {
-    const x = positions.getX(i);
-    const z = positions.getZ(i);
-    const height =
-      Math.sin(x * 0.02) * 5 +
-      Math.cos(z * 0.03) * 3 +
-      Math.sin((x + z) * 0.01) * 8;
-    positions.setY(i, height);
-  }
-  terrainGeometry.computeVertexNormals();
+  // ========================================================================
+  // Subsystems
+  // ========================================================================
 
-  const terrainMaterial = new THREE.MeshLambertMaterial({
-    color: 0x8b7355,
-    wireframe: false,
-  });
-  const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
-  scene.add(terrain);
+  const subsystems = new SubsystemRegistry();
 
-  // Placeholder unit — a simple box standing on the terrain
-  const unitGeometry = new THREE.BoxGeometry(6, 4, 10);
-  const unitMaterial = new THREE.MeshLambertMaterial({ color: 0x3366cc });
-  const unit = new THREE.Mesh(unitGeometry, unitMaterial);
-  unit.position.set(0, 4, 0);
-  scene.add(unit);
+  // Input
+  const inputManager = new InputManager(canvas);
+  subsystems.register(inputManager);
 
-  // Selection ring (projected circle under unit)
-  const ringGeometry = new THREE.RingGeometry(7, 8, 32);
-  ringGeometry.rotateX(-Math.PI / 2);
-  const ringMaterial = new THREE.MeshBasicMaterial({
-    color: 0x00ff00,
-    transparent: true,
-    opacity: 0.6,
-    side: THREE.DoubleSide,
-  });
-  const selectionRing = new THREE.Mesh(ringGeometry, ringMaterial);
-  selectionRing.position.set(0, 0.5, 0);
-  scene.add(selectionRing);
+  // RTS Camera
+  const rtsCamera = new RTSCamera(camera);
+  subsystems.register(rtsCamera);
 
-  setLoadingProgress(70, 'Setting up input...');
+  // Terrain
+  const terrainVisual = new TerrainVisual(scene);
+  subsystems.register(terrainVisual);
 
-  // Basic camera controls (placeholder — will be replaced by RTS camera system)
-  let cameraAngle = 0;
-  let cameraZoom = 300;
-  const cameraTarget = new THREE.Vector3(0, 0, 0);
+  // Water
+  const waterVisual = new WaterVisual(scene);
+  subsystems.register(waterVisual);
 
-  function updateCamera(): void {
-    camera.position.x = cameraTarget.x + Math.sin(cameraAngle) * cameraZoom;
-    camera.position.z = cameraTarget.z + Math.cos(cameraAngle) * cameraZoom;
-    camera.position.y = cameraZoom * 0.8;
-    camera.lookAt(cameraTarget);
+  await subsystems.initAll();
+
+  setLoadingProgress(50, 'Loading terrain...');
+
+  // ========================================================================
+  // Load terrain (map JSON or procedural demo)
+  // ========================================================================
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const mapPath = urlParams.get('map');
+  let mapData: MapDataJSON;
+
+  let loadedFromJSON = false;
+
+  if (mapPath) {
+    try {
+      const response = await fetch(mapPath);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      mapData = await response.json() as MapDataJSON;
+      loadedFromJSON = true;
+    } catch (err) {
+      console.warn(`Failed to load map "${mapPath}":`, err);
+      console.log('Falling back to procedural demo terrain.');
+      const demo = terrainVisual.loadDemoTerrain();
+      mapData = demo.mapData;
+    }
+  } else {
+    const demo = terrainVisual.loadDemoTerrain();
+    mapData = demo.mapData;
   }
 
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    cameraZoom = Math.max(50, Math.min(800, cameraZoom + e.deltaY * 0.5));
-    updateCamera();
-  });
+  // If loaded from JSON, build terrain (demo path already builds it)
+  if (loadedFromJSON) {
+    terrainVisual.loadMap(mapData);
+  }
 
-  // Edge scrolling
-  const scrollSpeed = 5;
-  const edgeSize = 20;
-  let scrollDx = 0;
-  let scrollDz = 0;
+  // Load water surfaces
+  waterVisual.loadFromMapData(mapData);
 
-  canvas.addEventListener('mousemove', (e) => {
-    scrollDx = 0;
-    scrollDz = 0;
-    if (e.clientX < edgeSize) scrollDx = -scrollSpeed;
-    if (e.clientX > window.innerWidth - edgeSize) scrollDx = scrollSpeed;
-    if (e.clientY < edgeSize) scrollDz = -scrollSpeed;
-    if (e.clientY > window.innerHeight - edgeSize) scrollDz = scrollSpeed;
-  });
+  setLoadingProgress(70, 'Configuring camera...');
 
-  // Keyboard camera rotation
-  const keys = new Set<string>();
-  window.addEventListener('keydown', (e) => keys.add(e.key));
-  window.addEventListener('keyup', (e) => keys.delete(e.key));
+  // ========================================================================
+  // Camera setup
+  // ========================================================================
+
+  const heightmap = terrainVisual.getHeightmap()!;
+
+  // Set camera height query for terrain following
+  rtsCamera.setHeightQuery((x, z) => heightmap.getInterpolatedHeight(x, z));
+
+  // Set map bounds
+  rtsCamera.setMapBounds(0, heightmap.worldWidth, 0, heightmap.worldDepth);
+
+  // Center camera on map
+  rtsCamera.lookAt(heightmap.worldWidth / 2, heightmap.worldDepth / 2);
 
   setLoadingProgress(90, 'Starting game loop...');
 
-  // Subsystem registry (empty for now — subsystems added in later stages)
-  const subsystems = new SubsystemRegistry();
+  // ========================================================================
+  // Debug info & keyboard shortcuts
+  // ========================================================================
 
-  // Debug info
   const debugInfo = document.getElementById('debug-info') as HTMLDivElement;
   let frameCount = 0;
   let lastFpsUpdate = performance.now();
   let displayFps = 0;
 
+  // F1 toggle wireframe
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F1') {
+      e.preventDefault();
+      terrainVisual.toggleWireframe();
+    }
+  });
+
+  // ========================================================================
   // Game loop
+  // ========================================================================
+
   const gameLoop = new GameLoop(30);
 
   gameLoop.start({
-    onSimulationStep(frameNumber: number, _dt: number) {
-      // Apply camera scrolling
-      cameraTarget.x += scrollDx;
-      cameraTarget.z += scrollDz;
+    onSimulationStep(_frameNumber: number, dt: number) {
+      // Feed input to camera
+      rtsCamera.setInputState(inputManager.getState());
 
-      // Keyboard rotation
-      if (keys.has('q') || keys.has('Q')) cameraAngle -= 0.03;
-      if (keys.has('e') || keys.has('E')) cameraAngle += 0.03;
-
-      // Keyboard scrolling
-      if (keys.has('ArrowLeft') || keys.has('a')) cameraTarget.x -= scrollSpeed;
-      if (keys.has('ArrowRight') || keys.has('d')) cameraTarget.x += scrollSpeed;
-      if (keys.has('ArrowUp') || keys.has('w')) cameraTarget.z -= scrollSpeed;
-      if (keys.has('ArrowDown') || keys.has('s')) cameraTarget.z += scrollSpeed;
-
-      updateCamera();
-
-      // Animate placeholder unit (rotate in circle)
-      const angle = frameNumber * 0.02;
-      unit.position.x = Math.cos(angle) * 30;
-      unit.position.z = Math.sin(angle) * 30;
-      unit.rotation.y = -angle + Math.PI / 2;
-      selectionRing.position.x = unit.position.x;
-      selectionRing.position.z = unit.position.z;
-
-      subsystems.updateAll(_dt);
+      // Update all subsystems (InputManager resets accumulators,
+      // RTSCamera processes input, WaterVisual animates UVs)
+      subsystems.updateAll(dt);
     },
 
     onRender(_alpha: number) {
@@ -210,7 +194,14 @@ async function init(): Promise<void> {
         frameCount = 0;
         lastFpsUpdate = now;
       }
-      debugInfo.textContent = `FPS: ${displayFps} | Frame: ${gameLoop.getFrameNumber()}`;
+
+      const hm = terrainVisual.getHeightmap();
+      const mapInfo = hm
+        ? `${hm.width}x${hm.height}`
+        : 'none';
+      const wireInfo = terrainVisual.isWireframe() ? ' [wireframe]' : '';
+      debugInfo.textContent =
+        `FPS: ${displayFps} | Map: ${mapInfo}${wireInfo} | Frame: ${gameLoop.getFrameNumber()}`;
     },
   });
 
@@ -233,8 +224,9 @@ async function init(): Promise<void> {
     '%c C&C Generals: Zero Hour — Browser Edition ',
     'background: #1a1a2e; color: #c9a84c; font-size: 16px; padding: 8px;',
   );
-  console.log('Engine initialized. Stage 0 scaffolding active.');
-  console.log(`Core math test: Vector3(1,2,3).length() = ${new Vector3(1, 2, 3).length()}`);
+  console.log('Stage 3: Terrain rendering & RTS camera active.');
+  console.log(`Terrain: ${heightmap.width}x${heightmap.height} (${mapPath ?? 'procedural demo'})`);
+  console.log('Controls: WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
 }
 
 init().catch((err) => {
