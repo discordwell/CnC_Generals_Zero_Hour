@@ -1,0 +1,700 @@
+import { describe, it, expect } from 'vitest';
+import { DataChunkReader, MAP_MAGIC, CHUNK_HEADER_SIZE } from './DataChunkReader.js';
+import { HeightmapExtractor, MAP_HEIGHT_SCALE } from './HeightmapExtractor.js';
+import { MapObjectExtractor } from './MapObjectExtractor.js';
+import { WaypointExtractor } from './WaypointExtractor.js';
+import { MapParser } from './MapParser.js';
+
+// ---------------------------------------------------------------------------
+// Helpers to construct synthetic .map binaries in memory
+// ---------------------------------------------------------------------------
+
+/** Helper: write a uint8 into a DataView and advance cursor. */
+function writeUint8(view: DataView, offset: number, value: number): number {
+  view.setUint8(offset, value);
+  return offset + 1;
+}
+
+/** Helper: write a uint16 LE into a DataView and advance cursor. */
+function writeUint16(view: DataView, offset: number, value: number): number {
+  view.setUint16(offset, value, true);
+  return offset + 2;
+}
+
+/** Helper: write an int32 LE into a DataView and advance cursor. */
+function writeInt32(view: DataView, offset: number, value: number): number {
+  view.setInt32(offset, value, true);
+  return offset + 4;
+}
+
+/** Helper: write a uint32 LE into a DataView and advance cursor. */
+function writeUint32(view: DataView, offset: number, value: number): number {
+  view.setUint32(offset, value, true);
+  return offset + 4;
+}
+
+/** Helper: write a float32 LE into a DataView and advance cursor. */
+function writeFloat32(view: DataView, offset: number, value: number): number {
+  view.setFloat32(offset, value, true);
+  return offset + 4;
+}
+
+/** Helper: write an ASCII string (raw bytes, no prefix) and advance cursor. */
+function writeAscii(view: DataView, offset: number, str: string): number {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+  return offset + str.length;
+}
+
+/** Helper: write a uint16-length-prefixed ASCII string. */
+function writePrefixedAscii(view: DataView, offset: number, str: string): number {
+  offset = writeUint16(view, offset, str.length);
+  offset = writeAscii(view, offset, str);
+  return offset;
+}
+
+/** Chunk type descriptor for building TOCs. */
+interface ChunkDef {
+  name: string;
+  id: number;
+}
+
+/**
+ * Calculate the byte size of a TOC.
+ * 4 (magic) + 4 (count) + sum(1 + name.length + 4) per entry
+ */
+function tocSize(chunks: ChunkDef[]): number {
+  let size = 4 + 4; // magic + count
+  for (const c of chunks) {
+    size += 1 + c.name.length + 4; // strLen(1) + name + id(4)
+  }
+  return size;
+}
+
+/** Write a TOC into a DataView starting at offset 0. Returns offset after TOC. */
+function writeTOC(view: DataView, chunks: ChunkDef[]): number {
+  let off = 0;
+  off = writeAscii(view, off, MAP_MAGIC);
+  off = writeUint32(view, off, chunks.length);
+  for (const c of chunks) {
+    off = writeUint8(view, off, c.name.length);
+    off = writeAscii(view, off, c.name);
+    off = writeUint32(view, off, c.id);
+  }
+  return off;
+}
+
+/**
+ * Write a chunk header (10 bytes): id(4) + version(2) + dataSize(4).
+ * Returns offset after the header.
+ */
+function writeChunkHeader(
+  view: DataView,
+  offset: number,
+  id: number,
+  version: number,
+  dataSize: number,
+): number {
+  offset = writeUint32(view, offset, id);
+  offset = writeUint16(view, offset, version);
+  offset = writeInt32(view, offset, dataSize);
+  return offset;
+}
+
+// ---------------------------------------------------------------------------
+// Build a minimal valid .map binary with HeightMapData chunk (v3)
+// ---------------------------------------------------------------------------
+
+function buildMinimalMap(opts?: {
+  hmWidth?: number;
+  hmHeight?: number;
+  hmBorder?: number;
+  hmVersion?: number;
+}): ArrayBuffer {
+  const hmWidth = opts?.hmWidth ?? 4;
+  const hmHeight = opts?.hmHeight ?? 3;
+  const hmBorder = opts?.hmBorder ?? 1;
+  const hmVersion = opts?.hmVersion ?? 3;
+
+  const chunks: ChunkDef[] = [{ name: 'HeightMapData', id: 1 }];
+
+  // HeightMapData payload: width(4) + height(4) + borderSize(4, v3+) + dataSize(4) + data
+  const hmDataLen = hmWidth * hmHeight;
+  let hmPayload = 4 + 4 + 4; // width, height, dataSize
+  if (hmVersion >= 3) hmPayload += 4; // borderSize
+  hmPayload += hmDataLen; // actual height data
+
+  const totalSize = tocSize(chunks) + CHUNK_HEADER_SIZE + hmPayload;
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+
+  let off = writeTOC(view, chunks);
+  off = writeChunkHeader(view, off, 1, hmVersion, hmPayload);
+
+  // HeightMapData payload
+  off = writeInt32(view, off, hmWidth);
+  off = writeInt32(view, off, hmHeight);
+  if (hmVersion >= 3) {
+    off = writeInt32(view, off, hmBorder);
+  }
+  off = writeInt32(view, off, hmDataLen);
+
+  // Fill height data with increasing values
+  for (let i = 0; i < hmDataLen; i++) {
+    off = writeUint8(view, off, i % 256);
+  }
+
+  return buffer;
+}
+
+// ---------------------------------------------------------------------------
+// Build a map with objects
+// ---------------------------------------------------------------------------
+
+function buildMapWithObjects(): ArrayBuffer {
+  const chunks: ChunkDef[] = [
+    { name: 'HeightMapData', id: 1 },
+    { name: 'ObjectsList', id: 2 },
+    { name: 'Object', id: 3 },
+  ];
+
+  // Minimal heightmap (2x2, v3)
+  const hmDataLen = 4;
+  const hmPayload = 4 + 4 + 4 + 4 + hmDataLen; // width + height + border + dataSize + data
+
+  // Object payload (v2): posX(4) + posY(4) + angle(4) + flags(4) + templateName(2+len) + dict
+  const templateName = 'AmericaCommandCenter';
+  // Dict: 1 pair, key=42, type=INT(1), value=100
+  const dictPayload = 2 + (4 + 4); // pairCount(2) + packed(4) + int32Value(4)
+  const objPayload = 4 + 4 + 4 + 4 + 2 + templateName.length + dictPayload;
+
+  // ObjectsList payload = Object chunk header + object payload
+  const objListPayload = CHUNK_HEADER_SIZE + objPayload;
+
+  const totalSize =
+    tocSize(chunks) +
+    CHUNK_HEADER_SIZE + hmPayload +
+    CHUNK_HEADER_SIZE + objListPayload;
+
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+
+  let off = writeTOC(view, chunks);
+
+  // HeightMapData chunk
+  off = writeChunkHeader(view, off, 1, 3, hmPayload);
+  off = writeInt32(view, off, 2); // width
+  off = writeInt32(view, off, 2); // height
+  off = writeInt32(view, off, 0); // borderSize
+  off = writeInt32(view, off, hmDataLen); // dataSize
+  for (let i = 0; i < hmDataLen; i++) {
+    off = writeUint8(view, off, 128);
+  }
+
+  // ObjectsList chunk
+  off = writeChunkHeader(view, off, 2, 1, objListPayload);
+
+  // Child Object chunk (v2)
+  off = writeChunkHeader(view, off, 3, 2, objPayload);
+  off = writeFloat32(view, off, 100.0); // posX
+  off = writeFloat32(view, off, 200.0); // posY
+  off = writeFloat32(view, off, 45.0);  // angle
+  off = writeInt32(view, off, 0x001);   // flags: DRAWS_IN_MIRROR
+  off = writePrefixedAscii(view, off, templateName);
+
+  // Dict: 1 pair
+  off = writeUint16(view, off, 1); // pairCount
+  off = writeInt32(view, off, (42 << 8) | 1); // key=42, type=INT
+  off = writeInt32(view, off, 100); // value
+
+  return buffer;
+}
+
+// ---------------------------------------------------------------------------
+// Build a map with polygon triggers
+// ---------------------------------------------------------------------------
+
+function buildMapWithTriggers(): ArrayBuffer {
+  const chunks: ChunkDef[] = [
+    { name: 'HeightMapData', id: 1 },
+    { name: 'PolygonTriggers', id: 2 },
+  ];
+
+  // Minimal heightmap (2x2, v3)
+  const hmDataLen = 4;
+  const hmPayload = 4 + 4 + 4 + 4 + hmDataLen;
+
+  // Trigger payload (v2): count(4) + trigger data
+  // One trigger: name(2+len) + id(4) + isWaterArea(1) + pointCount(4) + points
+  const trigName = 'SpawnZone';
+  const numPoints = 3;
+  const trigPayload =
+    4 +              // triggerCount
+    2 + trigName.length + // name
+    4 +              // id
+    1 +              // isWaterArea (v2)
+    4 +              // pointCount
+    numPoints * 12;  // points (x,y,z int32 each)
+
+  const totalSize =
+    tocSize(chunks) +
+    CHUNK_HEADER_SIZE + hmPayload +
+    CHUNK_HEADER_SIZE + trigPayload;
+
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+
+  let off = writeTOC(view, chunks);
+
+  // HeightMapData chunk
+  off = writeChunkHeader(view, off, 1, 3, hmPayload);
+  off = writeInt32(view, off, 2);
+  off = writeInt32(view, off, 2);
+  off = writeInt32(view, off, 0);
+  off = writeInt32(view, off, hmDataLen);
+  for (let i = 0; i < hmDataLen; i++) {
+    off = writeUint8(view, off, 64);
+  }
+
+  // PolygonTriggers chunk (v2)
+  off = writeChunkHeader(view, off, 2, 2, trigPayload);
+  off = writeInt32(view, off, 1); // triggerCount
+  off = writePrefixedAscii(view, off, trigName);
+  off = writeInt32(view, off, 7); // id
+  off = writeUint8(view, off, 1); // isWaterArea = true
+  off = writeInt32(view, off, numPoints);
+  // Point 0
+  off = writeInt32(view, off, 10);
+  off = writeInt32(view, off, 20);
+  off = writeInt32(view, off, 30);
+  // Point 1
+  off = writeInt32(view, off, 40);
+  off = writeInt32(view, off, 50);
+  off = writeInt32(view, off, 60);
+  // Point 2
+  off = writeInt32(view, off, 70);
+  off = writeInt32(view, off, 80);
+  off = writeInt32(view, off, 90);
+
+  return buffer;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('DataChunkReader', () => {
+  describe('readTableOfContents()', () => {
+    it('should parse the magic and chunk labels', () => {
+      const buffer = buildMinimalMap();
+      const reader = new DataChunkReader(buffer);
+      const toc = reader.readTableOfContents();
+
+      expect(toc).toHaveLength(1);
+      expect(toc[0]!.name).toBe('HeightMapData');
+      expect(toc[0]!.id).toBe(1);
+    });
+
+    it('should parse multiple TOC entries', () => {
+      const buffer = buildMapWithObjects();
+      const reader = new DataChunkReader(buffer);
+      const toc = reader.readTableOfContents();
+
+      expect(toc).toHaveLength(3);
+      expect(toc[0]!.name).toBe('HeightMapData');
+      expect(toc[1]!.name).toBe('ObjectsList');
+      expect(toc[2]!.name).toBe('Object');
+    });
+
+    it('should reject invalid magic', () => {
+      const buffer = new ArrayBuffer(16);
+      const view = new DataView(buffer);
+      writeAscii(view, 0, 'XXXX');
+      writeUint32(view, 4, 0);
+
+      const reader = new DataChunkReader(buffer);
+      expect(() => reader.readTableOfContents()).toThrow(/Invalid map magic/);
+    });
+  });
+
+  describe('readChunkHeader()', () => {
+    it('should read chunk id, version, and data size', () => {
+      const buffer = buildMinimalMap();
+      const reader = new DataChunkReader(buffer);
+      reader.readTableOfContents();
+
+      const chunk = reader.readChunkHeader();
+      expect(chunk.id).toBe(1);
+      expect(chunk.version).toBe(3);
+      expect(chunk.dataSize).toBeGreaterThan(0);
+      expect(chunk.dataOffset).toBe(reader.position);
+    });
+  });
+
+  describe('primitive readers', () => {
+    it('should read int32 correctly', () => {
+      const buffer = new ArrayBuffer(4);
+      const view = new DataView(buffer);
+      view.setInt32(0, -12345, true);
+
+      const reader = new DataChunkReader(buffer);
+      expect(reader.readInt32()).toBe(-12345);
+      expect(reader.position).toBe(4);
+    });
+
+    it('should read float32 correctly', () => {
+      const buffer = new ArrayBuffer(4);
+      const view = new DataView(buffer);
+      view.setFloat32(0, 3.14, true);
+
+      const reader = new DataChunkReader(buffer);
+      const val = reader.readFloat32();
+      expect(val).toBeCloseTo(3.14, 2);
+      expect(reader.position).toBe(4);
+    });
+
+    it('should read uint8 correctly', () => {
+      const buffer = new ArrayBuffer(1);
+      const view = new DataView(buffer);
+      view.setUint8(0, 255);
+
+      const reader = new DataChunkReader(buffer);
+      expect(reader.readUint8()).toBe(255);
+    });
+
+    it('should read uint16 correctly', () => {
+      const buffer = new ArrayBuffer(2);
+      const view = new DataView(buffer);
+      view.setUint16(0, 0xBEEF, true);
+
+      const reader = new DataChunkReader(buffer);
+      expect(reader.readUint16()).toBe(0xBEEF);
+    });
+  });
+
+  describe('string readers', () => {
+    it('should read a uint16-prefixed ASCII string', () => {
+      const str = 'Hello';
+      const buffer = new ArrayBuffer(2 + str.length);
+      const view = new DataView(buffer);
+      writePrefixedAscii(view, 0, str);
+
+      const reader = new DataChunkReader(buffer);
+      expect(reader.readAsciiString()).toBe('Hello');
+      expect(reader.position).toBe(2 + str.length);
+    });
+
+    it('should read an empty string', () => {
+      const buffer = new ArrayBuffer(2);
+      const view = new DataView(buffer);
+      writeUint16(view, 0, 0);
+
+      const reader = new DataChunkReader(buffer);
+      expect(reader.readAsciiString()).toBe('');
+      expect(reader.position).toBe(2);
+    });
+  });
+
+  describe('dict reader', () => {
+    it('should read a dict with BOOL, INT, REAL, and ASCII_STRING entries', () => {
+      // 4 pairs:
+      // key=1, BOOL(0), value=true  => 4 + 1 = 5
+      // key=2, INT(1), value=42     => 4 + 4 = 8
+      // key=3, REAL(2), value=1.5   => 4 + 4 = 8
+      // key=4, ASCII(3), "hi"       => 4 + 2 + 2 = 8
+      const payloadSize = 2 + 5 + 8 + 8 + 8; // pairCount(2) + entries
+      const buffer = new ArrayBuffer(payloadSize);
+      const view = new DataView(buffer);
+
+      let off = 0;
+      off = writeUint16(view, off, 4); // pairCount
+
+      // BOOL
+      off = writeInt32(view, off, (1 << 8) | 0);
+      off = writeUint8(view, off, 1);
+
+      // INT
+      off = writeInt32(view, off, (2 << 8) | 1);
+      off = writeInt32(view, off, 42);
+
+      // REAL
+      off = writeInt32(view, off, (3 << 8) | 2);
+      off = writeFloat32(view, off, 1.5);
+
+      // ASCII_STRING
+      off = writeInt32(view, off, (4 << 8) | 3);
+      off = writePrefixedAscii(view, off, 'hi');
+
+      const reader = new DataChunkReader(buffer);
+      const dict = reader.readDict();
+
+      expect(dict.size).toBe(4);
+      expect(dict.get(1)).toBe(true);
+      expect(dict.get(2)).toBe(42);
+      expect(dict.get(3)).toBeCloseTo(1.5);
+      expect(dict.get(4)).toBe('hi');
+    });
+
+    it('should read an empty dict', () => {
+      const buffer = new ArrayBuffer(2);
+      const view = new DataView(buffer);
+      writeUint16(view, 0, 0);
+
+      const reader = new DataChunkReader(buffer);
+      const dict = reader.readDict();
+      expect(dict.size).toBe(0);
+    });
+  });
+
+  describe('seek and skip', () => {
+    it('should move position with seek()', () => {
+      const buffer = new ArrayBuffer(16);
+      const reader = new DataChunkReader(buffer);
+      reader.seek(10);
+      expect(reader.position).toBe(10);
+    });
+
+    it('should advance position with skip()', () => {
+      const buffer = new ArrayBuffer(16);
+      const reader = new DataChunkReader(buffer);
+      reader.skip(5);
+      expect(reader.position).toBe(5);
+      reader.skip(3);
+      expect(reader.position).toBe(8);
+    });
+  });
+});
+
+describe('HeightmapExtractor', () => {
+  it('should extract heightmap dimensions and data (v3)', () => {
+    const buffer = buildMinimalMap({ hmWidth: 4, hmHeight: 3, hmBorder: 1 });
+    const reader = new DataChunkReader(buffer);
+    reader.readTableOfContents();
+    const chunk = reader.readChunkHeader();
+
+    const hm = HeightmapExtractor.extract(reader, chunk.version);
+    expect(hm.width).toBe(4);
+    expect(hm.height).toBe(3);
+    expect(hm.borderSize).toBe(1);
+    expect(hm.data).toHaveLength(12); // 4 * 3
+    // Verify data pattern (increasing mod 256)
+    for (let i = 0; i < 12; i++) {
+      expect(hm.data[i]).toBe(i % 256);
+    }
+  });
+
+  it('should handle v1 without borderSize', () => {
+    const buffer = buildMinimalMap({ hmWidth: 2, hmHeight: 2, hmVersion: 1 });
+    const reader = new DataChunkReader(buffer);
+    reader.readTableOfContents();
+    const chunk = reader.readChunkHeader();
+
+    const hm = HeightmapExtractor.extract(reader, chunk.version);
+    expect(hm.width).toBe(2);
+    expect(hm.height).toBe(2);
+    expect(hm.borderSize).toBe(0);
+    expect(hm.data).toHaveLength(4);
+  });
+
+  it('should convert to world coordinates', () => {
+    const hm = {
+      width: 2,
+      height: 2,
+      borderSize: 0,
+      data: new Uint8Array([0, 128, 255, 64]),
+    };
+
+    const world = HeightmapExtractor.toWorldCoordinates(hm);
+    expect(world).toHaveLength(4);
+    expect(world[0]).toBeCloseTo(0 * MAP_HEIGHT_SCALE);
+    expect(world[1]).toBeCloseTo(128 * MAP_HEIGHT_SCALE);
+    expect(world[2]).toBeCloseTo(255 * MAP_HEIGHT_SCALE);
+    expect(world[3]).toBeCloseTo(64 * MAP_HEIGHT_SCALE);
+  });
+});
+
+describe('MapObjectExtractor', () => {
+  it('should extract object position, angle, flags, and template (v2)', () => {
+    const buffer = buildMapWithObjects();
+    const reader = new DataChunkReader(buffer);
+    reader.readTableOfContents();
+
+    // Skip HeightMapData chunk
+    const hmChunk = reader.readChunkHeader();
+    reader.seek(hmChunk.dataOffset + hmChunk.dataSize);
+
+    // Read ObjectsList chunk
+    const objListChunk = reader.readChunkHeader();
+    expect(objListChunk.id).toBe(2); // ObjectsList
+
+    // Read child Object chunk
+    const objChunk = reader.readChunkHeader();
+    expect(objChunk.id).toBe(3); // Object
+
+    const obj = MapObjectExtractor.extract(reader, objChunk.version);
+    expect(obj.position.x).toBeCloseTo(100.0);
+    expect(obj.position.y).toBeCloseTo(200.0);
+    expect(obj.position.z).toBe(0); // v2 has no z
+    expect(obj.angle).toBeCloseTo(45.0);
+    expect(obj.flags).toBe(0x001);
+    expect(obj.templateName).toBe('AmericaCommandCenter');
+    expect(obj.properties.get(42)).toBe(100);
+  });
+
+  it('should extract v3 object with z coordinate', () => {
+    // Build a standalone v3 object payload
+    const templateName = 'ChinaTank';
+    const objPayload = 4 + 4 + 4 + 4 + 4 + 2 + templateName.length + 2;
+    // posX + posY + posZ(v3) + angle + flags + name + empty dict
+    const buffer = new ArrayBuffer(objPayload);
+    const view = new DataView(buffer);
+
+    let off = 0;
+    off = writeFloat32(view, off, 50.0);  // posX
+    off = writeFloat32(view, off, 75.0);  // posY
+    off = writeFloat32(view, off, 10.0);  // posZ (v3)
+    off = writeFloat32(view, off, 90.0);  // angle
+    off = writeInt32(view, off, 0x002);   // flags: ROAD_POINT1
+    off = writePrefixedAscii(view, off, templateName);
+    writeUint16(view, off, 0); // empty dict
+
+    const reader = new DataChunkReader(buffer);
+    const obj = MapObjectExtractor.extract(reader, 3);
+    expect(obj.position.x).toBeCloseTo(50.0);
+    expect(obj.position.y).toBeCloseTo(75.0);
+    expect(obj.position.z).toBeCloseTo(10.0);
+    expect(obj.angle).toBeCloseTo(90.0);
+    expect(obj.flags).toBe(0x002);
+    expect(obj.templateName).toBe('ChinaTank');
+  });
+});
+
+describe('WaypointExtractor', () => {
+  it('should extract polygon triggers (v2)', () => {
+    const buffer = buildMapWithTriggers();
+    const reader = new DataChunkReader(buffer);
+    reader.readTableOfContents();
+
+    // Skip HeightMapData chunk
+    const hmChunk = reader.readChunkHeader();
+    reader.seek(hmChunk.dataOffset + hmChunk.dataSize);
+
+    // Read PolygonTriggers chunk
+    const trigChunk = reader.readChunkHeader();
+    const triggers = WaypointExtractor.extractTriggers(reader, trigChunk.version);
+
+    expect(triggers).toHaveLength(1);
+    const trig = triggers[0]!;
+    expect(trig.name).toBe('SpawnZone');
+    expect(trig.id).toBe(7);
+    expect(trig.isWaterArea).toBe(true);
+    expect(trig.isRiver).toBe(false); // v2 doesn't have river
+    expect(trig.points).toHaveLength(3);
+    expect(trig.points[0]).toEqual({ x: 10, y: 20, z: 30 });
+    expect(trig.points[1]).toEqual({ x: 40, y: 50, z: 60 });
+    expect(trig.points[2]).toEqual({ x: 70, y: 80, z: 90 });
+  });
+});
+
+describe('MapParser', () => {
+  it('should parse a minimal map with only heightmap', () => {
+    const buffer = buildMinimalMap({ hmWidth: 5, hmHeight: 4, hmBorder: 2 });
+    const parsed = MapParser.parse(buffer);
+
+    expect(parsed.heightmap.width).toBe(5);
+    expect(parsed.heightmap.height).toBe(4);
+    expect(parsed.heightmap.borderSize).toBe(2);
+    expect(parsed.heightmap.data).toHaveLength(20);
+    expect(parsed.objects).toHaveLength(0);
+    expect(parsed.triggers).toHaveLength(0);
+    expect(parsed.textureClasses).toHaveLength(0);
+    expect(parsed.blendTileCount).toBe(0);
+  });
+
+  it('should parse a map with objects', () => {
+    const buffer = buildMapWithObjects();
+    const parsed = MapParser.parse(buffer);
+
+    expect(parsed.heightmap.width).toBe(2);
+    expect(parsed.heightmap.height).toBe(2);
+    expect(parsed.objects).toHaveLength(1);
+
+    const obj = parsed.objects[0]!;
+    expect(obj.templateName).toBe('AmericaCommandCenter');
+    expect(obj.position.x).toBeCloseTo(100.0);
+    expect(obj.position.y).toBeCloseTo(200.0);
+    expect(obj.angle).toBeCloseTo(45.0);
+  });
+
+  it('should parse a map with triggers', () => {
+    const buffer = buildMapWithTriggers();
+    const parsed = MapParser.parse(buffer);
+
+    expect(parsed.triggers).toHaveLength(1);
+    expect(parsed.triggers[0]!.name).toBe('SpawnZone');
+    expect(parsed.triggers[0]!.points).toHaveLength(3);
+  });
+
+  it('should throw if HeightMapData chunk is missing', () => {
+    // Build a buffer with valid TOC but no HeightMapData chunk
+    const chunks: ChunkDef[] = [{ name: 'SomeOtherChunk', id: 99 }];
+    const dummyPayload = 4; // 4 bytes of nothing
+    const totalSize = tocSize(chunks) + CHUNK_HEADER_SIZE + dummyPayload;
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+
+    let off = writeTOC(view, chunks);
+    off = writeChunkHeader(view, off, 99, 1, dummyPayload);
+    writeInt32(view, off, 0);
+
+    expect(() => MapParser.parse(buffer)).toThrow(/missing required HeightMapData/);
+  });
+
+  it('should skip unknown chunk types gracefully', () => {
+    // Build a map with HeightMapData + an unknown chunk
+    const chunks: ChunkDef[] = [
+      { name: 'HeightMapData', id: 1 },
+      { name: 'UnknownChunk', id: 99 },
+    ];
+
+    const hmWidth = 2;
+    const hmHeight = 2;
+    const hmDataLen = hmWidth * hmHeight;
+    const hmPayload = 4 + 4 + 4 + 4 + hmDataLen; // width + height + border + dataSize + data
+
+    const unknownPayload = 8;
+
+    const totalSize =
+      tocSize(chunks) +
+      CHUNK_HEADER_SIZE + hmPayload +
+      CHUNK_HEADER_SIZE + unknownPayload;
+
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+
+    let off = writeTOC(view, chunks);
+
+    // HeightMapData
+    off = writeChunkHeader(view, off, 1, 3, hmPayload);
+    off = writeInt32(view, off, hmWidth);
+    off = writeInt32(view, off, hmHeight);
+    off = writeInt32(view, off, 0); // borderSize
+    off = writeInt32(view, off, hmDataLen);
+    for (let i = 0; i < hmDataLen; i++) {
+      off = writeUint8(view, off, 200);
+    }
+
+    // Unknown chunk
+    off = writeChunkHeader(view, off, 99, 1, unknownPayload);
+    // Fill with junk
+    for (let i = 0; i < unknownPayload; i++) {
+      off = writeUint8(view, off, 0xFF);
+    }
+
+    const parsed = MapParser.parse(buffer);
+    expect(parsed.heightmap.width).toBe(2);
+    expect(parsed.heightmap.height).toBe(2);
+    expect(parsed.objects).toHaveLength(0);
+  });
+});
