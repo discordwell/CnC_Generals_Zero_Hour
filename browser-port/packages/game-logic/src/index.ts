@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import type { Subsystem } from '@generals/core';
 import { IniDataRegistry, type ObjectDef } from '@generals/ini-data';
+import type { IniValue } from '@generals/core';
 import {
   MAP_XY_FACTOR,
   type HeightmapGrid,
@@ -109,6 +110,8 @@ interface MapEntity {
   nominalHeight: number;
   selected: boolean;
   canMove: boolean;
+  blocksPath: boolean;
+  obstacleFootprint: number;
   movePath: VectorXZ[];
   pathIndex: number;
   moving: boolean;
@@ -312,6 +315,8 @@ export class GameLogicSubsystem implements Subsystem {
       selected: false,
     });
 
+    const blocksPath = this.shouldPathfindObstacle(objectDef, category);
+    const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef) : 0;
     const mesh = new THREE.Mesh(geometry, material);
     const [worldX, worldY, worldZ] = this.objectToWorldPosition(mapObject, heightmap);
     const baseHeight = nominalHeight / 2;
@@ -338,6 +343,8 @@ export class GameLogicSubsystem implements Subsystem {
       nominalHeight,
       selected: false,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
+      blocksPath,
+      obstacleFootprint,
       movePath: [],
       pathIndex: 0,
       moving: false,
@@ -359,6 +366,74 @@ export class GameLogicSubsystem implements Subsystem {
     if (uppercaseKinds.includes('VEHICLE') || uppercaseKinds.includes('HUGE_VEHICLE')) return 'vehicle';
 
     return 'unknown';
+  }
+
+  private shouldPathfindObstacle(objectDef: ObjectDef | undefined, category: ObjectCategory): boolean {
+    if (!objectDef) {
+      return false;
+    }
+
+    const kinds = this.normalizeKindOf(objectDef.kindOf);
+    const hasKindOf = (kind: string): boolean => kinds.has(kind);
+
+    if (hasKindOf('MINE') || hasKindOf('PROJECTILE') || hasKindOf('BRIDGE_TOWER')) {
+      return false;
+    }
+
+    if (!hasKindOf('STRUCTURE')) {
+      return false;
+    }
+
+    if (this.isMobileByCategoryOrKindOf(category, kinds)) {
+      return false;
+    }
+
+    if (this.isSmallGeometry(objectDef.fields)) {
+      return false;
+    }
+
+    const heightAboveTerrain = readNumericField(objectDef.fields, ['HeightAboveTerrain', 'Height']);
+    if (heightAboveTerrain !== null && heightAboveTerrain > MAP_XY_FACTOR) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private isMobileByCategoryOrKindOf(category: ObjectCategory, kinds: Set<string>): boolean {
+    if (category === 'air' || category === 'infantry' || category === 'vehicle') {
+      return true;
+    }
+
+    return (
+      kinds.has('INFANTRY')
+      || kinds.has('VEHICLE')
+      || kinds.has('HUGE_VEHICLE')
+      || kinds.has('AIRCRAFT')
+      || kinds.has('DOZER')
+      || kinds.has('HARVESTER')
+      || kinds.has('TRANSPORT')
+      || kinds.has('DRONE')
+      || kinds.has('MOBILE')
+    );
+  }
+
+  private isSmallGeometry(fields: Record<string, IniValue>): boolean {
+    const isSmall = readBooleanField(fields, ['IsSmall', 'Small', 'GeometryIsSmall', 'CanSeeOver']);
+    return isSmall === true;
+  }
+
+  private normalizeKindOf(kindOf: string[] | undefined): Set<string> {
+    const normalized = new Set<string>();
+    if (!kindOf) {
+      return normalized;
+    }
+
+    for (const kind of kindOf) {
+      normalized.add(kind.toUpperCase());
+    }
+
+    return normalized;
   }
 
   private getGeometry(category: ObjectCategory): { geometry: THREE.BufferGeometry; nominalHeight: number } {
@@ -542,11 +617,16 @@ export class GameLogicSubsystem implements Subsystem {
       return [];
     }
 
-    if (!this.canOccupyCell(startCellX, startCellZ, movementProfile)) {
+    const startCandidate = this.canOccupyCell(startCellX, startCellZ, movementProfile)
+      ? { x: startCellX, z: startCellZ }
+      : this.findNearestPassableCell(startCellX, startCellZ, grid, movementProfile);
+    if (!startCandidate) {
       return [];
     }
 
-    if (startCellX === goalCellX && startCellZ === goalCellZ) {
+    const effectiveStart = startCandidate;
+
+    if (effectiveStart.x === goalCellX && effectiveStart.z === goalCellZ) {
       return [];
     }
 
@@ -555,7 +635,7 @@ export class GameLogicSubsystem implements Subsystem {
       return [];
     }
 
-    const startIndex = startCellZ * grid.width + startCellX;
+    const startIndex = effectiveStart.z * grid.width + effectiveStart.x;
     const goalIndex = effectiveGoal.z * grid.width + effectiveGoal.x;
     const total = grid.width * grid.height;
 
@@ -674,7 +754,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private getMovementProfile(entity?: MapEntity): PathfindingProfile {
-    if (!entity || entity.category === 'air') {
+    if (entity?.category === 'air') {
       return {
         canCrossWater: true,
         canCrossCliff: true,
@@ -988,8 +1068,10 @@ export class GameLogicSubsystem implements Subsystem {
     };
 
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.canMove) continue;
-      const footprint = this.footprintInCells(entity);
+      if (!entity.blocksPath || entity.obstacleFootprint <= 0) {
+        continue;
+      }
+      const footprint = entity.obstacleFootprint;
       const [entityCellX, entityCellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
       if (entityCellX === null || entityCellZ === null) {
         continue;
@@ -1047,8 +1129,21 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  private footprintInCells(entity: MapEntity): number {
-    switch (entity.category) {
+  private footprintInCells(category: ObjectCategory, objectDef?: ObjectDef): number {
+    const explicitFootprint = readNumericListField(
+      objectDef?.fields ?? {},
+      ['Footprint', 'FootPrint', 'Foundation', 'Size'],
+    );
+    if (explicitFootprint !== null) {
+      const filtered = explicitFootprint.filter((value) => Number.isFinite(value));
+      if (filtered.length === 0) {
+        return 0;
+      }
+      const footprint = Math.max(...filtered);
+      return Math.max(1, Math.round(Math.abs(footprint)));
+    }
+
+    switch (category) {
       case 'building':
         return 1;
       case 'air':
@@ -1297,6 +1392,68 @@ function colorBySide(side?: string): number {
 function coerceStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function readBooleanField(fields: Record<string, IniValue>, names: string[]): boolean | null {
+  for (const name of names) {
+    const value = fields[name];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      return value !== 0;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'yes' || normalized === 'true' || normalized === '1') {
+        return true;
+      }
+      if (normalized === 'no' || normalized === 'false' || normalized === '0') {
+        return false;
+      }
+    }
+  }
+
+  return null;
+}
+
+function readNumericList(values: IniValue | undefined): number[] {
+  if (typeof values === 'undefined') return [];
+  if (typeof values === 'number') return [values];
+  if (typeof values === 'string') {
+    const parts = values
+      .split(/[\s,;]+/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => Number(part));
+    return parts.filter((value) => Number.isFinite(value));
+  }
+  if (Array.isArray(values)) {
+    return values.flatMap((value) => readNumericList(value as IniValue)).filter((value) => Number.isFinite(value));
+  }
+  return [];
+}
+
+function readNumericField(fields: Record<string, IniValue>, names: string[]): number | null {
+  for (const name of names) {
+    const values = readNumericList(fields[name]);
+    if (values.length > 0 && Number.isFinite(values[0])) {
+      return values[0];
+    }
+  }
+
+  return null;
+}
+
+function readNumericListField(fields: Record<string, IniValue>, names: string[]): number[] | null {
+  for (const name of names) {
+    const values = readNumericList(fields[name]);
+    if (values.length > 0) {
+      return values;
+    }
+  }
+
+  return null;
 }
 
 function clamp(value: number, min: number, max: number): number {
