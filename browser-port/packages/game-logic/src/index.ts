@@ -98,6 +98,14 @@ export interface GameLogicConfig {
   terrainSnapSpeed: number;
 }
 
+const TEST_CRUSH_ONLY = 0;
+const TEST_SQUISH_ONLY = 1;
+const TEST_CRUSH_OR_SQUISH = 2;
+const RELATIONSHIP_ENEMIES = 0;
+const RELATIONSHIP_NEUTRAL = 1;
+const RELATIONSHIP_ALLIES = 2;
+type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTRAL | typeof RELATIONSHIP_ALLIES;
+
 type ObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
 
 interface VectorXZ {
@@ -115,12 +123,20 @@ interface NavigationGrid {
   bridgePassable: Uint8Array;
   bridgeTransitions: Uint8Array;
   bridgeSegmentByCell: Int32Array;
+  zonePassable: Uint8Array;
+  zoneBlockWidth: number;
+  zoneBlockHeight: number;
+  logicalMinX: number;
+  logicalMinZ: number;
+  logicalMaxX: number;
+  logicalMaxZ: number;
 }
 
 const PATHFIND_CELL_SIZE = MAP_XY_FACTOR;
 const COST_ORTHOGONAL = 10;
 const COST_DIAGONAL = 14;
 const CLIFF_HEIGHT_DELTA = 9.8;
+const PATHFIND_ZONE_BLOCK_SIZE = 10;
 const MAX_PATH_COST = 1e9;
 const MAX_SEARCH_NODES = 500_000;
 const MAX_RECONSTRUCT_STEPS = 2_000;
@@ -166,6 +182,7 @@ const SOURCE_LOCOMOTOR_SET_NAMES = new Set<string>([
 interface LocomotorSetProfile {
   surfaceMask: number;
   downhillOnly: boolean;
+  movementSpeed: number;
 }
 
 interface PathfindingProfile {
@@ -174,6 +191,29 @@ interface PathfindingProfile {
   canPassObstacle: boolean;
   canUseBridge: boolean;
   avoidPinched: boolean;
+  pathDiameter: number;
+}
+
+interface PathingOccupationResult {
+  enemyFixed: boolean;
+  allyMoving: boolean;
+  allyFixedCount: number;
+  allyGoal: boolean;
+}
+
+const UNIT_NO_UNITS = 0;
+const UNIT_PRESENT_FIXED = 1;
+const UNIT_PRESENT_MOVING = 2;
+const UNIT_GOAL = 3;
+const UNIT_GOAL_OTHER_MOVING = 4;
+
+interface MovementOccupancyGrid {
+  width: number;
+  height: number;
+  flags: Uint8Array;
+  unitIds: Int32Array;
+  goalUnitIds: Int32Array;
+  unitIdsByCell: Map<number, number[]>;
 }
 
 interface BridgeSegmentState {
@@ -206,20 +246,28 @@ interface MapEntity {
   nominalHeight: number;
   selected: boolean;
   canMove: boolean;
+  crusherLevel: number;
+  crushableLevel: number;
+  canBeSquished: boolean;
+  isUnmanned: boolean;
   locomotorSets: Map<string, LocomotorSetProfile>;
   locomotorUpgradeTriggers: Set<string>;
   locomotorUpgradeEnabled: boolean;
   activeLocomotorSet: string;
   locomotorSurfaceMask: number;
   locomotorDownhillOnly: boolean;
+  pathDiameter: number;
   blocksPath: boolean;
   obstacleGeometry: ObstacleGeometry | null;
   obstacleFootprint: number;
+  ignoredMovementObstacleId: number | null;
   movePath: VectorXZ[];
   pathIndex: number;
   moving: boolean;
   speed: number;
   moveTarget: VectorXZ | null;
+  pathfindGoalCell: { x: number; z: number } | null;
+  pathfindPosCell: { x: number; z: number } | null;
 }
 
 const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
@@ -250,6 +298,8 @@ export class GameLogicSubsystem implements Subsystem {
   private frameCounter = 0;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
+  private readonly teamRelationshipOverrides = new Map<string, number>();
+  private readonly playerRelationshipOverrides = new Map<string, number>();
 
   private placementSummary: MapObjectPlacementSummary = {
     totalObjects: 0,
@@ -410,8 +460,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const index = cellZ * grid.width + cellX;
+    if (index < 0 || index >= grid.bridgeSegmentByCell.length) {
+      return false;
+    }
     const segmentId = grid.bridgeSegmentByCell[index];
-    if (segmentId < 0) {
+    if (segmentId === undefined || segmentId < 0) {
       return false;
     }
 
@@ -467,6 +520,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.activeLocomotorSet = resolvedSet;
     entity.locomotorSurfaceMask = profile.surfaceMask;
     entity.locomotorDownhillOnly = profile.downhillOnly;
+    entity.speed = profile.movementSpeed > 0 ? profile.movementSpeed : this.config.defaultMoveSpeed;
     return true;
   }
 
@@ -553,10 +607,13 @@ export class GameLogicSubsystem implements Subsystem {
     const locomotorProfile = locomotorSetProfiles.get(LOCOMOTORSET_NORMAL) ?? {
       surfaceMask: NO_SURFACES,
       downhillOnly: false,
+      movementSpeed: 0,
     };
+    const combatProfile = this.resolveCombatCollisionProfile(objectDef);
     const blocksPath = this.shouldPathfindObstacle(objectDef);
     const obstacleGeometry = blocksPath ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
+    const pathDiameter = this.resolvePathDiameter(category, objectDef, obstacleGeometry);
     const mesh = new THREE.Mesh(geometry, material);
     const [worldX, worldY, worldZ] = this.objectToWorldPosition(mapObject, heightmap);
     const baseHeight = nominalHeight / 2;
@@ -575,6 +632,8 @@ export class GameLogicSubsystem implements Subsystem {
       mapCellZ: Math.floor(mapObject.position.y / MAP_XY_FACTOR),
     };
 
+    const [posCellX, posCellZ] = this.worldToGrid(mesh.position.x, mesh.position.z);
+
     return {
       id: objectId,
       templateName: mapObject.templateName,
@@ -585,6 +644,10 @@ export class GameLogicSubsystem implements Subsystem {
       baseHeight,
       nominalHeight,
       selected: false,
+      crusherLevel: combatProfile.crusherLevel,
+      crushableLevel: combatProfile.crushableLevel,
+      canBeSquished: combatProfile.canBeSquished,
+      isUnmanned: combatProfile.isUnmanned,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
       locomotorSets: locomotorSetProfiles,
       locomotorUpgradeTriggers,
@@ -592,14 +655,18 @@ export class GameLogicSubsystem implements Subsystem {
       activeLocomotorSet: LOCOMOTORSET_NORMAL,
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
+      pathDiameter,
       blocksPath,
       obstacleGeometry,
       obstacleFootprint,
+      ignoredMovementObstacleId: null,
       movePath: [],
       pathIndex: 0,
       moving: false,
-      speed: this.config.defaultMoveSpeed,
+      speed: locomotorProfile.movementSpeed > 0 ? locomotorProfile.movementSpeed : this.config.defaultMoveSpeed,
       moveTarget: null,
+      pathfindGoalCell: null,
+      pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
     };
   }
 
@@ -717,6 +784,151 @@ export class GameLogicSubsystem implements Subsystem {
     return normalized;
   }
 
+  private resolveCombatCollisionProfile(objectDef: ObjectDef | undefined): {
+    crusherLevel: number;
+    crushableLevel: number;
+    canBeSquished: boolean;
+    isUnmanned: boolean;
+  } {
+    if (!objectDef) {
+      return {
+        crusherLevel: 0,
+        crushableLevel: 0,
+        canBeSquished: false,
+        isUnmanned: false,
+      };
+    }
+
+    return {
+      crusherLevel: toByte(readNumericField(objectDef.fields, ['CrusherLevel', 'Crusherlevel'])),
+      crushableLevel: toByte(readNumericField(objectDef.fields, ['CrushableLevel', 'Crushablelevel'])),
+      canBeSquished: this.hasSquishCollideModule(objectDef),
+      isUnmanned: readBooleanField(objectDef.fields, ['Unmanned', 'IsUnmanned']) === true,
+    };
+  }
+
+  private hasSquishCollideModule(objectDef: ObjectDef): boolean {
+    const hasSquish = (blocks: IniBlock[]): boolean => {
+      for (const block of blocks) {
+        const blockType = block.type.toUpperCase();
+        const blockName = block.name.toUpperCase();
+        if (blockType.includes('SQUISHCOLLIDE') || blockName.includes('SQUISHCOLLIDE')) {
+          return true;
+        }
+        if (hasSquish(block.blocks)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    return hasSquish(objectDef.blocks);
+  }
+
+  private normalizeSide(side?: string): string {
+    return side ? side.trim().toLowerCase() : '';
+  }
+
+  private relationshipKey(sourceSide: string, targetSide: string): string {
+    return `${sourceSide}\u0000${targetSide}`;
+  }
+
+  private getTeamRelationshipBySides(sourceSide: string, targetSide: string): number {
+    const source = this.normalizeSide(sourceSide);
+    const target = this.normalizeSide(targetSide);
+    if (!source || !target) {
+      return RELATIONSHIP_NEUTRAL;
+    }
+
+    const teamOverride = this.teamRelationshipOverrides.get(this.relationshipKey(source, target));
+    if (teamOverride !== undefined) {
+      return teamOverride;
+    }
+
+    const playerOverride = this.playerRelationshipOverrides.get(this.relationshipKey(source, target));
+    if (playerOverride !== undefined) {
+      return playerOverride;
+    }
+
+    return source === target ? RELATIONSHIP_ALLIES : RELATIONSHIP_NEUTRAL;
+  }
+
+  private isValidRelationship(relationship: number): relationship is RelationshipValue {
+    return (
+      relationship === RELATIONSHIP_ENEMIES
+      || relationship === RELATIONSHIP_NEUTRAL
+      || relationship === RELATIONSHIP_ALLIES
+    );
+  }
+
+  private getTeamRelationship(sourceEntity: MapEntity, targetEntity: MapEntity): number {
+    if (!sourceEntity || !targetEntity) {
+      return RELATIONSHIP_NEUTRAL;
+    }
+    return this.getTeamRelationshipBySides(sourceEntity.side ?? '', targetEntity.side ?? '');
+  }
+
+  setTeamRelationship(sourceSide: string, targetSide: string, relationship: number): void {
+    const source = this.normalizeSide(sourceSide);
+    const target = this.normalizeSide(targetSide);
+    if (!source || !target) {
+      return;
+    }
+    if (!this.isValidRelationship(relationship)) {
+      return;
+    }
+    this.teamRelationshipOverrides.set(this.relationshipKey(source, target), relationship);
+  }
+
+  setPlayerRelationship(sourceSide: string, targetSide: string, relationship: number): void {
+    const source = this.normalizeSide(sourceSide);
+    const target = this.normalizeSide(targetSide);
+    if (!source || !target) {
+      return;
+    }
+    if (!this.isValidRelationship(relationship)) {
+      return;
+    }
+    this.playerRelationshipOverrides.set(this.relationshipKey(source, target), relationship);
+  }
+
+  clearTeamRelationshipOverrides(): void {
+    this.teamRelationshipOverrides.clear();
+    this.playerRelationshipOverrides.clear();
+  }
+
+  private canCrushOrSquish(
+    mover: MapEntity,
+    target: MapEntity,
+    testType: number = TEST_CRUSH_OR_SQUISH,
+  ): boolean {
+    if (!mover || !target) {
+      return false;
+    }
+    if (mover.isUnmanned) {
+      return false;
+    }
+
+    if (this.getTeamRelationship(mover, target) === RELATIONSHIP_ALLIES) {
+      return false;
+    }
+
+    if (mover.crusherLevel <= 0) {
+      return false;
+    }
+
+    if (testType === TEST_SQUISH_ONLY || testType === TEST_CRUSH_OR_SQUISH) {
+      if (target.canBeSquished) {
+        return true;
+      }
+    }
+
+    if (testType === TEST_CRUSH_ONLY || testType === TEST_CRUSH_OR_SQUISH) {
+      return mover.crusherLevel > target.crushableLevel;
+    }
+
+    return false;
+  }
+
   private resolveLocomotorProfiles(
     objectDef: ObjectDef | undefined,
     iniDataRegistry: IniDataRegistry,
@@ -730,6 +942,7 @@ export class GameLogicSubsystem implements Subsystem {
     for (const [setName, locomotorNames] of locomotorSets) {
       let surfaceMask = 0;
       let downhillOnly = false;
+      let movementSpeed = 0;
       for (const locomotorName of locomotorNames) {
         const locomotor = iniDataRegistry.getLocomotor(locomotorName);
         if (!locomotor) {
@@ -737,8 +950,15 @@ export class GameLogicSubsystem implements Subsystem {
         }
         surfaceMask |= locomotor.surfaceMask;
         downhillOnly = downhillOnly || locomotor.downhillOnly;
+        if ((locomotor.speed ?? 0) > movementSpeed) {
+          movementSpeed = locomotor.speed ?? 0;
+        }
       }
-      profiles.set(setName, { surfaceMask, downhillOnly });
+      profiles.set(setName, {
+        surfaceMask,
+        downhillOnly,
+        movementSpeed,
+      });
     }
 
     return profiles;
@@ -1129,12 +1349,14 @@ export class GameLogicSubsystem implements Subsystem {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.canMove) return;
 
+    this.updatePathfindPosCell(entity);
     const path = this.findPath(entity.mesh.position.x, entity.mesh.position.z, targetX, targetZ, entity);
     if (path.length === 0) {
       entity.moving = false;
       entity.moveTarget = null;
       entity.movePath = [];
       entity.pathIndex = 0;
+      entity.pathfindGoalCell = null;
       return;
     }
 
@@ -1142,16 +1364,42 @@ export class GameLogicSubsystem implements Subsystem {
     entity.movePath = path;
     entity.pathIndex = 0;
     entity.moveTarget = entity.movePath[0]!;
+    this.updatePathfindGoalCellFromPath(entity);
   }
 
   private stopEntity(entityId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) return;
 
+    this.updatePathfindPosCell(entity);
     entity.moving = false;
     entity.moveTarget = null;
     entity.movePath = [];
     entity.pathIndex = 0;
+    entity.pathfindGoalCell = null;
+  }
+
+  private updatePathfindGoalCellFromPath(entity: MapEntity): void {
+    const destination = entity.movePath[entity.movePath.length - 1];
+    if (!destination) {
+      entity.pathfindGoalCell = null;
+      return;
+    }
+    const [goalCellX, goalCellZ] = this.worldToGrid(destination.x, destination.z);
+    if (goalCellX === null || goalCellZ === null) {
+      entity.pathfindGoalCell = null;
+      return;
+    }
+    entity.pathfindGoalCell = { x: goalCellX, z: goalCellZ };
+  }
+
+  private updatePathfindPosCell(entity: MapEntity): void {
+    const [cellX, cellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
+    if (cellX === null || cellZ === null) {
+      entity.pathfindPosCell = null;
+      return;
+    }
+    entity.pathfindPosCell = { x: cellX, z: cellZ };
   }
 
   private findPath(startX: number, startZ: number, targetX: number, targetZ: number, mover?: MapEntity): VectorXZ[] {
@@ -1176,16 +1424,16 @@ export class GameLogicSubsystem implements Subsystem {
       return [];
     }
 
-    const startCandidate = this.canOccupyCell(startCellX, startCellZ, movementProfile)
+    const startCandidate = this.canOccupyCell(startCellX, startCellZ, movementProfile, this.navigationGrid, true)
       ? { x: startCellX, z: startCellZ }
-      : this.findNearestPassableCell(startCellX, startCellZ, grid, movementProfile);
+      : this.findNearestPassableCell(startCellX, startCellZ, grid, movementProfile, true);
     if (!startCandidate) {
       return [];
     }
 
     const effectiveStart = startCandidate;
 
-    const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, movementProfile);
+    const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, movementProfile, true);
     if (!effectiveGoal) {
       return [];
     }
@@ -1193,6 +1441,7 @@ export class GameLogicSubsystem implements Subsystem {
     const startIndex = effectiveStart.z * grid.width + effectiveStart.x;
     const goalIndex = effectiveGoal.z * grid.width + effectiveGoal.x;
     const total = grid.width * grid.height;
+    const isHuman = true;
 
     const open: number[] = [];
     const parent = new Int32Array(total);
@@ -1214,6 +1463,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     const deltaX = [1, 0, -1, 0, 1, -1, -1, 1];
     const deltaZ = [0, 1, 0, -1, 1, 1, -1, -1];
+    const adjacent = [0, 1, 2, 3, 0];
+    const neighborFlags = [false, false, false, false, false, false, false, false];
+    const movementOccupancy = this.buildMovementOccupancyGrid(grid);
     let searched = 0;
 
     while (open.length > 0) {
@@ -1223,17 +1475,26 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       let bestOpenIndex = 0;
-      let bestF = fCost[open[0]!] ?? MAX_PATH_COST;
+      const startOpenIndex = open[0];
+      if (startOpenIndex === undefined) {
+        break;
+      }
+      let bestF = fCost[startOpenIndex] ?? MAX_PATH_COST;
       for (let i = 1; i < open.length; i++) {
         const candidateIndex = open[i];
+        if (candidateIndex === undefined) continue;
         const candidateF = fCost[candidateIndex];
+        if (candidateF === undefined) continue;
         if (candidateF < bestF) {
           bestF = candidateF;
           bestOpenIndex = i;
         }
       }
 
-      const currentIndex = open[bestOpenIndex]!;
+      const currentIndex = open[bestOpenIndex];
+      if (currentIndex === undefined) {
+        break;
+      }
       open.splice(bestOpenIndex, 1);
       inOpen[currentIndex] = 0;
       inClosed[currentIndex] = 1;
@@ -1242,7 +1503,7 @@ export class GameLogicSubsystem implements Subsystem {
         const pathCells = this.reconstructPath(parent, startIndex, goalIndex);
         if (grid.pinched[goalIndex] === 1) {
           const goalParentIndex = parent[goalIndex];
-          if (goalParentIndex >= 0 && grid.pinched[goalParentIndex] === 0) {
+          if (goalParentIndex !== undefined && goalParentIndex >= 0 && grid.pinched[goalParentIndex] === 0) {
             pathCells.pop();
           }
         }
@@ -1261,54 +1522,107 @@ export class GameLogicSubsystem implements Subsystem {
 
       const [currentCellX, currentCellZ] = this.gridFromIndex(currentIndex);
       const parentCellIndex = parent[currentIndex];
-      const [parentCellX, parentCellZ] = parentCellIndex >= 0
-        ? this.gridFromIndex(parentCellIndex)
-        : [undefined, undefined];
+      let parentCellX: number | undefined;
+      let parentCellZ: number | undefined;
+      if (parentCellIndex !== undefined && parentCellIndex >= 0) {
+        [parentCellX, parentCellZ] = this.gridFromIndex(parentCellIndex);
+      }
 
       for (let i = 0; i < deltaX.length; i++) {
-        const neighborX = currentCellX + deltaX[i];
-        const neighborZ = currentCellZ + deltaZ[i];
+        neighborFlags[i] = false;
+        const dirX = deltaX[i];
+        const dirZ = deltaZ[i];
+        if (dirX === undefined || dirZ === undefined) {
+          continue;
+        }
+        const neighborX = currentCellX + dirX;
+        const neighborZ = currentCellZ + dirZ;
         if (!this.isCellInBounds(neighborX, neighborZ, grid)) {
           continue;
         }
+        if (isHuman && !this.isInsideLogicalBounds(neighborX, neighborZ, grid)) {
+          continue;
+        }
+        const neighborIndex = neighborZ * grid.width + neighborX;
+        const notZonePassable = ((movementProfile.acceptableSurfaces & LOCOMOTORSURFACE_GROUND) !== 0)
+          && !this.isZonePassable(neighborX, neighborZ, grid);
+
         if (!this.canTraverseBridgeTransition(currentCellX, currentCellZ, neighborX, neighborZ, movementProfile, grid)) {
           continue;
         }
+        if (!this.canMoveToCell(currentCellX, currentCellZ, neighborX, neighborZ, movementProfile)) {
+          continue;
+        }
+        const onList = inOpen[neighborIndex] === 1 || inClosed[neighborIndex] === 1;
+        if (onList) {
+          continue;
+        }
 
-        const isDiagonal = deltaX[i] !== 0 && deltaZ[i] !== 0;
-        if (isDiagonal) {
-          const side1X = currentCellX + deltaX[i];
-          const side1Z = currentCellZ;
-          const side2X = currentCellX;
-          const side2Z = currentCellZ + deltaZ[i];
-          const sidePassable1 = this.canOccupyCell(side1X, side1Z, movementProfile, grid)
-            && this.canTraverseBridgeTransition(currentCellX, currentCellZ, side1X, side1Z, movementProfile, grid);
-          const sidePassable2 = this.canOccupyCell(side2X, side2Z, movementProfile, grid)
-            && this.canTraverseBridgeTransition(currentCellX, currentCellZ, side2X, side2Z, movementProfile, grid);
-          if (!sidePassable1 && !sidePassable2) {
+        if (i >= 4) {
+          const side1Index = adjacent[i - 4];
+          const side2Index = adjacent[i - 3];
+          const side1Passable = side1Index === undefined ? false : neighborFlags[side1Index];
+          const side2Passable = side2Index === undefined ? false : neighborFlags[side2Index];
+          if (!side1Passable && !side2Passable) {
             continue;
           }
         }
 
-        const neighborIndex = neighborZ * grid.width + neighborX;
-        if (inClosed[neighborIndex] === 1) {
+        const clearDiameter = this.clearCellForDiameter(neighborX, neighborZ, movementProfile.pathDiameter, movementProfile, grid);
+        if (clearDiameter === 0) {
           continue;
         }
-
         if (!this.canOccupyCell(neighborX, neighborZ, movementProfile, grid)) {
           continue;
         }
 
-        const moveCost = this.pathCost(currentCellX, currentCellZ, neighborX, neighborZ, grid, movementProfile);
-        let stepCost = moveCost;
-        if (parentCellIndex >= 0) {
+        neighborFlags[i] = true;
+
+        let stepCost = this.pathCost(currentCellX, currentCellZ, neighborX, neighborZ, grid, movementProfile);
+        const occupation = this.checkForMovement(
+          neighborX,
+          neighborZ,
+          mover,
+          grid,
+          effectiveStart,
+          i,
+          false,
+          movementOccupancy,
+        );
+        if (occupation.enemyFixed) {
+          continue;
+        }
+        if (notZonePassable) {
+          stepCost += 100 * COST_ORTHOGONAL;
+        }
+        if (grid.blocked[neighborIndex] === 1) {
+          stepCost += 100 * COST_ORTHOGONAL;
+        }
+        if (occupation.allyMoving && Math.abs(neighborX - effectiveStart.x) < 10 && Math.abs(neighborZ - effectiveStart.z) < 10) {
+          stepCost += 3 * COST_DIAGONAL;
+        }
+        if (occupation.allyFixedCount > 0) {
+          stepCost += 3 * COST_DIAGONAL;
+        }
+
+        if (neighborIndex !== goalIndex && movementProfile.pathDiameter > 0 && clearDiameter < movementProfile.pathDiameter) {
+          const delta = movementProfile.pathDiameter - clearDiameter;
+          stepCost += 0.6 * (delta * COST_ORTHOGONAL);
+        }
+
+        if (
+          parentCellIndex !== undefined
+          && parentCellIndex >= 0
+          && parentCellX !== undefined
+          && parentCellZ !== undefined
+        ) {
           const grandParentIndex = parent[parentCellIndex];
-          if (grandParentIndex >= 0) {
+          if (grandParentIndex !== undefined && grandParentIndex >= 0) {
             const [grandCellX, grandCellZ] = this.gridFromIndex(grandParentIndex);
-            const prevDirX = parentCellX! - currentCellX;
-            const prevDirZ = parentCellZ! - currentCellZ;
-            const nextDirX = grandCellX - parentCellX!;
-            const nextDirY = grandCellZ - parentCellZ!;
+            const prevDirX = parentCellX - currentCellX;
+            const prevDirZ = parentCellZ - currentCellZ;
+            const nextDirX = grandCellX - parentCellX;
+            const nextDirY = grandCellZ - parentCellZ;
 
             if (prevDirX !== nextDirX || prevDirZ !== nextDirY) {
               const dot = prevDirX * nextDirX + prevDirZ * nextDirY;
@@ -1323,8 +1637,13 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
 
-        const tentativeG = gCost[currentIndex] + stepCost;
-        if (tentativeG >= gCost[neighborIndex]) {
+        const currentG = gCost[currentIndex];
+        const neighborG = gCost[neighborIndex];
+        if (currentG === undefined || neighborG === undefined) {
+          continue;
+        }
+        const tentativeG = currentG + stepCost;
+        if (tentativeG >= neighborG) {
           continue;
         }
 
@@ -1344,8 +1663,12 @@ export class GameLogicSubsystem implements Subsystem {
   private getMovementProfile(entity?: MapEntity): PathfindingProfile {
     const rawMask = (entity as { locomotorSurfaceMask?: number } | undefined)?.locomotorSurfaceMask;
     const rawDownhillOnly = (entity as { locomotorDownhillOnly?: boolean } | undefined)?.locomotorDownhillOnly;
+    const rawDiameter = (entity as { pathDiameter?: number } | undefined)?.pathDiameter;
     const mask = typeof rawMask === 'number' ? rawMask : SOURCE_DEFAULT_PASSABLE_SURFACES;
     const downhillOnly = rawDownhillOnly === true;
+    const pathDiameter = typeof rawDiameter === 'number' && rawDiameter >= 0 && Number.isFinite(rawDiameter)
+      ? Math.max(0, Math.trunc(rawDiameter))
+      : 0;
 
     return {
       acceptableSurfaces: mask,
@@ -1353,7 +1676,263 @@ export class GameLogicSubsystem implements Subsystem {
       canPassObstacle: (mask & LOCOMOTORSURFACE_AIR) !== 0,
       canUseBridge: true,
       avoidPinched: false,
+      pathDiameter,
     };
+  }
+
+  private canMoveToCell(
+    fromX: number,
+    fromZ: number,
+    toX: number,
+    toZ: number,
+    movementProfile: PathfindingProfile,
+  ): boolean {
+    if (movementProfile.downhillOnly && this.mapHeightmap) {
+      const fromHeight = this.mapHeightmap.getWorldHeight(fromX * MAP_XY_FACTOR, fromZ * MAP_XY_FACTOR);
+      const toHeight = this.mapHeightmap.getWorldHeight(toX * MAP_XY_FACTOR, toZ * MAP_XY_FACTOR);
+      return toHeight <= fromHeight;
+    }
+
+    return true;
+  }
+
+  private isInsideLogicalBounds(cellX: number, cellZ: number, grid: NavigationGrid): boolean {
+    const hasLogicalBounds = (
+      Number.isFinite(grid.logicalMinX)
+      && Number.isFinite(grid.logicalMaxX)
+      && Number.isFinite(grid.logicalMinZ)
+      && Number.isFinite(grid.logicalMaxZ)
+    );
+    if (!hasLogicalBounds || grid.logicalMinX > grid.logicalMaxX || grid.logicalMinZ > grid.logicalMaxZ) {
+      return true;
+    }
+
+    return (
+      cellX >= grid.logicalMinX
+      && cellX <= grid.logicalMaxX
+      && cellZ >= grid.logicalMinZ
+      && cellZ <= grid.logicalMaxZ
+    );
+  }
+
+  private checkForMovement(
+    cellX: number,
+    cellZ: number,
+    mover: MapEntity | undefined,
+    grid: NavigationGrid | null,
+    effectiveStart: { x: number; z: number },
+    directionIndex: number,
+    considerTransient = false,
+    movementOccupancy?: MovementOccupancyGrid,
+  ): PathingOccupationResult {
+    void effectiveStart;
+    void directionIndex;
+    const result: PathingOccupationResult = {
+      enemyFixed: false,
+      allyMoving: false,
+      allyFixedCount: 0,
+      allyGoal: false,
+    };
+
+    if (!mover || !grid) {
+      return result;
+    }
+    const occupancy = movementOccupancy ?? this.buildMovementOccupancyGrid(grid);
+
+    const movementRadius = Math.max(0, Math.floor(mover.pathDiameter ?? 0));
+    const centerInCell = (movementRadius & 1) === 1;
+    const numCellsAbove = movementRadius === 0
+      ? 1
+      : movementRadius + (centerInCell ? 1 : 0);
+    const maxAlly = 5;
+    const maxCellX = cellX + numCellsAbove;
+    const maxCellZ = cellZ + numCellsAbove;
+    const ignoredObstacleId = mover.ignoredMovementObstacleId;
+
+    const allies: number[] = [];
+    for (let i = cellX - movementRadius; i < maxCellX; i++) {
+      for (let j = cellZ - movementRadius; j < maxCellZ; j++) {
+        if (!this.isCellInBounds(i, j, grid)) {
+          result.enemyFixed = true;
+          return result;
+        }
+
+        const cellIndex = j * occupancy.width + i;
+        if (cellIndex < 0 || cellIndex >= occupancy.flags.length) {
+          result.enemyFixed = true;
+          return result;
+        }
+
+        const flags = occupancy.flags[cellIndex] ?? UNIT_NO_UNITS;
+        if (flags === UNIT_GOAL || flags === UNIT_GOAL_OTHER_MOVING) {
+          result.allyGoal = true;
+        }
+
+        const cellUnits = occupancy.unitIdsByCell.get(cellIndex) ?? [];
+        if (flags === UNIT_NO_UNITS || cellUnits.length === 0) {
+          continue;
+        }
+
+        for (const posUnit of cellUnits) {
+          if (posUnit === mover.id) {
+            continue;
+          }
+          if (ignoredObstacleId !== null && posUnit === ignoredObstacleId) {
+            continue;
+          }
+
+          const unit = this.spawnedEntities.get(posUnit);
+          if (!unit) {
+            continue;
+          }
+
+          const unitFlag = unit.moving ? UNIT_PRESENT_MOVING : UNIT_PRESENT_FIXED;
+          let check = false;
+          if (unitFlag === UNIT_PRESENT_MOVING || unitFlag === UNIT_GOAL_OTHER_MOVING) {
+            if (this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES) {
+              result.allyMoving = true;
+            }
+            if (considerTransient) {
+              check = true;
+            }
+          }
+
+          if (unitFlag === UNIT_PRESENT_FIXED) {
+            check = true;
+          }
+
+          if (check && mover.ignoredMovementObstacleId !== null && mover.ignoredMovementObstacleId === unit.id) {
+            check = false;
+          }
+
+          if (!check) {
+            continue;
+          }
+
+          if (this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES) {
+            if (!unit.canMove) {
+              result.enemyFixed = true;
+              return result;
+            }
+            if (unit.moving) {
+              result.enemyFixed = true;
+              return result;
+            }
+            if (!allies.includes(unit.id)) {
+              result.allyFixedCount += 1;
+              if (allies.length < maxAlly) {
+                allies.push(unit.id);
+              }
+            }
+            continue;
+          }
+
+          if (!this.canCrushOrSquish(mover, unit)) {
+            result.enemyFixed = true;
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private buildMovementOccupancyGrid(grid: NavigationGrid): MovementOccupancyGrid {
+    const total = grid.width * grid.height;
+    const flags = new Uint8Array(total);
+    const unitIds = new Int32Array(total);
+    const goalUnitIds = new Int32Array(total);
+    const unitIdsByCell = new Map<number, number[]>();
+    unitIds.fill(-1);
+    goalUnitIds.fill(-1);
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (!entity.blocksPath && entity.pathDiameter <= 0 && entity.obstacleFootprint <= 0) {
+        continue;
+      }
+
+      const entityPosCell = entity.pathfindPosCell;
+      if (!entityPosCell) {
+        continue;
+      }
+
+      const entityRadius = Math.max(
+        Math.max(0, Math.floor((entity.pathDiameter ?? 0) / 2)),
+        Math.max(0, Math.floor(entity.obstacleFootprint ?? 0)),
+      );
+
+      const flag = entity.moving ? UNIT_PRESENT_MOVING : UNIT_PRESENT_FIXED;
+      for (let i = entityPosCell.x - entityRadius; i <= entityPosCell.x + entityRadius; i++) {
+        for (let j = entityPosCell.z - entityRadius; j <= entityPosCell.z + entityRadius; j++) {
+          if (!this.isCellInBounds(i, j, grid)) {
+            continue;
+          }
+          const index = j * grid.width + i;
+          const unitsInCell = unitIdsByCell.get(index);
+          if (unitsInCell) {
+            unitsInCell.push(entity.id);
+          } else {
+            unitIdsByCell.set(index, [entity.id]);
+          }
+          const currentFlag = flags[index] ?? UNIT_NO_UNITS;
+          if (currentFlag === UNIT_PRESENT_FIXED) {
+            continue;
+          }
+          if (flag === UNIT_PRESENT_FIXED || currentFlag === UNIT_NO_UNITS) {
+            flags[index] = flag;
+            unitIds[index] = entity.id;
+          }
+        }
+      }
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      const goal = this.getEntityGoalCell(entity);
+      if (!goal) {
+        continue;
+      }
+      const movementRadius = Math.max(0, Math.floor(entity.pathDiameter ?? 0));
+      const centerInCell = (movementRadius & 1) === 1;
+      const numCellsAbove = movementRadius === 0
+        ? 1
+        : movementRadius + (centerInCell ? 1 : 0);
+      const maxCellX = goal.x + numCellsAbove;
+      const maxCellZ = goal.z + numCellsAbove;
+
+      for (let i = goal.x - movementRadius; i < maxCellX; i++) {
+        for (let j = goal.z - movementRadius; j < maxCellZ; j++) {
+          if (!this.isCellInBounds(i, j, grid)) {
+            continue;
+          }
+          const index = j * grid.width + i;
+          goalUnitIds[index] = entity.id;
+
+          const posUnit = unitIds[index] ?? -1;
+          if (posUnit === entity.id) {
+            flags[index] = UNIT_PRESENT_FIXED;
+          } else if (posUnit === -1) {
+            flags[index] = UNIT_GOAL;
+          } else {
+            flags[index] = UNIT_GOAL_OTHER_MOVING;
+          }
+        }
+      }
+
+      // TODO(source): Port exact `updateGoal/removeGoal` lifecycle parity from original pathfind map updates.
+    }
+
+    return {
+      width: grid.width,
+      height: grid.height,
+      flags,
+      unitIds,
+      goalUnitIds,
+      unitIdsByCell,
+    };
+  }
+
+  private getEntityGoalCell(entity: MapEntity): { x: number; z: number } | null {
+    return entity.pathfindGoalCell;
   }
 
   private pathCost(
@@ -1365,7 +1944,13 @@ export class GameLogicSubsystem implements Subsystem {
     profile: PathfindingProfile,
   ): number {
     const index = toZ * grid.width + toX;
+    if (index < 0 || index >= grid.terrainType.length) {
+      return MAX_PATH_COST;
+    }
     const type = grid.terrainType[index];
+    if (type === undefined) {
+      return MAX_PATH_COST;
+    }
     const isDiagonal = Math.abs(toX - fromX) === 1 && Math.abs(toZ - fromZ) === 1;
     let cost = isDiagonal ? COST_DIAGONAL : COST_ORTHOGONAL;
 
@@ -1373,19 +1958,17 @@ export class GameLogicSubsystem implements Subsystem {
     if ((profile.acceptableSurfaces & toSurfaces) === 0) {
       return MAX_PATH_COST;
     }
-    if (profile.downhillOnly && this.mapHeightmap) {
-      const fromHeight = this.mapHeightmap.getWorldHeight(fromX * MAP_XY_FACTOR, fromZ * MAP_XY_FACTOR);
-      const toHeight = this.mapHeightmap.getWorldHeight(toX * MAP_XY_FACTOR, toZ * MAP_XY_FACTOR);
-      if (toHeight > fromHeight + 0.01) {
-        return MAX_PATH_COST;
-      }
-    }
-
-    if (grid.blocked[index] === 1 && !profile.canPassObstacle) {
+    if (!this.canMoveToCell(fromX, fromZ, toX, toZ, profile)) {
       return MAX_PATH_COST;
     }
 
-    if (type === NAV_CLIFF && grid.pinched[index] === 0) {
+    const blocked = grid.blocked[index];
+    if (blocked === undefined || (blocked === 1 && !profile.canPassObstacle)) {
+      return MAX_PATH_COST;
+    }
+
+    const pinched = grid.pinched[index] ?? 0;
+    if (type === NAV_CLIFF && pinched === 0) {
       const fromWorldX = fromX * MAP_XY_FACTOR;
       const fromWorldZ = fromZ * MAP_XY_FACTOR;
       const toWorldX = toX * MAP_XY_FACTOR;
@@ -1397,8 +1980,8 @@ export class GameLogicSubsystem implements Subsystem {
         cost += 7 * COST_DIAGONAL;
       }
     }
-    if (grid.pinched[index] === 1 && grid.bridgePassable[index] === 0) {
-      cost += COST_ORTHOGONAL;
+    if (pinched === 1) {
+      cost += COST_DIAGONAL;
     }
 
     return cost;
@@ -1421,7 +2004,7 @@ export class GameLogicSubsystem implements Subsystem {
       const [x, z] = this.gridFromIndex(current);
       cells.push({ x, z });
       const next = parent[current];
-      if (next < 0) {
+      if (next === undefined || next < 0) {
         break;
       }
       current = next;
@@ -1452,8 +2035,10 @@ export class GameLogicSubsystem implements Subsystem {
       if (candidate >= cells.length) {
         const last = smoothed[smoothed.length - 1];
         const goal = cells[cells.length - 1];
-        if (!last || last.x !== goal.x || last.z !== goal.z) {
-          smoothed.push(cells[cells.length - 1]!);
+        if (!last || !goal || last.x !== goal.x || last.z !== goal.z) {
+          if (goal) {
+            smoothed.push(goal);
+          }
         }
         break;
       }
@@ -1498,20 +2083,11 @@ export class GameLogicSubsystem implements Subsystem {
         nextZ += stepZ;
       }
 
-      if (!this.canOccupyCell(nextX, nextZ, profile, grid)) {
+      if (!this.canOccupyCell(nextX, nextZ, profile, grid, true)) {
         return false;
       }
       if (!this.canTraverseBridgeTransition(x, z, nextX, nextZ, profile, grid)) {
         return false;
-      }
-      if (nextX !== x && nextZ !== z) {
-        const sidePassable1 = this.canOccupyCell(nextX, z, profile, grid)
-          && this.canTraverseBridgeTransition(x, z, nextX, z, profile, grid);
-        const sidePassable2 = this.canOccupyCell(x, nextZ, profile, grid)
-          && this.canTraverseBridgeTransition(x, z, x, nextZ, profile, grid);
-        if (!sidePassable1 && !sidePassable2) {
-          return false;
-        }
       }
       x = nextX;
       z = nextZ;
@@ -1519,16 +2095,104 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private canOccupyCell(cellX: number, cellZ: number, profile: PathfindingProfile, nav: NavigationGrid | null = this.navigationGrid): boolean {
+  private canOccupyCell(
+    cellX: number,
+    cellZ: number,
+    profile: PathfindingProfile,
+    nav: NavigationGrid | null = this.navigationGrid,
+    exact = false,
+  ): boolean {
     if (!nav || !this.isCellInBounds(cellX, cellZ, nav)) {
       return false;
     }
+    const exactDiameter = profile.pathDiameter ?? 0;
+    const clearDiameter = this.clearCellForDiameter(cellX, cellZ, exactDiameter, profile, nav);
+    if (clearDiameter < 1) {
+      return false;
+    }
 
+    if (exactDiameter > 0 && exact && clearDiameter !== exactDiameter) {
+      return false;
+    }
+    return true;
+  }
+
+  private clearCellForDiameter(
+    cellX: number,
+    cellZ: number,
+    pathDiameter: number,
+    profile: PathfindingProfile,
+    nav: NavigationGrid,
+  ): number {
+    const normalizedPathDiameter = Number.isFinite(pathDiameter) ? Math.max(0, Math.trunc(pathDiameter)) : 0;
+    const clearDiameter = this.clearCellForExactDiameter(cellX, cellZ, normalizedPathDiameter, profile, nav);
+    if (clearDiameter === 0) {
+      if (normalizedPathDiameter < 2) {
+        return 0;
+      }
+      return this.clearCellForDiameter(cellX, cellZ, normalizedPathDiameter - 2, profile, nav);
+    }
+    return clearDiameter;
+  }
+
+  private clearCellForExactDiameter(
+    cellX: number,
+    cellZ: number,
+    pathDiameter: number,
+    profile: PathfindingProfile,
+    nav: NavigationGrid,
+  ): number {
+    if (!this.canOccupyCellCenter(cellX, cellZ, profile, nav)) {
+      return 0;
+    }
+
+    const radius = Math.max(0, Math.trunc(pathDiameter / 2));
+    const numCellsAbove = radius + 1;
+    const cutCorners = radius > 1;
+
+    for (let i = cellX - radius; i < cellX + numCellsAbove; i++) {
+      const isMinOrMaxX = i === cellX - radius;
+      const isMaxX = i === cellX + numCellsAbove - 1;
+      const xMinOrMax = isMinOrMaxX || isMaxX;
+      for (let j = cellZ - radius; j < cellZ + numCellsAbove; j++) {
+        const isMinOrMaxZ = j === cellZ - radius;
+        const isMaxZ = j === cellZ + numCellsAbove - 1;
+        const zMinOrMax = isMinOrMaxZ || isMaxZ;
+        if (xMinOrMax && zMinOrMax && cutCorners) {
+          continue;
+        }
+        if (!this.isCellInBounds(i, j, nav)) {
+          return 0;
+        }
+        if (!this.canOccupyCellCenter(i, j, profile, nav)) {
+          return 0;
+        }
+      }
+    }
+
+    if (Math.floor(radius) === 0) {
+      return 1;
+    }
+    return radius * 2;
+  }
+
+  private canOccupyCellCenter(
+    cellX: number,
+    cellZ: number,
+    profile: PathfindingProfile,
+    nav: NavigationGrid,
+  ): boolean {
     const index = cellZ * nav.width + cellX;
     const terrain = nav.terrainType[index];
+    if (terrain === undefined) {
+      return false;
+    }
     if (nav.bridgePassable[index] === 1) {
       const bridgeSurfaces = LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;
-      return !!profile.canUseBridge && (profile.acceptableSurfaces & bridgeSurfaces) !== 0;
+      if (!profile.canUseBridge || (profile.acceptableSurfaces & bridgeSurfaces) === 0) {
+        return false;
+      }
+      return true;
     }
     if (nav.blocked[index] === 1 && !profile.canPassObstacle) {
       return false;
@@ -1541,6 +2205,29 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return true;
+  }
+
+  private isZoneBlockIndex(cellX: number, cellZ: number, grid: NavigationGrid): number {
+    const blockX = Math.floor(cellX / PATHFIND_ZONE_BLOCK_SIZE);
+    const blockY = Math.floor(cellZ / PATHFIND_ZONE_BLOCK_SIZE);
+    if (blockX < 0 || blockX >= grid.zoneBlockWidth) {
+      return -1;
+    }
+    if (blockY < 0 || blockY >= grid.zoneBlockHeight) {
+      return -1;
+    }
+    return blockY * grid.zoneBlockWidth + blockX;
+  }
+
+  private isZonePassable(cellX: number, cellZ: number, grid: NavigationGrid): boolean {
+    const blockIndex = this.isZoneBlockIndex(cellX, cellZ, grid);
+    if (blockIndex < 0) {
+      return false;
+    }
+    if (!grid.zonePassable || blockIndex >= grid.zonePassable.length) {
+      return true;
+    }
+    return grid.zonePassable[blockIndex] === 1;
   }
 
   private validLocomotorSurfacesForCellType(
@@ -1609,29 +2296,55 @@ export class GameLogicSubsystem implements Subsystem {
     cellZ: number,
     grid: NavigationGrid,
     profile: PathfindingProfile,
+    exact = false,
+    maxOffset = 400,
   ): { x: number; z: number } | null {
-    if (this.canOccupyCell(cellX, cellZ, profile, grid)) {
+    if (this.canOccupyCell(cellX, cellZ, profile, grid, exact)) {
       return { x: cellX, z: cellZ };
     }
 
-    const maxRadius = Math.max(grid.width, grid.height);
-    for (let radius = 1; radius < maxRadius; radius++) {
-      for (let offset = -radius; offset <= radius; offset++) {
-        const candidates: [number, number][] = [
-          [cellX + offset, cellZ + radius],
-          [cellX + offset, cellZ - radius],
-          [cellX + radius, cellZ + offset],
-          [cellX - radius, cellZ + offset],
-        ];
-        for (const [x, z] of candidates) {
-          if (!this.isCellInBounds(x, z, grid)) {
-            continue;
-          }
-          if (this.canOccupyCell(x, z, profile, grid)) {
-            return { x, z };
-          }
+    let delta = 1;
+    let i = cellX;
+    let j = cellZ;
+    let remaining = maxOffset;
+    let count: number;
+
+    while (remaining > 0) {
+      for (count = delta; count > 0 && remaining > 0; count--) {
+        i += 1;
+        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
+          return { x: i, z: j };
         }
+        remaining--;
       }
+
+      for (count = delta; count > 0 && remaining > 0; count--) {
+        j += 1;
+        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
+          return { x: i, z: j };
+        }
+        remaining--;
+      }
+
+      delta += 1;
+
+      for (count = delta; count > 0 && remaining > 0; count--) {
+        i -= 1;
+        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
+          return { x: i, z: j };
+        }
+        remaining--;
+      }
+
+      for (count = delta; count > 0 && remaining > 0; count--) {
+        j -= 1;
+        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
+          return { x: i, z: j };
+        }
+        remaining--;
+      }
+
+      delta += 1;
     }
 
     return null;
@@ -1642,6 +2355,14 @@ export class GameLogicSubsystem implements Subsystem {
 
     const cellWidth = Math.max(1, heightmap.width - 1);
     const cellHeight = Math.max(1, heightmap.height - 1);
+    const borderSize = Math.max(0, Math.floor(heightmap.borderSize));
+    const logicalMinX = Math.min(borderSize, Math.max(0, cellWidth - 1));
+    const logicalMinZ = Math.min(borderSize, Math.max(0, cellHeight - 1));
+    let logicalMaxX = cellWidth - 1 - 2 * borderSize;
+    let logicalMaxZ = cellHeight - 1 - 2 * borderSize;
+    logicalMaxX = Math.max(logicalMinX, logicalMaxX);
+    logicalMaxZ = Math.max(logicalMinZ, logicalMaxZ);
+
     const total = cellWidth * cellHeight;
     const terrainType = new Uint8Array(total);
     const blocked = new Uint8Array(total);
@@ -1748,29 +2469,23 @@ export class GameLogicSubsystem implements Subsystem {
       bridgePassable,
       bridgeTransitions,
       bridgeSegmentByCell,
+      zonePassable: new Uint8Array(
+        Math.max(1, Math.ceil(cellWidth / PATHFIND_ZONE_BLOCK_SIZE))
+        * Math.max(1, Math.ceil(cellHeight / PATHFIND_ZONE_BLOCK_SIZE)),
+      ),
+      zoneBlockWidth: Math.max(1, Math.ceil(cellWidth / PATHFIND_ZONE_BLOCK_SIZE)),
+      zoneBlockHeight: Math.max(1, Math.ceil(cellHeight / PATHFIND_ZONE_BLOCK_SIZE)),
+      logicalMinX,
+      logicalMinZ,
+      logicalMaxX,
+      logicalMaxZ,
     };
 
-    this.applyBridgeOverlay(mapData, grid);
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (!entity.blocksPath || entity.obstacleFootprint <= 0) {
-        continue;
-      }
-      if (entity.obstacleGeometry) {
-        this.rasterizeObstacleGeometry(entity, grid);
-      } else {
-        const footprint = entity.obstacleFootprint;
-        const [entityCellX, entityCellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
-        if (entityCellX === null || entityCellZ === null) {
-          continue;
-        }
-        for (let x = entityCellX - footprint; x <= entityCellX + footprint; x++) {
-          for (let z = entityCellZ - footprint; z <= entityCellZ + footprint; z++) {
-            this.markObstacleCell(x, z, grid);
-          }
-        }
-      }
+    for (let i = 0; i < grid.zonePassable.length; i++) {
+      grid.zonePassable[i] = 0;
     }
+
+    this.applyBridgeOverlay(mapData, grid);
 
     for (let z = 0; z < grid.height; z++) {
       for (let x = 0; x < grid.width; x++) {
@@ -1832,6 +2547,45 @@ export class GameLogicSubsystem implements Subsystem {
         if (touchesObstacle) {
           pinched[index] = 1;
         }
+      }
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (!entity.blocksPath || entity.obstacleFootprint <= 0) {
+        continue;
+      }
+      if (entity.obstacleGeometry) {
+        this.rasterizeObstacleGeometry(entity, grid);
+      } else {
+        const footprint = entity.obstacleFootprint;
+        const [entityCellX, entityCellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
+        if (entityCellX === null || entityCellZ === null) {
+          continue;
+        }
+        for (let x = entityCellX - footprint; x <= entityCellX + footprint; x++) {
+          for (let z = entityCellZ - footprint; z <= entityCellZ + footprint; z++) {
+            this.markObstacleCell(x, z, grid);
+          }
+        }
+      }
+    }
+
+    for (let z = 0; z < grid.height; z++) {
+      for (let x = 0; x < grid.width; x++) {
+        const index = z * grid.width + x;
+        const terrain = terrainType[index] === NAV_IMPASSABLE || terrainType[index] === NAV_BRIDGE_IMPASSABLE
+          ? false
+          : blocked[index] !== 1;
+        if (!terrain) {
+          continue;
+        }
+
+        const blockX = Math.floor(x / PATHFIND_ZONE_BLOCK_SIZE);
+        const blockY = Math.floor(z / PATHFIND_ZONE_BLOCK_SIZE);
+        if (blockX < 0 || blockX >= grid.zoneBlockWidth || blockY < 0 || blockY >= grid.zoneBlockHeight) {
+          continue;
+        }
+        grid.zonePassable[blockY * grid.zoneBlockWidth + blockX] = 1;
       }
     }
 
@@ -2047,7 +2801,8 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
         const index = z * grid.width + x;
-        if (grid.bridgeSegmentByCell[index] < 0) {
+        const currentSegmentId = grid.bridgeSegmentByCell[index];
+        if (currentSegmentId === undefined || currentSegmentId < 0) {
           grid.bridgeSegmentByCell[index] = segmentId;
         }
         grid.bridge[index] = 1;
@@ -2168,6 +2923,60 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private resolvePathDiameter(
+    category: ObjectCategory,
+    objectDef?: ObjectDef,
+    obstacleGeometry?: ObstacleGeometry | null,
+  ): number {
+    if (!objectDef) {
+      return 0;
+    }
+
+    const geometryRadius = this.pathDiameterFromGeometryFields(objectDef);
+    let maxRadius = geometryRadius;
+    if (maxRadius === null && category === 'building') {
+      const explicitFootprint = this.footprintInCells(category, objectDef, null);
+      maxRadius = explicitFootprint * (MAP_XY_FACTOR * 0.5);
+    }
+    if (maxRadius === null) {
+      if (obstacleGeometry) {
+        maxRadius = Math.max(obstacleGeometry.majorRadius, obstacleGeometry.minorRadius);
+      }
+    }
+    if (maxRadius === null || maxRadius <= 0) {
+      return 0;
+    }
+
+    let pathDiameter = 2 * maxRadius;
+    if (pathDiameter > MAP_XY_FACTOR && pathDiameter < 2 * MAP_XY_FACTOR) {
+      pathDiameter = 2 * MAP_XY_FACTOR;
+    }
+
+    let iRadius = Math.floor(pathDiameter / MAP_XY_FACTOR + 0.3);
+    if (iRadius === 0) {
+      iRadius = 1;
+    }
+    iRadius = Math.floor(iRadius / 2);
+    iRadius = Math.min(iRadius, 2);
+    if (iRadius <= 0) {
+      return 0;
+    }
+
+    return iRadius;
+  }
+
+  private pathDiameterFromGeometryFields(objectDef: ObjectDef): number | null {
+    const majorRadius = readNumericField(objectDef.fields, ['GeometryMajorRadius', 'MajorRadius']);
+    const minorRadius = readNumericField(objectDef.fields, ['GeometryMinorRadius', 'MinorRadius', 'GeometryMajorRadius', 'MajorRadius']);
+    if (majorRadius === null || minorRadius === null) {
+      return null;
+    }
+    const resolvedMajor = Math.abs(majorRadius);
+    const resolvedMinor = Math.abs(minorRadius);
+    const maxRadius = Math.max(resolvedMajor, resolvedMinor);
+    return Number.isFinite(maxRadius) ? maxRadius : null;
+  }
+
   private worldToGrid(worldX: number, worldZ: number): [number | null, number | null] {
     if (!this.mapHeightmap) return [null, null];
 
@@ -2226,6 +3035,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   private updateEntityMovement(dt: number): void {
     for (const entity of this.spawnedEntities.values()) {
+      if (entity.canMove) {
+        this.updatePathfindPosCell(entity);
+      }
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
       if (!entity.canMove || !entity.moving || entity.moveTarget === null) {
         continue;
       }
@@ -2234,6 +3049,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.moving = false;
         entity.moveTarget = null;
         entity.movePath = [];
+        entity.pathfindGoalCell = null;
         continue;
       }
 
@@ -2251,6 +3067,7 @@ export class GameLogicSubsystem implements Subsystem {
           entity.moving = false;
           entity.moveTarget = null;
           entity.movePath = [];
+          entity.pathfindGoalCell = null;
           continue;
         }
         entity.moveTarget = entity.movePath[entity.pathIndex]!;
@@ -2266,6 +3083,7 @@ export class GameLogicSubsystem implements Subsystem {
           entity.moving = false;
           entity.moveTarget = null;
           entity.movePath = [];
+          entity.pathfindGoalCell = null;
           continue;
         }
         entity.moveTarget = entity.movePath[entity.pathIndex]!;
@@ -2289,6 +3107,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       entity.mesh.rotation.y = Math.atan2(dz, dx) + Math.PI / 2;
+      this.updatePathfindPosCell(entity);
     }
   }
 
@@ -2473,11 +3292,21 @@ function readNumericField(fields: Record<string, IniValue>, names: string[]): nu
   for (const name of names) {
     const values = readNumericList(fields[name]);
     if (values.length > 0 && Number.isFinite(values[0])) {
-      return values[0];
+      const [value] = values;
+      if (value !== undefined) {
+        return value;
+      }
     }
   }
 
   return null;
+}
+
+function toByte(value: number | null | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(255, Math.trunc(value)));
 }
 
 function readNumericListField(fields: Record<string, IniValue>, names: string[]): number[] | null {

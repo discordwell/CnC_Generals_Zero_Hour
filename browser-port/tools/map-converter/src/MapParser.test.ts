@@ -649,7 +649,7 @@ describe('MapParser', () => {
 
     let off = writeTOC(view, chunks);
     off = writeChunkHeader(view, off, 99, 1, dummyPayload);
-    writeInt32(view, off, 0);
+    void writeInt32(view, off, 0);
 
     expect(() => MapParser.parse(buffer)).toThrow(/missing required HeightMapData/);
   });
@@ -808,7 +808,7 @@ describe('BlendTileExtractor', () => {
     off = writeInt32(view, off, 1);
     off = writeInt32(view, off, 1);
     off = writeInt32(view, off, 1);
-    off = writeInt32(view, off, 0);
+    void writeInt32(view, off, 0);
 
     const reader = new DataChunkReader(buffer);
     const info = BlendTileExtractor.extract(reader, 7, mapWidth, mapHeight);

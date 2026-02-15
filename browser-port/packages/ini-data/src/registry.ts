@@ -56,6 +56,7 @@ export interface LocomotorDef {
   surfaces: string[];
   surfaceMask: number;
   downhillOnly: boolean;
+  speed?: number;
 }
 
 export interface RegistryStats {
@@ -351,6 +352,7 @@ export class IniDataRegistry {
           surfaces: extractLocomotorSurfaces(block.fields['Surfaces']),
           surfaceMask: locomotorSurfaceMaskFromNames(extractLocomotorSurfaces(block.fields['Surfaces'])),
           downhillOnly: extractBoolean(block.fields['DownhillOnly']) ?? false,
+          speed: extractNumber(block.fields['Speed']) ?? 0,
         });
         break;
 
@@ -499,6 +501,41 @@ function extractBoolean(value: IniValue | undefined): boolean | undefined {
     if (normalized === 'false' || normalized === 'no' || normalized === '0') return false;
   }
   return undefined;
+}
+
+function extractNumber(value: IniValue | undefined): number | undefined {
+  const values = readNumericValues(value);
+  if (values.length === 0) {
+    return undefined;
+  }
+  const candidate = values[0];
+  return Number.isFinite(candidate) ? candidate : undefined;
+}
+
+function readNumericValues(value: IniValue | undefined): number[] {
+  if (typeof value === 'number') {
+    return [value];
+  }
+  if (typeof value === 'boolean') {
+    return [value ? 1 : 0];
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return [parsed];
+    }
+    return value.split(/[\s,;|]+/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => Number(part))
+      .filter((entry) => Number.isFinite(entry));
+  }
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => readNumericValues(entry as IniValue))
+      .filter((entry) => Number.isFinite(entry));
+  }
+  return [];
 }
 
 function extractLocomotorSurfaces(value: IniValue | undefined): string[] {

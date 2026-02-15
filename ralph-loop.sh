@@ -11,6 +11,7 @@ usage() {
 Usage:
   ./ralph-loop.sh --count <N> --prompt <PROMPT> [--session-id <SESSION_ID>] [--new-agent]
     [--plan-prompt <PROMPT>] [--plan-prompt-file <PATH>] [--state-file <PATH>]
+    [--summary-prompt <PROMPT>] [--summary-prompt-file <PATH>] [--summary-every <N>]
     [--non-interactive] [--sandbox <read-only|workspace-write|danger-full-access>]
     [--bypass-sandbox] [--progress-window <N>] [--min-delta-lines <N>] [--allow-low-progress]
     [--completion-poll-interval <SECONDS>] [--completion-timeout <SECONDS>] [--log-file <PATH>] -- [codex args...]
@@ -26,6 +27,7 @@ Examples:
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --sandbox danger-full-access -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --bypass-sandbox -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --completion-poll-interval 5 --completion-timeout 120 -- -c model="gpt-5.3-codex-spark"
+  ./ralph-loop.sh --count 25 --prompt "..." --session-id <SESSION_ID> --summary-every 25 -- -c model="gpt-5.3-codex-spark"
 EOF
   exit 1
 }
@@ -35,6 +37,9 @@ prompt=""
 prompt_file=""
 plan_prompt=""
 plan_prompt_file=""
+summary_prompt=""
+summary_prompt_file=""
+summary_every=25
 sleep_seconds=0
 session_id=""
 interactive=1
@@ -71,6 +76,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --plan-prompt-file)
       plan_prompt_file="$2"
+      shift 2
+      ;;
+    --summary-prompt)
+      summary_prompt="$2"
+      shift 2
+      ;;
+    --summary-prompt-file)
+      summary_prompt_file="$2"
+      shift 2
+      ;;
+    --summary-every)
+      summary_every="$2"
       shift 2
       ;;
     --session-id)
@@ -154,6 +171,10 @@ if [[ "$plan_prompt_file" != "" ]]; then
   plan_prompt="$(cat "$plan_prompt_file")"
 fi
 
+if [[ "$summary_prompt_file" != "" ]]; then
+  summary_prompt="$(cat "$summary_prompt_file")"
+fi
+
 if [[ "$prompt" == "" ]]; then
   echo "Error: a prompt is required. Use --prompt or --prompt-file." >&2
   usage
@@ -167,6 +188,16 @@ Output:
 - What likely changed state is currently visible from the repo/diff.
 - The highest-priority next step to unlock stable progress.
 Do not edit files in this step."
+fi
+
+if [[ "$summary_prompt" == "" ]]; then
+  summary_prompt="Summarize the outcomes of the latest execution segment and any blockers.
+
+Output:
+- What changed in code, tests, and infrastructure this segment.
+- What risks, regressions, or missing coverage were introduced.
+- What should be the highest-priority next step.
+Keep it concise and actionable."
 fi
 
 if [[ "$iterations" -le 0 ]]; then
@@ -188,6 +219,11 @@ if [[ "$completion_poll_interval" -lt 0 ]]; then
 fi
 if [[ "$completion_timeout_seconds" -lt 0 ]]; then
   echo "Error: --completion-timeout must be zero or greater." >&2
+  exit 1
+fi
+
+if [[ "$summary_every" -le 0 ]]; then
+  echo "Error: --summary-every must be a positive integer." >&2
   exit 1
 fi
 
@@ -364,6 +400,7 @@ log_state() {
   local total_changed_lines="$5"
   local window_lines="$6"
   local delta_in_window="$7"
+  local summary_count="$8"
 
   local repo_status
   local diff_stat
@@ -384,6 +421,7 @@ progress_window: $progress_window
 progress_goal: $min_delta_lines
 progress_delta_since_window: $delta_in_window
 updated_at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+summary_count: $summary_count
 
 ## repo_status
 $repo_status
@@ -406,7 +444,37 @@ if (( bypass_sandbox )); then
   codex_base_cmd+=(--dangerously-bypass-approvals-and-sandbox)
 fi
 
+normalize_codex_arg() {
+  local normalized=()
+  local i=0
+  while (( i < ${#codex_args[@]} )); do
+    local arg="${codex_args[i]}"
+    if [[ "$arg" == "-c" ]]; then
+      local value="${codex_args[i+1]:-}"
+      if [[ -n "$value" ]]; then
+        normalized+=(--config "$value")
+        i=$((i + 2))
+      else
+        normalized+=("$arg")
+        i=$((i + 1))
+      fi
+      continue
+    fi
+
+    if [[ "$arg" == "--no-alt-screen" && interactive -eq 0 ]]; then
+      i=$((i + 1))
+      continue
+    fi
+
+    normalized+=("$arg")
+    i=$((i + 1))
+  done
+
+  codex_args=("${normalized[@]}")
+}
+
 if (( ${#codex_args[@]} > 0 )); then
+  normalize_codex_arg
   codex_base_cmd+=("${codex_args[@]}")
 fi
 
@@ -421,6 +489,13 @@ count_changed_lines() {
 
 window_start_lines="$(count_changed_lines)"
 window_start_iter=0
+summary_count=0
+if [[ -f "$state_file" ]]; then
+  persisted_summary_count="$(awk '/^summary_count:[[:space:]]*[0-9]+$/ { sub(/^summary_count:[[:space:]]*/, ""); print $1; exit }' "$state_file")"
+  if [[ -n "$persisted_summary_count" ]]; then
+    summary_count="$persisted_summary_count"
+  fi
+fi
 
 log_event() {
   local iteration="$1"
@@ -449,14 +524,23 @@ run_index=0
 
 while (( run_index < iterations )); do
   run_index=$((run_index + 1))
+  summary_count=$((summary_count + 1))
   session_label="${session_id:-last}"
   if (( run_index == 1 )); then
     prompt_to_send="$(build_context_prompt "planning" "$plan_prompt" "$run_index")"
+  elif (( summary_count % summary_every == 0 )); then
+    prompt_to_send="$(build_context_prompt "summary" "$summary_prompt" "$run_index")"
   else
     prompt_to_send="$(build_context_prompt "execution" "$prompt" "$run_index")"
   fi
 
-  log_event "$run_index" "starting" "$([ ${run_index} -eq 1 ] && echo planning || echo execution)" "" "" "$session_label"
+  run_phase="execution"
+  if (( run_index == 1 )); then
+    run_phase="planning"
+  elif (( summary_count % summary_every == 0 )); then
+    run_phase="summary"
+  fi
+  log_event "$run_index" "starting" "$run_phase" "" "" "$session_label"
   iteration_start=$(date +%s)
 
   output_file="$(mktemp)"
@@ -490,11 +574,11 @@ while (( run_index < iterations )); do
 
   iteration_end=$(date +%s)
   elapsed=$(( iteration_end - iteration_start ))
-  log_event "$run_index" "ended" "$([ ${run_index} -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed" "$session_label"
+  log_event "$run_index" "ended" "$run_phase" "$exit_code" "$elapsed" "$session_label"
 
   current_changed_lines="$(count_changed_lines)"
   window_delta=$((current_changed_lines - window_start_lines))
-  log_state "$run_index" "$([ $run_index -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed" "$current_changed_lines" "$min_delta_lines" "$window_delta"
+  log_state "$run_index" "$run_phase" "$exit_code" "$elapsed" "$current_changed_lines" "$min_delta_lines" "$window_delta" "$summary_count"
 
   session_file="$(resolve_session_file "$session_id")"
   turn_id="$(latest_turn_id "$session_file")"

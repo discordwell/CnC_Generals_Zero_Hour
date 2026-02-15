@@ -109,6 +109,17 @@ describe('IniDataRegistry', () => {
       expect(registry.objects.size).toBe(0);
       expect(registry.getUnsupportedBlockTypes()).toEqual([]);
     });
+
+    it('parses Locomotor Speed from INI data', () => {
+      registry.loadBlocks([
+        makeBlock('Locomotor', 'TestGroundLocomotor', { Surfaces: ['GROUND'], Speed: '42' }),
+      ]);
+
+      const locomotor = registry.getLocomotor('TestGroundLocomotor');
+
+      expect(locomotor?.name).toBe('TestGroundLocomotor');
+      expect(locomotor?.speed).toBe(42);
+    });
   });
 
   describe('getObjectsByKind', () => {
