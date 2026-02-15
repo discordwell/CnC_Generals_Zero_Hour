@@ -11,6 +11,7 @@ import { IniDataRegistry, type ObjectDef } from '@generals/ini-data';
 import type { IniValue } from '@generals/core';
 import {
   MAP_XY_FACTOR,
+  base64ToUint8Array,
   type HeightmapGrid,
   type MapDataJSON,
   type MapObjectJSON,
@@ -73,6 +74,8 @@ interface NavigationGrid {
   terrainType: Uint8Array;
   blocked: Uint8Array;
   pinched: Uint8Array;
+  bridge: Uint8Array;
+  bridgeTransitions: Uint8Array;
 }
 
 const PATHFIND_CELL_SIZE = MAP_XY_FACTOR;
@@ -88,13 +91,31 @@ const NAV_WATER = 1;
 const NAV_CLIFF = 2;
 const NAV_RUBBLE = 3;
 const NAV_OBSTACLE = 4;
+const NAV_BRIDGE = 5;
+
+const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
+const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
 
 interface PathfindingProfile {
   canCrossWater: boolean;
   canCrossCliff: boolean;
   canCrossRubble: boolean;
   canPassObstacle: boolean;
+  canUseBridge: boolean;
   avoidPinched: boolean;
+}
+
+type ObstacleGeometryShape = 'box' | 'circle';
+
+interface ObstacleGeometry {
+  shape: ObstacleGeometryShape;
+  majorRadius: number;
+  minorRadius: number;
+}
+
+interface CliffStateBits {
+  data: Uint8Array;
+  stride: number;
 }
 
 interface MapEntity {
@@ -108,7 +129,9 @@ interface MapEntity {
   nominalHeight: number;
   selected: boolean;
   canMove: boolean;
+  canCrossCliff: boolean;
   blocksPath: boolean;
+  obstacleGeometry: ObstacleGeometry | null;
   obstacleFootprint: number;
   movePath: VectorXZ[];
   pathIndex: number;
@@ -313,8 +336,10 @@ export class GameLogicSubsystem implements Subsystem {
       selected: false,
     });
 
-    const blocksPath = this.shouldPathfindObstacle(objectDef, category);
-    const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef) : 0;
+    const canCrossCliff = this.resolveCanCrossCliff(category, objectDef);
+    const blocksPath = this.shouldPathfindObstacle(objectDef);
+    const obstacleGeometry = blocksPath ? this.resolveObstacleGeometry(objectDef) : null;
+    const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
     const mesh = new THREE.Mesh(geometry, material);
     const [worldX, worldY, worldZ] = this.objectToWorldPosition(mapObject, heightmap);
     const baseHeight = nominalHeight / 2;
@@ -341,7 +366,9 @@ export class GameLogicSubsystem implements Subsystem {
       nominalHeight,
       selected: false,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
+      canCrossCliff,
       blocksPath,
+      obstacleGeometry,
       obstacleFootprint,
       movePath: [],
       pathIndex: 0,
@@ -366,7 +393,7 @@ export class GameLogicSubsystem implements Subsystem {
     return 'unknown';
   }
 
-  private shouldPathfindObstacle(objectDef: ObjectDef | undefined, category: ObjectCategory): boolean {
+  private shouldPathfindObstacle(objectDef: ObjectDef | undefined): boolean {
     if (!objectDef) {
       return false;
     }
@@ -382,7 +409,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    if (this.isMobileByCategoryOrKindOf(category, kinds)) {
+    if (this.isMobileObject(objectDef, kinds)) {
       return false;
     }
 
@@ -391,18 +418,38 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const heightAboveTerrain = readNumericField(objectDef.fields, ['HeightAboveTerrain', 'Height']);
-    if (heightAboveTerrain !== null && heightAboveTerrain > MAP_XY_FACTOR) {
+    if (heightAboveTerrain !== null && heightAboveTerrain > MAP_XY_FACTOR && !hasKindOf('BLAST_CRATER')) {
       return false;
     }
 
     return true;
   }
 
-  private isMobileByCategoryOrKindOf(category: ObjectCategory, kinds: Set<string>): boolean {
-    if (category === 'air' || category === 'infantry' || category === 'vehicle') {
+  private isMobileObject(objectDef: ObjectDef, kinds: Set<string>): boolean {
+    const explicit = readBooleanField(objectDef.fields, ['IsMobile', 'CanMove', 'Mobile']);
+    if (explicit !== null) {
+      return explicit;
+    }
+
+    if (this.hasLocomotorSetDefinition(objectDef)) {
       return true;
     }
 
+    return this.isMobileByKindOf(kinds);
+  }
+
+  private hasLocomotorSetDefinition(objectDef: ObjectDef): boolean {
+    for (const block of objectDef.blocks) {
+      const type = block.type.toUpperCase();
+      if (type === 'LOCOMOTOR' || type === 'LOCOMOTORSET') {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private isMobileByKindOf(kinds: Set<string>): boolean {
     return (
       kinds.has('INFANTRY')
       || kinds.has('VEHICLE')
@@ -417,8 +464,19 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private isSmallGeometry(fields: Record<string, IniValue>): boolean {
-    const isSmall = readBooleanField(fields, ['IsSmall', 'Small', 'GeometryIsSmall', 'CanSeeOver']);
-    return isSmall === true;
+    const explicitSmall = readBooleanField(fields, ['GeometryIsSmall', 'IsSmall', 'Small']);
+    if (explicitSmall !== null) {
+      return explicitSmall;
+    }
+
+    const major = readNumericField(fields, ['GeometryMajorRadius', 'MajorRadius']);
+    const minor = readNumericField(fields, ['GeometryMinorRadius', 'MinorRadius', 'GeometryMajorRadius', 'MajorRadius']);
+    if (major !== null && minor !== null) {
+      const maxRadius = Math.max(Math.abs(major), Math.abs(minor));
+      return maxRadius > 0 && maxRadius <= MAP_XY_FACTOR * 0.35;
+    }
+
+    return false;
   }
 
   private normalizeKindOf(kindOf: string[] | undefined): Set<string> {
@@ -432,6 +490,119 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return normalized;
+  }
+
+  private resolveCanCrossCliff(category: ObjectCategory, objectDef: ObjectDef | undefined): boolean {
+    if (category === 'air') {
+      return true;
+    }
+    if (!objectDef) {
+      return false;
+    }
+
+    const explicit = readBooleanField(objectDef.fields, [
+      'CanCrossCliff',
+      'CanTraverseCliff',
+      'CanClimbCliffs',
+      'CanMoveOnCliffs',
+    ]);
+    if (explicit !== null) {
+      return explicit;
+    }
+
+    const movementHint = readStringField(objectDef.fields, ['Locomotor', 'LocomotorSet', 'MovementMode', 'MovementType']);
+    if (!movementHint) {
+      return false;
+    }
+    const normalized = movementHint.toUpperCase();
+    return normalized.includes('CLIFF') || normalized.includes('ALL_TERRAIN');
+  }
+
+  private resolveObstacleGeometry(objectDef: ObjectDef | undefined): ObstacleGeometry | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    const geometryType = readStringField(objectDef.fields, ['Geometry', 'GeometryType'])?.toUpperCase() ?? '';
+    const majorRaw = readNumericField(objectDef.fields, ['GeometryMajorRadius', 'MajorRadius', 'GeometryRadius', 'Radius']);
+    const minorRaw = readNumericField(objectDef.fields, ['GeometryMinorRadius', 'MinorRadius']);
+    const majorRadius = majorRaw !== null ? Math.abs(majorRaw) : (minorRaw !== null ? Math.abs(minorRaw) : 0);
+    const minorRadius = minorRaw !== null ? Math.abs(minorRaw) : majorRadius;
+
+    if (!Number.isFinite(majorRadius) || majorRadius <= 0) {
+      return null;
+    }
+    if (!Number.isFinite(minorRadius) || minorRadius <= 0) {
+      return null;
+    }
+
+    const shape: ObstacleGeometryShape = geometryType.includes('BOX') ? 'box' : 'circle';
+    return { shape, majorRadius, minorRadius };
+  }
+
+  private rasterizeObstacleGeometry(entity: MapEntity, grid: NavigationGrid): void {
+    if (!entity.obstacleGeometry) {
+      return;
+    }
+
+    const centerX = entity.mesh.position.x;
+    const centerZ = entity.mesh.position.z;
+    if (entity.obstacleGeometry.shape === 'box') {
+      const angle = entity.mesh.rotation.y;
+      const major = entity.obstacleGeometry.majorRadius;
+      const minor = entity.obstacleGeometry.minorRadius;
+      const stepSize = MAP_XY_FACTOR * 0.5;
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      const ydx = s * stepSize;
+      const ydz = -c * stepSize;
+      const xdx = c * stepSize;
+      const xdz = s * stepSize;
+      const numStepsX = Math.max(1, Math.ceil((2 * major) / stepSize));
+      const numStepsZ = Math.max(1, Math.ceil((2 * minor) / stepSize));
+      let topLeftX = centerX - major * c - minor * s;
+      let topLeftZ = centerZ + minor * c - major * s;
+
+      for (let iz = 0; iz < numStepsZ; iz++, topLeftX += ydx, topLeftZ += ydz) {
+        let worldX = topLeftX;
+        let worldZ = topLeftZ;
+        for (let ix = 0; ix < numStepsX; ix++, worldX += xdx, worldZ += xdz) {
+          const cellX = Math.floor((worldX + 0.5) / MAP_XY_FACTOR);
+          const cellZ = Math.floor((worldZ + 0.5) / MAP_XY_FACTOR);
+          this.markObstacleCell(cellX, cellZ, grid);
+        }
+      }
+      return;
+    }
+
+    const radius = entity.obstacleGeometry.majorRadius;
+    const topLeftX = Math.floor(0.5 + (centerX - radius) / MAP_XY_FACTOR) - 1;
+    const topLeftZ = Math.floor(0.5 + (centerZ - radius) / MAP_XY_FACTOR) - 1;
+    const size = radius / MAP_XY_FACTOR + 0.4;
+    const r2 = size * size;
+    const centerCellX = centerX / MAP_XY_FACTOR;
+    const centerCellZ = centerZ / MAP_XY_FACTOR;
+    const bottomRightX = topLeftX + Math.floor(2 * size + 2);
+    const bottomRightZ = topLeftZ + Math.floor(2 * size + 2);
+
+    for (let z = topLeftZ; z < bottomRightZ; z++) {
+      for (let x = topLeftX; x < bottomRightX; x++) {
+        const dx = x + 0.5 - centerCellX;
+        const dz = z + 0.5 - centerCellZ;
+        if (dx * dx + dz * dz <= r2) {
+          this.markObstacleCell(x, z, grid);
+        }
+      }
+    }
+  }
+
+  private markObstacleCell(cellX: number, cellZ: number, grid: NavigationGrid): void {
+    if (!this.isCellInBounds(cellX, cellZ, grid)) {
+      return;
+    }
+    const index = cellZ * grid.width + cellX;
+    grid.blocked[index] = 1;
+    grid.terrainType[index] = NAV_OBSTACLE;
   }
 
   private getGeometry(category: ObjectCategory): { geometry: THREE.BufferGeometry; nominalHeight: number } {
@@ -626,10 +797,12 @@ export class GameLogicSubsystem implements Subsystem {
 
     const effectiveStart = startCandidate;
 
-    const goalProfile = {
-      ...movementProfile,
-      canCrossCliff: false,
-    };
+    const goalProfile = movementProfile.canCrossCliff
+      ? movementProfile
+      : {
+        ...movementProfile,
+        canCrossCliff: false,
+      };
     const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, goalProfile);
     if (!effectiveGoal) {
       return [];
@@ -716,11 +889,20 @@ export class GameLogicSubsystem implements Subsystem {
         if (!this.isCellInBounds(neighborX, neighborZ, grid)) {
           continue;
         }
+        if (!this.canTraverseBridgeTransition(currentCellX, currentCellZ, neighborX, neighborZ, movementProfile, grid)) {
+          continue;
+        }
 
         const isDiagonal = deltaX[i] !== 0 && deltaZ[i] !== 0;
         if (isDiagonal) {
-          const sidePassable1 = this.canOccupyCell(currentCellX + deltaX[i], currentCellZ, movementProfile, grid);
-          const sidePassable2 = this.canOccupyCell(currentCellX, currentCellZ + deltaZ[i], movementProfile, grid);
+          const side1X = currentCellX + deltaX[i];
+          const side1Z = currentCellZ;
+          const side2X = currentCellX;
+          const side2Z = currentCellZ + deltaZ[i];
+          const sidePassable1 = this.canOccupyCell(side1X, side1Z, movementProfile, grid)
+            && this.canTraverseBridgeTransition(currentCellX, currentCellZ, side1X, side1Z, movementProfile, grid);
+          const sidePassable2 = this.canOccupyCell(side2X, side2Z, movementProfile, grid)
+            && this.canTraverseBridgeTransition(currentCellX, currentCellZ, side2X, side2Z, movementProfile, grid);
           if (!sidePassable1 && !sidePassable2) {
             continue;
           }
@@ -784,15 +966,18 @@ export class GameLogicSubsystem implements Subsystem {
         canCrossCliff: true,
         canCrossRubble: true,
         canPassObstacle: true,
+        canUseBridge: true,
         avoidPinched: false,
       };
     }
 
+    const canCrossCliff = entity?.canCrossCliff === true;
     return {
       canCrossWater: false,
-      canCrossCliff: true,
+      canCrossCliff,
       canCrossRubble: false,
       canPassObstacle: false,
+      canUseBridge: true,
       avoidPinched: false,
     };
   }
@@ -810,6 +995,9 @@ export class GameLogicSubsystem implements Subsystem {
     const isDiagonal = Math.abs(toX - fromX) === 1 && Math.abs(toZ - fromZ) === 1;
     let cost = isDiagonal ? COST_DIAGONAL : COST_ORTHOGONAL;
 
+    if (type === NAV_BRIDGE) {
+      return cost;
+    }
     if (type === NAV_CLIFF && !profile.canCrossCliff) {
       return MAX_PATH_COST;
     }
@@ -864,6 +1052,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     cells.reverse();
+    const [startX, startZ] = this.gridFromIndex(startIndex);
+    cells.unshift({ x: startX, z: startZ });
     return cells;
   }
 
@@ -879,7 +1069,7 @@ export class GameLogicSubsystem implements Subsystem {
     let anchor = 0;
     let candidate = 2;
     smoothed.push(cells[0]!);
-    const optimizeProfile: PathfindingProfile = { ...profile, avoidPinched: true };
+    const optimizeProfile: PathfindingProfile = { ...profile };
 
     while (anchor < cells.length - 1) {
       if (candidate >= cells.length) {
@@ -934,9 +1124,14 @@ export class GameLogicSubsystem implements Subsystem {
       if (!this.canOccupyCell(nextX, nextZ, profile, grid)) {
         return false;
       }
+      if (!this.canTraverseBridgeTransition(x, z, nextX, nextZ, profile, grid)) {
+        return false;
+      }
       if (nextX !== x && nextZ !== z) {
-        const sidePassable1 = this.canOccupyCell(nextX, z, profile, grid);
-        const sidePassable2 = this.canOccupyCell(x, nextZ, profile, grid);
+        const sidePassable1 = this.canOccupyCell(nextX, z, profile, grid)
+          && this.canTraverseBridgeTransition(x, z, nextX, z, profile, grid);
+        const sidePassable2 = this.canOccupyCell(x, nextZ, profile, grid)
+          && this.canTraverseBridgeTransition(x, z, x, nextZ, profile, grid);
         if (!sidePassable1 && !sidePassable2) {
           return false;
         }
@@ -960,6 +1155,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (terrain === NAV_OBSTACLE) {
       return !!profile.canPassObstacle;
     }
+    if (terrain === NAV_BRIDGE) {
+      return !!profile.canUseBridge;
+    }
     if (terrain === NAV_WATER && !profile.canCrossWater) {
       return false;
     }
@@ -976,6 +1174,37 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return true;
+  }
+
+  private canTraverseBridgeTransition(
+    fromX: number,
+    fromZ: number,
+    toX: number,
+    toZ: number,
+    profile: PathfindingProfile,
+    nav: NavigationGrid | null = this.navigationGrid,
+  ): boolean {
+    if (!nav) {
+      return false;
+    }
+    if (!this.isCellInBounds(fromX, fromZ, nav) || !this.isCellInBounds(toX, toZ, nav)) {
+      return false;
+    }
+    const fromIndex = fromZ * nav.width + fromX;
+    const toIndex = toZ * nav.width + toX;
+    const fromBridge = nav.bridge[fromIndex] === 1;
+    const toBridge = nav.bridge[toIndex] === 1;
+
+    if (!fromBridge && !toBridge) {
+      return true;
+    }
+    if (fromBridge && toBridge) {
+      return true;
+    }
+    if (!profile.canUseBridge) {
+      return false;
+    }
+    return nav.bridgeTransitions[fromIndex] === 1 || nav.bridgeTransitions[toIndex] === 1;
   }
 
   private findNearestPassableCell(
@@ -1020,8 +1249,11 @@ export class GameLogicSubsystem implements Subsystem {
     const terrainType = new Uint8Array(total);
     const blocked = new Uint8Array(total);
     const pinched = new Uint8Array(total);
+    const bridge = new Uint8Array(total);
+    const bridgeTransitions = new Uint8Array(total);
 
     const waterCells = this.buildWaterCellsFromTriggers(mapData, heightmap, cellWidth, cellHeight);
+    const cliffBits = this.tryDecodeMapCliffState(mapData, heightmap);
 
     for (let z = 0; z < cellHeight; z++) {
       for (let x = 0; x < cellWidth; x++) {
@@ -1031,18 +1263,22 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
 
-        const zX1 = Math.min(x + 1, heightmap.width - 1);
-        const zZ1 = Math.min(z + 1, heightmap.height - 1);
-        const h00 = heightmap.getWorldHeight(x, z);
-        const h10 = heightmap.getWorldHeight(zX1, z);
-        const h01 = heightmap.getWorldHeight(x, zZ1);
-        const h11 = heightmap.getWorldHeight(zX1, zZ1);
-        const minHeight = Math.min(h00, h10, h01, h11);
-        const maxHeight = Math.max(h00, h10, h01, h11);
-        if (maxHeight - minHeight > CLIFF_HEIGHT_DELTA) {
+        if (this.isCliffBitSet(cliffBits, x, z)) {
           terrainType[index] = NAV_CLIFF;
         } else {
-          terrainType[index] = NAV_CLEAR;
+          const zX1 = Math.min(x + 1, heightmap.width - 1);
+          const zZ1 = Math.min(z + 1, heightmap.height - 1);
+          const h00 = heightmap.getWorldHeight(x, z);
+          const h10 = heightmap.getWorldHeight(zX1, z);
+          const h01 = heightmap.getWorldHeight(x, zZ1);
+          const h11 = heightmap.getWorldHeight(zX1, zZ1);
+          const minHeight = Math.min(h00, h10, h01, h11);
+          const maxHeight = Math.max(h00, h10, h01, h11);
+          if (maxHeight - minHeight > CLIFF_HEIGHT_DELTA) {
+            terrainType[index] = NAV_CLIFF;
+          } else {
+            terrainType[index] = NAV_CLEAR;
+          }
         }
       }
     }
@@ -1107,25 +1343,28 @@ export class GameLogicSubsystem implements Subsystem {
       terrainType,
       blocked,
       pinched,
+      bridge,
+      bridgeTransitions,
     };
+
+    this.applyBridgeOverlay(mapData, grid);
 
     for (const entity of this.spawnedEntities.values()) {
       if (!entity.blocksPath || entity.obstacleFootprint <= 0) {
         continue;
       }
-      const footprint = entity.obstacleFootprint;
-      const [entityCellX, entityCellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
-      if (entityCellX === null || entityCellZ === null) {
-        continue;
-      }
-      for (let x = entityCellX - footprint; x <= entityCellX + footprint; x++) {
-        for (let z = entityCellZ - footprint; z <= entityCellZ + footprint; z++) {
-          if (!this.isMapCellInBounds(x, z)) {
-            continue;
+      if (entity.obstacleGeometry) {
+        this.rasterizeObstacleGeometry(entity, grid);
+      } else {
+        const footprint = entity.obstacleFootprint;
+        const [entityCellX, entityCellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
+        if (entityCellX === null || entityCellZ === null) {
+          continue;
+        }
+        for (let x = entityCellX - footprint; x <= entityCellX + footprint; x++) {
+          for (let z = entityCellZ - footprint; z <= entityCellZ + footprint; z++) {
+            this.markObstacleCell(x, z, grid);
           }
-          const obstacleIndex = z * grid.width + x;
-          blocked[obstacleIndex] = 1;
-          terrainType[obstacleIndex] = NAV_OBSTACLE;
         }
       }
     }
@@ -1196,6 +1435,153 @@ export class GameLogicSubsystem implements Subsystem {
     return grid;
   }
 
+  private tryDecodeMapCliffState(mapData: MapDataJSON, heightmap: HeightmapGrid): CliffStateBits | null {
+    if (!mapData.cliffStateData) {
+      return null;
+    }
+
+    const stride = mapData.cliffStateStride ?? Math.floor((heightmap.width + 7) / 8);
+    if (!Number.isFinite(stride) || stride <= 0) {
+      return null;
+    }
+
+    const bytes = base64ToUint8Array(mapData.cliffStateData);
+    const requiredLength = heightmap.height * stride;
+    if (bytes.length < requiredLength) {
+      return null;
+    }
+
+    return { data: bytes, stride };
+  }
+
+  private isCliffBitSet(cliffBits: CliffStateBits | null, cellX: number, cellZ: number): boolean {
+    if (!cliffBits) {
+      return false;
+    }
+    const byteIndex = cellZ * cliffBits.stride + (cellX >> 3);
+    if (byteIndex < 0 || byteIndex >= cliffBits.data.length) {
+      return false;
+    }
+    const bitMask = 1 << (cellX & 0x7);
+    return (cliffBits.data[byteIndex]! & bitMask) !== 0;
+  }
+
+  private applyBridgeOverlay(mapData: MapDataJSON, grid: NavigationGrid): void {
+    const starts: Array<{ x: number; z: number }> = [];
+    const ends: Array<{ x: number; z: number }> = [];
+
+    for (const mapObject of mapData.objects) {
+      const flags = mapObject.flags;
+      if ((flags & (OBJECT_FLAG_BRIDGE_POINT1 | OBJECT_FLAG_BRIDGE_POINT2)) === 0) {
+        continue;
+      }
+
+      const cellX = Math.floor(mapObject.position.x / MAP_XY_FACTOR);
+      const cellZ = Math.floor(mapObject.position.y / MAP_XY_FACTOR);
+      if (!this.isCellInBounds(cellX, cellZ, grid)) {
+        continue;
+      }
+
+      if ((flags & OBJECT_FLAG_BRIDGE_POINT1) !== 0) {
+        starts.push({ x: cellX, z: cellZ });
+      }
+      if ((flags & OBJECT_FLAG_BRIDGE_POINT2) !== 0) {
+        ends.push({ x: cellX, z: cellZ });
+      }
+    }
+
+    if (starts.length === 0 || ends.length === 0) {
+      return;
+    }
+
+    const usedEnds = new Uint8Array(ends.length);
+    for (const start of starts) {
+      let bestIndex = -1;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < ends.length; i++) {
+        if (usedEnds[i] === 1) {
+          continue;
+        }
+        const end = ends[i]!;
+        const dx = end.x - start.x;
+        const dz = end.z - start.z;
+        const dist2 = dx * dx + dz * dz;
+        if (dist2 < bestDistance) {
+          bestDistance = dist2;
+          bestIndex = i;
+        }
+      }
+
+      if (bestIndex < 0) {
+        continue;
+      }
+      usedEnds[bestIndex] = 1;
+      this.markBridgeSegment(start, ends[bestIndex]!, grid);
+    }
+  }
+
+  private markBridgeSegment(
+    start: { x: number; z: number },
+    end: { x: number; z: number },
+    grid: NavigationGrid,
+  ): void {
+    let x = start.x;
+    let z = start.z;
+    const dx = Math.abs(end.x - start.x);
+    const dz = Math.abs(end.z - start.z);
+    const stepX = start.x < end.x ? 1 : -1;
+    const stepZ = start.z < end.z ? 1 : -1;
+    let err = dx - dz;
+
+    while (true) {
+      this.markBridgeCellRadius(x, z, 0, grid);
+      if (x === end.x && z === end.z) {
+        break;
+      }
+      const twoErr = 2 * err;
+      if (twoErr > -dz) {
+        err -= dz;
+        x += stepX;
+      }
+      if (twoErr < dx) {
+        err += dx;
+        z += stepZ;
+      }
+    }
+
+    this.markBridgeTransitionRadius(start.x, start.z, 0, grid);
+    this.markBridgeTransitionRadius(end.x, end.z, 0, grid);
+  }
+
+  private markBridgeCellRadius(cellX: number, cellZ: number, radius: number, grid: NavigationGrid): void {
+    for (let x = cellX - radius; x <= cellX + radius; x++) {
+      for (let z = cellZ - radius; z <= cellZ + radius; z++) {
+        if (!this.isCellInBounds(x, z, grid)) {
+          continue;
+        }
+        const index = z * grid.width + x;
+        grid.bridge[index] = 1;
+        grid.terrainType[index] = NAV_BRIDGE;
+        grid.blocked[index] = 0;
+        grid.pinched[index] = 0;
+      }
+    }
+  }
+
+  private markBridgeTransitionRadius(cellX: number, cellZ: number, radius: number, grid: NavigationGrid): void {
+    for (let x = cellX - radius; x <= cellX + radius; x++) {
+      for (let z = cellZ - radius; z <= cellZ + radius; z++) {
+        if (!this.isCellInBounds(x, z, grid)) {
+          continue;
+        }
+        const index = z * grid.width + x;
+        if (grid.bridge[index] === 1) {
+          grid.bridgeTransitions[index] = 1;
+        }
+      }
+    }
+  }
+
   private buildWaterCellsFromTriggers(
     mapData: MapDataJSON,
     heightmap: HeightmapGrid,
@@ -1246,7 +1632,16 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  private footprintInCells(category: ObjectCategory, objectDef?: ObjectDef): number {
+  private footprintInCells(
+    category: ObjectCategory,
+    objectDef?: ObjectDef,
+    obstacleGeometry?: ObstacleGeometry | null,
+  ): number {
+    if (obstacleGeometry) {
+      const maxRadius = Math.max(obstacleGeometry.majorRadius, obstacleGeometry.minorRadius);
+      return Math.max(1, Math.ceil(maxRadius / MAP_XY_FACTOR));
+    }
+
     const explicitFootprint = readNumericListField(
       objectDef?.fields ?? {},
       ['Footprint', 'FootPrint', 'Foundation', 'Size'],
@@ -1274,8 +1669,12 @@ export class GameLogicSubsystem implements Subsystem {
   private worldToGrid(worldX: number, worldZ: number): [number | null, number | null] {
     if (!this.mapHeightmap) return [null, null];
 
-    const gridX = Math.floor(worldX / MAP_XY_FACTOR);
-    const gridZ = Math.floor(worldZ / MAP_XY_FACTOR);
+    const maxWorldX = Math.max(0, this.mapHeightmap.worldWidth - 0.0001);
+    const maxWorldZ = Math.max(0, this.mapHeightmap.worldDepth - 0.0001);
+    const clampedX = clamp(worldX, 0, maxWorldX);
+    const clampedZ = clamp(worldZ, 0, maxWorldZ);
+    const gridX = Math.floor(clampedX / MAP_XY_FACTOR);
+    const gridZ = Math.floor(clampedZ / MAP_XY_FACTOR);
     if (!this.isMapCellInBounds(gridX, gridZ)) return [null, null];
     return [gridX, gridZ];
   }
@@ -1528,6 +1927,20 @@ function readBooleanField(fields: Record<string, IniValue>, names: string[]): bo
       }
       if (normalized === 'no' || normalized === 'false' || normalized === '0') {
         return false;
+      }
+    }
+  }
+
+  return null;
+}
+
+function readStringField(fields: Record<string, IniValue>, names: string[]): string | null {
+  for (const name of names) {
+    const value = fields[name];
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
       }
     }
   }

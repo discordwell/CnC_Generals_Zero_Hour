@@ -27,6 +27,10 @@ export interface ParsedMap {
   blendTileCount: number;
   /** Texture class names used by the terrain. */
   textureClasses: string[];
+  /** Optional packed cliff-state bits from BlendTileData (v7+). */
+  cliffStateData: Uint8Array | null;
+  /** Bytes per row for `cliffStateData`. */
+  cliffStateStride: number;
 }
 
 /** Chunk label constants. */
@@ -58,6 +62,8 @@ export class MapParser {
     const triggers: PolygonTrigger[] = [];
     let blendTileCount = 0;
     const textureClasses: string[] = [];
+    let cliffStateData: Uint8Array | null = null;
+    let cliffStateStride = 0;
 
     // Walk all chunks until end of buffer
     while (reader.position < reader.byteLength) {
@@ -74,11 +80,22 @@ export class MapParser {
           break;
 
         case CHUNK_BLEND_TILE: {
-          const blendInfo = BlendTileExtractor.extract(reader, chunk.version);
+          if (!heightmap) {
+            // BlendTileData v7+ cliff-state decoding depends on map dimensions.
+            break;
+          }
+          const blendInfo = BlendTileExtractor.extract(
+            reader,
+            chunk.version,
+            heightmap.width,
+            heightmap.height,
+          );
           blendTileCount = blendInfo.tileCount;
           for (const tc of blendInfo.textureClasses) {
             textureClasses.push(tc.name);
           }
+          cliffStateData = blendInfo.cliffStateData;
+          cliffStateStride = blendInfo.cliffStateStride;
           break;
         }
 
@@ -113,6 +130,8 @@ export class MapParser {
       triggers,
       blendTileCount,
       textureClasses,
+      cliffStateData,
+      cliffStateStride,
     };
   }
 

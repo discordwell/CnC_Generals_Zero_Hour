@@ -72,6 +72,16 @@ export interface MapDataJSON {
   triggers: PolygonTriggerJSON[];
   textureClasses: string[];
   blendTileCount: number;
+  /**
+   * Optional packed cliff-state bitset from BlendTileData (v7+), base64-encoded.
+   * Bits are addressed by cell index using `cliffStateStride` bytes per row.
+   */
+  cliffStateData?: string;
+  /**
+   * Optional bytes-per-row for `cliffStateData`.
+   * Mirrors engine `flipStateWidth` (typically ceil(heightmap.width / 8)).
+   */
+  cliffStateStride?: number;
 }
 
 // ============================================================================

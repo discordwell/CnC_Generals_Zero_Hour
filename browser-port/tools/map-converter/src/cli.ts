@@ -127,6 +127,8 @@ async function main(): Promise<void> {
     })),
     textureClasses: parsed.textureClasses,
     blendTileCount: parsed.blendTileCount,
+    cliffStateData: parsed.cliffStateData ? uint8ArrayToBase64(parsed.cliffStateData) : undefined,
+    cliffStateStride: parsed.cliffStateData ? parsed.cliffStateStride : undefined,
   };
 
   const jsonStr = JSON.stringify(jsonOutput, null, 2);

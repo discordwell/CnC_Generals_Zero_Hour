@@ -4,6 +4,7 @@ import { HeightmapExtractor, MAP_HEIGHT_SCALE } from './HeightmapExtractor.js';
 import { MapObjectExtractor } from './MapObjectExtractor.js';
 import { WaypointExtractor } from './WaypointExtractor.js';
 import { MapParser } from './MapParser.js';
+import { BlendTileExtractor } from './BlendTileExtractor.js';
 
 // ---------------------------------------------------------------------------
 // Helpers to construct synthetic .map binaries in memory
@@ -610,6 +611,8 @@ describe('MapParser', () => {
     expect(parsed.triggers).toHaveLength(0);
     expect(parsed.textureClasses).toHaveLength(0);
     expect(parsed.blendTileCount).toBe(0);
+    expect(parsed.cliffStateData).toBeNull();
+    expect(parsed.cliffStateStride).toBe(0);
   });
 
   it('should parse a map with objects', () => {
@@ -696,5 +699,123 @@ describe('MapParser', () => {
     expect(parsed.heightmap.width).toBe(2);
     expect(parsed.heightmap.height).toBe(2);
     expect(parsed.objects).toHaveLength(0);
+  });
+
+  it('should parse v8 cliff-state bits from BlendTileData', () => {
+    const chunks: ChunkDef[] = [
+      { name: 'HeightMapData', id: 1 },
+      { name: 'BlendTileData', id: 2 },
+    ];
+
+    const width = 4;
+    const height = 4;
+    const hmDataLen = width * height;
+    const hmPayload = 4 + 4 + 4 + 4 + hmDataLen;
+
+    const tileCount = width * height;
+    const cliffStride = Math.floor((width + 7) / 8);
+    const cliffBytesLen = height * cliffStride;
+    const textureClassName = 'Grass';
+    const blendPayload =
+      4 +                  // tileCount
+      tileCount * 2 +      // tileIndices
+      tileCount * 2 +      // blendTileIndices
+      tileCount * 2 +      // extraBlendTileIndices (v6+)
+      tileCount * 2 +      // cliffInfoIndices (v5+)
+      cliffBytesLen +      // cliffState bits (v7+)
+      4 +                  // numBitmapTiles
+      4 +                  // numBlendedTiles
+      4 +                  // numCliffInfo
+      4 +                  // numTextureClasses
+      4 + 4 + 4 + 4 +      // firstTile + numTiles + width + legacy
+      2 + textureClassName.length;
+
+    const totalSize =
+      tocSize(chunks) +
+      CHUNK_HEADER_SIZE + hmPayload +
+      CHUNK_HEADER_SIZE + blendPayload;
+
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+    let off = writeTOC(view, chunks);
+
+    off = writeChunkHeader(view, off, 1, 3, hmPayload);
+    off = writeInt32(view, off, width);
+    off = writeInt32(view, off, height);
+    off = writeInt32(view, off, 0);
+    off = writeInt32(view, off, hmDataLen);
+    for (let i = 0; i < hmDataLen; i++) {
+      off = writeUint8(view, off, 64);
+    }
+
+    off = writeChunkHeader(view, off, 2, 8, blendPayload);
+    off = writeInt32(view, off, tileCount);
+    off += tileCount * 2; // tileIndices
+    off += tileCount * 2; // blendTileIndices
+    off += tileCount * 2; // extraBlendTileIndices
+    off += tileCount * 2; // cliffInfoIndices
+    off = writeUint8(view, off, 0b00001000); // row 0
+    off = writeUint8(view, off, 0); // row 1
+    off = writeUint8(view, off, 0); // row 2
+    off = writeUint8(view, off, 0); // row 3
+    off = writeInt32(view, off, 1); // numBitmapTiles
+    off = writeInt32(view, off, 1); // numBlendedTiles
+    off = writeInt32(view, off, 1); // numCliffInfo
+    off = writeInt32(view, off, 1); // numTextureClasses
+    off = writeInt32(view, off, 0); // firstTile
+    off = writeInt32(view, off, 1); // numTiles
+    off = writeInt32(view, off, 1); // width
+    off = writeInt32(view, off, 0); // legacy
+    off = writePrefixedAscii(view, off, textureClassName);
+
+    const parsed = MapParser.parse(buffer);
+    expect(parsed.blendTileCount).toBe(tileCount);
+    expect(parsed.textureClasses).toEqual(['Grass']);
+    expect(parsed.cliffStateStride).toBe(cliffStride);
+    expect(parsed.cliffStateData).not.toBeNull();
+    expect(parsed.cliffStateData![0]).toBe(0b00001000);
+  });
+});
+
+describe('BlendTileExtractor', () => {
+  it('normalizes v7 cliff-state rows with legacy stride', () => {
+    const mapWidth = 9;
+    const mapHeight = 2;
+    const tileCount = mapWidth * mapHeight;
+    const legacyStride = Math.floor((mapWidth + 1) / 8);
+    const payloadSize =
+      4 +                  // tileCount
+      tileCount * 2 +      // tileIndices
+      tileCount * 2 +      // blendTileIndices
+      tileCount * 2 +      // extraBlendTileIndices (v6+)
+      tileCount * 2 +      // cliffInfoIndices (v5+)
+      mapHeight * legacyStride + // v7 legacy cliff bits
+      4 +                  // numBitmapTiles
+      4 +                  // numBlendedTiles
+      4 +                  // numCliffInfo
+      4;                   // numTextureClasses
+
+    const buffer = new ArrayBuffer(payloadSize);
+    const view = new DataView(buffer);
+    let off = 0;
+    off = writeInt32(view, off, tileCount);
+    off += tileCount * 2;
+    off += tileCount * 2;
+    off += tileCount * 2;
+    off += tileCount * 2;
+    off = writeUint8(view, off, 0b00000001);
+    off = writeUint8(view, off, 0b00000010);
+    off = writeInt32(view, off, 1);
+    off = writeInt32(view, off, 1);
+    off = writeInt32(view, off, 1);
+    off = writeInt32(view, off, 0);
+
+    const reader = new DataChunkReader(buffer);
+    const info = BlendTileExtractor.extract(reader, 7, mapWidth, mapHeight);
+    expect(info.cliffStateStride).toBe(Math.floor((mapWidth + 7) / 8));
+    expect(info.cliffStateData).not.toBeNull();
+    expect(info.cliffStateData!.length).toBe(mapHeight * info.cliffStateStride);
+    expect(info.cliffStateData![0]).toBe(0b00000001);
+    expect(info.cliffStateData![2]).toBe(0b00000010);
   });
 });
