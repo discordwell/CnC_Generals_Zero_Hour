@@ -57,13 +57,34 @@ export interface BridgeRepairedCommand {
   entityId: number;
 }
 
+export interface SetLocomotorSetCommand {
+  type: 'setLocomotorSet';
+  entityId: number;
+  setName: string;
+}
+
+export interface SetLocomotorUpgradeCommand {
+  type: 'setLocomotorUpgrade';
+  entityId: number;
+  enabled: boolean;
+}
+
+export interface ApplyUpgradeCommand {
+  type: 'applyUpgrade';
+  entityId: number;
+  upgradeName: string;
+}
+
 export type GameLogicCommand =
   | SelectByIdCommand
   | ClearSelectionCommand
   | MoveToCommand
   | StopCommand
   | BridgeDestroyedCommand
-  | BridgeRepairedCommand;
+  | BridgeRepairedCommand
+  | SetLocomotorSetCommand
+  | SetLocomotorUpgradeCommand
+  | ApplyUpgradeCommand;
 
 export interface GameLogicConfig {
   /**
@@ -110,6 +131,8 @@ const NAV_CLIFF = 2;
 const NAV_RUBBLE = 3;
 const NAV_OBSTACLE = 4;
 const NAV_BRIDGE = 5;
+const NAV_IMPASSABLE = 6;
+const NAV_BRIDGE_IMPASSABLE = 7;
 
 const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
 const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
@@ -120,8 +143,30 @@ const LOCOMOTORSURFACE_CLIFF = 1 << 2;
 const LOCOMOTORSURFACE_AIR = 1 << 3;
 const LOCOMOTORSURFACE_RUBBLE = 1 << 4;
 const LOCOMOTORSET_NORMAL = 'SET_NORMAL';
+const LOCOMOTORSET_NORMAL_UPGRADED = 'SET_NORMAL_UPGRADED';
+const LOCOMOTORSET_FREEFALL = 'SET_FREEFALL';
+const LOCOMOTORSET_WANDER = 'SET_WANDER';
+const LOCOMOTORSET_PANIC = 'SET_PANIC';
+const LOCOMOTORSET_TAXIING = 'SET_TAXIING';
+const LOCOMOTORSET_SUPERSONIC = 'SET_SUPERSONIC';
+const LOCOMOTORSET_SLUGGISH = 'SET_SLUGGISH';
 const NO_SURFACES = 0;
 const SOURCE_DEFAULT_PASSABLE_SURFACES = NO_SURFACES;
+const SOURCE_LOCOMOTOR_SET_NAMES = new Set<string>([
+  LOCOMOTORSET_NORMAL,
+  LOCOMOTORSET_NORMAL_UPGRADED,
+  LOCOMOTORSET_FREEFALL,
+  LOCOMOTORSET_WANDER,
+  LOCOMOTORSET_PANIC,
+  LOCOMOTORSET_TAXIING,
+  LOCOMOTORSET_SUPERSONIC,
+  LOCOMOTORSET_SLUGGISH,
+]);
+
+interface LocomotorSetProfile {
+  surfaceMask: number;
+  downhillOnly: boolean;
+}
 
 interface PathfindingProfile {
   acceptableSurfaces: number;
@@ -161,6 +206,10 @@ interface MapEntity {
   nominalHeight: number;
   selected: boolean;
   canMove: boolean;
+  locomotorSets: Map<string, LocomotorSetProfile>;
+  locomotorUpgradeTriggers: Set<string>;
+  locomotorUpgradeEnabled: boolean;
+  activeLocomotorSet: string;
   locomotorSurfaceMask: number;
   locomotorDownhillOnly: boolean;
   blocksPath: boolean;
@@ -391,6 +440,63 @@ export class GameLogicSubsystem implements Subsystem {
     return this.setBridgeSegmentPassable(segmentId, true);
   }
 
+  setEntityLocomotorSet(entityId: number, setName: string): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+    const normalizedSet = setName.trim().toUpperCase();
+    if (!SOURCE_LOCOMOTOR_SET_NAMES.has(normalizedSet)) {
+      return false;
+    }
+    if (normalizedSet === LOCOMOTORSET_NORMAL_UPGRADED) {
+      return false;
+    }
+    let resolvedSet = normalizedSet;
+    if (
+      normalizedSet === LOCOMOTORSET_NORMAL
+      && entity.locomotorUpgradeEnabled
+      && entity.locomotorSets.has(LOCOMOTORSET_NORMAL_UPGRADED)
+    ) {
+      resolvedSet = LOCOMOTORSET_NORMAL_UPGRADED;
+    }
+    const profile = entity.locomotorSets.get(resolvedSet);
+    if (!profile) {
+      return false;
+    }
+    entity.activeLocomotorSet = resolvedSet;
+    entity.locomotorSurfaceMask = profile.surfaceMask;
+    entity.locomotorDownhillOnly = profile.downhillOnly;
+    return true;
+  }
+
+  setEntityLocomotorUpgrade(entityId: number, enabled: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+    entity.locomotorUpgradeEnabled = enabled;
+    if (
+      entity.activeLocomotorSet === LOCOMOTORSET_NORMAL
+      || entity.activeLocomotorSet === LOCOMOTORSET_NORMAL_UPGRADED
+    ) {
+      this.setEntityLocomotorSet(entityId, LOCOMOTORSET_NORMAL);
+    }
+    return true;
+  }
+
+  applyUpgradeToEntity(entityId: number, upgradeName: string): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+    const normalizedUpgrade = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgrade || !entity.locomotorUpgradeTriggers.has(normalizedUpgrade)) {
+      return false;
+    }
+    return this.setEntityLocomotorUpgrade(entityId, true);
+  }
+
   reset(): void {
     this.clearSpawnedObjects();
     this.bridgeSegments.clear();
@@ -442,7 +548,12 @@ export class GameLogicSubsystem implements Subsystem {
       selected: false,
     });
 
-    const locomotorProfile = this.resolveLocomotorProfile(objectDef, iniDataRegistry);
+    const locomotorSetProfiles = this.resolveLocomotorProfiles(objectDef, iniDataRegistry);
+    const locomotorUpgradeTriggers = this.extractLocomotorUpgradeTriggers(objectDef);
+    const locomotorProfile = locomotorSetProfiles.get(LOCOMOTORSET_NORMAL) ?? {
+      surfaceMask: NO_SURFACES,
+      downhillOnly: false,
+    };
     const blocksPath = this.shouldPathfindObstacle(objectDef);
     const obstacleGeometry = blocksPath ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
@@ -475,6 +586,10 @@ export class GameLogicSubsystem implements Subsystem {
       nominalHeight,
       selected: false,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
+      locomotorSets: locomotorSetProfiles,
+      locomotorUpgradeTriggers,
+      locomotorUpgradeEnabled: false,
+      activeLocomotorSet: LOCOMOTORSET_NORMAL,
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
       blocksPath,
@@ -602,32 +717,31 @@ export class GameLogicSubsystem implements Subsystem {
     return normalized;
   }
 
-  private resolveLocomotorProfile(
+  private resolveLocomotorProfiles(
     objectDef: ObjectDef | undefined,
     iniDataRegistry: IniDataRegistry,
-  ): { surfaceMask: number; downhillOnly: boolean } {
+  ): Map<string, LocomotorSetProfile> {
+    const profiles = new Map<string, LocomotorSetProfile>();
     if (!objectDef) {
-      return { surfaceMask: NO_SURFACES, downhillOnly: false };
+      return profiles;
     }
 
     const locomotorSets = this.extractLocomotorSetEntries(objectDef);
-    const normalSet = locomotorSets.get(LOCOMOTORSET_NORMAL);
-    if (!normalSet || normalSet.length === 0) {
-      return { surfaceMask: NO_SURFACES, downhillOnly: false };
-    }
-
-    let surfaceMask = 0;
-    let downhillOnly = false;
-    for (const locomotorName of normalSet) {
-      const locomotor = iniDataRegistry.getLocomotor(locomotorName);
-      if (!locomotor) {
-        continue;
+    for (const [setName, locomotorNames] of locomotorSets) {
+      let surfaceMask = 0;
+      let downhillOnly = false;
+      for (const locomotorName of locomotorNames) {
+        const locomotor = iniDataRegistry.getLocomotor(locomotorName);
+        if (!locomotor) {
+          continue;
+        }
+        surfaceMask |= locomotor.surfaceMask;
+        downhillOnly = downhillOnly || locomotor.downhillOnly;
       }
-      surfaceMask |= locomotor.surfaceMask;
-      downhillOnly = downhillOnly || locomotor.downhillOnly;
+      profiles.set(setName, { surfaceMask, downhillOnly });
     }
 
-    return { surfaceMask, downhillOnly };
+    return profiles;
   }
 
   private extractLocomotorSetEntries(objectDef: ObjectDef): Map<string, string[]> {
@@ -635,14 +749,14 @@ export class GameLogicSubsystem implements Subsystem {
 
     const addEntry = (setName: string, locomotors: string[]): void => {
       const normalizedSet = setName.trim().toUpperCase();
-      if (!normalizedSet || locomotors.length === 0) {
+      if (!normalizedSet) {
         return;
       }
       sets.set(normalizedSet, locomotors);
     };
 
     const parseTokens = (tokens: string[]): { setName: string; locomotors: string[] } | null => {
-      if (tokens.length < 2) {
+      if (tokens.length < 1) {
         return null;
       }
       const setName = tokens[0]!.trim();
@@ -650,9 +764,6 @@ export class GameLogicSubsystem implements Subsystem {
         .slice(1)
         .map((token) => token.trim())
         .filter((token) => token.length > 0 && token.toUpperCase() !== 'NONE');
-      if (locomotors.length === 0) {
-        return null;
-      }
       return { setName, locomotors };
     };
 
@@ -722,6 +833,59 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return sets;
+  }
+
+  private extractLocomotorUpgradeTriggers(objectDef: ObjectDef | undefined): Set<string> {
+    const upgrades = new Set<string>();
+    if (!objectDef) {
+      return upgrades;
+    }
+
+    const parseScalarTokens = (value: IniValue): string[] => {
+      if (typeof value === 'string') {
+        return value.split(/[\s,;|]+/).filter(Boolean);
+      }
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        return [String(value)];
+      }
+      return [];
+    };
+
+    const parseUpgradeNames = (value: IniValue | undefined): string[] => {
+      if (value === undefined) {
+        return [];
+      }
+      if (Array.isArray(value)) {
+        return value.flatMap((entry) => parseUpgradeNames(entry as IniValue));
+      }
+      return parseScalarTokens(value)
+        .map((token) => token.trim().toUpperCase())
+        .filter((token) => token.length > 0 && token !== 'NONE');
+    };
+
+    const visitBlock = (block: IniBlock): void => {
+      const moduleToken = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleToken === 'LOCOMOTORSETUPGRADE' || block.type.toUpperCase() === 'LOCOMOTORSETUPGRADE') {
+        for (const [fieldName, fieldValue] of Object.entries(block.fields)) {
+          if (fieldName.toUpperCase() !== 'TRIGGEREDBY') {
+            continue;
+          }
+          const names = parseUpgradeNames(fieldValue);
+          for (const name of names) {
+            upgrades.add(name);
+          }
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return upgrades;
   }
 
   private resolveObstacleGeometry(objectDef: ObjectDef | undefined): ObstacleGeometry | null {
@@ -947,6 +1111,15 @@ export class GameLogicSubsystem implements Subsystem {
       case 'bridgeRepaired':
         this.onObjectRepaired(command.entityId);
         return;
+      case 'setLocomotorSet':
+        this.setEntityLocomotorSet(command.entityId, command.setName);
+        return;
+      case 'setLocomotorUpgrade':
+        this.setEntityLocomotorUpgrade(command.entityId, command.enabled);
+        return;
+      case 'applyUpgrade':
+        this.applyUpgradeToEntity(command.entityId, command.upgradeName);
+        return;
       default:
         return;
     }
@@ -988,6 +1161,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     const grid = this.navigationGrid;
     const movementProfile = this.getMovementProfile(mover);
+    if (movementProfile.acceptableSurfaces === NO_SURFACES) {
+      return [];
+    }
     const start = this.worldToGrid(startX, startZ);
     const goal = this.worldToGrid(targetX, targetZ);
 
@@ -1377,6 +1553,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
     switch (terrainType) {
       case NAV_OBSTACLE:
+      case NAV_IMPASSABLE:
+      case NAV_BRIDGE_IMPASSABLE:
         return LOCOMOTORSURFACE_AIR;
       case NAV_CLEAR:
         return LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;

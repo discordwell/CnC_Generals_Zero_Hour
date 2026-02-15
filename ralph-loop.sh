@@ -13,7 +13,7 @@ Usage:
     [--plan-prompt <PROMPT>] [--plan-prompt-file <PATH>] [--state-file <PATH>]
     [--non-interactive] [--sandbox <read-only|workspace-write|danger-full-access>]
     [--bypass-sandbox] [--progress-window <N>] [--min-delta-lines <N>] [--allow-low-progress]
-    [--log-file <PATH>] -- [codex args...]
+    [--completion-poll-interval <SECONDS>] [--completion-timeout <SECONDS>] [--log-file <PATH>] -- [codex args...]
 
 Examples:
   ./ralph-loop.sh --count 5 --prompt "Please continue from where you left off."
@@ -25,6 +25,7 @@ Examples:
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --progress-window 10 --min-delta-lines 500 -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --sandbox danger-full-access -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --bypass-sandbox -- -c model="gpt-5.3-codex-spark"
+  ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --completion-poll-interval 5 --completion-timeout 120 -- -c model="gpt-5.3-codex-spark"
 EOF
   exit 1
 }
@@ -45,6 +46,8 @@ progress_window=10
 min_delta_lines=500
 allow_low_progress=0
 new_agent=0
+completion_poll_interval=5
+completion_timeout_seconds=120
 run_id="$(date +%s)"
 repo_root="$(pwd -P)"
 
@@ -104,6 +107,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --min-delta-lines)
       min_delta_lines="$2"
+      shift 2
+      ;;
+    --completion-poll-interval)
+      completion_poll_interval="$2"
+      shift 2
+      ;;
+    --completion-timeout)
+      completion_timeout_seconds="$2"
       shift 2
       ;;
     --allow-low-progress)
@@ -171,14 +182,115 @@ if [[ "$min_delta_lines" -lt 0 ]]; then
   echo "Error: --min-delta-lines must be zero or greater." >&2
   exit 1
 fi
+if [[ "$completion_poll_interval" -lt 0 ]]; then
+  echo "Error: --completion-poll-interval must be zero or greater." >&2
+  exit 1
+fi
+if [[ "$completion_timeout_seconds" -lt 0 ]]; then
+  echo "Error: --completion-timeout must be zero or greater." >&2
+  exit 1
+fi
 
 codex_args=("$@")
 
 mkdir -p "$(dirname "$state_file")"
+codex_sessions_dir="${HOME}/.codex/sessions"
+codex_session_file=""
 
 extract_session_id() {
   local file="$1"
   sed -n 's/.*session id:[[:space:]]*\([0-9a-fA-F-][0-9a-fA-F-]*\).*/\1/p' "$file" | tail -n1
+}
+
+resolve_session_file() {
+  local sid="$1"
+  if [[ -z "$sid" ]]; then
+    echo ""
+    return 0
+  fi
+  if [[ -n "$codex_session_file" && "$codex_session_file" == *"$sid"* ]]; then
+    echo "$codex_session_file"
+    return 0
+  fi
+
+  codex_session_file="$(rg --files "$codex_sessions_dir" -g '*.jsonl' | rg "$sid" | head -n 1 || true)"
+  echo "$codex_session_file"
+}
+
+latest_turn_id() {
+  local session_file="$1"
+  if [[ -z "$session_file" || ! -f "$session_file" ]]; then
+    echo ""
+    return 0
+  fi
+  rg -n '"type":"turn_context"' "$session_file" \
+    | tail -n 1 \
+    | sed -E 's/.*"turn_id":"([^"]+)".*/\1/'
+}
+
+turn_completed() {
+  local session_file="$1"
+  local turn_id="$2"
+
+  if [[ -z "$session_file" || -z "$turn_id" ]]; then
+    echo 1
+    return 0
+  fi
+
+  local status
+  status="$(awk -v turn_id="$turn_id" '
+    $0 ~ "\"type\":\"turn_context\"" && $0 ~ ("\"turn_id\":\"" turn_id "\"") {
+      in_turn = 1
+      complete = 0
+      next
+    }
+    in_turn && $0 ~ "\"type\":\"turn_context\"" && $0 !~ ("\"turn_id\":\"" turn_id "\"") {
+      in_turn = 0
+    }
+    in_turn && $0 ~ "\"type\":\"event_msg\".*\"type\":\"task_complete\"" {
+      complete = 1
+      exit
+    }
+    END {
+      print complete + 0
+    }
+  ' "$session_file")"
+
+  if [[ "$status" == "1" ]]; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
+wait_for_turn_completion() {
+  local session_file="$1"
+  local turn_id="$2"
+
+  if (( completion_poll_interval <= 0 )); then
+    return 0
+  fi
+  if [[ -z "$session_file" || ! -f "$session_file" ]]; then
+    return 0
+  fi
+
+  local waited=0
+  local complete
+  while true; do
+    complete="$(turn_completed "$session_file" "$turn_id")"
+    if [[ "$complete" == "1" ]]; then
+      return 0
+    fi
+
+    if (( completion_timeout_seconds > 0 && waited >= completion_timeout_seconds )); then
+      echo "[RALPH-LOOP] timed out waiting for turn $turn_id to complete after ${completion_timeout_seconds}s." >&2
+      return 1
+    fi
+
+    echo "[RALPH-LOOP] waiting for session ${session_file} turn ${turn_id} completion..." >&2
+    sleep "$completion_poll_interval"
+    waited=$((waited + completion_poll_interval))
+  done
 }
 
 build_context_prompt() {
@@ -383,6 +495,12 @@ while (( run_index < iterations )); do
   current_changed_lines="$(count_changed_lines)"
   window_delta=$((current_changed_lines - window_start_lines))
   log_state "$run_index" "$([ $run_index -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed" "$current_changed_lines" "$min_delta_lines" "$window_delta"
+
+  session_file="$(resolve_session_file "$session_id")"
+  turn_id="$(latest_turn_id "$session_file")"
+  if [[ -n "$session_file" && -n "$turn_id" ]]; then
+    wait_for_turn_completion "$session_file" "$turn_id" || true
+  fi
 
   if (( run_index % progress_window == 0 )); then
     if (( allow_low_progress == 0 && window_delta < min_delta_lines )); then
