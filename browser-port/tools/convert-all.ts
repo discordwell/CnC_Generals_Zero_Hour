@@ -188,6 +188,7 @@ function combineLists(left: string[], right: string[]): string[] {
 }
 
 function mergeStats(bundle: IniDataBundle): RegistryStats {
+  const locomotorCount = bundle.locomotors?.length ?? 0;
   return {
     objects: bundle.objects.length,
     weapons: bundle.weapons.length,
@@ -196,7 +197,7 @@ function mergeStats(bundle: IniDataBundle): RegistryStats {
     sciences: bundle.sciences.length,
     factions: bundle.factions.length,
     unresolvedInheritance: bundle.errors.filter((entry) => entry.type === 'unresolved_parent').length,
-    totalBlocks: bundle.objects.length + bundle.weapons.length + bundle.armors.length + bundle.upgrades.length + bundle.sciences.length + bundle.factions.length,
+    totalBlocks: bundle.objects.length + bundle.weapons.length + bundle.armors.length + bundle.upgrades.length + bundle.sciences.length + bundle.factions.length + locomotorCount,
   };
 }
 
@@ -208,6 +209,7 @@ function mergeBundles(baseBundle: IniDataBundle, patchBundle: IniDataBundle): In
     upgrades: mergeByName(baseBundle.upgrades, patchBundle.upgrades),
     sciences: mergeByName(baseBundle.sciences, patchBundle.sciences),
     factions: mergeByName(baseBundle.factions, patchBundle.factions),
+    locomotors: mergeByName(baseBundle.locomotors ?? [], patchBundle.locomotors ?? []),
     errors: [...baseBundle.errors, ...patchBundle.errors],
     unsupportedBlockTypes: combineLists(
       baseBundle.unsupportedBlockTypes,

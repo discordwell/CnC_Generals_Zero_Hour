@@ -6,6 +6,7 @@ export type {
   UpgradeDef,
   ScienceDef,
   FactionDef,
+  LocomotorDef,
   RegistryStats,
   RegistryError,
   IniDataBundle,

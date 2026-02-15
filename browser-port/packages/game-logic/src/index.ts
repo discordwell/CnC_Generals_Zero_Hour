@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import type { Subsystem } from '@generals/core';
 import { IniDataRegistry, type ObjectDef } from '@generals/ini-data';
-import type { IniValue } from '@generals/core';
+import type { IniBlock, IniValue } from '@generals/core';
 import {
   MAP_XY_FACTOR,
   base64ToUint8Array,
@@ -47,7 +47,23 @@ export interface StopCommand {
   entityId: number;
 }
 
-export type GameLogicCommand = SelectByIdCommand | ClearSelectionCommand | MoveToCommand | StopCommand;
+export interface BridgeDestroyedCommand {
+  type: 'bridgeDestroyed';
+  entityId: number;
+}
+
+export interface BridgeRepairedCommand {
+  type: 'bridgeRepaired';
+  entityId: number;
+}
+
+export type GameLogicCommand =
+  | SelectByIdCommand
+  | ClearSelectionCommand
+  | MoveToCommand
+  | StopCommand
+  | BridgeDestroyedCommand
+  | BridgeRepairedCommand;
 
 export interface GameLogicConfig {
   /**
@@ -75,7 +91,9 @@ interface NavigationGrid {
   blocked: Uint8Array;
   pinched: Uint8Array;
   bridge: Uint8Array;
+  bridgePassable: Uint8Array;
   bridgeTransitions: Uint8Array;
+  bridgeSegmentByCell: Int32Array;
 }
 
 const PATHFIND_CELL_SIZE = MAP_XY_FACTOR;
@@ -96,13 +114,27 @@ const NAV_BRIDGE = 5;
 const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
 const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
 
+const LOCOMOTORSURFACE_GROUND = 1 << 0;
+const LOCOMOTORSURFACE_WATER = 1 << 1;
+const LOCOMOTORSURFACE_CLIFF = 1 << 2;
+const LOCOMOTORSURFACE_AIR = 1 << 3;
+const LOCOMOTORSURFACE_RUBBLE = 1 << 4;
+const LOCOMOTORSET_NORMAL = 'SET_NORMAL';
+const NO_SURFACES = 0;
+const SOURCE_DEFAULT_PASSABLE_SURFACES = NO_SURFACES;
+
 interface PathfindingProfile {
-  canCrossWater: boolean;
-  canCrossCliff: boolean;
-  canCrossRubble: boolean;
+  acceptableSurfaces: number;
+  downhillOnly: boolean;
   canPassObstacle: boolean;
   canUseBridge: boolean;
   avoidPinched: boolean;
+}
+
+interface BridgeSegmentState {
+  passable: boolean;
+  cellIndices: number[];
+  transitionIndices: number[];
 }
 
 type ObstacleGeometryShape = 'box' | 'circle';
@@ -129,7 +161,8 @@ interface MapEntity {
   nominalHeight: number;
   selected: boolean;
   canMove: boolean;
-  canCrossCliff: boolean;
+  locomotorSurfaceMask: number;
+  locomotorDownhillOnly: boolean;
   blocksPath: boolean;
   obstacleGeometry: ObstacleGeometry | null;
   obstacleFootprint: number;
@@ -166,6 +199,8 @@ export class GameLogicSubsystem implements Subsystem {
   private navigationGrid: NavigationGrid | null = null;
   private readonly commandQueue: GameLogicCommand[] = [];
   private frameCounter = 0;
+  private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
+  private readonly bridgeSegmentByControlEntity = new Map<number, number>();
 
   private placementSummary: MapObjectPlacementSummary = {
     totalObjects: 0,
@@ -219,7 +254,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const mapEntity = this.createMapEntity(mapObject, objectDef, heightmap);
+      const mapEntity = this.createMapEntity(mapObject, objectDef, iniDataRegistry, heightmap);
       this.spawnedEntities.set(mapEntity.id, mapEntity);
       this.scene.add(mapEntity.mesh);
 
@@ -288,8 +323,78 @@ export class GameLogicSubsystem implements Subsystem {
     return this.selectedEntityId;
   }
 
+  setBridgeSegmentPassable(segmentId: number, passable: boolean): boolean {
+    const grid = this.navigationGrid;
+    if (!grid) {
+      return false;
+    }
+
+    const segment = this.bridgeSegments.get(segmentId);
+    if (!segment) {
+      return false;
+    }
+    if (segment.passable === passable) {
+      return true;
+    }
+
+    segment.passable = passable;
+    const passableByte = passable ? 1 : 0;
+    for (const index of segment.cellIndices) {
+      grid.bridgePassable[index] = passableByte;
+    }
+    for (const index of segment.transitionIndices) {
+      grid.bridgeTransitions[index] = passableByte;
+    }
+
+    return true;
+  }
+
+  setBridgePassableAt(worldX: number, worldZ: number, passable: boolean): boolean {
+    const grid = this.navigationGrid;
+    if (!grid) {
+      return false;
+    }
+
+    const [cellX, cellZ] = this.worldToGrid(worldX, worldZ);
+    if (cellX === null || cellZ === null) {
+      return false;
+    }
+
+    const index = cellZ * grid.width + cellX;
+    const segmentId = grid.bridgeSegmentByCell[index];
+    if (segmentId < 0) {
+      return false;
+    }
+
+    return this.setBridgeSegmentPassable(segmentId, passable);
+  }
+
+  getBridgeSegmentStates(): Array<{ segmentId: number; passable: boolean }> {
+    return Array.from(this.bridgeSegments.entries())
+      .map(([segmentId, segment]) => ({ segmentId, passable: segment.passable }))
+      .sort((a, b) => a.segmentId - b.segmentId);
+  }
+
+  onObjectDestroyed(entityId: number): boolean {
+    const segmentId = this.bridgeSegmentByControlEntity.get(entityId);
+    if (segmentId === undefined) {
+      return false;
+    }
+    return this.setBridgeSegmentPassable(segmentId, false);
+  }
+
+  onObjectRepaired(entityId: number): boolean {
+    const segmentId = this.bridgeSegmentByControlEntity.get(entityId);
+    if (segmentId === undefined) {
+      return false;
+    }
+    return this.setBridgeSegmentPassable(segmentId, true);
+  }
+
   reset(): void {
     this.clearSpawnedObjects();
+    this.bridgeSegments.clear();
+    this.bridgeSegmentByControlEntity.clear();
     this.selectedEntityId = null;
     this.nextId = 1;
     this.animationTime = 0;
@@ -321,6 +426,7 @@ export class GameLogicSubsystem implements Subsystem {
   private createMapEntity(
     mapObject: MapObjectJSON,
     objectDef: ObjectDef | undefined,
+    iniDataRegistry: IniDataRegistry,
     heightmap: HeightmapGrid | null,
   ): MapEntity {
     const kindOf = objectDef?.kindOf;
@@ -336,7 +442,7 @@ export class GameLogicSubsystem implements Subsystem {
       selected: false,
     });
 
-    const canCrossCliff = this.resolveCanCrossCliff(category, objectDef);
+    const locomotorProfile = this.resolveLocomotorProfile(objectDef, iniDataRegistry);
     const blocksPath = this.shouldPathfindObstacle(objectDef);
     const obstacleGeometry = blocksPath ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
@@ -353,6 +459,9 @@ export class GameLogicSubsystem implements Subsystem {
       templateName: mapObject.templateName,
       unresolved: !isResolved,
       category,
+      bridgeFlags: mapObject.flags & (OBJECT_FLAG_BRIDGE_POINT1 | OBJECT_FLAG_BRIDGE_POINT2),
+      mapCellX: Math.floor(mapObject.position.x / MAP_XY_FACTOR),
+      mapCellZ: Math.floor(mapObject.position.y / MAP_XY_FACTOR),
     };
 
     return {
@@ -366,7 +475,8 @@ export class GameLogicSubsystem implements Subsystem {
       nominalHeight,
       selected: false,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
-      canCrossCliff,
+      locomotorSurfaceMask: locomotorProfile.surfaceMask,
+      locomotorDownhillOnly: locomotorProfile.downhillOnly,
       blocksPath,
       obstacleGeometry,
       obstacleFootprint,
@@ -492,30 +602,126 @@ export class GameLogicSubsystem implements Subsystem {
     return normalized;
   }
 
-  private resolveCanCrossCliff(category: ObjectCategory, objectDef: ObjectDef | undefined): boolean {
-    if (category === 'air') {
-      return true;
-    }
+  private resolveLocomotorProfile(
+    objectDef: ObjectDef | undefined,
+    iniDataRegistry: IniDataRegistry,
+  ): { surfaceMask: number; downhillOnly: boolean } {
     if (!objectDef) {
-      return false;
+      return { surfaceMask: NO_SURFACES, downhillOnly: false };
     }
 
-    const explicit = readBooleanField(objectDef.fields, [
-      'CanCrossCliff',
-      'CanTraverseCliff',
-      'CanClimbCliffs',
-      'CanMoveOnCliffs',
-    ]);
-    if (explicit !== null) {
-      return explicit;
+    const locomotorSets = this.extractLocomotorSetEntries(objectDef);
+    const normalSet = locomotorSets.get(LOCOMOTORSET_NORMAL);
+    if (!normalSet || normalSet.length === 0) {
+      return { surfaceMask: NO_SURFACES, downhillOnly: false };
     }
 
-    const movementHint = readStringField(objectDef.fields, ['Locomotor', 'LocomotorSet', 'MovementMode', 'MovementType']);
-    if (!movementHint) {
-      return false;
+    let surfaceMask = 0;
+    let downhillOnly = false;
+    for (const locomotorName of normalSet) {
+      const locomotor = iniDataRegistry.getLocomotor(locomotorName);
+      if (!locomotor) {
+        continue;
+      }
+      surfaceMask |= locomotor.surfaceMask;
+      downhillOnly = downhillOnly || locomotor.downhillOnly;
     }
-    const normalized = movementHint.toUpperCase();
-    return normalized.includes('CLIFF') || normalized.includes('ALL_TERRAIN');
+
+    return { surfaceMask, downhillOnly };
+  }
+
+  private extractLocomotorSetEntries(objectDef: ObjectDef): Map<string, string[]> {
+    const sets = new Map<string, string[]>();
+
+    const addEntry = (setName: string, locomotors: string[]): void => {
+      const normalizedSet = setName.trim().toUpperCase();
+      if (!normalizedSet || locomotors.length === 0) {
+        return;
+      }
+      sets.set(normalizedSet, locomotors);
+    };
+
+    const parseTokens = (tokens: string[]): { setName: string; locomotors: string[] } | null => {
+      if (tokens.length < 2) {
+        return null;
+      }
+      const setName = tokens[0]!.trim();
+      const locomotors = tokens
+        .slice(1)
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0 && token.toUpperCase() !== 'NONE');
+      if (locomotors.length === 0) {
+        return null;
+      }
+      return { setName, locomotors };
+    };
+
+    const parseIniScalarTokens = (value: IniValue): string[] => {
+      if (typeof value === 'string') {
+        return value.split(/[\s,;|]+/).filter(Boolean);
+      }
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        return [String(value)];
+      }
+      return [];
+    };
+
+    const parseLocomotorEntries = (value: IniValue | undefined): Array<{ setName: string; locomotors: string[] }> => {
+      if (value === undefined) {
+        return [];
+      }
+      if (Array.isArray(value)) {
+        return value.flatMap((entry) => parseLocomotorEntries(entry as IniValue));
+      }
+      const parsed = parseTokens(parseIniScalarTokens(value));
+      return parsed ? [parsed] : [];
+    };
+
+    const isLocomotorSetField = (fieldName: string): boolean => {
+      const normalized = fieldName.toUpperCase();
+      return normalized === 'LOCOMOTOR' || normalized === 'LOCOMOTORSET';
+    };
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'LOCOMOTORSET' || blockType === 'LOCOMOTOR') {
+        const tokens = block.name.split(/\s+/).filter(Boolean);
+        const parsed = parseTokens(tokens);
+        if (parsed) {
+          addEntry(parsed.setName, parsed.locomotors);
+        }
+      }
+
+      for (const [fieldName, fieldValue] of Object.entries(block.fields)) {
+        if (!isLocomotorSetField(fieldName)) {
+          continue;
+        }
+        const parsedEntries = parseLocomotorEntries(fieldValue);
+        for (const parsed of parsedEntries) {
+          addEntry(parsed.setName, parsed.locomotors);
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const [fieldName, fieldValue] of Object.entries(objectDef.fields)) {
+      if (!isLocomotorSetField(fieldName)) {
+        continue;
+      }
+      const parsedEntries = parseLocomotorEntries(fieldValue);
+      for (const parsed of parsedEntries) {
+        addEntry(parsed.setName, parsed.locomotors);
+      }
+    }
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return sets;
   }
 
   private resolveObstacleGeometry(objectDef: ObjectDef | undefined): ObstacleGeometry | null {
@@ -735,6 +941,12 @@ export class GameLogicSubsystem implements Subsystem {
       case 'stop':
         this.stopEntity(command.entityId);
         return;
+      case 'bridgeDestroyed':
+        this.onObjectDestroyed(command.entityId);
+        return;
+      case 'bridgeRepaired':
+        this.onObjectRepaired(command.entityId);
+        return;
       default:
         return;
     }
@@ -797,13 +1009,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const effectiveStart = startCandidate;
 
-    const goalProfile = movementProfile.canCrossCliff
-      ? movementProfile
-      : {
-        ...movementProfile,
-        canCrossCliff: false,
-      };
-    const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, goalProfile);
+    const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, movementProfile);
     if (!effectiveGoal) {
       return [];
     }
@@ -960,23 +1166,15 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private getMovementProfile(entity?: MapEntity): PathfindingProfile {
-    if (entity?.category === 'air') {
-      return {
-        canCrossWater: true,
-        canCrossCliff: true,
-        canCrossRubble: true,
-        canPassObstacle: true,
-        canUseBridge: true,
-        avoidPinched: false,
-      };
-    }
+    const rawMask = (entity as { locomotorSurfaceMask?: number } | undefined)?.locomotorSurfaceMask;
+    const rawDownhillOnly = (entity as { locomotorDownhillOnly?: boolean } | undefined)?.locomotorDownhillOnly;
+    const mask = typeof rawMask === 'number' ? rawMask : SOURCE_DEFAULT_PASSABLE_SURFACES;
+    const downhillOnly = rawDownhillOnly === true;
 
-    const canCrossCliff = entity?.canCrossCliff === true;
     return {
-      canCrossWater: false,
-      canCrossCliff,
-      canCrossRubble: false,
-      canPassObstacle: false,
+      acceptableSurfaces: mask,
+      downhillOnly,
+      canPassObstacle: (mask & LOCOMOTORSURFACE_AIR) !== 0,
       canUseBridge: true,
       avoidPinched: false,
     };
@@ -995,16 +1193,19 @@ export class GameLogicSubsystem implements Subsystem {
     const isDiagonal = Math.abs(toX - fromX) === 1 && Math.abs(toZ - fromZ) === 1;
     let cost = isDiagonal ? COST_DIAGONAL : COST_ORTHOGONAL;
 
-    if (type === NAV_BRIDGE) {
-      return cost;
-    }
-    if (type === NAV_CLIFF && !profile.canCrossCliff) {
+    const toSurfaces = this.validLocomotorSurfacesForCellType(type, grid, index);
+    if ((profile.acceptableSurfaces & toSurfaces) === 0) {
       return MAX_PATH_COST;
     }
-    if (type === NAV_RUBBLE && !profile.canCrossRubble) {
-      return MAX_PATH_COST;
+    if (profile.downhillOnly && this.mapHeightmap) {
+      const fromHeight = this.mapHeightmap.getWorldHeight(fromX * MAP_XY_FACTOR, fromZ * MAP_XY_FACTOR);
+      const toHeight = this.mapHeightmap.getWorldHeight(toX * MAP_XY_FACTOR, toZ * MAP_XY_FACTOR);
+      if (toHeight > fromHeight + 0.01) {
+        return MAX_PATH_COST;
+      }
     }
-    if (type === NAV_OBSTACLE && !profile.canPassObstacle) {
+
+    if (grid.blocked[index] === 1 && !profile.canPassObstacle) {
       return MAX_PATH_COST;
     }
 
@@ -1020,7 +1221,7 @@ export class GameLogicSubsystem implements Subsystem {
         cost += 7 * COST_DIAGONAL;
       }
     }
-    if (grid.pinched[index] === 1) {
+    if (grid.pinched[index] === 1 && grid.bridgePassable[index] === 0) {
       cost += COST_ORTHOGONAL;
     }
 
@@ -1149,31 +1350,49 @@ export class GameLogicSubsystem implements Subsystem {
 
     const index = cellZ * nav.width + cellX;
     const terrain = nav.terrainType[index];
+    if (nav.bridgePassable[index] === 1) {
+      const bridgeSurfaces = LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;
+      return !!profile.canUseBridge && (profile.acceptableSurfaces & bridgeSurfaces) !== 0;
+    }
     if (nav.blocked[index] === 1 && !profile.canPassObstacle) {
       return false;
     }
-    if (terrain === NAV_OBSTACLE) {
-      return !!profile.canPassObstacle;
-    }
-    if (terrain === NAV_BRIDGE) {
-      return !!profile.canUseBridge;
-    }
-    if (terrain === NAV_WATER && !profile.canCrossWater) {
-      return false;
-    }
-    if (terrain === NAV_CLIFF && profile.avoidPinched && nav.pinched[index] === 1) {
-      return false;
-    }
-    if (terrain === NAV_CLIFF && !profile.canCrossCliff) {
-      return false;
-    }
-    if (terrain === NAV_RUBBLE && !profile.canCrossRubble) {
+    const cellSurfaces = this.validLocomotorSurfacesForCellType(terrain, nav, index);
+    if ((profile.acceptableSurfaces & cellSurfaces) === 0) {
       return false;
     }
     if (profile.avoidPinched && nav.pinched[index] === 1) {
       return false;
     }
     return true;
+  }
+
+  private validLocomotorSurfacesForCellType(
+    terrainType: number,
+    nav: NavigationGrid,
+    cellIndex: number,
+  ): number {
+    if (nav.bridgePassable[cellIndex] === 1) {
+      return LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;
+    }
+    switch (terrainType) {
+      case NAV_OBSTACLE:
+        return LOCOMOTORSURFACE_AIR;
+      case NAV_CLEAR:
+        return LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;
+      case NAV_WATER:
+        return LOCOMOTORSURFACE_WATER | LOCOMOTORSURFACE_AIR;
+      case NAV_RUBBLE:
+        return LOCOMOTORSURFACE_RUBBLE | LOCOMOTORSURFACE_AIR;
+      case NAV_CLIFF:
+        return LOCOMOTORSURFACE_CLIFF | LOCOMOTORSURFACE_AIR;
+      case NAV_BRIDGE:
+        return nav.bridgePassable[cellIndex] === 1
+          ? LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR
+          : LOCOMOTORSURFACE_AIR;
+      default:
+        return NO_SURFACES;
+    }
   }
 
   private canTraverseBridgeTransition(
@@ -1192,8 +1411,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const fromIndex = fromZ * nav.width + fromX;
     const toIndex = toZ * nav.width + toX;
-    const fromBridge = nav.bridge[fromIndex] === 1;
-    const toBridge = nav.bridge[toIndex] === 1;
+    const fromBridge = nav.bridgePassable[fromIndex] === 1;
+    const toBridge = nav.bridgePassable[toIndex] === 1;
 
     if (!fromBridge && !toBridge) {
       return true;
@@ -1250,7 +1469,11 @@ export class GameLogicSubsystem implements Subsystem {
     const blocked = new Uint8Array(total);
     const pinched = new Uint8Array(total);
     const bridge = new Uint8Array(total);
+    const bridgePassable = new Uint8Array(total);
     const bridgeTransitions = new Uint8Array(total);
+    const bridgeSegmentByCell = new Int32Array(total);
+    bridgeSegmentByCell.fill(-1);
+    this.bridgeSegments.clear();
 
     const waterCells = this.buildWaterCellsFromTriggers(mapData, heightmap, cellWidth, cellHeight);
     const cliffBits = this.tryDecodeMapCliffState(mapData, heightmap);
@@ -1344,7 +1567,9 @@ export class GameLogicSubsystem implements Subsystem {
       blocked,
       pinched,
       bridge,
+      bridgePassable,
       bridgeTransitions,
+      bridgeSegmentByCell,
     };
 
     this.applyBridgeOverlay(mapData, grid);
@@ -1467,8 +1692,8 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private applyBridgeOverlay(mapData: MapDataJSON, grid: NavigationGrid): void {
-    const starts: Array<{ x: number; z: number }> = [];
-    const ends: Array<{ x: number; z: number }> = [];
+    const starts: Array<{ x: number; z: number; properties: Record<string, string>; entityId: number | null }> = [];
+    const ends: Array<{ x: number; z: number; properties: Record<string, string>; entityId: number | null }> = [];
 
     for (const mapObject of mapData.objects) {
       const flags = mapObject.flags;
@@ -1483,10 +1708,20 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       if ((flags & OBJECT_FLAG_BRIDGE_POINT1) !== 0) {
-        starts.push({ x: cellX, z: cellZ });
+        starts.push({
+          x: cellX,
+          z: cellZ,
+          properties: mapObject.properties,
+          entityId: this.findBridgeControlEntityId(cellX, cellZ, OBJECT_FLAG_BRIDGE_POINT1),
+        });
       }
       if ((flags & OBJECT_FLAG_BRIDGE_POINT2) !== 0) {
-        ends.push({ x: cellX, z: cellZ });
+        ends.push({
+          x: cellX,
+          z: cellZ,
+          properties: mapObject.properties,
+          entityId: this.findBridgeControlEntityId(cellX, cellZ, OBJECT_FLAG_BRIDGE_POINT2),
+        });
       }
     }
 
@@ -1515,16 +1750,70 @@ export class GameLogicSubsystem implements Subsystem {
       if (bestIndex < 0) {
         continue;
       }
+      const end = ends[bestIndex]!;
       usedEnds[bestIndex] = 1;
-      this.markBridgeSegment(start, ends[bestIndex]!, grid);
+      const segmentId = this.bridgeSegments.size;
+      const passable = this.resolveInitialBridgePassable(start.properties, end.properties);
+      this.markBridgeSegment(start, end, segmentId, passable, grid);
     }
   }
 
+  private findBridgeControlEntityId(cellX: number, cellZ: number, requiredFlag: number): number | null {
+    for (const entity of this.spawnedEntities.values()) {
+      const userData = entity.mesh.userData as {
+        bridgeFlags?: number;
+        mapCellX?: number;
+        mapCellZ?: number;
+      };
+      if (((userData.bridgeFlags ?? 0) & requiredFlag) === 0) {
+        continue;
+      }
+      if (userData.mapCellX === cellX && userData.mapCellZ === cellZ) {
+        return entity.id;
+      }
+    }
+    return null;
+  }
+
+  private resolveInitialBridgePassable(...propertySets: Array<Record<string, string>>): boolean {
+    for (const properties of propertySets) {
+      for (const [rawKey, rawValue] of Object.entries(properties)) {
+        const key = rawKey.trim().toLowerCase();
+        const value = rawValue.trim().toLowerCase();
+        if (key.length === 0 || value.length === 0) {
+          continue;
+        }
+        if (!/(bridge|destroy|broken|pass|state|repair|open|close|down|up)/.test(key)) {
+          continue;
+        }
+
+        if (
+          value.includes('down')
+          || value.includes('destroyed')
+          || value.includes('broken')
+          || value.includes('closed')
+          || value.includes('disabled')
+          || value === '0'
+          || value === 'false'
+          || value === 'no'
+        ) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
   private markBridgeSegment(
-    start: { x: number; z: number },
-    end: { x: number; z: number },
+    start: { x: number; z: number; properties: Record<string, string>; entityId: number | null },
+    end: { x: number; z: number; properties: Record<string, string>; entityId: number | null },
+    segmentId: number,
+    passable: boolean,
     grid: NavigationGrid,
   ): void {
+    const cellIndices = new Set<number>();
+    const transitionIndices = new Set<number>();
     let x = start.x;
     let z = start.z;
     const dx = Math.abs(end.x - start.x);
@@ -1534,7 +1823,7 @@ export class GameLogicSubsystem implements Subsystem {
     let err = dx - dz;
 
     while (true) {
-      this.markBridgeCellRadius(x, z, 0, grid);
+      this.markBridgeCellRadius(x, z, 0, segmentId, passable, grid, cellIndices);
       if (x === end.x && z === end.z) {
         break;
       }
@@ -1549,34 +1838,69 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    this.markBridgeTransitionRadius(start.x, start.z, 0, grid);
-    this.markBridgeTransitionRadius(end.x, end.z, 0, grid);
+    this.markBridgeTransitionRadius(start.x, start.z, 0, segmentId, passable, grid, transitionIndices);
+    this.markBridgeTransitionRadius(end.x, end.z, 0, segmentId, passable, grid, transitionIndices);
+
+    this.bridgeSegments.set(segmentId, {
+      passable,
+      cellIndices: Array.from(cellIndices),
+      transitionIndices: Array.from(transitionIndices),
+    });
+    if (start.entityId !== null) {
+      this.bridgeSegmentByControlEntity.set(start.entityId, segmentId);
+    }
+    if (end.entityId !== null) {
+      this.bridgeSegmentByControlEntity.set(end.entityId, segmentId);
+    }
   }
 
-  private markBridgeCellRadius(cellX: number, cellZ: number, radius: number, grid: NavigationGrid): void {
+  private markBridgeCellRadius(
+    cellX: number,
+    cellZ: number,
+    radius: number,
+    segmentId: number,
+    passable: boolean,
+    grid: NavigationGrid,
+    cellIndices: Set<number>,
+  ): void {
     for (let x = cellX - radius; x <= cellX + radius; x++) {
       for (let z = cellZ - radius; z <= cellZ + radius; z++) {
         if (!this.isCellInBounds(x, z, grid)) {
           continue;
         }
         const index = z * grid.width + x;
+        if (grid.bridgeSegmentByCell[index] < 0) {
+          grid.bridgeSegmentByCell[index] = segmentId;
+        }
         grid.bridge[index] = 1;
-        grid.terrainType[index] = NAV_BRIDGE;
-        grid.blocked[index] = 0;
-        grid.pinched[index] = 0;
+        if (passable) {
+          grid.bridgePassable[index] = 1;
+        }
+        cellIndices.add(index);
       }
     }
   }
 
-  private markBridgeTransitionRadius(cellX: number, cellZ: number, radius: number, grid: NavigationGrid): void {
+  private markBridgeTransitionRadius(
+    cellX: number,
+    cellZ: number,
+    radius: number,
+    segmentId: number,
+    passable: boolean,
+    grid: NavigationGrid,
+    transitionIndices: Set<number>,
+  ): void {
     for (let x = cellX - radius; x <= cellX + radius; x++) {
       for (let z = cellZ - radius; z <= cellZ + radius; z++) {
         if (!this.isCellInBounds(x, z, grid)) {
           continue;
         }
         const index = z * grid.width + x;
-        if (grid.bridge[index] === 1) {
-          grid.bridgeTransitions[index] = 1;
+        if (grid.bridge[index] === 1 && grid.bridgeSegmentByCell[index] === segmentId) {
+          if (passable) {
+            grid.bridgeTransitions[index] = 1;
+          }
+          transitionIndices.add(index);
         }
       }
     }
@@ -1827,6 +2151,8 @@ export class GameLogicSubsystem implements Subsystem {
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
     this.navigationGrid = null;
+    this.bridgeSegments.clear();
+    this.bridgeSegmentByControlEntity.clear();
     for (const entity of this.spawnedEntities.values()) {
       this.scene.remove(entity.mesh);
     }
