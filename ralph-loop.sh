@@ -9,14 +9,18 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./ralph-loop.sh --count <N> --prompt <PROMPT> [--session-id <SESSION_ID>] [--non-interactive] [--sandbox <read-only|workspace-write|danger-full-access>] [--bypass-sandbox] [--log-file <PATH>] -- [codex args...]
+  ./ralph-loop.sh --count <N> --prompt <PROMPT> [--session-id <SESSION_ID>] [--new-agent]
+    [--plan-prompt <PROMPT>] [--plan-prompt-file <PATH>] [--state-file <PATH>]
+    [--non-interactive] [--sandbox <read-only|workspace-write|danger-full-access>]
+    [--bypass-sandbox] [--log-file <PATH>] -- [codex args...]
 
 Examples:
   ./ralph-loop.sh --count 5 --prompt "Please continue from where you left off."
-  ./ralph-loop.sh --count 3 --prompt-file .codex-loop-prompt.txt -- --no-alt-screen
-  ./ralph-loop.sh --count 5 --prompt "Please continue." --session-id <SESSION_ID> -- --no-alt-screen
+  ./ralph-loop.sh --count 3 --prompt-file .codex-loop-prompt.txt --state-file .ralph/session-state.md -- --no-alt-screen
+  ./ralph-loop.sh --count 5 --prompt "Please continue." --session-id <SESSION_ID> --new-agent -- --no-alt-screen
   ./ralph-loop.sh --count 5 --prompt "Please continue." --session-id <SESSION_ID> --non-interactive -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --log-file /tmp/ralph-loop.log
+  ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --plan-prompt "Assess status, then plan." -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --sandbox danger-full-access -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --bypass-sandbox -- -c model="gpt-5.3-codex-spark"
 EOF
@@ -26,13 +30,18 @@ EOF
 iterations=1
 prompt=""
 prompt_file=""
+plan_prompt=""
+plan_prompt_file=""
 sleep_seconds=0
 session_id=""
 interactive=1
 log_file=""
+state_file=".ralph/session-state.md"
 codex_sandbox=""
 bypass_sandbox=0
+new_agent=0
 run_id="$(date +%s)"
+repo_root="$(pwd -P)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,8 +57,20 @@ while [[ $# -gt 0 ]]; do
       prompt_file="$2"
       shift 2
       ;;
+    --plan-prompt)
+      plan_prompt="$2"
+      shift 2
+      ;;
+    --plan-prompt-file)
+      plan_prompt_file="$2"
+      shift 2
+      ;;
     --session-id)
       session_id="$2"
+      shift 2
+      ;;
+    --state-file)
+      state_file="$2"
       shift 2
       ;;
     --sandbox)
@@ -76,6 +97,10 @@ while [[ $# -gt 0 ]]; do
       interactive=0
       shift
       ;;
+    --new-agent)
+      new_agent=1
+      shift
+      ;;
     -s|--sleep)
       sleep_seconds="$2"
       shift 2
@@ -97,9 +122,23 @@ if [[ "$prompt_file" != "" ]]; then
   prompt="$(cat "$prompt_file")"
 fi
 
+if [[ "$plan_prompt_file" != "" ]]; then
+  plan_prompt="$(cat "$plan_prompt_file")"
+fi
+
 if [[ "$prompt" == "" ]]; then
   echo "Error: a prompt is required. Use --prompt or --prompt-file." >&2
   usage
+fi
+
+if [[ "$plan_prompt" == "" ]]; then
+  plan_prompt="Assess current status and prepare a concise execution plan for this project before making any edits.
+
+Output:
+- What is complete and what is still missing.
+- What likely changed state is currently visible from the repo/diff.
+- The highest-priority next step to unlock stable progress.
+Do not edit files in this step."
 fi
 
 if [[ "$iterations" -le 0 ]]; then
@@ -109,48 +148,137 @@ fi
 
 codex_args=("$@")
 
-if (( interactive )); then
-  if [[ -n "$session_id" ]]; then
-    start_codex_cmd=(codex resume "$session_id")
-    resume_codex_cmd=(codex resume "$session_id")
+mkdir -p "$(dirname "$state_file")"
+
+extract_session_id() {
+  local file="$1"
+  sed -n 's/.*session id:[[:space:]]*\([0-9a-fA-F-][0-9a-fA-F-]*\).*/\1/p' "$file" | tail -n1
+}
+
+build_context_prompt() {
+  local phase="$1"
+  local base_prompt="$2"
+  local iteration="$3"
+
+  local previous_state=""
+  if [[ -f "$state_file" ]]; then
+    previous_state="$(sed -n '1,80p' "$state_file")"
   else
-    start_codex_cmd=(codex)
-    resume_codex_cmd=(codex resume --last)
+    previous_state="No prior state file found. This appears to be a fresh run."
   fi
-else
-  if [[ -n "$session_id" ]]; then
-    start_codex_cmd=(codex exec resume "$session_id")
-    resume_codex_cmd=(codex exec resume "$session_id")
+
+  local repo_status
+  repo_status="$(git -C "$repo_root" status --short 2>/dev/null | sed -n '1,60p')"
+  if [[ -z "$repo_status" ]]; then
+    repo_status="(working tree is clean)"
+  fi
+
+  local diff_stat
+  diff_stat="$(git -C "$repo_root" diff --stat 2>/dev/null | sed -n '1,80p')"
+  if [[ -z "$diff_stat" ]]; then
+    diff_stat="(no diff)"
+  fi
+
+  local recent_log=""
+  if [[ -n "$log_file" ]]; then
+    recent_log="$(tail -n 6 "$log_file" 2>/dev/null)"
+    if [[ -z "$recent_log" ]]; then
+      recent_log="(no previous loop log entries yet)"
+    fi
   else
-    start_codex_cmd=(codex exec)
-    resume_codex_cmd=(codex exec resume --last)
+    recent_log="(log file not configured)"
   fi
+
+  cat <<EOF
+$base_prompt
+
+Execution context:
+- Session: ${session_id:-unknown}
+- Run: $run_id
+- Iteration: $iteration / $iterations
+- Phase: $phase
+- Working branch: $(git -C "$repo_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+- Repo root: $repo_root
+
+Project state snapshot:
+$previous_state
+
+Repo status:
+$repo_status
+
+Diff summary:
+$diff_stat
+
+Recent loop log:
+$recent_log
+
+Important continuation contract:
+- Continue from the state above and avoid repeating work already completed.
+- If no actual progress was made since the previous turn, pivot to a different next action and report why.
+EOF
+}
+
+log_state() {
+  local iteration="$1"
+  local mode="$2"
+  local exit_code="$3"
+  local elapsed="$4"
+
+  local repo_status
+  local diff_stat
+  repo_status="$(git -C "$repo_root" status --short 2>/dev/null | sed -n '1,80p')"
+  diff_stat="$(git -C "$repo_root" diff --stat 2>/dev/null | sed -n '1,80p')"
+
+  cat > "$state_file" <<EOF
+# Ralph loop state
+
+run_id: $run_id
+session_id: ${session_id:-unknown}
+mode: $mode
+iteration: $iteration / $iterations
+exit_code: $exit_code
+elapsed_seconds: $elapsed
+updated_at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+## repo_status
+$repo_status
+
+## diff_stat
+$diff_stat
+EOF
+}
+
+codex_base_cmd=(codex)
+if (( interactive == 0 )); then
+  codex_base_cmd=(codex exec)
 fi
 
 if [[ -n "$codex_sandbox" ]]; then
-  start_codex_cmd=("${start_codex_cmd[@]:0:1}" -s "$codex_sandbox" "${start_codex_cmd[@]:1}")
-  resume_codex_cmd=("${resume_codex_cmd[@]:0:1}" -s "$codex_sandbox" "${resume_codex_cmd[@]:1}")
+  codex_base_cmd+=(-s "$codex_sandbox")
 fi
 
 if (( bypass_sandbox )); then
-  start_codex_cmd=("${start_codex_cmd[@]:0:1}" --dangerously-bypass-approvals-and-sandbox "${start_codex_cmd[@]:1}")
-  resume_codex_cmd=("${resume_codex_cmd[@]:0:1}" --dangerously-bypass-approvals-and-sandbox "${resume_codex_cmd[@]:1}")
+  codex_base_cmd+=(--dangerously-bypass-approvals-and-sandbox)
 fi
 
 if (( ${#codex_args[@]} > 0 )); then
-  start_codex_cmd+=("${codex_args[@]}")
-  resume_codex_cmd+=("${codex_args[@]}")
+  codex_base_cmd+=("${codex_args[@]}")
+fi
+
+if (( new_agent == 1 )); then
+  session_id=""
 fi
 
 log_event() {
   local iteration="$1"
   local status="$2"
-  local exit_code="${3:-}"
-  local elapsed="${4:-}"
-  local session_label="$5"
+  local phase="$3"
+  local exit_code="${4:-}"
+  local elapsed="${5:-}"
+  local session_label="$6"
   local timestamp
   timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  local line="[$timestamp] run=$run_id iter=${iteration}/${iterations} session=${session_label} status=${status}"
+  local line="[$timestamp] run=$run_id iter=${iteration}/${iterations} session=${session_label} phase=${phase} status=${status}"
   if [[ "$status" == "ended" ]]; then
     line+=" exit=${exit_code} elapsed=${elapsed}s"
   fi
@@ -161,7 +289,7 @@ log_event() {
 }
 
 if [[ -n "$log_file" ]]; then
-  echo "[START] run=$run_id count=$iterations session=${session_id:-last} mode=$([ $interactive -eq 1 ] && echo interactive || echo non-interactive)" > "$log_file"
+  echo "[START] run=$run_id count=$iterations session=${session_id:-last} state_file=$state_file mode=$([ $interactive -eq 1 ] && echo interactive || echo non-interactive) new_agent=$new_agent" > "$log_file"
 fi
 
 run_index=0
@@ -169,18 +297,49 @@ run_index=0
 while (( run_index < iterations )); do
   run_index=$((run_index + 1))
   session_label="${session_id:-last}"
-  log_event "$run_index" "starting" "" "" "$session_label"
+  if (( run_index == 1 )); then
+    prompt_to_send="$(build_context_prompt "planning" "$plan_prompt" "$run_index")"
+  else
+    prompt_to_send="$(build_context_prompt "execution" "$prompt" "$run_index")"
+  fi
+
+  log_event "$run_index" "starting" "$([ ${run_index} -eq 1 ] && echo planning || echo execution)" "" "" "$session_label"
   iteration_start=$(date +%s)
 
+  output_file="$(mktemp)"
+  iteration_cmd=("${codex_base_cmd[@]}")
+
   if (( run_index == 1 )); then
-    "${start_codex_cmd[@]}" "$prompt"
+    if [[ -n "$session_id" ]]; then
+      iteration_cmd+=(resume "$session_id")
+    fi
   else
-    "${resume_codex_cmd[@]}" "$prompt"
+    if [[ -n "$session_id" ]]; then
+      iteration_cmd+=(resume "$session_id")
+    else
+      iteration_cmd+=(resume --last)
+    fi
   fi
-  exit_code=$?
+
+  if "${iteration_cmd[@]}" "$prompt_to_send" > "$output_file" 2>&1; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+
+  detected_session_id="$(extract_session_id "$output_file")"
+  if [[ -n "$detected_session_id" ]]; then
+    session_id="$detected_session_id"
+  fi
+
+  cat "$output_file" >&2
+  rm -f "$output_file"
+
   iteration_end=$(date +%s)
   elapsed=$(( iteration_end - iteration_start ))
-  log_event "$run_index" "ended" "$exit_code" "$elapsed" "$session_label"
+  log_event "$run_index" "ended" "$([ ${run_index} -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed" "$session_label"
+
+  log_state "$run_index" "$([ $run_index -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed"
 
   if (( run_index >= iterations )); then
     break
