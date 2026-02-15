@@ -12,7 +12,8 @@ Usage:
   ./ralph-loop.sh --count <N> --prompt <PROMPT> [--session-id <SESSION_ID>] [--new-agent]
     [--plan-prompt <PROMPT>] [--plan-prompt-file <PATH>] [--state-file <PATH>]
     [--non-interactive] [--sandbox <read-only|workspace-write|danger-full-access>]
-    [--bypass-sandbox] [--log-file <PATH>] -- [codex args...]
+    [--bypass-sandbox] [--progress-window <N>] [--min-delta-lines <N>] [--allow-low-progress]
+    [--log-file <PATH>] -- [codex args...]
 
 Examples:
   ./ralph-loop.sh --count 5 --prompt "Please continue from where you left off."
@@ -21,6 +22,7 @@ Examples:
   ./ralph-loop.sh --count 5 --prompt "Please continue." --session-id <SESSION_ID> --non-interactive -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --log-file /tmp/ralph-loop.log
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --plan-prompt "Assess status, then plan." -- -c model="gpt-5.3-codex-spark"
+  ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --progress-window 10 --min-delta-lines 500 -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --sandbox danger-full-access -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --bypass-sandbox -- -c model="gpt-5.3-codex-spark"
 EOF
@@ -39,6 +41,9 @@ log_file=""
 state_file=".ralph/session-state.md"
 codex_sandbox=""
 bypass_sandbox=0
+progress_window=10
+min_delta_lines=500
+allow_low_progress=0
 new_agent=0
 run_id="$(date +%s)"
 repo_root="$(pwd -P)"
@@ -93,6 +98,18 @@ while [[ $# -gt 0 ]]; do
       bypass_sandbox=1
       shift
       ;;
+    --progress-window)
+      progress_window="$2"
+      shift 2
+      ;;
+    --min-delta-lines)
+      min_delta_lines="$2"
+      shift 2
+      ;;
+    --allow-low-progress)
+      allow_low_progress=1
+      shift
+      ;;
     --non-interactive)
       interactive=0
       shift
@@ -144,6 +161,15 @@ fi
 if [[ "$iterations" -le 0 ]]; then
   echo "Error: --count must be a positive integer." >&2
   usage
+fi
+
+if [[ "$progress_window" -le 0 ]]; then
+  echo "Error: --progress-window must be a positive integer." >&2
+  exit 1
+fi
+if [[ "$min_delta_lines" -lt 0 ]]; then
+  echo "Error: --min-delta-lines must be zero or greater." >&2
+  exit 1
 fi
 
 codex_args=("$@")
@@ -223,6 +249,9 @@ log_state() {
   local mode="$2"
   local exit_code="$3"
   local elapsed="$4"
+  local total_changed_lines="$5"
+  local window_lines="$6"
+  local delta_in_window="$7"
 
   local repo_status
   local diff_stat
@@ -238,6 +267,10 @@ mode: $mode
 iteration: $iteration / $iterations
 exit_code: $exit_code
 elapsed_seconds: $elapsed
+total_changed_lines: $total_changed_lines
+progress_window: $progress_window
+progress_goal: $min_delta_lines
+progress_delta_since_window: $delta_in_window
 updated_at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 ## repo_status
@@ -268,6 +301,14 @@ fi
 if (( new_agent == 1 )); then
   session_id=""
 fi
+
+count_changed_lines() {
+  git -C "$repo_root" diff --numstat 2>/dev/null \
+    | awk '{sum += ($1 ~ /^[0-9]+$/ ? $1 : 0) + ($2 ~ /^[0-9]+$/ ? $2 : 0)} END {print sum+0}'
+}
+
+window_start_lines="$(count_changed_lines)"
+window_start_iter=0
 
 log_event() {
   local iteration="$1"
@@ -339,7 +380,22 @@ while (( run_index < iterations )); do
   elapsed=$(( iteration_end - iteration_start ))
   log_event "$run_index" "ended" "$([ ${run_index} -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed" "$session_label"
 
-  log_state "$run_index" "$([ $run_index -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed"
+  current_changed_lines="$(count_changed_lines)"
+  window_delta=$((current_changed_lines - window_start_lines))
+  log_state "$run_index" "$([ $run_index -eq 1 ] && echo planning || echo execution)" "$exit_code" "$elapsed" "$current_changed_lines" "$min_delta_lines" "$window_delta"
+
+  if (( run_index % progress_window == 0 )); then
+    if (( allow_low_progress == 0 && window_delta < min_delta_lines )); then
+      delta_msg="Iteration ${run_index} progress gate failed: changed ${window_delta} lines since checkpoint, below required ${min_delta_lines} over last ${progress_window} iterations."
+      echo "$delta_msg" >&2
+      if [[ -n "$log_file" ]]; then
+        echo "$delta_msg" >> "$log_file"
+      fi
+      exit 1
+    fi
+    window_start_lines="$current_changed_lines"
+    window_start_iter="$run_index"
+  fi
 
   if (( run_index >= iterations )); then
     break
