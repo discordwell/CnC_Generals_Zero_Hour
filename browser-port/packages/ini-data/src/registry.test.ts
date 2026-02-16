@@ -104,10 +104,19 @@ describe('IniDataRegistry', () => {
         makeBlock('CommandButton', 'Btn1', {}),
         makeBlock('FXList', 'FX1', {}),
         makeBlock('AudioEvent', 'Sound1', {}),
+        makeBlock('AI', 'AI', { AttackUsesLineOfSight: '0' }),
       ]);
 
       expect(registry.objects.size).toBe(0);
       expect(registry.getUnsupportedBlockTypes()).toEqual([]);
+    });
+
+    it('indexes AI block config values', () => {
+      registry.loadBlocks([
+        makeBlock('AI', 'AI', { AttackUsesLineOfSight: 'no' }),
+      ]);
+
+      expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
     });
 
     it('parses Locomotor Speed from INI data', () => {
@@ -324,6 +333,9 @@ describe('IniDataRegistry', () => {
             detail: 'existing weapon kept',
           },
         ],
+        ai: {
+          attackUsesLineOfSight: false,
+        },
         unsupportedBlockTypes: ['CommandButton'],
       };
 
@@ -331,6 +343,7 @@ describe('IniDataRegistry', () => {
 
       expect(registry.objects.get('TankA')?.side).toBe('America');
       expect(registry.weapons.get('Gun')?.fields['Damage']).toBe(50);
+      expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
       expect(registry.getUnsupportedBlockTypes()).toEqual(['CommandButton']);
       expect(registry.errors).toHaveLength(1);
       expect(registry.errors[0]!.type).toBe('duplicate');

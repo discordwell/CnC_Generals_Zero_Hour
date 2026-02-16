@@ -101,11 +101,7 @@ async function init(): Promise<void> {
   const waterVisual = new WaterVisual(scene);
   subsystems.register(waterVisual);
 
-  // Game logic + object visuals
-  const gameLogic = new GameLogicSubsystem(scene);
-  subsystems.register(gameLogic);
-
-  await subsystems.initAll();
+  let gameLogic: GameLogicSubsystem;
 
   // ========================================================================
   // Game data (INI bundle)
@@ -138,6 +134,13 @@ async function init(): Promise<void> {
 
   const iniDataStats = iniDataRegistry.getStats();
   setLoadingProgress(48, 'Game data ready');
+
+  // Game logic + object visuals
+  const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
+  gameLogic = new GameLogicSubsystem(scene, { attackUsesLineOfSight });
+  subsystems.register(gameLogic);
+
+  await subsystems.initAll();
 
   setLoadingProgress(50, 'Loading terrain...');
   const dataSuffix = ` | INI: ${iniDataStats.objects} objects, ${iniDataStats.weapons} weapons`;

@@ -262,6 +262,20 @@ End
       expect(result.blocks[0]!.name).toBe('');
       expect(result.blocks[0]!.fields['MaxCameraHeight']).toBe(800.0);
     });
+
+    it('parses AI block without name', () => {
+      const source = `
+AI
+  AttackUsesLineOfSight = no
+End
+`;
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks).toHaveLength(1);
+      expect(result.blocks[0]!.type).toBe('AI');
+      expect(result.blocks[0]!.name).toBe('');
+      expect(result.blocks[0]!.fields['AttackUsesLineOfSight']).toBe(false);
+    });
   });
 
   describe('+= additive fields', () => {

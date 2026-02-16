@@ -78,6 +78,10 @@ export interface RegistryError {
   file?: string;
 }
 
+export interface AiConfig {
+  attackUsesLineOfSight?: boolean;
+}
+
 export interface IniDataBundle {
   objects: ObjectDef[];
   weapons: WeaponDef[];
@@ -86,6 +90,7 @@ export interface IniDataBundle {
   sciences: ScienceDef[];
   factions: FactionDef[];
   locomotors?: LocomotorDef[];
+  ai?: AiConfig;
   stats: RegistryStats;
   errors: RegistryError[];
   unsupportedBlockTypes: string[];
@@ -104,6 +109,7 @@ export class IniDataRegistry {
   readonly factions = new Map<string, FactionDef>();
   readonly locomotors = new Map<string, LocomotorDef>();
   readonly errors: RegistryError[] = [];
+  private ai: AiConfig | undefined;
 
   private unsupportedBlockTypes = new Set<string>();
 
@@ -177,6 +183,7 @@ export class IniDataRegistry {
     }
 
     this.errors.push(...bundle.errors);
+    this.ai = bundle.ai ? { ...bundle.ai } : undefined;
     for (const unsupported of bundle.unsupportedBlockTypes) {
       this.unsupportedBlockTypes.add(unsupported);
     }
@@ -228,6 +235,10 @@ export class IniDataRegistry {
     return this.factions.get(name);
   }
 
+  getAiConfig(): AiConfig | undefined {
+    return this.ai ? { ...this.ai } : undefined;
+  }
+
   getLocomotor(name: string): LocomotorDef | undefined {
     return this.locomotors.get(name);
   }
@@ -264,6 +275,7 @@ export class IniDataRegistry {
       sciences: [...this.sciences.values()].sort((a, b) => a.name.localeCompare(b.name)),
       factions: [...this.factions.values()].sort((a, b) => a.name.localeCompare(b.name)),
       locomotors: [...this.locomotors.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      ai: this.ai ? { ...this.ai } : undefined,
       stats,
       errors: [...this.errors],
       unsupportedBlockTypes: this.getUnsupportedBlockTypes(),
@@ -402,6 +414,11 @@ export class IniDataRegistry {
       case 'Body':
       case 'ArmorSet':
       case 'AI':
+        this.ai = {
+          ...this.ai,
+          attackUsesLineOfSight: extractBoolean(block.fields['AttackUsesLineOfSight']) ??
+            this.ai?.attackUsesLineOfSight,
+        };
         break;
 
       default:

@@ -202,6 +202,7 @@ function mergeStats(bundle: IniDataBundle): RegistryStats {
 }
 
 function mergeBundles(baseBundle: IniDataBundle, patchBundle: IniDataBundle): IniDataBundle {
+  const mergedAi = mergeAiConfig(baseBundle.ai, patchBundle.ai);
   const merged: IniDataBundle = {
     objects: mergeByName(baseBundle.objects, patchBundle.objects),
     weapons: mergeByName(baseBundle.weapons, patchBundle.weapons),
@@ -215,6 +216,7 @@ function mergeBundles(baseBundle: IniDataBundle, patchBundle: IniDataBundle): In
       baseBundle.unsupportedBlockTypes,
       patchBundle.unsupportedBlockTypes,
     ),
+    ...(mergedAi ? { ai: mergedAi } : {}),
     stats: {
       objects: 0,
       weapons: 0,
@@ -228,6 +230,17 @@ function mergeBundles(baseBundle: IniDataBundle, patchBundle: IniDataBundle): In
   };
   merged.stats = mergeStats(merged);
   return merged;
+}
+
+function mergeAiConfig(
+  baseConfig: IniDataBundle['ai'],
+  patchConfig: IniDataBundle['ai'],
+): IniDataBundle['ai'] {
+  if (!baseConfig && !patchConfig) return undefined;
+  return {
+    ...(baseConfig ?? {}),
+    ...(patchConfig ?? {}),
+  };
 }
 
 function mergeManifest(manifest: ReturnType<typeof createManifest>, manifestPath: string): void {

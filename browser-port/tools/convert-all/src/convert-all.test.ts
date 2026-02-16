@@ -48,10 +48,14 @@ describe('convert-all integration smoke', () => {
       const outputDir = resolve(dir, 'out');
       const sampleIni = resolve(gameDir, 'data', 'sample.ini');
       mkdirSync(resolve(gameDir, 'data'), { recursive: true });
-      writeFileSync(
-        sampleIni,
-        'Object Tank\\n  Side = America\\nEnd\\n',
-      );
+      writeFileSync(sampleIni, `Object Tank
+  Side = America
+End
+
+AI
+  AttackUsesLineOfSight = no
+End
+`);
 
       const result = runConvertAll([
         '--game-dir',
@@ -63,17 +67,24 @@ describe('convert-all integration smoke', () => {
       ]);
 
       expect(result.status).toBe(0);
+      const gameBundle = JSON.parse(
+        readFileSync(resolve(outputDir, 'data', 'bundle-game.json'), 'utf8',
+      ));
+      expect(gameBundle.ai?.attackUsesLineOfSight).toBe(false);
+
       const manifestText = readFileSync(
         resolve(outputDir, 'manifests', 'ini.json'),
         'utf8',
       );
       const manifest = JSON.parse(manifestText) as ConversionManifestSnapshot;
+
       expect(manifest.version).toBe(1);
       expect(manifest.entryCount).toBe(2);
       expect(manifest.entries).toHaveLength(2);
       expect(manifest.entries.some((entry) => entry.outputPath.includes('sample.json'))).toBe(true);
       expect(manifest.entries.some((entry) => entry.sourcePath.includes('ini-bundle'))).toBe(true);
       expect(manifest.entries.every((entry) => entry.sourceHash.length === 64)).toBe(true);
+
 
       const bundleText = readFileSync(
         resolve(outputDir, 'data', 'ini-bundle.json'),
@@ -83,10 +94,12 @@ describe('convert-all integration smoke', () => {
         objects: unknown[];
         weapons: unknown[];
         stats: { objects: number; weapons: number };
+        ai?: { attackUsesLineOfSight?: boolean };
       };
       expect(bundle.objects).toHaveLength(1);
       expect(bundle.stats.objects).toBe(1);
       expect(bundle.stats.weapons).toBe(0);
+      expect(bundle.ai?.attackUsesLineOfSight).toBe(false);
     });
   });
 });

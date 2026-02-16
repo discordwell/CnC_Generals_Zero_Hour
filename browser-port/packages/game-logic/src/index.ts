@@ -7,10 +7,11 @@
 
 import * as THREE from 'three';
 import type { Subsystem } from '@generals/core';
-import { IniDataRegistry, type ObjectDef } from '@generals/ini-data';
+import { IniDataRegistry, type ObjectDef, type WeaponDef } from '@generals/ini-data';
 import type { IniBlock, IniValue } from '@generals/core';
 import {
   MAP_XY_FACTOR,
+  MAP_HEIGHT_SCALE,
   base64ToUint8Array,
   type HeightmapGrid,
   type MapDataJSON,
@@ -40,6 +41,14 @@ export interface MoveToCommand {
   entityId: number;
   targetX: number;
   targetZ: number;
+}
+
+export interface AttackMoveToCommand {
+  type: 'attackMoveTo';
+  entityId: number;
+  targetX: number;
+  targetZ: number;
+  attackDistance: number;
 }
 
 export interface StopCommand {
@@ -79,6 +88,7 @@ export type GameLogicCommand =
   | SelectByIdCommand
   | ClearSelectionCommand
   | MoveToCommand
+  | AttackMoveToCommand
   | StopCommand
   | BridgeDestroyedCommand
   | BridgeRepairedCommand
@@ -96,6 +106,11 @@ export interface GameLogicConfig {
   defaultMoveSpeed: number;
   /** Terrain snap speed while moving. */
   terrainSnapSpeed: number;
+  /**
+   * If true, attack-move LOS checks are active for movers with
+   * ATTACK_NEEDS_LINE_OF_SIGHT.
+   */
+  attackUsesLineOfSight: boolean;
 }
 
 const TEST_CRUSH_ONLY = 0;
@@ -140,6 +155,10 @@ const PATHFIND_ZONE_BLOCK_SIZE = 10;
 const MAX_PATH_COST = 1e9;
 const MAX_SEARCH_NODES = 500_000;
 const MAX_RECONSTRUCT_STEPS = 2_000;
+const NO_ATTACK_DISTANCE = 0;
+const ATTACK_MOVE_DISTANCE_FUDGE = 3 * MAP_XY_FACTOR;
+const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
+const ATTACK_LOS_TERRAIN_FUDGE = 0.5;
 
 const NAV_CLEAR = 0;
 const NAV_WATER = 1;
@@ -201,11 +220,12 @@ interface PathingOccupationResult {
   allyGoal: boolean;
 }
 
-const UNIT_NO_UNITS = 0;
-const UNIT_PRESENT_FIXED = 1;
-const UNIT_PRESENT_MOVING = 2;
-const UNIT_GOAL = 3;
-const UNIT_GOAL_OTHER_MOVING = 4;
+// PathfindCell::CellFlags values mirrored from GeneralsMD AIPathfind.h.
+const UNIT_NO_UNITS = 0x00;
+const UNIT_GOAL = 0x01;
+const UNIT_PRESENT_MOVING = 0x02;
+const UNIT_PRESENT_FIXED = 0x03;
+const UNIT_GOAL_OTHER_MOVING = 0x05;
 
 interface MovementOccupancyGrid {
   width: number;
@@ -213,7 +233,6 @@ interface MovementOccupancyGrid {
   flags: Uint8Array;
   unitIds: Int32Array;
   goalUnitIds: Int32Array;
-  unitIdsByCell: Map<number, number[]>;
 }
 
 interface BridgeSegmentState {
@@ -250,6 +269,9 @@ interface MapEntity {
   crushableLevel: number;
   canBeSquished: boolean;
   isUnmanned: boolean;
+  attackNeedsLineOfSight: boolean;
+  isImmobile: boolean;
+  largestWeaponRange: number;
   locomotorSets: Map<string, LocomotorSetProfile>;
   locomotorUpgradeTriggers: Set<string>;
   locomotorUpgradeEnabled: boolean;
@@ -257,6 +279,7 @@ interface MapEntity {
   locomotorSurfaceMask: number;
   locomotorDownhillOnly: boolean;
   pathDiameter: number;
+  pathfindCenterInCell: boolean;
   blocksPath: boolean;
   obstacleGeometry: ObstacleGeometry | null;
   obstacleFootprint: number;
@@ -274,6 +297,7 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
   renderUnknownObjects: true,
   defaultMoveSpeed: 18,
   terrainSnapSpeed: 6,
+  attackUsesLineOfSight: true,
 };
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
@@ -300,6 +324,9 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
+
+  private isAttackMoveToMode = false;
+  private previousAttackMoveToggleDown = false;
 
   private placementSummary: MapObjectPlacementSummary = {
     totalObjects: 0,
@@ -377,12 +404,19 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Minimal RTS interaction:
    * - Left click: select a spawned entity.
-   * - Right click: issue a move command to selected entity.
+   * - Right click: issue move/attack-move based on attack-move mode.
+   * - Press A (edge-triggered) to toggle one-shot attack-move mode.
    */
   handlePointerInput(
     input: InputState,
     camera: THREE.Camera,
   ): void {
+    const attackMoveToggleDown = input.keysDown.has('a');
+    if (attackMoveToggleDown && !this.previousAttackMoveToggleDown) {
+      this.isAttackMoveToMode = !this.isAttackMoveToMode;
+    }
+    this.previousAttackMoveToggleDown = attackMoveToggleDown;
+
     if (input.leftMouseClick) {
       const pickedEntityId = this.pickObjectByMouse(input, camera);
       if (pickedEntityId === null) {
@@ -394,12 +428,25 @@ export class GameLogicSubsystem implements Subsystem {
     if (input.rightMouseClick && this.selectedEntityId !== null) {
       const moveTarget = this.getMoveTargetFromMouse(input, camera);
       if (moveTarget !== null) {
-        this.submitCommand({
-          type: 'moveTo',
-          entityId: this.selectedEntityId,
-          targetX: moveTarget.x,
-          targetZ: moveTarget.z,
-        });
+        const selectedEntity = this.spawnedEntities.get(this.selectedEntityId);
+        const attackDistance = this.resolveAttackMoveDistance(selectedEntity);
+        if (this.isAttackMoveToMode) {
+          this.submitCommand({
+            type: 'attackMoveTo',
+            entityId: this.selectedEntityId,
+            targetX: moveTarget.x,
+            targetZ: moveTarget.z,
+            attackDistance,
+          });
+          this.isAttackMoveToMode = false;
+        } else {
+          this.submitCommand({
+            type: 'moveTo',
+            entityId: this.selectedEntityId,
+            targetX: moveTarget.x,
+            targetZ: moveTarget.z,
+          });
+        }
       }
     }
   }
@@ -591,6 +638,7 @@ export class GameLogicSubsystem implements Subsystem {
   ): MapEntity {
     const kindOf = objectDef?.kindOf;
     const category = this.inferCategory(kindOf, objectDef?.fields.KindOf);
+    const normalizedKindOf = this.normalizeKindOf(kindOf);
     const isResolved = objectDef !== undefined;
     const objectId = this.nextId++;
 
@@ -604,16 +652,19 @@ export class GameLogicSubsystem implements Subsystem {
 
     const locomotorSetProfiles = this.resolveLocomotorProfiles(objectDef, iniDataRegistry);
     const locomotorUpgradeTriggers = this.extractLocomotorUpgradeTriggers(objectDef);
+    const largestWeaponRange = this.resolveLargestWeaponRange(objectDef, iniDataRegistry);
     const locomotorProfile = locomotorSetProfiles.get(LOCOMOTORSET_NORMAL) ?? {
       surfaceMask: NO_SURFACES,
       downhillOnly: false,
       movementSpeed: 0,
     };
     const combatProfile = this.resolveCombatCollisionProfile(objectDef);
+    const attackNeedsLineOfSight = normalizedKindOf.has('ATTACK_NEEDS_LINE_OF_SIGHT');
+    const isImmobile = normalizedKindOf.has('IMMOBILE');
     const blocksPath = this.shouldPathfindObstacle(objectDef);
     const obstacleGeometry = blocksPath ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
-    const pathDiameter = this.resolvePathDiameter(category, objectDef, obstacleGeometry);
+    const { pathDiameter, pathfindCenterInCell } = this.resolvePathRadiusAndCenter(category, objectDef, obstacleGeometry);
     const mesh = new THREE.Mesh(geometry, material);
     const [worldX, worldY, worldZ] = this.objectToWorldPosition(mapObject, heightmap);
     const baseHeight = nominalHeight / 2;
@@ -648,6 +699,8 @@ export class GameLogicSubsystem implements Subsystem {
       crushableLevel: combatProfile.crushableLevel,
       canBeSquished: combatProfile.canBeSquished,
       isUnmanned: combatProfile.isUnmanned,
+      attackNeedsLineOfSight,
+      isImmobile,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
       locomotorSets: locomotorSetProfiles,
       locomotorUpgradeTriggers,
@@ -656,9 +709,11 @@ export class GameLogicSubsystem implements Subsystem {
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
       pathDiameter,
+      pathfindCenterInCell,
       blocksPath,
       obstacleGeometry,
       obstacleFootprint,
+      largestWeaponRange,
       ignoredMovementObstacleId: null,
       movePath: [],
       pathIndex: 0,
@@ -715,6 +770,147 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return true;
+  }
+
+  private resolveAttackMoveDistance(entity: MapEntity | undefined): number {
+    if (!entity || entity.largestWeaponRange === NO_ATTACK_DISTANCE) {
+      return NO_ATTACK_DISTANCE;
+    }
+
+    return entity.largestWeaponRange + ATTACK_MOVE_DISTANCE_FUDGE;
+  }
+
+  private resolveLargestWeaponRange(objectDef: ObjectDef | undefined, iniDataRegistry: IniDataRegistry): number {
+    if (!objectDef) {
+      return NO_ATTACK_DISTANCE;
+    }
+
+    const weaponNames = new Set<string>();
+    const collectWeaponNamesFromFieldValue = (value: IniValue | undefined): void => {
+      for (const tokens of this.extractIniValueTokens(value)) {
+        for (const weaponName of this.extractWeaponNamesFromTokens(tokens)) {
+          weaponNames.add(weaponName);
+        }
+      }
+    };
+
+    const collectWeaponFields = (fields: Record<string, IniValue>): void => {
+      for (const [fieldName, fieldValue] of Object.entries(fields)) {
+        if (fieldName.toUpperCase() !== 'WEAPON') {
+          continue;
+        }
+        collectWeaponNamesFromFieldValue(fieldValue);
+      }
+    };
+
+    collectWeaponFields(objectDef.fields);
+
+    const visitBlock = (block: IniBlock): void => {
+      collectWeaponFields(block.fields);
+
+      if (block.type.toUpperCase() === 'WEAPONSET') {
+        collectWeaponFields(block.fields);
+      }
+
+      for (const childBlock of block.blocks) {
+        visitBlock(childBlock);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    let largestWeaponRange = NO_ATTACK_DISTANCE;
+    for (const weaponName of weaponNames) {
+      const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+      if (!weapon) {
+        continue;
+      }
+      const weaponRange = readNumericField(weapon.fields, ['Range', 'AttackRange']);
+      if (weaponRange === null) {
+        continue;
+      }
+      const effectiveRange = weaponRange;
+      if (effectiveRange > largestWeaponRange) {
+        largestWeaponRange = effectiveRange;
+      }
+    }
+
+    return largestWeaponRange;
+  }
+
+  private findWeaponDefByName(iniDataRegistry: IniDataRegistry, weaponName: string): WeaponDef | undefined {
+    const direct = iniDataRegistry.getWeapon(weaponName);
+    if (direct) {
+      return direct;
+    }
+
+    const normalizedWeaponName = weaponName.toUpperCase();
+    for (const [registryWeaponName, weaponDef] of iniDataRegistry.weapons.entries()) {
+      if (registryWeaponName.toUpperCase() === normalizedWeaponName) {
+        return weaponDef;
+      }
+    }
+
+    return undefined;
+  }
+
+  private extractIniValueTokens(value: IniValue | undefined): string[][] {
+    if (typeof value === 'undefined') {
+      return [];
+    }
+    if (value === null) {
+      return [];
+    }
+    if (typeof value === 'string') {
+      return [value.split(/[\s,;|]+/).map((token) => token.trim()).filter(Boolean)];
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return [[String(value)]];
+    }
+    if (Array.isArray(value)) {
+      return value.flatMap((entry) => this.extractIniValueTokens(entry as IniValue));
+    }
+    return [];
+  }
+
+  private extractWeaponNamesFromTokens(tokens: string[]): string[] {
+    const filteredTokens = tokens.filter((token) => token.trim().length > 0).map((token) => token.trim());
+    if (filteredTokens.length === 0) {
+      return [];
+    }
+
+    const slotNames = new Set(['PRIMARY', 'SECONDARY', 'TERTIARY']);
+    const weapons: string[] = [];
+
+    let tokenIndex = 0;
+    while (tokenIndex < filteredTokens.length) {
+      const token = filteredTokens[tokenIndex]!;
+      const upperToken = token.toUpperCase();
+
+      if (slotNames.has(upperToken)) {
+        const weaponName = filteredTokens[tokenIndex + 1];
+        tokenIndex += 2;
+        if (weaponName === undefined) {
+          continue;
+        }
+        if (weaponName.toUpperCase() === 'NONE') {
+          continue;
+        }
+        weapons.push(weaponName);
+        continue;
+      }
+
+      if (upperToken === 'NONE') {
+        tokenIndex++;
+        continue;
+      }
+
+      weapons.push(token);
+      tokenIndex++;
+    }
+    return weapons;
   }
 
   private isMobileObject(objectDef: ObjectDef, kinds: Set<string>): boolean {
@@ -1322,6 +1518,14 @@ export class GameLogicSubsystem implements Subsystem {
       case 'moveTo':
         this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
         return;
+      case 'attackMoveTo':
+        this.issueMoveTo(
+          command.entityId,
+          command.targetX,
+          command.targetZ,
+          command.attackDistance,
+        );
+        return;
       case 'stop':
         this.stopEntity(command.entityId);
         return;
@@ -1345,12 +1549,17 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private issueMoveTo(entityId: number, targetX: number, targetZ: number): void {
+  private issueMoveTo(
+    entityId: number,
+    targetX: number,
+    targetZ: number,
+    attackDistance = NO_ATTACK_DISTANCE,
+  ): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.canMove) return;
 
     this.updatePathfindPosCell(entity);
-    const path = this.findPath(entity.mesh.position.x, entity.mesh.position.z, targetX, targetZ, entity);
+    const path = this.findPath(entity.mesh.position.x, entity.mesh.position.z, targetX, targetZ, entity, attackDistance);
     if (path.length === 0) {
       entity.moving = false;
       entity.moveTarget = null;
@@ -1402,7 +1611,14 @@ export class GameLogicSubsystem implements Subsystem {
     entity.pathfindPosCell = { x: cellX, z: cellZ };
   }
 
-  private findPath(startX: number, startZ: number, targetX: number, targetZ: number, mover?: MapEntity): VectorXZ[] {
+  private findPath(
+    startX: number,
+    startZ: number,
+    targetX: number,
+    targetZ: number,
+    mover?: MapEntity,
+    attackDistance = NO_ATTACK_DISTANCE,
+  ): VectorXZ[] {
     if (!this.navigationGrid) {
       return [{ x: targetX, z: targetZ }];
     }
@@ -1456,8 +1672,310 @@ export class GameLogicSubsystem implements Subsystem {
       fCost[i] = Number.POSITIVE_INFINITY;
     }
 
+    const estimateToGoal = (cellX: number, cellZ: number): number => {
+      if (attackDistance === NO_ATTACK_DISTANCE) {
+        return this.pathHeuristic(cellX, cellZ, effectiveGoal.x, effectiveGoal.z);
+      }
+
+      const heuristic = COST_ORTHOGONAL * Math.hypot(cellX - effectiveGoal.x, cellZ - effectiveGoal.z);
+      return Math.max(0, heuristic - attackDistance / 2);
+    };
+
+    const isWithinAttackDistance = (cellX: number, cellZ: number): boolean => {
+      if (attackDistance === NO_ATTACK_DISTANCE) {
+        return false;
+      }
+      const deltaX = (cellX - effectiveGoal.x) * PATHFIND_CELL_SIZE;
+      const deltaZ = (cellZ - effectiveGoal.z) * PATHFIND_CELL_SIZE;
+      const effectiveRange = Math.max(0, attackDistance - ATTACK_RANGE_CELL_EDGE_FUDGE);
+      return deltaX * deltaX + deltaZ * deltaZ <= effectiveRange * effectiveRange;
+    };
+
+    const needsAttackLineOfSight = this.config.attackUsesLineOfSight && !!mover?.attackNeedsLineOfSight;
+    const shouldCheckAttackTerrain = needsAttackLineOfSight && !mover?.isImmobile;
+
+    const isAttackLineBlockedByObstacle = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
+      if (!grid) {
+        return false;
+      }
+      const skipObstacleChecks = mover?.category === 'air' ? 3 : 0;
+
+      const fromCell = this.worldToGrid(fromX, fromZ);
+      const toCell = this.worldToGrid(toX, toZ);
+      if (fromCell[0] === null || fromCell[1] === null || toCell[0] === null || toCell[1] === null) {
+        return true;
+      }
+
+      const startCellX = fromCell[0];
+      const startCellZ = fromCell[1];
+      const endCellX = toCell[0];
+      const endCellZ = toCell[1];
+
+      if (startCellX === endCellX && startCellZ === endCellZ) {
+        return false;
+      }
+
+      const deltaX = Math.abs(endCellX - startCellX);
+      const deltaZ = Math.abs(endCellZ - startCellZ);
+
+      let xinc1 = 1;
+      let xinc2 = 1;
+      if (endCellX < startCellX) {
+        xinc1 = -1;
+        xinc2 = -1;
+      }
+
+      let zinc1 = 1;
+      let zinc2 = 1;
+      if (endCellZ < startCellZ) {
+        zinc1 = -1;
+        zinc2 = -1;
+      }
+
+      let den: number;
+      let num: number;
+      let numadd: number;
+      const numpixels = deltaX >= deltaZ ? deltaX : deltaZ;
+      if (deltaX >= deltaZ) {
+        xinc1 = 0;
+        zinc2 = 0;
+        den = deltaX;
+        num = Math.floor(deltaX / 2);
+        numadd = deltaZ;
+      } else {
+        xinc2 = 0;
+        zinc1 = 0;
+        den = deltaZ;
+        num = Math.floor(deltaZ / 2);
+        numadd = deltaX;
+      }
+
+      const skipObstacleChecksRef = { current: skipObstacleChecks };
+      const checkCell = (cellX: number, cellZ: number): boolean => {
+        if (skipObstacleChecksRef.current > 0) {
+          skipObstacleChecksRef.current -= 1;
+          return false;
+        }
+        if (!this.isCellInBounds(cellX, cellZ, grid)) {
+          return true;
+        }
+        const cellIndex = cellZ * grid.width + cellX;
+        if (grid.terrainType[cellIndex] === NAV_OBSTACLE) {
+          return true;
+        }
+        return false;
+      };
+
+      let x = startCellX;
+      let z = startCellZ;
+
+      for (let curpixel = 0; curpixel <= numpixels; curpixel++) {
+        if (checkCell(x, z)) {
+          return true;
+        }
+
+        num += numadd;
+        if (num >= den) {
+          num -= den;
+          x += xinc1;
+          z += zinc1;
+          if (checkCell(x, z)) {
+            return true;
+          }
+        }
+        x += xinc2;
+        z += zinc2;
+      }
+
+      return false;
+    };
+
+    const isAttackLineBlockedByTerrain = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
+      const heightmap = this.mapHeightmap;
+      if (!heightmap || !shouldCheckAttackTerrain) {
+        return false;
+      }
+
+      const [fromCellX, fromCellZ] = this.worldToGrid(fromX, fromZ);
+      const [toCellX, toCellZ] = this.worldToGrid(toX, toZ);
+      if (fromCellX === null || fromCellZ === null || toCellX === null || toCellZ === null) {
+        return false;
+      }
+
+      const maxWorldX = Math.max(0, heightmap.worldWidth - 0.0001);
+      const maxWorldZ = Math.max(0, heightmap.worldDepth - 0.0001);
+      const fromHeight = heightmap.getInterpolatedHeight(clamp(fromX, 0, maxWorldX), clamp(fromZ, 0, maxWorldZ));
+      const toHeight = heightmap.getInterpolatedHeight(clamp(toX, 0, maxWorldX), clamp(toZ, 0, maxWorldZ));
+      const rayDeltaHeight = toHeight - fromHeight;
+
+      const getCellTopHeight = (cellX: number, cellZ: number): number => {
+        const x0 = clamp(cellX, 0, heightmap.width - 2);
+        const z0 = clamp(cellZ, 0, heightmap.height - 2);
+        const x1 = x0 + 1;
+        const z1 = z0 + 1;
+        return Math.max(
+          heightmap.getRawHeight(x0, z0),
+          heightmap.getRawHeight(x1, z0),
+          heightmap.getRawHeight(x0, z1),
+          heightmap.getRawHeight(x1, z1),
+        ) * MAP_HEIGHT_SCALE;
+      };
+
+      const deltaX = Math.abs(toCellX - fromCellX);
+      const deltaZ = Math.abs(toCellZ - fromCellZ);
+      if (deltaX === 0 && deltaZ === 0) {
+        return false;
+      }
+
+      let xinc1 = 1;
+      let xinc2 = 1;
+      if (toCellX < fromCellX) {
+        xinc1 = -1;
+        xinc2 = -1;
+      }
+
+      let zinc1 = 1;
+      let zinc2 = 1;
+      if (toCellZ < fromCellZ) {
+        zinc1 = -1;
+        zinc2 = -1;
+      }
+
+      let den: number;
+      let num: number;
+      let numadd: number;
+      const numpixels = deltaX >= deltaZ ? deltaX : deltaZ;
+      if (deltaX >= deltaZ) {
+        xinc1 = 0;
+        zinc2 = 0;
+        den = deltaX;
+        num = Math.floor(deltaX / 2);
+        numadd = deltaZ;
+      } else {
+        xinc2 = 0;
+        zinc1 = 0;
+        den = deltaZ;
+        num = Math.floor(deltaZ / 2);
+        numadd = deltaX;
+      }
+
+      const isCellBlockedByTerrain = (cellX: number, cellZ: number, step: number): boolean => {
+        const terrainHeight = getCellTopHeight(cellX, cellZ);
+        const t = numpixels <= 0 ? 0 : step / numpixels;
+        const rayHeight = fromHeight + rayDeltaHeight * t;
+        return terrainHeight > rayHeight + ATTACK_LOS_TERRAIN_FUDGE;
+      };
+
+      let x = fromCellX;
+      let z = fromCellZ;
+      for (let curpixel = 0; curpixel <= numpixels; curpixel++) {
+        if (isCellBlockedByTerrain(x, z, curpixel)) {
+          return true;
+        }
+
+        num += numadd;
+        if (num >= den) {
+          num -= den;
+          x += xinc1;
+          z += zinc1;
+          if (isCellBlockedByTerrain(x, z, curpixel)) {
+            return true;
+          }
+        }
+        x += xinc2;
+        z += zinc2;
+      }
+
+      return false;
+    };
+
+    const isNearSelfForAttackMove = (cellX: number, cellZ: number): boolean => {
+      const threshold = PATHFIND_CELL_SIZE * 0.5;
+      const selfToCellX = this.gridToWorld(cellX, cellZ).x - startX;
+      const selfToCellZ = this.gridToWorld(cellX, cellZ).z - startZ;
+      return selfToCellX * selfToCellX + selfToCellZ * selfToCellZ < threshold * threshold;
+    };
+
+    const isAttackLineBlocked = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
+      if (!needsAttackLineOfSight) {
+        return false;
+      }
+      if (isAttackLineBlockedByTerrain(fromX, fromZ, toX, toZ)) {
+        return true;
+      }
+      if (isAttackLineBlockedByObstacle(fromX, fromZ, toX, toZ)) {
+        return true;
+      }
+      return false;
+    };
+
+    if (attackDistance !== NO_ATTACK_DISTANCE) {
+      const toTargetDeltaX = targetX - startX;
+      const toTargetDeltaZ = targetZ - startZ;
+      const targetDistance = Math.hypot(toTargetDeltaX, toTargetDeltaZ);
+      if (targetDistance > 0) {
+        const stepX = (toTargetDeltaX / targetDistance) * PATHFIND_CELL_SIZE;
+        const stepZ = (toTargetDeltaZ / targetDistance) * PATHFIND_CELL_SIZE;
+        for (let i = 1; i < 10; i++) {
+          const testX = startX + stepX * i * 0.5;
+          const testZ = startZ + stepZ * i * 0.5;
+          const [testCellX, testCellZ] = this.worldToGrid(testX, testZ);
+          if (testCellX === null || testCellZ === null) {
+            break;
+          }
+          if (!this.canOccupyCell(testCellX, testCellZ, movementProfile, grid)) {
+            break;
+          }
+          const dx = testX - targetX;
+          const dz = testZ - targetZ;
+          const testDistSqr = dx * dx + dz * dz;
+          if (testDistSqr > attackDistance * attackDistance) {
+            continue;
+          }
+          if (isNearSelfForAttackMove(testCellX, testCellZ)) {
+            continue;
+          }
+          if (isAttackLineBlocked(startX, startZ, testX, testZ)) {
+            continue;
+          }
+          return [{ x: startX, z: startZ }, { x: testX, z: testZ }];
+        }
+      }
+    }
+
+    const buildPathFromGoal = (resolvedGoalIndex: number): VectorXZ[] => {
+      const pathCells = this.reconstructPath(parent, startIndex, resolvedGoalIndex);
+      if (grid.pinched[resolvedGoalIndex] === 1) {
+        const resolvedGoalParentIndex = parent[resolvedGoalIndex];
+        if (
+          resolvedGoalParentIndex !== undefined
+          && resolvedGoalParentIndex >= 0
+          && grid.pinched[resolvedGoalParentIndex] === 0
+        ) {
+          pathCells.pop();
+        }
+      }
+    const smoothed = this.smoothCellPath(
+      pathCells,
+      movementProfile,
+      mover,
+      movementOccupancy,
+      attackDistance === NO_ATTACK_DISTANCE,
+    );
+      const pathWorld = smoothed.map((cell) => this.gridToWorld(cell.x, cell.z));
+      if (pathWorld.length === 0) {
+        return [{ x: startX, z: startZ }];
+      }
+
+      const first = pathWorld[0];
+      if (first && (Math.abs(first.x - startX) > 0.0001 || Math.abs(first.z - startZ) > 0.0001)) {
+        pathWorld.unshift({ x: startX, z: startZ });
+      }
+      return pathWorld;
+    };
+
     gCost[startIndex] = 0;
-    fCost[startIndex] = this.pathHeuristic(effectiveStart.x, effectiveStart.z, effectiveGoal.x, effectiveGoal.z);
+    fCost[startIndex] = estimateToGoal(effectiveStart.x, effectiveStart.z);
     open.push(startIndex);
     inOpen[startIndex] = 1;
 
@@ -1499,28 +2017,23 @@ export class GameLogicSubsystem implements Subsystem {
       inOpen[currentIndex] = 0;
       inClosed[currentIndex] = 1;
 
-      if (currentIndex === goalIndex) {
-        const pathCells = this.reconstructPath(parent, startIndex, goalIndex);
-        if (grid.pinched[goalIndex] === 1) {
-          const goalParentIndex = parent[goalIndex];
-          if (goalParentIndex !== undefined && goalParentIndex >= 0 && grid.pinched[goalParentIndex] === 0) {
-            pathCells.pop();
-          }
+      const [currentCellX, currentCellZ] = this.gridFromIndex(currentIndex);
+      if (
+        attackDistance !== NO_ATTACK_DISTANCE
+        && currentIndex !== startIndex
+        && isWithinAttackDistance(currentCellX, currentCellZ)
+        && !isNearSelfForAttackMove(currentCellX, currentCellZ)
+      ) {
+        const currentWorld = this.gridToWorld(currentCellX, currentCellZ);
+        if (!isAttackLineBlocked(startX, startZ, currentWorld.x, currentWorld.z)) {
+          return buildPathFromGoal(currentIndex);
         }
-        const smoothed = this.smoothCellPath(pathCells, movementProfile);
-        const pathWorld = smoothed.map((cell) => this.gridToWorld(cell.x, cell.z));
-        if (pathWorld.length === 0) {
-          return [{ x: startX, z: startZ }];
-        }
-
-        const first = pathWorld[0]!;
-        if (Math.abs(first.x - startX) > 0.0001 || Math.abs(first.z - startZ) > 0.0001) {
-          pathWorld.unshift({ x: startX, z: startZ });
-        }
-        return pathWorld;
       }
 
-      const [currentCellX, currentCellZ] = this.gridFromIndex(currentIndex);
+      if (currentIndex === goalIndex && attackDistance === NO_ATTACK_DISTANCE) {
+        return buildPathFromGoal(goalIndex);
+      }
+
       const parentCellIndex = parent[currentIndex];
       let parentCellX: number | undefined;
       let parentCellZ: number | undefined;
@@ -1544,6 +2057,7 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
         const neighborIndex = neighborZ * grid.width + neighborX;
+        const alreadyOnList = inOpen[neighborIndex] === 1 || inClosed[neighborIndex] === 1;
         const notZonePassable = ((movementProfile.acceptableSurfaces & LOCOMOTORSURFACE_GROUND) !== 0)
           && !this.isZonePassable(neighborX, neighborZ, grid);
 
@@ -1553,11 +2067,6 @@ export class GameLogicSubsystem implements Subsystem {
         if (!this.canMoveToCell(currentCellX, currentCellZ, neighborX, neighborZ, movementProfile)) {
           continue;
         }
-        const onList = inOpen[neighborIndex] === 1 || inClosed[neighborIndex] === 1;
-        if (onList) {
-          continue;
-        }
-
         if (i >= 4) {
           const side1Index = adjacent[i - 4];
           const side2Index = adjacent[i - 3];
@@ -1605,6 +2114,15 @@ export class GameLogicSubsystem implements Subsystem {
           stepCost += 3 * COST_DIAGONAL;
         }
 
+        let costRemaining = estimateToGoal(neighborX, neighborZ);
+        if (attackDistance !== NO_ATTACK_DISTANCE && occupation.allyGoal) {
+          if (mover?.category === 'vehicle') {
+            stepCost += 3 * COST_ORTHOGONAL;
+          } else {
+            stepCost += COST_ORTHOGONAL;
+          }
+        }
+
         if (neighborIndex !== goalIndex && movementProfile.pathDiameter > 0 && clearDiameter < movementProfile.pathDiameter) {
           const delta = movementProfile.pathDiameter - clearDiameter;
           stepCost += 0.6 * (delta * COST_ORTHOGONAL);
@@ -1622,10 +2140,10 @@ export class GameLogicSubsystem implements Subsystem {
             const prevDirX = parentCellX - currentCellX;
             const prevDirZ = parentCellZ - currentCellZ;
             const nextDirX = grandCellX - parentCellX;
-            const nextDirY = grandCellZ - parentCellZ;
+            const nextDirZ = grandCellZ - parentCellZ;
 
-            if (prevDirX !== nextDirX || prevDirZ !== nextDirY) {
-              const dot = prevDirX * nextDirX + prevDirZ * nextDirY;
+            if (prevDirX !== nextDirX || prevDirZ !== nextDirZ) {
+              const dot = prevDirX * nextDirX + prevDirZ * nextDirZ;
               if (dot > 0) {
                 stepCost += 4;
               } else if (dot === 0) {
@@ -1649,8 +2167,14 @@ export class GameLogicSubsystem implements Subsystem {
 
         parent[neighborIndex] = currentIndex;
         gCost[neighborIndex] = tentativeG;
-        fCost[neighborIndex] = tentativeG + this.pathHeuristic(neighborX, neighborZ, effectiveGoal.x, effectiveGoal.z);
-        if (inOpen[neighborIndex] === 0) {
+        fCost[neighborIndex] = tentativeG + costRemaining;
+        if (alreadyOnList) {
+          if (inClosed[neighborIndex] === 1) {
+            inClosed[neighborIndex] = 0;
+            open.push(neighborIndex);
+            inOpen[neighborIndex] = 1;
+          }
+        } else {
           open.push(neighborIndex);
           inOpen[neighborIndex] = 1;
         }
@@ -1678,6 +2202,12 @@ export class GameLogicSubsystem implements Subsystem {
       avoidPinched: false,
       pathDiameter,
     };
+  }
+
+  private getPathfindRadiusAndCenter(entity?: MapEntity): { pathRadius: number; centerInCell: boolean } {
+    const pathRadius = Math.max(0, Math.trunc((entity as { pathDiameter?: number } | undefined)?.pathDiameter ?? 0));
+    const centerInCell = entity?.pathfindCenterInCell ?? ((pathRadius & 1) === 1);
+    return { pathRadius, centerInCell };
   }
 
   private canMoveToCell(
@@ -1739,8 +2269,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const occupancy = movementOccupancy ?? this.buildMovementOccupancyGrid(grid);
 
-    const movementRadius = Math.max(0, Math.floor(mover.pathDiameter ?? 0));
-    const centerInCell = (movementRadius & 1) === 1;
+    const { pathRadius: movementRadius, centerInCell } = this.getPathfindRadiusAndCenter(mover);
     const numCellsAbove = movementRadius === 0
       ? 1
       : movementRadius + (centerInCell ? 1 : 0);
@@ -1764,72 +2293,68 @@ export class GameLogicSubsystem implements Subsystem {
         }
 
         const flags = occupancy.flags[cellIndex] ?? UNIT_NO_UNITS;
+        const posUnit = occupancy.unitIds[cellIndex] ?? -1;
         if (flags === UNIT_GOAL || flags === UNIT_GOAL_OTHER_MOVING) {
           result.allyGoal = true;
         }
-
-        const cellUnits = occupancy.unitIdsByCell.get(cellIndex) ?? [];
-        if (flags === UNIT_NO_UNITS || cellUnits.length === 0) {
+        if (flags === UNIT_NO_UNITS) {
+          continue;
+        }
+        if (posUnit === mover.id) {
+          continue;
+        }
+        if (ignoredObstacleId !== null && posUnit === ignoredObstacleId) {
           continue;
         }
 
-        for (const posUnit of cellUnits) {
-          if (posUnit === mover.id) {
-            continue;
-          }
-          if (ignoredObstacleId !== null && posUnit === ignoredObstacleId) {
-            continue;
-          }
+        const unit = this.spawnedEntities.get(posUnit);
+        if (!unit) {
+          continue;
+        }
 
-          const unit = this.spawnedEntities.get(posUnit);
-          if (!unit) {
-            continue;
+        let check = false;
+        if (flags === UNIT_PRESENT_MOVING || flags === UNIT_GOAL_OTHER_MOVING) {
+          const isAlly = this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES;
+          if (isAlly) {
+            result.allyMoving = true;
           }
-
-          const unitFlag = unit.moving ? UNIT_PRESENT_MOVING : UNIT_PRESENT_FIXED;
-          let check = false;
-          if (unitFlag === UNIT_PRESENT_MOVING || unitFlag === UNIT_GOAL_OTHER_MOVING) {
-            if (this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES) {
-              result.allyMoving = true;
-            }
-            if (considerTransient) {
-              check = true;
-            }
-          }
-
-          if (unitFlag === UNIT_PRESENT_FIXED) {
+          if (considerTransient) {
             check = true;
           }
+        }
 
-          if (check && mover.ignoredMovementObstacleId !== null && mover.ignoredMovementObstacleId === unit.id) {
-            check = false;
-          }
+        if (flags === UNIT_PRESENT_FIXED) {
+          check = true;
+        }
 
-          if (!check) {
-            continue;
-          }
+        if (check && mover.ignoredMovementObstacleId !== null && mover.ignoredMovementObstacleId === unit.id) {
+          check = false;
+        }
 
-          if (this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES) {
-            if (!unit.canMove) {
-              result.enemyFixed = true;
-              return result;
-            }
-            if (unit.moving) {
-              result.enemyFixed = true;
-              return result;
-            }
-            if (!allies.includes(unit.id)) {
-              result.allyFixedCount += 1;
-              if (allies.length < maxAlly) {
-                allies.push(unit.id);
-              }
-            }
-            continue;
-          }
+        if (!check) {
+          continue;
+        }
 
-          if (!this.canCrushOrSquish(mover, unit)) {
+        if (mover.category === 'infantry' && unit.category === 'infantry') {
+          continue;
+        }
+
+        if (this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES) {
+          if (!unit.canMove || (considerTransient && unit.moving)) {
             result.enemyFixed = true;
+            return result;
           }
+          if (!allies.includes(unit.id)) {
+            result.allyFixedCount += 1;
+            if (allies.length < maxAlly) {
+              allies.push(unit.id);
+            }
+          }
+          continue;
+        }
+
+        if (!this.canCrushOrSquish(mover, unit)) {
+          result.enemyFixed = true;
         }
       }
     }
@@ -1842,7 +2367,6 @@ export class GameLogicSubsystem implements Subsystem {
     const flags = new Uint8Array(total);
     const unitIds = new Int32Array(total);
     const goalUnitIds = new Int32Array(total);
-    const unitIdsByCell = new Map<number, number[]>();
     unitIds.fill(-1);
     goalUnitIds.fill(-1);
 
@@ -1856,32 +2380,31 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const entityRadius = Math.max(
-        Math.max(0, Math.floor((entity.pathDiameter ?? 0) / 2)),
-        Math.max(0, Math.floor(entity.obstacleFootprint ?? 0)),
-      );
+      const { pathRadius: entityRadius, centerInCell } = this.getPathfindRadiusAndCenter(entity);
+      const numCellsAbove = entityRadius === 0 ? 1 : entityRadius + (centerInCell ? 1 : 0);
 
       const flag = entity.moving ? UNIT_PRESENT_MOVING : UNIT_PRESENT_FIXED;
-      for (let i = entityPosCell.x - entityRadius; i <= entityPosCell.x + entityRadius; i++) {
-        for (let j = entityPosCell.z - entityRadius; j <= entityPosCell.z + entityRadius; j++) {
+      for (let i = entityPosCell.x - entityRadius; i < entityPosCell.x + numCellsAbove; i++) {
+        for (let j = entityPosCell.z - entityRadius; j < entityPosCell.z + numCellsAbove; j++) {
           if (!this.isCellInBounds(i, j, grid)) {
             continue;
           }
           const index = j * grid.width + i;
-          const unitsInCell = unitIdsByCell.get(index);
-          if (unitsInCell) {
-            unitsInCell.push(entity.id);
-          } else {
-            unitIdsByCell.set(index, [entity.id]);
-          }
-          const currentFlag = flags[index] ?? UNIT_NO_UNITS;
-          if (currentFlag === UNIT_PRESENT_FIXED) {
+          const posUnit = unitIds[index] ?? -1;
+          if (posUnit === entity.id) {
             continue;
           }
-          if (flag === UNIT_PRESENT_FIXED || currentFlag === UNIT_NO_UNITS) {
+
+          const goalUnit = goalUnitIds[index] ?? -1;
+          if (goalUnit === entity.id) {
+            flags[index] = UNIT_PRESENT_FIXED;
+          } else if (goalUnit === -1) {
             flags[index] = flag;
-            unitIds[index] = entity.id;
+          } else {
+            flags[index] = UNIT_GOAL_OTHER_MOVING;
           }
+
+          unitIds[index] = entity.id;
         }
       }
     }
@@ -1891,8 +2414,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!goal) {
         continue;
       }
-      const movementRadius = Math.max(0, Math.floor(entity.pathDiameter ?? 0));
-      const centerInCell = (movementRadius & 1) === 1;
+      const { pathRadius: movementRadius, centerInCell } = this.getPathfindRadiusAndCenter(entity);
       const numCellsAbove = movementRadius === 0
         ? 1
         : movementRadius + (centerInCell ? 1 : 0);
@@ -1909,16 +2431,19 @@ export class GameLogicSubsystem implements Subsystem {
 
           const posUnit = unitIds[index] ?? -1;
           if (posUnit === entity.id) {
-            flags[index] = UNIT_PRESENT_FIXED;
-          } else if (posUnit === -1) {
-            flags[index] = UNIT_GOAL;
-          } else {
-            flags[index] = UNIT_GOAL_OTHER_MOVING;
+            if (entity.pathfindGoalCell) {
+              flags[index] = UNIT_GOAL_OTHER_MOVING;
+            } else {
+              flags[index] = UNIT_PRESENT_FIXED;
+            }
+            goalUnitIds[index] = entity.id;
+            continue;
           }
+
+          flags[index] = posUnit === -1 ? UNIT_GOAL : UNIT_GOAL_OTHER_MOVING;
+          goalUnitIds[index] = entity.id;
         }
       }
-
-      // TODO(source): Port exact `updateGoal/removeGoal` lifecycle parity from original pathfind map updates.
     }
 
     return {
@@ -1927,7 +2452,6 @@ export class GameLogicSubsystem implements Subsystem {
       flags,
       unitIds,
       goalUnitIds,
-      unitIdsByCell,
     };
   }
 
@@ -2020,6 +2544,9 @@ export class GameLogicSubsystem implements Subsystem {
   private smoothCellPath(
     cells: { x: number; z: number }[],
     profile: PathfindingProfile,
+    mover?: MapEntity,
+    movementOccupancy?: MovementOccupancyGrid,
+    preserveAllyGoalCells = false,
   ): { x: number; z: number }[] {
     if (cells.length <= 2) {
       return cells;
@@ -2029,7 +2556,12 @@ export class GameLogicSubsystem implements Subsystem {
     let anchor = 0;
     let candidate = 2;
     smoothed.push(cells[0]!);
-    const optimizeProfile: PathfindingProfile = { ...profile };
+    const optimizeProfile: PathfindingProfile = {
+      ...profile,
+      // Match source Path::optimize() behavior for LOS: allow pinched cells while
+      // line-of-sight evaluating and defer pinched handling to movement checks.
+      avoidPinched: false,
+    };
 
     while (anchor < cells.length - 1) {
       if (candidate >= cells.length) {
@@ -2043,7 +2575,29 @@ export class GameLogicSubsystem implements Subsystem {
         break;
       }
 
-      if (this.gridLineClear(cells[anchor]!, cells[candidate]!, this.navigationGrid, optimizeProfile)) {
+      if (this.gridLineClear(
+        cells[anchor]!,
+        cells[candidate]!,
+        this.navigationGrid,
+        optimizeProfile,
+        mover,
+        movementOccupancy,
+      )) {
+        if (
+          preserveAllyGoalCells
+          && this.pathSegmentContainsAllyGoal(cells, anchor, candidate, movementOccupancy, this.navigationGrid)
+        ) {
+          if (candidate - anchor > 1) {
+            smoothed.push(cells[candidate - 1]!);
+            anchor = candidate - 1;
+            candidate = anchor + 2;
+          } else {
+            candidate += 1;
+          }
+          continue;
+        }
+        candidate += 1;
+      } else if (this.canBypassClearanceFailureAsMonotonicSegment(cells, anchor, candidate)) {
         candidate += 1;
       } else {
         smoothed.push(cells[candidate - 1]!);
@@ -2055,43 +2609,227 @@ export class GameLogicSubsystem implements Subsystem {
     return smoothed;
   }
 
+  private pathSegmentContainsAllyGoal(
+    cells: { x: number; z: number }[],
+    startIndex: number,
+    endIndex: number,
+    movementOccupancy?: MovementOccupancyGrid,
+    grid?: NavigationGrid | null,
+  ): boolean {
+    if (!movementOccupancy || endIndex - startIndex <= 1) {
+      return false;
+    }
+
+    for (let i = startIndex + 1; i < endIndex; i++) {
+      const cell = cells[i];
+      if (!cell) {
+        continue;
+      }
+      if (!this.isCellInBounds(cell.x, cell.z, grid ?? this.navigationGrid)) {
+        return true;
+      }
+      const index = cell.z * movementOccupancy.width + cell.x;
+      if (index < 0 || index >= movementOccupancy.flags.length) {
+        return true;
+      }
+      const flags = movementOccupancy.flags[index];
+      if (flags === UNIT_GOAL || flags === UNIT_GOAL_OTHER_MOVING) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private canBypassClearanceFailureAsMonotonicSegment(
+    cells: { x: number; z: number }[],
+    anchorIndex: number,
+    candidateIndex: number,
+  ): boolean {
+    if (anchorIndex < 0 || candidateIndex <= anchorIndex || candidateIndex >= cells.length) {
+      return false;
+    }
+
+    const anchor = cells[anchorIndex];
+    const candidate = cells[candidateIndex];
+    if (!anchor || !candidate) {
+      return false;
+    }
+
+    const deltaX = candidate.x - anchor.x;
+    const deltaZ = candidate.z - anchor.z;
+    if (deltaX === 0) {
+      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
+        const prev = cells[i - 1];
+        const cur = cells[i];
+        if (!prev || !cur || cur.x - prev.x !== 0) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (deltaZ === 0) {
+      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
+        const prev = cells[i - 1];
+        const cur = cells[i];
+        if (!prev || !cur || cur.z - prev.z !== 0) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (deltaX === deltaZ) {
+      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
+        const prev = cells[i - 1];
+        const cur = cells[i];
+        if (!prev || !cur || cur.z - prev.z !== cur.x - prev.x) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (deltaX === -deltaZ) {
+      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
+        const prev = cells[i - 1];
+        const cur = cells[i];
+        if (!prev || !cur || cur.z - prev.z !== - (cur.x - prev.x)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   private gridLineClear(
     start: { x: number; z: number },
     end: { x: number; z: number },
     grid: NavigationGrid | null,
     profile: PathfindingProfile,
+    mover?: MapEntity,
+    movementOccupancy?: MovementOccupancyGrid,
   ): boolean {
     if (!grid) return false;
+    const effectiveStart = start;
+    if (start.x === end.x && start.z === end.z) {
+      if (mover) {
+        const occupation = this.checkForMovement(
+          start.x,
+          start.z,
+          mover,
+          grid,
+          effectiveStart,
+          0,
+          false,
+          movementOccupancy,
+        );
+        if (occupation.enemyFixed || occupation.allyFixedCount > 0) {
+          return false;
+        }
+      }
+      if (profile.avoidPinched && grid.pinched[start.z * grid.width + start.x] === 1) {
+        return false;
+      }
+      if (!this.canLineOfSightOccupyCell(start.x, start.z, profile, grid)) {
+        return false;
+      }
+      return true;
+    }
+
+    const deltaX = Math.abs(end.x - start.x);
+    const deltaZ = Math.abs(end.z - start.z);
+
+    let xinc1: number;
+    let xinc2: number;
+    if (end.x >= start.x) {
+      xinc1 = 1;
+      xinc2 = 1;
+    } else {
+      xinc1 = -1;
+      xinc2 = -1;
+    }
+
+    let zinc1: number;
+    let zinc2: number;
+    if (end.z >= start.z) {
+      zinc1 = 1;
+      zinc2 = 1;
+    } else {
+      zinc1 = -1;
+      zinc2 = -1;
+    }
+
+    let den: number;
+    let num: number;
+    let numadd: number;
+    const numpixels = deltaX >= deltaZ ? deltaX : deltaZ;
+    if (deltaX >= deltaZ) {
+      xinc1 = 0;
+      zinc2 = 0;
+      den = deltaX;
+      num = Math.floor(deltaX / 2);
+      numadd = deltaZ;
+    } else {
+      xinc2 = 0;
+      zinc1 = 0;
+      den = deltaZ;
+      num = Math.floor(deltaZ / 2);
+      numadd = deltaX;
+    }
+
+    const checkCell = (
+      cellX: number,
+      cellZ: number,
+    ): boolean => {
+      if (mover) {
+        const occupation = this.checkForMovement(
+          cellX,
+          cellZ,
+          mover,
+          grid,
+          effectiveStart,
+          0,
+          false,
+          movementOccupancy,
+        );
+        if (occupation.enemyFixed || occupation.allyFixedCount > 0) {
+          return false;
+        }
+      }
+      if (profile.avoidPinched && grid.pinched[cellZ * grid.width + cellX] === 1) {
+        return false;
+      }
+      if (!this.canLineOfSightOccupyCell(cellX, cellZ, profile, grid)) {
+        return false;
+      }
+      return true;
+    };
+
     let x = start.x;
     let z = start.z;
-    const dx = Math.abs(end.x - start.x);
-    const dz = Math.abs(end.z - start.z);
-    const stepX = start.x < end.x ? 1 : -1;
-    const stepZ = start.z < end.z ? 1 : -1;
-    let err = dx - dz;
 
-    while (!(x === end.x && z === end.z)) {
-      const twoErr = 2 * err;
-      let nextX = x;
-      let nextZ = z;
-      if (twoErr > -dz) {
-        err -= dz;
-        nextX += stepX;
-      }
-      if (twoErr < dx) {
-        err += dx;
-        nextZ += stepZ;
-      }
-
-      if (!this.canOccupyCell(nextX, nextZ, profile, grid, true)) {
+    for (let curpixel = 0; curpixel <= numpixels; curpixel++) {
+      if (!checkCell(x, z)) {
         return false;
       }
-      if (!this.canTraverseBridgeTransition(x, z, nextX, nextZ, profile, grid)) {
-        return false;
+
+      num += numadd;
+      if (num >= den) {
+        num -= den;
+        x += xinc1;
+        z += zinc1;
+        if (!checkCell(x, z)) {
+          return false;
+        }
       }
-      x = nextX;
-      z = nextZ;
+      x += xinc2;
+      z += zinc2;
     }
+
     return true;
   }
 
@@ -2115,6 +2853,21 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return true;
+  }
+
+  private canLineOfSightOccupyCell(
+    cellX: number,
+    cellZ: number,
+    profile: PathfindingProfile,
+    nav: NavigationGrid | null = this.navigationGrid,
+  ): boolean {
+    // Mirrors source Pathfinder::validMovementPosition flow used by line-of-sight checks:
+    // occupancy and bridge checks already happened in gridLineClear; this checks
+    // terrain/surface compatibility only.
+    if (!nav || !this.isCellInBounds(cellX, cellZ, nav)) {
+      return false;
+    }
+    return this.canOccupyCellCenter(cellX, cellZ, profile, nav);
   }
 
   private clearCellForDiameter(
@@ -2923,13 +3676,13 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private resolvePathDiameter(
+  private resolvePathRadiusAndCenter(
     category: ObjectCategory,
     objectDef?: ObjectDef,
     obstacleGeometry?: ObstacleGeometry | null,
-  ): number {
+  ): { pathDiameter: number; pathfindCenterInCell: boolean } {
     if (!objectDef) {
-      return 0;
+      return { pathDiameter: 0, pathfindCenterInCell: true };
     }
 
     const geometryRadius = this.pathDiameterFromGeometryFields(objectDef);
@@ -2944,7 +3697,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     if (maxRadius === null || maxRadius <= 0) {
-      return 0;
+      return { pathDiameter: 0, pathfindCenterInCell: true };
     }
 
     let pathDiameter = 2 * maxRadius;
@@ -2956,13 +3709,15 @@ export class GameLogicSubsystem implements Subsystem {
     if (iRadius === 0) {
       iRadius = 1;
     }
+    const center = (iRadius & 1) === 1;
     iRadius = Math.floor(iRadius / 2);
+    const cappedCenter = iRadius > 2 ? true : center;
     iRadius = Math.min(iRadius, 2);
     if (iRadius <= 0) {
-      return 0;
+      return { pathDiameter: 0, pathfindCenterInCell: cappedCenter };
     }
 
-    return iRadius;
+    return { pathDiameter: iRadius, pathfindCenterInCell: cappedCenter };
   }
 
   private pathDiameterFromGeometryFields(objectDef: ObjectDef): number | null {
@@ -2992,11 +3747,13 @@ export class GameLogicSubsystem implements Subsystem {
 
   private isMapCellInBounds(cellX: number, cellZ: number): boolean {
     if (!this.mapHeightmap) return false;
+    const mapCellWidth = Math.max(1, this.mapHeightmap.width - 1);
+    const mapCellHeight = Math.max(1, this.mapHeightmap.height - 1);
     return (
       cellX >= 0 &&
-      cellX < this.mapHeightmap.width - 1 &&
+      cellX < mapCellWidth &&
       cellZ >= 0 &&
-      cellZ < this.mapHeightmap.height - 1
+      cellZ < mapCellHeight
     );
   }
 
@@ -3303,10 +4060,11 @@ function readNumericField(fields: Record<string, IniValue>, names: string[]): nu
 }
 
 function toByte(value: number | null | undefined): number {
-  if (!Number.isFinite(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return 0;
   }
-  return Math.max(0, Math.min(255, Math.trunc(value)));
+  const normalized = Math.trunc(value);
+  return Math.max(0, Math.min(255, normalized));
 }
 
 function readNumericListField(fields: Record<string, IniValue>, names: string[]): number[] | null {

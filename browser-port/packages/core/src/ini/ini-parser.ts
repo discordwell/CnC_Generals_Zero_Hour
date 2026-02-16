@@ -71,6 +71,7 @@ interface TokenizedLine {
 const SINGLETON_BLOCK_TYPES = new Set([
   'GameData', 'MiscAudio', 'InGameUI', 'DrawGroupInfo',
   'MultiplayerSettings', 'Weather', 'AnimationSoundClientBehaviorGlobalSetting',
+  'AI',
 ]);
 
 /**
@@ -390,6 +391,7 @@ const TOP_LEVEL_BLOCK_TYPES = new Set([
   'EvaEvent', 'WebpageURL', 'InGameUI', 'ControlBarScheme',
   'ControlBarResizer', 'ShellMenuScheme', 'MiscAudio',
   'AnimationSoundClientBehaviorGlobalSetting',
+  'AI',
 ]);
 
 function isBlockStart(token: string): boolean {
