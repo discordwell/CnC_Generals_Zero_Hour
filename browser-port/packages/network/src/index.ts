@@ -55,6 +55,14 @@ type TransportLike = {
   sendLocalCommandDirect?: (command: unknown, relayMask: number) => void;
 };
 
+type TransportMetricName =
+  | 'getIncomingBytesPerSecond'
+  | 'getIncomingPacketsPerSecond'
+  | 'getOutgoingBytesPerSecond'
+  | 'getOutgoingPacketsPerSecond'
+  | 'getUnknownBytesPerSecond'
+  | 'getUnknownPacketsPerSecond';
+
 const MAX_FRAME_RATE = 300;
 const MAX_SLOTS = 16;
 const DEFAULT_FRAME_RATE = 30;
@@ -1707,6 +1715,10 @@ export class NetworkManager implements Subsystem {
       };
     }
 
+    if (data === null) {
+      return null;
+    }
+
     const chunkData = data;
 
     if (chunkData.byteLength + dataOffset > totalDataLength) {
@@ -2388,7 +2400,7 @@ export class NetworkManager implements Subsystem {
     return this.getPingsRecieved();
   }
 
-  private callTransportMetric(name: keyof TransportLike): number {
+  private callTransportMetric(name: TransportMetricName): number {
     const transport = this.transport as TransportLike | null;
     if (!transport) {
       return 0;
