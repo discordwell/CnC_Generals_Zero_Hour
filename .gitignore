@@ -129,4 +129,7 @@ soft_oal.dll
 *.ogg
 
 # Game specific
-Generals/bin/backup/ 
+Generals/bin/backup/
+
+# Local session-state artifacts
+.ralph/session-state-allowlow.md

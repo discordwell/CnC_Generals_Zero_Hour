@@ -13,7 +13,11 @@
   "references": [
     { "path": "../core" },
     { "path": "../assets" },
+    { "path": "../audio" },
+    { "path": "../network" },
     { "path": "../terrain" },
+    { "path": "../renderer" },
+    { "path": "../ui" },
     { "path": "../input" },
     { "path": "../ini-data" },
     { "path": "../game-logic" }

@@ -2114,7 +2114,7 @@ export class GameLogicSubsystem implements Subsystem {
           stepCost += 3 * COST_DIAGONAL;
         }
 
-        let costRemaining = estimateToGoal(neighborX, neighborZ);
+        const costRemaining = estimateToGoal(neighborX, neighborZ);
         if (attackDistance !== NO_ATTACK_DISTANCE && occupation.allyGoal) {
           if (mover?.category === 'vehicle') {
             stepCost += 3 * COST_ORTHOGONAL;

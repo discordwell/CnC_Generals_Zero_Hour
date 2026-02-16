@@ -9,11 +9,14 @@
 import * as THREE from 'three';
 import { GameLoop, SubsystemRegistry } from '@generals/core';
 import { AssetManager } from '@generals/assets';
-import { TerrainVisual, WaterVisual } from '@generals/terrain';
-import type { MapDataJSON } from '@generals/terrain';
+import { TerrainVisual, WaterVisual } from '@generals/renderer';
+import type { MapDataJSON } from '@generals/renderer';
 import { InputManager, RTSCamera } from '@generals/input';
+import { AudioManager, initializeAudioContext } from '@generals/audio';
 import { IniDataRegistry, type IniDataBundle } from '@generals/ini-data';
+import { initializeNetworkClient } from '@generals/network';
 import { GameLogicSubsystem } from '@generals/game-logic';
+import { UiRuntime, initializeUiOverlay } from '@generals/ui';
 
 // ============================================================================
 // Loading screen
@@ -33,6 +36,10 @@ function setLoadingProgress(percent: number, status: string): void {
 // ============================================================================
 
 async function init(): Promise<void> {
+  initializeAudioContext();
+  const networkManager = initializeNetworkClient({ forceSinglePlayer: true });
+  initializeUiOverlay();
+
   setLoadingProgress(10, 'Creating renderer...');
 
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -101,7 +108,17 @@ async function init(): Promise<void> {
   const waterVisual = new WaterVisual(scene);
   subsystems.register(waterVisual);
 
-  let gameLogic: GameLogicSubsystem;
+  // Audio
+  const audioManager = new AudioManager({ debugLabel: '@generals/audio' });
+  subsystems.register(audioManager);
+
+  // Network
+  subsystems.register(networkManager);
+
+  // UI
+  const uiRuntime = new UiRuntime({ enableDebugOverlay: true });
+  subsystems.register(uiRuntime);
+
 
   // ========================================================================
   // Game data (INI bundle)
@@ -137,7 +154,7 @@ async function init(): Promise<void> {
 
   // Game logic + object visuals
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
-  gameLogic = new GameLogicSubsystem(scene, { attackUsesLineOfSight });
+  const gameLogic = new GameLogicSubsystem(scene, { attackUsesLineOfSight });
   subsystems.register(gameLogic);
 
   await subsystems.initAll();
@@ -268,6 +285,9 @@ async function init(): Promise<void> {
         : 'none';
       const wireInfo = terrainVisual.isWireframe() ? ' [wireframe]' : '';
       const selectedInfo = gameLogic.getSelectedEntityId();
+      uiRuntime.setSelectedObjectName(
+        selectedInfo === null ? null : `Unit #${selectedInfo}`,
+      );
       debugInfo.textContent =
         `FPS: ${displayFps} | Map: ${mapInfo}${wireInfo}${dataSuffix}${objectStatus} | Sel: ` +
         `${selectedInfo === null ? 'none' : `#${selectedInfo}`} | Frame: ${gameLoop.getFrameNumber()}`;
@@ -279,7 +299,16 @@ async function init(): Promise<void> {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    uiRuntime.resize(window.innerWidth, window.innerHeight);
   });
+
+  const disposeGame = (): void => {
+    gameLoop.stop();
+    subsystems.disposeAll();
+  };
+
+  window.addEventListener('pagehide', disposeGame);
+  window.addEventListener('beforeunload', disposeGame);
 
   // Hide loading screen
   setLoadingProgress(100, 'Ready!');
