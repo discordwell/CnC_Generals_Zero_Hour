@@ -4333,6 +4333,52 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     }));
   });
 
+  it('includes ordered render-asset candidates across object and nested model fields', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'CandidateUnit',
+          'America',
+          ['VEHICLE'],
+          [
+            makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+            makeBlock('Draw', 'W3DModelDraw ModuleTag_Draw', {}, [
+              makeBlock('ModelConditionState', 'Default', { Model: 'NestedModelPrimary' }),
+              makeBlock('ModelConditionState', 'Damaged', { ModelName: 'NestedModelSecondary' }),
+              makeBlock('ModelConditionState', 'Destroyed', { FileName: 'NestedModelTertiary' }),
+            ]),
+          ],
+          {
+            Model: 'FieldModelPrimary',
+            ModelName: 'FieldModelSecondary',
+            FileName: 'FieldModelTertiary',
+          },
+        ),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CandidateUnit', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const state = logic.getEntityState(1);
+    expect(state).toEqual(expect.objectContaining({
+      renderAssetPath: 'FieldModelPrimary',
+      renderAssetResolved: true,
+      renderAssetCandidates: [
+        'FieldModelPrimary',
+        'FieldModelSecondary',
+        'FieldModelTertiary',
+        'NestedModelPrimary',
+        'NestedModelSecondary',
+        'NestedModelTertiary',
+      ],
+    }));
+  });
+
   it('marks NONE model tokens as unresolved even when template data exists', () => {
     const bundle = makeBundle({
       objects: [
