@@ -176,6 +176,26 @@ describe('ObjectVisualManager', () => {
     expect(manager.getUnresolvedEntityIds()).toEqual([2, 7, 10]);
   });
 
+  it('removes unresolved IDs when unresolved entities are removed', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => {
+        throw new Error('missing asset');
+      },
+    });
+
+    manager.sync([
+      makeMeshState({ id: 9, renderAssetPath: 'a' }),
+      makeMeshState({ id: 1, renderAssetPath: 'b' }),
+    ], 1 / 30);
+    await flushModelLoadQueue();
+    expect(manager.getUnresolvedEntityIds()).toEqual([1, 9]);
+
+    manager.sync([makeMeshState({ id: 9, renderAssetPath: 'a' })], 1 / 30);
+    await flushModelLoadQueue();
+    expect(manager.getUnresolvedEntityIds()).toEqual([1]);
+  });
+
   it('cancels stale model loads when an entity becomes unresolved', async () => {
     const scene = new THREE.Scene();
     let resolvePending: ((asset: LoadedModelAsset) => void) | null = null;
