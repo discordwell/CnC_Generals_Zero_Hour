@@ -28,6 +28,9 @@ Examples:
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --bypass-sandbox -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --completion-poll-interval 5 --completion-timeout 120 -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 25 --prompt "..." --session-id <SESSION_ID> --summary-every 25 -- -c model="gpt-5.3-codex-spark"
+
+Done condition:
+  If Codex replies with exactly "done" (single token, no extra text), the loop exits early with success.
 EOF
   exit 1
 }
@@ -55,6 +58,10 @@ completion_poll_interval=5
 completion_timeout_seconds=120
 run_id="$(date +%s)"
 repo_root="$(pwd -P)"
+default_model="gpt-5.3-codex-spark"
+default_reasoning_effort="high"
+default_plan_reasoning_effort="extra_high"
+done_sentinel="done"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -187,6 +194,8 @@ Output:
 - What is complete and what is still missing.
 - What likely changed state is currently visible from the repo/diff.
 - The highest-priority next step to unlock stable progress.
+Completion rule:
+- If the requested work is fully complete and no further changes are needed, reply with exactly: done
 Do not edit files in this step."
 fi
 
@@ -197,6 +206,8 @@ Output:
 - What changed in code, tests, and infrastructure this segment.
 - What risks, regressions, or missing coverage were introduced.
 - What should be the highest-priority next step.
+Completion rule:
+- If the requested work is fully complete and no further changes are needed, reply with exactly: done
 Keep it concise and actionable."
 fi
 
@@ -299,6 +310,86 @@ turn_completed() {
   fi
 }
 
+latest_assistant_text_for_turn() {
+  local session_file="$1"
+  local turn_id="$2"
+
+  if [[ -z "$session_file" || -z "$turn_id" || ! -f "$session_file" ]]; then
+    echo ""
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo ""
+    return 0
+  fi
+
+  local latest_text=""
+  latest_text="$(
+    awk -v turn_id="$turn_id" '
+      $0 ~ "\"type\":\"turn_context\"" && $0 ~ ("\"turn_id\":\"" turn_id "\"") {
+        in_turn = 1
+        next
+      }
+      in_turn && $0 ~ "\"type\":\"turn_context\"" && $0 !~ ("\"turn_id\":\"" turn_id "\"") {
+        in_turn = 0
+      }
+      in_turn {
+        print $0
+      }
+    ' "$session_file" \
+      | jq -r '
+        select(.type == "response_item"
+          and .payload.type == "message"
+          and .payload.role == "assistant")
+        | [.payload.content[]? | select(.type == "output_text") | .text]
+        | join("\n")
+      ' 2>/dev/null \
+      | tail -n 1 || true
+  )"
+  echo "$latest_text"
+}
+
+normalize_text() {
+  local value="$1"
+  printf '%s' "$value" \
+    | tr -d '\r' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
+output_file_signaled_done() {
+  local output_file="$1"
+  if [[ -z "$output_file" || ! -f "$output_file" ]]; then
+    return 1
+  fi
+
+  local cleaned
+  cleaned="$(sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$output_file" | tr -d '\r')"
+  local last_non_empty
+  last_non_empty="$(printf '%s\n' "$cleaned" | awk 'NF { last=$0 } END { print last }')"
+  local normalized
+  normalized="$(normalize_text "$last_non_empty")"
+  if [[ "$normalized" == "$done_sentinel" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+assistant_signaled_done() {
+  local session_file="$1"
+  local turn_id="$2"
+  local output_file="$3"
+
+  local assistant_text
+  assistant_text="$(latest_assistant_text_for_turn "$session_file" "$turn_id")"
+  local normalized
+  normalized="$(normalize_text "$assistant_text")"
+  if [[ "$normalized" == "$done_sentinel" ]]; then
+    return 0
+  fi
+
+  output_file_signaled_done "$output_file"
+}
+
 wait_for_turn_completion() {
   local session_file="$1"
   local turn_id="$2"
@@ -389,6 +480,8 @@ $recent_log
 Important continuation contract:
 - Continue from the state above and avoid repeating work already completed.
 - If no actual progress was made since the previous turn, pivot to a different next action and report why.
+- If and only if all requested work is fully complete with nothing left to do, respond with exactly: done
+- When using the done condition, output only done with no extra text.
 EOF
 }
 
@@ -478,6 +571,42 @@ if (( ${#codex_args[@]} > 0 )); then
   codex_base_cmd+=("${codex_args[@]}")
 fi
 
+has_model_override=0
+has_reasoning_override=0
+scan_codex_overrides() {
+  local i=0
+  while (( i < ${#codex_args[@]} )); do
+    local arg="${codex_args[i]}"
+    if [[ "$arg" == "-m" || "$arg" == "--model" ]]; then
+      has_model_override=1
+      i=$((i + 2))
+      continue
+    fi
+    if [[ "$arg" == "--config" || "$arg" == "-c" ]]; then
+      local value="${codex_args[i+1]:-}"
+      local key="${value%%=*}"
+      key="${key//[[:space:]]/}"
+      if [[ "$key" == "model" ]]; then
+        has_model_override=1
+      fi
+      if [[ "$key" == "model_reasoning_effort" ]]; then
+        has_reasoning_override=1
+      fi
+      i=$((i + 2))
+      continue
+    fi
+    i=$((i + 1))
+  done
+}
+scan_codex_overrides
+
+if (( has_model_override == 0 )); then
+  codex_base_cmd+=(--model "$default_model")
+fi
+if (( has_reasoning_override == 0 )); then
+  codex_base_cmd+=(--config "model_reasoning_effort=\"$default_reasoning_effort\"")
+fi
+
 if (( new_agent == 1 )); then
   session_id=""
 fi
@@ -521,6 +650,7 @@ if [[ -n "$log_file" ]]; then
 fi
 
 run_index=0
+done_detected=0
 
 while (( run_index < iterations )); do
   run_index=$((run_index + 1))
@@ -545,6 +675,9 @@ while (( run_index < iterations )); do
 
   output_file="$(mktemp)"
   iteration_cmd=("${codex_base_cmd[@]}")
+  if (( run_index == 1 && has_reasoning_override == 0 )); then
+    iteration_cmd+=(--config "model_reasoning_effort=\"$default_plan_reasoning_effort\"")
+  fi
 
   if (( run_index == 1 )); then
     if [[ -n "$session_id" ]]; then
@@ -569,6 +702,16 @@ while (( run_index < iterations )); do
     session_id="$detected_session_id"
   fi
 
+  session_file="$(resolve_session_file "$session_id")"
+  turn_id="$(latest_turn_id "$session_file")"
+  if [[ -n "$session_file" && -n "$turn_id" ]]; then
+    wait_for_turn_completion "$session_file" "$turn_id" || true
+  fi
+
+  if [[ "$exit_code" == "0" ]] && assistant_signaled_done "$session_file" "$turn_id" "$output_file"; then
+    done_detected=1
+  fi
+
   cat "$output_file" >&2
   rm -f "$output_file"
 
@@ -580,10 +723,12 @@ while (( run_index < iterations )); do
   window_delta=$((current_changed_lines - window_start_lines))
   log_state "$run_index" "$run_phase" "$exit_code" "$elapsed" "$current_changed_lines" "$min_delta_lines" "$window_delta" "$summary_count"
 
-  session_file="$(resolve_session_file "$session_id")"
-  turn_id="$(latest_turn_id "$session_file")"
-  if [[ -n "$session_file" && -n "$turn_id" ]]; then
-    wait_for_turn_completion "$session_file" "$turn_id" || true
+  if (( done_detected == 1 )); then
+    echo "[RALPH-LOOP] completion sentinel detected (${done_sentinel}); ending loop early at iteration $run_index." >&2
+    if [[ -n "$log_file" ]]; then
+      echo "[DONE] run=$run_id iter=${run_index}/${iterations} sentinel=${done_sentinel}" >> "$log_file"
+    fi
+    break
   fi
 
   if (( run_index % progress_window == 0 )); then
@@ -610,5 +755,5 @@ while (( run_index < iterations )); do
 done
 
 if [[ -n "$log_file" ]]; then
-  echo "[END] run=$run_id complete exit_last=$exit_code" >> "$log_file"
+  echo "[END] run=$run_id complete exit_last=$exit_code done_detected=$done_detected" >> "$log_file"
 fi
