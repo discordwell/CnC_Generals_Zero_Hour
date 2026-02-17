@@ -139,6 +139,24 @@ describe('ObjectVisualManager', () => {
     expect(manager.getVisualState(7)?.animationState).toBe('DIE');
   });
 
+  it('keeps the last supported animation state when requested clip is unavailable', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle']),
+    });
+
+    manager.sync([makeMeshState({ id: 9, renderAssetPath: 'unit-model', animationState: 'IDLE' })], 1 / 30);
+    await flushModelLoadQueue();
+    expect(manager.getVisualState(9)?.hasModel).toBe(true);
+    expect(manager.getVisualState(9)?.animationState).toBe('IDLE');
+
+    manager.sync([makeMeshState({ id: 9, renderAssetPath: 'unit-model', animationState: 'MOVE' })], 1 / 30);
+    expect(manager.getVisualState(9)?.animationState).toBe('IDLE');
+
+    manager.sync([makeMeshState({ id: 9, renderAssetPath: 'unit-model', animationState: 'ATTACK' })], 1 / 30);
+    expect(manager.getVisualState(9)?.animationState).toBe('IDLE');
+  });
+
   it('prefers source-provided animation clip candidates per render state', async () => {
     const scene = new THREE.Scene();
     const manager = new ObjectVisualManager(scene, null, {
