@@ -143,7 +143,7 @@ export class ObjectVisualManager {
    * Return entity ids that are currently marked unresolved because model load failed.
    */
   getUnresolvedEntityIds(): number[] {
-    return Array.from(this.unresolvedEntityIds.values());
+    return Array.from(this.unresolvedEntityIds.values()).sort((left, right) => left - right);
   }
 
   dispose(): void {

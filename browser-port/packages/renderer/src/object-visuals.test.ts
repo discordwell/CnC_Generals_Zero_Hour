@@ -158,6 +158,24 @@ describe('ObjectVisualManager', () => {
     expect(placeholder?.visible).toBe(true);
   });
 
+  it('returns unresolved entity IDs in deterministic ascending order', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => {
+        throw new Error('missing asset');
+      },
+    });
+
+    manager.sync([
+      makeMeshState({ id: 10, renderAssetPath: 'a' }),
+      makeMeshState({ id: 2, renderAssetPath: 'b' }),
+      makeMeshState({ id: 7, renderAssetPath: 'c' }),
+    ], 1 / 30);
+    await flushModelLoadQueue();
+
+    expect(manager.getUnresolvedEntityIds()).toEqual([2, 7, 10]);
+  });
+
   it('cancels stale model loads when an entity becomes unresolved', async () => {
     const scene = new THREE.Scene();
     let resolvePending: ((asset: LoadedModelAsset) => void) | null = null;

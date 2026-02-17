@@ -791,7 +791,7 @@ async function init(): Promise<void> {
         selectedObjectName: selectedInfo?.templateName ?? '',
       });
       uiRuntime.setControlBarButtons(controlBarButtons);
-      const unresolvedVisualIds = objectVisualManager.getUnresolvedEntityIds().sort((a, b) => a - b);
+      const unresolvedVisualIds = objectVisualManager.getUnresolvedEntityIds();
       const unresolvedVisualStatus = unresolvedVisualIds.length > 0
         ? ` | Unresolved visuals: ${unresolvedVisualIds.length} (${unresolvedVisualIds.join(', ')})`
         : '';
