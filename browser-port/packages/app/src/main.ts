@@ -449,9 +449,25 @@ async function init(): Promise<void> {
   // Game logic + object visuals
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
   const gameLogic = new GameLogicSubsystem(scene, { attackUsesLineOfSight });
-  networkManager.setDeterministicGameLogicCrcSectionWriters(
-    gameLogic.createDeterministicGameLogicCrcSectionWriters(),
-  );
+  const maybeSetDeterministicGameLogicCrcSectionWriters = (
+    networkManager as unknown as {
+      setDeterministicGameLogicCrcSectionWriters?: (writers: unknown) => void;
+    }
+  ).setDeterministicGameLogicCrcSectionWriters;
+  const maybeCreateDeterministicGameLogicCrcSectionWriters = (
+    gameLogic as unknown as {
+      createDeterministicGameLogicCrcSectionWriters?: () => unknown;
+    }
+  ).createDeterministicGameLogicCrcSectionWriters;
+  if (
+    typeof maybeSetDeterministicGameLogicCrcSectionWriters === 'function'
+    && typeof maybeCreateDeterministicGameLogicCrcSectionWriters === 'function'
+  ) {
+    maybeSetDeterministicGameLogicCrcSectionWriters.call(
+      networkManager,
+      maybeCreateDeterministicGameLogicCrcSectionWriters.call(gameLogic),
+    );
+  }
   subsystems.register(gameLogic);
   await gameLogic.init();
   audioManager.setObjectPositionResolver((objectId) => gameLogic.getEntityWorldPosition(objectId));
