@@ -4364,8 +4364,10 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       objects: [
         makeObjectDef('MobileUnit', 'America', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL Crawler', {}),
         ]),
       ],
+      locomotors: [makeLocomotorDef('Crawler', 120)],
     });
     const scene = new THREE.Scene();
     const logic = new GameLogicSubsystem(scene);

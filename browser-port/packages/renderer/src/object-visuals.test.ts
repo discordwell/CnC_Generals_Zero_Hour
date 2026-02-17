@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 import type { LoadedModelAsset } from './object-visuals.js';
 import { ObjectVisualManager, type RenderableEntityState } from './object-visuals.js';
 
+function flushModelLoadQueue(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function makeMeshState(overrides: Partial<RenderableEntityState> = {}): RenderableEntityState {
   return {
     id: 1,
@@ -64,7 +70,7 @@ describe('ObjectVisualManager', () => {
 
     const state = makeMeshState();
     manager.sync([state], 1 / 30);
-    await Promise.resolve();
+    await flushModelLoadQueue();
     const placeholder = getPlaceholderMesh(manager, state.id);
 
     const root = manager.getVisualRoot(state.id);
@@ -85,14 +91,14 @@ describe('ObjectVisualManager', () => {
     });
 
     manager.sync([makeMeshState()], 1 / 30);
-    await Promise.resolve();
+    await flushModelLoadQueue();
     manager.sync([makeMeshState({ animationState: 'MOVE' })], 1 / 30);
     expect(manager.getVisualState(1)?.animationState).toBe('MOVE');
     const placeholder1 = getPlaceholderMesh(manager, 1);
     expect(placeholder1?.visible).toBe(false);
 
     manager.sync([makeMeshState({ id: 2, renderAssetPath: 'building.glb' })], 1 / 30);
-    await Promise.resolve();
+    await flushModelLoadQueue();
     const placeholder2 = getPlaceholderMesh(manager, 2);
     expect(scene.children.filter((entry) => entry.name.startsWith('object-visual-')).length).toBe(1);
     expect(manager.getVisualRoot(1)).toBeNull();
@@ -111,7 +117,7 @@ describe('ObjectVisualManager', () => {
     });
 
     manager.sync([makeMeshState({ id: 3, renderAssetPath: 'missing' })], 1 / 30);
-    await Promise.resolve();
+    await flushModelLoadQueue();
     const placeholder = getPlaceholderMesh(manager, 3);
 
     expect(manager.getUnresolvedEntityIds()).toEqual([3]);
@@ -135,14 +141,14 @@ describe('ObjectVisualManager', () => {
     manager.sync([makeMeshState({ id: 4 })], 1 / 30);
     expect(resolvePending).not.toBeNull();
     manager.sync([makeMeshState({ id: 4, renderAssetResolved: false })], 1 / 30);
-    await Promise.resolve();
+    await flushModelLoadQueue();
     const placeholder = getPlaceholderMesh(manager, 4);
     expect(manager.getVisualState(4)?.hasModel).toBe(false);
     expect(placeholder).toBeTruthy();
     expect(placeholder?.visible).toBe(true);
 
     resolvePending?.(modelWithAnimationClips());
-    await Promise.resolve();
+    await flushModelLoadQueue();
     expect(manager.getVisualState(4)?.hasModel).toBe(false);
     expect(placeholder?.visible).toBe(true);
   });
@@ -157,14 +163,22 @@ describe('ObjectVisualManager', () => {
       },
     });
 
-    manager.sync([makeMeshState({ id: 1, renderAssetPath: 'soldier.w3d' })], 1 / 30);
-    manager.sync([makeMeshState({ id: 2, renderAssetPath: 'tank' })], 1 / 30);
-    await Promise.resolve();
+    manager.sync([
+      makeMeshState({ id: 1, renderAssetPath: 'soldier.w3d' }),
+      makeMeshState({ id: 2, renderAssetPath: 'tank' }),
+    ], 1 / 30);
+    await flushModelLoadQueue();
+    const root1 = manager.getVisualRoot(1);
+    const root2 = manager.getVisualRoot(2);
     const placeholder1 = getPlaceholderMesh(manager, 1);
     const placeholder2 = getPlaceholderMesh(manager, 2);
 
     expect(requestedPaths[0]).toBe('soldier.gltf');
     expect(requestedPaths[1]).toBe('tank.gltf');
+    expect(root1).toBeTruthy();
+    expect(root2).toBeTruthy();
+    expect(manager.getVisualState(1)?.hasModel).toBe(true);
+    expect(manager.getVisualState(2)?.hasModel).toBe(true);
     expect(placeholder1).toBeTruthy();
     expect(placeholder2).toBeTruthy();
     expect(placeholder1?.visible).toBe(false);
