@@ -612,7 +612,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     ]);
   });
 
-  it('shows TODO guidance for GUI_COMMAND_DOZER_CONSTRUCT_CANCEL until build cancel placement is wired', () => {
+  it('dispatches GUI_COMMAND_DOZER_CONSTRUCT_CANCEL for a single selected source', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_CancelDozer', {
@@ -636,9 +636,43 @@ describe('dispatchIssuedControlBarCommands', () => {
       audioManager as unknown as AudioManager,
     );
 
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'cancelDozerConstruction',
+        entityId: 33,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([
+    ]);
+  });
+
+  it('requires a single selected source for GUI_COMMAND_DOZER_CONSTRUCT_CANCEL', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelDozer', {
+        Command: 'DOZER_CONSTRUCT_CANCEL',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_CancelDozer', GUICommandType.GUI_COMMAND_DOZER_CONSTRUCT_CANCEL, {
+          selectedObjectIds: [33, 34],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_CancelDozer dozer construction cancel is not mapped to game logic yet.',
+      'Cancel dozer construction requires a single selected source object.',
     ]);
   });
 
@@ -1620,7 +1654,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     expect(uiRuntime.messages).toEqual([]);
   });
 
-  it('marks GUICOMMANDMODE_SABOTAGE_BUILDING as TODO until sabotage flow is wired', () => {
+  it('dispatches GUICOMMANDMODE_SABOTAGE_BUILDING as enter-object action', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_Sabotage', {
@@ -1636,6 +1670,7 @@ describe('dispatchIssuedControlBarCommands', () => {
       [
         makeCommand('Command_Sabotage', GUICommandType.GUICOMMANDMODE_SABOTAGE_BUILDING, {
           selectedObjectIds: [55],
+          targetObjectId: 99,
         }),
       ],
       registry,
@@ -1644,10 +1679,15 @@ describe('dispatchIssuedControlBarCommands', () => {
       audioManager as unknown as AudioManager,
     );
 
-    expect(gameLogic.submittedCommands).toEqual([]);
-    expect(uiRuntime.messages).toEqual([
-      'TODO: Command_Sabotage sabotage building is not mapped to game logic yet (source: CommandXlat.cpp GUICOMMANDMODE_SABOTAGE_BUILDING + createEnterMessage(MSG_ENTER)).',
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'enterObject',
+        entityId: 55,
+        targetObjectId: 99,
+        action: 'sabotageBuilding',
+      },
     ]);
+    expect(uiRuntime.messages).toEqual([]);
   });
 
   it('dispatches GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE to clear and select matching local-team units', () => {
@@ -1769,7 +1809,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     ]);
   });
 
-  it('marks remaining infrastructure-style commands as TODOs without fake dispatch', () => {
+  it('dispatches remaining infrastructure-style commands as game-logic commands', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_ExitContainer', {
@@ -1784,51 +1824,57 @@ describe('dispatchIssuedControlBarCommands', () => {
       makeCommandButtonBlock('Command_BeaconDelete', {
         Command: 'BEACON_DELETE',
       }),
-      makeCommandButtonBlock('Command_Sell', {
-        Command: 'SELL',
-      }),
       makeCommandButtonBlock('Command_HackInternet', {
         Command: 'HACK_INTERNET',
       }),
       makeCommandButtonBlock('Command_ToggleOvercharge', {
         Command: 'TOGGLE_OVERCHARGE',
       }),
+      makeCommandButtonBlock('Command_CombatDrop', {
+        Command: 'COMBATDROP',
+      }),
     ]);
 
     const gameLogic = new FakeGameLogic();
-    gameLogic.selectedEntityId = 20;
+    const selectedObjectIds = [20, 21];
     const uiRuntime = new FakeUiRuntime();
     const audioManager = new FakeAudioManager();
 
     dispatchIssuedControlBarCommands(
       [
         makeCommand('Command_ExitContainer', GUICommandType.GUI_COMMAND_EXIT_CONTAINER, {
-          selectedObjectIds: [20],
+          selectedObjectIds,
         }),
         makeCommand('Command_Evacuate', GUICommandType.GUI_COMMAND_EVACUATE, {
-          selectedObjectIds: [20],
+          selectedObjectIds,
         }),
         makeCommand(
           'Command_ExecuteRailedTransport',
           GUICommandType.GUI_COMMAND_EXECUTE_RAILED_TRANSPORT,
           {
-            selectedObjectIds: [20],
+            selectedObjectIds,
           },
         ),
         makeCommand('Command_BeaconDelete', GUICommandType.GUI_COMMAND_BEACON_DELETE, {
-          selectedObjectIds: [20],
-        }),
-        makeCommand('Command_Sell', GUICommandType.GUI_COMMAND_SELL, {
-          selectedObjectIds: [20],
+          selectedObjectIds,
         }),
         makeCommand('Command_HackInternet', GUICommandType.GUI_COMMAND_HACK_INTERNET, {
-          selectedObjectIds: [20],
+          selectedObjectIds,
         }),
         makeCommand(
           'Command_ToggleOvercharge',
           GUICommandType.GUI_COMMAND_TOGGLE_OVERCHARGE,
           {
-            selectedObjectIds: [20],
+            selectedObjectIds,
+          },
+        ),
+        makeCommand(
+          'Command_CombatDrop',
+          GUICommandType.GUI_COMMAND_COMBATDROP,
+          {
+            selectedObjectIds,
+            commandOption: CommandOption.NEED_OBJECT_TARGET,
+            targetObjectId: 77,
           },
         ),
       ],
@@ -1838,29 +1884,272 @@ describe('dispatchIssuedControlBarCommands', () => {
       audioManager as unknown as AudioManager,
     );
 
-    expect(gameLogic.submittedCommands).toEqual([]);
-    expect(uiRuntime.messages).toEqual([
-      'TODO: Command_ExitContainer exit container is not mapped to game logic yet.',
-      'TODO: Command_Evacuate evacuate is not mapped to game logic yet.',
-      'TODO: Command_ExecuteRailedTransport execute railed transport is not mapped to game logic yet.',
-      'TODO: Command_BeaconDelete beacon delete is not mapped to game logic yet.',
-      'TODO: Command_Sell sell is not mapped to game logic yet.',
-      'TODO: Command_HackInternet hack internet is not mapped to game logic yet.',
-      'TODO: Command_ToggleOvercharge toggle overcharge is not mapped to game logic yet.',
+    expect(gameLogic.submittedCommands).toEqual([
+      { type: 'exitContainer', entityId: 20 },
+      { type: 'exitContainer', entityId: 21 },
+      { type: 'evacuate', entityId: 20 },
+      { type: 'evacuate', entityId: 21 },
+      { type: 'executeRailedTransport', entityId: 20 },
+      { type: 'executeRailedTransport', entityId: 21 },
+      { type: 'beaconDelete', entityId: 20 },
+      { type: 'beaconDelete', entityId: 21 },
+      { type: 'hackInternet', entityId: 20 },
+      { type: 'hackInternet', entityId: 21 },
+      { type: 'toggleOvercharge', entityId: 20 },
+      { type: 'toggleOvercharge', entityId: 21 },
+      {
+        type: 'combatDrop',
+        entityId: 20,
+        targetObjectId: 77,
+        targetPosition: null,
+      },
+      {
+        type: 'combatDrop',
+        entityId: 21,
+        targetObjectId: 77,
+        targetPosition: null,
+      },
     ]);
+    expect(uiRuntime.messages).toEqual([]);
   });
 
-  it('marks weapon and mode commands as TODOs without behavior stubs', () => {
+  it('dispatches COMBATDROP to object target when target object ID is available', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CombatDrop', {
+        Command: 'COMBATDROP',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CombatDrop',
+          GUICommandType.GUI_COMMAND_COMBATDROP,
+          {
+            selectedObjectIds: [99],
+            commandOption: CommandOption.NEED_OBJECT_TARGET,
+            targetObjectId: 500,
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'combatDrop',
+        entityId: 99,
+        targetObjectId: 500,
+        targetPosition: null,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('dispatches COMBATDROP to location target when position data is available', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CombatDrop', {
+        Command: 'COMBATDROP',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CombatDrop',
+          GUICommandType.GUI_COMMAND_COMBATDROP,
+          {
+            selectedObjectIds: [99],
+            commandOption: CommandOption.NEED_TARGET_POS,
+            targetPosition: [12, 13, 14],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'combatDrop',
+        entityId: 99,
+        targetObjectId: null,
+        targetPosition: [12, 13, 14],
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('requires COMBATDROP target data in dispatch', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CombatDrop', {
+        Command: 'COMBATDROP',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_CombatDrop', GUICommandType.GUI_COMMAND_COMBATDROP, {
+          selectedObjectIds: [99],
+          commandOption: CommandOption.NEED_OBJECT_TARGET,
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual(['Combat Drop requires an object target.']);
+  });
+
+  it('dispatches SELL as game-logic commands', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_Sell', {
+        Command: 'SELL',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_Sell', GUICommandType.GUI_COMMAND_SELL, {
+          selectedObjectIds: [7, 8],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'sell',
+        entityId: 7,
+      },
+      {
+        type: 'sell',
+        entityId: 8,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('dispatches FIRE_WEAPON for object-target commands using button weapon slot and MaxShotsToFire', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_FireWeapon', {
+        Command: 'FIRE_WEAPON',
+        WeaponSlot: 'SECONDARY',
+        MaxShotsToFire: '3',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_FireWeapon', GUICommandType.GUI_COMMAND_FIRE_WEAPON, {
+          selectedObjectIds: [55],
+          commandOption: CommandOption.COMMAND_OPTION_NEED_OBJECT_TARGET,
+          targetObjectId: 99,
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'fireWeapon',
+        entityId: 55,
+        weaponSlot: 1,
+        maxShotsToFire: 3,
+        targetObjectId: 99,
+        targetPosition: null,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('dispatches FIRE_WEAPON with ATTACK_OBJECTS_POSITION using target object world position fallback', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_FireWeapon', {
+        Command: 'FIRE_WEAPON',
+        WeaponSlot: 'PRIMARY',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.setEntityWorldPosition(77, [300, 10, 400]);
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_FireWeapon', GUICommandType.GUI_COMMAND_FIRE_WEAPON, {
+          selectedObjectIds: [55],
+          commandOption: CommandOption.ATTACK_OBJECTS_POSITION
+            | CommandOption.COMMAND_OPTION_NEED_OBJECT_TARGET,
+          targetObjectId: 77,
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'fireWeapon',
+        entityId: 55,
+        weaponSlot: 0,
+        maxShotsToFire: 0x7fffffff,
+        targetObjectId: 77,
+        targetPosition: [300, 10, 400],
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('dispatches switch- and command-mode paths that are now implemented', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_SwitchWeapon', {
         Command: 'SWITCH_WEAPON',
-      }),
-      makeCommandButtonBlock('Command_FireWeapon', {
-        Command: 'FIRE_WEAPON',
-      }),
-      makeCommandButtonBlock('Command_CombatDrop', {
-        Command: 'COMBATDROP',
+        WeaponSlot: 'PRIMARY',
       }),
       makeCommandButtonBlock('Command_HijackVehicle', {
         Command: 'HIJACK_VEHICLE',
@@ -1879,12 +2168,32 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     dispatchIssuedControlBarCommands(
       [
-        makeCommand('Command_SwitchWeapon', GUICommandType.GUI_COMMAND_SWITCH_WEAPON),
-        makeCommand('Command_FireWeapon', GUICommandType.GUI_COMMAND_FIRE_WEAPON),
-        makeCommand('Command_CombatDrop', GUICommandType.GUI_COMMAND_COMBATDROP),
-        makeCommand('Command_HijackVehicle', GUICommandType.GUICOMMANDMODE_HIJACK_VEHICLE),
-        makeCommand('Command_ConvertCarbomb', GUICommandType.GUICOMMANDMODE_CONVERT_TO_CARBOMB),
-        makeCommand('Command_PlaceBeacon', GUICommandType.GUICOMMANDMODE_PLACE_BEACON),
+        makeCommand('Command_SwitchWeapon', GUICommandType.GUI_COMMAND_SWITCH_WEAPON, {
+          selectedObjectIds: [55],
+        }),
+        makeCommand(
+          'Command_HijackVehicle',
+          GUICommandType.GUICOMMANDMODE_HIJACK_VEHICLE,
+          {
+            selectedObjectIds: [55],
+            targetObjectId: 101,
+          },
+        ),
+        makeCommand(
+          'Command_ConvertCarbomb',
+          GUICommandType.GUICOMMANDMODE_CONVERT_TO_CARBOMB,
+          {
+            selectedObjectIds: [55],
+            targetObjectId: 101,
+          },
+        ),
+        makeCommand(
+          'Command_PlaceBeacon',
+          GUICommandType.GUICOMMANDMODE_PLACE_BEACON,
+          {
+            targetPosition: [5, 0, 6],
+          },
+        ),
       ],
       registry,
       gameLogic,
@@ -1892,15 +2201,30 @@ describe('dispatchIssuedControlBarCommands', () => {
       audioManager as unknown as AudioManager,
     );
 
-    expect(gameLogic.submittedCommands).toEqual([]);
-    expect(uiRuntime.messages).toEqual([
-      'TODO: Command_SwitchWeapon switch weapon is not mapped to game logic yet.',
-      'TODO: Command_FireWeapon fire weapon is not mapped to game logic yet.',
-      'TODO: Command_CombatDrop combat drop is not mapped to game logic yet.',
-      'TODO: Command_HijackVehicle command mode is not mapped to game logic yet.',
-      'TODO: Command_ConvertCarbomb command mode is not mapped to game logic yet.',
-      'TODO: Command_PlaceBeacon beacon placement command is not mapped to game logic yet.',
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'switchWeapon',
+        entityId: 55,
+        weaponSlot: 0,
+      },
+      {
+        type: 'enterObject',
+        entityId: 55,
+        targetObjectId: 101,
+        action: 'hijackVehicle',
+      },
+      {
+        type: 'enterObject',
+        entityId: 55,
+        targetObjectId: 101,
+        action: 'convertToCarBomb',
+      },
+      {
+        type: 'placeBeacon',
+        targetPosition: [5, 0, 6],
+      },
     ]);
+    expect(uiRuntime.messages).toEqual([]);
   });
 
   it('preserves existing STOP dispatch behavior without synthetic fallback audio', () => {

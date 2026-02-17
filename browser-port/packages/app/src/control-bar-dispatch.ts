@@ -15,16 +15,21 @@ import {
 
 import { playIssuedCommandAudio } from './control-bar-audio.js';
 
+const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
+
 type ControlBarDispatchGameLogic = Pick<
   GameLogicSubsystem,
   | 'getSelectedEntityId'
   | 'getEntityWorldPosition'
   | 'getAttackMoveDistanceForEntity'
+  | 'getEntityIdsByTemplateAndSide'
+  | 'getPlayerSide'
   | 'getLocalPlayerSciencePurchasePoints'
   | 'getLocalPlayerDisabledScienceNames'
   | 'getLocalPlayerHiddenScienceNames'
   | 'getLocalPlayerScienceNames'
   | 'resolveShortcutSpecialPowerSourceEntityId'
+  | 'resolveCommandCenterEntityId'
   | 'submitCommand'
 >;
 
@@ -87,6 +92,52 @@ function resolveRequiredCommandButtonToken(
     return null;
   }
   return firstIniToken(commandButton.fields[fieldName]);
+}
+
+function resolveWeaponSlotFromCommandButton(
+  commandButton: CommandButtonDef | undefined,
+): number | null {
+  const token = resolveRequiredCommandButtonToken(commandButton, 'WeaponSlot');
+  if (!token) {
+    return null;
+  }
+
+  const normalized = token.trim().toUpperCase();
+  switch (normalized) {
+    case 'PRIMARY':
+    case 'PRIMARY_WEAPON':
+      return 0;
+    case 'SECONDARY':
+    case 'SECONDARY_WEAPON':
+      return 1;
+    case 'TERTIARY':
+    case 'TERTIARY_WEAPON':
+      return 2;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    return null;
+  }
+  if (parsed < 0 || parsed > 2) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function resolveMaxShotsToFireFromCommandButton(
+  commandButton: CommandButtonDef | undefined,
+): number {
+  const maxShotsToFire = resolveRequiredCommandButtonToken(commandButton, 'MaxShotsToFire');
+  if (!maxShotsToFire) {
+    return SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE;
+  }
+  const parsed = Number.parseInt(maxShotsToFire, 10);
+  if (!Number.isFinite(parsed)) {
+    return SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE;
+  }
+  return parsed;
 }
 
 function guardModeForCommandType(commandType: GUICommandType): GuardMode {
@@ -181,6 +232,10 @@ function resolvePurchasableScienceName(
 interface ContextCommandPayload {
   targetObjectId: number | null;
   targetPosition: readonly [number, number, number] | null;
+  productionId: number | null;
+  upgradeName: string | null;
+  placeLineEndPosition: readonly [number, number, number] | null;
+  buildRotation: number | null;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -205,11 +260,22 @@ function parseTargetObjectId(value: unknown): number | null {
   return Math.trunc(value);
 }
 
+function parseRotation(value: unknown): number | null {
+  if (!isFiniteNumber(value)) {
+    return null;
+  }
+  return value;
+}
+
 function resolveContextCommandPayload(payload: unknown): ContextCommandPayload {
   if (!payload || typeof payload !== 'object') {
     return {
       targetObjectId: null,
       targetPosition: null,
+      productionId: null,
+      upgradeName: null,
+      placeLineEndPosition: null,
+      buildRotation: null,
     };
   }
   const candidate = payload as {
@@ -217,12 +283,44 @@ function resolveContextCommandPayload(payload: unknown): ContextCommandPayload {
     targetPosition?: unknown;
     objectId?: unknown;
     position?: unknown;
+    productionId?: unknown;
+    production_id?: unknown;
+    queueId?: unknown;
+    queueID?: unknown;
+    upgradeName?: unknown;
+    upgrade?: unknown;
+    placeLineEndPosition?: unknown;
+    buildLineEndPosition?: unknown;
+    lineEndPosition?: unknown;
+    buildEndPosition?: unknown;
+    rotation?: unknown;
+    angle?: unknown;
+    buildAngle?: unknown;
   };
   const targetObjectId = parseTargetObjectId(candidate.targetObjectId ?? candidate.objectId);
   const targetPosition = parseTargetPosition(candidate.targetPosition ?? candidate.position);
+  const productionId = parseTargetObjectId(
+    candidate.productionId ?? candidate.production_id ?? candidate.queueId ?? candidate.queueID,
+  );
+  const upgradeName = typeof candidate.upgradeName === 'string' && candidate.upgradeName.trim()
+    ? candidate.upgradeName.trim().toUpperCase()
+    : typeof candidate.upgrade === 'string' && candidate.upgrade.trim()
+      ? candidate.upgrade.trim().toUpperCase()
+      : null;
+  const placeLineEndPosition = parseTargetPosition(
+    candidate.placeLineEndPosition
+      ?? candidate.buildLineEndPosition
+      ?? candidate.lineEndPosition
+      ?? candidate.buildEndPosition,
+  );
+  const buildRotation = parseRotation(candidate.rotation ?? candidate.angle ?? candidate.buildAngle);
   return {
     targetObjectId,
     targetPosition,
+    productionId,
+    upgradeName,
+    placeLineEndPosition,
+    buildRotation,
   };
 }
 
@@ -483,6 +581,490 @@ export function dispatchIssuedControlBarCommands(
           targetZ: targetPosition ? targetPosition[2] : null,
         });
 
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER: {
+        const specialPowerName = resolveRequiredCommandButtonToken(commandButton, 'SpecialPower');
+        if (!specialPowerName) {
+          uiRuntime.showMessage(
+            `TODO: ${command.sourceButtonId} special power template is not mapped yet.`,
+          );
+          break;
+        }
+
+        const commandCenterEntityId = gameLogic.resolveCommandCenterEntityId(localPlayerIndex ?? 0);
+        if (commandCenterEntityId === null) {
+          // Source behavior from ControlBarCommandProcessing.cpp:
+          // command-center powers resolve the local player's command center as source.
+          uiRuntime.showMessage(
+            `TODO: ${specialPowerName} from command center requires command-center source resolution parity.`,
+          );
+          break;
+        }
+
+        gameLogic.submitCommand({
+          type: 'issueSpecialPower',
+          commandButtonId: command.sourceButtonId,
+          specialPowerName,
+          commandOption: command.commandOption,
+          issuingEntityIds: [commandCenterEntityId],
+          sourceEntityId: commandCenterEntityId,
+          targetEntityId: null,
+          targetX: null,
+          targetZ: null,
+        });
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_NONE:
+      case GUICommandType.GUI_COMMAND_NUM_COMMANDS: {
+        // Sentinel command values in source command sets; no runtime action.
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE: {
+        const objectName =
+          resolveRequiredCommandButtonToken(commandButton, 'Object')
+          || resolveRequiredCommandButtonToken(commandButton, 'ThingTemplate');
+        if (!objectName) {
+          uiRuntime.showMessage(
+            `TODO: ${command.sourceButtonId} select-all-units button missing Object/ThingTemplate mapping.`,
+          );
+          break;
+        }
+
+        const localSide = gameLogic.getPlayerSide(localPlayerIndex ?? 0);
+        if (!localSide) {
+          uiRuntime.showMessage(
+            `TODO: ${command.sourceButtonId} select-all-units requires local player side resolution parity.`,
+          );
+          break;
+        }
+
+        const matchingEntityIds = gameLogic.getEntityIdsByTemplateAndSide(
+          objectName,
+          localSide,
+        );
+        gameLogic.submitCommand({ type: 'clearSelection' });
+        if (matchingEntityIds.length > 0) {
+          gameLogic.submitCommand({
+            type: 'selectEntities',
+            entityIds: matchingEntityIds,
+          });
+        }
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUICOMMANDMODE_SABOTAGE_BUILDING: {
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        const targetObjectId = command.targetObjectId ?? contextPayload.targetObjectId;
+        if (targetObjectId === null) {
+          uiRuntime.showMessage(`${command.sourceButtonId} requires a target object.`);
+          break;
+        }
+        if (selectedEntityIds.length === 0) {
+          uiRuntime.showMessage('Command mode requires a selected source unit.');
+          break;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'enterObject',
+            entityId,
+            targetObjectId,
+            action: 'sabotageBuilding',
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_EXIT_CONTAINER: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'exitContainer',
+            entityId,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_EVACUATE: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'evacuate',
+            entityId,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_EXECUTE_RAILED_TRANSPORT: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'executeRailedTransport',
+            entityId,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_BEACON_DELETE: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'beaconDelete',
+            entityId,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_SELL: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'sell',
+            entityId,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_FIRE_WEAPON: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+
+        const weaponSlot = resolveWeaponSlotFromCommandButton(commandButton) ?? 0;
+        const maxShotsToFire = resolveMaxShotsToFireFromCommandButton(commandButton);
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        const needsObjectTarget =
+          (command.commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
+        const needsTargetPosition = (command.commandOption & CommandOption.NEED_TARGET_POS) !== 0;
+        const attacksObjectPosition =
+          (command.commandOption & CommandOption.ATTACK_OBJECTS_POSITION) !== 0;
+
+        let targetObjectId = command.targetObjectId ?? contextPayload.targetObjectId;
+        let targetPosition = command.targetPosition ?? contextPayload.targetPosition;
+
+        if (needsObjectTarget && targetObjectId === null) {
+          uiRuntime.showMessage('Fire Weapon requires an object target.');
+          break;
+        }
+        if (needsTargetPosition && !targetPosition) {
+          uiRuntime.showMessage('Fire Weapon requires a world target.');
+          break;
+        }
+
+        if (attacksObjectPosition && targetPosition === null && targetObjectId !== null) {
+          targetPosition = gameLogic.getEntityWorldPosition(targetObjectId) ?? null;
+          if (targetPosition === null) {
+            uiRuntime.showMessage('Fire Weapon needs target world position for ATTACK_OBJECTS_POSITION behavior.');
+            break;
+          }
+        }
+
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'fireWeapon',
+            entityId,
+            weaponSlot,
+            maxShotsToFire,
+            targetObjectId: needsObjectTarget ? targetObjectId : null,
+            targetPosition,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_HACK_INTERNET: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'hackInternet',
+            entityId,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_TOGGLE_OVERCHARGE: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'toggleOvercharge',
+            entityId,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_COMBATDROP: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        const needsObjectTarget =
+          (command.commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
+        const needsTargetPosition =
+          (command.commandOption & CommandOption.NEED_TARGET_POS) !== 0;
+
+        const targetObjectId =
+          command.targetObjectId ?? contextPayload.targetObjectId;
+        const targetPosition = command.targetPosition ?? contextPayload.targetPosition;
+
+        if (needsObjectTarget && targetObjectId === null) {
+          uiRuntime.showMessage('Combat Drop requires an object target.');
+          break;
+        }
+        if (!needsObjectTarget && needsTargetPosition && !targetPosition) {
+          uiRuntime.showMessage('Combat Drop requires a world target.');
+          break;
+        }
+        if (!needsObjectTarget && !needsTargetPosition) {
+          uiRuntime.showMessage('Combat Drop requires a target.');
+          break;
+        }
+
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'combatDrop',
+            entityId,
+            targetObjectId: needsObjectTarget ? targetObjectId : null,
+            targetPosition: needsObjectTarget ? null : targetPosition,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_SWITCH_WEAPON: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        const weaponSlot = resolveWeaponSlotFromCommandButton(commandButton);
+        if (weaponSlot === null) {
+          uiRuntime.showMessage(
+            `TODO: ${command.sourceButtonId} switch weapon requires a WeaponSlot mapping.`,
+          );
+          break;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'switchWeapon',
+            entityId,
+            weaponSlot,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUICOMMANDMODE_HIJACK_VEHICLE:
+      case GUICommandType.GUICOMMANDMODE_CONVERT_TO_CARBOMB: {
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        const targetObjectId = command.targetObjectId ?? contextPayload.targetObjectId;
+        if (targetObjectId === null) {
+          uiRuntime.showMessage(`${command.sourceButtonId} requires a target object.`);
+          break;
+        }
+        if (selectedEntityIds.length === 0) {
+          uiRuntime.showMessage('Command mode requires a selected source unit.');
+          break;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'enterObject',
+            entityId,
+            targetObjectId,
+            action:
+              command.commandType === GUICommandType.GUICOMMANDMODE_HIJACK_VEHICLE
+                ? 'hijackVehicle'
+                : 'convertToCarBomb',
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUICOMMANDMODE_PLACE_BEACON: {
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        const targetPosition = command.targetPosition ?? contextPayload.targetPosition;
+        if (!targetPosition) {
+          uiRuntime.showMessage('Place Beacon requires a world target.');
+          break;
+        }
+        gameLogic.submitCommand({
+          type: 'placeBeacon',
+          targetPosition,
+        });
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_DOZER_CONSTRUCT: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        const targetPosition = command.targetPosition ?? contextPayload.targetPosition;
+        if (!targetPosition) {
+          uiRuntime.showMessage('GUI_COMMAND_DOZER_CONSTRUCT requires a world target.');
+          break;
+        }
+        const templateName =
+          resolveRequiredCommandButtonToken(commandButton, 'Object')
+          || resolveRequiredCommandButtonToken(commandButton, 'ThingTemplate');
+        if (!templateName) {
+          uiRuntime.showMessage(
+            `TODO: ${command.sourceButtonId} unit build template is not mapped yet.`,
+          );
+          break;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'constructBuilding',
+            entityId,
+            templateName,
+            targetPosition,
+            angle: contextPayload.buildRotation ?? 0,
+            lineEndPosition: contextPayload.placeLineEndPosition,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_UNIT_BUILD: {
+        if (selectedEntityIds.length === 0) {
+          continue;
+        }
+        const unitTemplateName = resolveRequiredCommandButtonToken(commandButton, 'Object');
+        if (!unitTemplateName) {
+          uiRuntime.showMessage(`TODO: ${command.sourceButtonId} unit build template is not mapped yet.`);
+          break;
+        }
+        submitCommandForSelectedEntities(
+          selectedEntityIds,
+          (entityId) => ({
+            type: 'queueUnitProduction',
+            entityId,
+            unitTemplateName,
+          }),
+          gameLogic,
+        );
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_CANCEL_UNIT_BUILD: {
+        if (selectedEntityIds.length !== 1) {
+          uiRuntime.showMessage('Cancel Unit Build requires a single selected source object.');
+          break;
+        }
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        if (contextPayload.productionId === null) {
+          uiRuntime.showMessage(
+            `TODO: ${command.sourceButtonId} cancel unit build needs a queued production id context to dispatch.`,
+          );
+          break;
+        }
+        gameLogic.submitCommand({
+          type: 'cancelUnitProduction',
+          entityId: selectedEntityIds[0],
+          productionId: contextPayload.productionId,
+        });
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_DOZER_CONSTRUCT_CANCEL: {
+        if (selectedEntityIds.length !== 1) {
+          uiRuntime.showMessage('Cancel dozer construction requires a single selected source object.');
+          break;
+        }
+        gameLogic.submitCommand({
+          type: 'cancelDozerConstruction',
+          entityId: selectedEntityIds[0]!,
+        });
+        playCommandAudio();
+        break;
+      }
+
+      case GUICommandType.GUI_COMMAND_CANCEL_UPGRADE: {
+        if (selectedEntityIds.length !== 1) {
+          uiRuntime.showMessage('Cancel Upgrade requires a single selected source object.');
+          break;
+        }
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        const upgradeName = contextPayload.upgradeName;
+        if (!upgradeName) {
+          uiRuntime.showMessage(
+            `TODO: ${command.sourceButtonId} cancel upgrade needs queued upgrade context to dispatch.`,
+          );
+          break;
+        }
+        gameLogic.submitCommand({
+          type: 'cancelUpgradeProduction',
+          entityId: selectedEntityIds[0],
+          upgradeName,
+        });
         playCommandAudio();
         break;
       }
