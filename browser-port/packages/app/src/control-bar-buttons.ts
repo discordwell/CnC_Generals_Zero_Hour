@@ -33,12 +33,23 @@ export interface ControlBarSelectionContext {
   isUnmanned: boolean;
   isDozer: boolean;
   isMoving: boolean;
+  objectStatusFlags?: readonly string[];
+  productionQueueEntryCount?: number;
+  productionQueueMaxEntries?: number;
   appliedUpgradeNames?: readonly string[];
   playerUpgradeNames?: readonly string[];
   playerScienceNames?: readonly string[];
   playerSciencePurchasePoints?: number;
   disabledScienceNames?: readonly string[];
   hiddenScienceNames?: readonly string[];
+}
+
+function isMultiSelectButton(button: ControlBarButton): boolean {
+  return ((button.commandOption ?? CommandOption.COMMAND_OPTION_NONE) & CommandOption.OK_FOR_MULTI_SELECT) !== 0;
+}
+
+function isAttackMoveButton(button: ControlBarButton): boolean {
+  return button.commandType === GUICommandType.GUI_COMMAND_ATTACK_MOVE;
 }
 
 function flattenIniValueTokens(value: unknown): string[] {
@@ -150,6 +161,35 @@ function normalizeUpgradeNameSet(names: readonly string[] | undefined): Set<stri
     normalizedNames.add(normalized);
   }
   return normalizedNames;
+}
+
+function normalizeStatusNameSet(names: readonly string[] | undefined): Set<string> {
+  const normalizedNames = new Set<string>();
+  if (!names) {
+    return normalizedNames;
+  }
+
+  for (const name of names) {
+    const normalized = name.trim().toUpperCase();
+    if (!normalized) {
+      continue;
+    }
+    normalizedNames.add(normalized);
+  }
+  return normalizedNames;
+}
+
+function isBlockedByScriptStatusOrUnmanned(selection: ControlBarSelectionContext): boolean {
+  if (selection.isUnmanned) {
+    // Source behavior from ControlBar::getCommandAvailability:
+    // DISABLED_UNMANNED objects expose no command buttons.
+    return true;
+  }
+
+  const statusFlags = normalizeStatusNameSet(selection.objectStatusFlags);
+  return statusFlags.has('SCRIPT_DISABLED')
+    || statusFlags.has('SCRIPT_UNPOWERED')
+    || statusFlags.has('DISABLED_UNMANNED');
 }
 
 function parseUpgradeType(upgradeTypeName: string | null): 'player' | 'object' {
@@ -273,6 +313,14 @@ function canPurchaseScienceFromButton(
   return false;
 }
 
+function isProductionQueueFull(selection: ControlBarSelectionContext): boolean {
+  if (selection.productionQueueMaxEntries === undefined || selection.productionQueueEntryCount === undefined) {
+    return false;
+  }
+
+  return selection.productionQueueMaxEntries <= selection.productionQueueEntryCount;
+}
+
 function evaluateCommandAvailability(
   iniDataRegistry: IniDataRegistry,
   commandButton: CommandButtonDef,
@@ -318,6 +366,16 @@ function evaluateCommandAvailability(
     return false;
   }
 
+  // Source behavior from ControlBar::getCommandAvailability:
+  // production-backed commands are disabled when command queues are full.
+  if (
+    (commandType === GUICommandType.GUI_COMMAND_UNIT_BUILD
+      || commandType === GUICommandType.GUI_COMMAND_OBJECT_UPGRADE)
+    && isProductionQueueFull(selection)
+  ) {
+    return false;
+  }
+
   if (
     commandType === GUICommandType.GUI_COMMAND_PURCHASE_SCIENCE &&
     !canPurchaseScienceFromButton(iniDataRegistry, commandButton, selection)
@@ -325,8 +383,9 @@ function evaluateCommandAvailability(
     return false;
   }
 
-  // TODO: Source parity gap: command availability still needs full checks for
-  // object status, production queue state, and special power readiness.
+  // TODO: Source parity gap: special power readiness checks are not yet fully
+  // mirrored from GameLogic command modules, so command-type-specific blocking
+  // beyond status flags may still differ from source in edge cases.
   return true;
 }
 
@@ -338,9 +397,7 @@ export function buildControlBarButtonsForSelection(
     return [];
   }
 
-  if (selection.isUnmanned) {
-    // Source behavior from ControlBar::getCommandAvailability:
-    // DISABLED_UNMANNED objects expose no command buttons.
+  if (isBlockedByScriptStatusOrUnmanned(selection)) {
     return [];
   }
 
@@ -362,4 +419,99 @@ export function buildControlBarButtonsForSelection(
   // TODO: Source parity gap: full per-object command card should be generated
   // from CommandSet + CommandButton + object state checks.
   return [...FALLBACK_MOVABLE_CONTROL_BAR_BUTTONS];
+}
+
+function intersectControlBarButtonLists(
+  buttonSets: readonly ControlBarButton[][],
+): ControlBarButton[] {
+  if (buttonSets.length === 0) {
+    return [];
+  }
+
+  if (buttonSets.length === 1) {
+    return [...buttonSets[0]];
+  }
+
+  const firstSet = buttonSets[0] ?? [];
+  const commonBySlot = new Map<number, {
+    button: ControlBarButton;
+    canAnySource: boolean;
+  }>();
+  for (const button of firstSet) {
+    const slot = button.slot;
+    if (!slot) {
+      continue;
+    }
+    if (isMultiSelectButton(button) && !commonBySlot.has(slot)) {
+      commonBySlot.set(slot, {
+        button,
+        canAnySource: button.enabled,
+      });
+    }
+  }
+
+  for (const currentSet of buttonSets.slice(1)) {
+    const currentSetBySlot = new Map<number, ControlBarButton>();
+    for (const button of currentSet) {
+      const slot = button.slot;
+      if (!slot || !isMultiSelectButton(button)) {
+        continue;
+      }
+      if (!currentSetBySlot.has(slot)) {
+        currentSetBySlot.set(slot, button);
+      }
+    }
+
+    for (const [slot, commonButton] of commonBySlot) {
+      const nextButton = currentSetBySlot.get(slot);
+      if (!nextButton) {
+        if (commonButton.button.commandType !== GUICommandType.GUI_COMMAND_ATTACK_MOVE) {
+          commonBySlot.delete(slot);
+        }
+        continue;
+      }
+      if (commonButton.button.id === nextButton.id) {
+        commonButton.canAnySource = commonButton.canAnySource || nextButton.enabled;
+        continue;
+      }
+      if (isAttackMoveButton(commonButton.button) || isAttackMoveButton(nextButton)) {
+        continue;
+      }
+      commonBySlot.delete(slot);
+    }
+
+    for (const [slot, currentButton] of currentSetBySlot) {
+      if (commonBySlot.has(slot)) {
+        continue;
+      }
+      if (isAttackMoveButton(currentButton)) {
+        commonBySlot.set(slot, {
+          button: currentButton,
+          canAnySource: currentButton.enabled,
+        });
+      }
+    }
+  }
+
+  return Array.from(commonBySlot.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([, entry]) => ({
+      ...entry.button,
+      enabled: entry.canAnySource,
+    }));
+}
+
+export function buildControlBarButtonsForSelections(
+  iniDataRegistry: IniDataRegistry,
+  selections: readonly ControlBarSelectionContext[],
+): ControlBarButton[] {
+  if (selections.length === 0) {
+    return [];
+  }
+
+  const controlBarButtonSets = selections.map((selection) =>
+    buildControlBarButtonsForSelection(iniDataRegistry, selection),
+  );
+
+  return intersectControlBarButtonLists(controlBarButtonSets);
 }

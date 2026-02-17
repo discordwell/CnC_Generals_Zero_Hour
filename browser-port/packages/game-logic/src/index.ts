@@ -346,6 +346,7 @@ export interface SelectedEntityInfo {
   isDozer: boolean;
   isMoving: boolean;
   appliedUpgradeNames: string[];
+  objectStatusFlags: string[];
 }
 
 export type EntityRelationship = 'enemies' | 'neutral' | 'allies';
@@ -1110,6 +1111,7 @@ export class GameLogicSubsystem implements Subsystem {
       isDozer: normalizedKindOf.has('DOZER'),
       isMoving: selected.moving,
       appliedUpgradeNames: Array.from(selected.completedUpgrades.values()).sort(),
+      objectStatusFlags: Array.from(selected.objectStatusFlags.values()).sort(),
     };
   }
 
@@ -1476,6 +1478,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   getProductionState(entityId: number): {
     queueEntryCount: number;
+    maxQueueEntries?: number;
     queue: Array<{
       type: 'UNIT';
       templateName: string;
@@ -1504,6 +1507,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     return {
       queueEntryCount: entity.productionQueue.length,
+      maxQueueEntries: entity.productionProfile?.maxQueueEntries,
       queue: entity.productionQueue.map((entry) => {
         if (entry.type === 'UPGRADE') {
           return {
