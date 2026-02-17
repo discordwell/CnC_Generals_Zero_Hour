@@ -791,9 +791,14 @@ async function init(): Promise<void> {
         selectedObjectName: selectedInfo?.templateName ?? '',
       });
       uiRuntime.setControlBarButtons(controlBarButtons);
+      const unresolvedVisualIds = objectVisualManager.getUnresolvedEntityIds().sort((a, b) => a - b);
+      const unresolvedVisualStatus = unresolvedVisualIds.length > 0
+        ? ` | Unresolved visuals: ${unresolvedVisualIds.length} (${unresolvedVisualIds.join(', ')})`
+        : '';
       debugInfo.textContent =
         `FPS: ${displayFps} | Map: ${mapInfo}${wireInfo}${dataSuffix}${objectStatus} | Sel: ` +
-        `${selectedEntityId === null ? 'none' : `#${selectedEntityId}`} | Frame: ${gameLoop.getFrameNumber()}`;
+        `${selectedEntityId === null ? 'none' : `#${selectedEntityId}`} | Frame: ` +
+        `${gameLoop.getFrameNumber()}${unresolvedVisualStatus}`;
     },
   });
 
