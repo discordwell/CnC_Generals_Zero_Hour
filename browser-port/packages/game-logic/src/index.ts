@@ -18,6 +18,7 @@ import {
   type ArmorDef,
   type CommandButtonDef,
   type CommandSetDef,
+  type SpecialPowerDef,
   type ObjectDef,
   type ScienceDef,
   type UpgradeDef,
@@ -127,6 +128,12 @@ export interface SetLocomotorUpgradeCommand {
   enabled: boolean;
 }
 
+export interface CaptureEntityCommand {
+  type: 'captureEntity';
+  entityId: number;
+  newSide: string;
+}
+
 export interface ApplyUpgradeCommand {
   type: 'applyUpgrade';
   entityId: number;
@@ -218,6 +225,7 @@ export type GameLogicCommand =
   | BridgeRepairedCommand
   | SetLocomotorSetCommand
   | SetLocomotorUpgradeCommand
+  | CaptureEntityCommand
   | ApplyUpgradeCommand
   | QueueUnitProductionCommand
   | CancelUnitProductionCommand
@@ -271,6 +279,13 @@ const TEST_CRUSH_OR_SQUISH = 2;
 const RELATIONSHIP_ENEMIES = 0;
 const RELATIONSHIP_NEUTRAL = 1;
 const RELATIONSHIP_ALLIES = 2;
+const COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
+const COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
+const COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT = 0x00000004;
+const COMMAND_OPTION_NEED_TARGET_POS = 0x00000020;
+const COMMAND_OPTION_NEED_OBJECT_TARGET = COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT
+  | COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT
+  | COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT;
 type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTRAL | typeof RELATIONSHIP_ALLIES;
 type SidePlayerType = 'HUMAN' | 'COMPUTER';
 type AttackCommandSource = 'PLAYER' | 'AI';
@@ -575,18 +590,47 @@ interface UpgradeModuleProfile {
     | 'ARMORUPGRADE'
     | 'WEAPONSETUPGRADE'
     | 'COMMANDSETUPGRADE'
-    | 'STATUSBITSUPGRADE';
+    | 'STATUSBITSUPGRADE'
+    | 'STEALTHUPGRADE'
+    | 'WEAPONBONUSUPGRADE'
+    | 'COSTMODIFIERUPGRADE'
+    | 'GRANTSCIENCEUPGRADE'
+    | 'POWERPLANTUPGRADE'
+    | 'RADARUPGRADE'
+    | 'PASSENGERSFIREUPGRADE'
+    | 'UNPAUSESPECIALPOWERUPGRADE';
   triggeredBy: Set<string>;
   conflictsWith: Set<string>;
   removesUpgrades: Set<string>;
   requiresAllTriggers: boolean;
   addMaxHealth: number;
   maxHealthChangeType: MaxHealthChangeTypeName;
+  sourceUpgradeName: string | null;
   statusToSet: Set<string>;
   statusToClear: Set<string>;
   commandSetName: string | null;
   commandSetAltName: string | null;
   commandSetAltTriggerUpgrade: string | null;
+  effectKindOf: Set<string>;
+  effectPercent: number;
+  grantScienceName: string;
+  radarIsDisableProof: boolean;
+  specialPowerTemplateName: string;
+}
+
+interface KindOfProductionCostModifier {
+  kindOf: Set<string>;
+  multiplier: number;
+  refCount: number;
+}
+
+interface SideRadarState {
+  radarCount: number;
+  disableProofRadarCount: number;
+}
+
+interface SidePowerState {
+  powerBonus: number;
 }
 
 interface ProductionProfile {
@@ -603,18 +647,28 @@ interface ProductionPrerequisiteGroup {
 }
 
 interface QueueProductionExitProfile {
-  moduleType: 'QUEUE' | 'SUPPLY_CENTER';
+  moduleType: 'QUEUE' | 'SUPPLY_CENTER' | 'SPAWN_POINT';
   unitCreatePoint: { x: number; y: number; z: number };
   naturalRallyPoint: { x: number; y: number; z: number } | null;
   exitDelayFrames: number;
   allowAirborneCreation: boolean;
   initialBurst: number;
+  spawnPointBoneName: string | null;
 }
 
 interface ParkingPlaceProfile {
   totalSpaces: number;
   occupiedSpaceEntityIds: Set<number>;
   reservedProductionIds: Set<number>;
+}
+
+type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON';
+
+interface ContainProfile {
+  moduleType: ContainModuleType;
+  passengersAllowedToFire: boolean;
+  passengersAllowedToFireDefault: boolean;
+  portableStructureTemplateNames?: string[];
 }
 
 interface JetAISneakyProfile {
@@ -669,6 +723,7 @@ interface MapEntity {
   nominalHeight: number;
   selected: boolean;
   canMove: boolean;
+  energyBonus: number;
   crusherLevel: number;
   crushableLevel: number;
   canBeSquished: boolean;
@@ -704,9 +759,12 @@ interface MapEntity {
   queueProductionExitProfile: QueueProductionExitProfile | null;
   rallyPoint: VectorXZ | null;
   parkingPlaceProfile: ParkingPlaceProfile | null;
+  containProfile: ContainProfile | null;
   queueProductionExitDelayFramesRemaining: number;
   queueProductionExitBurstRemaining: number;
   parkingSpaceProducerId: number | null;
+  helixCarrierId: number | null;
+  helixPortableRiderId: number | null;
   largestWeaponRange: number;
   locomotorSets: Map<string, LocomotorSetProfile>;
   completedUpgrades: Set<string>;
@@ -773,11 +831,15 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sidePlayerTypes = new Map<string, SidePlayerType>();
   private readonly sideUpgradesInProduction = new Map<string, Set<string>>();
   private readonly sideCompletedUpgrades = new Map<string, Set<string>>();
+  private readonly sideKindOfProductionCostModifiers = new Map<string, KindOfProductionCostModifier[]>();
   private readonly sideSciences = new Map<string, Set<string>>();
+  private readonly sidePowerBonus = new Map<string, SidePowerState>();
+  private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly playerSideByIndex = new Map<number, string>();
   private readonly localPlayerScienceAvailability = new Map<string, LocalScienceAvailability>();
   private readonly shortcutSpecialPowerSourceByName = new Map<string, Map<number, number>>();
   private readonly shortcutSpecialPowerNamesByEntityId = new Map<number, Set<string>>();
+  private readonly sharedShortcutSpecialPowerReadyFrames = new Map<string, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
   private localPlayerSciencePurchasePoints = 0;
   private localPlayerIndex = 0;
@@ -966,6 +1028,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   submitCommand(command: GameLogicCommand): void {
+    if (command.type === 'purchaseScience') {
+      this.applyCommand(command);
+      return;
+    }
+
     this.commandQueue.push(command);
   }
 
@@ -1071,7 +1138,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   getLocalPlayerUpgradeNames(): string[] {
-    const side = this.playerSideByIndex.get(this.localPlayerIndex);
+    const side = this.resolveLocalPlayerSide();
     if (!side) {
       return [];
     }
@@ -1079,7 +1146,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   getLocalPlayerScienceNames(): string[] {
-    const side = this.playerSideByIndex.get(this.localPlayerIndex);
+    const side = this.resolveLocalPlayerSide();
     if (!side) {
       return [];
     }
@@ -1088,6 +1155,34 @@ export class GameLogicSubsystem implements Subsystem {
 
   getLocalPlayerSciencePurchasePoints(): number {
     return this.localPlayerSciencePurchasePoints;
+  }
+
+  private resolveLocalPlayerSide(): string | null {
+    const configuredLocalSide = this.playerSideByIndex.get(this.localPlayerIndex);
+    if (configuredLocalSide) {
+      return configuredLocalSide;
+    }
+
+    const observedSides = new Set<string>();
+    for (const entity of this.spawnedEntities.values()) {
+      const normalizedSide = this.normalizeSide(entity.side);
+      if (!normalizedSide) {
+        continue;
+      }
+      observedSides.add(normalizedSide);
+      if (observedSides.size > 1) {
+        return null;
+      }
+    }
+
+    if (observedSides.size !== 1) {
+      return null;
+    }
+
+    for (const observedSide of observedSides) {
+      return observedSide;
+    }
+    return null;
   }
 
   getLocalPlayerDisabledScienceNames(): string[] {
@@ -1436,6 +1531,24 @@ export class GameLogicSubsystem implements Subsystem {
     return { acquired };
   }
 
+  getSidePowerState(side: string): SidePowerState {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return { powerBonus: 0 };
+    }
+    const state = this.getSidePowerStateMap(normalizedSide);
+    return { powerBonus: state.powerBonus };
+  }
+
+  getSideRadarState(side: string): SideRadarState {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return { radarCount: 0, disableProofRadarCount: 0 };
+    }
+    const state = this.getSideRadarStateMap(normalizedSide);
+    return { radarCount: state.radarCount, disableProofRadarCount: state.disableProofRadarCount };
+  }
+
   grantSideScience(side: string, scienceName: string): boolean {
     const normalizedSide = this.normalizeSide(side);
     const normalizedScienceName = scienceName.trim().toUpperCase();
@@ -1463,14 +1576,91 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
+    return this.addScienceToSide(normalizedSide, normalizedScience);
+  }
+
+  private addScienceToSide(normalizedSide: string, normalizedScience: string): boolean {
     const sideSciences = this.getSideScienceSet(normalizedSide);
     if (sideSciences.has(normalizedScience)) {
       return false;
     }
 
     sideSciences.add(normalizedScience);
-    // TODO(C&C source parity): port full science purchase/availability flow (purchase points, hidden/disabled states).
     return true;
+  }
+
+  private getSciencePurchaseCost(scienceDef: ScienceDef): number {
+    const costRaw = readNumericField(scienceDef.fields, ['SciencePurchasePointCost']);
+    if (!Number.isFinite(costRaw)) {
+      return 0;
+    }
+    return Math.max(0, Math.trunc(costRaw));
+  }
+
+  private getSciencePrerequisites(scienceDef: ScienceDef): string[] {
+    const prerequisites = new Set<string>();
+    for (const tokens of this.extractIniValueTokens(scienceDef.fields['PrerequisiteSciences'])) {
+      for (const token of tokens) {
+        const normalized = token.trim().toUpperCase();
+        if (normalized && normalized !== 'NONE') {
+          prerequisites.add(normalized);
+        }
+      }
+    }
+    return [...prerequisites];
+  }
+
+  private isScienceAvailableForLocalPlayer(scienceName: string): boolean {
+    const availability = this.localPlayerScienceAvailability.get(scienceName);
+    return availability !== 'disabled' && availability !== 'hidden';
+  }
+
+  private getPurchasableScienceCost(side: string, scienceName: string): number {
+    const normalizedScienceName = scienceName.trim().toUpperCase();
+    if (!normalizedScienceName || normalizedScienceName === 'NONE') {
+      return 0;
+    }
+
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return 0;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return 0;
+    }
+
+    const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+    if (!scienceDef) {
+      return 0;
+    }
+
+    const normalizedScience = scienceDef.name.trim().toUpperCase();
+    if (!normalizedScience || normalizedScience === 'NONE') {
+      return 0;
+    }
+
+    if (!this.isScienceAvailableForLocalPlayer(normalizedScience)) {
+      return 0;
+    }
+
+    if (this.hasSideScience(normalizedSide, normalizedScience)) {
+      return 0;
+    }
+
+    const scienceCost = this.getSciencePurchaseCost(scienceDef);
+    if (scienceCost <= 0 || scienceCost > this.localPlayerSciencePurchasePoints) {
+      return 0;
+    }
+
+    for (const prerequisite of this.getSciencePrerequisites(scienceDef)) {
+      if (!this.hasSideScience(normalizedSide, prerequisite)) {
+        return 0;
+      }
+    }
+
+    return scienceCost;
   }
 
   private getSideUpgradeSet(map: Map<string, Set<string>>, normalizedSide: string): Set<string> {
@@ -1490,6 +1680,42 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const created = new Set<string>();
     this.sideSciences.set(normalizedSide, created);
+    return created;
+  }
+
+  private getSideKindOfProductionCostModifiers(normalizedSide: string): KindOfProductionCostModifier[] {
+    const existing = this.sideKindOfProductionCostModifiers.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+
+    const created: KindOfProductionCostModifier[] = [];
+    this.sideKindOfProductionCostModifiers.set(normalizedSide, created);
+    return created;
+  }
+
+  private getSidePowerStateMap(normalizedSide: string): SidePowerState {
+    const existing = this.sidePowerBonus.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+
+    const created: SidePowerState = { powerBonus: 0 };
+    this.sidePowerBonus.set(normalizedSide, created);
+    return created;
+  }
+
+  private getSideRadarStateMap(normalizedSide: string): SideRadarState {
+    const existing = this.sideRadarState.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+
+    const created: SideRadarState = {
+      radarCount: 0,
+      disableProofRadarCount: 0,
+    };
+    this.sideRadarState.set(normalizedSide, created);
     return created;
   }
 
@@ -1698,13 +1924,60 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     entity.completedUpgrades.add(normalizedUpgrade);
+
+    if (this.iniDataRegistry) {
+      const upgradeDef = this.findUpgradeDefByName(this.iniDataRegistry, normalizedUpgrade);
+      if (upgradeDef) {
+        const existingModuleIds = new Set(entity.upgradeModules.map((module) => module.id));
+        const modulesFromUpgrade = this.extractUpgradeModulesFromBlocks(
+          upgradeDef.blocks ?? [],
+          normalizedUpgrade,
+        );
+        for (const module of modulesFromUpgrade) {
+          if (!existingModuleIds.has(module.id)) {
+            entity.upgradeModules.push(module);
+            existingModuleIds.add(module.id);
+          }
+        }
+      }
+    }
+
     return this.executePendingUpgradeModules(entityId, entity);
   }
 
-  private executePendingUpgradeModules(entityId: number, entity: MapEntity): boolean {
+  private captureEntity(entityId: number, newSide: string): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return;
+    }
+
+    const normalizedNewSide = this.normalizeSide(newSide);
+    if (!normalizedNewSide) {
+      return;
+    }
+
+    const normalizedOldSide = this.normalizeSide(entity.side ?? '');
+    entity.side = normalizedNewSide;
+    entity.controllingPlayerToken = this.normalizeControllingPlayerToken(normalizedNewSide);
+    this.transferCostModifierUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
+    this.transferPowerPlantUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
+    this.transferRadarUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
+  }
+
+  private executePendingUpgradeModules(
+    entityId: number,
+    entity: MapEntity,
+    skipGlobalPlayerUpgradeModules = false,
+  ): boolean {
     let appliedAny = false;
     const upgradeMaskToCheck = this.buildEntityUpgradeMask(entity);
     for (const module of entity.upgradeModules) {
+      if (
+        skipGlobalPlayerUpgradeModules
+        && (module.moduleType === 'COSTMODIFIERUPGRADE' || module.moduleType === 'GRANTSCIENCEUPGRADE')
+      ) {
+        continue;
+      }
       if (!this.canExecuteUpgradeModule(entity, module, upgradeMaskToCheck)) {
         continue;
       }
@@ -1725,6 +1998,27 @@ export class GameLogicSubsystem implements Subsystem {
         appliedThisModule = this.applyCommandSetUpgrade(entity, module);
       } else if (module.moduleType === 'STATUSBITSUPGRADE') {
         appliedThisModule = this.applyStatusBitsUpgrade(entity, module);
+      } else if (module.moduleType === 'STEALTHUPGRADE') {
+        appliedThisModule = this.applyStealthUpgrade(entity);
+      } else if (module.moduleType === 'WEAPONBONUSUPGRADE') {
+        appliedThisModule = this.applyWeaponBonusUpgrade(entity);
+      } else if (module.moduleType === 'COSTMODIFIERUPGRADE') {
+        appliedThisModule = this.applyCostModifierUpgradeModule(entity, module);
+      } else if (module.moduleType === 'GRANTSCIENCEUPGRADE') {
+        appliedThisModule = this.applyGrantScienceUpgradeModule(entity, module);
+      } else if (module.moduleType === 'POWERPLANTUPGRADE') {
+        appliedThisModule = this.applyPowerPlantUpgradeModule(entity, module);
+      } else if (module.moduleType === 'RADARUPGRADE') {
+        appliedThisModule = this.applyRadarUpgradeModule(entity, module);
+      } else if (module.moduleType === 'PASSENGERSFIREUPGRADE') {
+        // Source parity: PassengersFireUpgrade sets contain->setPassengerAllowedToFire(TRUE).
+        if (entity.containProfile) {
+          entity.containProfile.passengersAllowedToFire = true;
+          appliedThisModule = true;
+        }
+      } else if (module.moduleType === 'UNPAUSESPECIALPOWERUPGRADE') {
+        // Source parity: UnpauseSpecialPowerUpgrade clears the associated special power pause.
+        appliedThisModule = this.applyUnpauseSpecialPowerUpgradeModule(entity, module);
       }
 
       if (!appliedThisModule) {
@@ -1752,7 +2046,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.sidePlayerTypes.clear();
     this.sideUpgradesInProduction.clear();
     this.sideCompletedUpgrades.clear();
+    this.sideKindOfProductionCostModifiers.clear();
     this.sideSciences.clear();
+    this.localPlayerScienceAvailability.clear();
+    this.localPlayerSciencePurchasePoints = 0;
+    this.sidePowerBonus.clear();
+    this.sideRadarState.clear();
     this.frameCounter = 0;
     this.gameRandom.setSeed(1);
     this.isAttackMoveToMode = false;
@@ -1806,11 +2105,13 @@ export class GameLogicSubsystem implements Subsystem {
     const productionProfile = this.extractProductionProfile(objectDef);
     const queueProductionExitProfile = this.extractQueueProductionExitProfile(objectDef);
     const parkingPlaceProfile = this.extractParkingPlaceProfile(objectDef);
+    const containProfile = this.extractContainProfile(objectDef);
     const jetAISneakyProfile = this.extractJetAISneakyProfile(objectDef);
     const weaponTemplateSets = this.extractWeaponTemplateSets(objectDef);
     const armorTemplateSets = this.extractArmorTemplateSets(objectDef);
     const attackWeapon = this.resolveAttackWeaponProfile(objectDef, iniDataRegistry);
     const bodyStats = this.resolveBodyStats(objectDef);
+    const energyBonus = readNumericField(objectDef?.fields ?? {}, ['EnergyBonus']) ?? 0;
     const largestWeaponRange = this.resolveLargestWeaponRange(objectDef, iniDataRegistry);
     const armorDamageCoefficients = this.resolveArmorDamageCoefficientsForSetSelection(
       armorTemplateSets,
@@ -1885,6 +2186,7 @@ export class GameLogicSubsystem implements Subsystem {
       canTakeDamage: bodyStats.maxHealth > 0,
       maxHealth: bodyStats.maxHealth,
       health: bodyStats.initialHealth,
+      energyBonus,
       attackWeapon,
       weaponTemplateSets,
       weaponSetFlagsMask: 0,
@@ -1911,9 +2213,12 @@ export class GameLogicSubsystem implements Subsystem {
       queueProductionExitProfile,
       rallyPoint: null,
       parkingPlaceProfile,
+      containProfile,
       queueProductionExitDelayFramesRemaining: 0,
       queueProductionExitBurstRemaining: queueProductionExitProfile?.initialBurst ?? 0,
       parkingSpaceProducerId: null,
+      helixCarrierId: null,
+      helixPortableRiderId: null,
       pathDiameter,
       pathfindCenterInCell,
       blocksPath,
@@ -2135,6 +2440,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!Number.isFinite(buildCostRaw)) {
       return 0;
     }
+    // Source parity note: C&C upgrade cost calc does not apply kind-of production
+    // cost modifiers; only object build/production costs are affected in this path.
     return Math.max(0, Math.trunc(buildCostRaw));
   }
 
@@ -2813,6 +3120,39 @@ export class GameLogicSubsystem implements Subsystem {
       .filter((token) => token.length > 0 && token !== 'NONE');
   }
 
+  private parseKindOf(value: IniValue | undefined): string[] {
+    if (value === undefined) {
+      return [];
+    }
+
+    return this.extractIniValueTokens(value)
+      .flatMap((tokens) => tokens)
+      .map((token) => token.trim().toUpperCase())
+      .filter((token) => token.length > 0 && token !== 'NONE');
+  }
+
+  private parsePercent(value: IniValue | undefined): number | null {
+    if (value === undefined) {
+      return null;
+    }
+
+    const tokens = this.extractIniValueTokens(value).flatMap((entry) => entry);
+    for (const token of tokens) {
+      const trimmed = token.trim();
+      if (!trimmed || trimmed.toUpperCase() === 'NONE') {
+        continue;
+      }
+
+      const numericText = trimmed.endsWith('%') ? trimmed.slice(0, -1) : trimmed;
+      const parsed = Number(numericText);
+      if (Number.isFinite(parsed)) {
+        return parsed / 100;
+      }
+    }
+
+    return null;
+  }
+
   private parseObjectStatusNames(value: IniValue | undefined): string[] {
     if (value === undefined) {
       return [];
@@ -2915,6 +3255,7 @@ export class GameLogicSubsystem implements Subsystem {
             exitDelayFrames: this.msToLogicFrames(exitDelayMs),
             allowAirborneCreation: readBooleanField(block.fields, ['AllowAirborneCreation']) === true,
             initialBurst: Math.max(0, Math.trunc(initialBurstRaw)),
+            spawnPointBoneName: null,
           };
         } else if (moduleType === 'SUPPLYCENTERPRODUCTIONEXITUPDATE') {
           const unitCreatePoint = readCoord3DField(block.fields, ['UnitCreatePoint']) ?? { x: 0, y: 0, z: 0 };
@@ -2926,6 +3267,21 @@ export class GameLogicSubsystem implements Subsystem {
             exitDelayFrames: 0,
             allowAirborneCreation: false,
             initialBurst: 0,
+            spawnPointBoneName: null,
+          };
+        } else if (moduleType === 'SPAWNPOINTPRODUCTIONEXITUPDATE') {
+          // Source parity: SpawnPointProductionExitUpdate.cpp drives exits from named bone positions.
+          // This browser port currently lacks bone-space exit placement, so we deterministically
+          // use producer-local origin and emit no rally/airborne overrides.
+          const spawnPointBoneName = readStringField(block.fields, ['SpawnPointBoneName']);
+          profile = {
+            moduleType: 'SPAWN_POINT',
+            unitCreatePoint: { x: 0, y: 0, z: 0 },
+            naturalRallyPoint: null,
+            exitDelayFrames: 0,
+            allowAirborneCreation: false,
+            initialBurst: 0,
+            spawnPointBoneName: spawnPointBoneName ?? null,
           };
         }
       }
@@ -2992,6 +3348,80 @@ export class GameLogicSubsystem implements Subsystem {
     };
   }
 
+  private extractContainProfile(objectDef: ObjectDef | undefined): ContainProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: ContainProfile | null = null;
+
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() !== 'BEHAVIOR') {
+        for (const child of block.blocks) {
+          visitBlock(child);
+        }
+        return;
+      }
+
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      const passengersAllowedRaw = readBooleanField(block.fields, ['PassengersAllowedToFire']);
+      const passengersAllowedToFire = passengersAllowedRaw === true;
+      const payloadTemplateNames = readStringList(block.fields, ['PayloadTemplateName']).map((templateName) =>
+        templateName.toUpperCase(),
+      );
+
+      if (moduleType === 'OPENCONTAIN') {
+        profile = {
+          moduleType: 'OPEN',
+          passengersAllowedToFire,
+          passengersAllowedToFireDefault: passengersAllowedToFire,
+        };
+      } else if (moduleType === 'TRANSPORTCONTAIN') {
+        profile = {
+          moduleType: 'TRANSPORT',
+          passengersAllowedToFire,
+          passengersAllowedToFireDefault: passengersAllowedToFire,
+        };
+      } else if (moduleType === 'OVERLORDCONTAIN') {
+        profile = {
+          moduleType: 'OVERLORD',
+          passengersAllowedToFire,
+          passengersAllowedToFireDefault: passengersAllowedToFire,
+        };
+      } else if (moduleType === 'HELIXCONTAIN') {
+        // HELIXCONTAIN is a Zero Hour-specific container module name used by data INIs;
+        // we map it to a dedicated internal container profile to preserve source behavior.
+        profile = {
+          moduleType: 'HELIX',
+          passengersAllowedToFire,
+          passengersAllowedToFireDefault: passengersAllowedToFire,
+          portableStructureTemplateNames: payloadTemplateNames,
+        };
+      } else if (moduleType === 'GARRISONCONTAIN') {
+        // GarrisonContain is OpenContain-derived in source but always returns TRUE from
+        // isPassengerAllowedToFire(), so we track it explicitly for behavior parity.
+        profile = {
+          moduleType: 'GARRISON',
+          passengersAllowedToFire,
+          passengersAllowedToFireDefault: passengersAllowedToFire,
+        };
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
   private extractJetAISneakyProfile(objectDef: ObjectDef | undefined): JetAISneakyProfile | null {
     if (!objectDef) {
       return null;
@@ -3039,6 +3469,13 @@ export class GameLogicSubsystem implements Subsystem {
       return [];
     }
 
+    return this.extractUpgradeModulesFromBlocks(objectDef.blocks);
+  }
+
+  private extractUpgradeModulesFromBlocks(
+    blocks: IniBlock[] = [],
+    sourceUpgradeName: string | null = null,
+  ): UpgradeModuleProfile[] {
     const modules: UpgradeModuleProfile[] = [];
     let index = 0;
 
@@ -3053,6 +3490,14 @@ export class GameLogicSubsystem implements Subsystem {
           || moduleType === 'WEAPONSETUPGRADE'
           || moduleType === 'COMMANDSETUPGRADE'
           || moduleType === 'STATUSBITSUPGRADE'
+          || moduleType === 'STEALTHUPGRADE'
+          || moduleType === 'WEAPONBONUSUPGRADE'
+          || moduleType === 'COSTMODIFIERUPGRADE'
+          || moduleType === 'GRANTSCIENCEUPGRADE'
+          || moduleType === 'POWERPLANTUPGRADE'
+          || moduleType === 'RADARUPGRADE'
+          || moduleType === 'PASSENGERSFIREUPGRADE'
+          || moduleType === 'UNPAUSESPECIALPOWERUPGRADE'
         ) {
           const triggeredBy = new Set(this.parseUpgradeNames(block.fields['TriggeredBy']));
           const conflictsWith = new Set(this.parseUpgradeNames(block.fields['ConflictsWith']));
@@ -3084,11 +3529,29 @@ export class GameLogicSubsystem implements Subsystem {
           const commandSetAltTriggerUpgrade = commandSetAltTriggerUpgradeRaw && commandSetAltTriggerUpgradeRaw !== 'NONE'
             ? commandSetAltTriggerUpgradeRaw
             : null;
-          const moduleId = `${moduleType}:${block.name}:${index}`;
+          const effectKindOf = moduleType === 'COSTMODIFIERUPGRADE'
+            ? new Set(this.parseKindOf(block.fields['EffectKindOf']))
+            : new Set<string>();
+          const effectPercent = moduleType === 'COSTMODIFIERUPGRADE'
+            ? (this.parsePercent(block.fields['Percentage']) ?? 0)
+            : 0;
+          const grantScienceName = moduleType === 'GRANTSCIENCEUPGRADE'
+            ? (readStringField(block.fields, ['GrantScience'])?.trim().toUpperCase() ?? '')
+            : '';
+          const radarIsDisableProof = moduleType === 'RADARUPGRADE'
+            ? readBooleanField(block.fields, ['DisableProof']) ?? false
+            : false;
+          const specialPowerTemplateName = moduleType === 'UNPAUSESPECIALPOWERUPGRADE'
+            ? (readStringField(block.fields, ['SpecialPowerTemplate'])?.trim().toUpperCase() ?? '')
+            : '';
+          const moduleId = sourceUpgradeName === null
+            ? `${moduleType}:${block.name}:${index}`
+            : `${moduleType}:${block.name}:${index}:${sourceUpgradeName}`;
           index += 1;
           modules.push({
             id: moduleId,
             moduleType,
+            sourceUpgradeName,
             triggeredBy,
             conflictsWith,
             removesUpgrades,
@@ -3100,10 +3563,19 @@ export class GameLogicSubsystem implements Subsystem {
             commandSetName: commandSetName && commandSetName !== 'NONE' ? commandSetName : null,
             commandSetAltName: commandSetAltName && commandSetAltName !== 'NONE' ? commandSetAltName : null,
             commandSetAltTriggerUpgrade,
+            effectKindOf,
+            effectPercent,
+            grantScienceName,
+            radarIsDisableProof,
+            specialPowerTemplateName,
           });
         }
         // TODO(C&C source parity): port additional UpgradeModule types beyond
-        // Locomotor/MaxHealth/Armor/WeaponSet/CommandSet/StatusBits upgrades.
+        // ArmorSet/WeaponSet/CommandSet/StatusBits/Locomotor/MaxHealth/CostModifier/
+        // GrantScience/UnpauseSpecialPower upgrades.
+        // PowerPlantUpgrade and RadarUpgrade are wired here, and
+        // TODO(source parity): port additional modules (for example
+        // Overcharge/WeaponOverride variants) when needed.
       }
 
       for (const child of block.blocks) {
@@ -3111,11 +3583,352 @@ export class GameLogicSubsystem implements Subsystem {
       }
     };
 
-    for (const block of objectDef.blocks) {
+    for (const block of blocks) {
       visitBlock(block);
     }
 
     return modules;
+  }
+
+  private applyUnpauseSpecialPowerUpgradeModule(
+    entity: MapEntity,
+    module: UpgradeModuleProfile,
+  ): boolean {
+    const specialPowerTemplateName = module.specialPowerTemplateName.trim().toUpperCase();
+    if (!specialPowerTemplateName) {
+      return false;
+    }
+
+    let isSharedSynced = false;
+    const registry = this.iniDataRegistry;
+    if (registry !== null) {
+      const specialPowerDef = registry.getSpecialPower(specialPowerTemplateName);
+      if (specialPowerDef) {
+        isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
+      }
+    }
+
+    // Source parity: UnpauseSpecialPowerUpgrade::upgradeImplementation() calls
+    // pauseCountdown(FALSE) on the matching SpecialPowerModule.
+    this.setSpecialPowerReadyFrame(specialPowerTemplateName, entity.id, isSharedSynced, this.frameCounter);
+    return true;
+  }
+
+  private applyCostModifierUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    const side = this.normalizeSide(entity.side);
+    if (!side) {
+      return false;
+    }
+
+    // Source parity: CostModifierUpgrade.cpp calls Player::addKindOfProductionCostChange on upgrade completion.
+    this.applyCostModifierUpgradeToSide(side, module);
+    return true;
+  }
+
+  private applyCostModifierUpgradeToSide(side: string, module: UpgradeModuleProfile): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    // Source parity: Player::addKindOfProductionCostChange updates a refcounted side production list.
+    const modifiers = this.getSideKindOfProductionCostModifiers(normalizedSide);
+    const existingModifier = modifiers.find((modifier) => (
+      modifier.multiplier === module.effectPercent
+      && this.areKindOfTokenSetsEquivalent(modifier.kindOf, module.effectKindOf)
+    ));
+    if (existingModifier) {
+      existingModifier.refCount += 1;
+      return;
+    }
+    modifiers.push({
+      kindOf: new Set(module.effectKindOf),
+      multiplier: module.effectPercent,
+      refCount: 1,
+    });
+  }
+
+  private removeCostModifierUpgradeFromSide(side: string, module: UpgradeModuleProfile): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    const modifiers = this.getSideKindOfProductionCostModifiers(normalizedSide);
+    const index = modifiers.findIndex((modifier) => (
+      modifier.multiplier === module.effectPercent
+      && this.areKindOfTokenSetsEquivalent(modifier.kindOf, module.effectKindOf)
+    ));
+    if (index < 0) {
+      return;
+    }
+
+    // Source parity: Player::removeKindOfProductionCostChange decrements refcount and removes at zero.
+    const modifier = modifiers[index];
+    modifier.refCount -= 1;
+    if (modifier.refCount <= 0) {
+      modifiers.splice(index, 1);
+    }
+  }
+
+  private removeCostModifierUpgradeFromEntity(entity: MapEntity, module: UpgradeModuleProfile): void {
+    const side = this.normalizeSide(entity.side);
+    if (!side) {
+      return;
+    }
+    this.removeCostModifierUpgradeFromSide(side, module);
+  }
+
+  private transferCostModifierUpgradesBetweenSides(entity: MapEntity, oldSide: string, newSide: string): void {
+    const normalizedOldSide = this.normalizeSide(oldSide);
+    const normalizedNewSide = this.normalizeSide(newSide);
+    if (!normalizedOldSide || !normalizedNewSide || normalizedOldSide === normalizedNewSide) {
+      return;
+    }
+    this.transferCostModifierUpgradesBetweenSidesForCapture(entity, normalizedOldSide, normalizedNewSide);
+  }
+
+  private transferCostModifierUpgradesBetweenSidesForCapture(
+    entity: MapEntity,
+    oldSide: string,
+    newSide: string,
+  ): void {
+    if (!oldSide || !newSide || oldSide === newSide) {
+      return;
+    }
+
+    // Source parity: Object::onCapture invokes each upgrade module's onCapture. For
+    // COSTMODIFIERUPGRADE, this means removing side effects from the old owner and
+    // re-applying them to the new owner while the upgrade is active.
+    for (const module of entity.upgradeModules) {
+      if (module.moduleType !== 'COSTMODIFIERUPGRADE') {
+        continue;
+      }
+      if (!entity.executedUpgradeModules.has(module.id)) {
+        continue;
+      }
+      this.removeCostModifierUpgradeFromSide(oldSide, module);
+      this.applyCostModifierUpgradeToSide(newSide, module);
+    }
+  }
+
+  private transferPowerPlantUpgradesBetweenSides(entity: MapEntity, oldSide: string, newSide: string): void {
+    const normalizedOldSide = this.normalizeSide(oldSide);
+    const normalizedNewSide = this.normalizeSide(newSide);
+    if (!normalizedOldSide || !normalizedNewSide || normalizedOldSide === normalizedNewSide) {
+      return;
+    }
+    this.transferPowerPlantUpgradesBetweenSidesForCapture(entity, normalizedOldSide, normalizedNewSide);
+  }
+
+  private transferPowerPlantUpgradesBetweenSidesForCapture(
+    entity: MapEntity,
+    oldSide: string,
+    newSide: string,
+  ): void {
+    if (!oldSide || !newSide || oldSide === newSide) {
+      return;
+    }
+
+    // Source parity: Object::onCapture invokes power-plant upgrade modules to move
+    // production bonus ownership from old owner to new owner while upgrade remains active.
+    for (const module of entity.upgradeModules) {
+      if (module.moduleType !== 'POWERPLANTUPGRADE') {
+        continue;
+      }
+      if (!entity.executedUpgradeModules.has(module.id)) {
+        continue;
+      }
+      this.removePowerPlantUpgradeFromSide(oldSide, entity);
+      this.applyPowerPlantUpgradeToSide(newSide, module, entity);
+    }
+  }
+
+  private transferRadarUpgradesBetweenSides(entity: MapEntity, oldSide: string, newSide: string): void {
+    const normalizedOldSide = this.normalizeSide(oldSide);
+    const normalizedNewSide = this.normalizeSide(newSide);
+    if (!normalizedOldSide || !normalizedNewSide || normalizedOldSide === normalizedNewSide) {
+      return;
+    }
+    this.transferRadarUpgradesBetweenSidesForCapture(entity, normalizedOldSide, normalizedNewSide);
+  }
+
+  private transferRadarUpgradesBetweenSidesForCapture(
+    entity: MapEntity,
+    oldSide: string,
+    newSide: string,
+  ): void {
+    if (!oldSide || !newSide || oldSide === newSide) {
+      return;
+    }
+
+    // Source parity: Object::onCapture invokes radar-upgrade modules to transfer
+    // radar ownership while preserving disable-proof counts.
+    for (const module of entity.upgradeModules) {
+      if (module.moduleType !== 'RADARUPGRADE') {
+        continue;
+      }
+      if (!entity.executedUpgradeModules.has(module.id)) {
+        continue;
+      }
+      this.removeRadarUpgradeFromSide(oldSide, module);
+      this.applyRadarUpgradeToSide(newSide, module);
+    }
+  }
+
+  private applyGrantScienceUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    const side = this.normalizeSide(entity.side);
+    if (!side || !module.grantScienceName || module.grantScienceName === 'NONE') {
+      return false;
+    }
+
+    // Source parity: GrantScienceUpgrade.cpp translates the configured science name to
+    // a science type and invokes Player::grantScience().
+    return this.grantSideScience(side, module.grantScienceName);
+  }
+
+  private applyKindOfProductionCostModifiers(buildCost: number, side: string, kindOf: Set<string>): number {
+    if (!Number.isFinite(buildCost) || buildCost < 0) {
+      return 0;
+    }
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide || kindOf.size === 0) {
+      return buildCost;
+    }
+
+    let nextCost = buildCost;
+    for (const modifier of this.getSideKindOfProductionCostModifiers(normalizedSide)) {
+      if (modifier.kindOf.size === 0) {
+        continue;
+      }
+
+      let matchesKindOf = false;
+      for (const kindOfToken of modifier.kindOf) {
+        if (kindOf.has(kindOfToken)) {
+          matchesKindOf = true;
+          break;
+        }
+      }
+
+      if (!matchesKindOf) {
+        continue;
+      }
+
+      nextCost *= 1 + modifier.multiplier;
+    }
+
+    return nextCost;
+  }
+
+  private areKindOfTokenSetsEquivalent(left: Set<string>, right: Set<string>): boolean {
+    if (left.size !== right.size) {
+      return false;
+    }
+    for (const token of left) {
+      if (!right.has(token)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private applyPowerPlantUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    const side = this.normalizeSide(entity.side);
+    if (!side) {
+      return false;
+    }
+    // TODO(source parity): skip add/remove when object is disabled (Player::isDisabled checks).
+    this.applyPowerPlantUpgradeToSide(side, module, entity);
+    return true;
+  }
+
+  private applyPowerPlantUpgradeToSide(
+    side: string,
+    module: UpgradeModuleProfile,
+    entity: MapEntity,
+  ): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    // Source parity: PowerPlantUpgrade.cpp adds energy from the templated object.
+    const bonus = Number.isFinite(entity.energyBonus) ? entity.energyBonus : 0;
+    const sideState = this.getSidePowerStateMap(normalizedSide);
+    sideState.powerBonus += bonus;
+  }
+
+  private removePowerPlantUpgradeFromEntity(entity: MapEntity, module: UpgradeModuleProfile): void {
+    const side = this.normalizeSide(entity.side);
+    if (!side) {
+      return;
+    }
+    this.removePowerPlantUpgradeFromSide(side, entity);
+  }
+
+  private removePowerPlantUpgradeFromSide(
+    side: string,
+    entity: MapEntity,
+  ): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    // Source parity: PowerPlantUpgrade.cpp mirrors removePowerBonus() on upgrade removal/capture.
+    const bonus = Number.isFinite(entity.energyBonus) ? entity.energyBonus : 0;
+    const sideState = this.getSidePowerStateMap(normalizedSide);
+    sideState.powerBonus -= bonus;
+    if (sideState.powerBonus <= 0) {
+      this.sidePowerBonus.delete(normalizedSide);
+    }
+  }
+
+  private applyRadarUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    const side = this.normalizeSide(entity.side);
+    if (!side) {
+      return false;
+    }
+    // TODO(source parity): skip add/remove when object is disabled (onDisabled checks).
+    this.applyRadarUpgradeToSide(side, module);
+    return true;
+  }
+
+  private applyRadarUpgradeToSide(side: string, module: UpgradeModuleProfile): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    const state = this.getSideRadarStateMap(normalizedSide);
+    state.radarCount += 1;
+    if (module.radarIsDisableProof) {
+      state.disableProofRadarCount += 1;
+    }
+  }
+
+  private removeRadarUpgradeFromEntity(entity: MapEntity, module: UpgradeModuleProfile): void {
+    const side = this.normalizeSide(entity.side);
+    if (!side) {
+      return;
+    }
+    this.removeRadarUpgradeFromSide(side, module);
+  }
+
+  private removeRadarUpgradeFromSide(side: string, module: UpgradeModuleProfile): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    const state = this.getSideRadarStateMap(normalizedSide);
+    state.radarCount = Math.max(0, state.radarCount - 1);
+    if (module.radarIsDisableProof) {
+      state.disableProofRadarCount = Math.max(0, state.disableProofRadarCount - 1);
+    }
+    if (state.radarCount <= 0 && state.disableProofRadarCount <= 0) {
+      this.sideRadarState.delete(normalizedSide);
+    }
   }
 
   private canExecuteUpgradeModule(
@@ -3123,11 +3936,19 @@ export class GameLogicSubsystem implements Subsystem {
     module: UpgradeModuleProfile,
     upgradeMask?: ReadonlySet<string>,
   ): boolean {
-    return this.wouldUpgradeModuleWithMask(
-      entity,
-      module,
-      upgradeMask ?? this.buildEntityUpgradeMask(entity),
-    );
+    const maskToCheck = upgradeMask ?? this.buildEntityUpgradeMask(entity);
+    return this.wouldUpgradeModuleWithMask(entity, module, maskToCheck, true);
+  }
+
+  private canRemainActiveUpgradeModule(
+    entity: MapEntity,
+    module: UpgradeModuleProfile,
+    upgradeMask: ReadonlySet<string>,
+  ): boolean {
+    // Source parity: upgrade removals and command-set refresh evaluate whether a module
+    // stays active under current prerequisites without excluding modules already in the
+    // executed set.
+    return this.wouldUpgradeModuleWithMask(entity, module, upgradeMask, false);
   }
 
   private entityHasUpgrade(entity: MapEntity, upgradeName: string): boolean {
@@ -3172,8 +3993,11 @@ export class GameLogicSubsystem implements Subsystem {
     entity: MapEntity,
     module: UpgradeModuleProfile,
     upgradeMask: ReadonlySet<string>,
+    skipExecutedGate: boolean,
   ): boolean {
-    if (module.triggeredBy.size === 0 || entity.executedUpgradeModules.has(module.id)) {
+    // Source parity: GeneralsMD's UpgradeMux::wouldUpgrade requires both activation and key masks
+    // to be non-empty before considering triggers, and refuses re-running an already executed module.
+    if (skipExecutedGate && entity.executedUpgradeModules.has(module.id)) {
       return false;
     }
 
@@ -3201,6 +4025,7 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
+
   private isEntityAffectedByUpgrade(entity: MapEntity, upgradeName: string): boolean {
     const normalizedUpgrade = upgradeName.trim().toUpperCase();
     if (!normalizedUpgrade || normalizedUpgrade === 'NONE') {
@@ -3209,7 +4034,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const maskToCheck = this.buildEntityUpgradeMask(entity, normalizedUpgrade);
     for (const module of entity.upgradeModules) {
-      if (this.wouldUpgradeModuleWithMask(entity, module, maskToCheck)) {
+      if (this.wouldUpgradeModuleWithMask(entity, module, maskToCheck, false)) {
         return true;
       }
     }
@@ -3267,7 +4092,27 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  // Source parity: WeaponBonusUpgrade.cpp sets WEAPONBONUSCONDITION_PLAYER_UPGRADE,
+  // which maps to WEAPON_SET_FLAG_PLAYER_UPGRADE in this port's weapon-set selection.
+  private applyWeaponBonusUpgrade(entity: MapEntity): boolean {
+    entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_PLAYER_UPGRADE;
+    this.refreshEntityCombatProfiles(entity);
+    return true;
+  }
+
+  // Source parity: StealthUpgrade.cpp sets OBJECT_STATUS_CAN_STEALTH.
+  private applyStealthUpgrade(entity: MapEntity): boolean {
+    entity.objectStatusFlags.add('CAN_STEALTH');
+    return true;
+  }
+
   private applyCommandSetUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    const targetCommandSetName = this.resolveCommandSetUpgradeTarget(entity, module);
+    entity.commandSetStringOverride = targetCommandSetName;
+    return true;
+  }
+
+  private resolveCommandSetUpgradeTarget(entity: MapEntity, module: UpgradeModuleProfile): string | null {
     let targetCommandSetName = module.commandSetName;
     if (
       module.commandSetAltTriggerUpgrade
@@ -3276,13 +4121,28 @@ export class GameLogicSubsystem implements Subsystem {
       targetCommandSetName = module.commandSetAltName;
     }
 
-    if (targetCommandSetName && targetCommandSetName !== 'NONE') {
-      entity.commandSetStringOverride = targetCommandSetName;
-      return true;
+    if (!targetCommandSetName || targetCommandSetName === 'NONE') {
+      return null;
+    }
+    return targetCommandSetName;
+  }
+
+  private refreshEntityCommandSetOverride(entity: MapEntity): void {
+    let commandSetName: string | null = null;
+    const upgradeMask = this.buildEntityUpgradeMask(entity);
+    for (const module of entity.upgradeModules) {
+      if (module.moduleType !== 'COMMANDSETUPGRADE' || !entity.executedUpgradeModules.has(module.id)) {
+        continue;
+      }
+
+      if (!this.canRemainActiveUpgradeModule(entity, module, upgradeMask)) {
+        continue;
+      }
+
+      commandSetName = this.resolveCommandSetUpgradeTarget(entity, module);
     }
 
-    entity.commandSetStringOverride = null;
-    return true;
+    entity.commandSetStringOverride = commandSetName;
   }
 
   private applyStatusBitsUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
@@ -3305,6 +4165,71 @@ export class GameLogicSubsystem implements Subsystem {
     return changed || module.statusToSet.size > 0 || module.statusToClear.size > 0;
   }
 
+  private removeWeaponBonusUpgradeFromEntity(entity: MapEntity): void {
+    // Recompute weapon-set flags from all currently active modules so that removing
+    // one WEAPONBONUSUPGRADE does not clear a remaining WEAPONSETUPGRADE source.
+    entity.weaponSetFlagsMask &= ~WEAPON_SET_FLAG_PLAYER_UPGRADE;
+    for (const module of entity.upgradeModules) {
+      if (!entity.executedUpgradeModules.has(module.id)) {
+        continue;
+      }
+      if (module.moduleType === 'WEAPONSETUPGRADE' || module.moduleType === 'WEAPONBONUSUPGRADE') {
+        entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_PLAYER_UPGRADE;
+        break;
+      }
+    }
+    this.refreshEntityCombatProfiles(entity);
+  }
+
+  private removeStealthUpgradeFromEntity(entity: MapEntity): void {
+    // Keep CAN_STEALTH active if any other STEALTHUPGRADE module remains executed.
+    entity.objectStatusFlags.delete('CAN_STEALTH');
+    for (const module of entity.upgradeModules) {
+      if (!entity.executedUpgradeModules.has(module.id)) {
+        continue;
+      }
+      if (module.moduleType === 'STEALTHUPGRADE') {
+        entity.objectStatusFlags.add('CAN_STEALTH');
+        break;
+      }
+    }
+  }
+
+  private removeLocomotorUpgradeFromEntity(entity: MapEntity): void {
+    // Source parity: LocomotorSetUpgrade removal should restore base locomotor state when
+    // the source object-upgrade mask is no longer present.
+    this.setEntityLocomotorUpgrade(entity.id, false);
+  }
+
+  private removeStatusBitsUpgradeFromEntity(entity: MapEntity): void {
+    const controlledStatuses = new Set<string>();
+    for (const module of entity.upgradeModules) {
+      if (
+        !entity.executedUpgradeModules.has(module.id)
+        || module.moduleType !== 'STATUSBITSUPGRADE'
+      ) {
+        continue;
+      }
+      for (const statusName of module.statusToSet) {
+        controlledStatuses.add(statusName);
+      }
+      for (const statusName of module.statusToClear) {
+        controlledStatuses.add(statusName);
+      }
+    }
+
+    for (const statusName of controlledStatuses) {
+      entity.objectStatusFlags.delete(statusName);
+    }
+
+    for (const module of entity.upgradeModules) {
+      if (!entity.executedUpgradeModules.has(module.id) || module.moduleType !== 'STATUSBITSUPGRADE') {
+        continue;
+      }
+      this.applyStatusBitsUpgrade(entity, module);
+    }
+  }
+
   private processUpgradeModuleRemovals(entity: MapEntity, module: UpgradeModuleProfile): void {
     for (const upgradeName of module.removesUpgrades) {
       this.removeEntityUpgrade(entity, upgradeName);
@@ -3318,15 +4243,55 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     entity.completedUpgrades.delete(normalizedUpgrade);
+    const upgradeMask = this.buildEntityUpgradeMask(entity);
     for (const module of entity.upgradeModules) {
-      if (!module.triggeredBy.has(normalizedUpgrade)) {
+      if (!entity.executedUpgradeModules.has(module.id)) {
         continue;
       }
+
+      if (this.canRemainActiveUpgradeModule(entity, module, upgradeMask)) {
+        continue;
+      }
+
       entity.executedUpgradeModules.delete(module.id);
+      if (module.moduleType === 'COSTMODIFIERUPGRADE') {
+        this.removeCostModifierUpgradeFromEntity(entity, module);
+      } else if (module.moduleType === 'POWERPLANTUPGRADE') {
+        this.removePowerPlantUpgradeFromEntity(entity, module);
+      } else if (module.moduleType === 'RADARUPGRADE') {
+        this.removeRadarUpgradeFromEntity(entity, module);
+      } else if (module.moduleType === 'LOCOMOTORSETUPGRADE') {
+        this.removeLocomotorUpgradeFromEntity(entity);
+      } else if (module.moduleType === 'WEAPONBONUSUPGRADE') {
+        this.removeWeaponBonusUpgradeFromEntity(entity);
+      } else if (module.moduleType === 'STEALTHUPGRADE') {
+        this.removeStealthUpgradeFromEntity(entity);
+      } else if (module.moduleType === 'COMMANDSETUPGRADE') {
+        // Side effect is recomputed from remaining executable command-set modules.
+      } else if (module.moduleType === 'STATUSBITSUPGRADE') {
+        this.removeStatusBitsUpgradeFromEntity(entity);
+      } else if (module.moduleType === 'PASSENGERSFIREUPGRADE') {
+        // Source parity for PassengersFireUpgrade: when the upgrade is removed, restore
+        // container firing permission to its configured baseline unless another active
+        // PassengersFireUpgrade still applies.
+        const hasOtherPassengerFireUpgrade = entity.upgradeModules.some(
+          (executedModule) => executedModule.moduleType === 'PASSENGERSFIREUPGRADE'
+            && entity.executedUpgradeModules.has(executedModule.id),
+        );
+        if (!hasOtherPassengerFireUpgrade && entity.containProfile) {
+          entity.containProfile.passengersAllowedToFire = entity.containProfile.passengersAllowedToFireDefault;
+        }
+      } else if (module.moduleType === 'UNPAUSESPECIALPOWERUPGRADE') {
+        // Source parity: UnpauseSpecialPowerUpgrade is an instantaneous cooldown-release action,
+        // so no persistent entity-side state needs removal here.
+      }
     }
 
-    // TODO(C&C source parity): source resetUpgrade uses compiled UpgradeTemplate masks.
-    // This port currently resets executed module state by normalized TriggeredBy names.
+    this.refreshEntityCommandSetOverride(entity);
+
+    // Source parity: Object::removeUpgrade calls UpgradeModule::resetUpgrade(removedUpgradeMask)
+    // on all behavior modules; this loop mirrors that behavior by clearing modules whose
+    // trigger mask no longer matches the current upgrade mask.
   }
 
   private entityHasObjectStatus(entity: MapEntity, statusName: string): boolean {
@@ -3338,7 +4303,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private canEntityAttackFromStatus(entity: MapEntity): boolean {
-    // Source parity: Object::isAbleToAttack() early-outs on OBJECT_STATUS_NO_ATTACK,
+    // Source parity: GeneralsMD Object::isAbleToAttack() early-outs on OBJECT_STATUS_NO_ATTACK,
     // OBJECT_STATUS_UNDER_CONSTRUCTION, and OBJECT_STATUS_SOLD.
     if (this.entityHasObjectStatus(entity, 'NO_ATTACK')) {
       return false;
@@ -3350,8 +4315,42 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // TODO(C&C source parity): mirror additional isAbleToAttack() blockers
-    // (containment fire rules, disabled states, turret availability, AI module checks).
+    // Source parity: GeneralsMD Object::isAbleToAttack() adds DISABLED_SUBDUED guard.
+    // - Portable structures and spawned-weapon units are also blocked while
+    //   DISABLED_HACKED or DISABLED_EMP (see Object.cpp).
+    if (this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')) {
+      return false;
+    }
+    const containingEntity = this.resolveEntityContainingObject(entity);
+    const kindOf = this.resolveEntityKindOfSet(entity);
+    const isPortableOrSpawnWeaponUnit = kindOf.has('PORTABLE_STRUCTURE') || kindOf.has('SPAWNS_ARE_THE_WEAPONS');
+    if (isPortableOrSpawnWeaponUnit && (
+      this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
+    )) {
+      return false;
+    }
+    if (containingEntity && !this.isPassengerAllowedToFireFromContainingObject(entity, containingEntity)) {
+      // Source parity: GeneralsMD/Object.cpp checks contain modules via
+      // getContainedBy()->getContain()->isPassengerAllowedToFire().
+      return false;
+    }
+    if (isPortableOrSpawnWeaponUnit && kindOf.has('INFANTRY')) {
+      // Source parity: GeneralsMD/Object.cpp checks SlavedUpdateInterface for spawned
+      // infantry and blocks attacks when the linked slaver is DISABLED_SUBDUED.
+      // TODO(C&C source parity): port generic slaver linkage outside of queue-produced
+      // spawn relationship once SpawnBehavior/MobMemberSlavedUpdate state is represented.
+      if (
+        containingEntity
+        && this.entityHasObjectStatus(containingEntity, 'DISABLED_SUBDUED')
+      ) {
+        return false;
+      }
+    }
+
+    // TODO(C&C source parity): containment fire rules and
+    // turret-availability/AI module checks are intentionally deferred because they
+    // require fully modeling source AI + weapon module internals.
     return true;
   }
 
@@ -4149,6 +5148,9 @@ export class GameLogicSubsystem implements Subsystem {
       case 'setLocomotorUpgrade':
         this.setEntityLocomotorUpgrade(command.entityId, command.enabled);
         return;
+      case 'captureEntity':
+        this.captureEntity(command.entityId, command.newSide);
+        return;
       case 'applyUpgrade':
         this.applyUpgradeToEntity(command.entityId, command.upgradeName);
         return;
@@ -4177,7 +5179,7 @@ export class GameLogicSubsystem implements Subsystem {
         this.grantSideScience(command.side, command.scienceName);
         return;
       case 'applyPlayerUpgrade': {
-        const localSide = this.playerSideByIndex.get(this.localPlayerIndex);
+        const localSide = this.resolveLocalPlayerSide();
         if (!localSide) {
           return;
         }
@@ -4190,31 +5192,345 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'purchaseScience': {
-        const localSide = this.playerSideByIndex.get(this.localPlayerIndex);
+        const localSide = this.resolveLocalPlayerSide();
         if (!localSide) {
           return;
         }
-        const normalizedCost = Number.isFinite(command.scienceCost)
-          ? Math.max(0, Math.trunc(command.scienceCost))
-          : 0;
-        if (normalizedCost > this.localPlayerSciencePurchasePoints) {
+        const normalizedScienceName = command.scienceName.trim().toUpperCase();
+        if (!normalizedScienceName || normalizedScienceName === 'NONE') {
           return;
         }
-        if (!this.grantSideScience(localSide, command.scienceName)) {
+
+        const registry = this.iniDataRegistry;
+        if (!registry) {
+          return;
+        }
+
+        const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+        if (!scienceDef) {
+          return;
+        }
+
+        const normalizedScience = scienceDef.name.trim().toUpperCase();
+        if (!normalizedScience || normalizedScience === 'NONE') {
+          return;
+        }
+
+        const scienceCost = this.getPurchasableScienceCost(localSide, normalizedScience);
+        if (scienceCost <= 0) {
+          return;
+        }
+        if (!this.addScienceToSide(localSide, normalizedScience)) {
           return;
         }
         this.localPlayerSciencePurchasePoints = Math.max(
           0,
-          this.localPlayerSciencePurchasePoints - normalizedCost,
+          this.localPlayerSciencePurchasePoints - scienceCost,
         );
         return;
       }
       case 'issueSpecialPower':
-        // TODO(source parity): route SpecialPower execution through module/system owners.
+        this.routeIssueSpecialPowerCommand(command);
         return;
       default:
         return;
     }
+  }
+
+  private routeIssueSpecialPowerCommand(command: IssueSpecialPowerCommand): void {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return;
+    }
+
+    const normalizedSpecialPowerName = command.specialPowerName.trim().toUpperCase();
+    if (!normalizedSpecialPowerName) {
+      return;
+    }
+
+    // Source parity: this only guards known/unknown special powers by INI definition lookup.
+    // The actual execution path is intentionally TODO until module owners are fully wired.
+    const specialPowerDef = registry.getSpecialPower(normalizedSpecialPowerName);
+    if (!specialPowerDef) {
+      return;
+    }
+
+    const reloadFrames = this.msToLogicFrames(readNumericField(specialPowerDef.fields, ['ReloadTime']) ?? 0);
+    const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
+
+    const sourceEntityId = this.resolveIssueSpecialPowerSourceEntityId(command, normalizedSpecialPowerName);
+    if (sourceEntityId === null) {
+      return;
+    }
+
+    const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+    if (!sourceEntity || sourceEntity.destroyed) {
+      return;
+    }
+
+    // Source parity: shared special powers gate globally by power name; non-shared powers
+    // gate per source entity via its tracked shortcut-ready frame.
+    const canExecute = isSharedSynced
+      ? this.frameCounter >= this.resolveSharedShortcutSpecialPowerReadyFrame(normalizedSpecialPowerName)
+      : this.frameCounter >= this.resolveShortcutSpecialPowerSourceEntityReadyFrameBySource(
+        normalizedSpecialPowerName,
+        sourceEntityId,
+      );
+    if (!canExecute) {
+      return;
+    }
+
+    const readyFrame = this.frameCounter + reloadFrames;
+
+    const commandOption = Number.isFinite(command.commandOption) ? command.commandOption | 0 : 0;
+    const needsObjectTarget = (commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
+    const needsTargetPosition = (commandOption & COMMAND_OPTION_NEED_TARGET_POS) !== 0;
+
+    if (needsObjectTarget) {
+      if (!Number.isFinite(command.targetEntityId)) {
+        return;
+      }
+
+      const targetEntity = this.spawnedEntities.get(Math.trunc(command.targetEntityId));
+      if (!targetEntity || targetEntity.destroyed) {
+        return;
+      }
+
+      if (!this.isSpecialPowerObjectRelationshipAllowed(commandOption, this.getTeamRelationship(sourceEntity, targetEntity))) {
+        return;
+      }
+
+      this.onIssueSpecialPowerTargetObject(
+        sourceEntity.id,
+        normalizedSpecialPowerName,
+        targetEntity.id,
+        commandOption,
+        command.commandButtonId,
+        specialPowerDef,
+      );
+
+      this.setSpecialPowerReadyFrame(normalizedSpecialPowerName, sourceEntityId, isSharedSynced, readyFrame);
+      return;
+    }
+
+    if (needsTargetPosition) {
+      if (!Number.isFinite(command.targetX) || !Number.isFinite(command.targetZ)) {
+        return;
+      }
+
+      const targetX = command.targetX as number;
+      const targetZ = command.targetZ as number;
+      this.onIssueSpecialPowerTargetPosition(
+        sourceEntity.id,
+        normalizedSpecialPowerName,
+        targetX,
+        targetZ,
+        commandOption,
+        command.commandButtonId,
+        specialPowerDef,
+      );
+
+      this.setSpecialPowerReadyFrame(normalizedSpecialPowerName, sourceEntityId, isSharedSynced, readyFrame);
+      return;
+    }
+
+      this.onIssueSpecialPowerNoTarget(
+        sourceEntity.id,
+        normalizedSpecialPowerName,
+        commandOption,
+        command.commandButtonId,
+        specialPowerDef,
+      );
+
+      this.setSpecialPowerReadyFrame(normalizedSpecialPowerName, sourceEntityId, isSharedSynced, readyFrame);
+  }
+
+  private resolveSharedShortcutSpecialPowerReadyFrame(specialPowerName: string): number {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName) {
+      return this.frameCounter;
+    }
+
+    const sharedReadyFrame = this.sharedShortcutSpecialPowerReadyFrames.get(normalizedSpecialPowerName);
+    if (!Number.isFinite(sharedReadyFrame)) {
+      // Source parity: shared special powers are player-global and start at frame 0 (ready immediately)
+      // unless explicitly started by prior usage.
+      return this.frameCounter;
+    }
+
+    return Math.max(0, Math.trunc(sharedReadyFrame));
+  }
+
+  private resolveShortcutSpecialPowerSourceEntityReadyFrameBySource(
+    specialPowerName: string,
+    sourceEntityId: number,
+  ): number {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName || !Number.isFinite(sourceEntityId)) {
+      return this.frameCounter;
+    }
+
+    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
+    const sourcesForPower = this.shortcutSpecialPowerSourceByName.get(normalizedSpecialPowerName);
+    if (!sourcesForPower) {
+      return this.frameCounter;
+    }
+
+    const readyFrame = sourcesForPower.get(normalizedSourceEntityId);
+    if (!Number.isFinite(readyFrame)) {
+      return this.frameCounter;
+    }
+
+    return Math.max(0, Math.trunc(readyFrame));
+  }
+
+  private setSpecialPowerReadyFrame(
+    specialPowerName: string,
+    sourceEntityId: number,
+    isShared: boolean,
+    readyFrame: number,
+  ): void {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName) {
+      return;
+    }
+
+    if (!Number.isFinite(readyFrame)) {
+      return;
+    }
+
+    const normalizedReadyFrame = Math.max(this.frameCounter, Math.trunc(readyFrame));
+    if (isShared) {
+      this.sharedShortcutSpecialPowerReadyFrames.set(normalizedSpecialPowerName, normalizedReadyFrame);
+      return;
+    }
+
+    this.trackShortcutSpecialPowerSourceEntity(normalizedSpecialPowerName, sourceEntityId, normalizedReadyFrame);
+  }
+
+  private resolveIssueSpecialPowerSourceEntityId(
+    command: IssueSpecialPowerCommand,
+    normalizedSpecialPowerName: string,
+  ): number | null {
+    if (Number.isFinite(command.sourceEntityId)) {
+      const explicitSourceEntityId = Math.trunc(command.sourceEntityId as number);
+      const explicitSourceEntity = this.spawnedEntities.get(explicitSourceEntityId);
+      if (explicitSourceEntity && !explicitSourceEntity.destroyed) {
+        return explicitSourceEntityId;
+      }
+    }
+
+    if (command.issuingEntityIds.length > 0) {
+      for (const rawEntityId of command.issuingEntityIds) {
+        if (!Number.isFinite(rawEntityId)) {
+          continue;
+        }
+        const candidateId = Math.trunc(rawEntityId);
+        const candidateEntity = this.spawnedEntities.get(candidateId);
+        if (candidateEntity && !candidateEntity.destroyed) {
+          return candidateId;
+        }
+      }
+    }
+
+    const shortcutSourceEntityId = this.resolveShortcutSpecialPowerSourceEntityId(normalizedSpecialPowerName);
+    if (shortcutSourceEntityId !== null) {
+      const shortcutSourceEntity = this.spawnedEntities.get(shortcutSourceEntityId);
+      if (shortcutSourceEntity && !shortcutSourceEntity.destroyed) {
+        return shortcutSourceEntityId;
+      }
+    }
+
+    const selectedEntity = this.selectedEntityId !== null
+      ? this.spawnedEntities.get(this.selectedEntityId)
+      : null;
+    if (selectedEntity && !selectedEntity.destroyed) {
+      return selectedEntity.id;
+    }
+
+    return null;
+  }
+
+  private isSpecialPowerObjectRelationshipAllowed(
+    commandOption: number,
+    relationship: number,
+  ): boolean {
+    const requiresEnemy = (commandOption & COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT) !== 0;
+    const requiresNeutral = (commandOption & COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT) !== 0;
+    const requiresAlly = (commandOption & COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT) !== 0;
+
+    if (!requiresEnemy && !requiresNeutral && !requiresAlly) {
+      return true;
+    }
+
+    if (requiresEnemy && relationship === RELATIONSHIP_ENEMIES) {
+      return true;
+    }
+    if (requiresNeutral && relationship === RELATIONSHIP_NEUTRAL) {
+      return true;
+    }
+    if (requiresAlly && relationship === RELATIONSHIP_ALLIES) {
+      return true;
+    }
+
+    return false;
+  }
+
+  protected onIssueSpecialPowerNoTarget(
+    sourceEntityId: number,
+    specialPowerName: string,
+    commandOption: number,
+    commandButtonId: string,
+    _specialPowerDef: SpecialPowerDef,
+  ): void {
+    void sourceEntityId;
+    void specialPowerName;
+    void commandOption;
+    void commandButtonId;
+    // Source parity: route to SpecialPower module/module owners (see:
+    // GeneralsMD/Code/GameClient/GUI/ControlBar/ControlBarCommand.cpp around issueSpecialPowerCommand)
+    // GeneralsMD/Code/GameClient/GUI/ControlBar/ControlBarCommandProcessing.cpp
+    // For non-implemented execution paths, keep explicit TODO per source-compat policy.
+  }
+
+  protected onIssueSpecialPowerTargetPosition(
+    sourceEntityId: number,
+    specialPowerName: string,
+    targetX: number,
+    targetZ: number,
+    commandOption: number,
+    commandButtonId: string,
+    _specialPowerDef: SpecialPowerDef,
+  ): void {
+    void sourceEntityId;
+    void specialPowerName;
+    void targetX;
+    void targetZ;
+    void commandOption;
+    void commandButtonId;
+    // Source parity: route to owner module update path.
+    // Source candidates in GeneralsMD:
+    // - SpecialPowerCommand with target-position path in ControlBarCommand::isValid/issue handling.
+    // - SpecialPowerModule / SpecialPowerUpdate implementations (e.g. SpectreGunshipDeploymentUpdate.cpp).
+  }
+
+  protected onIssueSpecialPowerTargetObject(
+    sourceEntityId: number,
+    specialPowerName: string,
+    targetEntityId: number,
+    commandOption: number,
+    commandButtonId: string,
+    _specialPowerDef: SpecialPowerDef,
+  ): void {
+    void sourceEntityId;
+    void specialPowerName;
+    void targetEntityId;
+    void commandOption;
+    void commandButtonId;
+    // Source parity: route to SpecialPower module owner for object-target execution.
+    // TODO(source parity): replace this with full module dispatch from SpecialPowerTemplate lookup.
+    // See GeneralsMD/Code/GameLogic/Object/SpecialPower/* for execution modules and
+    // ControlBarCommand.cpp for object-target dispatch semantics.
   }
 
   private queueUnitProduction(entityId: number, unitTemplateName: string): boolean {
@@ -4269,7 +5585,7 @@ export class GameLogicSubsystem implements Subsystem {
     // TODO(C&C source parity): add remaining BuildAssistant checks beyond parking capacity/door reservation.
 
     // TODO(C&C source parity): include ThingTemplate::calcCostToBuild modifiers (handicap, faction production cost changes).
-    const buildCost = this.resolveObjectBuildCost(unitDef);
+    const buildCost = this.resolveObjectBuildCost(unitDef, producerSide);
     if (buildCost > this.getSideCredits(producerSide)) {
       return false;
     }
@@ -4622,11 +5938,21 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const upgradeType = this.resolveUpgradeType(upgradeDef);
+    const producerObjectDef = this.findObjectDefByName(registry, producer.templateName);
+    const commandSetName = producerObjectDef
+      ? this.resolveEntityCommandSetName(producer, producerObjectDef)
+      : null;
+    const hasExplicitCommandSet = commandSetName !== null;
+
     if (producer.productionQueue.some((entry) => entry.type === 'UPGRADE' && entry.upgradeName === normalizedUpgradeName)) {
       return false;
     }
 
     if (upgradeType === 'PLAYER') {
+      if (hasExplicitCommandSet && !this.canEntityProduceUpgrade(producer, upgradeDef)) {
+        return false;
+      }
+
       if (this.hasSideUpgradeCompleted(producerSide, normalizedUpgradeName)) {
         return false;
       }
@@ -4634,21 +5960,26 @@ export class GameLogicSubsystem implements Subsystem {
         return false;
       }
     } else if (upgradeType === 'OBJECT') {
+      // Source parity: OBJECT upgrades usually require a matching command-set button.
+      // Some upgrades intentionally change command sets (for example strategy-center command unlocks),
+      // so allow queueing when the upgrade explicitly drives a CommandSetUpgrade path for this unit.
+      if (
+        !this.canEntityProduceUpgrade(producer, upgradeDef)
+        && !this.canUpgradeTriggerCommandSetForEntity(producer, normalizedUpgradeName)
+      ) {
+        return false;
+      }
+
+      if (!hasExplicitCommandSet && !this.isEntityAffectedByUpgrade(producer, normalizedUpgradeName)) {
+        return false;
+      }
       if (producer.completedUpgrades.has(normalizedUpgradeName)) {
         return false;
       }
-      if (!this.isEntityAffectedByUpgrade(producer, normalizedUpgradeName)) {
-        return false;
-      }
     }
 
-    if (!this.canEntityProduceUpgrade(producer, upgradeDef, upgradeType)) {
-      return false;
-    }
-
-    // TODO(C&C source parity): port exact UpgradeCenter::canAffordUpgrade behavior (calcCostToBuild modifiers, possibly-scripted rules).
     const buildCost = this.resolveUpgradeBuildCost(upgradeDef);
-    if (buildCost > this.getSideCredits(producerSide)) {
+    if (!this.canAffordUpgrade(producerSide, buildCost)) {
       return false;
     }
     const withdrawn = this.withdrawSideCredits(producerSide, buildCost);
@@ -4674,10 +6005,20 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private canAffordUpgrade(side: string, buildCost: number): boolean {
+    // Source parity: UpgradeCenter::canAffordUpgrade in
+    // Generals/Code/GameEngine/Source/Common/System/Upgrade.cpp returns false if
+    // money < upgradeTemplate->calcCostToBuild(player), and nothing else.
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    return Math.max(0, this.getSideCredits(normalizedSide)) >= Math.max(0, Math.trunc(buildCost));
+  }
+
   private canEntityProduceUpgrade(
     producer: MapEntity,
     upgradeDef: UpgradeDef,
-    upgradeType: 'PLAYER' | 'OBJECT',
   ): boolean {
     const registry = this.iniDataRegistry;
     if (!registry) {
@@ -4689,13 +6030,13 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity: Object::canProduceUpgrade() checks the current command set for an
-    // explicit PLAYER_UPGRADE/OBJECT_UPGRADE button matching the requested upgrade.
+    // Source parity: Object::canProduceUpgrade() checks the current command set for a
+    // command button whose Upgrade field matches the requested upgrade.
     const commandSetName = this.resolveEntityCommandSetName(producer, producerObjectDef);
     if (!commandSetName) {
-      // TODO(C&C source parity): mirror script-driven command-set override mutations that bypass
-      // CommandSetUpgrade module execution in this port.
-      return true;
+      // Source: Object::canProduceUpgrade returns false when a producer has no
+      // discoverable command set; callers are expected to handle this explicitly.
+      return false;
     }
 
     const commandSetDef = this.findCommandSetDefByName(registry, commandSetName);
@@ -4703,7 +6044,6 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const expectedCommandType = upgradeType === 'PLAYER' ? 'PLAYER_UPGRADE' : 'OBJECT_UPGRADE';
     const normalizedUpgradeName = upgradeDef.name.trim().toUpperCase();
     if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
       return false;
@@ -4720,13 +6060,33 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const commandType = this.resolveCommandButtonType(commandButtonDef);
-      if (commandType !== expectedCommandType) {
+      const commandUpgradeName = readStringField(commandButtonDef.fields, ['Upgrade'])?.trim().toUpperCase() ?? '';
+      if (!commandUpgradeName || commandUpgradeName === 'NONE') {
+        continue;
+      }
+      if (commandUpgradeName === normalizedUpgradeName) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private canUpgradeTriggerCommandSetForEntity(entity: MapEntity, normalizedUpgradeName: string): boolean {
+    const target = normalizedUpgradeName.trim().toUpperCase();
+    if (!target || target === 'NONE') {
+      return false;
+    }
+
+    for (const module of entity.upgradeModules) {
+      if (module.moduleType !== 'COMMANDSETUPGRADE') {
         continue;
       }
 
-      const commandUpgradeName = readStringField(commandButtonDef.fields, ['Upgrade'])?.trim().toUpperCase() ?? '';
-      if (commandUpgradeName === normalizedUpgradeName) {
+      if (module.sourceUpgradeName === target) {
+        return true;
+      }
+      if (module.triggeredBy.has(target)) {
         return true;
       }
     }
@@ -4744,18 +6104,6 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
     return baseCommandSet;
-  }
-
-  private resolveCommandButtonType(commandButtonDef: CommandButtonDef): string | null {
-    const commandToken = readStringField(commandButtonDef.fields, ['Command'])?.trim().toUpperCase();
-    if (!commandToken) {
-      return null;
-    }
-
-    if (commandToken.startsWith('GUI_COMMAND_')) {
-      return commandToken.slice('GUI_COMMAND_'.length);
-    }
-    return commandToken;
   }
 
   private cancelUpgradeProduction(entityId: number, upgradeName: string): boolean {
@@ -4796,12 +6144,14 @@ export class GameLogicSubsystem implements Subsystem {
     return Math.trunc(buildTimeSeconds * LOGIC_FRAME_RATE);
   }
 
-  private resolveObjectBuildCost(objectDef: ObjectDef): number {
+  private resolveObjectBuildCost(objectDef: ObjectDef, side: string = ''): number {
     const buildCostRaw = readNumericField(objectDef.fields, ['BuildCost']) ?? 0;
     if (!Number.isFinite(buildCostRaw)) {
       return 0;
     }
-    return Math.max(0, Math.trunc(buildCostRaw));
+    const normalizedSide = this.normalizeSide(side);
+    const nextCost = this.applyKindOfProductionCostModifiers(buildCostRaw, normalizedSide, this.normalizeKindOf(objectDef.kindOf));
+    return Math.max(0, Math.trunc(nextCost));
   }
 
   private resolveMaxSimultaneousOfType(objectDef: ObjectDef): number {
@@ -5070,7 +6420,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   private completeUnitProduction(producer: MapEntity, production: UnitProductionQueueEntry): void {
     if (!producer.queueProductionExitProfile) {
-      // TODO(C&C source parity): support additional ExitInterface modules (SpawnPointProductionExitUpdate).
       this.removeProductionEntry(producer, production.productionId);
       return;
     }
@@ -5130,10 +6479,34 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private applyCompletedPlayerUpgrade(side: string, upgradeName: string): void {
-    void upgradeName;
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
       return;
+    }
+
+    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
+      return;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (registry) {
+      const upgradeDef = this.findUpgradeDefByName(registry, normalizedUpgradeName);
+      if (upgradeDef) {
+        for (const module of this.extractUpgradeModulesFromBlocks(
+          upgradeDef.blocks ?? [],
+          normalizedUpgradeName,
+        )) {
+          if (module.moduleType === 'COSTMODIFIERUPGRADE') {
+            // Source parity: COSTMODIFIERUPGRADE.cpp routes to
+            // Player::addKindOfProductionCostChange on upgrade completion.
+            this.applyCostModifierUpgradeToSide(normalizedSide, module);
+          } else if (module.moduleType === 'GRANTSCIENCEUPGRADE') {
+            // Source parity: GrantScienceUpgrade.cpp grants configured science at upgrade completion.
+            this.grantSideScience(normalizedSide, module.grantScienceName);
+          }
+        }
+      }
     }
 
     for (const entity of this.spawnedEntities.values()) {
@@ -5143,7 +6516,8 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed) {
         continue;
       }
-      this.executePendingUpgradeModules(entity.id, entity);
+      // Skip side-global modules to avoid reapplying once per entity.
+      this.executePendingUpgradeModules(entity.id, entity, true);
     }
   }
 
@@ -5251,6 +6625,22 @@ export class GameLogicSubsystem implements Subsystem {
 
     parkingProfile.occupiedSpaceEntityIds.add(producedUnit.id);
     producedUnit.parkingSpaceProducerId = producer.id;
+    if (producer.containProfile?.moduleType === 'HELIX') {
+      const producedKindOf = this.resolveEntityKindOfSet(producedUnit);
+      if (producedKindOf.has('PORTABLE_STRUCTURE')) {
+        const allowedPortableTemplates = producer.containProfile.portableStructureTemplateNames;
+        const producedTemplateName = producedUnit.templateName.toUpperCase();
+        const isTemplateAllowed =
+          !allowedPortableTemplates || allowedPortableTemplates.length === 0 || allowedPortableTemplates.includes(producedTemplateName);
+        // Source parity: HelixContain::addToContain/addToContainList only set
+        // m_portableStructureID when it is INVALID_ID (first portable only).
+        // (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Contain/HelixContain.cpp:252,270)
+        if (producer.helixPortableRiderId === null && isTemplateAllowed) {
+          producer.helixPortableRiderId = producedUnit.id;
+        }
+        producedUnit.helixCarrierId = producer.id;
+      }
+    }
     return true;
   }
 
@@ -8481,6 +9871,111 @@ export class GameLogicSubsystem implements Subsystem {
     return kindOf;
   }
 
+  private resolveEntityContainingObject(entity: MapEntity): MapEntity | null {
+    // Source parity subset: map getContainedBy()/contain module checks onto the
+    // currently represented production/parking container relation.
+    return this.resolveProjectileLauncherContainer(entity);
+  }
+
+  private isPassengerAllowedToFireFromContainingObject(
+    entity: MapEntity,
+    container: MapEntity,
+  ): boolean {
+    // Source parity:
+    // - Object::isAbleToAttack() first gates attacks when container->isPassengerAllowedToFire() is false.
+    //   (Generals/Code/GameEngine/Source/GameLogic/Object/Object.cpp:2865)
+    // - WeaponSet::getAbleToUseWeaponAgainstTarget() checks container riders when allowed.
+    //   (Generals/Code/GameEngine/Source/GameLogic/Object/WeaponSet.cpp:711)
+    // - OpenContain recursively delegates to a parent container; OverlordContain redirect chains
+    //   similarly in the engine.
+    //   (OpenContain.cpp:1035, OverlordContain.cpp:99)
+    const kindOf = this.resolveEntityKindOfSet(entity);
+    const isInfantry = kindOf.has('INFANTRY');
+    const isPortableStructure = kindOf.has('PORTABLE_STRUCTURE');
+    const visited = new Set<number>();
+
+    const isAllowed = (currentContainer: MapEntity): boolean => {
+      if (visited.has(currentContainer.id)) {
+        // Cycle-guard for malformed nesting in test data.
+        return false;
+      }
+      visited.add(currentContainer.id);
+
+      const containProfile = currentContainer.containProfile;
+      if (!containProfile) {
+        // Unknown container module shape: keep permissive behavior.
+        return true;
+      }
+
+      const parent = this.resolveEntityContainingObject(currentContainer);
+      const parentProfile = parent?.containProfile;
+      const isParentOverlordStyle = parentProfile?.moduleType === 'OVERLORD' || parentProfile?.moduleType === 'HELIX';
+
+      if (containProfile.moduleType === 'OPEN') {
+        if (!containProfile.passengersAllowedToFire) {
+          return false;
+        }
+        return parent ? isAllowed(parent) : true;
+      }
+
+      if (containProfile.moduleType === 'TRANSPORT') {
+        if (!isInfantry) {
+          return false;
+        }
+
+        if (parent && isParentOverlordStyle) {
+          return isAllowed(parent);
+        }
+
+        return containProfile.passengersAllowedToFire;
+      }
+
+      if (containProfile.moduleType === 'OVERLORD') {
+        if (!isInfantry && !isPortableStructure) {
+          return false;
+        }
+        if (parent) {
+          return false;
+        }
+        return containProfile.passengersAllowedToFire;
+      }
+
+      if (containProfile.moduleType === 'HELIX') {
+        if (parent) {
+          return false;
+        }
+        if (isPortableStructure) {
+          const payloadTemplateNames = currentContainer.containProfile?.portableStructureTemplateNames;
+          const templateName = entity.templateName.toUpperCase();
+          if (payloadTemplateNames && payloadTemplateNames.length > 0 && !payloadTemplateNames.includes(templateName)) {
+            return false;
+          }
+          // Source parity: HelixContain::isPassengerAllowedToFire returns true only for the
+          // currently tracked portableStructureID; nested riders always fail.
+          // (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Contain/HelixContain.cpp:364-373)
+          return currentContainer.helixPortableRiderId === entity.id;
+        }
+        if (!isInfantry) {
+          return false;
+        }
+        return containProfile.passengersAllowedToFire;
+      }
+
+      if (containProfile.moduleType === 'GARRISON') {
+        // GarrisonContain.cpp returns TRUE only when container is not disabled.
+        // See Generals/Code/GameEngine/Source/GameLogic/Object/Contain/GarrisonContain.cpp.
+        if (this.entityHasObjectStatus(currentContainer, 'DISABLED_SUBDUED')) {
+          return false;
+        }
+        return true;
+      }
+
+      return true;
+    };
+
+    return isAllowed(container);
+  }
+
   private resolveEntityFenceWidth(entity: MapEntity): number {
     const registry = this.iniDataRegistry;
     if (!registry) {
@@ -8686,7 +10181,12 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed) {
       return;
     }
+    const completedUpgradeNames = Array.from(entity.completedUpgrades.values());
+    for (const completedUpgradeName of completedUpgradeNames) {
+      this.removeEntityUpgrade(entity, completedUpgradeName);
+    }
     this.cancelAndRefundAllProductionOnDeath(entity);
+    // Source parity: upgrade modules clean up side state via removeEntityUpgrade/onDelete parity.
     entity.destroyed = true;
     entity.moving = false;
     entity.moveTarget = null;
@@ -8756,6 +10256,16 @@ export class GameLogicSubsystem implements Subsystem {
           producer.parkingPlaceProfile.occupiedSpaceEntityIds.delete(entity.id);
         }
         entity.parkingSpaceProducerId = null;
+      }
+      if (entity.helixCarrierId !== null) {
+        const carrier = this.spawnedEntities.get(entity.helixCarrierId);
+        if (carrier?.helixPortableRiderId === entity.id) {
+          carrier.helixPortableRiderId = null;
+        }
+        entity.helixCarrierId = null;
+      }
+      if (entity.helixPortableRiderId !== null) {
+        entity.helixPortableRiderId = null;
       }
       this.scene.remove(entity.mesh);
       this.spawnedEntities.delete(entityId);
@@ -8880,6 +10390,20 @@ export class GameLogicSubsystem implements Subsystem {
       crc.addUnsignedByte(entity.isImmobile ? 1 : 0);
       crc.addUnsignedInt(Math.trunc(entity.crusherLevel) >>> 0);
       crc.addUnsignedInt(Math.trunc(entity.crushableLevel) >>> 0);
+      if (entity.helixCarrierId !== null) {
+        crc.addUnsignedByte(1);
+        // Deterministic state: include helix rider/carrier linkage used by HELIX contain rules.
+        this.addSignedIntCrc(crc, entity.helixCarrierId);
+      } else {
+        crc.addUnsignedByte(0);
+      }
+      if (entity.helixPortableRiderId !== null) {
+        crc.addUnsignedByte(1);
+        // Deterministic state: include helix rider/carrier linkage used by HELIX contain rules.
+        this.addSignedIntCrc(crc, entity.helixPortableRiderId);
+      } else {
+        crc.addUnsignedByte(0);
+      }
       crc.addUnsignedInt(Math.trunc(entity.pathDiameter) >>> 0);
       crc.addUnsignedInt(Math.trunc(entity.obstacleFootprint) >>> 0);
       crc.addUnsignedInt(Math.trunc(entity.pathIndex) >>> 0);
@@ -9003,6 +10527,9 @@ export class GameLogicSubsystem implements Subsystem {
     crc.addUnsignedInt(this.placementSummary.skippedObjects >>> 0);
     crc.addUnsignedInt(this.placementSummary.resolvedObjects >>> 0);
     crc.addUnsignedInt(this.placementSummary.unresolvedObjects >>> 0);
+    this.writeCostModifierUpgradeStatesCrc(crc, this.sideKindOfProductionCostModifiers);
+    this.writeSidePowerStateCrc(crc, this.sidePowerBonus);
+    this.writeSideRadarStateCrc(crc, this.sideRadarState);
   }
 
   private writeDeterministicAiCrc(
@@ -9081,6 +10608,10 @@ export class GameLogicSubsystem implements Subsystem {
         this.addSignedIntCrc(crc, command.entityId);
         crc.addUnsignedByte(command.enabled ? 1 : 0);
         return;
+      case 'captureEntity':
+        this.addSignedIntCrc(crc, command.entityId);
+        crc.addAsciiString(command.newSide);
+        return;
       case 'applyUpgrade':
         this.addSignedIntCrc(crc, command.entityId);
         crc.addAsciiString(command.upgradeName);
@@ -9116,7 +10647,6 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       case 'purchaseScience':
         crc.addAsciiString(command.scienceName);
-        this.addSignedIntCrc(crc, command.scienceCost);
         return;
       case 'issueSpecialPower':
         crc.addAsciiString(command.commandButtonId);
@@ -9144,6 +10674,66 @@ export class GameLogicSubsystem implements Subsystem {
     for (const [key, relationship] of entries) {
       crc.addAsciiString(key);
       this.addSignedIntCrc(crc, relationship);
+    }
+  }
+
+  private writeCostModifierUpgradeStatesCrc(
+    crc: XferCrcAccumulator,
+    sideModifiers: ReadonlyMap<string, KindOfProductionCostModifier[]>,
+  ): void {
+    const sideEntries = Array.from(sideModifiers.entries()).sort(([left], [right]) => left.localeCompare(right));
+    crc.addUnsignedInt(sideEntries.length >>> 0);
+    for (const [side, modifiers] of sideEntries) {
+      crc.addAsciiString(side);
+      const sortedModifiers = [...modifiers].sort((left, right) => {
+        const leftKindOf = Array.from(left.kindOf).sort().join('|');
+        const rightKindOf = Array.from(right.kindOf).sort().join('|');
+        if (leftKindOf < rightKindOf) {
+          return -1;
+        }
+        if (leftKindOf > rightKindOf) {
+          return 1;
+        }
+        if (left.multiplier !== right.multiplier) {
+          return left.multiplier - right.multiplier;
+        }
+        return left.refCount - right.refCount;
+      });
+      crc.addUnsignedInt(sortedModifiers.length >>> 0);
+      for (const modifier of sortedModifiers) {
+        const kindOf = Array.from(modifier.kindOf).sort();
+        crc.addUnsignedInt(kindOf.length >>> 0);
+        for (const kindOfToken of kindOf) {
+          crc.addAsciiString(kindOfToken);
+        }
+        this.addFloat32Crc(crc, modifier.multiplier);
+        crc.addSignedIntCrc(crc, modifier.refCount);
+      }
+    }
+  }
+
+  private writeSidePowerStateCrc(
+    crc: XferCrcAccumulator,
+    sidePowerState: ReadonlyMap<string, SidePowerState>,
+  ): void {
+    const sideEntries = Array.from(sidePowerState.entries()).sort(([left], [right]) => left.localeCompare(right));
+    crc.addUnsignedInt(sideEntries.length >>> 0);
+    for (const [side, state] of sideEntries) {
+      crc.addAsciiString(side);
+      this.addFloat32Crc(crc, state.powerBonus);
+    }
+  }
+
+  private writeSideRadarStateCrc(
+    crc: XferCrcAccumulator,
+    sideRadarState: ReadonlyMap<string, SideRadarState>,
+  ): void {
+    const sideEntries = Array.from(sideRadarState.entries()).sort(([left], [right]) => left.localeCompare(right));
+    crc.addUnsignedInt(sideEntries.length >>> 0);
+    for (const [side, state] of sideEntries) {
+      crc.addAsciiString(side);
+      crc.addUnsignedInt(state.radarCount >>> 0);
+      crc.addUnsignedInt(state.disableProofRadarCount >>> 0);
     }
   }
 
@@ -9343,6 +10933,35 @@ function colorBySide(side?: string): number {
 function coerceStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function readStringList(fields: Record<string, IniValue>, names: string[]): string[] {
+  for (const name of names) {
+    const values = readStringListValue(fields[name]);
+    if (values.length > 0) {
+      return values;
+    }
+  }
+
+  return [];
+}
+
+function readStringListValue(value: IniValue | undefined): string[] {
+  if (typeof value === 'string') {
+    return value
+      .split(/[\s,;]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => readStringListValue(entry as IniValue))
+      .filter((entry) => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  return [];
 }
 
 function readBooleanField(fields: Record<string, IniValue>, names: string[]): boolean | null {

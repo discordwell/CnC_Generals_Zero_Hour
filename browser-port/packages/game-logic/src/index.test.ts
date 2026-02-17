@@ -10,6 +10,8 @@ import {
   type IniDataBundle,
   type LocomotorDef,
   type ObjectDef,
+  type ObjectCreationListDef,
+  type SpecialPowerDef,
   type ScienceDef,
   type UpgradeDef,
   type WeaponDef,
@@ -75,10 +77,17 @@ function makeLocomotorDef(name: string, speed: number): LocomotorDef {
   };
 }
 
-function makeUpgradeDef(name: string, fields: Record<string, unknown>): UpgradeDef {
+function makeUpgradeDef(
+  name: string,
+  fields: Record<string, unknown>,
+  blocks: IniBlock[] = [],
+  kindOf?: string[],
+): UpgradeDef {
   return {
     name,
     fields: fields as Record<string, string | number | boolean | string[] | number[]>,
+    blocks,
+    kindOf: kindOf ? [...kindOf] : undefined,
   };
 }
 
@@ -108,6 +117,8 @@ function makeBundle(params: {
   weapons?: WeaponDef[];
   armors?: ArmorDef[];
   upgrades?: UpgradeDef[];
+  specialPowers?: SpecialPowerDef[];
+  objectCreationLists?: ObjectCreationListDef[];
   commandButtons?: CommandButtonDef[];
   commandSets?: CommandSetDef[];
   sciences?: ScienceDef[];
@@ -116,12 +127,16 @@ function makeBundle(params: {
   const weapons = params.weapons ?? [];
   const armors = params.armors ?? [];
   const upgrades = params.upgrades ?? [];
+  const specialPowers = params.specialPowers ?? [];
+  const objectCreationLists = params.objectCreationLists ?? [];
   const commandButtons = params.commandButtons ?? [];
   const commandSets = params.commandSets ?? [];
   const sciences = params.sciences ?? [];
   const locomotors = params.locomotors ?? [];
   return {
     objects: params.objects,
+    specialPowers,
+    objectCreationLists,
     weapons,
     armors,
     upgrades,
@@ -146,6 +161,8 @@ function makeBundle(params: {
         + weapons.length
         + armors.length
         + upgrades.length
+        + specialPowers.length
+        + objectCreationLists.length
         + commandButtons.length
         + commandSets.length
         + sciences.length
@@ -203,7 +220,229 @@ function makeMapObject(
   };
 }
 
-function runCombatTimeline(): number[] {
+const COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
+const COMMAND_OPTION_NEED_TARGET_POS = 0x00000020;
+
+type SpecialPowerCaptureEvent =
+  | {
+    type: 'noTarget';
+    sourceEntityId: number;
+    specialPowerName: string;
+    commandOption: number;
+    commandButtonId: string;
+    targetEntityId?: undefined;
+    targetX?: undefined;
+    targetZ?: undefined;
+  }
+  | {
+    type: 'targetPosition';
+    sourceEntityId: number;
+    specialPowerName: string;
+    commandOption: number;
+    commandButtonId: string;
+    targetX: number;
+    targetZ: number;
+    targetEntityId?: undefined;
+  }
+  | {
+    type: 'targetObject';
+    sourceEntityId: number;
+    specialPowerName: string;
+    commandOption: number;
+    commandButtonId: string;
+    targetEntityId: number;
+    targetX?: undefined;
+    targetZ?: undefined;
+  };
+
+class SpecialPowerCaptureSubsystem extends GameLogicSubsystem {
+  public readonly events: SpecialPowerCaptureEvent[] = [];
+
+  protected onIssueSpecialPowerNoTarget(
+    sourceEntityId: number,
+    specialPowerName: string,
+    commandOption: number,
+    commandButtonId: string,
+    _specialPowerDef: SpecialPowerDef,
+  ): void {
+    this.events.push({
+      type: 'noTarget',
+      sourceEntityId,
+      specialPowerName,
+      commandOption,
+      commandButtonId,
+    });
+  }
+
+  protected onIssueSpecialPowerTargetPosition(
+    sourceEntityId: number,
+    specialPowerName: string,
+    targetX: number,
+    targetZ: number,
+    commandOption: number,
+    commandButtonId: string,
+    _specialPowerDef: SpecialPowerDef,
+  ): void {
+    this.events.push({
+      type: 'targetPosition',
+      sourceEntityId,
+      specialPowerName,
+      commandOption,
+      commandButtonId,
+      targetX,
+      targetZ,
+    });
+  }
+
+  protected onIssueSpecialPowerTargetObject(
+    sourceEntityId: number,
+    specialPowerName: string,
+    targetEntityId: number,
+    commandOption: number,
+    commandButtonId: string,
+    _specialPowerDef: SpecialPowerDef,
+  ): void {
+    this.events.push({
+      type: 'targetObject',
+      sourceEntityId,
+      specialPowerName,
+      commandOption,
+      commandButtonId,
+      targetEntityId,
+    });
+  }
+}
+
+function makeSpecialPowerCaptureSetup(
+  options: { reloadTimeMs?: number; sharedSyncedTimer?: boolean } = {},
+): {
+  logic: SpecialPowerCaptureSubsystem;
+  bundle: ReturnType<typeof makeBundle>;
+  map: ReturnType<typeof makeMap>;
+} {
+  const reloadTimeMs = options.reloadTimeMs ?? 0;
+  const sharedSyncedTimer = options.sharedSyncedTimer === true;
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('CasterA', 'America', ['CAN_ATTACK'], []),
+      makeObjectDef('CasterB', 'America', ['CAN_ATTACK'], []),
+      makeObjectDef('CasterC', 'America', ['CAN_ATTACK'], []),
+      makeObjectDef('CasterD', 'America', ['CAN_ATTACK'], []),
+      makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody', { MaxHealth: 120, InitialHealth: 120 }),
+      ]),
+      makeObjectDef('AllyTarget', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody', { MaxHealth: 120, InitialHealth: 120 }),
+      ]),
+    ],
+    specialPowers: [
+      {
+        name: 'POWER_TEST',
+        fields: {
+          Type: 'Instant',
+          SpecialPowerTemplate: 'OCL_Fx',
+          ReloadTime: reloadTimeMs,
+          SharedSyncedTimer: sharedSyncedTimer,
+        },
+        blocks: [],
+      },
+    ],
+  });
+
+  const map = makeMap([
+    makeMapObject('CasterA', 5, 10),
+    makeMapObject('CasterB', 10, 10),
+    makeMapObject('CasterC', 15, 10),
+    makeMapObject('CasterD', 20, 10),
+    makeMapObject('EnemyTarget', 30, 10),
+    makeMapObject('AllyTarget', 40, 10),
+  ], 64, 64);
+  const logic = new SpecialPowerCaptureSubsystem(new THREE.Scene());
+  logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(64, 64));
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+
+  return {
+    logic,
+    bundle,
+    map,
+  };
+}
+
+function makeUnpauseSpecialPowerUpgradeSetup(
+  options: { reloadTimeMs?: number; sharedSyncedTimer?: boolean } = {},
+): {
+  logic: SpecialPowerCaptureSubsystem;
+} {
+  const reloadTimeMs = options.reloadTimeMs ?? 5000;
+  const sharedSyncedTimer = options.sharedSyncedTimer === true;
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('UnpausableCaster', 'America', ['CAN_ATTACK'], [
+        makeBlock('Behavior', 'UnpauseSpecialPowerUpgrade ModuleTag_Unpause', {
+          TriggeredBy: 'Upgrade_Unpause',
+          SpecialPowerTemplate: 'POWER_TEST',
+        }),
+      ]),
+      makeObjectDef('FallbackCaster', 'America', ['CAN_ATTACK'], []),
+      makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 120, InitialHealth: 120 }),
+      ]),
+    ],
+    specialPowers: [
+      {
+        name: 'POWER_TEST',
+        fields: {
+          Type: 'Instant',
+          SpecialPowerTemplate: 'OCL_Fx',
+          ReloadTime: reloadTimeMs,
+          SharedSyncedTimer: sharedSyncedTimer,
+        },
+        blocks: [],
+      },
+    ],
+    upgrades: [
+      makeUpgradeDef(
+        'Upgrade_Unpause',
+        {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 0,
+        },
+        [
+          makeBlock('Behavior', 'UnpauseSpecialPowerUpgrade ModuleTag_Unpause', {
+            TriggeredBy: 'Upgrade_Unpause',
+            SpecialPowerTemplate: 'POWER_TEST',
+          }),
+        ],
+      ),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new SpecialPowerCaptureSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([
+      makeMapObject('UnpausableCaster', 5, 10),
+      makeMapObject('FallbackCaster', 10, 10),
+      makeMapObject('EnemyTarget', 20, 10),
+    ], 64, 64),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+
+  return { logic };
+}
+
+function runCombatTimeline(
+  options?: {
+    passengersFireUpgradeFrames?: {
+      removeAtFrame?: number;
+    };
+  },
+): number[] {
   const bundle = makeBundle({
     objects: [
       makeObjectDef('Attacker', 'America', ['VEHICLE'], [
@@ -214,6 +453,34 @@ function runCombatTimeline(): number[] {
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
       ]),
     ],
+    upgrades: options?.passengersFireUpgradeFrames
+      ? [
+          makeUpgradeDef('Upgrade_PassengersFire', {
+            Type: 'OBJECT',
+            BuildTime: 0.1,
+            BuildCost: 100,
+          }),
+          ...(options.passengersFireUpgradeFrames.removeAtFrame === undefined
+            ? []
+            : [
+                makeUpgradeDef(
+                  'Upgrade_RemovePassengersFire',
+                  {
+                    Type: 'OBJECT',
+                    BuildTime: 0.1,
+                    BuildCost: 100,
+                  },
+                  [
+                    makeBlock('Behavior', 'MaxHealthUpgrade ModuleTag_RemovePassengerFire', {
+                      TriggeredBy: 'Upgrade_RemovePassengersFire',
+                      RemovesUpgrades: 'Upgrade_PassengersFire',
+                      AddMaxHealth: 0,
+                    }),
+                  ],
+                ),
+              ]),
+        ]
+      : [],
     weapons: [
       makeWeaponDef('TestCannon', {
         AttackRange: 120,
@@ -1143,6 +1410,547 @@ function runProjectileContainedByCollisionTimeline(): {
   return { targetHealthTimeline, containingAirfieldHealthTimeline };
 }
 
+function runContainPassengerAllowedToFireTimeline(
+  containType: 'Open' | 'Transport' | 'Overlord' | 'Helix' | 'Garrison',
+  passengersAllowedToFire: boolean,
+  passengerKind: 'INFANTRY' | 'VEHICLE' = 'INFANTRY',
+  options?: {
+    passengerTemplateName?: string;
+    payloadTemplateNames?: string[];
+    containerDisabledSubduedFrames?: {
+      disableAtFrame: number;
+      restoreAtFrame?: number;
+    };
+    passengersFireUpgradeFrames?: {
+      enableAtFrame: number;
+      removeAtFrame?: number;
+    };
+  },
+): {
+  targetHealthTimeline: number[];
+  containerHealthTimeline: number[];
+  containerStatusFlagsTimeline: string[][];
+} {
+  const passengerTemplateName = options?.passengerTemplateName ?? `${containType}ContainPassenger`;
+  const payloadTemplateNames = options?.payloadTemplateNames ?? [];
+  const containTypeToBlockName: Record<typeof containType, string> = {
+    Open: 'OpenContain',
+    Transport: 'TransportContain',
+    Overlord: 'OverlordContain',
+    Helix: 'HelixContain',
+    Garrison: 'GarrisonContain',
+  };
+
+  const containerTemplateName = `${containType}ContainmentPad`;
+  const bundle = makeBundle({
+    upgrades: options?.passengersFireUpgradeFrames
+      ? [
+          makeUpgradeDef('Upgrade_PassengersFire', {
+            Type: 'OBJECT',
+            BuildTime: 0.1,
+            BuildCost: 100,
+          }),
+          ...(options.passengersFireUpgradeFrames.removeAtFrame === undefined
+            ? []
+            : [
+                makeUpgradeDef(
+                  'Upgrade_RemovePassengersFire',
+                  {
+                    Type: 'OBJECT',
+                    BuildTime: 0.1,
+                    BuildCost: 100,
+                  },
+                  [
+                    makeBlock('Behavior', 'MaxHealthUpgrade ModuleTag_RemovePassengerFire', {
+                      TriggeredBy: 'Upgrade_RemovePassengersFire',
+                      RemovesUpgrades: 'Upgrade_PassengersFire',
+                      AddMaxHealth: 0,
+                    }),
+                  ],
+                ),
+              ]),
+        ]
+      : [],
+    objects: [
+      makeObjectDef(
+        containerTemplateName,
+        'America',
+        ['STRUCTURE', 'COMMANDCENTER'],
+        [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [0, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+          makeBlock('Behavior', `${containTypeToBlockName[containType]} ModuleTag_${containType}Contain`, {
+            PassengersAllowedToFire: passengersAllowedToFire ? 'Yes' : 'No',
+            ...(containType === 'Helix' && payloadTemplateNames.length > 0
+              ? { PayloadTemplateName: payloadTemplateNames }
+              : {}),
+          }),
+          ...(options?.passengersFireUpgradeFrames
+            ? [
+                makeBlock('Behavior', 'PassengersFireUpgrade ModuleTag_EnablePassengerFire', {
+                  TriggeredBy: 'Upgrade_PassengersFire',
+                }),
+              ]
+            : []),
+          ...(options?.containerDisabledSubduedFrames
+            ? [
+                makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Disable', {
+                  TriggeredBy: 'Upgrade_Disable_GarrisonContainSubdued',
+                  StatusToSet: 'DISABLED_SUBDUED',
+                }),
+                makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Restore', {
+                  TriggeredBy: 'Upgrade_Restore_GarrisonContainSubdued',
+                  StatusToClear: 'DISABLED_SUBDUED',
+                }),
+              ]
+            : []),
+        ],
+      ),
+      makeObjectDef(passengerTemplateName, 'America', [passengerKind], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 120, InitialHealth: 120 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', `${containType}ContainCannon`] }),
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+      ], {
+        BuildCost: 100,
+        BuildTime: 0.1,
+      }),
+      makeObjectDef(`${containType}ContainTarget`, 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+      ]),
+      makeObjectDef('DummyProjectile', 'America', ['PROJECTILE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+      ]),
+    ],
+    weapons: [
+      makeWeaponDef(`${containType}ContainCannon`, {
+        AttackRange: 180,
+        PrimaryDamage: 40,
+        PrimaryDamageRadius: 0,
+        SecondaryDamage: 0,
+        SecondaryDamageRadius: 0,
+        WeaponSpeed: 1000,
+        DelayBetweenShots: 1,
+        ClipSize: 1,
+        ClipReloadTime: 0,
+        PreAttackDelay: 0,
+        PreAttackType: 'PER_SHOT',
+        WeaponRecoil: 0,
+        ProjectileObject: 'DummyProjectile',
+      }),
+    ],
+    locomotors: [
+      makeLocomotorDef('LocomotorFast', 180),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([
+      makeMapObject(containerTemplateName, 50, 20),
+      makeMapObject(`${containType}ContainTarget`, 110, 20),
+    ], 128, 128),
+    makeRegistry(bundle),
+    makeHeightmap(128, 128),
+  );
+
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+  logic.submitCommand({
+    type: 'queueUnitProduction',
+    entityId: 1,
+    unitTemplateName: passengerTemplateName,
+  });
+
+  let passengerId: number | null = null;
+  for (let frame = 0; frame < 10; frame += 1) {
+    logic.update(1 / 30);
+    passengerId = logic.getEntityIdsByTemplate(passengerTemplateName)[0] ?? null;
+    if (passengerId !== null) {
+      break;
+    }
+  }
+  if (passengerId === null) {
+    throw new Error(`${passengerTemplateName} did not spawn`);
+  }
+
+  logic.submitCommand({
+    type: 'attackEntity',
+    entityId: passengerId,
+    targetEntityId: 2,
+  });
+
+  const targetHealthTimeline: number[] = [];
+  const containerHealthTimeline: number[] = [];
+  const containerStatusFlagsTimeline: string[][] = [];
+  for (let frame = 0; frame < 10; frame += 1) {
+    if (options?.passengersFireUpgradeFrames?.enableAtFrame === frame) {
+      logic.submitCommand({
+        type: 'applyUpgrade',
+        entityId: 1,
+        upgradeName: 'Upgrade_PassengersFire',
+      });
+    }
+
+    if (
+      options?.passengersFireUpgradeFrames?.removeAtFrame !== undefined
+      && options.passengersFireUpgradeFrames.removeAtFrame === frame
+    ) {
+      logic.submitCommand({
+        type: 'applyUpgrade',
+        entityId: 1,
+        upgradeName: 'Upgrade_RemovePassengersFire',
+      });
+    }
+
+    if (options?.containerDisabledSubduedFrames?.disableAtFrame === frame) {
+      logic.submitCommand({
+        type: 'applyUpgrade',
+        entityId: 1,
+        upgradeName: 'Upgrade_Disable_GarrisonContainSubdued',
+      });
+    }
+
+    if (
+      options?.containerDisabledSubduedFrames?.restoreAtFrame !== undefined
+      && options.containerDisabledSubduedFrames.restoreAtFrame === frame
+    ) {
+      logic.submitCommand({
+        type: 'applyUpgrade',
+        entityId: 1,
+        upgradeName: 'Upgrade_Restore_GarrisonContainSubdued',
+      });
+    }
+
+    logic.update(1 / 30);
+    targetHealthTimeline.push(logic.getEntityState(2)?.health ?? -1);
+    containerHealthTimeline.push(logic.getEntityState(1)?.health ?? -1);
+    containerStatusFlagsTimeline.push(logic.getEntityState(1)?.statusFlags ?? []);
+  }
+
+  return {
+    targetHealthTimeline,
+    containerHealthTimeline,
+    containerStatusFlagsTimeline,
+  };
+}
+
+function runHelixPortableRiderIdentityTimeline(): {
+  targetHealthTimeline: number[];
+  containerHealthTimeline: number[];
+} {
+  // Regression for Source parity around helix rider identity:
+  // only one tracked portable structure in a HELIXCONTAIN should be active for attacks.
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef(
+        'HelixRiderIdentityContainmentPad',
+        'America',
+        ['STRUCTURE', 'COMMANDCENTER'],
+        [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [0, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 2,
+            NumCols: 1,
+          }),
+          makeBlock('Behavior', 'HelixContain ModuleTag_HelixContain', {
+            PassengersAllowedToFire: 'No',
+            PayloadTemplateName: ['HELIXRIDERRIDER_A', 'HELIXRIDERRIDER_B'],
+          }),
+        ],
+      ),
+      makeObjectDef('HelixRiderA', 'America', ['PORTABLE_STRUCTURE', 'VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 120, InitialHealth: 120 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HelixContainCannon'] }),
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+      ], {
+        BuildCost: 100,
+        BuildTime: 0.01,
+      }),
+      makeObjectDef('HelixRiderB', 'America', ['PORTABLE_STRUCTURE', 'VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 120, InitialHealth: 120 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HelixContainCannon'] }),
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+      ], {
+        BuildCost: 100,
+        BuildTime: 0.01,
+      }),
+      makeObjectDef('HelixContainTarget', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+      ]),
+      makeObjectDef('DummyProjectile', 'America', ['PROJECTILE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+      ]),
+    ],
+    weapons: [
+      makeWeaponDef('HelixContainCannon', {
+        AttackRange: 180,
+        PrimaryDamage: 40,
+        PrimaryDamageRadius: 0,
+        SecondaryDamage: 0,
+        SecondaryDamageRadius: 0,
+        WeaponSpeed: 1000,
+        DelayBetweenShots: 1000,
+        ClipSize: 1,
+        ClipReloadTime: 0,
+        PreAttackDelay: 0,
+        PreAttackType: 'PER_SHOT',
+        WeaponRecoil: 0,
+        ProjectileObject: 'DummyProjectile',
+      }),
+    ],
+    locomotors: [
+      makeLocomotorDef('LocomotorFast', 180),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap(
+      [
+        makeMapObject('HelixRiderIdentityContainmentPad', 50, 20),
+        makeMapObject('HelixContainTarget', 110, 20),
+      ],
+      128,
+      128,
+    ),
+    makeRegistry(bundle),
+    makeHeightmap(128, 128),
+  );
+
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+  logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'HelixRiderA' });
+  logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'HelixRiderB' });
+
+  let firstRiderId: number | null = null;
+  let secondRiderId: number | null = null;
+  for (let frame = 0; frame < 40; frame += 1) {
+    logic.update(1 / 30);
+    firstRiderId = logic.getEntityIdsByTemplate('HelixRiderA')[0] ?? null;
+    secondRiderId = logic.getEntityIdsByTemplate('HelixRiderB')[0] ?? null;
+    if (firstRiderId !== null && secondRiderId !== null) {
+      break;
+    }
+  }
+
+  if (firstRiderId === null || secondRiderId === null) {
+    throw new Error('Helix rider units did not spawn');
+  }
+
+  logic.submitCommand({
+    type: 'attackEntity',
+    entityId: firstRiderId,
+    targetEntityId: 2,
+  });
+  logic.submitCommand({
+    type: 'attackEntity',
+    entityId: secondRiderId,
+    targetEntityId: 2,
+  });
+
+  const targetHealthTimeline: number[] = [];
+  const containerHealthTimeline: number[] = [];
+  for (let frame = 0; frame < 10; frame += 1) {
+    logic.update(1 / 30);
+    targetHealthTimeline.push(logic.getEntityState(2)?.health ?? -1);
+    containerHealthTimeline.push(logic.getEntityState(1)?.health ?? -1);
+  }
+
+  return { targetHealthTimeline, containerHealthTimeline };
+}
+
+function runOpenContainPassengerAllowedToFireTimeline(passengersAllowedToFire: boolean) {
+  return runContainPassengerAllowedToFireTimeline('Open', passengersAllowedToFire);
+}
+
+function runNestedOpenContainPassengerAllowedToFireTimeline(): {
+  targetHealthTimeline: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef(
+        'OuterOpenContainmentPad',
+        'America',
+        ['STRUCTURE', 'COMMANDCENTER'],
+        [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [0, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 2,
+          }),
+          makeBlock('Behavior', 'OpenContain ModuleTag_OpenContain', {
+            PassengersAllowedToFire: 'No',
+          }),
+        ],
+      ),
+      makeObjectDef(
+        'InnerOpenContainmentPad',
+        'America',
+        ['STRUCTURE', 'COMMANDCENTER'],
+        [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [0, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+          makeBlock('Behavior', 'OpenContain ModuleTag_OpenContain', {
+            PassengersAllowedToFire: 'Yes',
+          }),
+        ], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        },
+      ),
+      makeObjectDef(
+        'NestedOpenContainPassenger',
+        'America',
+        ['INFANTRY'],
+        [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 120, InitialHealth: 120 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'NestedOpenContainCannon'] }),
+          makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+        ], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+      makeObjectDef('NestedOpenContainTarget', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+      ]),
+      makeObjectDef('DummyProjectile', 'America', ['PROJECTILE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+      ]),
+    ],
+    weapons: [
+      makeWeaponDef('NestedOpenContainCannon', {
+        AttackRange: 180,
+        PrimaryDamage: 40,
+        PrimaryDamageRadius: 0,
+        SecondaryDamage: 0,
+        SecondaryDamageRadius: 0,
+        WeaponSpeed: 1000,
+        DelayBetweenShots: 1,
+        ClipSize: 1,
+        ClipReloadTime: 0,
+        PreAttackDelay: 0,
+        PreAttackType: 'PER_SHOT',
+        WeaponRecoil: 0,
+        ProjectileObject: 'DummyProjectile',
+      }),
+    ],
+    locomotors: [
+      makeLocomotorDef('LocomotorFast', 180),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap(
+      [
+        makeMapObject('OuterOpenContainmentPad', 50, 20),
+        makeMapObject('NestedOpenContainTarget', 110, 20),
+      ],
+      128,
+      128,
+    ),
+    makeRegistry(bundle),
+    makeHeightmap(128, 128),
+  );
+
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+  logic.submitCommand({
+    type: 'queueUnitProduction',
+    entityId: 1,
+    unitTemplateName: 'InnerOpenContainmentPad',
+  });
+
+  let innerContainerId: number | null = null;
+  for (let frame = 0; frame < 20; frame += 1) {
+    logic.update(1 / 30);
+    innerContainerId = logic.getEntityIdsByTemplate('InnerOpenContainmentPad')[0] ?? null;
+    if (innerContainerId !== null) {
+      break;
+    }
+  }
+
+  if (innerContainerId === null) {
+    throw new Error('InnerOpenContainmentPad did not spawn');
+  }
+
+  logic.submitCommand({
+    type: 'queueUnitProduction',
+    entityId: innerContainerId,
+    unitTemplateName: 'NestedOpenContainPassenger',
+  });
+
+  let passengerId: number | null = null;
+  for (let frame = 0; frame < 20; frame += 1) {
+    logic.update(1 / 30);
+    passengerId = logic.getEntityIdsByTemplate('NestedOpenContainPassenger')[0] ?? null;
+    if (passengerId !== null) {
+      break;
+    }
+  }
+
+  if (passengerId === null) {
+    throw new Error('NestedOpenContainPassenger did not spawn');
+  }
+
+  logic.submitCommand({
+    type: 'attackEntity',
+    entityId: passengerId,
+    targetEntityId: 2,
+  });
+
+  const targetHealthTimeline: number[] = [];
+  for (let frame = 0; frame < 10; frame += 1) {
+    logic.update(1 / 30);
+    targetHealthTimeline.push(logic.getEntityState(2)?.health ?? -1);
+  }
+
+  return { targetHealthTimeline };
+}
+
 function runProjectileAirfieldReservedVictimCollisionTimeline(): {
   targetHealthTimeline: number[];
   airfieldHealthTimeline: number[];
@@ -2037,6 +2845,53 @@ function runSupplyCenterExitProductionTimeline(): {
   };
 }
 
+function runSpawnPointExitProductionTimeline(): {
+  producedCounts: number[];
+  queueCounts: number[];
+  credits: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('SpawnBuilding', 'America', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 2,
+        }),
+        makeBlock('Behavior', 'SpawnPointProductionExitUpdate ModuleTag_Exit', {
+          SpawnPointBoneName: 'SpawnPoint',
+        }),
+      ]),
+      makeObjectDef('Ranger', 'America', ['INFANTRY'], [], {
+        BuildTime: 0.1,
+        BuildCost: 600,
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('SpawnBuilding', 30, 30)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+  logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'Ranger' });
+
+  const producedCounts: number[] = [];
+  const queueCounts: number[] = [];
+  const credits: number[] = [];
+  for (let frame = 0; frame < 6; frame += 1) {
+    logic.update(1 / 30);
+    producedCounts.push(logic.getEntityIdsByTemplate('Ranger').length);
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    credits.push(logic.getSideCredits('America'));
+  }
+
+  return {
+    producedCounts,
+    queueCounts,
+    credits,
+  };
+}
+
 function runEconomyProductionTimeline(): {
   credits: number[];
   queueCounts: number[];
@@ -2141,14 +2996,660 @@ function runUpgradeProductionTimeline(): {
   return { credits, inProductionCounts, completedCounts, speeds };
 }
 
+function runLocomotorUpgradeRemovalTimeline(): {
+  speeds: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('LocomotorVehicle', 'America', ['VEHICLE'], [
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorSlow', {}),
+        makeBlock('LocomotorSet', 'SET_NORMAL_UPGRADED LocomotorFast', {}),
+        makeBlock('Behavior', 'LocomotorSetUpgrade ModuleTag_Move', {
+          TriggeredBy: 'Upgrade_Move',
+        }),
+      ]),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Move', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef(
+        'Upgrade_Remove_Move',
+        {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 100,
+        },
+        [
+          makeBlock('Behavior', 'MaxHealthUpgrade ModuleTag_Remove', {
+            TriggeredBy: 'Upgrade_Remove_Move',
+            RemovesUpgrades: 'Upgrade_Move',
+            AddMaxHealth: 0,
+          }),
+        ],
+      ),
+    ],
+    locomotors: [
+      makeLocomotorDef('LocomotorSlow', 10),
+      makeLocomotorDef('LocomotorFast', 20),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('LocomotorVehicle', 10, 10)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  const speeds: number[] = [];
+  for (let frame = 0; frame < 8; frame += 1) {
+    if (frame === 1) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Move' });
+    } else if (frame === 4) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Remove_Move' });
+    }
+
+    logic.update(1 / 30);
+    speeds.push(logic.getEntityState(1)?.speed ?? -1);
+  }
+
+  return { speeds };
+}
+
+function runCostModifierUpgradeTimeline(): {
+  credits: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 10,
+        }),
+      ]),
+      makeObjectDef('VehicleA', 'America', ['VEHICLE'], [], { BuildTime: 0.1, BuildCost: 400 }),
+      makeObjectDef('JetA', 'America', ['AIRCRAFT'], [], { BuildTime: 0.1, BuildCost: 500 }),
+    ],
+    upgrades: [
+      makeUpgradeDef(
+        'Upgrade_Vehicle_Discount',
+        {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        },
+        [
+          makeBlock('Behavior', 'CostModifierUpgrade ModuleTag_Discount', {
+            EffectKindOf: 'VEHICLE',
+            Percentage: '-25%',
+          }),
+        ],
+      ),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([makeMapObject('StrategyCenter', 8, 8)]),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 2000 });
+  logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'VehicleA' });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Vehicle_Discount' });
+
+  const credits: number[] = [];
+  for (let frame = 0; frame < 8; frame += 1) {
+    if (frame === 4) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'VehicleA' });
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'JetA' });
+    }
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+  }
+
+  return { credits };
+}
+
+function runCostModifierUpgradeRemovalTimeline(): {
+  credits: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 10,
+        }),
+      ], {
+        CommandSet: 'CommandSet_StrategyCenter_Discount',
+      }),
+      makeObjectDef('VehicleA', 'America', ['VEHICLE'], [], { BuildTime: 0.1, BuildCost: 400 }),
+    ],
+    upgrades: [
+      makeUpgradeDef(
+        'Upgrade_Discount_Object',
+        {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 100,
+        },
+        [
+          makeBlock('Behavior', 'CostModifierUpgrade ModuleTag_Discount', {
+            EffectKindOf: 'VEHICLE',
+            Percentage: '-25%',
+          }),
+        ],
+      ),
+      makeUpgradeDef(
+        'Upgrade_Cancel_Discount',
+        {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 100,
+        },
+        [
+          makeBlock('Behavior', 'MaxHealthUpgrade ModuleTag_Cancel', {
+            TriggeredBy: 'Upgrade_Cancel_Discount',
+            RemovesUpgrades: 'Upgrade_Discount_Object',
+            AddMaxHealth: 0,
+          }),
+        ],
+      ),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_Upgrade_Discount', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Discount_Object',
+      }),
+      makeCommandButtonDef('Command_Upgrade_Cancel_Discount', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Cancel_Discount',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StrategyCenter_Discount', {
+        1: 'Command_Upgrade_Discount',
+        2: 'Command_Upgrade_Cancel_Discount',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 8, 8)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 2500 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Discount_Object' });
+
+  const credits: number[] = [];
+  for (let frame = 0; frame < 11; frame += 1) {
+    if (frame === 3) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'VehicleA' });
+    }
+    if (frame === 4) {
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Cancel_Discount' });
+    }
+    if (frame === 7) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'VehicleA' });
+    }
+
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+  }
+
+  return { credits };
+}
+
+function runCostModifierUpgradeCostUnaffectedTimeline(): {
+  credits: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 10,
+        }),
+      ]),
+    ],
+    upgrades: [
+      makeUpgradeDef(
+        'Upgrade_Vehicle_Discount',
+        {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        },
+        [
+          makeBlock('Behavior', 'CostModifierUpgrade ModuleTag_Discount', {
+            EffectKindOf: 'VEHICLE',
+            Percentage: '-25%',
+          }),
+        ],
+      ),
+      makeUpgradeDef(
+        'Upgrade_Vehicle_Cost',
+        {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 100,
+        },
+        [],
+        ['VEHICLE'],
+      ),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 8, 8)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Vehicle_Discount' });
+
+  const credits: number[] = [];
+  for (let frame = 0; frame < 7; frame += 1) {
+    if (frame === 3) {
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Vehicle_Cost' });
+    }
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+  }
+
+  return { credits };
+}
+
+function runCostModifierUpgradeCaptureTransferTimeline(): {
+  creditsAmerica: number[];
+  creditsChina: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 10,
+        }),
+      ], {
+        CommandSet: 'CommandSet_StrategyCenter_Discount',
+      }),
+      makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 10,
+        }),
+      ], {
+        CommandSet: 'CommandSet_StrategyCenter_Discount',
+      }),
+      makeObjectDef('VehicleA', 'America', ['VEHICLE'], [], {
+        BuildTime: 0.1,
+        BuildCost: 400,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef(
+        'Upgrade_Discount_Object',
+        {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 100,
+        },
+        [
+          makeBlock('Behavior', 'CostModifierUpgrade ModuleTag_Discount', {
+            TriggeredBy: 'Upgrade_Discount_Object',
+            EffectKindOf: 'VEHICLE',
+            Percentage: '-25%',
+          }),
+        ],
+      ),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_Upgrade_Discount', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Discount_Object',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StrategyCenter_Discount', {
+        1: 'Command_Upgrade_Discount',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([makeMapObject('StrategyCenter', 8, 8), makeMapObject('StrategyCenter', 16, 8)]),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 4000 });
+  logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 1200 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Discount_Object' });
+
+  const creditsAmerica: number[] = [];
+  const creditsChina: number[] = [];
+  for (let frame = 0; frame < 7; frame += 1) {
+    if (frame === 3) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'VehicleA' });
+    }
+    if (frame === 4) {
+      logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'China' });
+    }
+    if (frame === 5) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'VehicleA' });
+    }
+    if (frame === 6) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 2, unitTemplateName: 'VehicleA' });
+    }
+
+    logic.update(1 / 30);
+    creditsAmerica.push(logic.getSideCredits('America'));
+    creditsChina.push(logic.getSideCredits('China'));
+  }
+
+  return { creditsAmerica, creditsChina };
+}
+
+function runPowerPlantUpgradeRemovalTimeline(): {
+  powerBonuses: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'PowerPlantUpgrade ModuleTag_Power', {
+          TriggeredBy: 'Upgrade_Power_Grid',
+        }),
+        makeBlock('Behavior', 'MaxHealthUpgrade ModuleTag_Remove', {
+          TriggeredBy: 'Upgrade_Remove_Power_Grid',
+          RemovesUpgrades: 'Upgrade_Power_Grid',
+          AddMaxHealth: 0,
+        }),
+      ], {
+        EnergyBonus: 150,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Power_Grid', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_Remove_Power_Grid', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('PowerPlant', 12, 12)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  const powerBonuses: number[] = [];
+  for (let frame = 0; frame < 6; frame += 1) {
+    if (frame === 1) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Power_Grid' });
+    } else if (frame === 4) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Remove_Power_Grid' });
+    }
+
+    logic.update(1 / 30);
+    powerBonuses.push(logic.getSidePowerState('America').powerBonus);
+  }
+
+  return { powerBonuses };
+}
+
+function runPowerPlantUpgradeCaptureTransferTimeline(): {
+  powerBonusesAmerica: number[];
+  powerBonusesChina: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'PowerPlantUpgrade ModuleTag_Power', {
+          TriggeredBy: 'Upgrade_Power_Grid',
+        }),
+      ], {
+        EnergyBonus: 150,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Power_Grid', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('PowerPlant', 12, 12)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  const powerBonusesAmerica: number[] = [];
+  const powerBonusesChina: number[] = [];
+  for (let frame = 0; frame < 6; frame += 1) {
+    if (frame === 1) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Power_Grid' });
+    }
+    if (frame === 4) {
+      logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'China' });
+    }
+
+    logic.update(1 / 30);
+    powerBonusesAmerica.push(logic.getSidePowerState('America').powerBonus);
+    powerBonusesChina.push(logic.getSidePowerState('China').powerBonus);
+  }
+
+  return { powerBonusesAmerica, powerBonusesChina };
+}
+
+function runRadarUpgradeRemovalTimeline(): {
+  radarCounts: number[];
+  disableProofRadarCounts: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('RadarArray', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'RadarUpgrade ModuleTag_Radar', {
+          TriggeredBy: 'Upgrade_Radar',
+        }),
+        makeBlock('Behavior', 'RadarUpgrade ModuleTag_DisableProofRadar', {
+          TriggeredBy: 'Upgrade_DisableProof_Radar',
+          DisableProof: true,
+        }),
+        makeBlock('Behavior', 'MaxHealthUpgrade ModuleTag_Remove', {
+          TriggeredBy: 'Upgrade_Remove_Radar',
+          RemovesUpgrades: 'Upgrade_Radar',
+          AddMaxHealth: 0,
+        }),
+      ]),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Radar', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_DisableProof_Radar', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_Remove_Radar', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('RadarArray', 12, 12)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  const radarCounts: number[] = [];
+  const disableProofRadarCounts: number[] = [];
+  for (let frame = 0; frame < 6; frame += 1) {
+    if (frame === 1) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Radar' });
+    } else if (frame === 2) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_DisableProof_Radar' });
+    } else if (frame === 4) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Remove_Radar' });
+    }
+
+    logic.update(1 / 30);
+    const state = logic.getSideRadarState('America');
+    radarCounts.push(state.radarCount);
+    disableProofRadarCounts.push(state.disableProofRadarCount);
+  }
+
+  return { radarCounts, disableProofRadarCounts };
+}
+
+function runRadarUpgradeCaptureTransferTimeline(): {
+  americaRadarCounts: number[];
+  chinaRadarCounts: number[];
+  americaDisableProofRadarCounts: number[];
+  chinaDisableProofRadarCounts: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('RadarArray', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'RadarUpgrade ModuleTag_Radar', {
+          TriggeredBy: 'Upgrade_Radar',
+        }),
+        makeBlock('Behavior', 'RadarUpgrade ModuleTag_DisableProofRadar', {
+          TriggeredBy: 'Upgrade_DisableProof_Radar',
+          DisableProof: true,
+        }),
+      ]),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Radar', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_DisableProof_Radar', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('RadarArray', 12, 12)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  const americaRadarCounts: number[] = [];
+  const chinaRadarCounts: number[] = [];
+  const americaDisableProofRadarCounts: number[] = [];
+  const chinaDisableProofRadarCounts: number[] = [];
+  for (let frame = 0; frame < 6; frame += 1) {
+    if (frame === 1) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Radar' });
+    }
+    if (frame === 2) {
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_DisableProof_Radar' });
+    }
+    if (frame === 4) {
+      logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'China' });
+    }
+
+    logic.update(1 / 30);
+    const americaState = logic.getSideRadarState('America');
+    const chinaState = logic.getSideRadarState('China');
+    americaRadarCounts.push(americaState.radarCount);
+    chinaRadarCounts.push(chinaState.radarCount);
+    americaDisableProofRadarCounts.push(americaState.disableProofRadarCount);
+    chinaDisableProofRadarCounts.push(chinaState.disableProofRadarCount);
+  }
+
+  return {
+    americaRadarCounts,
+    chinaRadarCounts,
+    americaDisableProofRadarCounts,
+    chinaDisableProofRadarCounts,
+  };
+}
+
+function runGrantScienceUpgradeTimeline(): {
+  credits: number[];
+  queueCounts: number[];
+  scienceCounts: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 10,
+        }),
+      ]),
+      makeObjectDef('ScienceVehicle', 'America', ['VEHICLE'], [
+        makeBlock('Prerequisite', 'Science SCIENCE_PROMO_1', {}),
+      ], {
+        BuildTime: 0.1,
+        BuildCost: 150,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef(
+        'Upgrade_Grant_Science',
+        {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 100,
+        },
+        [
+          makeBlock('Behavior', 'GrantScienceUpgrade ModuleTag_Grant', {
+            GrantScience: 'SCIENCE_PROMO_1',
+          }),
+        ],
+      ),
+    ],
+    sciences: [
+      makeScienceDef('SCIENCE_PROMO_1', {
+        IsGrantable: 'Yes',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Grant_Science' });
+
+  const credits: number[] = [];
+  const queueCounts: number[] = [];
+  const scienceCounts: number[] = [];
+  for (let frame = 0; frame < 7; frame += 1) {
+    if (frame === 0 || frame === 3) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'ScienceVehicle' });
+    }
+
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    scienceCounts.push(logic.getSideScienceState('America').acquired.length);
+  }
+
+  return { credits, queueCounts, scienceCounts };
+}
+
 function runObjectUpgradeAffectabilityTimeline(): {
   credits: number[];
   queueCounts: number[];
   maxHealth: number[];
   speeds: number[];
 } {
-  const bundle = makeBundle({
-    objects: [
+    const bundle = makeBundle({
+      objects: [
       makeObjectDef('UpgradeLab', 'America', ['STRUCTURE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
@@ -2165,7 +3666,9 @@ function runObjectUpgradeAffectabilityTimeline(): {
           AddMaxHealth: 50,
           ChangeType: 'SAME_CURRENTHEALTH',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_UpgradeLab',
+      }),
     ],
     upgrades: [
       makeUpgradeDef('Upgrade_Unused', {
@@ -2187,6 +3690,27 @@ function runObjectUpgradeAffectabilityTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeUnused', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Unused',
+      }),
+      makeCommandButtonDef('Command_UpgradeB', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_B',
+      }),
+      makeCommandButtonDef('Command_UpgradeMoveObject', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Move_Object',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_UpgradeLab', {
+        1: 'Command_UpgradeUnused',
+        2: 'Command_UpgradeB',
+        3: 'Command_UpgradeMoveObject',
       }),
     ],
     locomotors: [
@@ -2231,7 +3755,7 @@ function runWeaponSetUpgradeCombatTimeline(): {
   queueCounts: number[];
   healthTimeline: number[];
 } {
-  const bundle = makeBundle({
+    const bundle = makeBundle({
     objects: [
       makeObjectDef('UpgradeTank', 'America', ['VEHICLE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
@@ -2249,7 +3773,9 @@ function runWeaponSetUpgradeCombatTimeline(): {
         makeBlock('Behavior', 'WeaponSetUpgrade ModuleTag_WeaponSet', {
           TriggeredBy: 'Upgrade_Weapon',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_UpgradeTank',
+      }),
       makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
       ]),
@@ -2271,6 +3797,17 @@ function runWeaponSetUpgradeCombatTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeWeapon', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Weapon',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_UpgradeTank', {
+        1: 'Command_UpgradeWeapon',
       }),
     ],
   });
@@ -2300,6 +3837,151 @@ function runWeaponSetUpgradeCombatTimeline(): {
   }
 
   return { credits, queueCounts, healthTimeline };
+}
+
+function runWeaponBonusUpgradeCombatTimeline(): {
+  credits: number[];
+  queueCounts: number[];
+  healthTimeline: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('UpgradeTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('WeaponSet', 'WeaponSet', {
+          Conditions: 'NONE',
+          Weapon: ['PRIMARY', 'WeakCannon'],
+        }),
+        makeBlock('WeaponSet', 'WeaponSet', {
+          Conditions: 'PLAYER_UPGRADE',
+          Weapon: ['PRIMARY', 'StrongCannon'],
+        }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 2,
+        }),
+        makeBlock('Behavior', 'WeaponBonusUpgrade ModuleTag_WeaponBonus', {
+          TriggeredBy: 'Upgrade_Weapon',
+        }),
+      ], {
+        CommandSet: 'CommandSet_UpgradeTank',
+      }),
+      makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]),
+    ],
+    weapons: [
+      makeWeaponDef('WeakCannon', {
+        AttackRange: 120,
+        PrimaryDamage: 20,
+        DelayBetweenShots: 100,
+      }),
+      makeWeaponDef('StrongCannon', {
+        AttackRange: 120,
+        PrimaryDamage: 60,
+        DelayBetweenShots: 100,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Weapon', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeWeapon', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Weapon',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_UpgradeTank', {
+        1: 'Command_UpgradeWeapon',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([makeMapObject('UpgradeTank', 10, 10), makeMapObject('TargetTank', 30, 10)], 64, 64),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 300 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Weapon' });
+  logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+  const credits: number[] = [];
+  const queueCounts: number[] = [];
+  const healthTimeline: number[] = [];
+  for (let frame = 0; frame < 8; frame += 1) {
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    healthTimeline.push(logic.getEntityState(2)?.health ?? -1);
+  }
+
+  return { credits, queueCounts, healthTimeline };
+}
+
+function runStealthUpgradeProductionTimeline(): {
+  statusTimeline: string[][];
+} {
+    const bundle = makeBundle({
+    objects: [
+      makeObjectDef('SpyTruck', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 2,
+        }),
+        makeBlock('Behavior', 'StealthUpgrade ModuleTag_Stealth', {
+          TriggeredBy: 'Upgrade_Stealth',
+        }),
+      ], {
+        CommandSet: 'CommandSet_SpyTruck',
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Stealth', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeStealth', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Stealth',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_SpyTruck', {
+        1: 'Command_UpgradeStealth',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([makeMapObject('SpyTruck', 10, 10)]),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 200 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Stealth' });
+
+  const statusTimeline: string[][] = [];
+  for (let frame = 0; frame < 8; frame += 1) {
+    logic.update(1 / 30);
+    statusTimeline.push(logic.getEntityState(1)?.statusFlags ?? []);
+  }
+
+  return { statusTimeline };
 }
 
 function runMaxSimEquivalentVariationTimeline(): {
@@ -2627,6 +4309,78 @@ function runSciencePrerequisiteTimeline(params: {
   return { credits, queueCounts, producedCounts, scienceCounts };
 }
 
+function runPurchaseScienceUnlocksProductionTimeline(params: {
+  scienceCost: number;
+  commandScienceCost?: number;
+  initialPoints: number;
+  purchaseAtFrame: number;
+  queueAtFrame: number;
+}): {
+  credits: number[];
+  queueCounts: number[];
+  producedCounts: number[];
+  scienceCounts: number[];
+  remainingPoints: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 4,
+        }),
+        makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+          UnitCreatePoint: [8, 0, 0],
+          ExitDelay: 0,
+        }),
+      ]),
+      makeObjectDef('ScienceTank', 'America', ['VEHICLE'], [
+        makeBlock('Prerequisite', 'Science SCIENCE_PROMO_1', {}),
+      ], {
+        BuildTime: 0.1,
+        BuildCost: 150,
+      }),
+    ],
+    sciences: [
+      makeScienceDef('SCIENCE_PROMO_1', {
+        SciencePurchasePointCost: params.scienceCost,
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('WarFactory', 10, 10)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+  (logic as unknown as { localPlayerSciencePurchasePoints: number }).localPlayerSciencePurchasePoints = params.initialPoints;
+
+  const credits: number[] = [];
+  const queueCounts: number[] = [];
+  const producedCounts: number[] = [];
+  const scienceCounts: number[] = [];
+  const remainingPoints: number[] = [];
+  for (let frame = 0; frame < 7; frame += 1) {
+    if (frame === params.purchaseAtFrame) {
+      logic.submitCommand({
+        type: 'purchaseScience',
+        scienceName: 'SCIENCE_PROMO_1',
+        scienceCost: params.commandScienceCost ?? params.scienceCost,
+      });
+    }
+    if (frame === params.queueAtFrame) {
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'ScienceTank' });
+    }
+
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    producedCounts.push(logic.getEntityIdsByTemplate('ScienceTank').length);
+    scienceCounts.push(logic.getSideScienceState('America').acquired.length);
+    remainingPoints.push(logic.getLocalPlayerSciencePurchasePoints());
+  }
+
+  return { credits, queueCounts, producedCounts, scienceCounts, remainingPoints };
+}
+
 function runOnlyByAiBuildableTimeline(playerType: 'HUMAN' | 'COMPUTER'): {
   credits: number[];
   queueCounts: number[];
@@ -2737,6 +4491,7 @@ function runUpgradeCommandSetGateTimeline(matchesUpgradeButton: boolean): {
   completedCounts: number[];
 } {
   const commandButtonName = matchesUpgradeButton ? 'Command_ResearchMove' : 'Command_NotAnUpgrade';
+  const commandButtonUpgrade = matchesUpgradeButton ? 'Upgrade_Move' : 'Upgrade_Attack';
   const commandName = matchesUpgradeButton ? 'PLAYER_UPGRADE' : 'UNIT_BUILD';
   const bundle = makeBundle({
     objects: [
@@ -2758,7 +4513,67 @@ function runUpgradeCommandSetGateTimeline(matchesUpgradeButton: boolean): {
     commandButtons: [
       makeCommandButtonDef(commandButtonName, {
         Command: commandName,
-        Upgrade: 'Upgrade_Move',
+        Upgrade: commandButtonUpgrade,
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StrategyCenter', {
+        1: commandButtonName,
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 300 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+
+  const credits: number[] = [];
+  const queueCounts: number[] = [];
+  const inProductionCounts: number[] = [];
+  const completedCounts: number[] = [];
+  for (let frame = 0; frame < 4; frame += 1) {
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    const sideUpgradeState = logic.getSideUpgradeState('America');
+    inProductionCounts.push(sideUpgradeState.inProduction.length);
+    completedCounts.push(sideUpgradeState.completed.length);
+  }
+
+  return { credits, queueCounts, inProductionCounts, completedCounts };
+}
+
+function runUpgradeNoCommandSetTimeline(): {
+  credits: number[];
+  queueCounts: number[];
+  inProductionCounts: number[];
+  completedCounts: number[];
+} {
+  const commandButtonName = 'Command_NotUpgrade';
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 3,
+        }),
+      ], {
+        CommandSet: 'CommandSet_StrategyCenter',
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Move', {
+        Type: 'PLAYER',
+        BuildTime: 0.1,
+        BuildCost: 150,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef(commandButtonName, {
+        Command: 'UNIT_BUILD',
+        Unit: 'Dummy',
       }),
     ],
     commandSets: [
@@ -2901,6 +4716,123 @@ function runCommandSetUpgradeTimeline(useAltTrigger: boolean): {
   }
 
   return { credits, queueCounts, maxHealth };
+}
+
+function runCommandSetUpgradeRemovalTimeline(): {
+  credits: number[];
+  queueCounts: number[];
+  queueNames: string[][];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('UpgradeHub', 'America', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 3,
+        }),
+        makeBlock('Behavior', 'CommandSetUpgrade ModuleTag_CommandSet', {
+          TriggeredBy: 'Upgrade_A',
+          CommandSet: 'CommandSet_Hub_AfterA',
+          CommandSetAlt: 'CommandSet_Hub_AfterA_Alt',
+          TriggerAlt: 'Upgrade_Alt_Object',
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Remover', {
+          TriggeredBy: 'Upgrade_Remover',
+          StatusToSet: 'UNSELECTABLE',
+          RemovesUpgrades: 'Upgrade_Alt_Object',
+        }),
+        makeBlock('Behavior', 'MaxHealthUpgrade ModuleTag_UpgradeB', {
+          TriggeredBy: 'Upgrade_B',
+          AddMaxHealth: 50,
+          ChangeType: 'SAME_CURRENTHEALTH',
+        }),
+      ], {
+        CommandSet: 'CommandSet_Hub_Base',
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_A', {
+        Type: 'OBJECT',
+        BuildTime: 0.3,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_B', {
+        Type: 'OBJECT',
+        BuildTime: 0.3,
+        BuildCost: 120,
+      }),
+      makeUpgradeDef('Upgrade_C', {
+        Type: 'OBJECT',
+        BuildTime: 0.3,
+        BuildCost: 140,
+      }),
+      makeUpgradeDef('Upgrade_Alt_Object', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 1,
+      }),
+      makeUpgradeDef('Upgrade_Remover', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 1,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeA', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_A',
+      }),
+      makeCommandButtonDef('Command_UpgradeB', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_B',
+      }),
+      makeCommandButtonDef('Command_UpgradeC', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_C',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_Hub_Base', {
+        1: 'Command_UpgradeA',
+      }),
+      makeCommandSetDef('CommandSet_Hub_AfterA', {
+        1: 'Command_UpgradeB',
+      }),
+      makeCommandSetDef('CommandSet_Hub_AfterA_Alt', {
+        1: 'Command_UpgradeC',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('UpgradeHub', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+  logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Alt_Object' });
+  logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_A' });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_B' });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_C' });
+
+  const credits: number[] = [];
+  const queueCounts: number[] = [];
+  const queueNames: string[][] = [];
+  for (let frame = 0; frame < 8; frame += 1) {
+    if (frame === 1) {
+      // Removing the alt trigger should revert the command set override and block Upgrade_C.
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Remover' });
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_B' });
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_C' });
+    }
+
+    logic.update(1 / 30);
+    const state = logic.getProductionState(1);
+    credits.push(logic.getSideCredits('America'));
+    queueCounts.push(state?.queueEntryCount ?? 0);
+    queueNames.push(state?.queue.filter((entry) => entry.type === 'UPGRADE').map((entry) => entry.upgradeName.trim().toUpperCase()) ?? []);
+  }
+
+  return { credits, queueCounts, queueNames };
 }
 
 function runParkingPlaceQueueTimeline(): {
@@ -3116,7 +5048,7 @@ function runStatusBitsUpgradeTimeline(): {
   queueCounts: number[];
   statusFlagsTimeline: string[][];
 } {
-  const bundle = makeBundle({
+    const bundle = makeBundle({
     objects: [
       makeObjectDef('StatusLab', 'America', ['STRUCTURE'], [
         makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
@@ -3131,7 +5063,9 @@ function runStatusBitsUpgradeTimeline(): {
           StatusToSet: 'STEALTHED',
           StatusToClear: 'EMPED',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_StatusLab',
+      }),
     ],
     upgrades: [
       makeUpgradeDef('Upgrade_Status_A', {
@@ -3143,6 +5077,22 @@ function runStatusBitsUpgradeTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 130,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeStatusA', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Status_A',
+      }),
+      makeCommandButtonDef('Command_UpgradeStatusB', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Status_B',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusLab', {
+        1: 'Command_UpgradeStatusA',
+        2: 'Command_UpgradeStatusB',
       }),
     ],
   });
@@ -3171,13 +5121,90 @@ function runStatusBitsUpgradeTimeline(): {
   return { credits, queueCounts, statusFlagsTimeline };
 }
 
+function runStatusBitsUpgradeRemovalTimeline(): {
+  credits: number[];
+  queueCounts: number[];
+  statusFlagsTimeline: string[][];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StatusLab', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 3,
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Disable', {
+          TriggeredBy: 'Upgrade_Disable',
+          StatusToSet: 'NO_ATTACK',
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_RemoveDisable', {
+          TriggeredBy: 'Upgrade_RemoveDisable',
+          RemovesUpgrades: 'Upgrade_Disable',
+        }),
+      ], {
+        CommandSet: 'CommandSet_StatusLab',
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Disable', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 120,
+      }),
+      makeUpgradeDef('Upgrade_RemoveDisable', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 80,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeDisable', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Disable',
+      }),
+      makeCommandButtonDef('Command_UpgradeRemoveDisable', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_RemoveDisable',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusLab', {
+        1: 'Command_UpgradeDisable',
+        2: 'Command_UpgradeRemoveDisable',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(makeMap([makeMapObject('StatusLab', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Disable' });
+
+  const credits: number[] = [];
+  const queueCounts: number[] = [];
+  const statusFlagsTimeline: string[][] = [];
+  for (let frame = 0; frame < 10; frame += 1) {
+    if (frame === 4) {
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_RemoveDisable' });
+    }
+
+    logic.update(1 / 30);
+    credits.push(logic.getSideCredits('America'));
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    statusFlagsTimeline.push(logic.getEntityState(1)?.statusFlags ?? []);
+  }
+
+  return { credits, queueCounts, statusFlagsTimeline };
+}
+
 function runStatusBitsCombatTimeline(): {
   credits: number[];
   queueCounts: number[];
   statusFlagsTimeline: string[][];
   targetHealthTimeline: number[];
 } {
-  const bundle = makeBundle({
+    const bundle = makeBundle({
     objects: [
       makeObjectDef('StatusTank', 'America', ['VEHICLE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
@@ -3193,7 +5220,9 @@ function runStatusBitsCombatTimeline(): {
           TriggeredBy: 'Upgrade_AttackRestore',
           StatusToClear: 'NO_ATTACK',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_StatusTank',
+      }),
       makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
       ]),
@@ -3215,6 +5244,22 @@ function runStatusBitsCombatTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 120,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeNoAttack', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_NoAttack',
+      }),
+      makeCommandButtonDef('Command_UpgradeAttackRestore', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_AttackRestore',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusTank', {
+        1: 'Command_UpgradeNoAttack',
+        2: 'Command_UpgradeAttackRestore',
       }),
     ],
   });
@@ -3250,6 +5295,294 @@ function runStatusBitsCombatTimeline(): {
   }
 
   return { credits, queueCounts, statusFlagsTimeline, targetHealthTimeline };
+}
+
+function runStatusBitsDisabledCombatTimeline(): {
+  queueCounts: number[];
+  statusFlagsTimeline: string[][];
+  targetHealthTimeline: number[];
+} {
+    const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StatusTank', 'America', ['VEHICLE', 'PORTABLE_STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'StatusCannon'] }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 3,
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Disable', {
+          TriggeredBy: 'Upgrade_Disable',
+          StatusToSet: 'DISABLED_EMP',
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Restore', {
+          TriggeredBy: 'Upgrade_Restore',
+          StatusToClear: 'DISABLED_EMP',
+        }),
+      ], {
+        CommandSet: 'CommandSet_StatusTank_Disable',
+      }),
+      makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]),
+    ],
+    weapons: [
+      makeWeaponDef('StatusCannon', {
+        AttackRange: 120,
+        PrimaryDamage: 30,
+        DelayBetweenShots: 100,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Disable', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_Restore', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 120,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeDisable', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Disable',
+      }),
+      makeCommandButtonDef('Command_UpgradeRestore', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Restore',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusTank_Disable', {
+        1: 'Command_UpgradeDisable',
+        2: 'Command_UpgradeRestore',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([makeMapObject('StatusTank', 10, 10), makeMapObject('TargetTank', 30, 10)], 64, 64),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Disable' });
+  logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+  const queueCounts: number[] = [];
+  const statusFlagsTimeline: string[][] = [];
+  const targetHealthTimeline: number[] = [];
+  for (let frame = 0; frame < 10; frame += 1) {
+    if (frame === 4) {
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Restore' });
+    }
+
+    logic.update(1 / 30);
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    statusFlagsTimeline.push(logic.getEntityState(1)?.statusFlags ?? []);
+    targetHealthTimeline.push(logic.getEntityState(2)?.health ?? -1);
+  }
+
+  return { queueCounts, statusFlagsTimeline, targetHealthTimeline };
+}
+
+function runStatusBitsDisabledHackCombatTimeline(): {
+  queueCounts: number[];
+  statusFlagsTimeline: string[][];
+  targetHealthTimeline: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StatusTank', 'America', ['VEHICLE', 'PORTABLE_STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'StatusCannon'] }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 3,
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Disable', {
+          TriggeredBy: 'Upgrade_Disable',
+          StatusToSet: 'DISABLED_HACKED',
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Restore', {
+          TriggeredBy: 'Upgrade_Restore',
+          StatusToClear: 'DISABLED_HACKED',
+        }),
+      ], {
+        CommandSet: 'CommandSet_StatusTank_Hack',
+      }),
+      makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]),
+    ],
+    weapons: [
+      makeWeaponDef('StatusCannon', {
+        AttackRange: 120,
+        PrimaryDamage: 30,
+        DelayBetweenShots: 100,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Disable', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_Restore', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 120,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeDisable', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Disable',
+      }),
+      makeCommandButtonDef('Command_UpgradeRestore', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Restore',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusTank_Hack', {
+        1: 'Command_UpgradeDisable',
+        2: 'Command_UpgradeRestore',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([makeMapObject('StatusTank', 10, 10), makeMapObject('TargetTank', 30, 10)], 64, 64),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Disable' });
+  logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+  const queueCounts: number[] = [];
+  const statusFlagsTimeline: string[][] = [];
+  const targetHealthTimeline: number[] = [];
+  for (let frame = 0; frame < 10; frame += 1) {
+    if (frame === 4) {
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Restore' });
+    }
+
+    logic.update(1 / 30);
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    statusFlagsTimeline.push(logic.getEntityState(1)?.statusFlags ?? []);
+    targetHealthTimeline.push(logic.getEntityState(2)?.health ?? -1);
+  }
+
+  return { queueCounts, statusFlagsTimeline, targetHealthTimeline };
+}
+
+function runStatusBitsDisabledSubduedCombatTimeline(): {
+  queueCounts: number[];
+  statusFlagsTimeline: string[][];
+  targetHealthTimeline: number[];
+} {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('StatusTank', 'America', ['VEHICLE', 'PORTABLE_STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'StatusCannon'] }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 3,
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Disable', {
+          TriggeredBy: 'Upgrade_Disable',
+          StatusToSet: 'DISABLED_SUBDUED',
+        }),
+        makeBlock('Behavior', 'StatusBitsUpgrade ModuleTag_Restore', {
+          TriggeredBy: 'Upgrade_Restore',
+          StatusToClear: 'DISABLED_SUBDUED',
+        }),
+      ], {
+        CommandSet: 'CommandSet_StatusTank_Subdue',
+      }),
+      makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]),
+    ],
+    weapons: [
+      makeWeaponDef('StatusCannon', {
+        AttackRange: 120,
+        PrimaryDamage: 30,
+        DelayBetweenShots: 100,
+      }),
+    ],
+    upgrades: [
+      makeUpgradeDef('Upgrade_Disable', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 100,
+      }),
+      makeUpgradeDef('Upgrade_Restore', {
+        Type: 'OBJECT',
+        BuildTime: 0.1,
+        BuildCost: 120,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeDisable', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Disable',
+      }),
+      makeCommandButtonDef('Command_UpgradeRestore', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Restore',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusTank_Subdue', {
+        1: 'Command_UpgradeDisable',
+        2: 'Command_UpgradeRestore',
+      }),
+    ],
+  });
+
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+  logic.loadMapObjects(
+    makeMap([makeMapObject('StatusTank', 10, 10), makeMapObject('TargetTank', 30, 10)], 64, 64),
+    makeRegistry(bundle),
+    makeHeightmap(64, 64),
+  );
+
+  logic.setTeamRelationship('America', 'China', 0);
+  logic.setTeamRelationship('China', 'America', 0);
+  logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+  logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Disable' });
+  logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+  const queueCounts: number[] = [];
+  const statusFlagsTimeline: string[][] = [];
+  const targetHealthTimeline: number[] = [];
+  for (let frame = 0; frame < 10; frame += 1) {
+    if (frame === 4) {
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Restore' });
+    }
+
+    logic.update(1 / 30);
+    queueCounts.push(logic.getProductionState(1)?.queueEntryCount ?? 0);
+    statusFlagsTimeline.push(logic.getEntityState(1)?.statusFlags ?? []);
+    targetHealthTimeline.push(logic.getEntityState(2)?.health ?? -1);
+  }
+
+  return { queueCounts, statusFlagsTimeline, targetHealthTimeline };
 }
 
 function runAimAndFiringStatusTimeline(): {
@@ -3378,7 +5711,7 @@ function runUpgradeRemovalMuxTimeline(): {
   queueCounts: number[];
   maxHealthTimeline: number[];
 } {
-  const bundle = makeBundle({
+    const bundle = makeBundle({
     objects: [
       makeObjectDef('UpgradeMuxLab', 'America', ['STRUCTURE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
@@ -3396,7 +5729,9 @@ function runUpgradeRemovalMuxTimeline(): {
           AddMaxHealth: 30,
           ChangeType: 'SAME_CURRENTHEALTH',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_UpgradeMuxLab',
+      }),
     ],
     upgrades: [
       makeUpgradeDef('Upgrade_A', {
@@ -3408,6 +5743,22 @@ function runUpgradeRemovalMuxTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeA', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_A',
+      }),
+      makeCommandButtonDef('Command_UpgradeB', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_B',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_UpgradeMuxLab', {
+        1: 'Command_UpgradeA',
+        2: 'Command_UpgradeB',
       }),
     ],
   });
@@ -4239,6 +6590,587 @@ function runProducerDeathUpgradeRefundTimeline(): {
 }
 
 describe('GameLogicSubsystem combat + upgrades', () => {
+  it('routes issueSpecialPower commands through source resolution and no-target handler', () => {
+    const { logic } = makeSpecialPowerCaptureSetup();
+    logic.submitCommand({
+      type: 'select',
+      entityId: 4,
+    });
+    logic.trackShortcutSpecialPowerSourceEntity('POWER_TEST', 3, 0);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnDirect',
+      specialPowerName: ' power_test ',
+      commandOption: 0,
+      issuingEntityIds: [2],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnDirect',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnIssuing',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [2],
+      sourceEntityId: null,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 2,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnIssuing',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnShortcut',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: null,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 3,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnShortcut',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.trackShortcutSpecialPowerSourceEntity('POWER_TEST', 3, 0);
+    logic.setShortcutSpecialPowerSourceEntity('POWER_TEST', null);
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnSelected',
+      commandOption: 0,
+      specialPowerName: 'POWER_TEST',
+      issuingEntityIds: [999],
+      sourceEntityId: null,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 4,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnSelected',
+      },
+    ]);
+  });
+
+  it('enforces per-source cooldown for issueSpecialPower commands when SharedSyncedTimer is false', () => {
+    const { logic } = makeSpecialPowerCaptureSetup({
+      reloadTimeMs: 34,
+      sharedSyncedTimer: false,
+    });
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnPerSourcePrimary',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnPerSourcePrimary',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnPerSourceBlocked',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnPerSourceOtherSource',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 2,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 2,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnPerSourceOtherSource',
+      },
+    ]);
+  });
+
+  it('shares special power cooldown when SharedSyncedTimer is true', () => {
+    const { logic } = makeSpecialPowerCaptureSetup({
+      reloadTimeMs: 34,
+      sharedSyncedTimer: true,
+    });
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnSharedPrimary',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnSharedPrimary',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnSharedBlockedByFirst',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 2,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnSharedAfterReload',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnSharedAfterReload',
+      },
+    ]);
+  });
+
+  it('unpause special power module resets per-source cooldown for OBJECT upgrades', () => {
+    const { logic } = makeUnpauseSpecialPowerUpgradeSetup({
+      sharedSyncedTimer: false,
+      reloadTimeMs: 5000,
+    });
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnInitial',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnInitial',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnStillBlocked',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnOtherSourceStillAllowed',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 2,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 2,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnOtherSourceStillAllowed',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Unpause' });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnAfterUnpause',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnAfterUnpause',
+      },
+    ]);
+  });
+
+  it('unpause special power module resets shared special power cooldown for all sources', () => {
+    const { logic } = makeUnpauseSpecialPowerUpgradeSetup({
+      sharedSyncedTimer: true,
+      reloadTimeMs: 5000,
+    });
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnInitialShared',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnInitialShared',
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnBlockedByShared',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 2,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([]);
+
+    logic.events.length = 0;
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Unpause' });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnAfterSharedUnpause',
+      specialPowerName: 'POWER_TEST',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 2,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'noTarget',
+        sourceEntityId: 2,
+        specialPowerName: 'POWER_TEST',
+        commandOption: 0,
+        commandButtonId: 'BtnAfterSharedUnpause',
+      },
+    ]);
+  });
+
+  it('routes issueSpecialPower to target-object handler only when relationship matches command option', () => {
+    const { logic } = makeSpecialPowerCaptureSetup();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnEnemy',
+      specialPowerName: 'POWER_TEST',
+      commandOption: COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: 5,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'targetObject',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT,
+        commandButtonId: 'BtnEnemy',
+        targetEntityId: 5,
+      },
+    ]);
+
+    logic.events.length = 0;
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnAllyBlocked',
+      specialPowerName: 'POWER_TEST',
+      commandOption: COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: 6,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([]);
+  });
+
+  it('routes issueSpecialPower commands with position targets to target-position handler', () => {
+    const { logic } = makeSpecialPowerCaptureSetup();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnPos',
+      specialPowerName: 'POWER_TEST',
+      commandOption: COMMAND_OPTION_NEED_TARGET_POS,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 25.5,
+      targetZ: 42.75,
+    });
+
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([
+      {
+        type: 'targetPosition',
+        sourceEntityId: 1,
+        specialPowerName: 'POWER_TEST',
+        commandOption: COMMAND_OPTION_NEED_TARGET_POS,
+        commandButtonId: 'BtnPos',
+        targetX: 25.5,
+        targetZ: 42.75,
+      },
+    ]);
+  });
+
+  it('ignores unknown or blank issueSpecialPower definitions without invoking handlers', () => {
+    const { logic } = makeSpecialPowerCaptureSetup();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnEmpty',
+      specialPowerName: '   ',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    logic.update(1 / 30);
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'BtnMissing',
+      specialPowerName: 'MISSING_POWER',
+      commandOption: 0,
+      issuingEntityIds: [],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    logic.update(1 / 30);
+    expect(logic.events).toEqual([]);
+  });
+
+  it('supports applyPlayerUpgrade when local side is inferred from spawned entity side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+        ]),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Test_Player', {
+          Type: 'PLAYER',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('CommandCenter', 10, 10)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'applyPlayerUpgrade', upgradeName: 'Upgrade_Test_Player' });
+    logic.update(0);
+    expect(logic.getSideUpgradeState('America').completed).toEqual(['UPGRADE_TEST_PLAYER']);
+  });
+
+  it('supports getLocalPlayerUpgradeNames when local side is inferred from spawned entity side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+        ]),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_Test_Player', { Type: 'PLAYER' })],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('CommandCenter', 10, 10)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'applyPlayerUpgrade', upgradeName: 'Upgrade_Test_Player' });
+    logic.update(0);
+    expect(logic.getLocalPlayerUpgradeNames()).toEqual(['UPGRADE_TEST_PLAYER']);
+  });
+
+  it('keeps getLocalPlayerUpgradeNames empty when local side is ambiguous across spawned entities', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenterAmerica', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+        ]),
+        makeObjectDef('CommandCenterChina', 'China', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+        ]),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_Test_Player', { Type: 'PLAYER' })],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CommandCenterAmerica', 10, 10),
+        makeMapObject('CommandCenterChina', 20, 20),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    logic.submitCommand({ type: 'applyPlayerUpgrade', upgradeName: 'Upgrade_Test_Player' });
+    logic.update(0);
+    expect(logic.getLocalPlayerUpgradeNames()).toEqual([]);
+  });
+
   it('applies deterministic direct-fire combat with source attack range and shot delay semantics', () => {
     const timeline = runCombatTimeline();
     expect(timeline).toEqual([70, 70, 70, 40, 40, 40, 10, 10, 10, -1, -1, -1]);
@@ -4455,6 +7387,19 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(timeline.credits).toEqual([400, 400, 400, 400, 400, 400]);
   });
 
+  it('supports SpawnPointProductionExitUpdate as a valid production exit module', () => {
+    const timeline = runSpawnPointExitProductionTimeline();
+    expect(timeline.producedCounts).toEqual([0, 0, 1, 1, 1, 1]);
+    expect(timeline.queueCounts).toEqual([1, 1, 0, 0, 0, 0]);
+    expect(timeline.credits).toEqual([400, 400, 400, 400, 400, 400]);
+  });
+
+  it('keeps SpawnPointProductionExitUpdate production timing deterministic across repeated runs', () => {
+    const first = runSpawnPointExitProductionTimeline();
+    const second = runSpawnPointExitProductionTimeline();
+    expect(first).toEqual(second);
+  });
+
   it('enforces ProductionUpdate MaxQueueEntries when queueing units', () => {
     const bundle = makeBundle({
       objects: [
@@ -4553,6 +7498,123 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(timeline.speeds).toEqual([10, 10, 20, 20, 20]);
   });
 
+  it('reverts LocomotorSetUpgrade when its source object upgrade is removed', () => {
+    const timeline = runLocomotorUpgradeRemovalTimeline();
+    expect(timeline.speeds).toEqual([10, 20, 20, 20, 10, 10, 10, 10]);
+  });
+
+  it('keeps LocomotorSetUpgrade removal timing deterministic across repeated runs', () => {
+    const first = runLocomotorUpgradeRemovalTimeline();
+    const second = runLocomotorUpgradeRemovalTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('applies COSTMODIFIERUPGRADE to discount matching kind-of production costs on completion', () => {
+    const timeline = runCostModifierUpgradeTimeline();
+    expect(timeline.credits).toEqual([1400, 1400, 1400, 1400, 600, 600, 600, 600]);
+  });
+
+  it('reverts COSTMODIFIERUPGRADE production-cost discount when its source OBJECT upgrade is removed', () => {
+    const timeline = runCostModifierUpgradeRemovalTimeline();
+    // Verify queue ordering: the cancel upgrade must finish before discount expires, so the queued
+    // second VEHICLE unit is still discounted when queued.
+    // Source parity note:
+    // In ProductionUpdate::update(), only the front queue entry progresses, so a later QUEUE
+    // entry cannot affect cost at its queue time until it reaches queue front.
+    expect(timeline.credits).toEqual([2400, 2400, 2400, 2100, 2000, 2000, 2000, 1700, 1700, 1700, 1700]);
+  });
+
+  it('keeps COSTMODIFIERUPGRADE production-cost interaction deterministic across repeated runs', () => {
+    const first = runCostModifierUpgradeTimeline();
+    const second = runCostModifierUpgradeTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('keeps COSTMODIFIERUPGRADE removal-and-revert path deterministic across repeated runs', () => {
+    const first = runCostModifierUpgradeRemovalTimeline();
+    const second = runCostModifierUpgradeRemovalTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('does not apply COSTMODIFIERUPGRADE to PLAYER upgrade build cost (upgrade cost uses UpgradeTemplate path)', () => {
+    const timeline = runCostModifierUpgradeCostUnaffectedTimeline();
+    expect(timeline.credits).toEqual([800, 800, 800, 700, 700, 700, 700]);
+  });
+
+  it('transfers active COSTMODIFIERUPGRADE side effects on object capture and preserves discounted unit pricing for new owner only', () => {
+    const timeline = runCostModifierUpgradeCaptureTransferTimeline();
+    expect(timeline.creditsAmerica).toEqual([3900, 3900, 3900, 3600, 3600, 3600, 3200]);
+    expect(timeline.creditsChina).toEqual([1200, 1200, 1200, 1200, 1200, 900, 900]);
+  });
+
+  it('keeps COSTMODIFIERUPGRADE capture-transfer interaction deterministic across repeated runs', () => {
+    const first = runCostModifierUpgradeCaptureTransferTimeline();
+    const second = runCostModifierUpgradeCaptureTransferTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('applies POWERPLANTUPGRADE side-effects and reverts them when source upgrade is removed', () => {
+    const timeline = runPowerPlantUpgradeRemovalTimeline();
+    expect(timeline.powerBonuses).toEqual([0, 150, 150, 150, 0, 0]);
+  });
+
+  it('keeps POWERPLANTUPGRADE removal/revert behavior deterministic across repeated runs', () => {
+    const first = runPowerPlantUpgradeRemovalTimeline();
+    const second = runPowerPlantUpgradeRemovalTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('transfers POWERPLANTUPGRADE side-effect state on object capture and applies it to the new owner', () => {
+    const timeline = runPowerPlantUpgradeCaptureTransferTimeline();
+    expect(timeline.powerBonusesAmerica).toEqual([0, 150, 150, 150, 0, 0]);
+    expect(timeline.powerBonusesChina).toEqual([0, 0, 0, 0, 150, 150]);
+  });
+
+  it('keeps POWERPLANTUPGRADE capture-transfer interaction deterministic across repeated runs', () => {
+    const first = runPowerPlantUpgradeCaptureTransferTimeline();
+    const second = runPowerPlantUpgradeCaptureTransferTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('applies RADARUPGRADE side-effects including disable-proof counts and removes source non-proof effect', () => {
+    const timeline = runRadarUpgradeRemovalTimeline();
+    expect(timeline.radarCounts).toEqual([0, 1, 2, 2, 1, 1]);
+    expect(timeline.disableProofRadarCounts).toEqual([0, 0, 1, 1, 1, 1]);
+  });
+
+  it('keeps RADARUPGRADE removal and transfer behavior deterministic across repeated runs', () => {
+    const first = runRadarUpgradeRemovalTimeline();
+    const second = runRadarUpgradeRemovalTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('transfers RADARUPGRADE side-effect state on object capture including disable-proof counts', () => {
+    const timeline = runRadarUpgradeCaptureTransferTimeline();
+    expect(timeline.americaRadarCounts).toEqual([0, 1, 2, 2, 0, 0]);
+    expect(timeline.chinaRadarCounts).toEqual([0, 0, 0, 0, 2, 2]);
+    expect(timeline.americaDisableProofRadarCounts).toEqual([0, 0, 1, 1, 0, 0]);
+    expect(timeline.chinaDisableProofRadarCounts).toEqual([0, 0, 0, 0, 1, 1]);
+  });
+
+  it('keeps RADARUPGRADE capture-transfer interaction deterministic across repeated runs', () => {
+    const first = runRadarUpgradeCaptureTransferTimeline();
+    const second = runRadarUpgradeCaptureTransferTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('grants science from GRANTSCIENCEUPGRADE on PLAYER upgrade completion and gates production', () => {
+    const timeline = runGrantScienceUpgradeTimeline();
+    expect(timeline.credits).toEqual([900, 900, 900, 750, 750, 750, 750]);
+    expect(timeline.queueCounts).toEqual([1, 1, 0, 1, 1, 0, 0]);
+    expect(timeline.scienceCounts).toEqual([0, 0, 1, 1, 1, 1, 1]);
+  });
+
+  it('keeps GRANTSCIENCEUPGRADE production/ science unlock timing deterministic across repeated runs', () => {
+    const first = runGrantScienceUpgradeTimeline();
+    const second = runGrantScienceUpgradeTimeline();
+    expect(first).toEqual(second);
+  });
+
   it('gates OBJECT upgrade queueing by source affectedByUpgrade semantics and applies valid upgrades on completion', () => {
     const timeline = runObjectUpgradeAffectabilityTimeline();
     expect(timeline.credits).toEqual([1000, 1000, 900, 900, 900, 800, 800, 800]);
@@ -4577,6 +7639,33 @@ describe('GameLogicSubsystem combat + upgrades', () => {
   it('keeps WeaponSetUpgrade production-to-combat transition deterministic across repeated runs', () => {
     const first = runWeaponSetUpgradeCombatTimeline();
     const second = runWeaponSetUpgradeCombatTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('applies WEAPONBONUSUPGRADE combat flag via OBJECT upgrade production and switches damage profile on completion', () => {
+    const timeline = runWeaponBonusUpgradeCombatTimeline();
+    expect(timeline.credits).toEqual([200, 200, 200, 200, 200, 200, 200, 200]);
+    expect(timeline.queueCounts).toEqual([1, 1, 0, 0, 0, 0, 0, 0]);
+    expect(timeline.healthTimeline).toEqual([180, 180, 180, 120, 120, 120, 60, 60]);
+  });
+
+  it('keeps WEAPONBONUSUPGRADE production-to-combat transition deterministic across repeated runs', () => {
+    const first = runWeaponBonusUpgradeCombatTimeline();
+    const second = runWeaponBonusUpgradeCombatTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('adds CAN_STEALTH after STEALTHUPGRADE completion', () => {
+    const timeline = runStealthUpgradeProductionTimeline();
+    expect(timeline.statusTimeline[0]).toEqual([]);
+    expect(timeline.statusTimeline[1]).toEqual([]);
+    expect(timeline.statusTimeline.some((flags) => flags.includes('CAN_STEALTH'))).toBe(true);
+    expect(timeline.statusTimeline[timeline.statusTimeline.length - 1]).toContain('CAN_STEALTH');
+  });
+
+  it('keeps STEALTHUPGRADE production timing deterministic across repeated runs', () => {
+    const first = runStealthUpgradeProductionTimeline();
+    const second = runStealthUpgradeProductionTimeline();
     expect(first).toEqual(second);
   });
 
@@ -4613,6 +7702,409 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideCredits('America')).toBe(200);
     expect(logic.getSideUpgradeState('America').inProduction).toEqual([]);
     expect(logic.getSideUpgradeState('America').completed).toEqual([]);
+  });
+
+  it('does not queue player upgrade production when side cannot afford the upgrade cost', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+        ]),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Move', {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 100 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(100);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(0);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual([]);
+  });
+
+  it('queues player upgrade production when side has exact upgrade cost and debits credits immediately', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+        ]),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Move', {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 200 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(0);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(1);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual(['UPGRADE_MOVE']);
+  });
+
+  it('does not queue player upgrade when command set does not allow command even with sufficient credits', () => {
+    const commandButtonName = 'Command_NotAnUpgrade';
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'StrategyCenter',
+          'America',
+          ['STRUCTURE'],
+          [
+            makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+              MaxQueueEntries: 1,
+            }),
+          ],
+          {
+            CommandSet: 'CommandSet_StrategyCenter',
+          },
+        ),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Move', {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef(commandButtonName, {
+          Command: 'UNIT_BUILD',
+          Unit: 'Dummy',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_StrategyCenter', {
+          1: commandButtonName,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(500);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(0);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual([]);
+  });
+
+  it('does not queue player upgrade when command is blocked and credits are insufficient', () => {
+    const commandButtonName = 'Command_NotAnUpgrade';
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'StrategyCenter',
+          'America',
+          ['STRUCTURE'],
+          [
+            makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+              MaxQueueEntries: 1,
+            }),
+          ],
+          {
+            CommandSet: 'CommandSet_StrategyCenter',
+          },
+        ),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Move', {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef(commandButtonName, {
+          Command: 'UNIT_BUILD',
+          Unit: 'Dummy',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_StrategyCenter', {
+          1: commandButtonName,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 100 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(100);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(0);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual([]);
+  });
+
+  it('unlocks PLAYER_UPGRADE command-set gate after an object CommandSetUpgrade', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'StrategyCenter',
+          'America',
+          ['STRUCTURE'],
+          [
+            makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+              MaxQueueEntries: 1,
+            }),
+            makeBlock('Behavior', 'CommandSetUpgrade ModuleTag_CommandSet', {
+              TriggeredBy: 'Upgrade_Unlock',
+              CommandSet: 'CommandSet_StrategyCenter_After',
+            }),
+          ],
+          {
+            CommandSet: 'CommandSet_StrategyCenter_Before',
+          },
+        ),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Unlock', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 1,
+        }),
+        makeUpgradeDef('Upgrade_Move', {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_NotUpgrade', {
+          Command: 'UNIT_BUILD',
+          Unit: 'Dummy',
+        }),
+        makeCommandButtonDef('Command_Move', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_Move',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_StrategyCenter_Before', {
+          1: 'Command_NotUpgrade',
+        }),
+        makeCommandSetDef('CommandSet_StrategyCenter_After', {
+          1: 'Command_Move',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 200 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(200);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(0);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual([]);
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Unlock' });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(0);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(1);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual(['UPGRADE_MOVE']);
+  });
+
+  it('keeps CommandSetUpgrade unlock gate transition deterministic across repeated runs', () => {
+    const runUnlockGateScenario = () => {
+      const bundle = makeBundle({
+        objects: [
+          makeObjectDef(
+            'StrategyCenter',
+            'America',
+            ['STRUCTURE'],
+            [
+              makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+                MaxQueueEntries: 1,
+              }),
+              makeBlock('Behavior', 'CommandSetUpgrade ModuleTag_CommandSet', {
+                TriggeredBy: 'Upgrade_Unlock',
+                CommandSet: 'CommandSet_StrategyCenter_After',
+              }),
+            ],
+            {
+              CommandSet: 'CommandSet_StrategyCenter_Before',
+            },
+          ),
+        ],
+        upgrades: [
+          makeUpgradeDef('Upgrade_Unlock', {
+            Type: 'OBJECT',
+            BuildTime: 0.1,
+            BuildCost: 1,
+          }),
+          makeUpgradeDef('Upgrade_Move', {
+            Type: 'PLAYER',
+            BuildTime: 0.1,
+            BuildCost: 200,
+          }),
+        ],
+        commandButtons: [
+          makeCommandButtonDef('Command_NotUpgrade', {
+            Command: 'UNIT_BUILD',
+            Unit: 'Dummy',
+          }),
+          makeCommandButtonDef('Command_Move', {
+            Command: 'PLAYER_UPGRADE',
+            Upgrade: 'Upgrade_Move',
+          }),
+        ],
+        commandSets: [
+          makeCommandSetDef('CommandSet_StrategyCenter_Before', {
+            1: 'Command_NotUpgrade',
+          }),
+          makeCommandSetDef('CommandSet_StrategyCenter_After', {
+            1: 'Command_Move',
+          }),
+        ],
+      });
+
+      const scene = new THREE.Scene();
+      const logic = new GameLogicSubsystem(scene);
+      logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 200 });
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+      logic.update(1 / 30);
+
+      const before = {
+        credits: logic.getSideCredits('America'),
+        queueCount: logic.getProductionState(1)?.queueEntryCount ?? 0,
+        inProduction: [...logic.getSideUpgradeState('America').inProduction],
+      };
+
+      logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Unlock' });
+      logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+      logic.update(1 / 30);
+
+      const after = {
+        credits: logic.getSideCredits('America'),
+        queueCount: logic.getProductionState(1)?.queueEntryCount ?? 0,
+        inProduction: [...logic.getSideUpgradeState('America').inProduction],
+      };
+
+      return { before, after };
+    };
+
+    const first = runUnlockGateScenario();
+    const second = runUnlockGateScenario();
+    expect(first).toEqual(second);
+  });
+
+  it('unlocks PLAYER_UPGRADE command-set gate only after OBJECT upgrade production completes', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'StrategyCenter',
+          'America',
+          ['STRUCTURE'],
+          [
+            makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+              MaxQueueEntries: 2,
+            }),
+            makeBlock('Behavior', 'CommandSetUpgrade ModuleTag_CommandSet', {
+              TriggeredBy: 'Upgrade_Unlock',
+              CommandSet: 'CommandSet_StrategyCenter_After',
+            }),
+          ],
+          {
+            CommandSet: 'CommandSet_StrategyCenter_Before',
+          },
+        ),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Unlock', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 1,
+        }),
+        makeUpgradeDef('Upgrade_Move', {
+          Type: 'PLAYER',
+          BuildTime: 0.1,
+          BuildCost: 200,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_NotUpgrade', {
+          Command: 'UNIT_BUILD',
+          Unit: 'Dummy',
+        }),
+        makeCommandButtonDef('Command_Move', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_Move',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_StrategyCenter_Before', {
+          1: 'Command_NotUpgrade',
+        }),
+        makeCommandSetDef('CommandSet_StrategyCenter_After', {
+          1: 'Command_Move',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 201 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Unlock' });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+
+    // Update through completion of Unlock; first move queue attempt should be blocked by base command set.
+    for (let frame = 0; frame < 3; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getSideCredits('America')).toBe(200);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual([]);
+    expect(logic.getSideUpgradeState('America').completed).toEqual([]);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(0);
+
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Move' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(0);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual(['UPGRADE_MOVE']);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(1);
   });
 
   it('prevents queueing the same player upgrade on another producer while in production', () => {
@@ -4652,7 +8144,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideUpgradeState('America').inProduction).toEqual(['UPGRADE_MOVE']);
   });
 
-  it('requires a matching PLAYER_UPGRADE/OBJECT_UPGRADE command button to queue upgrade production', () => {
+  it('requires a command-set button with matching Upgrade to queue upgrade production', () => {
     const allowed = runUpgradeCommandSetGateTimeline(true);
     expect(allowed.credits).toEqual([150, 150, 150, 150]);
     expect(allowed.queueCounts).toEqual([1, 1, 0, 0]);
@@ -4664,6 +8156,119 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(blocked.queueCounts).toEqual([0, 0, 0, 0]);
     expect(blocked.inProductionCounts).toEqual([0, 0, 0, 0]);
     expect(blocked.completedCounts).toEqual([0, 0, 0, 0]);
+  });
+
+  it('requires an explicit command set when queueing player upgrades', () => {
+    const blocked = runUpgradeNoCommandSetTimeline();
+    expect(blocked.credits).toEqual([300, 300, 300, 300]);
+    expect(blocked.queueCounts).toEqual([0, 0, 0, 0]);
+    expect(blocked.inProductionCounts).toEqual([0, 0, 0, 0]);
+    expect(blocked.completedCounts).toEqual([0, 0, 0, 0]);
+  });
+
+  it('allows OBJECT command-set transition upgrade to queue without explicit command button', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'StrategyCenter',
+          'America',
+          ['STRUCTURE'],
+          [
+            makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+              MaxQueueEntries: 1,
+            }),
+            makeBlock('Behavior', 'CommandSetUpgrade ModuleTag_CommandSet', {
+              TriggeredBy: 'Upgrade_Unlock',
+              CommandSet: 'CommandSet_StrategyCenter_After',
+            }),
+          ],
+          {
+            CommandSet: 'CommandSet_StrategyCenter_Before',
+          },
+        ),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Unlock', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 50,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_Dummy', {
+          Command: 'UNIT_BUILD',
+          Unit: 'Dummy',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_StrategyCenter_Before', {
+          1: 'Command_Dummy',
+        }),
+        makeCommandSetDef('CommandSet_StrategyCenter_After', {
+          1: 'Command_Dummy',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 100 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Unlock' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(50);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(1);
+  });
+
+  it('blocks OBJECT upgrade queueing without command button or CommandSetUpgrade trigger', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'StrategyCenter',
+          'America',
+          ['STRUCTURE'],
+          [
+            makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+              MaxQueueEntries: 1,
+            }),
+          ],
+          {
+            CommandSet: 'CommandSet_StrategyCenter_Before',
+          },
+        ),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Unlock', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 50,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_Dummy', {
+          Command: 'UNIT_BUILD',
+          Unit: 'Dummy',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_StrategyCenter_Before', {
+          1: 'Command_Dummy',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('StrategyCenter', 6, 6)]), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 100 });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_Unlock' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(100);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(0);
   });
 
   it('keeps upgrade command-set gating deterministic across repeated runs', () => {
@@ -4694,6 +8299,25 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       withAlt: runCommandSetUpgradeTimeline(true),
     };
     expect(first).toEqual(second);
+  });
+
+  it('recomputes CommandSetUpgrade override when TriggerAlt upgrade is removed', () => {
+    const timeline = runCommandSetUpgradeRemovalTimeline();
+    expect(timeline.credits).toEqual([860, 740, 740, 740, 740, 740, 740, 740]);
+    expect(timeline.queueCounts).toEqual([1, 2, 2, 2, 2, 2, 2, 2]);
+    expect(timeline.queueNames).toEqual([
+      ['UPGRADE_C'],
+      ['UPGRADE_C', 'UPGRADE_B'],
+      ['UPGRADE_C', 'UPGRADE_B'],
+      ['UPGRADE_C', 'UPGRADE_B'],
+      ['UPGRADE_C', 'UPGRADE_B'],
+      ['UPGRADE_C', 'UPGRADE_B'],
+      ['UPGRADE_C', 'UPGRADE_B'],
+      ['UPGRADE_C', 'UPGRADE_B'],
+    ]);
+
+    const repeated = runCommandSetUpgradeRemovalTimeline();
+    expect(timeline).toEqual(repeated);
   });
 
   it('enforces ParkingPlaceBehavior queue gating and preserves PRODUCED_AT_HELIPAD bypass behavior', () => {
@@ -4761,6 +8385,28 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(first).toEqual(second);
   });
 
+  it('removes status effects when StatusBitsUpgrade sources are removed via RemovesUpgrades', () => {
+    const timeline = runStatusBitsUpgradeRemovalTimeline();
+    const disabledFrames = timeline.statusFlagsTimeline
+      .map((flags, frame) => (flags.includes('NO_ATTACK') ? frame : null))
+      .filter((frame): frame is number => frame !== null);
+    expect(disabledFrames.length).toBeGreaterThan(0);
+
+    const firstDisabledFrame = disabledFrames[0];
+    const firstEnabledAfterRemoval = timeline.statusFlagsTimeline.findIndex(
+      (flags, frame) => frame > firstDisabledFrame && !flags.includes('NO_ATTACK'),
+    );
+    expect(firstEnabledAfterRemoval).toBeGreaterThan(firstDisabledFrame);
+    expect(timeline.statusFlagsTimeline.slice(firstEnabledAfterRemoval).every((flags) => !flags.includes('NO_ATTACK')))
+      .toBe(true);
+  });
+
+  it('keeps StatusBitsUpgrade removal timing deterministic across repeated runs', () => {
+    const first = runStatusBitsUpgradeRemovalTimeline();
+    const second = runStatusBitsUpgradeRemovalTimeline();
+    expect(first).toEqual(second);
+  });
+
   it('applies StatusBitsUpgrade NO_ATTACK set/clear semantics to combat timing', () => {
     const timeline = runStatusBitsCombatTimeline();
     expect(timeline.credits).toEqual([400, 400, 400, 400, 280, 280, 280, 280, 280, 280]);
@@ -4783,6 +8429,96 @@ describe('GameLogicSubsystem combat + upgrades', () => {
   it('keeps StatusBitsUpgrade combat gating deterministic across repeated runs', () => {
     const first = runStatusBitsCombatTimeline();
     const second = runStatusBitsCombatTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('blocks and restores attacks while DISABLED_EMP status is active for portable/spawn units', () => {
+    const timeline = runStatusBitsDisabledCombatTimeline();
+    expect(timeline.queueCounts).toEqual([1, 1, 0, 0, 1, 1, 0, 0, 0, 0]);
+    const disabledFrames = timeline.statusFlagsTimeline
+      .map((flags, frame) => ({ frame, disabled: flags.includes('DISABLED_EMP') }))
+      .filter((entry) => entry.disabled)
+      .map((entry) => entry.frame);
+    expect(disabledFrames.length).toBeGreaterThan(0);
+
+    const firstDisabledFrame = disabledFrames[0];
+    const firstEnabledAfterDisable = timeline.statusFlagsTimeline.findIndex(
+      (flags, frame) => frame > firstDisabledFrame && !flags.includes('DISABLED_EMP'),
+    );
+    expect(firstEnabledAfterDisable).toBeGreaterThan(firstDisabledFrame);
+
+    const disabledHealth = timeline.targetHealthTimeline.slice(firstDisabledFrame, firstEnabledAfterDisable);
+    expect(new Set(disabledHealth).size).toBe(1);
+    expect(disabledHealth[0]).toBeLessThanOrEqual(200);
+
+    expect(
+      Math.min(...timeline.targetHealthTimeline.slice(firstEnabledAfterDisable)),
+    ).toBeLessThan(disabledHealth[0]);
+  });
+
+  it('blocks and restores attacks while DISABLED_HACKED status is active for portable/spawn units', () => {
+    const timeline = runStatusBitsDisabledHackCombatTimeline();
+    expect(timeline.queueCounts).toEqual([1, 1, 0, 0, 1, 1, 0, 0, 0, 0]);
+    const disabledFrames = timeline.statusFlagsTimeline
+      .map((flags, frame) => ({ frame, disabled: flags.includes('DISABLED_HACKED') }))
+      .filter((entry) => entry.disabled)
+      .map((entry) => entry.frame);
+    expect(disabledFrames.length).toBeGreaterThan(0);
+
+    const firstDisabledFrame = disabledFrames[0];
+    const firstEnabledAfterDisable = timeline.statusFlagsTimeline.findIndex(
+      (flags, frame) => frame > firstDisabledFrame && !flags.includes('DISABLED_HACKED'),
+    );
+    expect(firstEnabledAfterDisable).toBeGreaterThan(firstDisabledFrame);
+
+    const disabledHealth = timeline.targetHealthTimeline.slice(firstDisabledFrame, firstEnabledAfterDisable);
+    expect(new Set(disabledHealth).size).toBe(1);
+    expect(disabledHealth[0]).toBeLessThanOrEqual(200);
+
+    expect(
+      Math.min(...timeline.targetHealthTimeline.slice(firstEnabledAfterDisable)),
+    ).toBeLessThan(disabledHealth[0]);
+  });
+
+  it('keeps DISABLED_EMP combat gating deterministic across repeated runs', () => {
+    const first = runStatusBitsDisabledCombatTimeline();
+    const second = runStatusBitsDisabledCombatTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('keeps DISABLED_HACKED combat gating deterministic across repeated runs', () => {
+    const first = runStatusBitsDisabledHackCombatTimeline();
+    const second = runStatusBitsDisabledHackCombatTimeline();
+    expect(first).toEqual(second);
+  });
+
+  it('blocks and restores attacks while DISABLED_SUBDUED status is active for portable/spawn units', () => {
+    const timeline = runStatusBitsDisabledSubduedCombatTimeline();
+    expect(timeline.queueCounts).toEqual([1, 1, 0, 0, 1, 1, 0, 0, 0, 0]);
+    const disabledFrames = timeline.statusFlagsTimeline
+      .map((flags, frame) => ({ frame, disabled: flags.includes('DISABLED_SUBDUED') }))
+      .filter((entry) => entry.disabled)
+      .map((entry) => entry.frame);
+    expect(disabledFrames.length).toBeGreaterThan(0);
+
+    const firstDisabledFrame = disabledFrames[0];
+    const firstEnabledAfterDisable = timeline.statusFlagsTimeline.findIndex(
+      (flags, frame) => frame > firstDisabledFrame && !flags.includes('DISABLED_SUBDUED'),
+    );
+    expect(firstEnabledAfterDisable).toBeGreaterThan(firstDisabledFrame);
+
+    const disabledHealth = timeline.targetHealthTimeline.slice(firstDisabledFrame, firstEnabledAfterDisable);
+    expect(new Set(disabledHealth).size).toBe(1);
+    expect(disabledHealth[0]).toBeLessThanOrEqual(200);
+
+    expect(
+      Math.min(...timeline.targetHealthTimeline.slice(firstEnabledAfterDisable)),
+    ).toBeLessThan(disabledHealth[0]);
+  });
+
+  it('keeps DISABLED_SUBDUED combat gating deterministic across repeated runs', () => {
+    const first = runStatusBitsDisabledSubduedCombatTimeline();
+    const second = runStatusBitsDisabledSubduedCombatTimeline();
     expect(first).toEqual(second);
   });
 
@@ -5170,6 +8906,244 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(timeline.containingAirfieldHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500]);
   });
 
+  it('prevents open-contain passengers from firing when PassengersAllowedToFire=No', () => {
+    const timeline = runOpenContainPassengerAllowedToFireTimeline(false);
+    expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
+    expect(timeline.containerHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
+  });
+
+  it('allows open-contain passengers to fire when PassengersAllowedToFire=Yes', () => {
+    const timeline = runOpenContainPassengerAllowedToFireTimeline(true);
+    expect(timeline.targetHealthTimeline[0]).toBe(100);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeLessThan(100);
+  });
+
+  it('allows open-contain passengers to fire after PassengersFireUpgrade', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Open', false, 'INFANTRY', {
+      passengersFireUpgradeFrames: {
+        enableAtFrame: 2,
+      },
+    });
+
+    expect(timeline.targetHealthTimeline.slice(0, 2).every((health) => health === 100)).toBe(true);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeLessThan(100);
+  });
+
+  it('restores PassengersAllowedToFire behavior when PassengersFireUpgrade is removed', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Open', false, 'INFANTRY', {
+      passengersFireUpgradeFrames: {
+        enableAtFrame: 2,
+        removeAtFrame: 5,
+      },
+    });
+
+    expect(timeline.targetHealthTimeline.slice(0, 2).every((health) => health === 100)).toBe(true);
+    expect(Math.min(...timeline.targetHealthTimeline.slice(2, 6))).toBeLessThan(100);
+    expect(
+      timeline.targetHealthTimeline.slice(6).every((health) => health === timeline.targetHealthTimeline[5]),
+    ).toBe(true);
+  });
+
+  it('is deterministic when using PassengersFireUpgrade enable/remove timeline', () => {
+    const run = () =>
+      runContainPassengerAllowedToFireTimeline('Open', false, 'INFANTRY', {
+        passengersFireUpgradeFrames: {
+          enableAtFrame: 2,
+          removeAtFrame: 5,
+        },
+      });
+
+    expect(run()).toEqual(run());
+  });
+
+  it('blocks nested open-contain passengers when outer OpenContain PassengersAllowedToFire=No', () => {
+    const timeline = runNestedOpenContainPassengerAllowedToFireTimeline();
+    expect(timeline.targetHealthTimeline).toEqual([
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+    ]);
+  });
+
+  it('prevents transport-contain infantry passengers from firing when PassengersAllowedToFire=No', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Transport', false);
+    expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
+    expect(timeline.containerHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
+  });
+
+  it('allows transport-contain infantry passengers to fire when PassengersAllowedToFire=Yes', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Transport', true);
+    expect(timeline.targetHealthTimeline[0]).toBe(100);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeLessThan(100);
+  });
+
+  it('prevents transport-contain vehicle passengers from firing even when PassengersAllowedToFire=Yes', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Transport', true, 'VEHICLE');
+    expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
+    expect(timeline.containerHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
+  });
+
+  it('prevents overlord-contain passengers from firing when PassengersAllowedToFire=No', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Overlord', false);
+    expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
+    expect(timeline.containerHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
+  });
+
+  it('allows overlord-contain passengers to fire when PassengersAllowedToFire=Yes', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Overlord', true);
+    expect(timeline.targetHealthTimeline[0]).toBe(100);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeLessThan(100);
+  });
+
+  it('prevents overlord-contain vehicle passengers from firing when PassengersAllowedToFire=Yes', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Overlord', true, 'VEHICLE');
+    expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
+    expect(timeline.containerHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
+  });
+
+  it('prevents helix-contain passengers from firing when PassengersAllowedToFire=No', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Helix', false);
+    expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
+    expect(timeline.containerHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
+  });
+
+  it('allows helix-contain passengers to fire when PassengersAllowedToFire=Yes', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Helix', true);
+    expect(timeline.targetHealthTimeline[0]).toBe(100);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeLessThan(100);
+  });
+
+  it('allows helix-contain matching portable structures to fire while PassengersAllowedToFire=No', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline(
+      'Helix',
+      false,
+      'PORTABLE_STRUCTURE',
+      {
+        passengerTemplateName: 'HelixContainPortablePassenger',
+        payloadTemplateNames: ['HelixContainPortablePassenger'],
+      },
+    );
+    expect(timeline.targetHealthTimeline[0]).toBe(100);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeLessThan(100);
+  });
+
+  it('prevents helix-contain portable structure from firing when it is not in PayloadTemplateName', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline(
+      'Helix',
+      true,
+      'PORTABLE_STRUCTURE',
+      {
+        passengerTemplateName: 'HelixContainPortablePassenger',
+        payloadTemplateNames: ['OtherPortable'],
+      },
+    );
+    expect(timeline.targetHealthTimeline).toEqual([
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+      100,
+    ]);
+    expect(timeline.containerHealthTimeline).toEqual([
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+    ]);
+  });
+
+  it('prevents helix-contain portable riders from firing based on tracked rider identity', () => {
+    const timeline = runHelixPortableRiderIdentityTimeline();
+    expect(timeline.targetHealthTimeline[0]).toBe(100);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBe(60);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeGreaterThan(20);
+    expect(timeline.containerHealthTimeline).toEqual([
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+    ]);
+  });
+
+  it('prevents helix-contain vehicle passengers from firing even when PassengersAllowedToFire=Yes', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Helix', true, 'VEHICLE');
+    expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
+    expect(timeline.containerHealthTimeline).toEqual([500, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
+  });
+
+  it('allows garrison-contain passengers to fire even when PassengersAllowedToFire=No', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Garrison', false);
+    expect(timeline.targetHealthTimeline[0]).toBe(100);
+    expect(Math.min(...timeline.targetHealthTimeline)).toBeLessThan(100);
+  });
+
+  it('blocks garrison-contain passenger fire while container is DISABLED_SUBDUED and restores afterwards', () => {
+    const timeline = runContainPassengerAllowedToFireTimeline('Garrison', false, 'INFANTRY', {
+      containerDisabledSubduedFrames: {
+        disableAtFrame: 2,
+        restoreAtFrame: 6,
+      },
+    });
+
+    const disabledFrames = timeline.containerStatusFlagsTimeline
+      .map((flags, frame) => ({ frame, disabled: flags.includes('DISABLED_SUBDUED') }))
+      .filter((entry) => entry.disabled)
+      .map((entry) => entry.frame);
+    expect(disabledFrames.length).toBeGreaterThan(0);
+
+    const firstDisabledFrame = disabledFrames[0];
+    const firstEnabledAfterDisable = timeline.containerStatusFlagsTimeline.findIndex(
+      (flags, frame) => frame > firstDisabledFrame && !flags.includes('DISABLED_SUBDUED'),
+    );
+    expect(firstEnabledAfterDisable).toBeGreaterThan(firstDisabledFrame);
+
+    const preDisabledHealth = timeline.targetHealthTimeline.slice(0, firstDisabledFrame);
+    expect(Math.min(...preDisabledHealth)).toBeLessThan(100);
+
+    const disabledHealth = timeline.targetHealthTimeline.slice(firstDisabledFrame, firstEnabledAfterDisable);
+    expect(new Set(disabledHealth).size).toBe(1);
+
+    const postRestoreHealth = timeline.targetHealthTimeline.slice(firstEnabledAfterDisable);
+    expect(Math.min(...postRestoreHealth)).toBeLessThan(disabledHealth[0]);
+  });
+
+  it('keeps garrison-contain passenger DISABLED_SUBDUED gating deterministic across repeated runs', () => {
+    const run = () => runContainPassengerAllowedToFireTimeline('Garrison', false, 'INFANTRY', {
+      containerDisabledSubduedFrames: {
+        disableAtFrame: 2,
+        restoreAtFrame: 6,
+      },
+    });
+
+    const first = run();
+    const second = run();
+    expect(first).toEqual(second);
+  });
+
   it('ignores incidental projectile collisions with FS_AIRFIELD when the intended victim is reserved there', () => {
     const timeline = runProjectileAirfieldReservedVictimCollisionTimeline();
     expect(timeline.targetHealthTimeline).toEqual([100, 100, 100, 100, 100, 100, 100]);
@@ -5448,6 +9422,192 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     const first = runSciencePrerequisiteTimeline({ grantAtFrame: 1 });
     const second = runSciencePrerequisiteTimeline({ grantAtFrame: 1 });
     expect(first).toEqual(second);
+  });
+
+  it('purchases science using local science purchase points and avoids duplicates', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DummyUnit', 'America', ['INFANTRY'], [], {
+          BuildTime: 0.1,
+          BuildCost: 10,
+        }),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_EMERGENCY', {
+          SciencePurchasePointCost: 2,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('DummyUnit', 10, 10)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.setPlayerSide(0, 'America');
+    (logic as unknown as { localPlayerSciencePurchasePoints: number }).localPlayerSciencePurchasePoints = 2;
+
+    logic.submitCommand({ type: 'purchaseScience', scienceName: 'SCIENCE_EMERGENCY', scienceCost: 2 });
+    expect(logic.getLocalPlayerScienceNames()).toEqual(['SCIENCE_EMERGENCY']);
+    expect(logic.getLocalPlayerSciencePurchasePoints()).toBe(0);
+
+    logic.submitCommand({ type: 'purchaseScience', scienceName: 'SCIENCE_EMERGENCY', scienceCost: 2 });
+    expect(logic.getLocalPlayerScienceNames()).toEqual(['SCIENCE_EMERGENCY']);
+  });
+
+  it('supports purchaseScience when local side is inferred from spawned entity side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DummyUnit', 'America', ['INFANTRY'], [], {
+          BuildTime: 0.1,
+          BuildCost: 10,
+        }),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_EMERGENCY', {
+          SciencePurchasePointCost: 2,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('DummyUnit', 10, 10)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    (logic as unknown as { localPlayerSciencePurchasePoints: number }).localPlayerSciencePurchasePoints = 2;
+
+    logic.submitCommand({ type: 'purchaseScience', scienceName: 'SCIENCE_EMERGENCY', scienceCost: 2 });
+    expect(logic.getLocalPlayerScienceNames()).toEqual(['SCIENCE_EMERGENCY']);
+    expect(logic.getSideScienceState('America').acquired).toEqual(['SCIENCE_EMERGENCY']);
+    expect((logic as unknown as { localPlayerSciencePurchasePoints: number }).localPlayerSciencePurchasePoints).toBe(0);
+  });
+
+  it('keeps getLocalPlayerScienceNames empty when local side is ambiguous across spawned entities', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DummyUnit', 'America', ['INFANTRY'], [], {
+          BuildTime: 0.1,
+          BuildCost: 10,
+        }),
+        makeObjectDef('DummyUnit', 'China', ['INFANTRY'], [], {
+          BuildTime: 0.1,
+          BuildCost: 10,
+        }),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_EMERGENCY', {
+          SciencePurchasePointCost: 2,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('DummyUnit', 10, 10), makeMapObject('DummyUnit', 20, 20)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.grantSideScience('America', 'SCIENCE_EMERGENCY');
+
+    expect(logic.getLocalPlayerScienceNames()).toEqual([]);
+  });
+
+  it('requires science prerequisites before purchase and deducts remaining points only on success', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DummyUnit', 'America', ['INFANTRY'], [], {
+          BuildTime: 0.1,
+          BuildCost: 10,
+        }),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_ROOT', {
+          SciencePurchasePointCost: 2,
+        }),
+        makeScienceDef('SCIENCE_ADVANCED', {
+          SciencePurchasePointCost: 3,
+          PrerequisiteSciences: 'SCIENCE_ROOT',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('DummyUnit', 10, 10)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.setPlayerSide(0, 'America');
+    (logic as unknown as { localPlayerSciencePurchasePoints: number }).localPlayerSciencePurchasePoints = 3;
+
+    logic.submitCommand({ type: 'purchaseScience', scienceName: 'SCIENCE_ADVANCED', scienceCost: 3 });
+    expect(logic.getLocalPlayerScienceNames()).toEqual([]);
+    expect(logic.getLocalPlayerSciencePurchasePoints()).toBe(3);
+
+    logic.submitCommand({ type: 'purchaseScience', scienceName: 'SCIENCE_ROOT', scienceCost: 2 });
+    expect(logic.getLocalPlayerScienceNames()).toEqual(['SCIENCE_ROOT']);
+    expect(logic.getLocalPlayerSciencePurchasePoints()).toBe(1);
+
+    logic.submitCommand({ type: 'purchaseScience', scienceName: 'SCIENCE_ADVANCED', scienceCost: 3 });
+    expect(logic.getLocalPlayerScienceNames()).toEqual(['SCIENCE_ADVANCED', 'SCIENCE_ROOT']);
+    expect(logic.getLocalPlayerSciencePurchasePoints()).toBe(0);
+  });
+
+  it('blocks purchase for disabled or hidden local science entries', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DummyUnit', 'America', ['INFANTRY'], [], {
+          BuildTime: 0.1,
+          BuildCost: 10,
+        }),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_EMERGENCY', {
+          SciencePurchasePointCost: 2,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('DummyUnit', 10, 10)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.setPlayerSide(0, 'America');
+    (logic as unknown as {
+      localPlayerSciencePurchasePoints: number;
+      localPlayerScienceAvailability: Map<string, 'enabled' | 'disabled' | 'hidden'>;
+    }).localPlayerSciencePurchasePoints = 2;
+    (logic as unknown as {
+      localPlayerSciencePurchasePoints: number;
+      localPlayerScienceAvailability: Map<string, 'enabled' | 'disabled' | 'hidden'>;
+    }).localPlayerScienceAvailability.set('SCIENCE_EMERGENCY', 'hidden');
+
+    logic.submitCommand({ type: 'purchaseScience', scienceName: 'SCIENCE_EMERGENCY', scienceCost: 2 });
+    expect(logic.getLocalPlayerScienceNames()).toEqual([]);
+    expect(logic.getLocalPlayerSciencePurchasePoints()).toBe(2);
+  });
+
+  it('purchases science through local science points to unlock production deterministically', () => {
+    const timeline = runPurchaseScienceUnlocksProductionTimeline({
+      scienceCost: 2,
+      initialPoints: 2,
+      purchaseAtFrame: 1,
+      queueAtFrame: 2,
+    });
+
+    expect(timeline.scienceCounts).toEqual([0, 1, 1, 1, 1, 1, 1]);
+    expect(timeline.credits).toEqual([500, 500, 350, 350, 350, 350, 350]);
+    expect(timeline.queueCounts).toEqual([0, 0, 1, 1, 1, 0, 0]);
+    expect(timeline.producedCounts).toEqual([0, 0, 0, 0, 0, 1, 1]);
+    expect(timeline.remainingPoints).toEqual([2, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it('ignores command-reported purchase cost payload and validates against registered science cost', () => {
+    const timeline = runPurchaseScienceUnlocksProductionTimeline({
+      scienceCost: 2,
+      commandScienceCost: 999,
+      initialPoints: 2,
+      purchaseAtFrame: 0,
+      queueAtFrame: 1,
+    });
+
+    expect(timeline.scienceCounts[1]).toBe(1);
+    expect(timeline.remainingPoints[1]).toBe(0);
+    expect(timeline.queueCounts[1]).toBe(1);
   });
 
   it('enforces Buildable=Only_By_AI against side player type', () => {

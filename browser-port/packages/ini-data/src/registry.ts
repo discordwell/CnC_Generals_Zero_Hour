@@ -37,6 +37,22 @@ export interface ArmorDef {
 export interface UpgradeDef {
   name: string;
   fields: Record<string, IniValue>;
+  blocks?: IniBlock[];
+  kindOf?: string[];
+}
+
+export interface SpecialPowerDef {
+  name: string;
+  parent?: string;
+  fields: Record<string, IniValue>;
+  blocks: IniBlock[];
+}
+
+export interface ObjectCreationListDef {
+  name: string;
+  parent?: string;
+  fields: Record<string, IniValue>;
+  blocks: IniBlock[];
 }
 
 export interface ScienceDef {
@@ -151,6 +167,8 @@ export interface IniDataBundle {
   upgrades: UpgradeDef[];
   sciences: ScienceDef[];
   factions: FactionDef[];
+  specialPowers?: SpecialPowerDef[];
+  objectCreationLists?: ObjectCreationListDef[];
   locomotors?: LocomotorDef[];
   audioEvents?: AudioEventDef[];
   miscAudio?: MiscAudioDef;
@@ -174,6 +192,8 @@ export class IniDataRegistry {
   readonly upgrades = new Map<string, UpgradeDef>();
   readonly sciences = new Map<string, ScienceDef>();
   readonly factions = new Map<string, FactionDef>();
+  readonly specialPowers = new Map<string, SpecialPowerDef>();
+  readonly objectCreationLists = new Map<string, ObjectCreationListDef>();
   readonly locomotors = new Map<string, LocomotorDef>();
   readonly audioEvents = new Map<string, AudioEventDef>();
   readonly commandButtons = new Map<string, CommandButtonDef>();
@@ -210,6 +230,8 @@ export class IniDataRegistry {
     this.upgrades.clear();
     this.sciences.clear();
     this.factions.clear();
+    this.specialPowers.clear();
+    this.objectCreationLists.clear();
     this.locomotors.clear();
     this.audioEvents.clear();
     this.commandButtons.clear();
@@ -241,7 +263,12 @@ export class IniDataRegistry {
     }
 
     for (const upgrade of bundle.upgrades) {
-      this.upgrades.set(upgrade.name, { ...upgrade, fields: { ...upgrade.fields } });
+      this.upgrades.set(upgrade.name, {
+        ...upgrade,
+        fields: { ...upgrade.fields },
+        blocks: [...(upgrade.blocks ?? [])],
+        kindOf: upgrade.kindOf ? [...upgrade.kindOf] : undefined,
+      });
     }
 
     for (const science of bundle.sciences) {
@@ -250,6 +277,20 @@ export class IniDataRegistry {
 
     for (const faction of bundle.factions) {
       this.factions.set(faction.name, { ...faction, fields: { ...faction.fields } });
+    }
+    for (const specialPower of bundle.specialPowers ?? []) {
+      this.specialPowers.set(specialPower.name, {
+        ...specialPower,
+        fields: { ...specialPower.fields },
+        blocks: [...specialPower.blocks],
+      });
+    }
+    for (const objectCreationList of bundle.objectCreationLists ?? []) {
+      this.objectCreationLists.set(objectCreationList.name, {
+        ...objectCreationList,
+        fields: { ...objectCreationList.fields },
+        blocks: [...objectCreationList.blocks],
+      });
     }
     for (const locomotor of bundle.locomotors ?? []) {
       this.locomotors.set(locomotor.name, {
@@ -355,6 +396,14 @@ export class IniDataRegistry {
     return this.factions.get(name);
   }
 
+  getSpecialPower(name: string): SpecialPowerDef | undefined {
+    return this.specialPowers.get(name);
+  }
+
+  getObjectCreationList(name: string): ObjectCreationListDef | undefined {
+    return this.objectCreationLists.get(name);
+  }
+
   getAiConfig(): AiConfig | undefined {
     return this.ai ? { ...this.ai } : undefined;
   }
@@ -402,6 +451,8 @@ export class IniDataRegistry {
       audioEvents: this.audioEvents.size,
       commandButtons: this.commandButtons.size,
       commandSets: this.commandSets.size,
+      // SpecialPower and ObjectCreationList definitions are intentionally excluded here
+      // until we decide whether to expose their totals in the public stats contract.
       unresolvedInheritance: this.getUnresolvedInheritanceCount(),
       totalBlocks: this.objects.size + this.weapons.size + this.armors.size +
         this.upgrades.size + this.sciences.size + this.factions.size + this.locomotors.size +
@@ -426,6 +477,9 @@ export class IniDataRegistry {
       upgrades: [...this.upgrades.values()].sort((a, b) => a.name.localeCompare(b.name)),
       sciences: [...this.sciences.values()].sort((a, b) => a.name.localeCompare(b.name)),
       factions: [...this.factions.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      specialPowers: [...this.specialPowers.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      objectCreationLists: [...this.objectCreationLists.values()]
+        .sort((a, b) => a.name.localeCompare(b.name)),
       locomotors: [...this.locomotors.values()].sort((a, b) => a.name.localeCompare(b.name)),
       audioEvents: [...this.audioEvents.values()].sort((a, b) => a.name.localeCompare(b.name)),
       miscAudio: this.miscAudio
@@ -501,6 +555,8 @@ export class IniDataRegistry {
         addDefinition(this.upgrades, block.type, {
           name: block.name,
           fields: block.fields,
+          blocks: block.blocks,
+          kindOf: extractStringArray(block.fields['KindOf']),
         });
         break;
 
@@ -553,6 +609,24 @@ export class IniDataRegistry {
         break;
       }
 
+      case 'SpecialPower':
+        addDefinition(this.specialPowers, block.type, {
+          name: block.name,
+          parent: block.parent,
+          fields: block.fields,
+          blocks: block.blocks,
+        });
+        break;
+
+      case 'ObjectCreationList':
+        addDefinition(this.objectCreationLists, block.type, {
+          name: block.name,
+          parent: block.parent,
+          fields: block.fields,
+          blocks: block.blocks,
+        });
+        break;
+
       case 'AudioEvent':
       case 'MusicTrack':
       case 'DialogEvent':
@@ -587,10 +661,8 @@ export class IniDataRegistry {
       }
 
       // Known but not indexed block types — skip silently
-      case 'SpecialPower':
       case 'DamageFX':
       case 'FXList':
-      case 'ObjectCreationList':
       case 'Multisound':
       case 'EvaEvent':
       case 'MappedImage':
