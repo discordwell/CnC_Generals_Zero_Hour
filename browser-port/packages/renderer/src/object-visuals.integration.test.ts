@@ -234,7 +234,7 @@ describe('renderer/game-logic integration', () => {
 
     expect(requestedPaths).toContain('TankMesh.gltf');
     expect(manager.getVisualState(1)?.hasModel).toBe(true);
-    expect(manager.getVisualState(1)?.animationState).toBeNull();
+    expect(manager.getVisualState(1)?.animationState).toBe('IDLE');
     expect(manager.getUnresolvedEntityIds()).toEqual([2, 3]);
     expect(manager.getVisualState(3)?.hasModel).toBe(false);
 

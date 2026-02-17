@@ -124,7 +124,7 @@ describe('ObjectVisualManager', () => {
 
     expect(modelLoaderCalls).toEqual(['unit-model.gltf']);
     expect(manager.getVisualState(7)?.hasModel).toBe(true);
-    expect(manager.getVisualState(7)?.animationState).toBeNull();
+    expect(manager.getVisualState(7)?.animationState).toBe('IDLE');
 
     manager.sync([makeMeshState({ id: 7, renderAssetPath: 'unit-model' })], 1 / 30);
     expect(manager.getVisualState(7)?.animationState).toBe('IDLE');
@@ -137,6 +137,33 @@ describe('ObjectVisualManager', () => {
 
     manager.sync([makeMeshState({ id: 7, animationState: 'DIE', renderAssetPath: 'unit-model' })], 1 / 30);
     expect(manager.getVisualState(7)?.animationState).toBe('DIE');
+  });
+
+  it('prefers source-provided animation clip candidates per render state', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle01', 'Move01', 'Attack01', 'Die01']),
+    });
+    const clips = {
+      IDLE: ['Idle01'],
+      MOVE: ['Move01'],
+      ATTACK: ['Attack01'],
+      DIE: ['Die01'],
+    };
+
+    const baseState = makeMeshState({ id: 8, renderAssetPath: 'unit-model', renderAnimationStateClips: clips });
+    manager.sync([baseState], 1 / 30);
+    await flushModelLoadQueue();
+    expect(manager.getVisualState(8)?.animationState).toBe('IDLE');
+
+    manager.sync([makeMeshState({ id: 8, renderAssetPath: 'unit-model', renderAnimationStateClips: clips, animationState: 'MOVE' })], 1 / 30);
+    expect(manager.getVisualState(8)?.animationState).toBe('MOVE');
+
+    manager.sync([makeMeshState({ id: 8, renderAssetPath: 'unit-model', renderAnimationStateClips: clips, animationState: 'ATTACK' })], 1 / 30);
+    expect(manager.getVisualState(8)?.animationState).toBe('ATTACK');
+
+    manager.sync([makeMeshState({ id: 8, renderAssetPath: 'unit-model', renderAnimationStateClips: clips, animationState: 'DIE' })], 1 / 30);
+    expect(manager.getVisualState(8)?.animationState).toBe('DIE');
   });
 
   it('keeps missing assets explicit and non-throwing', async () => {
@@ -193,7 +220,7 @@ describe('ObjectVisualManager', () => {
 
     manager.sync([makeMeshState({ id: 9, renderAssetPath: 'a' })], 1 / 30);
     await flushModelLoadQueue();
-    expect(manager.getUnresolvedEntityIds()).toEqual([1]);
+    expect(manager.getUnresolvedEntityIds()).toEqual([9]);
   });
 
   it('cancels stale model loads when an entity becomes unresolved', async () => {

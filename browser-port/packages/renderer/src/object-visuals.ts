@@ -16,6 +16,7 @@ export interface RenderableEntityState {
   renderAssetPath: string | null;
   renderAssetResolved: boolean;
   renderAssetCandidates?: readonly string[];
+  renderAnimationStateClips?: Partial<Record<RenderableAnimationState, string[]>>;
   x: number;
   y: number;
   z: number;
@@ -37,6 +38,7 @@ interface VisualAssetState {
   mixer: THREE.AnimationMixer | null;
   actions: Map<RenderableAnimationState, THREE.AnimationAction>;
   activeState: RenderableAnimationState | null;
+  requestedAnimationState: RenderableAnimationState;
 }
 
 export interface ObjectVisualManagerConfig {
@@ -100,6 +102,7 @@ export class ObjectVisualManager {
         visual = this.createVisual(state.id);
         this.visuals.set(state.id, visual);
       }
+      visual.requestedAnimationState = state.animationState;
 
       this.syncVisualTransform(visual, state);
       this.syncVisualAsset(visual, state);
@@ -175,6 +178,7 @@ export class ObjectVisualManager {
       mixer: null,
       actions: new Map(),
       activeState: null,
+      requestedAnimationState: 'IDLE',
     };
   }
 
@@ -263,9 +267,11 @@ export class ObjectVisualManager {
             ? new THREE.AnimationMixer(clone)
             : null;
           const actions = new Map<RenderableAnimationState, THREE.AnimationAction>();
+          const clipCandidatesByState = this.resolveAnimationClipCandidates(state.renderAnimationStateClips);
 
           for (const stateKey of Object.keys(CLIP_HINTS_BY_STATE) as RenderableAnimationState[]) {
-            const clip = this.findMatchingClip(source.animations, CLIP_HINTS_BY_STATE[stateKey]);
+            const clipCandidates = clipCandidatesByState[stateKey];
+            const clip = this.findMatchingClip(source.animations, clipCandidates);
             if (clip) {
               const action = mixer?.clipAction(clip);
               if (action) {
@@ -279,6 +285,7 @@ export class ObjectVisualManager {
           currentVisual.mixer = mixer;
           currentVisual.actions = actions;
           currentVisual.root.add(clone);
+          this.applyAnimationState(currentVisual, currentVisual.requestedAnimationState);
           this.unresolvedEntityIds.delete(entityId);
           this.updatePlaceholderVisibility(entityId, false);
           return;
@@ -325,6 +332,52 @@ export class ObjectVisualManager {
     }
 
     return requested;
+  }
+
+  private resolveAnimationClipCandidates(
+    renderAnimationStateClips?: Partial<Record<RenderableAnimationState, string[]>>,
+  ): Record<RenderableAnimationState, string[]> {
+    const next: Record<RenderableAnimationState, string[]> = {
+      IDLE: [...CLIP_HINTS_BY_STATE.IDLE],
+      MOVE: [...CLIP_HINTS_BY_STATE.MOVE],
+      ATTACK: [...CLIP_HINTS_BY_STATE.ATTACK],
+      DIE: [...CLIP_HINTS_BY_STATE.DIE],
+    };
+
+    if (!renderAnimationStateClips) {
+      return next;
+    }
+
+    for (const stateKey of Object.keys(next) as RenderableAnimationState[]) {
+      const sourceCandidates = renderAnimationStateClips[stateKey];
+      if (!sourceCandidates || sourceCandidates.length === 0) {
+        continue;
+      }
+      const dedupedCandidates: string[] = [];
+      const seen = new Set<string>();
+      for (const rawCandidate of sourceCandidates) {
+        const trimmed = rawCandidate.trim();
+        if (!trimmed || seen.has(trimmed.toUpperCase())) {
+          continue;
+        }
+        seen.add(trimmed.toUpperCase());
+        dedupedCandidates.push(trimmed);
+      }
+      if (dedupedCandidates.length > 0) {
+        const fallback = CLIP_HINTS_BY_STATE[stateKey];
+        const merged = [...dedupedCandidates];
+        const seen = new Set(dedupedCandidates.map((candidate) => candidate.toUpperCase()));
+        for (const fallbackCandidate of fallback) {
+          if (!seen.has(fallbackCandidate.toUpperCase())) {
+            merged.push(fallbackCandidate);
+            seen.add(fallbackCandidate.toUpperCase());
+          }
+        }
+        next[stateKey] = merged;
+      }
+    }
+
+    return next;
   }
 
   private updatePlaceholderVisibility(entityId: number, visible: boolean): void {

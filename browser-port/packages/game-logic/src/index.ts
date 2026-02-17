@@ -42,6 +42,7 @@ export interface MapObjectPlacementSummary {
 }
 
 export type RenderAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE';
+export type RenderAnimationStateClipCandidates = Partial<Record<RenderAnimationState, string[]>>;
 
 export type RenderableObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
 
@@ -52,6 +53,7 @@ export interface RenderableEntityState {
   renderAssetCandidates: string[];
   renderAssetPath: string | null;
   renderAssetResolved: boolean;
+  renderAnimationStateClips?: RenderAnimationStateClipCandidates;
   category: RenderableObjectCategory;
   x: number;
   y: number;
@@ -693,6 +695,7 @@ interface MapEntity {
   renderAssetCandidates: string[];
   renderAssetPath: string | null;
   renderAssetResolved: boolean;
+  renderAnimationStateClips?: RenderAnimationStateClipCandidates;
   x: number;
   y: number;
   z: number;
@@ -909,6 +912,7 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetCandidates: entity.renderAssetCandidates,
       renderAssetPath: entity.renderAssetPath,
       renderAssetResolved: entity.renderAssetResolved,
+      renderAnimationStateClips: entity.renderAnimationStateClips,
       category: entity.category,
       x: entity.x,
       y: entity.y,
@@ -1322,6 +1326,7 @@ export class GameLogicSubsystem implements Subsystem {
     renderAssetCandidates: string[];
     renderAssetPath: string | null;
     renderAssetResolved: boolean;
+    renderAnimationStateClips?: RenderAnimationStateClipCandidates;
     health: number;
     maxHealth: number;
     canTakeDamage: boolean;
@@ -1347,6 +1352,7 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetCandidates: entity.renderAssetCandidates,
       renderAssetPath: entity.renderAssetPath,
       renderAssetResolved: entity.renderAssetResolved,
+      renderAnimationStateClips: entity.renderAnimationStateClips,
       health: entity.health,
       maxHealth: entity.maxHealth,
       canTakeDamage: entity.canTakeDamage,
@@ -1916,6 +1922,7 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetCandidates: renderAssetProfile.renderAssetCandidates,
       renderAssetPath: renderAssetProfile.renderAssetPath,
       renderAssetResolved: renderAssetProfile.renderAssetResolved,
+      renderAnimationStateClips: renderAssetProfile.renderAnimationStateClips,
       x,
       y,
       z,
@@ -1996,6 +2003,7 @@ export class GameLogicSubsystem implements Subsystem {
     renderAssetCandidates: string[];
     renderAssetPath: string | null;
     renderAssetResolved: boolean;
+    renderAnimationStateClips: RenderAnimationStateClipCandidates;
   } {
     const renderAssetCandidates = this.collectRenderAssetCandidates(objectDef);
     const renderAssetPath = this.resolveRenderAssetPathFromCandidates(renderAssetCandidates);
@@ -2003,6 +2011,7 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetCandidates,
       renderAssetPath,
       renderAssetResolved: renderAssetPath !== null,
+      renderAnimationStateClips: this.collectRenderAnimationStateClips(objectDef),
     };
   }
 
@@ -2059,6 +2068,117 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return candidates;
+  }
+
+  private collectRenderAnimationStateClips(objectDef: ObjectDef | undefined): RenderAnimationStateClipCandidates {
+    if (!objectDef) {
+      return {};
+    }
+
+    const renderAnimationStateClips: RenderAnimationStateClipCandidates = {};
+    const used = new Map<RenderAnimationState, Set<string>>();
+
+    const addClip = (state: RenderAnimationState, clipName: string): void => {
+      const trimmed = clipName.trim();
+      if (!trimmed || trimmed.toUpperCase() === 'NONE') {
+        return;
+      }
+      const seen = used.get(state) ?? new Set<string>();
+      const canonical = trimmed.toUpperCase();
+      if (seen.has(canonical)) {
+        return;
+      }
+      seen.add(canonical);
+      used.set(state, seen);
+      renderAnimationStateClips[state] = renderAnimationStateClips[state] ?? [];
+      renderAnimationStateClips[state]!.push(trimmed);
+    };
+
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'MODELCONDITIONSTATE') {
+        const inferredStateFromName = this.inferRenderAnimationStateFromConditionStateName(block.name);
+        for (const [fieldName, fieldValue] of Object.entries(block.fields)) {
+          const inferredState = this.inferRenderAnimationStateFromFieldName(
+            fieldName,
+            inferredStateFromName,
+          );
+          if (!inferredState) {
+            continue;
+          }
+
+          for (const tokenGroup of this.extractIniValueTokens(fieldValue)) {
+            for (const token of tokenGroup) {
+              if (typeof token === 'string') {
+                addClip(inferredState, token);
+              }
+            }
+          }
+        }
+      }
+
+      for (const childBlock of block.blocks) {
+        visitBlock(childBlock);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return renderAnimationStateClips;
+  }
+
+  private inferRenderAnimationStateFromFieldName(
+    fieldName: string,
+    fallback: RenderAnimationState | null,
+  ): RenderAnimationState | null {
+    const normalizedFieldName = fieldName.toUpperCase();
+    // Source parser supports only `Animation` and `IdleAnimation` for condition-state
+    // clips (see W3DModelDraw::parseConditionState).
+    if (normalizedFieldName === 'ANIMATION') {
+      return fallback;
+    }
+    if (normalizedFieldName === 'IDLEANIMATION') {
+      return 'IDLE';
+    }
+    return null;
+  }
+
+  private inferRenderAnimationStateFromConditionStateName(conditionStateName: string): RenderAnimationState | null {
+    const normalizedConditionStateName = conditionStateName.toUpperCase();
+    if (
+      normalizedConditionStateName.includes('ATTACK')
+      || normalizedConditionStateName.includes('FIRING')
+      || normalizedConditionStateName.includes('PREATTACK')
+      || normalizedConditionStateName.includes('RELOADING')
+      || normalizedConditionStateName.includes('BETWEEN_FIRING_SHOTS')
+      || normalizedConditionStateName.includes('USING_WEAPON')
+    ) {
+      return 'ATTACK';
+    }
+    if (normalizedConditionStateName.includes('MOVE') || normalizedConditionStateName.includes('RUN')
+      || normalizedConditionStateName.includes('WALK')
+      || normalizedConditionStateName.includes('MOVING')) {
+      return 'MOVE';
+    }
+    if (
+      normalizedConditionStateName.includes('DEATH')
+      || normalizedConditionStateName.includes('DIE')
+      || normalizedConditionStateName.includes('DEAD')
+      || normalizedConditionStateName.includes('DESTROY')
+      || normalizedConditionStateName.includes('DYING')
+    ) {
+      return 'DIE';
+    }
+    if (
+      normalizedConditionStateName.includes('IDLE')
+      || normalizedConditionStateName.includes('STAND')
+      || normalizedConditionStateName.includes('DEFAULT')
+      || normalizedConditionStateName.includes('NORMAL')
+    ) {
+      return 'IDLE';
+    }
+    return null;
   }
 
   private resolveForwardUnitVector(entity: MapEntity): { x: number; z: number } {

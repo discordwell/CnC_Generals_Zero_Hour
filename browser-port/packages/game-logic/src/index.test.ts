@@ -4379,6 +4379,45 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     }));
   });
 
+  it('extracts source-driven animation clip candidates from model condition state fields', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ClipMappedUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Draw', 'W3DModelDraw ModuleTag_Draw', {}, [
+            makeBlock('ModelConditionState', 'DefaultModelConditionState', {
+              IdleAnimation: 'Idle01',
+            }),
+            makeBlock('ModelConditionState', 'Moving', {
+              Animation: 'Move01',
+            }),
+            makeBlock('ModelConditionState', 'Attacking', {
+              Animation: 'Attack01',
+            }),
+            makeBlock('ModelConditionState', 'Dying', {
+              Animation: 'Die01',
+            }),
+          ]),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ClipMappedUnit', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const state = logic.getEntityState(1);
+    expect(state?.renderAnimationStateClips).toEqual({
+      IDLE: ['Idle01'],
+      MOVE: ['Move01'],
+      ATTACK: ['Attack01'],
+      DIE: ['Die01'],
+    });
+  });
+
   it('marks NONE model tokens as unresolved even when template data exists', () => {
     const bundle = makeBundle({
       objects: [
