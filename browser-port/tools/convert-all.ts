@@ -189,6 +189,8 @@ function combineLists(left: string[], right: string[]): string[] {
 
 function mergeStats(bundle: IniDataBundle): RegistryStats {
   const locomotorCount = bundle.locomotors?.length ?? 0;
+  const commandButtonCount = bundle.commandButtons?.length ?? 0;
+  const commandSetCount = bundle.commandSets?.length ?? 0;
   return {
     objects: bundle.objects.length,
     weapons: bundle.weapons.length,
@@ -197,7 +199,16 @@ function mergeStats(bundle: IniDataBundle): RegistryStats {
     sciences: bundle.sciences.length,
     factions: bundle.factions.length,
     unresolvedInheritance: bundle.errors.filter((entry) => entry.type === 'unresolved_parent').length,
-    totalBlocks: bundle.objects.length + bundle.weapons.length + bundle.armors.length + bundle.upgrades.length + bundle.sciences.length + bundle.factions.length + locomotorCount,
+    totalBlocks:
+      bundle.objects.length
+      + bundle.weapons.length
+      + bundle.armors.length
+      + bundle.upgrades.length
+      + commandButtonCount
+      + commandSetCount
+      + bundle.sciences.length
+      + bundle.factions.length
+      + locomotorCount,
   };
 }
 
@@ -208,6 +219,8 @@ function mergeBundles(baseBundle: IniDataBundle, patchBundle: IniDataBundle): In
     weapons: mergeByName(baseBundle.weapons, patchBundle.weapons),
     armors: mergeByName(baseBundle.armors, patchBundle.armors),
     upgrades: mergeByName(baseBundle.upgrades, patchBundle.upgrades),
+    commandButtons: mergeByName(baseBundle.commandButtons ?? [], patchBundle.commandButtons ?? []),
+    commandSets: mergeByName(baseBundle.commandSets ?? [], patchBundle.commandSets ?? []),
     sciences: mergeByName(baseBundle.sciences, patchBundle.sciences),
     factions: mergeByName(baseBundle.factions, patchBundle.factions),
     locomotors: mergeByName(baseBundle.locomotors ?? [], patchBundle.locomotors ?? []),

@@ -4,6 +4,8 @@ export type {
   WeaponDef,
   ArmorDef,
   UpgradeDef,
+  CommandButtonDef,
+  CommandSetDef,
   ScienceDef,
   FactionDef,
   LocomotorDef,

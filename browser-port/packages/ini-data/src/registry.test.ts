@@ -99,15 +99,18 @@ describe('IniDataRegistry', () => {
       expect(registry.getUnsupportedBlockTypes()).toEqual(['CustomThing']);
     });
 
-    it('silently skips known non-indexed types', () => {
+    it('indexes command button/set blocks and skips other known non-indexed types', () => {
       registry.loadBlocks([
-        makeBlock('CommandButton', 'Btn1', {}),
+        makeBlock('CommandButton', 'Btn1', { Command: 'PLAYER_UPGRADE', Upgrade: 'Upgrade_Armor' }),
+        makeBlock('CommandSet', 'Set1', { 1: 'Btn1' }),
         makeBlock('FXList', 'FX1', {}),
         makeBlock('AudioEvent', 'Sound1', {}),
         makeBlock('AI', 'AI', { AttackUsesLineOfSight: '0' }),
       ]);
 
       expect(registry.objects.size).toBe(0);
+      expect(registry.commandButtons.get('Btn1')?.fields['Upgrade']).toBe('Upgrade_Armor');
+      expect(registry.commandSets.get('Set1')?.fields['1']).toBe('Btn1');
       expect(registry.getUnsupportedBlockTypes()).toEqual([]);
     });
 
@@ -275,6 +278,10 @@ describe('IniDataRegistry', () => {
         makeBlock('Object', 'TankA', { Side: 'China' }),
         makeBlock('Weapon', 'GunC', {}),
         makeBlock('Weapon', 'GunA', {}),
+        makeBlock('CommandButton', 'BtnZ', {}),
+        makeBlock('CommandButton', 'BtnA', {}),
+        makeBlock('CommandSet', 'SetZ', {}),
+        makeBlock('CommandSet', 'SetA', {}),
       ]);
 
       const bundle = registry.toBundle();
@@ -283,6 +290,10 @@ describe('IniDataRegistry', () => {
       expect(bundle.objects[1]!.name).toBe('TankZ');
       expect(bundle.weapons[0]!.name).toBe('GunA');
       expect(bundle.weapons[1]!.name).toBe('GunC');
+      expect(bundle.commandButtons?.[0]!.name).toBe('BtnA');
+      expect(bundle.commandButtons?.[1]!.name).toBe('BtnZ');
+      expect(bundle.commandSets?.[0]!.name).toBe('SetA');
+      expect(bundle.commandSets?.[1]!.name).toBe('SetZ');
       expect(bundle.stats.objects).toBe(2);
       expect(bundle.stats.weapons).toBe(2);
     });
@@ -308,6 +319,12 @@ describe('IniDataRegistry', () => {
         ],
         upgrades: [
           { name: 'UpgradeA', fields: { BuildTime: 10 } },
+        ],
+        commandButtons: [
+          { name: 'Command_UpgradeA', fields: { Command: 'PLAYER_UPGRADE', Upgrade: 'UpgradeA' } },
+        ],
+        commandSets: [
+          { name: 'Set_Upgrade', fields: { 1: 'Command_UpgradeA' } },
         ],
         sciences: [
           { name: 'ScienceA', fields: { SciencePurchasePointCost: 1 } },
@@ -343,6 +360,8 @@ describe('IniDataRegistry', () => {
 
       expect(registry.objects.get('TankA')?.side).toBe('America');
       expect(registry.weapons.get('Gun')?.fields['Damage']).toBe(50);
+      expect(registry.getCommandButton('Command_UpgradeA')?.fields['Upgrade']).toBe('UpgradeA');
+      expect(registry.getCommandSet('Set_Upgrade')?.fields['1']).toBe('Command_UpgradeA');
       expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
       expect(registry.getUnsupportedBlockTypes()).toEqual(['CommandButton']);
       expect(registry.errors).toHaveLength(1);
