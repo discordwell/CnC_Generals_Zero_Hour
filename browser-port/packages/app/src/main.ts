@@ -31,13 +31,12 @@ import { GameLogicSubsystem } from '@generals/game-logic';
 import {
   UiRuntime,
   initializeUiOverlay,
+  GUICommandType,
 } from '@generals/ui';
 import {
   playUiFeedbackAudio,
 } from './control-bar-audio.js';
-import {
-  buildControlBarButtonsForSelection,
-} from './control-bar-buttons.js';
+import { buildControlBarButtonsForSelections } from './control-bar-buttons.js';
 import { dispatchIssuedControlBarCommands } from './control-bar-dispatch.js';
 import {
   isObjectTargetAllowedForSelection,
@@ -594,6 +593,22 @@ async function init(): Promise<void> {
     }
   };
 
+  const resolveControlBarSlotFromKey = (key: string): number | null => {
+    if (/^[1-9]$/.test(key)) {
+      return Number.parseInt(key, 10);
+    }
+    if (key === '0') {
+      return 10;
+    }
+    if (key === '-') {
+      return 11;
+    }
+    if (key === '=') {
+      return 12;
+    }
+    return null;
+  };
+
   // F1 toggle wireframe
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F1') {
@@ -602,10 +617,10 @@ async function init(): Promise<void> {
       return;
     }
 
-    const slotIndex = Number.parseInt(e.key, 10);
-    if (Number.isInteger(slotIndex) && slotIndex >= 1 && slotIndex <= 9) {
+    const resolvedSlot = resolveControlBarSlotFromKey(e.key);
+    if (resolvedSlot !== null) {
       e.preventDefault();
-      activateControlBarSlot(slotIndex - 1);
+      activateControlBarSlot(resolvedSlot - 1);
     }
   });
 
@@ -614,6 +629,7 @@ async function init(): Promise<void> {
   // ========================================================================
 
   const gameLoop = new GameLoop(30);
+  const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
 
   gameLoop.start({
     onSimulationStep(_frameNumber: number, dt: number) {
@@ -655,27 +671,47 @@ async function init(): Promise<void> {
         } else if (pendingControlBarCommand.targetKind === 'object') {
           const targetObjectId = gameLogic.resolveObjectTargetFromInput(inputState, camera);
           if (targetObjectId !== null) {
-            const selectedObjectIds = uiRuntime.getSelectionState().selectedObjectIds;
-            const sourceObjectIds = selectedObjectIds.length > 0
-              ? selectedObjectIds
-              : (() => {
-                  const selectedEntityId = gameLogic.getSelectedEntityId();
-                  return selectedEntityId === null ? [] : [selectedEntityId];
-                })();
-            const isValidTarget = sourceObjectIds.length === 1
-              ? isObjectTargetRelationshipAllowed(
-                  pendingControlBarCommand.commandOption,
-                  gameLogic.getEntityRelationship(sourceObjectIds[0]!, targetObjectId),
-                )
-              : isObjectTargetAllowedForSelection(
-                  pendingControlBarCommand.commandOption,
-                  sourceObjectIds,
-                  targetObjectId,
-                  (sourceObjectId, objectTargetId) => gameLogic.getEntityRelationship(
-                    sourceObjectId,
-                    objectTargetId,
-                  ),
+            const localPlayerIndex = networkManager.getLocalPlayerID();
+            let isValidTarget = false;
+            if (
+              pendingControlBarCommand.commandType
+              === GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER
+            ) {
+              const commandCenterEntityId = gameLogic.resolveCommandCenterEntityId(localPlayerIndex);
+              if (commandCenterEntityId === null) {
+                uiRuntime.showMessage(
+                  'TODO: SpecialPower from command center target validation requires resolved command-center source.',
                 );
+                playUiFeedbackAudio(iniDataRegistry, audioManager, 'invalid');
+              } else {
+                isValidTarget = isObjectTargetRelationshipAllowed(
+                  pendingControlBarCommand.commandOption,
+                  gameLogic.getEntityRelationship(commandCenterEntityId, targetObjectId),
+                );
+              }
+            } else {
+              const selectedObjectIds = uiRuntime.getSelectionState().selectedObjectIds;
+              const sourceObjectIds = selectedObjectIds.length > 0
+                ? selectedObjectIds
+                : (() => {
+                    const selectedEntityId = gameLogic.getSelectedEntityId();
+                    return selectedEntityId === null ? [] : [selectedEntityId];
+                  })();
+              isValidTarget = sourceObjectIds.length === 1
+                ? isObjectTargetRelationshipAllowed(
+                    pendingControlBarCommand.commandOption,
+                    gameLogic.getEntityRelationship(sourceObjectIds[0]!, targetObjectId),
+                  )
+                : isObjectTargetAllowedForSelection(
+                    pendingControlBarCommand.commandOption,
+                    sourceObjectIds,
+                    targetObjectId,
+                    (sourceObjectId, objectTargetId) => gameLogic.getEntityRelationship(
+                      sourceObjectId,
+                      objectTargetId,
+                    ),
+                  );
+            }
             if (!isValidTarget) {
               uiRuntime.showMessage('Target is not valid for this command.');
               playUiFeedbackAudio(iniDataRegistry, audioManager, 'invalid');
@@ -743,26 +779,46 @@ async function init(): Promise<void> {
         ? `${hm.width}x${hm.height}`
         : 'none';
       const wireInfo = terrainVisual.isWireframe() ? ' [wireframe]' : '';
-      const selectedInfo = gameLogic.getSelectedEntityInfo();
-      const selectedEntityId = selectedInfo?.id ?? null;
-      const controlBarButtons = buildControlBarButtonsForSelection(
+      const selectedEntityIdList = gameLogic.getLocalPlayerSelectionIds();
+      const selectedInfo = selectedEntityIdList.length > 0
+        ? gameLogic.getSelectedEntityInfoById(selectedEntityIdList[0] ?? null)
+        : gameLogic.getSelectedEntityInfo();
+      const selectedEntities = selectedEntityIdList.length > 0
+        ? gameLogic.getSelectedEntityInfos(selectedEntityIdList)
+        : selectedInfo
+          ? [selectedInfo]
+          : [];
+      const selectedEntityId = selectedEntities[0]?.id ?? null;
+      const selectedEntityIds = selectedEntities.map((selection) => selection.id);
+      const selectedEntityIdSet = new Set(selectedEntityIds);
+
+      const playerUpgradeNames = gameLogic.getLocalPlayerUpgradeNames();
+      const playerScienceNames = gameLogic.getLocalPlayerScienceNames();
+      const playerSciencePurchasePoints = gameLogic.getLocalPlayerSciencePurchasePoints();
+      const disabledScienceNames = gameLogic.getLocalPlayerDisabledScienceNames();
+      const hiddenScienceNames = gameLogic.getLocalPlayerHiddenScienceNames();
+      const controlBarButtons = buildControlBarButtonsForSelections(
         iniDataRegistry,
-        {
-          templateName: selectedInfo?.templateName ?? null,
-          canMove: selectedInfo?.canMove ?? false,
-          hasAutoRallyPoint: selectedInfo?.hasAutoRallyPoint ?? false,
-          isUnmanned: selectedInfo?.isUnmanned ?? false,
-          isDozer: selectedInfo?.isDozer ?? false,
-          isMoving: selectedInfo?.isMoving ?? false,
-          appliedUpgradeNames: selectedInfo?.appliedUpgradeNames ?? [],
-          // TODO: Source parity gap: player progression currently comes from
-          // game-logic command hooks, not a full Player subsystem.
-          playerUpgradeNames: gameLogic.getLocalPlayerUpgradeNames(),
-          playerScienceNames: gameLogic.getLocalPlayerScienceNames(),
-          playerSciencePurchasePoints: gameLogic.getLocalPlayerSciencePurchasePoints(),
-          disabledScienceNames: gameLogic.getLocalPlayerDisabledScienceNames(),
-          hiddenScienceNames: gameLogic.getLocalPlayerHiddenScienceNames(),
-        },
+        selectedEntities.map((selection) => {
+          const productionState = gameLogic.getProductionState(selection.id);
+          return {
+            templateName: selection.templateName,
+            canMove: selection.canMove,
+            hasAutoRallyPoint: selection.hasAutoRallyPoint,
+            isUnmanned: selection.isUnmanned,
+            isDozer: selection.isDozer,
+            isMoving: selection.isMoving,
+            objectStatusFlags: selection.objectStatusFlags,
+            productionQueueEntryCount: productionState?.queueEntryCount,
+            productionQueueMaxEntries: productionState?.maxQueueEntries,
+            appliedUpgradeNames: selection.appliedUpgradeNames,
+            playerUpgradeNames,
+            playerScienceNames,
+            playerSciencePurchasePoints,
+            disabledScienceNames,
+            hiddenScienceNames,
+          };
+        }),
       );
 
       const currentShortcutSpecialPowerReadyFrames = collectShortcutSpecialPowerReadyFrames(
@@ -770,25 +826,42 @@ async function init(): Promise<void> {
         iniDataRegistry,
       );
 
-      if (selectedEntityId !== null) {
+      if (selectedEntityIds.length > 0) {
+        for (const previousEntityId of trackedShortcutSpecialPowerSourceEntityIds) {
+          if (!selectedEntityIdSet.has(previousEntityId)) {
+            gameLogic.clearTrackedShortcutSpecialPowerSourceEntity(previousEntityId);
+            trackedShortcutSpecialPowerSourceEntityIds.delete(previousEntityId);
+          }
+        }
+
         // Source behavior from Player::findMostReadyShortcutSpecialPowerOfType:
         // candidate source objects are tracked per special power and resolved by
         // lowest ready frame.
         // TODO: Source parity gap: ready-frame values currently come from command
         // card enabled state, not live SpecialPowerModule cooldown frames.
-        gameLogic.clearTrackedShortcutSpecialPowerSourceEntity(selectedEntityId);
-        for (const [specialPowerName, readyFrame] of currentShortcutSpecialPowerReadyFrames) {
-          gameLogic.trackShortcutSpecialPowerSourceEntity(
-            specialPowerName,
-            selectedEntityId,
-            readyFrame,
-          );
+        for (const sourceEntityId of selectedEntityIds) {
+          gameLogic.clearTrackedShortcutSpecialPowerSourceEntity(sourceEntityId);
+          for (const [specialPowerName, readyFrame] of currentShortcutSpecialPowerReadyFrames) {
+            gameLogic.trackShortcutSpecialPowerSourceEntity(
+              specialPowerName,
+              sourceEntityId,
+              readyFrame,
+            );
+          }
+          trackedShortcutSpecialPowerSourceEntityIds.add(sourceEntityId);
         }
+      } else {
+        for (const previousEntityId of trackedShortcutSpecialPowerSourceEntityIds) {
+          gameLogic.clearTrackedShortcutSpecialPowerSourceEntity(previousEntityId);
+        }
+        trackedShortcutSpecialPowerSourceEntityIds.clear();
       }
 
       uiRuntime.setSelectionState({
-        selectedObjectIds: selectedInfo ? [selectedInfo.id] : [],
-        selectedObjectName: selectedInfo?.templateName ?? '',
+        selectedObjectIds: selectedEntities.map((selection) => selection.id),
+        selectedObjectName: selectedEntityId === null
+          ? selectedInfo?.templateName ?? ''
+          : selectedEntities[0]?.templateName ?? '',
       });
       uiRuntime.setControlBarButtons(controlBarButtons);
       const unresolvedVisualIds = objectVisualManager.getUnresolvedEntityIds();
@@ -834,7 +907,7 @@ async function init(): Promise<void> {
   console.log('Stage 3: Terrain + map entities bootstrapped.');
   console.log(`Terrain: ${heightmap.width}x${heightmap.height} (${mapPath ?? 'procedural demo'})`);
   console.log(`Placed ${objectPlacement.spawnedObjects}/${objectPlacement.totalObjects} objects from map data.`);
-  console.log('Controls: LMB=select, RMB=move/confirm target, 1-9=ControlBar slot, WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
+  console.log('Controls: LMB=select, RMB=move/confirm target, 1-12=ControlBar slot, WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
 }
 
 init().catch((err) => {

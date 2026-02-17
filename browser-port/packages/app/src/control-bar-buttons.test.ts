@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { IniDataRegistry } from '@generals/ini-data';
 import { CommandOption, GUICommandType } from '@generals/ui';
 
-import { buildControlBarButtonsForSelection } from './control-bar-buttons.js';
+import {
+  buildControlBarButtonsForSelection,
+  buildControlBarButtonsForSelections,
+} from './control-bar-buttons.js';
 
 describe('buildControlBarButtonsForSelection', () => {
   it('builds source command-set buttons with preserved slot indices', () => {
@@ -115,6 +118,88 @@ describe('buildControlBarButtonsForSelection', () => {
     expect(buttons).toEqual([]);
   });
 
+  it('hides all commands when the object is script-disabled', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'Vehicle_Unactionable',
+        fields: {
+          CommandSet: 'Set_Unactionable',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'Set_Unactionable',
+        fields: {
+          1: 'Command_Stop',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_Stop',
+        fields: {
+          Command: 'STOP',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelection(registry, {
+      templateName: 'Vehicle_Unactionable',
+      canMove: true,
+      isUnmanned: false,
+      isDozer: false,
+      isMoving: false,
+      objectStatusFlags: ['SCRIPT_DISABLED'],
+    });
+
+    expect(buttons).toEqual([]);
+  });
+
+  it('hides all commands when the object is script-unpowered', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'Vehicle_Unactionable',
+        fields: {
+          CommandSet: 'Set_Unactionable',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'Set_Unactionable',
+        fields: {
+          1: 'Command_Stop',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_Stop',
+        fields: {
+          Command: 'STOP',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelection(registry, {
+      templateName: 'Vehicle_Unactionable',
+      canMove: true,
+      isUnmanned: false,
+      isDozer: false,
+      isMoving: false,
+      objectStatusFlags: ['SCRIPT_UNPOWERED'],
+    });
+
+    expect(buttons).toEqual([]);
+  });
+
   it('uses minimal fallback controls for movable units without source command cards', () => {
     const registry = new IniDataRegistry();
 
@@ -170,6 +255,7 @@ describe('buildControlBarButtonsForSelection', () => {
         name: 'Command_DozerConstruct',
         fields: {
           Command: 'DOZER_CONSTRUCT',
+          Options: 'OK_FOR_MULTI_SELECT',
         },
         blocks: [],
       },
@@ -711,6 +797,125 @@ describe('buildControlBarButtonsForSelection', () => {
     expect(buttons[0]?.enabled).toBe(false);
   });
 
+  it('disables build-related commands when production queue is at capacity', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'WarFactory',
+        fields: {
+          CommandSet: 'WarFactorySet',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'WarFactorySet',
+        fields: {
+          1: 'Command_UnitBuild',
+          2: 'Command_ObjectUpgrade',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_UnitBuild',
+        fields: {
+          Command: 'UNIT_BUILD',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_ObjectUpgrade',
+        fields: {
+          Command: 'OBJECT_UPGRADE',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelection(registry, {
+      templateName: 'WarFactory',
+      canMove: true,
+      isUnmanned: false,
+      isDozer: false,
+      isMoving: false,
+      productionQueueEntryCount: 5,
+      productionQueueMaxEntries: 5,
+    });
+
+    expect(buttons).toEqual([
+      {
+        id: 'Command_UnitBuild',
+        slot: 1,
+        label: 'Command_UnitBuild',
+        commandType: GUICommandType.GUI_COMMAND_UNIT_BUILD,
+        commandOption: CommandOption.COMMAND_OPTION_NONE,
+        enabled: false,
+      },
+      {
+        id: 'Command_ObjectUpgrade',
+        slot: 2,
+        label: 'Command_ObjectUpgrade',
+        commandType: GUICommandType.GUI_COMMAND_OBJECT_UPGRADE,
+        commandOption: CommandOption.COMMAND_OPTION_NONE,
+        enabled: false,
+      },
+    ]);
+  });
+
+  it('enables build-related commands when production queue has capacity', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'WarFactory',
+        fields: {
+          CommandSet: 'WarFactorySet',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'WarFactorySet',
+        fields: {
+          1: 'Command_UnitBuild',
+          2: 'Command_ObjectUpgrade',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_UnitBuild',
+        fields: {
+          Command: 'UNIT_BUILD',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_ObjectUpgrade',
+        fields: {
+          Command: 'OBJECT_UPGRADE',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelection(registry, {
+      templateName: 'WarFactory',
+      canMove: true,
+      isUnmanned: false,
+      isDozer: false,
+      isMoving: false,
+      productionQueueEntryCount: 4,
+      productionQueueMaxEntries: 5,
+    });
+
+    expect(buttons.map((button) => button.enabled)).toEqual([true, true]);
+  });
+
   it('disables PURCHASE_SCIENCE when science cost exceeds available purchase points', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
@@ -827,5 +1032,325 @@ describe('buildControlBarButtonsForSelection', () => {
     });
 
     expect(buttons[0]?.enabled).toBe(true);
+  });
+
+  it('intersects command cards across multi-selections by slot and button id', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'UnitA',
+        fields: {
+          CommandSet: 'SetA',
+        },
+        blocks: [],
+      },
+      {
+        type: 'Object',
+        name: 'UnitB',
+        fields: {
+          CommandSet: 'SetB',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetA',
+        fields: {
+          1: 'Command_Stop',
+          2: 'Command_AttackMove',
+          3: 'Command_OnlyA',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetB',
+        fields: {
+          1: 'Command_Stop',
+          2: 'Command_AttackMove',
+          3: 'Command_OnlyB',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_Stop',
+        fields: {
+          Command: 'STOP',
+          Options: 'OK_FOR_MULTI_SELECT',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_AttackMove',
+        fields: {
+          Command: 'ATTACK_MOVE',
+          Options: 'OK_FOR_MULTI_SELECT NEED_TARGET_POS',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_OnlyA',
+        fields: {
+          Command: 'STOP',
+          Options: 'OK_FOR_MULTI_SELECT',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_OnlyB',
+        fields: {
+          Command: 'STOP',
+          Options: 'OK_FOR_MULTI_SELECT',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelections(registry, [
+      {
+        templateName: 'UnitA',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+      {
+        templateName: 'UnitB',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+    ]);
+
+    expect(buttons.map((button) => button.id)).toEqual([
+      'Command_Stop',
+      'Command_AttackMove',
+    ]);
+  });
+
+  it('excludes commands that are not OK_FOR_MULTI_SELECT from multi-selection', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'UnitA',
+        fields: {
+          CommandSet: 'SetA',
+        },
+        blocks: [],
+      },
+      {
+        type: 'Object',
+        name: 'UnitB',
+        fields: {
+          CommandSet: 'SetB',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetA',
+        fields: {
+          1: 'Command_Stop',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetB',
+        fields: {
+          1: 'Command_Stop',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_Stop',
+        fields: {
+          Command: 'STOP',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelections(registry, [
+      {
+        templateName: 'UnitA',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+      {
+        templateName: 'UnitB',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+    ]);
+
+    expect(buttons).toEqual([]);
+  });
+
+  it('keeps intersected commands enabled when any source can execute them', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'Builder',
+        fields: {
+          CommandSet: 'SetBuilder',
+        },
+        blocks: [],
+      },
+      {
+        type: 'Object',
+        name: 'Base',
+        fields: {
+          CommandSet: 'SetBase',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetBuilder',
+        fields: {
+          1: 'Command_DozerConstruct',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetBase',
+        fields: {
+          1: 'Command_DozerConstruct',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_DozerConstruct',
+        fields: {
+          Command: 'DOZER_CONSTRUCT',
+          Options: 'OK_FOR_MULTI_SELECT',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelections(registry, [
+      {
+        templateName: 'Builder',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: true,
+        isMoving: false,
+      },
+      {
+        templateName: 'Base',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+    ]);
+
+    expect(buttons).toEqual([
+      {
+        id: 'Command_DozerConstruct',
+        slot: 1,
+        label: 'Command_DozerConstruct',
+        commandType: GUICommandType.GUI_COMMAND_DOZER_CONSTRUCT,
+        commandOption: CommandOption.COMMAND_OPTION_NONE,
+        enabled: true,
+      },
+    ]);
+  });
+
+  it('preserves ATTACK_MOVE slots from non-common selections as source-compatible intersections', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'UnitA',
+        fields: {
+          CommandSet: 'SetA',
+        },
+        blocks: [],
+      },
+      {
+        type: 'Object',
+        name: 'UnitB',
+        fields: {
+          CommandSet: 'SetB',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetA',
+        fields: {
+          1: 'Command_Stop',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SetB',
+        fields: {
+          1: 'Command_Stop',
+          2: 'Command_AttackMove',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_Stop',
+        fields: {
+          Command: 'STOP',
+          Options: 'OK_FOR_MULTI_SELECT',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_AttackMove',
+        fields: {
+          Command: 'ATTACK_MOVE',
+          Options: 'OK_FOR_MULTI_SELECT NEED_TARGET_POS',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelections(registry, [
+      {
+        templateName: 'UnitA',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+      {
+        templateName: 'UnitB',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+    ]);
+
+    expect(buttons.map((button) => button.id)).toEqual([
+      'Command_Stop',
+      'Command_AttackMove',
+    ]);
+    expect(buttons).toHaveLength(2);
   });
 });

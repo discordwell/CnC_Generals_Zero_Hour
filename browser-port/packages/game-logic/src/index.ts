@@ -71,6 +71,11 @@ export interface ClearSelectionCommand {
   type: 'clearSelection';
 }
 
+export interface SelectEntitySetCommand {
+  type: 'selectEntities';
+  entityIds: number[];
+}
+
 export interface MoveToCommand {
   type: 'moveTo';
   entityId: number;
@@ -119,6 +124,15 @@ export interface AttackEntityCommand {
   entityId: number;
   targetEntityId: number;
   commandSource?: AttackCommandSource;
+}
+
+export interface FireWeaponCommand {
+  type: 'fireWeapon';
+  entityId: number;
+  weaponSlot: number;
+  maxShotsToFire: number;
+  targetObjectId: number | null;
+  targetPosition: readonly [number, number, number] | null;
 }
 
 export interface StopCommand {
@@ -225,8 +239,83 @@ export interface IssueSpecialPowerCommand {
   targetZ: number | null;
 }
 
+export interface SwitchWeaponCommand {
+  type: 'switchWeapon';
+  entityId: number;
+  weaponSlot: number;
+}
+
+export interface SellCommand {
+  type: 'sell';
+  entityId: number;
+}
+
+export interface ExitContainerCommand {
+  type: 'exitContainer';
+  entityId: number;
+}
+
+export interface EvacuateCommand {
+  type: 'evacuate';
+  entityId: number;
+}
+
+export interface ExecuteRailedTransportCommand {
+  type: 'executeRailedTransport';
+  entityId: number;
+}
+
+export interface BeaconDeleteCommand {
+  type: 'beaconDelete';
+  entityId: number;
+}
+
+export interface HackInternetCommand {
+  type: 'hackInternet';
+  entityId: number;
+}
+
+export interface ToggleOverchargeCommand {
+  type: 'toggleOvercharge';
+  entityId: number;
+}
+
+export interface CombatDropCommand {
+  type: 'combatDrop';
+  entityId: number;
+  targetObjectId: number | null;
+  targetPosition: readonly [number, number, number] | null;
+}
+
+export interface PlaceBeaconCommand {
+  type: 'placeBeacon';
+  targetPosition: readonly [number, number, number];
+}
+
+export interface EnterObjectCommand {
+  type: 'enterObject';
+  entityId: number;
+  targetObjectId: number;
+  action: 'hijackVehicle' | 'convertToCarBomb' | 'sabotageBuilding';
+}
+
+export interface ConstructBuildingCommand {
+  type: 'constructBuilding';
+  entityId: number;
+  templateName: string;
+  targetPosition: readonly [number, number, number];
+  angle: number;
+  lineEndPosition: readonly [number, number, number] | null;
+}
+
+export interface CancelDozerConstructionCommand {
+  type: 'cancelDozerConstruction';
+  entityId: number;
+}
+
 export type GameLogicCommand =
   | SelectByIdCommand
+  | SelectEntitySetCommand
   | ClearSelectionCommand
   | MoveToCommand
   | AttackMoveToCommand
@@ -234,6 +323,7 @@ export type GameLogicCommand =
   | GuardObjectCommand
   | SetRallyPointCommand
   | AttackEntityCommand
+  | FireWeaponCommand
   | StopCommand
   | BridgeDestroyedCommand
   | BridgeRepairedCommand
@@ -250,7 +340,20 @@ export type GameLogicCommand =
   | GrantSideScienceCommand
   | ApplyPlayerUpgradeCommand
   | PurchaseScienceCommand
-  | IssueSpecialPowerCommand;
+  | IssueSpecialPowerCommand
+  | ExitContainerCommand
+  | EvacuateCommand
+  | ExecuteRailedTransportCommand
+  | BeaconDeleteCommand
+  | SellCommand
+  | HackInternetCommand
+  | ToggleOverchargeCommand
+  | CombatDropCommand
+  | PlaceBeaconCommand
+  | EnterObjectCommand
+  | ConstructBuildingCommand
+  | CancelDozerConstructionCommand
+  | SwitchWeaponCommand;
 
 export interface SelectedEntityInfo {
   id: number;
@@ -264,6 +367,7 @@ export interface SelectedEntityInfo {
   isDozer: boolean;
   isMoving: boolean;
   appliedUpgradeNames: string[];
+  objectStatusFlags: string[];
 }
 
 export type EntityRelationship = 'enemies' | 'neutral' | 'allies';
@@ -721,12 +825,14 @@ interface MapEntity {
   armorSetFlagsMask: number;
   armorDamageCoefficients: Map<string, number> | null;
   attackTargetEntityId: number | null;
+  attackTargetPosition: VectorXZ | null;
   attackOriginalVictimPosition: VectorXZ | null;
   attackCommandSource: AttackCommandSource;
   nextAttackFrame: number;
   attackAmmoInClip: number;
   attackReloadFinishFrame: number;
   attackForceReloadFrame: number;
+  forcedWeaponSlot: number | null;
   attackScatterTargetsUnused: number[];
   preAttackFinishFrame: number;
   consecutiveShotsTargetEntityId: number | null;
@@ -792,6 +898,7 @@ export class GameLogicSubsystem implements Subsystem {
   private nextId = 1;
   private animationTime = 0;
   private selectedEntityId: number | null = null;
+  private selectedEntityIds: readonly number[] = [];
   private mapHeightmap: HeightmapGrid | null = null;
   private navigationGrid: NavigationGrid | null = null;
   private iniDataRegistry: IniDataRegistry | null = null;
@@ -1039,11 +1146,15 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   getSelectedEntityInfo(): SelectedEntityInfo | null {
-    if (this.selectedEntityId === null) {
+    return this.getSelectedEntityInfoById(this.selectedEntityId);
+  }
+
+  getSelectedEntityInfoById(entityId: number | null): SelectedEntityInfo | null {
+    if (entityId === null) {
       return null;
     }
 
-    const selected = this.spawnedEntities.get(this.selectedEntityId);
+    const selected = this.spawnedEntities.get(entityId);
     if (!selected) {
       return null;
     }
@@ -1065,6 +1176,7 @@ export class GameLogicSubsystem implements Subsystem {
       isDozer: normalizedKindOf.has('DOZER'),
       isMoving: selected.moving,
       appliedUpgradeNames: Array.from(selected.completedUpgrades.values()).sort(),
+      objectStatusFlags: Array.from(selected.objectStatusFlags.values()).sort(),
     };
   }
 
@@ -1149,6 +1261,34 @@ export class GameLogicSubsystem implements Subsystem {
       return [];
     }
     return Array.from(this.getSideScienceSet(side)).sort();
+  }
+
+  resolveCommandCenterEntityId(localPlayerIndex?: number | null): number | null {
+    const normalizedPlayerIndex = this.normalizePlayerIndex(
+      localPlayerIndex === undefined || localPlayerIndex === null
+        ? this.localPlayerIndex
+        : localPlayerIndex,
+    );
+    if (normalizedPlayerIndex === null) {
+      return null;
+    }
+    const localSide = this.playerSideByIndex.get(normalizedPlayerIndex);
+    if (!localSide) {
+      return null;
+    }
+
+    for (const [entityId, entity] of this.spawnedEntities) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== localSide) {
+        continue;
+      }
+      if (this.resolveEntityKindOfSet(entity).has('COMMANDCENTER')) {
+        return entityId;
+      }
+    }
+    return null;
   }
 
   getLocalPlayerSciencePurchasePoints(): number {
@@ -1379,8 +1519,45 @@ export class GameLogicSubsystem implements Subsystem {
       .sort((left, right) => left - right);
   }
 
+  getEntityIdsByTemplateAndSide(templateName: string, side: string): number[] {
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedTemplateName || !normalizedSide) {
+      return [];
+    }
+    return Array.from(this.spawnedEntities.values())
+      .filter(
+        (entity) =>
+          this.normalizeSide(entity.side) === normalizedSide
+          && entity.templateName.toUpperCase() === normalizedTemplateName,
+      )
+      .map((entity) => entity.id)
+      .sort((left, right) => left - right);
+  }
+
+  getLocalPlayerSelectionIds(): readonly number[] {
+    return [...this.selectedEntityIds];
+  }
+
+  getSelectedEntityInfos(entityIds: readonly number[]): SelectedEntityInfo[] {
+    const infos: SelectedEntityInfo[] = [];
+    const seen = new Set<number>();
+    for (const entityId of entityIds) {
+      if (seen.has(entityId)) {
+        continue;
+      }
+      seen.add(entityId);
+      const info = this.getSelectedEntityInfoById(entityId);
+      if (info !== null) {
+        infos.push(info);
+      }
+    }
+    return infos;
+  }
+
   getProductionState(entityId: number): {
     queueEntryCount: number;
+    maxQueueEntries?: number;
     queue: Array<{
       type: 'UNIT';
       templateName: string;
@@ -1409,6 +1586,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     return {
       queueEntryCount: entity.productionQueue.length,
+      maxQueueEntries: entity.productionProfile?.maxQueueEntries,
       queue: entity.productionQueue.map((entry) => {
         if (entry.type === 'UPGRADE') {
           return {
@@ -1955,10 +2133,12 @@ export class GameLogicSubsystem implements Subsystem {
       attackWeapon,
       weaponTemplateSets,
       weaponSetFlagsMask: 0,
+      forcedWeaponSlot: null,
       armorTemplateSets,
       armorSetFlagsMask: 0,
       armorDamageCoefficients,
       attackTargetEntityId: null,
+      attackTargetPosition: null,
       attackOriginalVictimPosition: null,
       attackCommandSource: 'AI',
       nextAttackFrame: 0,
@@ -2781,6 +2961,14 @@ export class GameLogicSubsystem implements Subsystem {
     return best;
   }
 
+  private normalizeWeaponSlot(weaponSlot: number | null): number | null {
+    const normalized = Math.trunc(weaponSlot);
+    if (!Number.isFinite(normalized) || normalized < 0 || normalized > 2) {
+      return null;
+    }
+    return normalized;
+  }
+
   private countSetBits(value: number): number {
     let v = value >>> 0;
     let count = 0;
@@ -2895,10 +3083,25 @@ export class GameLogicSubsystem implements Subsystem {
     weaponTemplateSets: readonly WeaponTemplateSetProfile[],
     weaponSetFlagsMask: number,
     iniDataRegistry: IniDataRegistry,
+    forcedWeaponSlot: number | null = null,
   ): AttackWeaponProfile | null {
     const selectedSet = this.selectBestSetByConditions(weaponTemplateSets, weaponSetFlagsMask);
     if (!selectedSet) {
       return null;
+    }
+
+    const normalizedForcedWeaponSlot = this.normalizeWeaponSlot(forcedWeaponSlot);
+    if (normalizedForcedWeaponSlot !== null) {
+      const weaponName = selectedSet.weaponNamesBySlot[normalizedForcedWeaponSlot];
+      if (weaponName) {
+        const forcedWeapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+        if (forcedWeapon) {
+          const profile = this.resolveWeaponProfileFromDef(forcedWeapon);
+          if (profile) {
+            return profile;
+          }
+        }
+      }
     }
 
     for (const weaponName of selectedSet.weaponNamesBySlot) {
@@ -2922,10 +3125,25 @@ export class GameLogicSubsystem implements Subsystem {
     weaponTemplateSets: readonly WeaponTemplateSetProfile[],
     weaponSetFlagsMask: number,
     iniDataRegistry: IniDataRegistry,
+    forcedWeaponSlot: number | null = null,
   ): number {
     const selectedSet = this.selectBestSetByConditions(weaponTemplateSets, weaponSetFlagsMask);
     if (!selectedSet) {
       return NO_ATTACK_DISTANCE;
+    }
+
+    const normalizedForcedWeaponSlot = this.normalizeWeaponSlot(forcedWeaponSlot);
+    if (normalizedForcedWeaponSlot !== null) {
+      const weaponName = selectedSet.weaponNamesBySlot[normalizedForcedWeaponSlot];
+      if (weaponName) {
+        const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+        if (weapon) {
+          const weaponProfile = this.resolveWeaponProfileFromDef(weapon);
+          if (weaponProfile) {
+            return weaponProfile.attackRange;
+          }
+        }
+      }
     }
 
     let largestWeaponRange = NO_ATTACK_DISTANCE;
@@ -3712,11 +3930,13 @@ export class GameLogicSubsystem implements Subsystem {
       entity.weaponTemplateSets,
       entity.weaponSetFlagsMask,
       registry,
+      entity.forcedWeaponSlot,
     );
     entity.largestWeaponRange = this.resolveLargestWeaponRangeForSetSelection(
       entity.weaponTemplateSets,
       entity.weaponSetFlagsMask,
       registry,
+      entity.forcedWeaponSlot,
     );
     entity.armorDamageCoefficients = this.resolveArmorDamageCoefficientsForSetSelection(
       entity.armorTemplateSets,
@@ -4319,13 +4539,22 @@ export class GameLogicSubsystem implements Subsystem {
   private applyCommand(command: GameLogicCommand): void {
     switch (command.type) {
       case 'clearSelection': {
+        this.selectedEntityIds = [];
         this.selectedEntityId = null;
         this.clearEntitySelectionState();
+        return;
+      }
+      case 'selectEntities': {
+        const nextSelectionIds = this.filterValidSelectionIds(command.entityIds);
+        this.selectedEntityIds = nextSelectionIds;
+        this.selectedEntityId = nextSelectionIds[0] ?? null;
+        this.updateSelectionHighlight();
         return;
       }
       case 'select': {
         const picked = this.spawnedEntities.get(command.entityId);
         if (!picked) return;
+        this.selectedEntityIds = [command.entityId];
         this.selectedEntityId = command.entityId;
         this.updateSelectionHighlight();
         return;
@@ -4360,6 +4589,25 @@ export class GameLogicSubsystem implements Subsystem {
           command.commandSource ?? 'PLAYER',
         );
         return;
+      case 'fireWeapon':
+        this.issueFireWeapon(
+          command.entityId,
+          command.weaponSlot,
+          command.maxShotsToFire,
+          command.targetObjectId,
+          command.targetPosition,
+        );
+        return;
+      case 'switchWeapon': {
+        const entity = this.spawnedEntities.get(command.entityId);
+        const weaponSlot = this.normalizeWeaponSlot(command.weaponSlot);
+        if (!entity || entity.destroyed || weaponSlot === null) {
+          return;
+        }
+        entity.forcedWeaponSlot = weaponSlot;
+        this.refreshEntityCombatProfiles(entity);
+        return;
+      }
       case 'stop':
         this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
@@ -4439,6 +4687,60 @@ export class GameLogicSubsystem implements Subsystem {
       case 'issueSpecialPower':
         // TODO(source parity): route SpecialPower execution through module/system owners.
         return;
+      case 'exitContainer':
+        // TODO(source parity): wire MSG_EXIT / object containment exit path.
+        // Source source file: ControlBarCommandProcessing.cpp and GameLogicDispatch.cpp MSG_EXIT.
+        return;
+      case 'evacuate': {
+        // TODO(source parity): wire group-level MSG_EVACUATE handling.
+        // Source behavior lives in GameLogicDispatch.cpp MSG_EVACUATE with selected-group semantics.
+        return;
+      }
+      case 'executeRailedTransport':
+        // TODO(source parity): wire MSG_EXECUTE_RAILED_TRANSPORT behavior.
+        return;
+      case 'beaconDelete':
+        // TODO(source parity): Source GUI_COMMAND_BEACON_DELETE path currently no message in current code path.
+        return;
+      case 'hackInternet':
+        // TODO(source parity): wire MSG_INTERNET_HACK / HackInternetAIUpdate behavior.
+        return;
+      case 'toggleOvercharge':
+        // TODO(source parity): wire MSG_TOGGLE_OVERCHARGE / power plant overcharge behavior.
+        return;
+      case 'combatDrop':
+        // TODO(source parity): wire MSG_COMBATDROP_AT_OBJECT / MSG_COMBATDROP_AT_LOCATION and AI/group update.
+        return;
+      case 'placeBeacon':
+        // TODO(source parity): Source path is GameMessage::MSG_PLACE_BEACON via GUICommandTranslator.
+        // Requires terrain/world placement validation and single-instance beacon limits.
+        return;
+      case 'enterObject':
+        // TODO(source parity): Source path is GUI CommandXlat createEnterMessage -> MSG_ENTER.
+        // command.action is currently preserved for future action-specific validation parity.
+        // In source, this also carries sabotage/hijack/car-bomb semantics through target/action validity.
+        return;
+      case 'constructBuilding':
+        // TODO(source parity): Source path is GUI_COMMAND_DOZER_CONSTRUCT placement flow:
+        // GUICommandTranslator/GUI callbacks -> MSG_DOZER_CONSTRUCT / MSG_DOZER_CONSTRUCT_LINE.
+        return;
+      case 'cancelDozerConstruction':
+        // TODO(source parity): Source path is MSG_DOZER_CANCEL_CONSTRUCT with ownership/status checks.
+        return;
+      case 'sell': {
+        const entity = this.spawnedEntities.get(command.entityId);
+        if (!entity || entity.destroyed) {
+          return;
+        }
+        if (entity.category !== 'building') {
+          return;
+        }
+        // TODO(source parity): Implement sellObject equivalent.
+        // Source behavior from AIGroup::groupSell / BuildAssistant::sellObject includes
+        // timed teardown + refund logic and contain/parking side effects.
+        this.markEntityDestroyed(command.entityId, -1);
+        return;
+      }
       default:
         return;
     }
@@ -5646,12 +5948,117 @@ export class GameLogicSubsystem implements Subsystem {
     this.issueMoveTo(attacker.id, target.x, target.z, attackRange);
   }
 
+  private issueFireWeapon(
+    entityId: number,
+    weaponSlot: number,
+    maxShotsToFire: number,
+    targetObjectId: number | null,
+    targetPosition: readonly [number, number, number] | null,
+  ): void {
+    const attacker = this.spawnedEntities.get(entityId);
+    if (!attacker || attacker.destroyed) {
+      return;
+    }
+
+    const normalizedWeaponSlot = this.normalizeWeaponSlot(Math.trunc(weaponSlot));
+    if (normalizedWeaponSlot === null) {
+      return;
+    }
+    attacker.forcedWeaponSlot = normalizedWeaponSlot;
+    this.refreshEntityCombatProfiles(attacker);
+
+    const weapon = attacker.attackWeapon;
+    if (!weapon || weapon.primaryDamage <= 0) {
+      return;
+    }
+
+    this.setEntityIgnoringStealthStatus(attacker, weapon.continueAttackRange > 0);
+    attacker.attackCommandSource = 'PLAYER';
+    attacker.attackTargetEntityId = null;
+    attacker.attackOriginalVictimPosition = null;
+    attacker.attackTargetPosition = null;
+    attacker.preAttackFinishFrame = 0;
+
+    // TODO(source parity): honor maxShotsToFire and temporary weapon lock behavior from
+    // MessageStream::MSG_DO_WEAPON* paths (LOCKED_TEMPORARILY + shot counters).
+    if (maxShotsToFire <= 0) {
+      return;
+    }
+
+    if (targetObjectId !== null) {
+      this.issueAttackEntity(entityId, targetObjectId, 'PLAYER');
+      return;
+    }
+
+    if (targetPosition === null) {
+      return;
+    }
+
+    const [targetX, , targetZ] = targetPosition;
+    attacker.attackTargetPosition = { x: targetX, z: targetZ };
+
+    // Source behavior for MSG_DO_WEAPON_AT_LOCATION sends a target location while some
+    // commands also append an object ID for obstacle awareness. We only have positional
+    // targeting here and select a victim dynamically from command-local state.
+    const targetEntity = this.findFireWeaponTargetForPosition(attacker, targetX, targetZ);
+    if (!targetEntity) {
+      const attackRange = Math.max(0, weapon.attackRange);
+      if (attacker.canMove) {
+        this.issueMoveTo(entityId, targetX, targetZ, attackRange);
+      }
+      return;
+    }
+    this.issueAttackEntity(entityId, targetEntity.id, 'PLAYER');
+  }
+
+  private findFireWeaponTargetForPosition(
+    attacker: MapEntity,
+    targetX: number,
+    targetZ: number,
+  ): MapEntity | null {
+    const weapon = attacker.attackWeapon;
+    if (!weapon) {
+      return null;
+    }
+
+    const attackRange = Math.max(0, weapon.attackRange);
+    const attackRangeSqr = attackRange * attackRange;
+    let bestTarget: MapEntity | null = null;
+    let bestDistanceSqr = Number.POSITIVE_INFINITY;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (!candidate.canTakeDamage || candidate.destroyed) {
+        continue;
+      }
+      if (candidate.id === attacker.id) {
+        continue;
+      }
+      if (!this.canAttackerTargetEntity(attacker, candidate, attacker.attackCommandSource)) {
+        continue;
+      }
+      const dx = candidate.mesh.position.x - targetX;
+      const dz = candidate.mesh.position.z - targetZ;
+      const distanceSqr = dx * dx + dz * dz;
+      if (distanceSqr > attackRangeSqr) {
+        continue;
+      }
+      if (distanceSqr >= bestDistanceSqr) {
+        continue;
+      }
+      bestTarget = candidate;
+      bestDistanceSqr = distanceSqr;
+    }
+
+    return bestTarget;
+  }
+
   private clearAttackTarget(entityId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
       return;
     }
     entity.attackTargetEntityId = null;
+    entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
     this.setEntityIgnoringStealthStatus(entity, false);
@@ -7884,8 +8291,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       const targetId = attacker.attackTargetEntityId;
+      const targetPosition = attacker.attackTargetPosition;
       const weapon = attacker.attackWeapon;
-      if (targetId === null || !weapon) {
+      if ((targetId === null && targetPosition === null) || !weapon) {
         this.setEntityAttackStatus(attacker, false);
         this.setEntityAimingWeaponStatus(attacker, false);
         this.setEntityIgnoringStealthStatus(attacker, false);
@@ -7894,11 +8302,33 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const target = this.spawnedEntities.get(targetId);
+      let target = targetId === null ? null : this.spawnedEntities.get(targetId);
+      if (!target && targetPosition !== null) {
+        target = this.findFireWeaponTargetForPosition(attacker, targetPosition.x, targetPosition.z);
+        if (!target) {
+          this.setEntityAttackStatus(attacker, false);
+          this.setEntityAimingWeaponStatus(attacker, false);
+          this.setEntityIgnoringStealthStatus(attacker, false);
+          this.refreshEntitySneakyMissWindow(attacker);
+          attacker.preAttackFinishFrame = 0;
+          if (attacker.canMove) {
+            const attackRange = Math.max(0, weapon.attackRange);
+            this.issueMoveTo(attacker.id, targetPosition.x, targetPosition.z, attackRange);
+          }
+          continue;
+        }
+        attacker.attackTargetEntityId = target.id;
+        attacker.attackOriginalVictimPosition = {
+          x: target.mesh.position.x,
+          z: target.mesh.position.z,
+        };
+      }
       if (!target || !this.canAttackerTargetEntity(attacker, target, attacker.attackCommandSource)) {
         attacker.attackTargetEntityId = null;
         attacker.attackOriginalVictimPosition = null;
-        attacker.attackCommandSource = 'AI';
+        if (!targetPosition) {
+          attacker.attackCommandSource = 'AI';
+        }
         this.setEntityAttackStatus(attacker, false);
         this.setEntityAimingWeaponStatus(attacker, false);
         this.setEntityIgnoringStealthStatus(attacker, false);
@@ -8914,6 +9344,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.pathIndex = 0;
     entity.pathfindGoalCell = null;
     entity.attackTargetEntityId = null;
+    entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
     this.pendingDyingRenderableStates.set(entityId, {
@@ -8965,6 +9396,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.attackTargetEntityId !== null && destroyedEntityIds.includes(entity.attackTargetEntityId)) {
         entity.attackTargetEntityId = null;
         entity.attackOriginalVictimPosition = null;
+        entity.attackTargetPosition = null;
         entity.attackCommandSource = 'AI';
       }
     }
@@ -9116,6 +9548,7 @@ export class GameLogicSubsystem implements Subsystem {
       crc.addUnsignedInt(Math.trunc(entity.pathIndex) >>> 0);
       crc.addAsciiString(entity.activeLocomotorSet);
       crc.addUnsignedInt(entity.locomotorSurfaceMask >>> 0);
+      crc.addUnsignedByte(entity.forcedWeaponSlot === null ? 255 : entity.forcedWeaponSlot);
       this.addFloat32Crc(crc, entity.baseHeight);
       this.addFloat32Crc(crc, entity.nominalHeight);
       this.addFloat32Crc(crc, entity.speed);
@@ -9304,6 +9737,15 @@ export class GameLogicSubsystem implements Subsystem {
         this.addSignedIntCrc(crc, command.targetEntityId);
         crc.addAsciiString(command.commandSource ?? 'PLAYER');
         return;
+      case 'fireWeapon':
+        this.addSignedIntCrc(crc, command.entityId);
+        this.addSignedIntCrc(crc, command.weaponSlot);
+        this.addSignedIntCrc(crc, command.maxShotsToFire);
+        this.addSignedIntCrc(crc, command.targetObjectId ?? -1);
+        this.addFloat32Crc(crc, command.targetPosition?.[0] ?? 0);
+        this.addFloat32Crc(crc, command.targetPosition?.[1] ?? 0);
+        this.addFloat32Crc(crc, command.targetPosition?.[2] ?? 0);
+        return;
       case 'setLocomotorSet':
         this.addSignedIntCrc(crc, command.entityId);
         crc.addAsciiString(command.setName);
@@ -9358,6 +9800,57 @@ export class GameLogicSubsystem implements Subsystem {
         this.addFloat32Crc(crc, command.targetX ?? 0);
         this.addFloat32Crc(crc, command.targetZ ?? 0);
         this.writeSignedNumberArrayCrc(crc, command.issuingEntityIds, true);
+        return;
+      case 'exitContainer':
+      case 'evacuate':
+      case 'executeRailedTransport':
+      case 'beaconDelete':
+      case 'hackInternet':
+      case 'toggleOvercharge':
+        this.addSignedIntCrc(crc, command.entityId);
+        return;
+      case 'combatDrop':
+        this.addSignedIntCrc(crc, command.entityId);
+        this.addSignedIntCrc(crc, command.targetObjectId ?? -1);
+        this.addFloat32Crc(crc, command.targetPosition?.[0] ?? 0);
+        this.addFloat32Crc(crc, command.targetPosition?.[1] ?? 0);
+        this.addFloat32Crc(crc, command.targetPosition?.[2] ?? 0);
+        return;
+      case 'placeBeacon':
+        this.addFloat32Crc(crc, command.targetPosition[0]);
+        this.addFloat32Crc(crc, command.targetPosition[1]);
+        this.addFloat32Crc(crc, command.targetPosition[2]);
+        return;
+      case 'enterObject':
+        this.addSignedIntCrc(crc, command.entityId);
+        this.addSignedIntCrc(crc, command.targetObjectId);
+        crc.addAsciiString(command.action);
+        return;
+      case 'constructBuilding':
+        this.addSignedIntCrc(crc, command.entityId);
+        crc.addAsciiString(command.templateName);
+        this.addFloat32Crc(crc, command.targetPosition[0]);
+        this.addFloat32Crc(crc, command.targetPosition[1]);
+        this.addFloat32Crc(crc, command.targetPosition[2]);
+        this.addFloat32Crc(crc, command.angle);
+        if (command.lineEndPosition === null) {
+          crc.addUnsignedByte(0);
+        } else {
+          crc.addUnsignedByte(1);
+          this.addFloat32Crc(crc, command.lineEndPosition[0]);
+          this.addFloat32Crc(crc, command.lineEndPosition[1]);
+          this.addFloat32Crc(crc, command.lineEndPosition[2]);
+        }
+        return;
+      case 'cancelDozerConstruction':
+        this.addSignedIntCrc(crc, command.entityId);
+        return;
+      case 'sell':
+        this.addSignedIntCrc(crc, command.entityId);
+        return;
+      case 'switchWeapon':
+        this.addSignedIntCrc(crc, command.entityId);
+        this.addSignedIntCrc(crc, command.weaponSlot);
         return;
       default: {
         const unsupported: never = command;
@@ -9461,11 +9954,41 @@ export class GameLogicSubsystem implements Subsystem {
   private updateSelectionHighlight(): void {
     this.clearEntitySelectionState();
 
-    if (this.selectedEntityId === null) return;
-    const selected = this.spawnedEntities.get(this.selectedEntityId);
-    if (!selected) return;
+    for (const selectedEntityId of this.selectedEntityIds) {
+      const selected = this.spawnedEntities.get(selectedEntityId);
+      if (!selected) {
+        continue;
+      }
 
-    selected.selected = true;
+      selected.selected = true;
+      selected.mesh.material = this.getMaterial({
+        category: selected.category,
+        resolved: selected.resolved,
+        side: selected.side,
+        selected: true,
+      });
+    }
+  }
+
+  private filterValidSelectionIds(entityIds: readonly number[]): number[] {
+    const seen = new Set<number>();
+    const nextSelectionIds: number[] = [];
+    for (const candidateId of entityIds) {
+      if (!Number.isInteger(candidateId) || candidateId <= 0) {
+        continue;
+      }
+      const entity = this.spawnedEntities.get(candidateId);
+      if (!entity || entity.destroyed) {
+        continue;
+      }
+      if (seen.has(candidateId)) {
+        continue;
+      }
+      seen.add(candidateId);
+      nextSelectionIds.push(candidateId);
+    }
+
+    return nextSelectionIds;
   }
 
   private clearSpawnedObjects(): void {
