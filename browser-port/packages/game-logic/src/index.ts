@@ -41,6 +41,25 @@ export interface MapObjectPlacementSummary {
   unresolvedObjects: number;
 }
 
+export type RenderAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE';
+
+export type RenderableObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
+
+export interface RenderableEntityState {
+  id: number;
+  templateName: string;
+  resolved: boolean;
+  renderAssetCandidates: string[];
+  renderAssetPath: string | null;
+  renderAssetResolved: boolean;
+  category: RenderableObjectCategory;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  animationState: RenderAnimationState;
+}
+
 export interface SelectByIdCommand {
   type: 'select';
   entityId: number;
@@ -250,6 +269,10 @@ export type LocalScienceAvailability = 'enabled' | 'disabled' | 'hidden';
 
 export interface GameLogicConfig {
   /**
+   * Optional renderer-side object picker callback for pointer selection/hit-testing.
+   */
+  pickObjectByInput?: (input: InputState, camera: THREE.Camera) => number | null;
+  /**
    * Include unresolved objects as magenta placeholders.
    * If false, unresolved templates are skipped entirely.
    */
@@ -275,7 +298,7 @@ type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTR
 type SidePlayerType = 'HUMAN' | 'COMPUTER';
 type AttackCommandSource = 'PLAYER' | 'AI';
 
-type ObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
+type ObjectCategory = RenderableObjectCategory;
 
 interface VectorXZ {
   x: number;
@@ -664,7 +687,17 @@ interface MapEntity {
   side?: string;
   controllingPlayerToken: string | null;
   resolved: boolean;
-  mesh: THREE.Mesh;
+  bridgeFlags: number;
+  mapCellX: number;
+  mapCellZ: number;
+  renderAssetCandidates: string[];
+  renderAssetPath: string | null;
+  renderAssetResolved: boolean;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  animationState: RenderAnimationState;
   baseHeight: number;
   nominalHeight: number;
   selected: boolean;
@@ -747,11 +780,8 @@ const OBJECT_DONT_RENDER_FLAG = 0x100;
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
-  private readonly scene: THREE.Scene;
   private readonly config: GameLogicConfig;
   private readonly spawnedEntities = new Map<number, MapEntity>();
-  private readonly materialCache = new Map<string, THREE.MeshStandardMaterial>();
-  private readonly geometryCache = new Map<ObjectCategory, THREE.BufferGeometry>();
   private readonly raycaster = new THREE.Raycaster();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private readonly gameRandom = new GameRandom(1);
@@ -793,8 +823,8 @@ export class GameLogicSubsystem implements Subsystem {
     unresolvedObjects: 0,
   };
 
-  constructor(scene: THREE.Scene, config?: Partial<GameLogicConfig>) {
-    this.scene = scene;
+  constructor(_scene: THREE.Scene, config?: Partial<GameLogicConfig>) {
+    void _scene;
     this.config = { ...DEFAULT_GAME_LOGIC_CONFIG, ...config };
   }
 
@@ -803,8 +833,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Resolve map objects against INI definitions and create placeholder meshes.
-   *
+   * Resolve map objects against INI definitions and create simulation entities.
    * Returns a compact summary for debug overlays and future HUD wiring.
    */
   loadMapObjects(
@@ -840,7 +869,6 @@ export class GameLogicSubsystem implements Subsystem {
 
       const mapEntity = this.createMapEntity(mapObject, objectDef, iniDataRegistry, heightmap);
       this.spawnedEntities.set(mapEntity.id, mapEntity);
-      this.scene.add(mapEntity.mesh);
 
       this.placementSummary.spawnedObjects++;
       if (resolved) {
@@ -857,6 +885,23 @@ export class GameLogicSubsystem implements Subsystem {
 
   getPlacementSummary(): MapObjectPlacementSummary {
     return { ...this.placementSummary };
+  }
+
+  getRenderableEntityStates(): RenderableEntityState[] {
+    return Array.from(this.spawnedEntities.values()).map((entity) => ({
+      id: entity.id,
+      templateName: entity.templateName,
+      resolved: entity.resolved,
+      renderAssetCandidates: entity.renderAssetCandidates,
+      renderAssetPath: entity.renderAssetPath,
+      renderAssetResolved: entity.renderAssetResolved,
+      category: entity.category,
+      x: entity.x,
+      y: entity.y,
+      z: entity.z,
+      rotationY: entity.rotationY,
+      animationState: entity.animationState,
+    }));
   }
 
   /**
@@ -894,7 +939,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.previousAttackMoveToggleDown = attackMoveToggleDown;
 
     if (input.leftMouseClick) {
-      const pickedEntityId = this.pickObjectByMouse(input, camera);
+      const pickedEntityId = this.pickObjectByInput(input, camera);
       if (pickedEntityId === null) {
         this.submitCommand({ type: 'clearSelection' });
       } else {
@@ -903,7 +948,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     if (input.rightMouseClick && this.selectedEntityId !== null) {
       const selectedEntity = this.spawnedEntities.get(this.selectedEntityId);
-      const pickedEntityId = this.pickObjectByMouse(input, camera);
+      const pickedEntityId = this.pickObjectByInput(input, camera);
       if (
         selectedEntity
         && selectedEntity.attackWeapon
@@ -960,6 +1005,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProduction();
     this.updateCombat();
     this.updateEntityMovement(dt);
+    this.updateRenderStates();
     this.updateWeaponIdleAutoReload();
     this.updatePendingWeaponDamage();
     this.finalizeDestroyedEntities();
@@ -1009,9 +1055,9 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
     return [
-      entity.mesh.position.x,
-      entity.mesh.position.y,
-      entity.mesh.position.z,
+      entity.x,
+      entity.y,
+      entity.z,
     ];
   }
 
@@ -1251,12 +1297,15 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   resolveObjectTargetFromInput(input: InputState, camera: THREE.Camera): number | null {
-    return this.pickObjectByMouse(input, camera);
+    return this.pickObjectByInput(input, camera);
   }
 
   getEntityState(entityId: number): {
     id: number;
     templateName: string;
+    resolved: boolean;
+    renderAssetPath: string | null;
+    renderAssetResolved: boolean;
     health: number;
     maxHealth: number;
     canTakeDamage: boolean;
@@ -1266,6 +1315,8 @@ export class GameLogicSubsystem implements Subsystem {
     speed: number;
     statusFlags: string[];
     x: number;
+    y: number;
+    animationState: RenderAnimationState;
     z: number;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
@@ -1276,6 +1327,9 @@ export class GameLogicSubsystem implements Subsystem {
     return {
       id: entity.id,
       templateName: entity.templateName,
+      resolved: entity.resolved,
+      renderAssetPath: entity.renderAssetPath,
+      renderAssetResolved: entity.renderAssetResolved,
       health: entity.health,
       maxHealth: entity.maxHealth,
       canTakeDamage: entity.canTakeDamage,
@@ -1284,8 +1338,10 @@ export class GameLogicSubsystem implements Subsystem {
       activeLocomotorSet: entity.activeLocomotorSet,
       speed: entity.speed,
       statusFlags: Array.from(entity.objectStatusFlags.values()).sort(),
-      x: entity.mesh.position.x,
-      z: entity.mesh.position.z,
+      x: entity.x,
+      y: entity.y,
+      animationState: entity.animationState,
+      z: entity.z,
     };
   }
 
@@ -1768,16 +1824,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   dispose(): void {
     this.clearSpawnedObjects();
-
-    for (const material of this.materialCache.values()) {
-      material.dispose();
-    }
-    this.materialCache.clear();
-
-    for (const geometry of this.geometryCache.values()) {
-      geometry.dispose();
-    }
-    this.geometryCache.clear();
   }
 
   private createMapEntity(
@@ -1792,14 +1838,9 @@ export class GameLogicSubsystem implements Subsystem {
     const isResolved = objectDef !== undefined;
     const objectId = this.nextId++;
     const controllingPlayerToken = this.resolveMapObjectControllingPlayerToken(mapObject);
+    const renderAssetProfile = this.resolveRenderAssetProfile(objectDef);
 
-    const { geometry, nominalHeight } = this.getGeometry(category);
-    const material = this.getMaterial({
-      category,
-      resolved: isResolved,
-      side: objectDef?.side,
-      selected: false,
-    });
+    const nominalHeight = nominalHeightForCategory(category);
 
     const locomotorSetProfiles = this.resolveLocomotorProfiles(objectDef, iniDataRegistry);
     const upgradeModules = this.extractUpgradeModules(objectDef);
@@ -1829,25 +1870,17 @@ export class GameLogicSubsystem implements Subsystem {
     const obstacleGeometry = blocksPath ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
     const { pathDiameter, pathfindCenterInCell } = this.resolvePathRadiusAndCenter(category, objectDef, obstacleGeometry);
-    const mesh = new THREE.Mesh(geometry, material);
     const [worldX, worldY, worldZ] = this.objectToWorldPosition(mapObject, heightmap);
     const baseHeight = nominalHeight / 2;
+    const x = worldX;
+    const y = worldY + baseHeight;
+    const z = worldZ;
+    const rotationY = THREE.MathUtils.degToRad(mapObject.angle);
+    const bridgeFlags = mapObject.flags & (OBJECT_FLAG_BRIDGE_POINT1 | OBJECT_FLAG_BRIDGE_POINT2);
+    const mapCellX = Math.floor(mapObject.position.x / MAP_XY_FACTOR);
+    const mapCellZ = Math.floor(mapObject.position.y / MAP_XY_FACTOR);
 
-    mesh.position.set(worldX, worldY + baseHeight, worldZ);
-    mesh.rotation.y = THREE.MathUtils.degToRad(mapObject.angle);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.userData = {
-      mapObjectIndex: objectId,
-      templateName: mapObject.templateName,
-      unresolved: !isResolved,
-      category,
-      bridgeFlags: mapObject.flags & (OBJECT_FLAG_BRIDGE_POINT1 | OBJECT_FLAG_BRIDGE_POINT2),
-      mapCellX: Math.floor(mapObject.position.x / MAP_XY_FACTOR),
-      mapCellZ: Math.floor(mapObject.position.y / MAP_XY_FACTOR),
-    };
-
-    const [posCellX, posCellZ] = this.worldToGrid(mesh.position.x, mesh.position.z);
+    const [posCellX, posCellZ] = this.worldToGrid(x, z);
     const initialClipAmmo = attackWeapon && attackWeapon.clipSize > 0 ? attackWeapon.clipSize : 0;
     const initialScatterTargetsUnused = attackWeapon
       ? Array.from({ length: attackWeapon.scatterTargets.length }, (_entry, index) => index)
@@ -1860,7 +1893,17 @@ export class GameLogicSubsystem implements Subsystem {
       side: objectDef?.side,
       controllingPlayerToken,
       resolved: isResolved,
-      mesh,
+      bridgeFlags,
+      mapCellX,
+      mapCellZ,
+      renderAssetCandidates: renderAssetProfile.renderAssetCandidates,
+      renderAssetPath: renderAssetProfile.renderAssetPath,
+      renderAssetResolved: renderAssetProfile.renderAssetResolved,
+      x,
+      y,
+      z,
+      rotationY,
+      animationState: 'IDLE',
       baseHeight,
       nominalHeight,
       selected: false,
@@ -1930,6 +1973,111 @@ export class GameLogicSubsystem implements Subsystem {
       pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
       destroyed: false,
     };
+  }
+
+  private resolveRenderAssetProfile(objectDef: ObjectDef | undefined): {
+    renderAssetCandidates: string[];
+    renderAssetPath: string | null;
+    renderAssetResolved: boolean;
+  } {
+    const renderAssetCandidates = this.collectRenderAssetCandidates(objectDef);
+    const renderAssetPath = this.resolveRenderAssetPathFromCandidates(renderAssetCandidates);
+    return {
+      renderAssetCandidates,
+      renderAssetPath,
+      renderAssetResolved: renderAssetPath !== null,
+    };
+  }
+
+  private collectRenderAssetCandidates(objectDef: ObjectDef | undefined): string[] {
+    if (!objectDef) {
+      return [];
+    }
+
+    const candidates: string[] = [];
+    candidates.push(...this.collectRenderAssetCandidatesInFields(objectDef.fields));
+
+    for (const block of objectDef.blocks) {
+      candidates.push(...this.collectRenderAssetCandidatesInBlock(block));
+    }
+
+    return candidates.filter((candidate) => candidate !== null).map((candidate) => candidate.trim()).filter(Boolean);
+  }
+
+  private resolveRenderAssetPathFromCandidates(renderAssetCandidates: string[]): string | null {
+    for (const candidate of renderAssetCandidates) {
+      if (candidate.length === 0) {
+        continue;
+      }
+      if (candidate.toUpperCase() === 'NONE') {
+        continue;
+      }
+      return candidate;
+    }
+    return null;
+  }
+
+  private collectRenderAssetCandidatesInBlock(block: IniBlock): string[] {
+    const candidates = this.collectRenderAssetCandidatesInFields(block.fields);
+    for (const childBlock of block.blocks) {
+      candidates.push(...this.collectRenderAssetCandidatesInBlock(childBlock));
+    }
+    return candidates;
+  }
+
+  private collectRenderAssetCandidatesInFields(fields: Record<string, IniValue>): string[] {
+    const candidateFieldNames = ['Model', 'ModelName', 'FileName'];
+    const candidates: string[] = [];
+    for (const fieldName of candidateFieldNames) {
+      const value = this.readIniFieldValue(fields, fieldName);
+      for (const tokenGroup of this.extractIniValueTokens(value)) {
+        for (const token of tokenGroup) {
+          if (typeof token === 'string') {
+            const trimmed = token.trim();
+            if (trimmed.length > 0) {
+              candidates.push(trimmed);
+            }
+          }
+        }
+      }
+    }
+    return candidates;
+  }
+
+  private resolveForwardUnitVector(entity: MapEntity): { x: number; z: number } {
+    return {
+      x: Math.cos(entity.rotationY),
+      z: Math.sin(entity.rotationY),
+    };
+  }
+
+  private deriveRenderAnimationState(entity: MapEntity): RenderAnimationState {
+    // Source parity note:
+    // Generals/Code/GameEngine/Source/GameLogic/Thing/Drawable.cpp
+    // drives render-state from object locomotor/combat lifecycle transitions.
+    if (entity.destroyed) {
+      return 'DIE';
+    }
+
+    if (entity.attackTargetEntityId !== null && this.canEntityAttackFromStatus(entity)) {
+      return 'ATTACK';
+    }
+
+    if (entity.canMove && entity.moving) {
+      return 'MOVE';
+    }
+
+    return 'IDLE';
+  }
+
+  private updateRenderState(entity: MapEntity): void {
+    entity.animationState = this.deriveRenderAnimationState(entity);
+  }
+
+  private updateRenderStates(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      this.updateRenderState(entity);
+    }
   }
 
   private inferCategory(kindOf: string[] | undefined, fallbackKindOf?: unknown): ObjectCategory {
@@ -3372,10 +3520,10 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity subset: PartitionFilterSameMapStatus compares Object::isOffMap() between
     // attacker and candidate. This port infers off-map status from current world position.
     return (
-      entity.mesh.position.x < 0
-      || entity.mesh.position.z < 0
-      || entity.mesh.position.x >= heightmap.worldWidth
-      || entity.mesh.position.z >= heightmap.worldDepth
+      entity.x < 0
+      || entity.z < 0
+      || entity.x >= heightmap.worldWidth
+      || entity.z >= heightmap.worldDepth
     );
   }
 
@@ -3919,10 +4067,10 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const centerX = entity.mesh.position.x;
-    const centerZ = entity.mesh.position.z;
+    const centerX = entity.x;
+    const centerZ = entity.z;
     if (entity.obstacleGeometry.shape === 'box') {
-      const angle = entity.mesh.rotation.y;
+      const angle = entity.rotationY;
       const major = entity.obstacleGeometry.majorRadius;
       const minor = entity.obstacleGeometry.minorRadius;
       const stepSize = MAP_XY_FACTOR * 0.5;
@@ -3979,45 +4127,6 @@ export class GameLogicSubsystem implements Subsystem {
     grid.terrainType[index] = NAV_OBSTACLE;
   }
 
-  private getGeometry(category: ObjectCategory): { geometry: THREE.BufferGeometry; nominalHeight: number } {
-    const cached = this.geometryCache.get(category);
-    if (cached) {
-      return { geometry: cached, nominalHeight: nominalHeightForCategory(category) };
-    }
-
-    const created = buildGeometry(category);
-    this.geometryCache.set(category, created.geometry);
-    return created;
-  }
-
-  private getMaterial(options: {
-    category: ObjectCategory;
-    resolved: boolean;
-    side?: string;
-    selected: boolean;
-  }): THREE.MeshStandardMaterial {
-    const key = `${options.category}|${options.resolved ? 'resolved' : 'unresolved'}|${options.side ?? 'none'}|${options.selected ? 'selected' : 'normal'}`;
-    const cached = this.materialCache.get(key);
-    if (cached) return cached;
-
-    const baseColor = options.resolved
-      ? colorBySide(options.side)
-      : 0xff33ff;
-    const emissive = options.selected ? 0x3344aa : (options.resolved ? 0x101010 : 0x551155);
-
-    const material = new THREE.MeshStandardMaterial({
-      color: baseColor,
-      emissive,
-      roughness: 0.6,
-      metalness: 0.15,
-      transparent: true,
-      opacity: 0.95,
-    });
-
-    this.materialCache.set(key, material);
-    return material;
-  }
-
   private objectToWorldPosition(
     mapObject: MapObjectJSON,
     heightmap: HeightmapGrid | null,
@@ -4031,27 +4140,8 @@ export class GameLogicSubsystem implements Subsystem {
     return [worldX, worldY, worldZ];
   }
 
-  private pickObjectByMouse(input: InputState, camera: THREE.Camera): number | null {
-    const ndc = this.pixelToNDC(input.mouseX, input.mouseY, input.viewportWidth, input.viewportHeight);
-    if (ndc === null) return null;
-
-    this.raycaster.setFromCamera(ndc, camera);
-    const hit = this.raycaster.intersectObjects(this.getRaycastTargets(), true).at(0);
-    if (!hit) return null;
-
-    const candidate = (hit.object as THREE.Mesh & { userData: { mapObjectIndex?: number } }).userData?.mapObjectIndex;
-    if (typeof candidate === 'number') {
-      return candidate;
-    }
-
-    if (hit.object.parent) {
-      const parentId = (hit.object.parent as THREE.Mesh & { userData?: { mapObjectIndex?: number } })?.userData?.mapObjectIndex;
-      if (typeof parentId === 'number') {
-        return parentId;
-      }
-    }
-
-    return null;
+  private pickObjectByInput(input: InputState, camera: THREE.Camera): number | null {
+    return this.config.pickObjectByInput?.(input, camera) ?? null;
   }
 
   private getMoveTargetFromMouse(input: InputState, camera: THREE.Camera): VectorXZ | null {
@@ -5194,7 +5284,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const mapObject: MapObjectJSON = {
       templateName: unitDef.name,
-      angle: THREE.MathUtils.radToDeg(producer.mesh.rotation.y),
+      angle: THREE.MathUtils.radToDeg(producer.rotationY),
       flags: 0,
       position: {
         x: spawnLocation.x,
@@ -5206,12 +5296,6 @@ export class GameLogicSubsystem implements Subsystem {
     const created = this.createMapEntity(mapObject, unitDef, registry, this.mapHeightmap);
     if (producer.side !== undefined) {
       created.side = producer.side;
-      created.mesh.material = this.getMaterial({
-        category: created.category,
-        resolved: created.resolved,
-        side: created.side,
-        selected: created.selected,
-      });
     }
     created.controllingPlayerToken = producer.controllingPlayerToken;
 
@@ -5220,7 +5304,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.spawnedEntities.set(created.id, created);
-    this.scene.add(created.mesh);
     this.applyQueueProductionNaturalRallyPoint(producer, created);
 
     return created;
@@ -5264,14 +5347,14 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    const yaw = producer.mesh.rotation.y;
+    const yaw = producer.rotationY;
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
     const local = exitProfile.unitCreatePoint;
-    const x = producer.mesh.position.x + (local.x * cos - local.y * sin);
-    const z = producer.mesh.position.z + (local.x * sin + local.y * cos);
+    const x = producer.x + (local.x * cos - local.y * sin);
+    const z = producer.z + (local.x * sin + local.y * cos);
     const terrainHeight = this.mapHeightmap ? this.mapHeightmap.getInterpolatedHeight(x, z) : 0;
-    const producerBaseY = producer.mesh.position.y - producer.baseHeight;
+    const producerBaseY = producer.y - producer.baseHeight;
     let worldY = producerBaseY + local.z;
     const creationInAir = Math.abs(worldY - terrainHeight) > 0.0001;
     if (creationInAir && !exitProfile.allowAirborneCreation) {
@@ -5307,11 +5390,11 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    const yaw = producer.mesh.rotation.y;
+    const yaw = producer.rotationY;
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
-    const rallyX = producer.mesh.position.x + (rallyPoint.x * cos - rallyPoint.y * sin);
-    const rallyZ = producer.mesh.position.z + (rallyPoint.x * sin + rallyPoint.y * cos);
+    const rallyX = producer.x + (rallyPoint.x * cos - rallyPoint.y * sin);
+    const rallyZ = producer.z + (rallyPoint.x * sin + rallyPoint.y * cos);
     this.issueMoveTo(producedUnit.id, rallyX, rallyZ);
   }
 
@@ -5358,7 +5441,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || !entity.canMove) return;
 
     this.updatePathfindPosCell(entity);
-    const path = this.findPath(entity.mesh.position.x, entity.mesh.position.z, targetX, targetZ, entity, attackDistance);
+    const path = this.findPath(entity.x, entity.z, targetX, targetZ, entity, attackDistance);
     if (path.length === 0) {
       entity.moving = false;
       entity.moveTarget = null;
@@ -5408,8 +5491,8 @@ export class GameLogicSubsystem implements Subsystem {
 
     attacker.attackTargetEntityId = targetEntityId;
     attacker.attackOriginalVictimPosition = {
-      x: target.mesh.position.x,
-      z: target.mesh.position.z,
+      x: target.x,
+      z: target.z,
     };
     attacker.attackCommandSource = commandSource;
 
@@ -5423,7 +5506,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    this.issueMoveTo(attacker.id, target.mesh.position.x, target.mesh.position.z, attackRange);
+    this.issueMoveTo(attacker.id, target.x, target.z, attackRange);
   }
 
   private clearAttackTarget(entityId: number): void {
@@ -5466,7 +5549,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updatePathfindPosCell(entity: MapEntity): void {
-    const [cellX, cellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
+    const [cellX, cellZ] = this.worldToGrid(entity.x, entity.z);
     if (cellX === null || cellZ === null) {
       entity.pathfindPosCell = null;
       return;
@@ -7174,7 +7257,7 @@ export class GameLogicSubsystem implements Subsystem {
         this.rasterizeObstacleGeometry(entity, grid);
       } else {
         const footprint = entity.obstacleFootprint;
-        const [entityCellX, entityCellZ] = this.worldToGrid(entity.mesh.position.x, entity.mesh.position.z);
+        const [entityCellX, entityCellZ] = this.worldToGrid(entity.x, entity.z);
         if (entityCellX === null || entityCellZ === null) {
           continue;
         }
@@ -7308,15 +7391,10 @@ export class GameLogicSubsystem implements Subsystem {
 
   private findBridgeControlEntityId(cellX: number, cellZ: number, requiredFlag: number): number | null {
     for (const entity of this.spawnedEntities.values()) {
-      const userData = entity.mesh.userData as {
-        bridgeFlags?: number;
-        mapCellX?: number;
-        mapCellZ?: number;
-      };
-      if (((userData.bridgeFlags ?? 0) & requiredFlag) === 0) {
+      if (((entity.bridgeFlags ?? 0) & requiredFlag) === 0) {
         continue;
       }
-      if (userData.mapCellX === cellX && userData.mapCellZ === cellZ) {
+      if (entity.mapCellX === cellX && entity.mapCellZ === cellZ) {
         return entity.id;
       }
     }
@@ -7695,8 +7773,8 @@ export class GameLogicSubsystem implements Subsystem {
       this.setEntityAttackStatus(attacker, true);
       this.refreshEntitySneakyMissWindow(attacker);
 
-      const dx = target.mesh.position.x - attacker.mesh.position.x;
-      const dz = target.mesh.position.z - attacker.mesh.position.z;
+      const dx = target.x - attacker.x;
+      const dz = target.z - attacker.z;
       const distanceSqr = dx * dx + dz * dz;
       const minAttackRange = Math.max(0, weapon.minAttackRange);
       const minAttackRangeSqr = minAttackRange * minAttackRange;
@@ -7717,7 +7795,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (distanceSqr > attackRangeSqr) {
         this.setEntityAimingWeaponStatus(attacker, false);
         if (attacker.canMove) {
-          this.issueMoveTo(attacker.id, target.mesh.position.x, target.mesh.position.z, attackRange);
+          this.issueMoveTo(attacker.id, target.x, target.z, attackRange);
         }
         attacker.preAttackFinishFrame = 0;
         continue;
@@ -7787,10 +7865,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private queueWeaponDamageEvent(attacker: MapEntity, target: MapEntity, weapon: AttackWeaponProfile): void {
-    const sourceX = attacker.mesh.position.x;
-    const sourceZ = attacker.mesh.position.z;
-    const targetX = target.mesh.position.x;
-    const targetZ = target.mesh.position.z;
+    const sourceX = attacker.x;
+    const sourceZ = attacker.z;
+    const targetX = target.x;
+    const targetZ = target.z;
 
     let aimX = targetX;
     let aimZ = targetZ;
@@ -7960,7 +8038,7 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    const forward = new THREE.Vector3(1, 0, 0).applyQuaternion(entity.mesh.quaternion);
+    const forward = this.resolveForwardUnitVector(entity);
     const length = Math.hypot(forward.x, forward.z);
     if (!Number.isFinite(length) || length <= 0) {
       return { x: 0, z: 0 };
@@ -8032,8 +8110,8 @@ export class GameLogicSubsystem implements Subsystem {
     let impactX = event.impactX;
     let impactZ = event.impactZ;
     if (event.delivery === 'DIRECT' && primaryVictim && !primaryVictim.destroyed) {
-      impactX = primaryVictim.mesh.position.x;
-      impactZ = primaryVictim.mesh.position.z;
+      impactX = primaryVictim.x;
+      impactZ = primaryVictim.z;
     }
 
     const primaryRadius = Math.max(0, weapon.primaryDamageRadius);
@@ -8044,7 +8122,11 @@ export class GameLogicSubsystem implements Subsystem {
     const effectRadius = Math.max(primaryRadius, secondaryRadius);
     const effectRadiusSqr = effectRadius * effectRadius;
     const sourceFacingVector = source
-      ? new THREE.Vector3(1, 0, 0).applyQuaternion(source.mesh.quaternion).normalize()
+      ? new THREE.Vector3(
+        this.resolveForwardUnitVector(source).x,
+        0,
+        this.resolveForwardUnitVector(source).z,
+      ).normalize()
       : null;
 
     const victims: Array<{ entity: MapEntity; distanceSqr: number }> = [];
@@ -8053,8 +8135,8 @@ export class GameLogicSubsystem implements Subsystem {
         if (entity.destroyed || !entity.canTakeDamage) {
           continue;
         }
-        const dx = entity.mesh.position.x - impactX;
-        const dz = entity.mesh.position.z - impactZ;
+        const dx = entity.x - impactX;
+        const dz = entity.z - impactZ;
         const distanceSqr = dx * dx + dz * dz;
         if (distanceSqr <= effectRadiusSqr) {
           victims.push({ entity, distanceSqr });
@@ -8064,8 +8146,8 @@ export class GameLogicSubsystem implements Subsystem {
     } else if (primaryVictim && !primaryVictim.destroyed && primaryVictim.canTakeDamage) {
       if (event.delivery === 'PROJECTILE') {
         const collisionRadius = this.resolveProjectilePointCollisionRadius(primaryVictim);
-        const dx = primaryVictim.mesh.position.x - impactX;
-        const dz = primaryVictim.mesh.position.z - impactZ;
+        const dx = primaryVictim.x - impactX;
+        const dz = primaryVictim.z - impactZ;
         const distanceSqr = dx * dx + dz * dz;
         if (distanceSqr <= collisionRadius * collisionRadius) {
           victims.push({ entity: primaryVictim, distanceSqr: 0 });
@@ -8116,9 +8198,9 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
         const damageVector = new THREE.Vector3(
-          candidate.mesh.position.x - source.mesh.position.x,
+          candidate.x - source.x,
           0,
-          candidate.mesh.position.z - source.mesh.position.z,
+          candidate.z - source.z,
         ).normalize();
         // Source parity subset: WeaponTemplate::dealDamageInternal gates radius damage by
         // comparing source orientation to candidate direction against RadiusDamageAngle.
@@ -8250,8 +8332,8 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const dx = candidate.mesh.position.x - originalVictimPosition.x;
-      const dz = candidate.mesh.position.z - originalVictimPosition.z;
+      const dx = candidate.x - originalVictimPosition.x;
+      const dz = candidate.z - originalVictimPosition.z;
       const distanceSqr = (dx * dx) + (dz * dz);
       if (distanceSqr > continueRangeSqr) {
         continue;
@@ -8309,8 +8391,8 @@ export class GameLogicSubsystem implements Subsystem {
 
     for (const candidate of candidates) {
       const collisionRadius = this.resolveProjectilePointCollisionRadius(candidate);
-      const dx = candidate.mesh.position.x - impactX;
-      const dz = candidate.mesh.position.z - impactZ;
+      const dx = candidate.x - impactX;
+      const dz = candidate.z - impactZ;
       const distanceSqr = dx * dx + dz * dz;
       if (distanceSqr > collisionRadius * collisionRadius) {
         continue;
@@ -8543,10 +8625,10 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     weapon: AttackWeaponProfile,
   ): VectorXZ | null {
-    const targetX = target.mesh.position.x;
-    const targetZ = target.mesh.position.z;
-    let awayX = attacker.mesh.position.x - targetX;
-    let awayZ = attacker.mesh.position.z - targetZ;
+    const targetX = target.x;
+    const targetZ = target.z;
+    let awayX = attacker.x - targetX;
+    let awayZ = attacker.z - targetZ;
     const length = Math.hypot(awayX, awayZ);
     if (length <= 1e-6) {
       awayX = 1;
@@ -8687,6 +8769,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     this.cancelAndRefundAllProductionOnDeath(entity);
+    entity.animationState = 'DIE';
     entity.destroyed = true;
     entity.moving = false;
     entity.moveTarget = null;
@@ -8757,7 +8840,6 @@ export class GameLogicSubsystem implements Subsystem {
         }
         entity.parkingSpaceProducerId = null;
       }
-      this.scene.remove(entity.mesh);
       this.spawnedEntities.delete(entityId);
       if (this.selectedEntityId === entityId) {
         this.selectedEntityId = null;
@@ -8795,8 +8877,8 @@ export class GameLogicSubsystem implements Subsystem {
         entity.moveTarget = entity.movePath[entity.pathIndex]!;
       }
 
-      const dx = entity.moveTarget.x - entity.mesh.position.x;
-      const dz = entity.moveTarget.z - entity.mesh.position.z;
+      const dx = entity.moveTarget.x - entity.x;
+      const dz = entity.moveTarget.z - entity.z;
       const distance = Math.hypot(dx, dz);
 
       if (distance < 0.001) {
@@ -8814,8 +8896,8 @@ export class GameLogicSubsystem implements Subsystem {
 
       const step = entity.speed * dt;
       if (distance <= step) {
-        entity.mesh.position.x = entity.moveTarget.x;
-        entity.mesh.position.z = entity.moveTarget.z;
+        entity.x = entity.moveTarget.x;
+        entity.z = entity.moveTarget.z;
         entity.pathIndex += 1;
         if (entity.pathIndex >= entity.movePath.length) {
           entity.moving = false;
@@ -8827,24 +8909,24 @@ export class GameLogicSubsystem implements Subsystem {
         entity.moveTarget = entity.movePath[entity.pathIndex]!;
       } else {
         const inv = 1 / distance;
-        entity.mesh.position.x += dx * inv * step;
-        entity.mesh.position.z += dz * inv * step;
+        entity.x += dx * inv * step;
+        entity.z += dz * inv * step;
       }
 
       if (this.mapHeightmap) {
-        const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.mesh.position.x, entity.mesh.position.z);
+        const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
         const targetY = terrainHeight + entity.baseHeight;
         const snapAlpha = 1 - Math.exp(-this.config.terrainSnapSpeed * dt);
-        entity.mesh.position.y += (targetY - entity.mesh.position.y) * snapAlpha;
+        entity.y += (targetY - entity.y) * snapAlpha;
       }
 
       // Subtle bob for unresolved movers (e.g., placeholders not in registry)
       if (!entity.resolved) {
         const bob = (Math.sin(this.animationTime * this.config.terrainSnapSpeed + entity.id) + 1) * 0.04;
-        entity.mesh.position.y += bob;
+        entity.y += bob;
       }
 
-      entity.mesh.rotation.y = Math.atan2(dz, dx) + Math.PI / 2;
+      entity.rotationY = Math.atan2(dz, dx) + Math.PI / 2;
       this.updatePathfindPosCell(entity);
     }
   }
@@ -8889,10 +8971,10 @@ export class GameLogicSubsystem implements Subsystem {
       this.addFloat32Crc(crc, entity.nominalHeight);
       this.addFloat32Crc(crc, entity.speed);
       this.addFloat32Crc(crc, entity.largestWeaponRange);
-      this.addFloat32Crc(crc, entity.mesh.position.x);
-      this.addFloat32Crc(crc, entity.mesh.position.y);
-      this.addFloat32Crc(crc, entity.mesh.position.z);
-      this.addFloat32Crc(crc, entity.mesh.rotation.y);
+      this.addFloat32Crc(crc, entity.x);
+      this.addFloat32Crc(crc, entity.y);
+      this.addFloat32Crc(crc, entity.z);
+      this.addFloat32Crc(crc, entity.rotationY);
       this.writeNullableVectorCrc(crc, entity.moveTarget);
       this.writeVectorArrayCrc(crc, entity.movePath);
       this.writeNullableGridCellCrc(crc, entity.pathfindGoalCell);
@@ -9219,20 +9301,10 @@ export class GameLogicSubsystem implements Subsystem {
     crc.addUnsignedInt(this.crcFloatScratch.getUint32(0, true));
   }
 
-  private getRaycastTargets(): THREE.Object3D[] {
-    return Array.from(this.spawnedEntities.values()).map((entity) => entity.mesh);
-  }
-
   private clearEntitySelectionState(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.selected) {
         entity.selected = false;
-        entity.mesh.material = this.getMaterial({
-          category: entity.category,
-          resolved: entity.resolved,
-          side: entity.side,
-          selected: false,
-        });
       }
     }
   }
@@ -9245,12 +9317,6 @@ export class GameLogicSubsystem implements Subsystem {
     if (!selected) return;
 
     selected.selected = true;
-    selected.mesh.material = this.getMaterial({
-      category: selected.category,
-      resolved: selected.resolved,
-      side: selected.side,
-      selected: true,
-    });
   }
 
   private clearSpawnedObjects(): void {
@@ -9261,9 +9327,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.bridgeSegmentByControlEntity.clear();
     this.shortcutSpecialPowerSourceByName.clear();
     this.shortcutSpecialPowerNamesByEntityId.clear();
-    for (const entity of this.spawnedEntities.values()) {
-      this.scene.remove(entity.mesh);
-    }
     this.spawnedEntities.clear();
     this.selectedEntityId = null;
   }
@@ -9286,57 +9349,6 @@ function nominalHeightForCategory(category: ObjectCategory): number {
     case 'unknown':
     default:
       return 2;
-  }
-}
-
-function buildGeometry(category: ObjectCategory): {
-  geometry: THREE.BufferGeometry;
-  nominalHeight: number;
-} {
-  switch (category) {
-    case 'air':
-      return {
-        geometry: new THREE.ConeGeometry(1.4, 2.4, 12),
-        nominalHeight: 2.4,
-      };
-    case 'building':
-      return {
-        geometry: new THREE.BoxGeometry(8, 8, 8),
-        nominalHeight: 8,
-      };
-    case 'infantry':
-      return {
-        geometry: new THREE.CylinderGeometry(0.6, 0.8, 2, 10),
-        nominalHeight: 2,
-      };
-    case 'vehicle':
-      return {
-        geometry: new THREE.BoxGeometry(3.5, 3, 5),
-        nominalHeight: 3,
-      };
-    case 'unknown':
-    default:
-      return {
-        geometry: new THREE.TetrahedronGeometry(1.2),
-        nominalHeight: 2,
-      };
-  }
-}
-
-function colorBySide(side?: string): number {
-  if (!side) return 0x7f7f7f;
-
-  switch (side.toLowerCase()) {
-    case 'america':
-      return 0x4f90ff;
-    case 'china':
-      return 0xff5a3c;
-    case 'gla':
-      return 0x7bcf4e;
-    case 'civilian':
-      return 0xbababa;
-    default:
-      return 0xcdbf89;
   }
 }
 

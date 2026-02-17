@@ -29,6 +29,7 @@ export interface LoadedModelAsset {
 
 interface VisualAssetState {
   root: THREE.Group;
+  placeholder: THREE.Mesh | null;
   assetPath: string | null;
   loadToken: number;
   currentModel: THREE.Object3D | null;
@@ -62,6 +63,7 @@ export class ObjectVisualManager {
   private readonly config: Required<ObjectVisualManagerConfig>;
   private readonly modelLoader: (assetPath: string) => Promise<LoadedModelAsset>;
   private readonly gltfLoader = new GLTFLoader();
+  private readonly raycaster = new THREE.Raycaster();
   private readonly visuals = new Map<number, VisualAssetState>();
   private readonly modelCache = new Map<string, LoadedModelAsset>();
   private readonly modelLoadPromises = new Map<string, Promise<LoadedModelAsset>>();
@@ -82,7 +84,6 @@ export class ObjectVisualManager {
       modelExtensions: [...DEFAULT_MODEL_EXTENSIONS],
       modelLoader: config.modelLoader ?? this.createDefaultModelLoader.bind(this),
     };
-    this.assetManager = assetManager;
     this.modelLoader = config.modelLoader ?? this.config.modelLoader;
   }
 
@@ -166,6 +167,7 @@ export class ObjectVisualManager {
 
     return {
       root,
+      placeholder: null,
       assetPath: null,
       loadToken: 0,
       currentModel: null,
@@ -178,6 +180,41 @@ export class ObjectVisualManager {
   private syncVisualTransform(visual: VisualAssetState, state: RenderableEntityState): void {
     visual.root.position.set(state.x, state.y, state.z);
     visual.root.rotation.y = state.rotationY;
+  }
+
+  pickObjectByInput(
+    input: { mouseX: number; mouseY: number; viewportWidth: number; viewportHeight: number },
+    camera: THREE.Camera,
+  ): number | null {
+    const ndc = this.pixelToNDC(
+      input.mouseX,
+      input.mouseY,
+      input.viewportWidth,
+      input.viewportHeight,
+    );
+    if (ndc === null) {
+      return null;
+    }
+
+    this.raycaster.setFromCamera(ndc, camera);
+    const hit = this.raycaster.intersectObjects(this.scene.children, true).at(0);
+    if (!hit) {
+      return null;
+    }
+
+    let current: THREE.Object3D | null = hit.object;
+    while (current !== null) {
+      const candidate = current.userData as { entityId?: unknown };
+      const entityId = typeof candidate?.entityId === 'number'
+        ? candidate.entityId
+        : undefined;
+      if (entityId !== undefined) {
+        return entityId;
+      }
+      current = current.parent;
+    }
+
+    return null;
   }
 
   private syncVisualAsset(visual: VisualAssetState, state: RenderableEntityState): void {
@@ -256,35 +293,15 @@ export class ObjectVisualManager {
   }
 
   private updatePlaceholderVisibility(entityId: number, visible: boolean): void {
-    const placeholder = this.findPlaceholderMesh(entityId);
-    if (!placeholder) {
+    const visual = this.visuals.get(entityId);
+    if (!visual) {
       return;
     }
-
-    const mesh = placeholder as THREE.Mesh;
-    mesh.visible = visible;
-  }
-
-  private findPlaceholderMesh(entityId: number): THREE.Object3D | null {
-    const targetId = entityId;
-    let match: THREE.Object3D | null = null;
-
-    this.scene.traverse((object) => {
-      if (match) {
-        return;
-      }
-      const userData = object.userData as { mapObjectIndex?: number };
-      if (userData?.mapObjectIndex === targetId) {
-        match = object;
-      }
-    });
-
-    return match;
+    this.syncPlaceholder(visual, entityId, visible);
   }
 
   private removeVisual(entityId: number, visual: VisualAssetState): void {
     this.removeModel(visual);
-    this.updatePlaceholderVisibility(entityId, true);
     this.scene.remove(visual.root);
     visual.root.clear();
     visual.activeState = null;
@@ -478,5 +495,59 @@ export class ObjectVisualManager {
         material?.dispose?.();
       }
     });
+  }
+
+  private createPlaceholderMesh(entityId: number): THREE.Mesh {
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xff33ff,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = `placeholder-${entityId}`;
+    mesh.userData = { entityId };
+    return mesh;
+  }
+
+  private ensurePlaceholderMesh(entityId: number): THREE.Mesh {
+    const visual = this.visuals.get(entityId);
+    if (!visual) {
+      throw new Error(`Unknown visual state for entity ${entityId}`);
+    }
+
+    if (visual.placeholder) {
+      return visual.placeholder;
+    }
+
+    const placeholder = this.createPlaceholderMesh(entityId);
+    visual.placeholder = placeholder;
+    visual.root.add(placeholder);
+    return placeholder;
+  }
+
+  private pixelToNDC(
+    mouseX: number,
+    mouseY: number,
+    viewportWidth: number,
+    viewportHeight: number,
+  ): THREE.Vector2 | null {
+    if (viewportWidth <= 0 || viewportHeight <= 0 || !Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+      return null;
+    }
+    return new THREE.Vector2(
+      (mouseX / viewportWidth) * 2 - 1,
+      -(mouseY / viewportHeight) * 2 + 1,
+    );
+  }
+
+  private syncPlaceholder(visual: VisualAssetState, entityId: number, visible: boolean): void {
+    if (visible) {
+      this.ensurePlaceholderMesh(entityId);
+      visual.placeholder?.updateMatrixWorld();
+    }
+    if (visual.placeholder) {
+      visual.placeholder.visible = visible;
+    }
   }
 }

@@ -10,5 +10,8 @@
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"],
-  "references": [{ "path": "../terrain" }]
+  "references": [
+    { "path": "../assets" },
+    { "path": "../terrain" }
+  ]
 }

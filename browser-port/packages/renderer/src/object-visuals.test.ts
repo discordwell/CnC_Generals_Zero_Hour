@@ -40,14 +40,16 @@ function modelWithAnimationClips(clips: readonly string[] = []): LoadedModelAsse
   };
 }
 
-function createPlaceholderMesh(entityId: number): THREE.Mesh {
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshBasicMaterial({ color: 0xff33ff, transparent: true, opacity: 0.95 }),
-  );
-  mesh.userData = { mapObjectIndex: entityId };
-  mesh.name = `placeholder-${entityId}`;
-  return mesh;
+function getPlaceholderMesh(manager: ObjectVisualManager, entityId: number): THREE.Mesh | null {
+  const root = manager.getVisualRoot(entityId);
+  if (!root) {
+    return null;
+  }
+  const placeholder = root.children.find((entry) => {
+    const userData = entry.userData as { entityId?: unknown };
+    return entry.type === 'Mesh' && userData?.entityId === entityId;
+  });
+  return placeholder instanceof THREE.Mesh ? placeholder : null;
 }
 
 describe('ObjectVisualManager', () => {
@@ -61,10 +63,9 @@ describe('ObjectVisualManager', () => {
     const manager = new ObjectVisualManager(scene, null, { modelLoader });
 
     const state = makeMeshState();
-    const placeholder = createPlaceholderMesh(state.id);
-    scene.add(placeholder);
     manager.sync([state], 1 / 30);
     await Promise.resolve();
+    const placeholder = getPlaceholderMesh(manager, state.id);
 
     const root = manager.getVisualRoot(state.id);
     expect(root).toBeTruthy();
@@ -73,14 +74,12 @@ describe('ObjectVisualManager', () => {
     expect(root?.rotation.y).toBe(state.rotationY);
     expect(modelsRequested).toContain('unit-model.gltf');
     expect(manager.getVisualState(state.id)?.hasModel).toBe(true);
-    expect(placeholder.visible).toBe(false);
+    expect(placeholder).toBeTruthy();
+    expect(placeholder?.visible).toBe(false);
   });
 
   it('updates animation state transitions and removes stale entities', async () => {
     const scene = new THREE.Scene();
-    const placeholder1 = createPlaceholderMesh(1);
-    const placeholder2 = createPlaceholderMesh(2);
-    scene.add(placeholder1, placeholder2);
     const manager = new ObjectVisualManager(scene, null, {
       modelLoader: async () => modelWithAnimationClips(['Idle', 'Move', 'Attack', 'Die']),
     });
@@ -89,21 +88,22 @@ describe('ObjectVisualManager', () => {
     await Promise.resolve();
     manager.sync([makeMeshState({ animationState: 'MOVE' })], 1 / 30);
     expect(manager.getVisualState(1)?.animationState).toBe('MOVE');
-    expect(placeholder1.visible).toBe(false);
+    const placeholder1 = getPlaceholderMesh(manager, 1);
+    expect(placeholder1?.visible).toBe(false);
 
     manager.sync([makeMeshState({ id: 2, renderAssetPath: 'building.glb' })], 1 / 30);
     await Promise.resolve();
+    const placeholder2 = getPlaceholderMesh(manager, 2);
     expect(scene.children.filter((entry) => entry.name.startsWith('object-visual-')).length).toBe(1);
     expect(manager.getVisualRoot(1)).toBeNull();
     expect(manager.getVisualRoot(2)).toBeTruthy();
     expect(manager.getVisualState(2)?.hasModel).toBe(true);
-    expect(placeholder2.visible).toBe(false);
+    expect(placeholder2).toBeTruthy();
+    expect(placeholder2?.visible).toBe(false);
   });
 
   it('keeps missing assets explicit and non-throwing', async () => {
     const scene = new THREE.Scene();
-    const placeholder = createPlaceholderMesh(3);
-    scene.add(placeholder);
     const manager = new ObjectVisualManager(scene, null, {
       modelLoader: async () => {
         throw new Error('missing asset');
@@ -112,18 +112,17 @@ describe('ObjectVisualManager', () => {
 
     manager.sync([makeMeshState({ id: 3, renderAssetPath: 'missing' })], 1 / 30);
     await Promise.resolve();
+    const placeholder = getPlaceholderMesh(manager, 3);
 
     expect(manager.getUnresolvedEntityIds()).toEqual([3]);
     expect(manager.getVisualState(3)?.hasModel).toBe(false);
     expect(scene.children.filter((entry) => entry.name.startsWith('object-visual-')).length).toBe(1);
-    expect(placeholder.visible).toBe(true);
+    expect(placeholder).toBeTruthy();
+    expect(placeholder?.visible).toBe(true);
   });
 
   it('cancels stale model loads when an entity becomes unresolved', async () => {
     const scene = new THREE.Scene();
-    const placeholder = createPlaceholderMesh(4);
-    scene.add(placeholder);
-
     let resolvePending: ((asset: LoadedModelAsset) => void) | null = null;
     const delayedModelLoader = async () => new Promise<LoadedModelAsset>((resolve) => {
       resolvePending = resolve;
@@ -137,21 +136,20 @@ describe('ObjectVisualManager', () => {
     expect(resolvePending).not.toBeNull();
     manager.sync([makeMeshState({ id: 4, renderAssetResolved: false })], 1 / 30);
     await Promise.resolve();
+    const placeholder = getPlaceholderMesh(manager, 4);
     expect(manager.getVisualState(4)?.hasModel).toBe(false);
-    expect(placeholder.visible).toBe(true);
+    expect(placeholder).toBeTruthy();
+    expect(placeholder?.visible).toBe(true);
 
     resolvePending?.(modelWithAnimationClips());
     await Promise.resolve();
     expect(manager.getVisualState(4)?.hasModel).toBe(false);
-    expect(placeholder.visible).toBe(true);
+    expect(placeholder?.visible).toBe(true);
   });
 
   it('prioritizes extension conversions and explicit defaults for source asset hints', async () => {
     const scene = new THREE.Scene();
     const requestedPaths: string[] = [];
-    const placeholder1 = createPlaceholderMesh(1);
-    const placeholder2 = createPlaceholderMesh(2);
-    scene.add(placeholder1, placeholder2);
     const manager = new ObjectVisualManager(scene, null, {
       modelLoader: async (assetPath) => {
         requestedPaths.push(assetPath);
@@ -162,10 +160,14 @@ describe('ObjectVisualManager', () => {
     manager.sync([makeMeshState({ id: 1, renderAssetPath: 'soldier.w3d' })], 1 / 30);
     manager.sync([makeMeshState({ id: 2, renderAssetPath: 'tank' })], 1 / 30);
     await Promise.resolve();
+    const placeholder1 = getPlaceholderMesh(manager, 1);
+    const placeholder2 = getPlaceholderMesh(manager, 2);
 
     expect(requestedPaths[0]).toBe('soldier.gltf');
     expect(requestedPaths[1]).toBe('tank.gltf');
-    expect(placeholder1.visible).toBe(false);
-    expect(placeholder2.visible).toBe(false);
+    expect(placeholder1).toBeTruthy();
+    expect(placeholder2).toBeTruthy();
+    expect(placeholder1?.visible).toBe(false);
+    expect(placeholder2?.visible).toBe(false);
   });
 });

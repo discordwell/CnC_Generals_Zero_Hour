@@ -4239,6 +4239,217 @@ function runProducerDeathUpgradeRefundTimeline(): {
 }
 
 describe('GameLogicSubsystem combat + upgrades', () => {
+  it('exposes renderable entity snapshots and keeps unresolved objects explicit', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ResolvedVehicle', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Draw', 'W3DModelDraw ModuleTag_Draw', {}, [
+            makeBlock('ModelConditionState', 'DefaultModelConditionState', { Model: 'USAPrivateTank' }),
+          ]),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const summary = logic.loadMapObjects(
+      makeMap([makeMapObject('ResolvedVehicle', 10, 10), makeMapObject('MissingVehicle', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    const renderable = logic.getRenderableEntityStates();
+
+    expect(summary.totalObjects).toBe(2);
+    expect(summary.spawnedObjects).toBe(2);
+    expect(summary.unresolvedObjects).toBe(1);
+    expect(renderable).toHaveLength(2);
+    expect(renderable).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          templateName: 'ResolvedVehicle',
+          resolved: true,
+          renderAssetPath: 'USAPrivateTank',
+          renderAssetResolved: true,
+          animationState: 'IDLE',
+        }),
+        expect.objectContaining({
+          templateName: 'MissingVehicle',
+          resolved: false,
+          renderAssetPath: null,
+          renderAssetResolved: false,
+          animationState: 'IDLE',
+        }),
+      ]),
+    );
+  });
+
+  it('reports render asset metadata independently from placeholder geometry visibility', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NoModelObject', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('NoModelObject', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const state = logic.getEntityState(1);
+    expect(state).toEqual(expect.objectContaining({
+      renderAssetPath: null,
+      renderAssetResolved: false,
+    }));
+  });
+
+  it('reads render assets from nested model condition blocks and supports FileName/ModelName', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NestedDrawUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Draw', 'W3DModelDraw ModuleTag_Draw', {}, [
+            makeBlock('ModelConditionState', 'Default', { ModelName: 'USAPrivateTank' }),
+            makeBlock('ModelConditionState', 'Damaged', { FileName: 'USAPrivateTank_Damaged' }),
+          ]),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('NestedDrawUnit', 20, 20)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const state = logic.getEntityState(1);
+    expect(state).toEqual(expect.objectContaining({
+      renderAssetPath: 'USAPrivateTank',
+      renderAssetResolved: true,
+    }));
+  });
+
+  it('marks NONE model tokens as unresolved even when template data exists', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NoRenderableToken', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Draw', 'W3DModelDraw ModuleTag_Draw', {}, [
+            makeBlock('ModelConditionState', 'Default', { Model: 'NONE' }),
+          ]),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('NoRenderableToken', 30, 30)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const state = logic.getEntityState(1);
+    expect(state).toEqual(expect.objectContaining({
+      renderAssetPath: null,
+      renderAssetResolved: false,
+    }));
+  });
+
+  it('transitions animation state from IDLE to MOVE and back when a move command is issued', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('MobileUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('MobileUnit', 10, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.getEntityState(1)?.animationState).toBe('IDLE');
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 40, targetZ: 10 });
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.animationState).toBe('MOVE');
+
+    for (let frame = 0; frame < 80; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.getEntityState(1)?.animationState).toBe('IDLE');
+  });
+
+  it('transitions animation state to ATTACK while attacking and to IDLE on explicit stop', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'AttackCannon'] }),
+        ]),
+        makeObjectDef('Target', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('AttackCannon', {
+          AttackRange: 140,
+          PrimaryDamage: 10,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Attacker', 10, 10), makeMapObject('Target', 30, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    expect(logic.getEntityState(1)?.animationState).toBe('IDLE');
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.animationState).toBe('ATTACK');
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.animationState).toBe('IDLE');
+  });
+
+  it('records DIE before entity cleanup when an entity is destroyed', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DestroyMe', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('DestroyMe', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const logicWithPrivateAccess = logic as unknown as {
+      markEntityDestroyed: (entityId: number, attackerId: number) => void;
+    };
+    logicWithPrivateAccess.markEntityDestroyed(1, 0);
+    expect(logic.getEntityState(1)?.animationState).toBe('DIE');
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)).toBeNull();
+  });
+
   it('applies deterministic direct-fire combat with source attack range and shot delay semantics', () => {
     const timeline = runCombatTimeline();
     expect(timeline).toEqual([70, 70, 70, 40, 40, 40, 10, 10, 10, -1, -1, -1]);

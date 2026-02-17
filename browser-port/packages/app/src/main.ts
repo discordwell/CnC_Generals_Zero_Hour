@@ -13,7 +13,7 @@ import {
   RUNTIME_ASSET_BASE_URL,
   RUNTIME_MANIFEST_FILE,
 } from '@generals/assets';
-import { TerrainVisual, WaterVisual } from '@generals/renderer';
+import { ObjectVisualManager, TerrainVisual, WaterVisual } from '@generals/renderer';
 import type { MapDataJSON } from '@generals/renderer';
 import { InputManager, RTSCamera, type InputState } from '@generals/input';
 import {
@@ -448,7 +448,11 @@ async function init(): Promise<void> {
 
   // Game logic + object visuals
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
-  const gameLogic = new GameLogicSubsystem(scene, { attackUsesLineOfSight });
+  const objectVisualManager = new ObjectVisualManager(scene, assets);
+  const gameLogic = new GameLogicSubsystem(scene, {
+    attackUsesLineOfSight,
+    pickObjectByInput: (input, camera) => objectVisualManager.pickObjectByInput(input, camera),
+  });
   const maybeSetDeterministicGameLogicCrcSectionWriters = (
     networkManager as unknown as {
       setDeterministicGameLogicCrcSectionWriters?: (writers: unknown) => void;
@@ -533,6 +537,7 @@ async function init(): Promise<void> {
       `Object resolve summary: ${objectPlacement.resolvedObjects}/${objectPlacement.spawnedObjects} objects resolved`,
     );
   }
+  objectVisualManager.sync(gameLogic.getRenderableEntityStates());
   const objectStatus = ` | Objects: ${objectPlacement.spawnedObjects}/${objectPlacement.totalObjects} ` +
     `(unresolved: ${objectPlacement.unresolvedObjects})`;
 
@@ -718,6 +723,7 @@ async function init(): Promise<void> {
       // Update all subsystems (InputManager resets accumulators,
       // RTSCamera processes input, WaterVisual animates UVs)
       subsystems.updateAll(dt);
+      objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
     },
 
     onRender(_alpha: number) {
@@ -802,6 +808,7 @@ async function init(): Promise<void> {
   const disposeGame = (): void => {
     gameLoop.stop();
     subsystems.disposeAll();
+    objectVisualManager.dispose();
   };
 
   window.addEventListener('pagehide', disposeGame);
