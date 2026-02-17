@@ -108,6 +108,34 @@ describe('ObjectVisualManager', () => {
     expect(placeholder2?.visible).toBe(false);
   });
 
+  it('applies explicit IDLE/MOVE/ATTACK/DIE state transitions from render snapshots', async () => {
+    const scene = new THREE.Scene();
+    const modelLoaderCalls: string[] = [];
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async (assetPath: string): Promise<LoadedModelAsset> => {
+        modelLoaderCalls.push(assetPath);
+        return modelWithAnimationClips(['Idle', 'Move', 'Attack', 'Die']);
+      },
+    });
+
+    const baseState = makeMeshState({ id: 7, renderAssetPath: 'unit-model' });
+    manager.sync([baseState], 1 / 30);
+    await flushModelLoadQueue();
+
+    expect(modelLoaderCalls).toEqual(['unit-model.gltf']);
+    expect(manager.getVisualState(7)?.hasModel).toBe(true);
+    expect(manager.getVisualState(7)?.animationState).toBe('IDLE');
+
+    manager.sync([makeMeshState({ id: 7, animationState: 'MOVE', renderAssetPath: 'unit-model' })], 1 / 30);
+    expect(manager.getVisualState(7)?.animationState).toBe('MOVE');
+
+    manager.sync([makeMeshState({ id: 7, animationState: 'ATTACK', renderAssetPath: 'unit-model' })], 1 / 30);
+    expect(manager.getVisualState(7)?.animationState).toBe('ATTACK');
+
+    manager.sync([makeMeshState({ id: 7, animationState: 'DIE', renderAssetPath: 'unit-model' })], 1 / 30);
+    expect(manager.getVisualState(7)?.animationState).toBe('DIE');
+  });
+
   it('keeps missing assets explicit and non-throwing', async () => {
     const scene = new THREE.Scene();
     const manager = new ObjectVisualManager(scene, null, {
