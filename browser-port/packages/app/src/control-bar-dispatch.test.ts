@@ -1604,6 +1604,211 @@ describe('dispatchIssuedControlBarCommands', () => {
     expect(uiRuntime.messages).toEqual([]);
   });
 
+  it('requires object targets for object-targeted GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterObjectPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerNapalmAirstrike',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.commandCenterEntityId = 17;
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterObjectPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+          {
+            commandOption: CommandOption.NEED_TARGET_ENEMY_OBJECT,
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'Special Power from command center requires an object target.',
+    ]);
+  });
+
+  it('dispatches object-targeted GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER with context payload target', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterObjectPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerNapalmAirstrike',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.commandCenterEntityId = 17;
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterObjectPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+          {
+            commandOption: CommandOption.NEED_TARGET_ENEMY_OBJECT,
+            contextPayload: {
+              targetObjectId: 88,
+              targetPosition: [111, 0, 222],
+            },
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'issueSpecialPower',
+        commandButtonId: 'Command_CommandCenterObjectPower',
+        specialPowerName: 'SpecialPowerNapalmAirstrike',
+        commandOption: CommandOption.NEED_TARGET_ENEMY_OBJECT,
+        issuingEntityIds: [17],
+        sourceEntityId: 17,
+        targetEntityId: 88,
+        targetX: null,
+        targetZ: null,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('reports missing command-center source for GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterObjectPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerNapalmAirstrike',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterObjectPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+          {
+            commandOption: CommandOption.NEED_TARGET_ENEMY_OBJECT,
+            targetObjectId: 88,
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: SpecialPowerNapalmAirstrike from command center requires command-center source resolution parity.',
+    ]);
+  });
+
+  it('requires world targets for position-targeted GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterPositionPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerParachuteDrop',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.commandCenterEntityId = 17;
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterPositionPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+          {
+            commandOption: CommandOption.NEED_TARGET_POS,
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'Special Power from command center requires a world target.',
+    ]);
+  });
+
+  it('dispatches position-targeted GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER with target payload', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterPositionPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerParachuteDrop',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.commandCenterEntityId = 17;
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterPositionPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+          {
+            commandOption: CommandOption.NEED_TARGET_POS,
+            targetPosition: [250, 0, 600],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'issueSpecialPower',
+        commandButtonId: 'Command_CommandCenterPositionPower',
+        specialPowerName: 'SpecialPowerParachuteDrop',
+        commandOption: CommandOption.NEED_TARGET_POS,
+        issuingEntityIds: [17],
+        sourceEntityId: 17,
+        targetEntityId: null,
+        targetX: 250,
+        targetZ: 600,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
   it('treats GUI_COMMAND_NONE as no-op', () => {
     const registry = new IniDataRegistry();
     const gameLogic = new FakeGameLogic();
