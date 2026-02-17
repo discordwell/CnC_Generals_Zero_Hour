@@ -73,7 +73,7 @@ Win64/
 
 # Dependency directories
 packages/
-# Browser-port workspace sources are tracked under browser-port/packages.
+# Keep root dependency ignore, but allow browser-port workspace sources/tests to be tracked.
 !browser-port/packages/
 !browser-port/packages/**
 

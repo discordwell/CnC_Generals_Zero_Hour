@@ -39,6 +39,16 @@ export interface UpgradeDef {
   fields: Record<string, IniValue>;
 }
 
+export interface CommandButtonDef {
+  name: string;
+  fields: Record<string, IniValue>;
+}
+
+export interface CommandSetDef {
+  name: string;
+  fields: Record<string, IniValue>;
+}
+
 export interface ScienceDef {
   name: string;
   fields: Record<string, IniValue>;
@@ -87,6 +97,8 @@ export interface IniDataBundle {
   weapons: WeaponDef[];
   armors: ArmorDef[];
   upgrades: UpgradeDef[];
+  commandButtons?: CommandButtonDef[];
+  commandSets?: CommandSetDef[];
   sciences: ScienceDef[];
   factions: FactionDef[];
   locomotors?: LocomotorDef[];
@@ -105,6 +117,8 @@ export class IniDataRegistry {
   readonly weapons = new Map<string, WeaponDef>();
   readonly armors = new Map<string, ArmorDef>();
   readonly upgrades = new Map<string, UpgradeDef>();
+  readonly commandButtons = new Map<string, CommandButtonDef>();
+  readonly commandSets = new Map<string, CommandSetDef>();
   readonly sciences = new Map<string, ScienceDef>();
   readonly factions = new Map<string, FactionDef>();
   readonly locomotors = new Map<string, LocomotorDef>();
@@ -136,6 +150,8 @@ export class IniDataRegistry {
     this.weapons.clear();
     this.armors.clear();
     this.upgrades.clear();
+    this.commandButtons.clear();
+    this.commandSets.clear();
     this.sciences.clear();
     this.factions.clear();
     this.locomotors.clear();
@@ -165,6 +181,14 @@ export class IniDataRegistry {
 
     for (const upgrade of bundle.upgrades) {
       this.upgrades.set(upgrade.name, { ...upgrade, fields: { ...upgrade.fields } });
+    }
+
+    for (const commandButton of bundle.commandButtons ?? []) {
+      this.commandButtons.set(commandButton.name, { ...commandButton, fields: { ...commandButton.fields } });
+    }
+
+    for (const commandSet of bundle.commandSets ?? []) {
+      this.commandSets.set(commandSet.name, { ...commandSet, fields: { ...commandSet.fields } });
     }
 
     for (const science of bundle.sciences) {
@@ -227,6 +251,14 @@ export class IniDataRegistry {
     return this.upgrades.get(name);
   }
 
+  getCommandButton(name: string): CommandButtonDef | undefined {
+    return this.commandButtons.get(name);
+  }
+
+  getCommandSet(name: string): CommandSetDef | undefined {
+    return this.commandSets.get(name);
+  }
+
   getScience(name: string): ScienceDef | undefined {
     return this.sciences.get(name);
   }
@@ -254,7 +286,8 @@ export class IniDataRegistry {
       factions: this.factions.size,
       unresolvedInheritance: this.getUnresolvedInheritanceCount(),
       totalBlocks: this.objects.size + this.weapons.size + this.armors.size +
-        this.upgrades.size + this.sciences.size + this.factions.size + this.locomotors.size,
+        this.upgrades.size + this.commandButtons.size + this.commandSets.size +
+        this.sciences.size + this.factions.size + this.locomotors.size,
     };
   }
 
@@ -272,6 +305,8 @@ export class IniDataRegistry {
       weapons: [...this.weapons.values()].sort((a, b) => a.name.localeCompare(b.name)),
       armors: [...this.armors.values()].sort((a, b) => a.name.localeCompare(b.name)),
       upgrades: [...this.upgrades.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      commandButtons: [...this.commandButtons.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      commandSets: [...this.commandSets.values()].sort((a, b) => a.name.localeCompare(b.name)),
       sciences: [...this.sciences.values()].sort((a, b) => a.name.localeCompare(b.name)),
       factions: [...this.factions.values()].sort((a, b) => a.name.localeCompare(b.name)),
       locomotors: [...this.locomotors.values()].sort((a, b) => a.name.localeCompare(b.name)),
@@ -341,6 +376,20 @@ export class IniDataRegistry {
         });
         break;
 
+      case 'CommandButton':
+        addDefinition(this.commandButtons, block.type, {
+          name: block.name,
+          fields: block.fields,
+        });
+        break;
+
+      case 'CommandSet':
+        addDefinition(this.commandSets, block.type, {
+          name: block.name,
+          fields: block.fields,
+        });
+        break;
+
       case 'Science':
         addDefinition(this.sciences, block.type, {
           name: block.name,
@@ -369,8 +418,6 @@ export class IniDataRegistry {
         break;
 
       // Known but not indexed block types — skip silently
-      case 'CommandButton':
-      case 'CommandSet':
       case 'SpecialPower':
       case 'DamageFX':
       case 'FXList':

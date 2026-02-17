@@ -7,13 +7,22 @@
 
 import * as THREE from 'three';
 import type {
-  Subsystem,
   DeterministicFrameSnapshot,
   DeterministicGameLogicCrcSectionWriters,
+  Subsystem,
   XferCrcAccumulator,
 } from '@generals/engine';
-import { IniDataRegistry, type ObjectDef, type WeaponDef } from '@generals/ini-data';
-import type { IniBlock, IniValue } from '@generals/core';
+import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
+import {
+  IniDataRegistry,
+  type ArmorDef,
+  type CommandButtonDef,
+  type CommandSetDef,
+  type ObjectDef,
+  type ScienceDef,
+  type UpgradeDef,
+  type WeaponDef,
+} from '@generals/ini-data';
 import {
   MAP_XY_FACTOR,
   MAP_HEIGHT_SCALE,
@@ -56,6 +65,13 @@ export interface AttackMoveToCommand {
   attackDistance: number;
 }
 
+export interface AttackEntityCommand {
+  type: 'attackEntity';
+  entityId: number;
+  targetEntityId: number;
+  commandSource?: AttackCommandSource;
+}
+
 export interface StopCommand {
   type: 'stop';
   entityId: number;
@@ -89,17 +105,74 @@ export interface ApplyUpgradeCommand {
   upgradeName: string;
 }
 
+export interface QueueUnitProductionCommand {
+  type: 'queueUnitProduction';
+  entityId: number;
+  unitTemplateName: string;
+}
+
+export interface CancelUnitProductionCommand {
+  type: 'cancelUnitProduction';
+  entityId: number;
+  productionId: number;
+}
+
+export interface QueueUpgradeProductionCommand {
+  type: 'queueUpgradeProduction';
+  entityId: number;
+  upgradeName: string;
+}
+
+export interface CancelUpgradeProductionCommand {
+  type: 'cancelUpgradeProduction';
+  entityId: number;
+  upgradeName: string;
+}
+
+export interface SetSideCreditsCommand {
+  type: 'setSideCredits';
+  side: string;
+  amount: number;
+}
+
+export interface AddSideCreditsCommand {
+  type: 'addSideCredits';
+  side: string;
+  amount: number;
+}
+
+export interface SetSidePlayerTypeCommand {
+  type: 'setSidePlayerType';
+  side: string;
+  playerType: 'HUMAN' | 'COMPUTER';
+}
+
+export interface GrantSideScienceCommand {
+  type: 'grantSideScience';
+  side: string;
+  scienceName: string;
+}
+
 export type GameLogicCommand =
   | SelectByIdCommand
   | ClearSelectionCommand
   | MoveToCommand
   | AttackMoveToCommand
+  | AttackEntityCommand
   | StopCommand
   | BridgeDestroyedCommand
   | BridgeRepairedCommand
   | SetLocomotorSetCommand
   | SetLocomotorUpgradeCommand
-  | ApplyUpgradeCommand;
+  | ApplyUpgradeCommand
+  | QueueUnitProductionCommand
+  | CancelUnitProductionCommand
+  | QueueUpgradeProductionCommand
+  | CancelUpgradeProductionCommand
+  | SetSideCreditsCommand
+  | AddSideCreditsCommand
+  | SetSidePlayerTypeCommand
+  | GrantSideScienceCommand;
 
 export interface GameLogicConfig {
   /**
@@ -125,6 +198,8 @@ const RELATIONSHIP_ENEMIES = 0;
 const RELATIONSHIP_NEUTRAL = 1;
 const RELATIONSHIP_ALLIES = 2;
 type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTRAL | typeof RELATIONSHIP_ALLIES;
+type SidePlayerType = 'HUMAN' | 'COMPUTER';
+type AttackCommandSource = 'PLAYER' | 'AI';
 
 type ObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
 
@@ -163,7 +238,10 @@ const MAX_RECONSTRUCT_STEPS = 2_000;
 const NO_ATTACK_DISTANCE = 0;
 const ATTACK_MOVE_DISTANCE_FUDGE = 3 * MAP_XY_FACTOR;
 const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
+const ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE = 0.5;
 const ATTACK_LOS_TERRAIN_FUDGE = 0.5;
+const LOGIC_FRAME_RATE = 30;
+const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
 
 const NAV_CLEAR = 0;
 const NAV_WATER = 1;
@@ -202,6 +280,116 @@ const SOURCE_LOCOMOTOR_SET_NAMES = new Set<string>([
   LOCOMOTORSET_SUPERSONIC,
   LOCOMOTORSET_SLUGGISH,
 ]);
+const WEAPON_SET_FLAG_VETERAN = 1 << 0;
+const WEAPON_SET_FLAG_ELITE = 1 << 1;
+const WEAPON_SET_FLAG_HERO = 1 << 2;
+const WEAPON_SET_FLAG_PLAYER_UPGRADE = 1 << 3;
+const WEAPON_SET_FLAG_CRATEUPGRADE_ONE = 1 << 4;
+const WEAPON_SET_FLAG_CRATEUPGRADE_TWO = 1 << 5;
+const WEAPON_SET_FLAG_VEHICLE_HIJACK = 1 << 6;
+const WEAPON_SET_FLAG_CARBOMB = 1 << 7;
+const WEAPON_SET_FLAG_MINE_CLEARING_DETAIL = 1 << 8;
+const WEAPON_AFFECTS_SELF = 0x01;
+const WEAPON_AFFECTS_ALLIES = 0x02;
+const WEAPON_AFFECTS_ENEMIES = 0x04;
+const WEAPON_AFFECTS_NEUTRALS = 0x08;
+const WEAPON_KILLS_SELF = 0x10;
+const WEAPON_DOESNT_AFFECT_SIMILAR = 0x20;
+const WEAPON_DOESNT_AFFECT_AIRBORNE = 0x40;
+const WEAPON_AFFECTS_DEFAULT_MASK = WEAPON_AFFECTS_ALLIES | WEAPON_AFFECTS_ENEMIES | WEAPON_AFFECTS_NEUTRALS;
+const WEAPON_COLLIDE_ALLIES = 0x0001;
+const WEAPON_COLLIDE_ENEMIES = 0x0002;
+const WEAPON_COLLIDE_STRUCTURES = 0x0004;
+const WEAPON_COLLIDE_SHRUBBERY = 0x0008;
+const WEAPON_COLLIDE_PROJECTILE = 0x0010;
+const WEAPON_COLLIDE_WALLS = 0x0020;
+const WEAPON_COLLIDE_SMALL_MISSILES = 0x0040;
+const WEAPON_COLLIDE_BALLISTIC_MISSILES = 0x0080;
+const WEAPON_COLLIDE_CONTROLLED_STRUCTURES = 0x0100;
+const WEAPON_COLLIDE_DEFAULT_MASK = WEAPON_COLLIDE_STRUCTURES;
+const HUGE_DAMAGE_AMOUNT = 1_000_000_000;
+const ARMOR_SET_FLAG_VETERAN = 1 << 0;
+const ARMOR_SET_FLAG_ELITE = 1 << 1;
+const ARMOR_SET_FLAG_HERO = 1 << 2;
+const ARMOR_SET_FLAG_PLAYER_UPGRADE = 1 << 3;
+const ARMOR_SET_FLAG_WEAK_VERSUS_BASEDEFENSES = 1 << 4;
+
+const WEAPON_SET_FLAG_MASK_BY_NAME = new Map<string, number>([
+  ['VETERAN', WEAPON_SET_FLAG_VETERAN],
+  ['ELITE', WEAPON_SET_FLAG_ELITE],
+  ['HERO', WEAPON_SET_FLAG_HERO],
+  ['PLAYER_UPGRADE', WEAPON_SET_FLAG_PLAYER_UPGRADE],
+  ['CRATEUPGRADE_ONE', WEAPON_SET_FLAG_CRATEUPGRADE_ONE],
+  ['CRATEUPGRADE_TWO', WEAPON_SET_FLAG_CRATEUPGRADE_TWO],
+  ['VEHICLE_HIJACK', WEAPON_SET_FLAG_VEHICLE_HIJACK],
+  ['CARBOMB', WEAPON_SET_FLAG_CARBOMB],
+  ['MINE_CLEARING_DETAIL', WEAPON_SET_FLAG_MINE_CLEARING_DETAIL],
+]);
+
+const WEAPON_AFFECTS_MASK_BY_NAME = new Map<string, number>([
+  ['SELF', WEAPON_AFFECTS_SELF],
+  ['ALLIES', WEAPON_AFFECTS_ALLIES],
+  ['ENEMIES', WEAPON_AFFECTS_ENEMIES],
+  ['NEUTRALS', WEAPON_AFFECTS_NEUTRALS],
+  ['SUICIDE', WEAPON_KILLS_SELF],
+  ['NOT_SIMILAR', WEAPON_DOESNT_AFFECT_SIMILAR],
+  ['NOT_AIRBORNE', WEAPON_DOESNT_AFFECT_AIRBORNE],
+]);
+const WEAPON_COLLIDE_MASK_BY_NAME = new Map<string, number>([
+  ['ALLIES', WEAPON_COLLIDE_ALLIES],
+  ['ENEMIES', WEAPON_COLLIDE_ENEMIES],
+  ['STRUCTURES', WEAPON_COLLIDE_STRUCTURES],
+  ['SHRUBBERY', WEAPON_COLLIDE_SHRUBBERY],
+  ['PROJECTILES', WEAPON_COLLIDE_PROJECTILE],
+  ['WALLS', WEAPON_COLLIDE_WALLS],
+  ['SMALL_MISSILES', WEAPON_COLLIDE_SMALL_MISSILES],
+  ['BALLISTIC_MISSILES', WEAPON_COLLIDE_BALLISTIC_MISSILES],
+  ['CONTROLLED_STRUCTURES', WEAPON_COLLIDE_CONTROLLED_STRUCTURES],
+]);
+
+const ARMOR_SET_FLAG_MASK_BY_NAME = new Map<string, number>([
+  ['VETERAN', ARMOR_SET_FLAG_VETERAN],
+  ['ELITE', ARMOR_SET_FLAG_ELITE],
+  ['HERO', ARMOR_SET_FLAG_HERO],
+  ['PLAYER_UPGRADE', ARMOR_SET_FLAG_PLAYER_UPGRADE],
+  ['WEAK_VERSUS_BASEDEFENSES', ARMOR_SET_FLAG_WEAK_VERSUS_BASEDEFENSES],
+]);
+
+const SOURCE_DAMAGE_TYPE_NAMES: readonly string[] = [
+  'EXPLOSION',
+  'CRUSH',
+  'ARMOR_PIERCING',
+  'SMALL_ARMS',
+  'GATTLING',
+  'RADIATION',
+  'FLAME',
+  'LASER',
+  'SNIPER',
+  'POISON',
+  'HEALING',
+  'UNRESISTABLE',
+  'WATER',
+  'DEPLOY',
+  'SURRENDER',
+  'HACK',
+  'KILL_PILOT',
+  'PENALTY',
+  'FALLING',
+  'MELEE',
+  'DISARM',
+  'HAZARD_CLEANUP',
+  'PARTICLE_BEAM',
+  'TOPPLING',
+  'INFANTRY_MISSILE',
+  'AURORA_BOMB',
+  'LAND_MINE',
+  'JET_MISSILES',
+  'STEALTHJET_MISSILES',
+  'MOLOTOV_COCKTAIL',
+  'COMANCHE_VULCAN',
+  'FLESHY_SNIPER',
+];
+const SOURCE_DAMAGE_TYPE_NAME_SET = new Set<string>(SOURCE_DAMAGE_TYPE_NAMES);
 
 interface LocomotorSetProfile {
   surfaceMask: number;
@@ -259,11 +447,147 @@ interface CliffStateBits {
   stride: number;
 }
 
+type MaxHealthChangeTypeName = 'SAME_CURRENTHEALTH' | 'PRESERVE_RATIO' | 'ADD_CURRENT_HEALTH_TOO';
+type WeaponPrefireTypeName = 'PER_SHOT' | 'PER_ATTACK' | 'PER_CLIP';
+
+interface AttackWeaponProfile {
+  name: string;
+  primaryDamage: number;
+  secondaryDamage: number;
+  primaryDamageRadius: number;
+  secondaryDamageRadius: number;
+  scatterTargetScalar: number;
+  scatterTargets: Array<{ x: number; z: number }>;
+  scatterRadius: number;
+  scatterRadiusVsInfantry: number;
+  radiusDamageAngle: number;
+  damageType: string;
+  damageDealtAtSelfPosition: boolean;
+  radiusDamageAffectsMask: number;
+  projectileCollideMask: number;
+  weaponSpeed: number;
+  minWeaponSpeed: number;
+  scaleWeaponSpeed: boolean;
+  projectileObjectName: string | null;
+  attackRange: number;
+  unmodifiedAttackRange: number;
+  minAttackRange: number;
+  continueAttackRange: number;
+  clipSize: number;
+  clipReloadFrames: number;
+  autoReloadWhenIdleFrames: number;
+  preAttackDelayFrames: number;
+  preAttackType: WeaponPrefireTypeName;
+  minDelayFrames: number;
+  maxDelayFrames: number;
+}
+
+interface WeaponTemplateSetProfile {
+  conditionsMask: number;
+  weaponNamesBySlot: [string | null, string | null, string | null];
+}
+
+interface ArmorTemplateSetProfile {
+  conditionsMask: number;
+  armorName: string | null;
+}
+
+interface UpgradeModuleProfile {
+  id: string;
+  moduleType:
+    | 'LOCOMOTORSETUPGRADE'
+    | 'MAXHEALTHUPGRADE'
+    | 'ARMORUPGRADE'
+    | 'WEAPONSETUPGRADE'
+    | 'COMMANDSETUPGRADE'
+    | 'STATUSBITSUPGRADE';
+  triggeredBy: Set<string>;
+  conflictsWith: Set<string>;
+  removesUpgrades: Set<string>;
+  requiresAllTriggers: boolean;
+  addMaxHealth: number;
+  maxHealthChangeType: MaxHealthChangeTypeName;
+  statusToSet: Set<string>;
+  statusToClear: Set<string>;
+  commandSetName: string | null;
+  commandSetAltName: string | null;
+  commandSetAltTriggerUpgrade: string | null;
+}
+
+interface ProductionProfile {
+  maxQueueEntries: number;
+  quantityModifiers: Array<{
+    templateName: string;
+    quantity: number;
+  }>;
+}
+
+interface ProductionPrerequisiteGroup {
+  objectAlternatives: string[];
+  scienceRequirements: string[];
+}
+
+interface QueueProductionExitProfile {
+  moduleType: 'QUEUE' | 'SUPPLY_CENTER';
+  unitCreatePoint: { x: number; y: number; z: number };
+  naturalRallyPoint: { x: number; y: number; z: number } | null;
+  exitDelayFrames: number;
+  allowAirborneCreation: boolean;
+  initialBurst: number;
+}
+
+interface ParkingPlaceProfile {
+  totalSpaces: number;
+  occupiedSpaceEntityIds: Set<number>;
+  reservedProductionIds: Set<number>;
+}
+
+interface JetAISneakyProfile {
+  sneakyOffsetWhenAttacking: number;
+  attackersMissPersistFrames: number;
+}
+
+interface UnitProductionQueueEntry {
+  type: 'UNIT';
+  templateName: string;
+  productionId: number;
+  buildCost: number;
+  totalProductionFrames: number;
+  framesUnderConstruction: number;
+  percentComplete: number;
+  productionQuantityTotal: number;
+  productionQuantityProduced: number;
+}
+
+interface UpgradeProductionQueueEntry {
+  type: 'UPGRADE';
+  upgradeName: string;
+  productionId: number;
+  buildCost: number;
+  totalProductionFrames: number;
+  framesUnderConstruction: number;
+  percentComplete: number;
+  upgradeType: 'PLAYER' | 'OBJECT';
+}
+
+type ProductionQueueEntry = UnitProductionQueueEntry | UpgradeProductionQueueEntry;
+
+interface PendingWeaponDamageEvent {
+  sourceEntityId: number;
+  primaryVictimEntityId: number | null;
+  impactX: number;
+  impactZ: number;
+  executeFrame: number;
+  delivery: 'DIRECT' | 'PROJECTILE';
+  weapon: AttackWeaponProfile;
+}
+
 interface MapEntity {
   id: number;
   templateName: string;
   category: ObjectCategory;
   side?: string;
+  controllingPlayerToken: string | null;
   resolved: boolean;
   mesh: THREE.Mesh;
   baseHeight: number;
@@ -276,9 +600,44 @@ interface MapEntity {
   isUnmanned: boolean;
   attackNeedsLineOfSight: boolean;
   isImmobile: boolean;
+  canTakeDamage: boolean;
+  maxHealth: number;
+  health: number;
+  attackWeapon: AttackWeaponProfile | null;
+  weaponTemplateSets: WeaponTemplateSetProfile[];
+  weaponSetFlagsMask: number;
+  armorTemplateSets: ArmorTemplateSetProfile[];
+  armorSetFlagsMask: number;
+  armorDamageCoefficients: Map<string, number> | null;
+  attackTargetEntityId: number | null;
+  attackOriginalVictimPosition: VectorXZ | null;
+  attackCommandSource: AttackCommandSource;
+  nextAttackFrame: number;
+  attackAmmoInClip: number;
+  attackReloadFinishFrame: number;
+  attackForceReloadFrame: number;
+  attackScatterTargetsUnused: number[];
+  preAttackFinishFrame: number;
+  consecutiveShotsTargetEntityId: number | null;
+  consecutiveShotsAtTarget: number;
+  sneakyOffsetWhenAttacking: number;
+  attackersMissPersistFrames: number;
+  attackersMissExpireFrame: number;
+  productionProfile: ProductionProfile | null;
+  productionQueue: ProductionQueueEntry[];
+  productionNextId: number;
+  queueProductionExitProfile: QueueProductionExitProfile | null;
+  parkingPlaceProfile: ParkingPlaceProfile | null;
+  queueProductionExitDelayFramesRemaining: number;
+  queueProductionExitBurstRemaining: number;
+  parkingSpaceProducerId: number | null;
   largestWeaponRange: number;
   locomotorSets: Map<string, LocomotorSetProfile>;
-  locomotorUpgradeTriggers: Set<string>;
+  completedUpgrades: Set<string>;
+  executedUpgradeModules: Set<string>;
+  upgradeModules: UpgradeModuleProfile[];
+  objectStatusFlags: Set<string>;
+  commandSetStringOverride: string | null;
   locomotorUpgradeEnabled: boolean;
   activeLocomotorSet: string;
   locomotorSurfaceMask: number;
@@ -296,6 +655,7 @@ interface MapEntity {
   moveTarget: VectorXZ | null;
   pathfindGoalCell: { x: number; z: number } | null;
   pathfindPosCell: { x: number; z: number } | null;
+  destroyed: boolean;
 }
 
 const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
@@ -317,12 +677,14 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly geometryCache = new Map<ObjectCategory, THREE.BufferGeometry>();
   private readonly raycaster = new THREE.Raycaster();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private readonly gameRandom = new GameRandom(1);
 
   private nextId = 1;
   private animationTime = 0;
   private selectedEntityId: number | null = null;
   private mapHeightmap: HeightmapGrid | null = null;
   private navigationGrid: NavigationGrid | null = null;
+  private iniDataRegistry: IniDataRegistry | null = null;
   private readonly commandQueue: GameLogicCommand[] = [];
   private frameCounter = 0;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
@@ -330,6 +692,12 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
   private readonly crcFloatScratch = new DataView(new ArrayBuffer(4));
+  private readonly sideCredits = new Map<string, number>();
+  private readonly sidePlayerTypes = new Map<string, SidePlayerType>();
+  private readonly sideUpgradesInProduction = new Map<string, Set<string>>();
+  private readonly sideCompletedUpgrades = new Map<string, Set<string>>();
+  private readonly sideSciences = new Map<string, Set<string>>();
+  private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
 
   private isAttackMoveToMode = false;
   private previousAttackMoveToggleDown = false;
@@ -363,6 +731,7 @@ export class GameLogicSubsystem implements Subsystem {
   ): MapObjectPlacementSummary {
     this.clearSpawnedObjects();
     this.mapHeightmap = heightmap;
+    this.iniDataRegistry = iniDataRegistry;
 
     this.placementSummary = {
       totalObjects: mapData.objects.length,
@@ -450,9 +819,32 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     if (input.rightMouseClick && this.selectedEntityId !== null) {
+      const selectedEntity = this.spawnedEntities.get(this.selectedEntityId);
+      const pickedEntityId = this.pickObjectByMouse(input, camera);
+      if (
+        selectedEntity
+        && selectedEntity.attackWeapon
+        && pickedEntityId !== null
+        && pickedEntityId !== this.selectedEntityId
+      ) {
+        const targetEntity = this.spawnedEntities.get(pickedEntityId);
+        if (
+          targetEntity
+          && !targetEntity.destroyed
+          && this.getTeamRelationship(selectedEntity, targetEntity) === RELATIONSHIP_ENEMIES
+        ) {
+          this.submitCommand({
+            type: 'attackEntity',
+            entityId: this.selectedEntityId,
+            targetEntityId: pickedEntityId,
+          });
+          this.isAttackMoveToMode = false;
+          return;
+        }
+      }
+
       const moveTarget = this.getMoveTargetFromMouse(input, camera);
       if (moveTarget !== null) {
-        const selectedEntity = this.spawnedEntities.get(this.selectedEntityId);
         const attackDistance = this.resolveAttackMoveDistance(selectedEntity);
         if (this.isAttackMoveToMode) {
           this.submitCommand({
@@ -482,7 +874,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.animationTime += dt;
     this.frameCounter++;
     this.flushCommands();
+    this.updateProduction();
+    this.updateCombat();
     this.updateEntityMovement(dt);
+    this.updateWeaponIdleAutoReload();
+    this.updatePendingWeaponDamage();
+    this.finalizeDestroyedEntities();
   }
 
   submitCommand(command: GameLogicCommand): void {
@@ -491,6 +888,317 @@ export class GameLogicSubsystem implements Subsystem {
 
   getSelectedEntityId(): number | null {
     return this.selectedEntityId;
+  }
+
+  getEntityState(entityId: number): {
+    id: number;
+    templateName: string;
+    health: number;
+    maxHealth: number;
+    canTakeDamage: boolean;
+    attackTargetEntityId: number | null;
+    alive: boolean;
+    activeLocomotorSet: string;
+    speed: number;
+    statusFlags: string[];
+    x: number;
+    z: number;
+  } | null {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return null;
+    }
+
+    return {
+      id: entity.id,
+      templateName: entity.templateName,
+      health: entity.health,
+      maxHealth: entity.maxHealth,
+      canTakeDamage: entity.canTakeDamage,
+      attackTargetEntityId: entity.attackTargetEntityId,
+      alive: !entity.destroyed,
+      activeLocomotorSet: entity.activeLocomotorSet,
+      speed: entity.speed,
+      statusFlags: Array.from(entity.objectStatusFlags.values()).sort(),
+      x: entity.mesh.position.x,
+      z: entity.mesh.position.z,
+    };
+  }
+
+  getEntityIdsByTemplate(templateName: string): number[] {
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return [];
+    }
+    return Array.from(this.spawnedEntities.values())
+      .filter((entity) => entity.templateName.toUpperCase() === normalizedTemplateName)
+      .map((entity) => entity.id)
+      .sort((left, right) => left - right);
+  }
+
+  getProductionState(entityId: number): {
+    queueEntryCount: number;
+    queue: Array<{
+      type: 'UNIT';
+      templateName: string;
+      productionId: number;
+      buildCost: number;
+      totalProductionFrames: number;
+      framesUnderConstruction: number;
+      percentComplete: number;
+      productionQuantityTotal: number;
+      productionQuantityProduced: number;
+    } | {
+      type: 'UPGRADE';
+      upgradeName: string;
+      productionId: number;
+      buildCost: number;
+      totalProductionFrames: number;
+      framesUnderConstruction: number;
+      percentComplete: number;
+      upgradeType: 'PLAYER' | 'OBJECT';
+    }>;
+  } | null {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return null;
+    }
+
+    return {
+      queueEntryCount: entity.productionQueue.length,
+      queue: entity.productionQueue.map((entry) => {
+        if (entry.type === 'UPGRADE') {
+          return {
+            type: entry.type,
+            upgradeName: entry.upgradeName,
+            productionId: entry.productionId,
+            buildCost: entry.buildCost,
+            totalProductionFrames: entry.totalProductionFrames,
+            framesUnderConstruction: entry.framesUnderConstruction,
+            percentComplete: entry.percentComplete,
+            upgradeType: entry.upgradeType,
+          };
+        }
+
+        return {
+          type: entry.type,
+          templateName: entry.templateName,
+          productionId: entry.productionId,
+          buildCost: entry.buildCost,
+          totalProductionFrames: entry.totalProductionFrames,
+          framesUnderConstruction: entry.framesUnderConstruction,
+          percentComplete: entry.percentComplete,
+          productionQuantityTotal: entry.productionQuantityTotal,
+          productionQuantityProduced: entry.productionQuantityProduced,
+        };
+      }),
+    };
+  }
+
+  getSideCredits(side: string): number {
+    return this.sideCredits.get(this.normalizeSide(side)) ?? 0;
+  }
+
+  setSideCredits(side: string, amount: number): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+    const normalizedAmount = Number.isFinite(amount) ? Math.max(0, Math.trunc(amount)) : 0;
+    this.sideCredits.set(normalizedSide, normalizedAmount);
+  }
+
+  addSideCredits(side: string, amount: number): number {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return 0;
+    }
+    const delta = Number.isFinite(amount) ? Math.trunc(amount) : 0;
+    const current = this.sideCredits.get(normalizedSide) ?? 0;
+    const next = Math.max(0, current + delta);
+    this.sideCredits.set(normalizedSide, next);
+    return next;
+  }
+
+  getSidePlayerType(side: string): SidePlayerType {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return 'HUMAN';
+    }
+    return this.sidePlayerTypes.get(normalizedSide) ?? 'HUMAN';
+  }
+
+  setSidePlayerType(side: string, playerType: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedType = playerType.trim().toUpperCase();
+    if (!normalizedSide) {
+      return false;
+    }
+    if (normalizedType !== 'HUMAN' && normalizedType !== 'COMPUTER') {
+      return false;
+    }
+
+    this.sidePlayerTypes.set(normalizedSide, normalizedType);
+    return true;
+  }
+
+  getSideUpgradeState(side: string): {
+    inProduction: string[];
+    completed: string[];
+  } {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return { inProduction: [], completed: [] };
+    }
+
+    const inProduction = Array.from(this.getSideUpgradeSet(this.sideUpgradesInProduction, normalizedSide));
+    const completed = Array.from(this.getSideUpgradeSet(this.sideCompletedUpgrades, normalizedSide));
+    inProduction.sort((left, right) => left.localeCompare(right));
+    completed.sort((left, right) => left.localeCompare(right));
+
+    return { inProduction, completed };
+  }
+
+  getSideScienceState(side: string): {
+    acquired: string[];
+  } {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return { acquired: [] };
+    }
+
+    const acquired = Array.from(this.getSideScienceSet(normalizedSide));
+    acquired.sort((left, right) => left.localeCompare(right));
+    return { acquired };
+  }
+
+  grantSideScience(side: string, scienceName: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedScienceName = scienceName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedScienceName || normalizedScienceName === 'NONE') {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+    if (!scienceDef) {
+      return false;
+    }
+
+    // Source parity: Player::grantScience() rejects non-grantable sciences.
+    const isGrantable = readBooleanField(scienceDef.fields, ['IsGrantable']);
+    if (isGrantable === false) {
+      return false;
+    }
+
+    const normalizedScience = scienceDef.name.trim().toUpperCase();
+    if (!normalizedScience || normalizedScience === 'NONE') {
+      return false;
+    }
+
+    const sideSciences = this.getSideScienceSet(normalizedSide);
+    if (sideSciences.has(normalizedScience)) {
+      return false;
+    }
+
+    sideSciences.add(normalizedScience);
+    // TODO(C&C source parity): port full science purchase/availability flow (purchase points, hidden/disabled states).
+    return true;
+  }
+
+  private getSideUpgradeSet(map: Map<string, Set<string>>, normalizedSide: string): Set<string> {
+    const existing = map.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+    const created = new Set<string>();
+    map.set(normalizedSide, created);
+    return created;
+  }
+
+  private getSideScienceSet(normalizedSide: string): Set<string> {
+    const existing = this.sideSciences.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+    const created = new Set<string>();
+    this.sideSciences.set(normalizedSide, created);
+    return created;
+  }
+
+  private hasSideScience(side: string, scienceName: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedScienceName = scienceName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedScienceName || normalizedScienceName === 'NONE') {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+    if (!scienceDef) {
+      return false;
+    }
+
+    const normalizedScience = scienceDef.name.trim().toUpperCase();
+    if (!normalizedScience || normalizedScience === 'NONE') {
+      return false;
+    }
+
+    return this.getSideScienceSet(normalizedSide).has(normalizedScience);
+  }
+
+  private setSideUpgradeInProduction(side: string, upgradeName: string, enabled: boolean): void {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedUpgradeName) {
+      return;
+    }
+
+    const set = this.getSideUpgradeSet(this.sideUpgradesInProduction, normalizedSide);
+    if (enabled) {
+      set.add(normalizedUpgradeName);
+      return;
+    }
+    set.delete(normalizedUpgradeName);
+  }
+
+  private setSideUpgradeCompleted(side: string, upgradeName: string, enabled: boolean): void {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedUpgradeName) {
+      return;
+    }
+
+    const set = this.getSideUpgradeSet(this.sideCompletedUpgrades, normalizedSide);
+    if (enabled) {
+      set.add(normalizedUpgradeName);
+      return;
+    }
+    set.delete(normalizedUpgradeName);
+  }
+
+  private hasSideUpgradeInProduction(side: string, upgradeName: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedUpgradeName) {
+      return false;
+    }
+    return this.getSideUpgradeSet(this.sideUpgradesInProduction, normalizedSide).has(normalizedUpgradeName);
+  }
+
+  private hasSideUpgradeCompleted(side: string, upgradeName: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedUpgradeName) {
+      return false;
+    }
+    return this.getSideUpgradeSet(this.sideCompletedUpgrades, normalizedSide).has(normalizedUpgradeName);
   }
 
   setBridgeSegmentPassable(segmentId: number, passable: boolean): boolean {
@@ -615,11 +1323,55 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity) {
       return false;
     }
-    const normalizedUpgrade = upgradeName.trim().toUpperCase();
-    if (!normalizedUpgrade || !entity.locomotorUpgradeTriggers.has(normalizedUpgrade)) {
+
+    if (entity.destroyed) {
       return false;
     }
-    return this.setEntityLocomotorUpgrade(entityId, true);
+
+    const normalizedUpgrade = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgrade || normalizedUpgrade === 'NONE') {
+      return false;
+    }
+
+    entity.completedUpgrades.add(normalizedUpgrade);
+    return this.executePendingUpgradeModules(entityId, entity);
+  }
+
+  private executePendingUpgradeModules(entityId: number, entity: MapEntity): boolean {
+    let appliedAny = false;
+    const upgradeMaskToCheck = this.buildEntityUpgradeMask(entity);
+    for (const module of entity.upgradeModules) {
+      if (!this.canExecuteUpgradeModule(entity, module, upgradeMaskToCheck)) {
+        continue;
+      }
+
+      // Source parity: UpgradeMux::giveSelfUpgrade() processes removals before module implementation.
+      this.processUpgradeModuleRemovals(entity, module);
+
+      let appliedThisModule = false;
+      if (module.moduleType === 'LOCOMOTORSETUPGRADE') {
+        appliedThisModule = this.setEntityLocomotorUpgrade(entityId, true);
+      } else if (module.moduleType === 'MAXHEALTHUPGRADE') {
+        appliedThisModule = this.applyMaxHealthUpgrade(entity, module.addMaxHealth, module.maxHealthChangeType);
+      } else if (module.moduleType === 'ARMORUPGRADE') {
+        appliedThisModule = this.applyArmorUpgrade(entity);
+      } else if (module.moduleType === 'WEAPONSETUPGRADE') {
+        appliedThisModule = this.applyWeaponSetUpgrade(entity);
+      } else if (module.moduleType === 'COMMANDSETUPGRADE') {
+        appliedThisModule = this.applyCommandSetUpgrade(entity, module);
+      } else if (module.moduleType === 'STATUSBITSUPGRADE') {
+        appliedThisModule = this.applyStatusBitsUpgrade(entity, module);
+      }
+
+      if (!appliedThisModule) {
+        continue;
+      }
+
+      entity.executedUpgradeModules.add(module.id);
+      appliedAny = true;
+    }
+
+    return appliedAny;
   }
 
   reset(): void {
@@ -631,6 +1383,16 @@ export class GameLogicSubsystem implements Subsystem {
     this.animationTime = 0;
     this.mapHeightmap = null;
     this.navigationGrid = null;
+    this.iniDataRegistry = null;
+    this.sideCredits.clear();
+    this.sidePlayerTypes.clear();
+    this.sideUpgradesInProduction.clear();
+    this.sideCompletedUpgrades.clear();
+    this.sideSciences.clear();
+    this.frameCounter = 0;
+    this.gameRandom.setSeed(1);
+    this.isAttackMoveToMode = false;
+    this.previousAttackMoveToggleDown = false;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -665,6 +1427,7 @@ export class GameLogicSubsystem implements Subsystem {
     const normalizedKindOf = this.normalizeKindOf(kindOf);
     const isResolved = objectDef !== undefined;
     const objectId = this.nextId++;
+    const controllingPlayerToken = this.resolveMapObjectControllingPlayerToken(mapObject);
 
     const { geometry, nominalHeight } = this.getGeometry(category);
     const material = this.getMaterial({
@@ -675,8 +1438,21 @@ export class GameLogicSubsystem implements Subsystem {
     });
 
     const locomotorSetProfiles = this.resolveLocomotorProfiles(objectDef, iniDataRegistry);
-    const locomotorUpgradeTriggers = this.extractLocomotorUpgradeTriggers(objectDef);
+    const upgradeModules = this.extractUpgradeModules(objectDef);
+    const productionProfile = this.extractProductionProfile(objectDef);
+    const queueProductionExitProfile = this.extractQueueProductionExitProfile(objectDef);
+    const parkingPlaceProfile = this.extractParkingPlaceProfile(objectDef);
+    const jetAISneakyProfile = this.extractJetAISneakyProfile(objectDef);
+    const weaponTemplateSets = this.extractWeaponTemplateSets(objectDef);
+    const armorTemplateSets = this.extractArmorTemplateSets(objectDef);
+    const attackWeapon = this.resolveAttackWeaponProfile(objectDef, iniDataRegistry);
+    const bodyStats = this.resolveBodyStats(objectDef);
     const largestWeaponRange = this.resolveLargestWeaponRange(objectDef, iniDataRegistry);
+    const armorDamageCoefficients = this.resolveArmorDamageCoefficientsForSetSelection(
+      armorTemplateSets,
+      0,
+      iniDataRegistry,
+    );
     const locomotorProfile = locomotorSetProfiles.get(LOCOMOTORSET_NORMAL) ?? {
       surfaceMask: NO_SURFACES,
       downhillOnly: false,
@@ -708,12 +1484,17 @@ export class GameLogicSubsystem implements Subsystem {
     };
 
     const [posCellX, posCellZ] = this.worldToGrid(mesh.position.x, mesh.position.z);
+    const initialClipAmmo = attackWeapon && attackWeapon.clipSize > 0 ? attackWeapon.clipSize : 0;
+    const initialScatterTargetsUnused = attackWeapon
+      ? Array.from({ length: attackWeapon.scatterTargets.length }, (_entry, index) => index)
+      : [];
 
     return {
       id: objectId,
       templateName: mapObject.templateName,
       category,
       side: objectDef?.side,
+      controllingPlayerToken,
       resolved: isResolved,
       mesh,
       baseHeight,
@@ -727,11 +1508,46 @@ export class GameLogicSubsystem implements Subsystem {
       isImmobile,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
       locomotorSets: locomotorSetProfiles,
-      locomotorUpgradeTriggers,
+      completedUpgrades: new Set<string>(),
+      executedUpgradeModules: new Set<string>(),
+      upgradeModules,
+      objectStatusFlags: new Set<string>(),
+      commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,
       activeLocomotorSet: LOCOMOTORSET_NORMAL,
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
+      canTakeDamage: bodyStats.maxHealth > 0,
+      maxHealth: bodyStats.maxHealth,
+      health: bodyStats.initialHealth,
+      attackWeapon,
+      weaponTemplateSets,
+      weaponSetFlagsMask: 0,
+      armorTemplateSets,
+      armorSetFlagsMask: 0,
+      armorDamageCoefficients,
+      attackTargetEntityId: null,
+      attackOriginalVictimPosition: null,
+      attackCommandSource: 'AI',
+      nextAttackFrame: 0,
+      attackAmmoInClip: initialClipAmmo,
+      attackReloadFinishFrame: 0,
+      attackForceReloadFrame: 0,
+      attackScatterTargetsUnused: initialScatterTargetsUnused,
+      preAttackFinishFrame: 0,
+      consecutiveShotsTargetEntityId: null,
+      consecutiveShotsAtTarget: 0,
+      sneakyOffsetWhenAttacking: jetAISneakyProfile?.sneakyOffsetWhenAttacking ?? 0,
+      attackersMissPersistFrames: jetAISneakyProfile?.attackersMissPersistFrames ?? 0,
+      attackersMissExpireFrame: 0,
+      productionProfile,
+      productionQueue: [],
+      productionNextId: 1,
+      queueProductionExitProfile,
+      parkingPlaceProfile,
+      queueProductionExitDelayFramesRemaining: 0,
+      queueProductionExitBurstRemaining: queueProductionExitProfile?.initialBurst ?? 0,
+      parkingSpaceProducerId: null,
       pathDiameter,
       pathfindCenterInCell,
       blocksPath,
@@ -746,6 +1562,7 @@ export class GameLogicSubsystem implements Subsystem {
       moveTarget: null,
       pathfindGoalCell: null,
       pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
+      destroyed: false,
     };
   }
 
@@ -809,59 +1626,11 @@ export class GameLogicSubsystem implements Subsystem {
       return NO_ATTACK_DISTANCE;
     }
 
-    const weaponNames = new Set<string>();
-    const collectWeaponNamesFromFieldValue = (value: IniValue | undefined): void => {
-      for (const tokens of this.extractIniValueTokens(value)) {
-        for (const weaponName of this.extractWeaponNamesFromTokens(tokens)) {
-          weaponNames.add(weaponName);
-        }
-      }
-    };
-
-    const collectWeaponFields = (fields: Record<string, IniValue>): void => {
-      for (const [fieldName, fieldValue] of Object.entries(fields)) {
-        if (fieldName.toUpperCase() !== 'WEAPON') {
-          continue;
-        }
-        collectWeaponNamesFromFieldValue(fieldValue);
-      }
-    };
-
-    collectWeaponFields(objectDef.fields);
-
-    const visitBlock = (block: IniBlock): void => {
-      collectWeaponFields(block.fields);
-
-      if (block.type.toUpperCase() === 'WEAPONSET') {
-        collectWeaponFields(block.fields);
-      }
-
-      for (const childBlock of block.blocks) {
-        visitBlock(childBlock);
-      }
-    };
-
-    for (const block of objectDef.blocks) {
-      visitBlock(block);
-    }
-
-    let largestWeaponRange = NO_ATTACK_DISTANCE;
-    for (const weaponName of weaponNames) {
-      const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
-      if (!weapon) {
-        continue;
-      }
-      const weaponRange = readNumericField(weapon.fields, ['Range', 'AttackRange']);
-      if (weaponRange === null) {
-        continue;
-      }
-      const effectiveRange = weaponRange;
-      if (effectiveRange > largestWeaponRange) {
-        largestWeaponRange = effectiveRange;
-      }
-    }
-
-    return largestWeaponRange;
+    return this.resolveLargestWeaponRangeForSetSelection(
+      this.extractWeaponTemplateSets(objectDef),
+      0,
+      iniDataRegistry,
+    );
   }
 
   private findWeaponDefByName(iniDataRegistry: IniDataRegistry, weaponName: string): WeaponDef | undefined {
@@ -878,6 +1647,129 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return undefined;
+  }
+
+  private findArmorDefByName(iniDataRegistry: IniDataRegistry, armorName: string): ArmorDef | undefined {
+    const direct = iniDataRegistry.getArmor(armorName);
+    if (direct) {
+      return direct;
+    }
+
+    const normalizedArmorName = armorName.toUpperCase();
+    for (const [registryArmorName, armorDef] of iniDataRegistry.armors.entries()) {
+      if (registryArmorName.toUpperCase() === normalizedArmorName) {
+        return armorDef;
+      }
+    }
+
+    return undefined;
+  }
+
+  private findObjectDefByName(iniDataRegistry: IniDataRegistry, objectName: string): ObjectDef | undefined {
+    const direct = iniDataRegistry.getObject(objectName);
+    if (direct) {
+      return direct;
+    }
+
+    const normalizedObjectName = objectName.toUpperCase();
+    for (const [registryObjectName, objectDef] of iniDataRegistry.objects.entries()) {
+      if (registryObjectName.toUpperCase() === normalizedObjectName) {
+        return objectDef;
+      }
+    }
+
+    return undefined;
+  }
+
+  private findUpgradeDefByName(iniDataRegistry: IniDataRegistry, upgradeName: string): UpgradeDef | undefined {
+    const direct = iniDataRegistry.getUpgrade(upgradeName);
+    if (direct) {
+      return direct;
+    }
+
+    const normalizedUpgradeName = upgradeName.toUpperCase();
+    for (const [registryUpgradeName, upgradeDef] of iniDataRegistry.upgrades.entries()) {
+      if (registryUpgradeName.toUpperCase() === normalizedUpgradeName) {
+        return upgradeDef;
+      }
+    }
+
+    return undefined;
+  }
+
+  private findCommandButtonDefByName(
+    iniDataRegistry: IniDataRegistry,
+    commandButtonName: string,
+  ): CommandButtonDef | undefined {
+    const direct = iniDataRegistry.getCommandButton(commandButtonName);
+    if (direct) {
+      return direct;
+    }
+
+    const normalizedCommandButtonName = commandButtonName.toUpperCase();
+    for (const [registryCommandButtonName, commandButtonDef] of iniDataRegistry.commandButtons.entries()) {
+      if (registryCommandButtonName.toUpperCase() === normalizedCommandButtonName) {
+        return commandButtonDef;
+      }
+    }
+
+    return undefined;
+  }
+
+  private findCommandSetDefByName(iniDataRegistry: IniDataRegistry, commandSetName: string): CommandSetDef | undefined {
+    const direct = iniDataRegistry.getCommandSet(commandSetName);
+    if (direct) {
+      return direct;
+    }
+
+    const normalizedCommandSetName = commandSetName.toUpperCase();
+    for (const [registryCommandSetName, commandSetDef] of iniDataRegistry.commandSets.entries()) {
+      if (registryCommandSetName.toUpperCase() === normalizedCommandSetName) {
+        return commandSetDef;
+      }
+    }
+
+    return undefined;
+  }
+
+  private findScienceDefByName(iniDataRegistry: IniDataRegistry, scienceName: string): ScienceDef | undefined {
+    const direct = iniDataRegistry.getScience(scienceName);
+    if (direct) {
+      return direct;
+    }
+
+    const normalizedScienceName = scienceName.toUpperCase();
+    for (const [registryScienceName, scienceDef] of iniDataRegistry.sciences.entries()) {
+      if (registryScienceName.toUpperCase() === normalizedScienceName) {
+        return scienceDef;
+      }
+    }
+
+    return undefined;
+  }
+
+  private resolveUpgradeType(upgradeDef: UpgradeDef): 'PLAYER' | 'OBJECT' {
+    const type = readStringField(upgradeDef.fields, ['Type'])?.toUpperCase();
+    if (type === 'OBJECT') {
+      return 'OBJECT';
+    }
+    return 'PLAYER';
+  }
+
+  private resolveUpgradeBuildTimeFrames(upgradeDef: UpgradeDef): number {
+    const buildTimeSeconds = readNumericField(upgradeDef.fields, ['BuildTime']) ?? 0;
+    if (!Number.isFinite(buildTimeSeconds)) {
+      return 0;
+    }
+    return Math.trunc(buildTimeSeconds * LOGIC_FRAME_RATE);
+  }
+
+  private resolveUpgradeBuildCost(upgradeDef: UpgradeDef): number {
+    const buildCostRaw = readNumericField(upgradeDef.fields, ['BuildCost']) ?? 0;
+    if (!Number.isFinite(buildCostRaw)) {
+      return 0;
+    }
+    return Math.max(0, Math.trunc(buildCostRaw));
   }
 
   private extractIniValueTokens(value: IniValue | undefined): string[][] {
@@ -897,6 +1789,25 @@ export class GameLogicSubsystem implements Subsystem {
       return value.flatMap((entry) => this.extractIniValueTokens(entry as IniValue));
     }
     return [];
+  }
+
+  private readIniFieldValue(fields: Record<string, IniValue>, fieldName: string): IniValue | undefined {
+    const normalizedFieldName = fieldName.toUpperCase();
+    for (const [name, value] of Object.entries(fields)) {
+      if (name.toUpperCase() === normalizedFieldName) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  private resolveIniFieldString(fields: Record<string, IniValue>, fieldName: string): string | null {
+    const value = this.readIniFieldValue(fields, fieldName);
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
   }
 
   private extractWeaponNamesFromTokens(tokens: string[]): string[] {
@@ -935,6 +1846,1278 @@ export class GameLogicSubsystem implements Subsystem {
       tokenIndex++;
     }
     return weapons;
+  }
+
+  private collectWeaponNamesInPriorityOrder(objectDef: ObjectDef): string[] {
+    const slotPriority = new Map<string, number>([
+      ['PRIMARY', 0],
+      ['SECONDARY', 1],
+      ['TERTIARY', 2],
+    ]);
+    const candidates: Array<{ name: string; priority: number; order: number }> = [];
+    const seen = new Set<string>();
+    let order = 0;
+
+    const addCandidate = (name: string, priority: number): void => {
+      const trimmed = name.trim();
+      if (!trimmed || trimmed.toUpperCase() === 'NONE') {
+        return;
+      }
+      const normalized = trimmed.toUpperCase();
+      if (seen.has(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      candidates.push({ name: trimmed, priority, order });
+      order += 1;
+    };
+
+    const collectFromFieldValue = (value: IniValue | undefined): void => {
+      for (const tokens of this.extractIniValueTokens(value)) {
+        if (tokens.length >= 2) {
+          const slot = tokens[0]?.toUpperCase() ?? '';
+          const slotPriorityValue = slotPriority.get(slot);
+          if (slotPriorityValue !== undefined) {
+            const weaponName = tokens[1];
+            if (weaponName !== undefined) {
+              addCandidate(weaponName, slotPriorityValue);
+              continue;
+            }
+          }
+        }
+        for (const weaponName of this.extractWeaponNamesFromTokens(tokens)) {
+          addCandidate(weaponName, 3);
+        }
+      }
+    };
+
+    const collectWeaponFields = (fields: Record<string, IniValue>): void => {
+      for (const [fieldName, fieldValue] of Object.entries(fields)) {
+        if (fieldName.toUpperCase() === 'WEAPON') {
+          collectFromFieldValue(fieldValue);
+        }
+      }
+    };
+
+    const visitBlock = (block: IniBlock): void => {
+      collectWeaponFields(block.fields);
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    collectWeaponFields(objectDef.fields);
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return candidates
+      .sort((left, right) => left.priority - right.priority || left.order - right.order)
+      .map((candidate) => candidate.name);
+  }
+
+  private extractWeaponTemplateSets(objectDef: ObjectDef | undefined): WeaponTemplateSetProfile[] {
+    if (!objectDef) {
+      return [];
+    }
+
+    const sets: WeaponTemplateSetProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'WEAPONSET') {
+        sets.push({
+          conditionsMask: this.extractConditionsMask(
+            this.readIniFieldValue(block.fields, 'Conditions'),
+            WEAPON_SET_FLAG_MASK_BY_NAME,
+          ),
+          weaponNamesBySlot: this.extractWeaponNamesBySlot(block.fields),
+        });
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (sets.length > 0) {
+      return sets;
+    }
+
+    const fallback = this.collectWeaponNamesInPriorityOrder(objectDef);
+    if (fallback.length === 0) {
+      return [];
+    }
+
+    const fallbackBySlot: [string | null, string | null, string | null] = [
+      fallback[0] ?? null,
+      fallback[1] ?? null,
+      fallback[2] ?? null,
+    ];
+    return [{ conditionsMask: 0, weaponNamesBySlot: fallbackBySlot }];
+  }
+
+  private extractArmorTemplateSets(objectDef: ObjectDef | undefined): ArmorTemplateSetProfile[] {
+    if (!objectDef) {
+      return [];
+    }
+
+    const sets: ArmorTemplateSetProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'ARMORSET') {
+        sets.push({
+          conditionsMask: this.extractConditionsMask(
+            this.readIniFieldValue(block.fields, 'Conditions'),
+            ARMOR_SET_FLAG_MASK_BY_NAME,
+          ),
+          armorName: this.resolveIniFieldString(block.fields, 'Armor'),
+        });
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (sets.length > 0) {
+      return sets;
+    }
+
+    const fallbackArmor = this.resolveIniFieldString(objectDef.fields, 'Armor');
+    if (!fallbackArmor) {
+      return [];
+    }
+
+    return [{ conditionsMask: 0, armorName: fallbackArmor }];
+  }
+
+  private extractConditionsMask(value: IniValue | undefined, flagMaskByName: Map<string, number>): number {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.max(0, Math.trunc(value));
+    }
+
+    let mask = 0;
+    for (const tokens of this.extractIniValueTokens(value)) {
+      for (const token of tokens) {
+        const normalized = token.trim().toUpperCase();
+        const bitMask = flagMaskByName.get(normalized);
+        if (bitMask !== undefined) {
+          mask |= bitMask;
+        }
+      }
+    }
+
+    return mask;
+  }
+
+  private resolveWeaponRadiusAffectsMask(weaponDef: WeaponDef): number {
+    const affectsValue = this.readIniFieldValue(weaponDef.fields, 'RadiusDamageAffects');
+    if (typeof affectsValue === 'undefined') {
+      return WEAPON_AFFECTS_DEFAULT_MASK;
+    }
+    return this.extractConditionsMask(affectsValue, WEAPON_AFFECTS_MASK_BY_NAME);
+  }
+
+  private resolveWeaponProjectileCollideMask(weaponDef: WeaponDef): number {
+    const collideValue = this.readIniFieldValue(weaponDef.fields, 'ProjectileCollidesWith');
+    if (typeof collideValue === 'undefined') {
+      return WEAPON_COLLIDE_DEFAULT_MASK;
+    }
+    return this.extractConditionsMask(collideValue, WEAPON_COLLIDE_MASK_BY_NAME);
+  }
+
+  private resolveWeaponScatterTargets(weaponDef: WeaponDef): Array<{ x: number; z: number }> {
+    const scatterTargetValue = this.readIniFieldValue(weaponDef.fields, 'ScatterTarget');
+    if (typeof scatterTargetValue === 'undefined') {
+      return [];
+    }
+
+    const resolvedTargets: Array<{ x: number; z: number }> = [];
+    for (const tokens of this.extractIniValueTokens(scatterTargetValue)) {
+      const numericTokens = tokens
+        .map((token) => Number(token))
+        .filter((value) => Number.isFinite(value));
+      if (numericTokens.length >= 2) {
+        resolvedTargets.push({
+          x: numericTokens[0] ?? 0,
+          z: numericTokens[1] ?? 0,
+        });
+      }
+    }
+
+    if (resolvedTargets.length > 0) {
+      return resolvedTargets;
+    }
+
+    const flattenedNumbers = readNumericList(scatterTargetValue);
+    for (let index = 0; index + 1 < flattenedNumbers.length; index += 2) {
+      resolvedTargets.push({
+        x: flattenedNumbers[index] ?? 0,
+        z: flattenedNumbers[index + 1] ?? 0,
+      });
+    }
+
+    return resolvedTargets;
+  }
+
+  private extractWeaponNamesBySlot(fields: Record<string, IniValue>): [string | null, string | null, string | null] {
+    const slots: [string | null, string | null, string | null] = [null, null, null];
+
+    for (const [fieldName, fieldValue] of Object.entries(fields)) {
+      if (fieldName.toUpperCase() !== 'WEAPON') {
+        continue;
+      }
+
+      const tokenGroups = this.extractIniValueTokens(fieldValue);
+      if (
+        Array.isArray(fieldValue)
+        && fieldValue.every((entry) => typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean')
+      ) {
+        const inlineTokens = fieldValue
+          .map((entry) => String(entry).trim())
+          .filter((entry) => entry.length > 0);
+        if (inlineTokens.length > 0) {
+          tokenGroups.unshift(inlineTokens);
+        }
+      }
+
+      for (const tokens of tokenGroups) {
+        const slotName = tokens[0]?.trim().toUpperCase() ?? '';
+        const weaponName = tokens[1]?.trim();
+        if (!weaponName) {
+          continue;
+        }
+        const normalizedWeaponName = weaponName.toUpperCase() === 'NONE' ? null : weaponName;
+        if (slotName === 'PRIMARY') {
+          slots[0] = normalizedWeaponName;
+        } else if (slotName === 'SECONDARY') {
+          slots[1] = normalizedWeaponName;
+        } else if (slotName === 'TERTIARY') {
+          slots[2] = normalizedWeaponName;
+        }
+      }
+    }
+
+    return slots;
+  }
+
+  private selectBestSetByConditions<T extends { conditionsMask: number }>(
+    sets: readonly T[],
+    currentMask: number,
+  ): T | null {
+    if (sets.length === 0) {
+      return null;
+    }
+
+    let best: T | null = null;
+    let bestYesMatch = 0;
+    let bestYesExtraneousBits = Number.MAX_SAFE_INTEGER;
+    for (const candidate of sets) {
+      const yesFlags = candidate.conditionsMask >>> 0;
+      const yesMatch = this.countSetBits((currentMask & yesFlags) >>> 0);
+      const yesExtraneousBits = this.countSetBits((yesFlags & ~currentMask) >>> 0);
+      if (yesMatch > bestYesMatch || (yesMatch >= bestYesMatch && yesExtraneousBits < bestYesExtraneousBits)) {
+        best = candidate;
+        bestYesMatch = yesMatch;
+        bestYesExtraneousBits = yesExtraneousBits;
+      }
+    }
+
+    return best;
+  }
+
+  private countSetBits(value: number): number {
+    let v = value >>> 0;
+    let count = 0;
+    while (v !== 0) {
+      count += v & 1;
+      v >>>= 1;
+    }
+    return count;
+  }
+
+  private resolveWeaponDamageTypeName(weaponDef: WeaponDef): string {
+    const explicitType = this.resolveIniFieldString(weaponDef.fields, 'DamageType')?.toUpperCase();
+    if (explicitType && SOURCE_DAMAGE_TYPE_NAME_SET.has(explicitType)) {
+      return explicitType;
+    }
+
+    const indexedType = readNumericField(weaponDef.fields, ['DamageType']);
+    if (indexedType !== null) {
+      const index = Math.trunc(indexedType);
+      if (index >= 0 && index < SOURCE_DAMAGE_TYPE_NAMES.length) {
+        return SOURCE_DAMAGE_TYPE_NAMES[index]!;
+      }
+    }
+
+    return 'EXPLOSION';
+  }
+
+  private resolveWeaponProfileFromDef(weaponDef: WeaponDef): AttackWeaponProfile | null {
+    const attackRangeRaw = readNumericField(weaponDef.fields, ['AttackRange', 'Range']) ?? NO_ATTACK_DISTANCE;
+    const unmodifiedAttackRange = Math.max(0, attackRangeRaw);
+    const attackRange = Math.max(0, attackRangeRaw - ATTACK_RANGE_CELL_EDGE_FUDGE);
+    const minAttackRange = Math.max(0, readNumericField(weaponDef.fields, ['MinimumAttackRange']) ?? 0);
+    const continueAttackRange = Math.max(0, readNumericField(weaponDef.fields, ['ContinueAttackRange']) ?? 0);
+    const primaryDamage = readNumericField(weaponDef.fields, ['PrimaryDamage']) ?? 0;
+    const secondaryDamage = readNumericField(weaponDef.fields, ['SecondaryDamage']) ?? 0;
+    const primaryDamageRadius = Math.max(0, readNumericField(weaponDef.fields, ['PrimaryDamageRadius']) ?? 0);
+    const secondaryDamageRadius = Math.max(0, readNumericField(weaponDef.fields, ['SecondaryDamageRadius']) ?? 0);
+    const scatterTargetScalar = Math.max(0, readNumericField(weaponDef.fields, ['ScatterTargetScalar']) ?? 0);
+    const scatterTargets = this.resolveWeaponScatterTargets(weaponDef);
+    const scatterRadius = Math.max(0, readNumericField(weaponDef.fields, ['ScatterRadius']) ?? 0);
+    const scatterRadiusVsInfantry = Math.max(0, readNumericField(weaponDef.fields, ['ScatterRadiusVsInfantry']) ?? 0);
+    const radiusDamageAngleDegrees = readNumericField(weaponDef.fields, ['RadiusDamageAngle']);
+    const radiusDamageAngle = radiusDamageAngleDegrees === null
+      ? Math.PI
+      : Math.max(0, radiusDamageAngleDegrees * (Math.PI / 180));
+    const projectileObjectRaw = readStringField(weaponDef.fields, ['ProjectileObject'])?.trim() ?? '';
+    const projectileObjectName = projectileObjectRaw && projectileObjectRaw.toUpperCase() !== 'NONE'
+      ? projectileObjectRaw
+      : null;
+    const damageDealtAtSelfPosition = readBooleanField(weaponDef.fields, ['DamageDealtAtSelfPosition']) ?? false;
+    const radiusDamageAffectsMask = this.resolveWeaponRadiusAffectsMask(weaponDef);
+    const projectileCollideMask = this.resolveWeaponProjectileCollideMask(weaponDef);
+    const weaponSpeedRaw = readNumericField(weaponDef.fields, ['WeaponSpeed']) ?? 999999;
+    const weaponSpeed = Number.isFinite(weaponSpeedRaw) && weaponSpeedRaw > 0 ? weaponSpeedRaw : 999999;
+    const minWeaponSpeedRaw = readNumericField(weaponDef.fields, ['MinWeaponSpeed']) ?? 999999;
+    const minWeaponSpeed = Number.isFinite(minWeaponSpeedRaw) && minWeaponSpeedRaw > 0 ? minWeaponSpeedRaw : 999999;
+    const scaleWeaponSpeed = readBooleanField(weaponDef.fields, ['ScaleWeaponSpeed']) ?? false;
+    const clipSizeRaw = readNumericField(weaponDef.fields, ['ClipSize']) ?? 0;
+    const clipSize = Math.max(0, Math.trunc(clipSizeRaw));
+    const clipReloadFrames = this.msToLogicFrames(readNumericField(weaponDef.fields, ['ClipReloadTime']) ?? 0);
+    const autoReloadWhenIdleFrames = this.msToLogicFrames(readNumericField(weaponDef.fields, ['AutoReloadWhenIdle']) ?? 0);
+    const preAttackDelayFrames = this.msToLogicFrames(readNumericField(weaponDef.fields, ['PreAttackDelay']) ?? 0);
+    const preAttackTypeToken = readStringField(weaponDef.fields, ['PreAttackType'])?.trim().toUpperCase();
+    const preAttackType: WeaponPrefireTypeName =
+      preAttackTypeToken === 'PER_ATTACK' || preAttackTypeToken === 'PER_CLIP'
+        ? preAttackTypeToken
+        : 'PER_SHOT';
+    const delayValues = readNumericList(weaponDef.fields['DelayBetweenShots']);
+    const minDelayMs = delayValues[0] ?? 0;
+    const maxDelayMs = delayValues[1] ?? minDelayMs;
+    const minDelayFrames = this.msToLogicFrames(minDelayMs);
+    const maxDelayFrames = this.msToLogicFrames(maxDelayMs);
+
+    if (attackRange <= 0 || primaryDamage <= 0) {
+      return null;
+    }
+
+    return {
+      name: weaponDef.name,
+      primaryDamage,
+      secondaryDamage,
+      primaryDamageRadius,
+      secondaryDamageRadius,
+      scatterTargetScalar,
+      scatterTargets,
+      scatterRadius,
+      scatterRadiusVsInfantry,
+      radiusDamageAngle,
+      damageType: this.resolveWeaponDamageTypeName(weaponDef),
+      damageDealtAtSelfPosition,
+      radiusDamageAffectsMask,
+      projectileCollideMask,
+      weaponSpeed,
+      minWeaponSpeed,
+      scaleWeaponSpeed,
+      projectileObjectName,
+      attackRange,
+      unmodifiedAttackRange,
+      minAttackRange,
+      continueAttackRange,
+      clipSize,
+      clipReloadFrames,
+      autoReloadWhenIdleFrames,
+      preAttackDelayFrames,
+      preAttackType,
+      minDelayFrames: Math.max(0, Math.min(minDelayFrames, maxDelayFrames)),
+      maxDelayFrames: Math.max(minDelayFrames, maxDelayFrames),
+    };
+  }
+
+  private resolveAttackWeaponProfileForSetSelection(
+    weaponTemplateSets: readonly WeaponTemplateSetProfile[],
+    weaponSetFlagsMask: number,
+    iniDataRegistry: IniDataRegistry,
+  ): AttackWeaponProfile | null {
+    const selectedSet = this.selectBestSetByConditions(weaponTemplateSets, weaponSetFlagsMask);
+    if (!selectedSet) {
+      return null;
+    }
+
+    for (const weaponName of selectedSet.weaponNamesBySlot) {
+      if (!weaponName) {
+        continue;
+      }
+      const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+      if (!weapon) {
+        continue;
+      }
+      const profile = this.resolveWeaponProfileFromDef(weapon);
+      if (profile) {
+        return profile;
+      }
+    }
+
+    return null;
+  }
+
+  private resolveLargestWeaponRangeForSetSelection(
+    weaponTemplateSets: readonly WeaponTemplateSetProfile[],
+    weaponSetFlagsMask: number,
+    iniDataRegistry: IniDataRegistry,
+  ): number {
+    const selectedSet = this.selectBestSetByConditions(weaponTemplateSets, weaponSetFlagsMask);
+    if (!selectedSet) {
+      return NO_ATTACK_DISTANCE;
+    }
+
+    let largestWeaponRange = NO_ATTACK_DISTANCE;
+    for (const weaponName of selectedSet.weaponNamesBySlot) {
+      if (!weaponName) {
+        continue;
+      }
+      const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+      if (!weapon) {
+        continue;
+      }
+      const weaponProfile = this.resolveWeaponProfileFromDef(weapon);
+      if (!weaponProfile) {
+        continue;
+      }
+      if (weaponProfile.attackRange > largestWeaponRange) {
+        largestWeaponRange = weaponProfile.attackRange;
+      }
+    }
+
+    return largestWeaponRange;
+  }
+
+  private resolveArmorDamageCoefficientsForSetSelection(
+    armorTemplateSets: readonly ArmorTemplateSetProfile[],
+    armorSetFlagsMask: number,
+    iniDataRegistry: IniDataRegistry,
+  ): Map<string, number> | null {
+    const selectedSet = this.selectBestSetByConditions(armorTemplateSets, armorSetFlagsMask);
+    if (!selectedSet || !selectedSet.armorName) {
+      return null;
+    }
+
+    const armorDef = this.findArmorDefByName(iniDataRegistry, selectedSet.armorName);
+    if (!armorDef) {
+      return null;
+    }
+
+    return this.resolveArmorDamageCoefficientsFromDef(armorDef);
+  }
+
+  private resolveArmorDamageCoefficientsFromDef(armorDef: ArmorDef): Map<string, number> {
+    let defaultCoefficient = 1;
+    for (const [fieldName, fieldValue] of Object.entries(armorDef.fields)) {
+      if (fieldName.trim().toUpperCase() !== 'DEFAULT') {
+        continue;
+      }
+      const parsedDefault = this.parseNumericIniValue(fieldValue);
+      if (parsedDefault !== null) {
+        defaultCoefficient = Math.max(0, parsedDefault);
+      }
+      break;
+    }
+
+    const coefficients = new Map<string, number>();
+    for (const damageType of SOURCE_DAMAGE_TYPE_NAMES) {
+      coefficients.set(damageType, defaultCoefficient);
+    }
+
+    for (const [fieldName, fieldValue] of Object.entries(armorDef.fields)) {
+      const normalizedFieldName = fieldName.trim().toUpperCase();
+      if (normalizedFieldName === 'DEFAULT' || !SOURCE_DAMAGE_TYPE_NAME_SET.has(normalizedFieldName)) {
+        continue;
+      }
+      const coefficient = this.parseNumericIniValue(fieldValue);
+      if (coefficient === null) {
+        continue;
+      }
+      coefficients.set(normalizedFieldName, Math.max(0, coefficient));
+    }
+
+    return coefficients;
+  }
+
+  private parseNumericIniValue(value: IniValue | undefined): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const token = value.trim();
+      if (token.endsWith('%')) {
+        const parsedPercent = Number(token.slice(0, -1));
+        if (Number.isFinite(parsedPercent)) {
+          return parsedPercent / 100;
+        }
+      }
+      const parsed = Number(token);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const parsed = this.parseNumericIniValue(entry as IniValue);
+        if (parsed !== null) {
+          return parsed;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private resolveAttackWeaponProfile(
+    objectDef: ObjectDef | undefined,
+    iniDataRegistry: IniDataRegistry,
+  ): AttackWeaponProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+    return this.resolveAttackWeaponProfileForSetSelection(
+      this.extractWeaponTemplateSets(objectDef),
+      0,
+      iniDataRegistry,
+    );
+  }
+
+  private resolveBodyStats(objectDef: ObjectDef | undefined): {
+    maxHealth: number;
+    initialHealth: number;
+  } {
+    if (!objectDef) {
+      return { maxHealth: 0, initialHealth: 0 };
+    }
+
+    let maxHealth: number | null = null;
+    let initialHealth: number | null = null;
+
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BODY') {
+        const blockMaxHealth = readNumericField(block.fields, ['MaxHealth']);
+        const blockInitialHealth = readNumericField(block.fields, ['InitialHealth']);
+        if (blockMaxHealth !== null) {
+          maxHealth = blockMaxHealth;
+        }
+        if (blockInitialHealth !== null) {
+          initialHealth = blockInitialHealth;
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    const resolvedMax = maxHealth !== null && Number.isFinite(maxHealth) && maxHealth > 0
+      ? maxHealth
+      : 0;
+    const resolvedInitial = initialHealth !== null && Number.isFinite(initialHealth)
+      ? clamp(initialHealth, 0, resolvedMax > 0 ? resolvedMax : Math.max(initialHealth, 0))
+      : resolvedMax;
+
+    return {
+      maxHealth: resolvedMax,
+      initialHealth: resolvedInitial,
+    };
+  }
+
+  private parseUpgradeNames(value: IniValue | undefined): string[] {
+    if (value === undefined) {
+      return [];
+    }
+
+    return this.extractIniValueTokens(value)
+      .flatMap((tokens) => tokens)
+      .map((token) => token.trim().toUpperCase())
+      .filter((token) => token.length > 0 && token !== 'NONE');
+  }
+
+  private parseObjectStatusNames(value: IniValue | undefined): string[] {
+    if (value === undefined) {
+      return [];
+    }
+
+    return this.extractIniValueTokens(value)
+      .flatMap((tokens) => tokens)
+      .map((token) => this.normalizeObjectStatusName(token))
+      .filter((token) => token !== null);
+  }
+
+  private normalizeObjectStatusName(statusName: string): string | null {
+    const normalized = statusName.trim().toUpperCase();
+    if (!normalized || normalized === 'NONE') {
+      return null;
+    }
+    if (normalized.startsWith('OBJECT_STATUS_')) {
+      const withoutPrefix = normalized.slice('OBJECT_STATUS_'.length);
+      return withoutPrefix.length > 0 ? withoutPrefix : null;
+    }
+    return normalized;
+  }
+
+  private extractProductionProfile(objectDef: ObjectDef | undefined): ProductionProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let foundModule = false;
+    let maxQueueEntries = 9;
+    const quantityModifiers: Array<{ templateName: string; quantity: number }> = [];
+
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'PRODUCTIONUPDATE') {
+          foundModule = true;
+
+          const configuredMaxQueueEntries = readNumericField(block.fields, ['MaxQueueEntries']);
+          if (configuredMaxQueueEntries !== null && Number.isFinite(configuredMaxQueueEntries)) {
+            maxQueueEntries = Math.max(0, Math.trunc(configuredMaxQueueEntries));
+          }
+
+          for (const tokens of this.extractIniValueTokens(block.fields['QuantityModifier'])) {
+            const templateName = tokens[0]?.trim();
+            if (!templateName || templateName.toUpperCase() === 'NONE') {
+              continue;
+            }
+            const quantityRaw = tokens[1] !== undefined ? Number(tokens[1]) : 1;
+            const quantity = Number.isFinite(quantityRaw) ? Math.max(1, Math.trunc(quantityRaw)) : 1;
+            quantityModifiers.push({
+              templateName: templateName.toUpperCase(),
+              quantity,
+            });
+          }
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (!foundModule) {
+      return null;
+    }
+
+    return {
+      maxQueueEntries,
+      quantityModifiers,
+    };
+  }
+
+  private extractQueueProductionExitProfile(objectDef: ObjectDef | undefined): QueueProductionExitProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: QueueProductionExitProfile | null = null;
+
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'QUEUEPRODUCTIONEXITUPDATE') {
+          const unitCreatePoint = readCoord3DField(block.fields, ['UnitCreatePoint']) ?? { x: 0, y: 0, z: 0 };
+          const naturalRallyPoint = readCoord3DField(block.fields, ['NaturalRallyPoint']);
+          const exitDelayMs = readNumericField(block.fields, ['ExitDelay']) ?? 0;
+          const initialBurstRaw = readNumericField(block.fields, ['InitialBurst']) ?? 0;
+          profile = {
+            moduleType: 'QUEUE',
+            unitCreatePoint,
+            naturalRallyPoint,
+            exitDelayFrames: this.msToLogicFrames(exitDelayMs),
+            allowAirborneCreation: readBooleanField(block.fields, ['AllowAirborneCreation']) === true,
+            initialBurst: Math.max(0, Math.trunc(initialBurstRaw)),
+          };
+        } else if (moduleType === 'SUPPLYCENTERPRODUCTIONEXITUPDATE') {
+          const unitCreatePoint = readCoord3DField(block.fields, ['UnitCreatePoint']) ?? { x: 0, y: 0, z: 0 };
+          const naturalRallyPoint = readCoord3DField(block.fields, ['NaturalRallyPoint']);
+          profile = {
+            moduleType: 'SUPPLY_CENTER',
+            unitCreatePoint,
+            naturalRallyPoint,
+            exitDelayFrames: 0,
+            allowAirborneCreation: false,
+            initialBurst: 0,
+          };
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
+  private extractParkingPlaceProfile(objectDef: ObjectDef | undefined): ParkingPlaceProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let foundModule = false;
+    let numRows = 0;
+    let numCols = 0;
+
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() !== 'BEHAVIOR') {
+        for (const child of block.blocks) {
+          visitBlock(child);
+        }
+        return;
+      }
+
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType === 'PARKINGPLACEBEHAVIOR') {
+        foundModule = true;
+        const rowsRaw = readNumericField(block.fields, ['NumRows']);
+        const colsRaw = readNumericField(block.fields, ['NumCols']);
+        if (rowsRaw !== null && Number.isFinite(rowsRaw)) {
+          numRows = Math.max(0, Math.trunc(rowsRaw));
+        }
+        if (colsRaw !== null && Number.isFinite(colsRaw)) {
+          numCols = Math.max(0, Math.trunc(colsRaw));
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (!foundModule) {
+      return null;
+    }
+
+    return {
+      totalSpaces: numRows * numCols,
+      occupiedSpaceEntityIds: new Set<number>(),
+      reservedProductionIds: new Set<number>(),
+    };
+  }
+
+  private extractJetAISneakyProfile(objectDef: ObjectDef | undefined): JetAISneakyProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let foundModule = false;
+    let sneakyOffsetWhenAttacking = 0;
+    let attackersMissPersistFrames = 0;
+
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'JETAIUPDATE') {
+          foundModule = true;
+          const sneakyOffsetRaw = readNumericField(block.fields, ['SneakyOffsetWhenAttacking']) ?? 0;
+          if (Number.isFinite(sneakyOffsetRaw)) {
+            sneakyOffsetWhenAttacking = sneakyOffsetRaw;
+          }
+          const persistMsRaw = readNumericField(block.fields, ['AttackersMissPersistTime']) ?? 0;
+          attackersMissPersistFrames = this.msToLogicFrames(persistMsRaw);
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (!foundModule) {
+      return null;
+    }
+
+    return {
+      sneakyOffsetWhenAttacking,
+      attackersMissPersistFrames,
+    };
+  }
+
+  private extractUpgradeModules(objectDef: ObjectDef | undefined): UpgradeModuleProfile[] {
+    if (!objectDef) {
+      return [];
+    }
+
+    const modules: UpgradeModuleProfile[] = [];
+    let index = 0;
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (
+          moduleType === 'LOCOMOTORSETUPGRADE'
+          || moduleType === 'MAXHEALTHUPGRADE'
+          || moduleType === 'ARMORUPGRADE'
+          || moduleType === 'WEAPONSETUPGRADE'
+          || moduleType === 'COMMANDSETUPGRADE'
+          || moduleType === 'STATUSBITSUPGRADE'
+        ) {
+          const triggeredBy = new Set(this.parseUpgradeNames(block.fields['TriggeredBy']));
+          const conflictsWith = new Set(this.parseUpgradeNames(block.fields['ConflictsWith']));
+          const removesUpgrades = new Set(this.parseUpgradeNames(block.fields['RemovesUpgrades']));
+          const requiresAllTriggers = readBooleanField(block.fields, ['RequiresAllTriggers']) === true;
+          const addMaxHealth = moduleType === 'MAXHEALTHUPGRADE'
+            ? (readNumericField(block.fields, ['AddMaxHealth']) ?? 0)
+            : 0;
+          const statusToSet = moduleType === 'STATUSBITSUPGRADE'
+            ? new Set(this.parseObjectStatusNames(block.fields['StatusToSet']))
+            : new Set<string>();
+          const statusToClear = moduleType === 'STATUSBITSUPGRADE'
+            ? new Set(this.parseObjectStatusNames(block.fields['StatusToClear']))
+            : new Set<string>();
+          const changeTypeRaw = readStringField(block.fields, ['ChangeType'])?.toUpperCase() ?? 'SAME_CURRENTHEALTH';
+          const maxHealthChangeType: MaxHealthChangeTypeName =
+            changeTypeRaw === 'PRESERVE_RATIO' || changeTypeRaw === 'ADD_CURRENT_HEALTH_TOO'
+              ? changeTypeRaw
+              : 'SAME_CURRENTHEALTH';
+          const commandSetName = moduleType === 'COMMANDSETUPGRADE'
+            ? (readStringField(block.fields, ['CommandSet'])?.trim().toUpperCase() ?? '')
+            : '';
+          const commandSetAltName = moduleType === 'COMMANDSETUPGRADE'
+            ? (readStringField(block.fields, ['CommandSetAlt'])?.trim().toUpperCase() ?? '')
+            : '';
+          const commandSetAltTriggerUpgradeRaw = moduleType === 'COMMANDSETUPGRADE'
+            ? (readStringField(block.fields, ['TriggerAlt'])?.trim().toUpperCase() ?? '')
+            : '';
+          const commandSetAltTriggerUpgrade = commandSetAltTriggerUpgradeRaw && commandSetAltTriggerUpgradeRaw !== 'NONE'
+            ? commandSetAltTriggerUpgradeRaw
+            : null;
+          const moduleId = `${moduleType}:${block.name}:${index}`;
+          index += 1;
+          modules.push({
+            id: moduleId,
+            moduleType,
+            triggeredBy,
+            conflictsWith,
+            removesUpgrades,
+            requiresAllTriggers,
+            addMaxHealth,
+            maxHealthChangeType,
+            statusToSet,
+            statusToClear,
+            commandSetName: commandSetName && commandSetName !== 'NONE' ? commandSetName : null,
+            commandSetAltName: commandSetAltName && commandSetAltName !== 'NONE' ? commandSetAltName : null,
+            commandSetAltTriggerUpgrade,
+          });
+        }
+        // TODO(C&C source parity): port additional UpgradeModule types beyond
+        // Locomotor/MaxHealth/Armor/WeaponSet/CommandSet/StatusBits upgrades.
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return modules;
+  }
+
+  private canExecuteUpgradeModule(
+    entity: MapEntity,
+    module: UpgradeModuleProfile,
+    upgradeMask?: ReadonlySet<string>,
+  ): boolean {
+    return this.wouldUpgradeModuleWithMask(
+      entity,
+      module,
+      upgradeMask ?? this.buildEntityUpgradeMask(entity),
+    );
+  }
+
+  private entityHasUpgrade(entity: MapEntity, upgradeName: string): boolean {
+    const normalizedUpgrade = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgrade || normalizedUpgrade === 'NONE') {
+      return false;
+    }
+
+    if (entity.completedUpgrades.has(normalizedUpgrade)) {
+      return true;
+    }
+
+    const side = this.normalizeSide(entity.side);
+    if (!side) {
+      return false;
+    }
+    return this.getSideUpgradeSet(this.sideCompletedUpgrades, side).has(normalizedUpgrade);
+  }
+
+  private buildEntityUpgradeMask(entity: MapEntity, additionalUpgradeName?: string): Set<string> {
+    const upgradeMask = new Set<string>();
+    for (const upgradeName of entity.completedUpgrades) {
+      upgradeMask.add(upgradeName);
+    }
+
+    const side = this.normalizeSide(entity.side);
+    if (side) {
+      for (const sideUpgrade of this.getSideUpgradeSet(this.sideCompletedUpgrades, side)) {
+        upgradeMask.add(sideUpgrade);
+      }
+    }
+
+    const normalizedAdditional = additionalUpgradeName?.trim().toUpperCase();
+    if (normalizedAdditional && normalizedAdditional !== 'NONE') {
+      upgradeMask.add(normalizedAdditional);
+    }
+
+    return upgradeMask;
+  }
+
+  private wouldUpgradeModuleWithMask(
+    entity: MapEntity,
+    module: UpgradeModuleProfile,
+    upgradeMask: ReadonlySet<string>,
+  ): boolean {
+    if (module.triggeredBy.size === 0 || entity.executedUpgradeModules.has(module.id)) {
+      return false;
+    }
+
+    for (const conflictingUpgrade of module.conflictsWith) {
+      if (upgradeMask.has(conflictingUpgrade)) {
+        return false;
+      }
+    }
+
+    if (module.requiresAllTriggers) {
+      for (const activationUpgrade of module.triggeredBy) {
+        if (!upgradeMask.has(activationUpgrade)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    for (const activationUpgrade of module.triggeredBy) {
+      if (upgradeMask.has(activationUpgrade)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private isEntityAffectedByUpgrade(entity: MapEntity, upgradeName: string): boolean {
+    const normalizedUpgrade = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgrade || normalizedUpgrade === 'NONE') {
+      return false;
+    }
+
+    const maskToCheck = this.buildEntityUpgradeMask(entity, normalizedUpgrade);
+    for (const module of entity.upgradeModules) {
+      if (this.wouldUpgradeModuleWithMask(entity, module, maskToCheck)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private applyMaxHealthUpgrade(
+    entity: MapEntity,
+    addMaxHealth: number,
+    changeType: MaxHealthChangeTypeName,
+  ): boolean {
+    if (!Number.isFinite(addMaxHealth) || addMaxHealth === 0) {
+      return false;
+    }
+
+    const previousMaxHealth = entity.maxHealth;
+    const nextMaxHealth = Math.max(0, previousMaxHealth + addMaxHealth);
+    entity.maxHealth = nextMaxHealth;
+
+    switch (changeType) {
+      case 'PRESERVE_RATIO': {
+        if (previousMaxHealth > 0) {
+          entity.health = nextMaxHealth * (entity.health / previousMaxHealth);
+        }
+        break;
+      }
+      case 'ADD_CURRENT_HEALTH_TOO':
+        entity.health += nextMaxHealth - previousMaxHealth;
+        break;
+      case 'SAME_CURRENTHEALTH':
+      default:
+        break;
+    }
+
+    if (entity.health > entity.maxHealth) {
+      entity.health = entity.maxHealth;
+    }
+    if (entity.health < 0) {
+      entity.health = 0;
+    }
+    entity.canTakeDamage = entity.maxHealth > 0;
+    return true;
+  }
+
+  private applyArmorUpgrade(entity: MapEntity): boolean {
+    entity.armorSetFlagsMask |= ARMOR_SET_FLAG_PLAYER_UPGRADE;
+    this.refreshEntityCombatProfiles(entity);
+    return true;
+  }
+
+  private applyWeaponSetUpgrade(entity: MapEntity): boolean {
+    entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_PLAYER_UPGRADE;
+    this.refreshEntityCombatProfiles(entity);
+    return true;
+  }
+
+  private applyCommandSetUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    let targetCommandSetName = module.commandSetName;
+    if (
+      module.commandSetAltTriggerUpgrade
+      && this.entityHasUpgrade(entity, module.commandSetAltTriggerUpgrade)
+    ) {
+      targetCommandSetName = module.commandSetAltName;
+    }
+
+    if (targetCommandSetName && targetCommandSetName !== 'NONE') {
+      entity.commandSetStringOverride = targetCommandSetName;
+      return true;
+    }
+
+    entity.commandSetStringOverride = null;
+    return true;
+  }
+
+  private applyStatusBitsUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    let changed = false;
+    for (const statusName of module.statusToSet) {
+      if (!entity.objectStatusFlags.has(statusName)) {
+        entity.objectStatusFlags.add(statusName);
+        changed = true;
+      }
+    }
+
+    for (const statusName of module.statusToClear) {
+      if (entity.objectStatusFlags.delete(statusName)) {
+        changed = true;
+      }
+    }
+
+    // TODO(C&C source parity): map ObjectStatus bits to their full simulation side-effects
+    // (disabled/under-construction/targetability/pathing) instead of tracking names only.
+    return changed || module.statusToSet.size > 0 || module.statusToClear.size > 0;
+  }
+
+  private processUpgradeModuleRemovals(entity: MapEntity, module: UpgradeModuleProfile): void {
+    for (const upgradeName of module.removesUpgrades) {
+      this.removeEntityUpgrade(entity, upgradeName);
+    }
+  }
+
+  private removeEntityUpgrade(entity: MapEntity, upgradeName: string): void {
+    const normalizedUpgrade = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgrade || normalizedUpgrade === 'NONE') {
+      return;
+    }
+
+    entity.completedUpgrades.delete(normalizedUpgrade);
+    for (const module of entity.upgradeModules) {
+      if (!module.triggeredBy.has(normalizedUpgrade)) {
+        continue;
+      }
+      entity.executedUpgradeModules.delete(module.id);
+    }
+
+    // TODO(C&C source parity): source resetUpgrade uses compiled UpgradeTemplate masks.
+    // This port currently resets executed module state by normalized TriggeredBy names.
+  }
+
+  private entityHasObjectStatus(entity: MapEntity, statusName: string): boolean {
+    const normalizedStatusName = this.normalizeObjectStatusName(statusName);
+    if (!normalizedStatusName) {
+      return false;
+    }
+    return entity.objectStatusFlags.has(normalizedStatusName);
+  }
+
+  private canEntityAttackFromStatus(entity: MapEntity): boolean {
+    // Source parity: Object::isAbleToAttack() early-outs on OBJECT_STATUS_NO_ATTACK,
+    // OBJECT_STATUS_UNDER_CONSTRUCTION, and OBJECT_STATUS_SOLD.
+    if (this.entityHasObjectStatus(entity, 'NO_ATTACK')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(entity, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(entity, 'SOLD')) {
+      return false;
+    }
+
+    // TODO(C&C source parity): mirror additional isAbleToAttack() blockers
+    // (containment fire rules, disabled states, turret availability, AI module checks).
+    return true;
+  }
+
+  private isEntityStealthedAndUndetected(entity: MapEntity): boolean {
+    return (
+      this.entityHasObjectStatus(entity, 'STEALTHED')
+      && !this.entityHasObjectStatus(entity, 'DETECTED')
+      && !this.entityHasObjectStatus(entity, 'DISGUISED')
+    );
+  }
+
+  private isEntityOffMap(entity: MapEntity): boolean {
+    const heightmap = this.mapHeightmap;
+    if (!heightmap) {
+      return false;
+    }
+
+    // Source parity subset: PartitionFilterSameMapStatus compares Object::isOffMap() between
+    // attacker and candidate. This port infers off-map status from current world position.
+    return (
+      entity.mesh.position.x < 0
+      || entity.mesh.position.z < 0
+      || entity.mesh.position.x >= heightmap.worldWidth
+      || entity.mesh.position.z >= heightmap.worldDepth
+    );
+  }
+
+  private canAttackerTargetEntity(
+    attacker: MapEntity,
+    target: MapEntity,
+    commandSource: AttackCommandSource,
+  ): boolean {
+    if (!target.canTakeDamage || target.destroyed) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'MASKED')) {
+      return false;
+    }
+    if (commandSource === 'AI' && this.entityHasObjectStatus(target, 'NO_ATTACK_FROM_AI')) {
+      return false;
+    }
+    const targetKindOf = this.resolveEntityKindOfSet(target);
+    if (targetKindOf.has('UNATTACKABLE')) {
+      return false;
+    }
+    if (this.getTeamRelationship(attacker, target) !== RELATIONSHIP_ENEMIES) {
+      return false;
+    }
+    if (this.isEntityOffMap(attacker) !== this.isEntityOffMap(target)) {
+      return false;
+    }
+    if (
+      !this.entityHasObjectStatus(attacker, 'IGNORING_STEALTH')
+      && this.isEntityStealthedAndUndetected(target)
+    ) {
+      return false;
+    }
+
+    // TODO(C&C source parity): mirror full WeaponSet::getAbleToAttackSpecificObject rules
+    // (force-attack/same-owner exceptions, disguised disguiser handling,
+    // full Object::isOffMap private-status parity, and fog/shroud constraints).
+    return true;
+  }
+
+  private refreshEntityCombatProfiles(entity: MapEntity): void {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return;
+    }
+
+    const previousWeapon = entity.attackWeapon;
+    entity.attackWeapon = this.resolveAttackWeaponProfileForSetSelection(
+      entity.weaponTemplateSets,
+      entity.weaponSetFlagsMask,
+      registry,
+    );
+    entity.largestWeaponRange = this.resolveLargestWeaponRangeForSetSelection(
+      entity.weaponTemplateSets,
+      entity.weaponSetFlagsMask,
+      registry,
+    );
+    entity.armorDamageCoefficients = this.resolveArmorDamageCoefficientsForSetSelection(
+      entity.armorTemplateSets,
+      entity.armorSetFlagsMask,
+      registry,
+    );
+
+    const nextWeapon = entity.attackWeapon;
+    const scatterTargetPatternChanged = (() => {
+      if (!previousWeapon || !nextWeapon) {
+        return previousWeapon !== nextWeapon;
+      }
+      if (previousWeapon.scatterTargets.length !== nextWeapon.scatterTargets.length) {
+        return true;
+      }
+      for (let index = 0; index < previousWeapon.scatterTargets.length; index += 1) {
+        const previousTarget = previousWeapon.scatterTargets[index];
+        const nextTarget = nextWeapon.scatterTargets[index];
+        if (!previousTarget || !nextTarget) {
+          return true;
+        }
+        if (previousTarget.x !== nextTarget.x || previousTarget.z !== nextTarget.z) {
+          return true;
+        }
+      }
+      return false;
+    })();
+    const weaponChanged = previousWeapon?.name !== nextWeapon?.name
+      || previousWeapon?.clipSize !== nextWeapon?.clipSize
+      || previousWeapon?.clipReloadFrames !== nextWeapon?.clipReloadFrames
+      || previousWeapon?.autoReloadWhenIdleFrames !== nextWeapon?.autoReloadWhenIdleFrames
+      || previousWeapon?.preAttackDelayFrames !== nextWeapon?.preAttackDelayFrames
+      || previousWeapon?.preAttackType !== nextWeapon?.preAttackType
+      || previousWeapon?.projectileObjectName !== nextWeapon?.projectileObjectName
+      || previousWeapon?.scatterTargetScalar !== nextWeapon?.scatterTargetScalar
+      || previousWeapon?.minWeaponSpeed !== nextWeapon?.minWeaponSpeed
+      || previousWeapon?.scaleWeaponSpeed !== nextWeapon?.scaleWeaponSpeed
+      || previousWeapon?.continueAttackRange !== nextWeapon?.continueAttackRange
+      || previousWeapon?.unmodifiedAttackRange !== nextWeapon?.unmodifiedAttackRange
+      || scatterTargetPatternChanged;
+    if (weaponChanged) {
+      this.resetEntityWeaponTimingState(entity);
+      // TODO(C&C source parity): preserve per-slot runtime weapon state when sets change,
+      // instead of resetting timing/clip state on profile refresh.
+    }
+  }
+
+  private msToLogicFrames(milliseconds: number): number {
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+      return 0;
+    }
+    return Math.max(1, Math.ceil(milliseconds / LOGIC_FRAME_MS));
   }
 
   private isMobileObject(objectDef: ObjectDef, kinds: Set<string>): boolean {
@@ -1046,6 +3229,29 @@ export class GameLogicSubsystem implements Subsystem {
 
   private normalizeSide(side?: string): string {
     return side ? side.trim().toLowerCase() : '';
+  }
+
+  private normalizeControllingPlayerToken(token?: string): string | null {
+    if (!token) {
+      return null;
+    }
+    const normalized = token.trim().toLowerCase();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private resolveMapObjectControllingPlayerToken(mapObject: MapObjectJSON): string | null {
+    for (const [key, value] of Object.entries(mapObject.properties)) {
+      if (key.trim().toLowerCase() !== 'originalowner') {
+        continue;
+      }
+
+      return this.normalizeControllingPlayerToken(value);
+    }
+
+    // TODO(C&C source parity): map-converter currently serializes map object property
+    // keys as raw NameKey ids. Decode NameKey ids to well-known names and read
+    // TheKey_originalOwner from numeric-key dictionary entries.
+    return null;
   }
 
   private relationshipKey(sourceSide: string, targetSide: string): string {
@@ -1275,59 +3481,6 @@ export class GameLogicSubsystem implements Subsystem {
     return sets;
   }
 
-  private extractLocomotorUpgradeTriggers(objectDef: ObjectDef | undefined): Set<string> {
-    const upgrades = new Set<string>();
-    if (!objectDef) {
-      return upgrades;
-    }
-
-    const parseScalarTokens = (value: IniValue): string[] => {
-      if (typeof value === 'string') {
-        return value.split(/[\s,;|]+/).filter(Boolean);
-      }
-      if (typeof value === 'number' || typeof value === 'boolean') {
-        return [String(value)];
-      }
-      return [];
-    };
-
-    const parseUpgradeNames = (value: IniValue | undefined): string[] => {
-      if (value === undefined) {
-        return [];
-      }
-      if (Array.isArray(value)) {
-        return value.flatMap((entry) => parseUpgradeNames(entry as IniValue));
-      }
-      return parseScalarTokens(value)
-        .map((token) => token.trim().toUpperCase())
-        .filter((token) => token.length > 0 && token !== 'NONE');
-    };
-
-    const visitBlock = (block: IniBlock): void => {
-      const moduleToken = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-      if (moduleToken === 'LOCOMOTORSETUPGRADE' || block.type.toUpperCase() === 'LOCOMOTORSETUPGRADE') {
-        for (const [fieldName, fieldValue] of Object.entries(block.fields)) {
-          if (fieldName.toUpperCase() !== 'TRIGGEREDBY') {
-            continue;
-          }
-          const names = parseUpgradeNames(fieldValue);
-          for (const name of names) {
-            upgrades.add(name);
-          }
-        }
-      }
-      for (const child of block.blocks) {
-        visitBlock(child);
-      }
-    };
-
-    for (const block of objectDef.blocks) {
-      visitBlock(block);
-    }
-
-    return upgrades;
-  }
-
   private resolveObstacleGeometry(objectDef: ObjectDef | undefined): ObstacleGeometry | null {
     if (!objectDef) {
       return null;
@@ -1540,9 +3693,11 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'moveTo':
+        this.clearAttackTarget(command.entityId);
         this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
         return;
       case 'attackMoveTo':
+        this.clearAttackTarget(command.entityId);
         this.issueMoveTo(
           command.entityId,
           command.targetX,
@@ -1550,7 +3705,15 @@ export class GameLogicSubsystem implements Subsystem {
           command.attackDistance,
         );
         return;
+      case 'attackEntity':
+        this.issueAttackEntity(
+          command.entityId,
+          command.targetEntityId,
+          command.commandSource ?? 'PLAYER',
+        );
+        return;
       case 'stop':
+        this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
         return;
       case 'bridgeDestroyed':
@@ -1568,9 +3731,1159 @@ export class GameLogicSubsystem implements Subsystem {
       case 'applyUpgrade':
         this.applyUpgradeToEntity(command.entityId, command.upgradeName);
         return;
+      case 'queueUnitProduction':
+        this.queueUnitProduction(command.entityId, command.unitTemplateName);
+        return;
+      case 'cancelUnitProduction':
+        this.cancelUnitProduction(command.entityId, command.productionId);
+        return;
+      case 'queueUpgradeProduction':
+        this.queueUpgradeProduction(command.entityId, command.upgradeName);
+        return;
+      case 'cancelUpgradeProduction':
+        this.cancelUpgradeProduction(command.entityId, command.upgradeName);
+        return;
+      case 'setSideCredits':
+        this.setSideCredits(command.side, command.amount);
+        return;
+      case 'addSideCredits':
+        this.addSideCredits(command.side, command.amount);
+        return;
+      case 'setSidePlayerType':
+        this.setSidePlayerType(command.side, command.playerType);
+        return;
+      case 'grantSideScience':
+        this.grantSideScience(command.side, command.scienceName);
+        return;
       default:
         return;
     }
+  }
+
+  private queueUnitProduction(entityId: number, unitTemplateName: string): boolean {
+    const producer = this.spawnedEntities.get(entityId);
+    if (!producer || producer.destroyed) {
+      return false;
+    }
+    const productionProfile = producer.productionProfile;
+    if (!productionProfile) {
+      return false;
+    }
+    if (producer.productionQueue.length >= productionProfile.maxQueueEntries) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const unitDef = this.findObjectDefByName(registry, unitTemplateName);
+    if (!unitDef) {
+      return false;
+    }
+
+    const producerSide = this.normalizeSide(producer.side);
+    if (!producerSide) {
+      // TODO(C&C source parity): map producer ownership to full Player data instead of side-string buckets.
+      return false;
+    }
+
+    if (!this.canSideBuildUnitTemplate(producerSide, unitDef)) {
+      return false;
+    }
+
+    // Source parity: buildability/queue-limit checks must happen before spending money.
+    const normalizedTemplateName = unitDef.name;
+    const maxSimultaneousOfType = this.resolveMaxSimultaneousOfType(unitDef);
+    if (maxSimultaneousOfType > 0) {
+      const existingCount = this.countActiveEntitiesForMaxSimultaneousForSide(producerSide, unitDef);
+      const queuedCount = this.isStructureObjectDef(unitDef)
+        ? 0
+        : this.countQueuedUnitsForMaxSimultaneousForSide(producerSide, unitDef);
+      if (existingCount + queuedCount >= maxSimultaneousOfType) {
+        return false;
+      }
+    }
+
+    if (!this.hasAvailableParkingSpaceFor(producer, unitDef)) {
+      return false;
+    }
+
+    // TODO(C&C source parity): add remaining BuildAssistant checks beyond parking capacity/door reservation.
+
+    // TODO(C&C source parity): include ThingTemplate::calcCostToBuild modifiers (handicap, faction production cost changes).
+    const buildCost = this.resolveObjectBuildCost(unitDef);
+    if (buildCost > this.getSideCredits(producerSide)) {
+      return false;
+    }
+    const withdrawn = this.withdrawSideCredits(producerSide, buildCost);
+    if (withdrawn < buildCost) {
+      return false;
+    }
+
+    const totalProductionFrames = this.resolveObjectBuildTimeFrames(unitDef);
+    const productionQuantityTotal = this.resolveProductionQuantity(producer, normalizedTemplateName);
+    const productionId = producer.productionNextId++;
+
+    producer.productionQueue.push({
+      type: 'UNIT',
+      templateName: normalizedTemplateName,
+      productionId,
+      buildCost,
+      totalProductionFrames,
+      framesUnderConstruction: 0,
+      percentComplete: 0,
+      productionQuantityTotal,
+      productionQuantityProduced: 0,
+    });
+
+    if (!this.reserveParkingDoorForQueuedUnit(producer, unitDef, productionId)) {
+      this.removeProductionEntry(producer, productionId);
+      this.depositSideCredits(producer.side, buildCost);
+      return false;
+    }
+
+    return true;
+  }
+
+  private hasAvailableParkingSpaceFor(producer: MapEntity, unitDef: ObjectDef): boolean {
+    const parkingProfile = producer.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return true;
+    }
+
+    if (!this.shouldReserveParkingDoorWhenQueued(unitDef)) {
+      return true;
+    }
+
+    this.pruneParkingOccupancy(producer);
+    this.pruneParkingReservations(producer);
+    return (parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size)
+      < parkingProfile.totalSpaces;
+  }
+
+  private shouldReserveParkingDoorWhenQueued(unitDef: ObjectDef): boolean {
+    // Source parity: ParkingPlaceBehavior::shouldReserveDoorWhenQueued() bypasses parking
+    // reservation for KINDOF_PRODUCED_AT_HELIPAD units.
+    return !this.normalizeKindOf(unitDef.kindOf).has('PRODUCED_AT_HELIPAD');
+  }
+
+  private reserveParkingDoorForQueuedUnit(
+    producer: MapEntity,
+    unitDef: ObjectDef,
+    productionId: number,
+  ): boolean {
+    const parkingProfile = producer.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return true;
+    }
+
+    if (!this.shouldReserveParkingDoorWhenQueued(unitDef)) {
+      return true;
+    }
+
+    this.pruneParkingOccupancy(producer);
+    this.pruneParkingReservations(producer);
+    if ((parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size) >= parkingProfile.totalSpaces) {
+      return false;
+    }
+
+    // Source parity subset: ProductionUpdate::queueCreateUnit() reserves an exit door up front
+    // via ParkingPlaceBehavior::reserveDoorForExit() for units that require hangar parking.
+    parkingProfile.reservedProductionIds.add(productionId);
+    return true;
+  }
+
+  private releaseParkingDoorReservationForProduction(producer: MapEntity, productionId: number): void {
+    const parkingProfile = producer.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return;
+    }
+    parkingProfile.reservedProductionIds.delete(productionId);
+  }
+
+  private pruneParkingReservations(producer: MapEntity): void {
+    const parkingProfile = producer.parkingPlaceProfile;
+    if (!parkingProfile || parkingProfile.reservedProductionIds.size === 0) {
+      return;
+    }
+
+    const activeUnitProductionIds = new Set<number>();
+    for (const entry of producer.productionQueue) {
+      if (entry.type === 'UNIT') {
+        activeUnitProductionIds.add(entry.productionId);
+      }
+    }
+
+    for (const reservedProductionId of Array.from(parkingProfile.reservedProductionIds.values())) {
+      if (!activeUnitProductionIds.has(reservedProductionId)) {
+        parkingProfile.reservedProductionIds.delete(reservedProductionId);
+      }
+    }
+  }
+
+  private pruneParkingOccupancy(producer: MapEntity): void {
+    const parkingProfile = producer.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return;
+    }
+
+    for (const occupiedEntityId of Array.from(parkingProfile.occupiedSpaceEntityIds.values())) {
+      const occupiedEntity = this.spawnedEntities.get(occupiedEntityId);
+      if (!occupiedEntity || occupiedEntity.destroyed) {
+        parkingProfile.occupiedSpaceEntityIds.delete(occupiedEntityId);
+      }
+    }
+  }
+
+  private canSideBuildUnitTemplate(side: string, unitDef: ObjectDef): boolean {
+    const buildableStatus = this.resolveBuildableStatus(unitDef);
+    if (buildableStatus === 'NO') {
+      return false;
+    }
+    if (buildableStatus === 'ONLY_BY_AI' && this.getSidePlayerType(side) !== 'COMPUTER') {
+      return false;
+    }
+    if (buildableStatus === 'IGNORE_PREREQUISITES') {
+      return true;
+    }
+
+    for (const prereqGroup of this.extractProductionPrerequisiteGroups(unitDef)) {
+      if (prereqGroup.objectAlternatives.length > 0) {
+        let objectSatisfied = false;
+        for (const alternativeName of prereqGroup.objectAlternatives) {
+          if (this.countActiveEntitiesOfTemplateForSide(side, alternativeName) > 0) {
+            objectSatisfied = true;
+            break;
+          }
+        }
+        if (!objectSatisfied) {
+          return false;
+        }
+      }
+
+      if (prereqGroup.scienceRequirements.length > 0) {
+        for (const requiredScience of prereqGroup.scienceRequirements) {
+          if (!this.hasSideScience(side, requiredScience)) {
+            return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  }
+
+  private resolveBuildableStatus(objectDef: ObjectDef): 'YES' | 'IGNORE_PREREQUISITES' | 'NO' | 'ONLY_BY_AI' {
+    const tokens = this.extractIniValueTokens(objectDef.fields['Buildable']).flatMap((group) => group);
+    const token = tokens[0]?.trim().toUpperCase() ?? '';
+    if (token === 'IGNORE_PREREQUISITES') {
+      return 'IGNORE_PREREQUISITES';
+    }
+    if (token === 'NO') {
+      return 'NO';
+    }
+    if (token === 'ONLY_BY_AI') {
+      return 'ONLY_BY_AI';
+    }
+    if (token === 'YES') {
+      return 'YES';
+    }
+
+    const numericStatus = readNumericField(objectDef.fields, ['Buildable']);
+    if (numericStatus !== null) {
+      const normalized = Math.trunc(numericStatus);
+      if (normalized === 1) {
+        return 'IGNORE_PREREQUISITES';
+      }
+      if (normalized === 2) {
+        return 'NO';
+      }
+      if (normalized === 3) {
+        return 'ONLY_BY_AI';
+      }
+      return 'YES';
+    }
+
+    return 'YES';
+  }
+
+  private extractProductionPrerequisiteGroups(objectDef: ObjectDef): ProductionPrerequisiteGroup[] {
+    const groups: ProductionPrerequisiteGroup[] = [];
+
+    const addObjectGroup = (names: string[]): void => {
+      const normalized = names
+        .map((name) => name.trim().toUpperCase())
+        .filter((name) => name.length > 0 && name !== 'NONE');
+      if (normalized.length === 0) {
+        return;
+      }
+      groups.push({ objectAlternatives: normalized, scienceRequirements: [] });
+    };
+
+    const addScienceGroup = (names: string[]): void => {
+      const normalized = names
+        .map((name) => name.trim().toUpperCase())
+        .filter((name) => name.length > 0 && name !== 'NONE');
+      if (normalized.length === 0) {
+        return;
+      }
+      groups.push({ objectAlternatives: [], scienceRequirements: normalized });
+    };
+
+    const parseTokensAsPrereqGroup = (tokens: string[]): void => {
+      if (tokens.length === 0) {
+        return;
+      }
+      const head = tokens[0]?.trim().toUpperCase() ?? '';
+      const tail = tokens.slice(1);
+      if (head === 'OBJECT') {
+        addObjectGroup(tail);
+      } else if (head === 'SCIENCE') {
+        addScienceGroup(tail);
+      }
+    };
+
+    const parsePrereqValueWithPrefix = (prefix: 'OBJECT' | 'SCIENCE', value: IniValue | undefined): void => {
+      for (const tokens of this.extractIniValueTokens(value)) {
+        if (prefix === 'OBJECT') {
+          addObjectGroup(tokens);
+        } else {
+          addScienceGroup(tokens);
+        }
+      }
+    };
+
+    for (const tokens of this.extractIniValueTokens(objectDef.fields['Prerequisites'])) {
+      parseTokensAsPrereqGroup(tokens);
+    }
+    for (const tokens of this.extractIniValueTokens(objectDef.fields['Prerequisite'])) {
+      parseTokensAsPrereqGroup(tokens);
+    }
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'PREREQUISITE' || blockType === 'PREREQUISITES') {
+        const headerTokens = block.name
+          .split(/[\s,;|]+/)
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0);
+        parseTokensAsPrereqGroup(headerTokens);
+
+        parsePrereqValueWithPrefix('OBJECT', block.fields['Object']);
+        parsePrereqValueWithPrefix('SCIENCE', block.fields['Science']);
+        parsePrereqValueWithPrefix('OBJECT', block.fields['OBJECT']);
+        parsePrereqValueWithPrefix('SCIENCE', block.fields['SCIENCE']);
+      }
+
+      if (blockType === 'OBJECT') {
+        const names = block.name
+          .split(/[\s,;|]+/)
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0);
+        if (names.length > 0) {
+          addObjectGroup(names);
+        }
+      } else if (blockType === 'SCIENCE') {
+        const sciences = block.name
+          .split(/[\s,;|]+/)
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0);
+        if (sciences.length > 0) {
+          addScienceGroup(sciences);
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return groups;
+  }
+
+  private cancelUnitProduction(entityId: number, productionId: number): boolean {
+    const producer = this.spawnedEntities.get(entityId);
+    if (!producer || producer.destroyed) {
+      return false;
+    }
+
+    const index = producer.productionQueue.findIndex((entry) => entry.type === 'UNIT' && entry.productionId === productionId);
+    if (index < 0) {
+      return false;
+    }
+
+    const [removed] = producer.productionQueue.splice(index, 1);
+    if (removed) {
+      if (removed.type === 'UNIT') {
+        this.releaseParkingDoorReservationForProduction(producer, removed.productionId);
+      }
+      if (removed.type === 'UPGRADE' && removed.upgradeType === 'PLAYER') {
+        this.setSideUpgradeInProduction(producer.side ?? '', removed.upgradeName, false);
+      }
+      const refunded = removed.buildCost;
+      this.depositSideCredits(producer.side, refunded);
+    }
+    return true;
+  }
+
+  private queueUpgradeProduction(entityId: number, upgradeName: string): boolean {
+    const producer = this.spawnedEntities.get(entityId);
+    if (!producer || producer.destroyed) {
+      return false;
+    }
+    const productionProfile = producer.productionProfile;
+    if (!productionProfile) {
+      return false;
+    }
+    if (producer.productionQueue.length >= productionProfile.maxQueueEntries) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const upgradeDef = this.findUpgradeDefByName(registry, upgradeName);
+    if (!upgradeDef) {
+      return false;
+    }
+
+    const normalizedUpgradeName = upgradeDef.name.trim().toUpperCase();
+    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
+      return false;
+    }
+
+    const producerSide = this.normalizeSide(producer.side);
+    if (!producerSide) {
+      // TODO(C&C source parity): map producer ownership to full Player data instead of side-string buckets.
+      return false;
+    }
+
+    const upgradeType = this.resolveUpgradeType(upgradeDef);
+    if (producer.productionQueue.some((entry) => entry.type === 'UPGRADE' && entry.upgradeName === normalizedUpgradeName)) {
+      return false;
+    }
+
+    if (upgradeType === 'PLAYER') {
+      if (this.hasSideUpgradeCompleted(producerSide, normalizedUpgradeName)) {
+        return false;
+      }
+      if (this.hasSideUpgradeInProduction(producerSide, normalizedUpgradeName)) {
+        return false;
+      }
+    } else if (upgradeType === 'OBJECT') {
+      if (producer.completedUpgrades.has(normalizedUpgradeName)) {
+        return false;
+      }
+      if (!this.isEntityAffectedByUpgrade(producer, normalizedUpgradeName)) {
+        return false;
+      }
+    }
+
+    if (!this.canEntityProduceUpgrade(producer, upgradeDef, upgradeType)) {
+      return false;
+    }
+
+    // TODO(C&C source parity): port exact UpgradeCenter::canAffordUpgrade behavior (calcCostToBuild modifiers, possibly-scripted rules).
+    const buildCost = this.resolveUpgradeBuildCost(upgradeDef);
+    if (buildCost > this.getSideCredits(producerSide)) {
+      return false;
+    }
+    const withdrawn = this.withdrawSideCredits(producerSide, buildCost);
+    if (withdrawn < buildCost) {
+      return false;
+    }
+
+    const totalProductionFrames = this.resolveUpgradeBuildTimeFrames(upgradeDef);
+    producer.productionQueue.push({
+      type: 'UPGRADE',
+      upgradeName: normalizedUpgradeName,
+      productionId: producer.productionNextId++,
+      buildCost,
+      totalProductionFrames,
+      framesUnderConstruction: 0,
+      percentComplete: 0,
+      upgradeType,
+    });
+    if (upgradeType === 'PLAYER') {
+      this.setSideUpgradeInProduction(producerSide, normalizedUpgradeName, true);
+    }
+
+    return true;
+  }
+
+  private canEntityProduceUpgrade(
+    producer: MapEntity,
+    upgradeDef: UpgradeDef,
+    upgradeType: 'PLAYER' | 'OBJECT',
+  ): boolean {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const producerObjectDef = this.findObjectDefByName(registry, producer.templateName);
+    if (!producerObjectDef) {
+      return false;
+    }
+
+    // Source parity: Object::canProduceUpgrade() checks the current command set for an
+    // explicit PLAYER_UPGRADE/OBJECT_UPGRADE button matching the requested upgrade.
+    const commandSetName = this.resolveEntityCommandSetName(producer, producerObjectDef);
+    if (!commandSetName) {
+      // TODO(C&C source parity): mirror script-driven command-set override mutations that bypass
+      // CommandSetUpgrade module execution in this port.
+      return true;
+    }
+
+    const commandSetDef = this.findCommandSetDefByName(registry, commandSetName);
+    if (!commandSetDef) {
+      return false;
+    }
+
+    const expectedCommandType = upgradeType === 'PLAYER' ? 'PLAYER_UPGRADE' : 'OBJECT_UPGRADE';
+    const normalizedUpgradeName = upgradeDef.name.trim().toUpperCase();
+    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
+      return false;
+    }
+
+    for (let buttonSlot = 1; buttonSlot <= 12; buttonSlot += 1) {
+      const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      if (!commandButtonName) {
+        continue;
+      }
+
+      const commandButtonDef = this.findCommandButtonDefByName(registry, commandButtonName);
+      if (!commandButtonDef) {
+        continue;
+      }
+
+      const commandType = this.resolveCommandButtonType(commandButtonDef);
+      if (commandType !== expectedCommandType) {
+        continue;
+      }
+
+      const commandUpgradeName = readStringField(commandButtonDef.fields, ['Upgrade'])?.trim().toUpperCase() ?? '';
+      if (commandUpgradeName === normalizedUpgradeName) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private resolveEntityCommandSetName(entity: MapEntity, objectDef: ObjectDef): string | null {
+    if (entity.commandSetStringOverride && entity.commandSetStringOverride !== 'NONE') {
+      return entity.commandSetStringOverride;
+    }
+
+    const baseCommandSet = readStringField(objectDef.fields, ['CommandSet'])?.trim().toUpperCase() ?? '';
+    if (!baseCommandSet || baseCommandSet === 'NONE') {
+      return null;
+    }
+    return baseCommandSet;
+  }
+
+  private resolveCommandButtonType(commandButtonDef: CommandButtonDef): string | null {
+    const commandToken = readStringField(commandButtonDef.fields, ['Command'])?.trim().toUpperCase();
+    if (!commandToken) {
+      return null;
+    }
+
+    if (commandToken.startsWith('GUI_COMMAND_')) {
+      return commandToken.slice('GUI_COMMAND_'.length);
+    }
+    return commandToken;
+  }
+
+  private cancelUpgradeProduction(entityId: number, upgradeName: string): boolean {
+    const producer = this.spawnedEntities.get(entityId);
+    if (!producer || producer.destroyed) {
+      return false;
+    }
+
+    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgradeName) {
+      return false;
+    }
+
+    const index = producer.productionQueue.findIndex(
+      (entry) => entry.type === 'UPGRADE' && entry.upgradeName === normalizedUpgradeName,
+    );
+    if (index < 0) {
+      return false;
+    }
+
+    const [removed] = producer.productionQueue.splice(index, 1);
+    if (!removed || removed.type !== 'UPGRADE') {
+      return false;
+    }
+
+    if (removed.upgradeType === 'PLAYER') {
+      this.setSideUpgradeInProduction(producer.side ?? '', removed.upgradeName, false);
+    }
+    this.depositSideCredits(producer.side, removed.buildCost);
+    return true;
+  }
+
+  private resolveObjectBuildTimeFrames(objectDef: ObjectDef): number {
+    const buildTimeSeconds = readNumericField(objectDef.fields, ['BuildTime']) ?? 1;
+    if (!Number.isFinite(buildTimeSeconds)) {
+      return 0;
+    }
+    return Math.trunc(buildTimeSeconds * LOGIC_FRAME_RATE);
+  }
+
+  private resolveObjectBuildCost(objectDef: ObjectDef): number {
+    const buildCostRaw = readNumericField(objectDef.fields, ['BuildCost']) ?? 0;
+    if (!Number.isFinite(buildCostRaw)) {
+      return 0;
+    }
+    return Math.max(0, Math.trunc(buildCostRaw));
+  }
+
+  private resolveMaxSimultaneousOfType(objectDef: ObjectDef): number {
+    const maxKeyword = readStringField(objectDef.fields, ['MaxSimultaneousOfType'])?.trim().toUpperCase();
+    if (maxKeyword === 'DETERMINEDBYSUPERWEAPONRESTRICTION') {
+      // TODO(C&C source parity): wire GameInfo superweapon restrictions into max-simultaneous evaluation.
+      return 0;
+    }
+
+    const maxRaw = readNumericField(objectDef.fields, ['MaxSimultaneousOfType']) ?? 0;
+    if (!Number.isFinite(maxRaw)) {
+      return 0;
+    }
+    return Math.max(0, Math.trunc(maxRaw));
+  }
+
+  private resolveMaxSimultaneousLinkKey(objectDef: ObjectDef): string | null {
+    const rawLinkKey = readStringField(objectDef.fields, ['MaxSimultaneousLinkKey'])?.trim().toUpperCase() ?? '';
+    if (!rawLinkKey || rawLinkKey === 'NONE') {
+      return null;
+    }
+    return rawLinkKey;
+  }
+
+  private isStructureObjectDef(objectDef: ObjectDef): boolean {
+    return this.normalizeKindOf(objectDef.kindOf).has('STRUCTURE');
+  }
+
+  private doesTemplateMatchMaxSimultaneousType(targetObjectDef: ObjectDef, candidateTemplateName: string): boolean {
+    const normalizedTargetName = targetObjectDef.name.trim().toUpperCase();
+    if (!normalizedTargetName) {
+      return false;
+    }
+
+    if (this.areEquivalentTemplateNames(candidateTemplateName, normalizedTargetName)) {
+      return true;
+    }
+
+    const targetLinkKey = this.resolveMaxSimultaneousLinkKey(targetObjectDef);
+    if (!targetLinkKey) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const candidateDef = this.findObjectDefByName(registry, candidateTemplateName);
+    if (!candidateDef) {
+      return false;
+    }
+
+    const candidateLinkKey = this.resolveMaxSimultaneousLinkKey(candidateDef);
+    return candidateLinkKey !== null && candidateLinkKey === targetLinkKey;
+  }
+
+  private countActiveEntitiesForMaxSimultaneousForSide(side: string, targetObjectDef: ObjectDef): number {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return 0;
+    }
+
+    let count = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (!this.doesTemplateMatchMaxSimultaneousType(targetObjectDef, entity.templateName)) {
+        continue;
+      }
+      count += 1;
+    }
+
+    return count;
+  }
+
+  private countQueuedUnitsForMaxSimultaneousForSide(side: string, targetObjectDef: ObjectDef): number {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return 0;
+    }
+
+    let count = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      for (const queueEntry of entity.productionQueue) {
+        if (queueEntry.type !== 'UNIT') {
+          continue;
+        }
+        if (this.doesTemplateMatchMaxSimultaneousType(targetObjectDef, queueEntry.templateName)) {
+          count += 1;
+        }
+      }
+    }
+
+    return count;
+  }
+
+  private extractBuildVariationNames(objectDef: ObjectDef | undefined): Set<string> {
+    const names = new Set<string>();
+    if (!objectDef) {
+      return names;
+    }
+
+    for (const tokens of this.extractIniValueTokens(objectDef.fields['BuildVariations'])) {
+      for (const token of tokens) {
+        const normalized = token.trim().toUpperCase();
+        if (!normalized || normalized === 'NONE') {
+          continue;
+        }
+        names.add(normalized);
+      }
+    }
+
+    return names;
+  }
+
+  private areEquivalentObjectTemplates(left: ObjectDef | undefined, right: ObjectDef | undefined): boolean {
+    if (!left || !right) {
+      return false;
+    }
+
+    const leftName = left.name.trim().toUpperCase();
+    const rightName = right.name.trim().toUpperCase();
+    if (!leftName || !rightName) {
+      return false;
+    }
+    if (leftName === rightName) {
+      return true;
+    }
+
+    // Source parity: ThingTemplate::isEquivalentTo() compares direct equality, final overrides,
+    // reskin ancestry, and BuildVariations both directions. Registry data currently exposes
+    // BuildVariations reliably, but not final-override/reskin links.
+    const leftVariations = this.extractBuildVariationNames(left);
+    if (leftVariations.has(rightName)) {
+      return true;
+    }
+    const rightVariations = this.extractBuildVariationNames(right);
+    if (rightVariations.has(leftName)) {
+      return true;
+    }
+
+    // TODO(C&C source parity): include final-override and reskin ancestry equivalence checks once represented in ini-data registry.
+    return false;
+  }
+
+  private areEquivalentTemplateNames(leftTemplateName: string, rightTemplateName: string): boolean {
+    const normalizedLeft = leftTemplateName.trim().toUpperCase();
+    const normalizedRight = rightTemplateName.trim().toUpperCase();
+    if (!normalizedLeft || !normalizedRight) {
+      return false;
+    }
+    if (normalizedLeft === normalizedRight) {
+      return true;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const leftDef = this.findObjectDefByName(registry, normalizedLeft);
+    const rightDef = this.findObjectDefByName(registry, normalizedRight);
+    return this.areEquivalentObjectTemplates(leftDef, rightDef);
+  }
+
+  private countActiveEntitiesOfTemplateForSide(side: string, templateName: string): number {
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedTemplateName) {
+      return 0;
+    }
+
+    let count = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (!this.areEquivalentTemplateNames(entity.templateName, normalizedTemplateName)) {
+        continue;
+      }
+      count += 1;
+    }
+
+    return count;
+  }
+
+  private resolveProductionQuantity(producer: MapEntity, templateName: string): number {
+    const productionProfile = producer.productionProfile;
+    if (!productionProfile) {
+      return 1;
+    }
+
+    for (const modifier of productionProfile.quantityModifiers) {
+      if (!this.areEquivalentTemplateNames(modifier.templateName, templateName)) {
+        continue;
+      }
+      return Math.max(1, modifier.quantity);
+    }
+
+    return 1;
+  }
+
+  private updateProduction(): void {
+    for (const producer of this.spawnedEntities.values()) {
+      if (producer.destroyed || producer.productionProfile === null) {
+        continue;
+      }
+
+      this.updateQueueExitGate(producer);
+
+      const production = producer.productionQueue[0];
+      if (!production) {
+        continue;
+      }
+
+      production.framesUnderConstruction += 1;
+      if (production.totalProductionFrames <= 0) {
+        production.percentComplete = 100;
+      } else {
+        production.percentComplete = (production.framesUnderConstruction / production.totalProductionFrames) * 100;
+      }
+
+      if (production.percentComplete < 100) {
+        continue;
+      }
+
+      if (production.type === 'UNIT') {
+        this.completeUnitProduction(producer, production);
+      } else if (production.type === 'UPGRADE') {
+        this.completeUpgradeProduction(producer, production);
+      }
+    }
+  }
+
+  private updateQueueExitGate(producer: MapEntity): void {
+    if (!producer.queueProductionExitProfile) {
+      return;
+    }
+
+    const isFreeToExit = producer.queueProductionExitBurstRemaining > 0
+      || producer.queueProductionExitDelayFramesRemaining === 0;
+    if (isFreeToExit) {
+      producer.queueProductionExitDelayFramesRemaining = 0;
+      return;
+    }
+
+    producer.queueProductionExitDelayFramesRemaining = Math.max(
+      0,
+      producer.queueProductionExitDelayFramesRemaining - 1,
+    );
+  }
+
+  private completeUnitProduction(producer: MapEntity, production: UnitProductionQueueEntry): void {
+    if (!producer.queueProductionExitProfile) {
+      // TODO(C&C source parity): support additional ExitInterface modules (SpawnPointProductionExitUpdate).
+      this.removeProductionEntry(producer, production.productionId);
+      return;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      this.removeProductionEntry(producer, production.productionId);
+      return;
+    }
+
+    const unitDef = this.findObjectDefByName(registry, production.templateName);
+    if (!unitDef) {
+      this.removeProductionEntry(producer, production.productionId);
+      return;
+    }
+
+    let shouldRemoveEntry = false;
+    while (production.productionQuantityProduced < production.productionQuantityTotal) {
+      const canExit = producer.queueProductionExitBurstRemaining > 0
+        || producer.queueProductionExitDelayFramesRemaining === 0;
+      if (!canExit) {
+        break;
+      }
+
+      if (!this.canExitProducedUnitViaParking(producer, unitDef, production.productionId)) {
+        break;
+      }
+
+      const produced = this.spawnProducedUnit(producer, unitDef, production.productionId);
+      if (!produced) {
+        shouldRemoveEntry = true;
+        break;
+      }
+
+      production.productionQuantityProduced += 1;
+      producer.queueProductionExitDelayFramesRemaining = producer.queueProductionExitProfile.exitDelayFrames;
+      if (producer.queueProductionExitBurstRemaining > 0) {
+        producer.queueProductionExitBurstRemaining -= 1;
+      }
+    }
+
+    if (shouldRemoveEntry || production.productionQuantityProduced >= production.productionQuantityTotal) {
+      this.removeProductionEntry(producer, production.productionId);
+    }
+  }
+
+  private completeUpgradeProduction(producer: MapEntity, production: UpgradeProductionQueueEntry): void {
+    if (production.upgradeType === 'PLAYER') {
+      this.setSideUpgradeInProduction(producer.side ?? '', production.upgradeName, false);
+      this.setSideUpgradeCompleted(producer.side ?? '', production.upgradeName, true);
+      this.applyCompletedPlayerUpgrade(producer.side ?? '', production.upgradeName);
+    } else {
+      this.applyUpgradeToEntity(producer.id, production.upgradeName);
+    }
+
+    this.removeProductionEntry(producer, production.productionId);
+  }
+
+  private applyCompletedPlayerUpgrade(side: string, upgradeName: string): void {
+    void upgradeName;
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (entity.destroyed) {
+        continue;
+      }
+      this.executePendingUpgradeModules(entity.id, entity);
+    }
+  }
+
+  private removeProductionEntry(producer: MapEntity, productionId: number): void {
+    const index = producer.productionQueue.findIndex((entry) => entry.productionId === productionId);
+    if (index >= 0) {
+      const [removed] = producer.productionQueue.splice(index, 1);
+      if (removed?.type === 'UNIT') {
+        this.releaseParkingDoorReservationForProduction(producer, removed.productionId);
+      }
+    }
+  }
+
+  private canExitProducedUnitViaParking(
+    producer: MapEntity,
+    unitDef: ObjectDef,
+    productionId: number,
+  ): boolean {
+    const parkingProfile = producer.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return true;
+    }
+
+    if (!this.shouldReserveParkingDoorWhenQueued(unitDef)) {
+      return true;
+    }
+
+    this.pruneParkingOccupancy(producer);
+    this.pruneParkingReservations(producer);
+    if (parkingProfile.reservedProductionIds.has(productionId)) {
+      return true;
+    }
+
+    return (parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size)
+      < parkingProfile.totalSpaces;
+  }
+
+  private spawnProducedUnit(producer: MapEntity, unitDef: ObjectDef, productionId: number): MapEntity | null {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return null;
+    }
+
+    const spawnLocation = this.resolveQueueSpawnLocation(producer);
+    if (!spawnLocation) {
+      return null;
+    }
+
+    const mapObject: MapObjectJSON = {
+      templateName: unitDef.name,
+      angle: THREE.MathUtils.radToDeg(producer.mesh.rotation.y),
+      flags: 0,
+      position: {
+        x: spawnLocation.x,
+        y: spawnLocation.z,
+        z: spawnLocation.heightOffset,
+      },
+      properties: {},
+    };
+    const created = this.createMapEntity(mapObject, unitDef, registry, this.mapHeightmap);
+    if (producer.side !== undefined) {
+      created.side = producer.side;
+      created.mesh.material = this.getMaterial({
+        category: created.category,
+        resolved: created.resolved,
+        side: created.side,
+        selected: created.selected,
+      });
+    }
+    created.controllingPlayerToken = producer.controllingPlayerToken;
+
+    if (!this.reserveParkingSpaceForProducedUnit(producer, created, unitDef, productionId)) {
+      return null;
+    }
+
+    this.spawnedEntities.set(created.id, created);
+    this.scene.add(created.mesh);
+    this.applyQueueProductionNaturalRallyPoint(producer, created);
+
+    return created;
+  }
+
+  private reserveParkingSpaceForProducedUnit(
+    producer: MapEntity,
+    producedUnit: MapEntity,
+    producedUnitDef: ObjectDef,
+    productionId: number,
+  ): boolean {
+    const parkingProfile = producer.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return true;
+    }
+
+    if (!this.shouldReserveParkingDoorWhenQueued(producedUnitDef)) {
+      return true;
+    }
+
+    this.pruneParkingOccupancy(producer);
+    this.pruneParkingReservations(producer);
+    if (parkingProfile.reservedProductionIds.has(productionId)) {
+      parkingProfile.reservedProductionIds.delete(productionId);
+    } else if ((parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size) >= parkingProfile.totalSpaces) {
+      return false;
+    }
+
+    parkingProfile.occupiedSpaceEntityIds.add(producedUnit.id);
+    producedUnit.parkingSpaceProducerId = producer.id;
+    return true;
+  }
+
+  private resolveQueueSpawnLocation(producer: MapEntity): {
+    x: number;
+    z: number;
+    heightOffset: number;
+  } | null {
+    const exitProfile = producer.queueProductionExitProfile;
+    if (!exitProfile) {
+      return null;
+    }
+
+    const yaw = producer.mesh.rotation.y;
+    const cos = Math.cos(yaw);
+    const sin = Math.sin(yaw);
+    const local = exitProfile.unitCreatePoint;
+    const x = producer.mesh.position.x + (local.x * cos - local.y * sin);
+    const z = producer.mesh.position.z + (local.x * sin + local.y * cos);
+    const terrainHeight = this.mapHeightmap ? this.mapHeightmap.getInterpolatedHeight(x, z) : 0;
+    const producerBaseY = producer.mesh.position.y - producer.baseHeight;
+    let worldY = producerBaseY + local.z;
+    const creationInAir = Math.abs(worldY - terrainHeight) > 0.0001;
+    if (creationInAir && !exitProfile.allowAirborneCreation) {
+      worldY = terrainHeight;
+    }
+
+    return {
+      x,
+      z,
+      heightOffset: worldY - terrainHeight,
+    };
+  }
+
+  private applyQueueProductionNaturalRallyPoint(producer: MapEntity, producedUnit: MapEntity): void {
+    const exitProfile = producer.queueProductionExitProfile;
+    if (!exitProfile || !exitProfile.naturalRallyPoint || !producedUnit.canMove) {
+      return;
+    }
+
+    const rallyPoint = { ...exitProfile.naturalRallyPoint };
+    if (exitProfile.moduleType === 'QUEUE') {
+      const magnitude = Math.hypot(rallyPoint.x, rallyPoint.y, rallyPoint.z);
+      if (magnitude > 0) {
+        const offsetScale = (2 * MAP_XY_FACTOR) / magnitude;
+        rallyPoint.x += rallyPoint.x * offsetScale;
+        rallyPoint.y += rallyPoint.y * offsetScale;
+        rallyPoint.z += rallyPoint.z * offsetScale;
+      }
+    }
+
+    const yaw = producer.mesh.rotation.y;
+    const cos = Math.cos(yaw);
+    const sin = Math.sin(yaw);
+    const rallyX = producer.mesh.position.x + (rallyPoint.x * cos - rallyPoint.y * sin);
+    const rallyZ = producer.mesh.position.z + (rallyPoint.x * sin + rallyPoint.y * cos);
+    this.issueMoveTo(producedUnit.id, rallyX, rallyZ);
+  }
+
+  private withdrawSideCredits(side: string | undefined, amount: number): number {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return 0;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return 0;
+    }
+
+    const current = this.sideCredits.get(normalizedSide) ?? 0;
+    const requested = Math.max(0, Math.trunc(amount));
+    const withdrawn = Math.min(requested, current);
+    if (withdrawn === 0) {
+      return 0;
+    }
+    this.sideCredits.set(normalizedSide, current - withdrawn);
+    return withdrawn;
+  }
+
+  private depositSideCredits(side: string | undefined, amount: number): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return;
+    }
+
+    const current = this.sideCredits.get(normalizedSide) ?? 0;
+    const deposit = Math.max(0, Math.trunc(amount));
+    this.sideCredits.set(normalizedSide, current + deposit);
   }
 
   private issueMoveTo(
@@ -1600,6 +4913,61 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePathfindGoalCellFromPath(entity);
   }
 
+  private issueAttackEntity(
+    entityId: number,
+    targetEntityId: number,
+    commandSource: AttackCommandSource,
+  ): void {
+    const attacker = this.spawnedEntities.get(entityId);
+    const target = this.spawnedEntities.get(targetEntityId);
+    if (!attacker || !target) {
+      return;
+    }
+    if (attacker.destroyed || target.destroyed) {
+      return;
+    }
+    const weapon = attacker.attackWeapon;
+    if (!weapon || weapon.primaryDamage <= 0) {
+      return;
+    }
+    this.setEntityIgnoringStealthStatus(attacker, weapon.continueAttackRange > 0);
+    if (!this.canAttackerTargetEntity(attacker, target, commandSource)) {
+      this.setEntityIgnoringStealthStatus(attacker, false);
+      return;
+    }
+
+    attacker.attackTargetEntityId = targetEntityId;
+    attacker.attackOriginalVictimPosition = {
+      x: target.mesh.position.x,
+      z: target.mesh.position.z,
+    };
+    attacker.attackCommandSource = commandSource;
+
+    const attackRange = weapon.attackRange;
+    if (!attacker.canMove || attackRange <= 0) {
+      attacker.moving = false;
+      attacker.moveTarget = null;
+      attacker.movePath = [];
+      attacker.pathIndex = 0;
+      attacker.pathfindGoalCell = null;
+      return;
+    }
+
+    this.issueMoveTo(attacker.id, target.mesh.position.x, target.mesh.position.z, attackRange);
+  }
+
+  private clearAttackTarget(entityId: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return;
+    }
+    entity.attackTargetEntityId = null;
+    entity.attackOriginalVictimPosition = null;
+    entity.attackCommandSource = 'AI';
+    this.setEntityIgnoringStealthStatus(entity, false);
+    entity.preAttackFinishFrame = 0;
+  }
+
   private stopEntity(entityId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) return;
@@ -1610,6 +4978,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.movePath = [];
     entity.pathIndex = 0;
     entity.pathfindGoalCell = null;
+    entity.preAttackFinishFrame = 0;
   }
 
   private updatePathfindGoalCellFromPath(entity: MapEntity): void {
@@ -3814,14 +7183,1132 @@ export class GameLogicSubsystem implements Subsystem {
     return new THREE.Vector2(x, y);
   }
 
+  private updateCombat(): void {
+    for (const attacker of this.spawnedEntities.values()) {
+      if (attacker.destroyed) {
+        continue;
+      }
+      this.setEntityFiringWeaponStatus(attacker, false);
+      if (!this.canEntityAttackFromStatus(attacker)) {
+        this.setEntityAttackStatus(attacker, false);
+        this.setEntityAimingWeaponStatus(attacker, false);
+        this.setEntityIgnoringStealthStatus(attacker, false);
+        this.refreshEntitySneakyMissWindow(attacker);
+        attacker.preAttackFinishFrame = 0;
+        continue;
+      }
+
+      const targetId = attacker.attackTargetEntityId;
+      const weapon = attacker.attackWeapon;
+      if (targetId === null || !weapon) {
+        this.setEntityAttackStatus(attacker, false);
+        this.setEntityAimingWeaponStatus(attacker, false);
+        this.setEntityIgnoringStealthStatus(attacker, false);
+        this.refreshEntitySneakyMissWindow(attacker);
+        attacker.preAttackFinishFrame = 0;
+        continue;
+      }
+
+      const target = this.spawnedEntities.get(targetId);
+      if (!target || !this.canAttackerTargetEntity(attacker, target, attacker.attackCommandSource)) {
+        attacker.attackTargetEntityId = null;
+        attacker.attackOriginalVictimPosition = null;
+        attacker.attackCommandSource = 'AI';
+        this.setEntityAttackStatus(attacker, false);
+        this.setEntityAimingWeaponStatus(attacker, false);
+        this.setEntityIgnoringStealthStatus(attacker, false);
+        this.refreshEntitySneakyMissWindow(attacker);
+        attacker.preAttackFinishFrame = 0;
+        continue;
+      }
+
+      this.setEntityAttackStatus(attacker, true);
+      this.refreshEntitySneakyMissWindow(attacker);
+
+      const dx = target.mesh.position.x - attacker.mesh.position.x;
+      const dz = target.mesh.position.z - attacker.mesh.position.z;
+      const distanceSqr = dx * dx + dz * dz;
+      const minAttackRange = Math.max(0, weapon.minAttackRange);
+      const minAttackRangeSqr = minAttackRange * minAttackRange;
+      const attackRange = Math.max(0, weapon.attackRange);
+      const attackRangeSqr = attackRange * attackRange;
+      if (distanceSqr < Math.max(0, minAttackRangeSqr - ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE)) {
+        this.setEntityAimingWeaponStatus(attacker, false);
+        if (attacker.canMove && minAttackRange > PATHFIND_CELL_SIZE) {
+          const retreatTarget = this.computeAttackRetreatTarget(attacker, target, weapon);
+          if (retreatTarget) {
+            this.issueMoveTo(attacker.id, retreatTarget.x, retreatTarget.z);
+          }
+        }
+        attacker.preAttackFinishFrame = 0;
+        continue;
+      }
+
+      if (distanceSqr > attackRangeSqr) {
+        this.setEntityAimingWeaponStatus(attacker, false);
+        if (attacker.canMove) {
+          this.issueMoveTo(attacker.id, target.mesh.position.x, target.mesh.position.z, attackRange);
+        }
+        attacker.preAttackFinishFrame = 0;
+        continue;
+      }
+
+      if (attacker.moving) {
+        attacker.moving = false;
+        attacker.moveTarget = null;
+        attacker.movePath = [];
+        attacker.pathIndex = 0;
+        attacker.pathfindGoalCell = null;
+      }
+      this.setEntityAimingWeaponStatus(attacker, true);
+
+      if (this.frameCounter < attacker.nextAttackFrame) {
+        continue;
+      }
+
+      // TODO(C&C source parity): replace this per-entity weapon timing model with full
+      // WeaponStatus state handling (PRE_ATTACK/BETWEEN_FIRING_SHOTS/OUT_OF_AMMO), including
+      // shared reload timing across weapon slots and firing-tracker integration.
+      if (weapon.clipSize > 0 && attacker.attackAmmoInClip <= 0) {
+        if (this.frameCounter < attacker.attackReloadFinishFrame) {
+          continue;
+        }
+        attacker.attackAmmoInClip = weapon.clipSize;
+        this.rebuildEntityScatterTargets(attacker);
+      }
+
+      if (attacker.preAttackFinishFrame > this.frameCounter) {
+        continue;
+      }
+
+      if (attacker.preAttackFinishFrame === 0) {
+        const preAttackDelay = this.resolveWeaponPreAttackDelayFrames(attacker, target, weapon);
+        if (preAttackDelay > 0) {
+          attacker.preAttackFinishFrame = this.frameCounter + preAttackDelay;
+          if (attacker.preAttackFinishFrame > this.frameCounter) {
+            continue;
+          }
+        }
+      }
+
+      this.setEntityAimingWeaponStatus(attacker, false);
+      this.setEntityFiringWeaponStatus(attacker, true);
+      this.queueWeaponDamageEvent(attacker, target, weapon);
+      this.setEntityIgnoringStealthStatus(attacker, false);
+      attacker.preAttackFinishFrame = 0;
+      this.recordConsecutiveAttackShot(attacker, target.id);
+      if (weapon.autoReloadWhenIdleFrames > 0) {
+        attacker.attackForceReloadFrame = this.frameCounter + weapon.autoReloadWhenIdleFrames;
+      } else {
+        attacker.attackForceReloadFrame = 0;
+      }
+
+      if (weapon.clipSize > 0) {
+        attacker.attackAmmoInClip = Math.max(0, attacker.attackAmmoInClip - 1);
+        if (attacker.attackAmmoInClip <= 0) {
+          attacker.attackReloadFinishFrame = this.frameCounter + weapon.clipReloadFrames;
+          attacker.nextAttackFrame = attacker.attackReloadFinishFrame;
+          continue;
+        }
+      }
+
+      attacker.nextAttackFrame = this.frameCounter + this.resolveWeaponDelayFrames(weapon);
+    }
+  }
+
+  private queueWeaponDamageEvent(attacker: MapEntity, target: MapEntity, weapon: AttackWeaponProfile): void {
+    const sourceX = attacker.mesh.position.x;
+    const sourceZ = attacker.mesh.position.z;
+    const targetX = target.mesh.position.x;
+    const targetZ = target.mesh.position.z;
+
+    let aimX = targetX;
+    let aimZ = targetZ;
+    let primaryVictimEntityId = weapon.damageDealtAtSelfPosition ? null : target.id;
+
+    const sneakyOffset = this.resolveEntitySneakyTargetingOffset(target);
+    if (sneakyOffset && primaryVictimEntityId !== null) {
+      aimX += sneakyOffset.x;
+      aimZ += sneakyOffset.z;
+      // Source parity subset: WeaponTemplate::fireWeaponTemplate() converts sneaky-targeted
+      // victim shots into position-shots using AIUpdateInterface::getSneakyTargetingOffset().
+      primaryVictimEntityId = null;
+    }
+
+    if (attacker.attackScatterTargetsUnused.length > 0) {
+      const randomPick = this.gameRandom.nextRange(0, attacker.attackScatterTargetsUnused.length - 1);
+      const targetIndex = attacker.attackScatterTargetsUnused[randomPick];
+      const scatterOffset = targetIndex === undefined ? null : weapon.scatterTargets[targetIndex];
+      if (scatterOffset) {
+        aimX += scatterOffset.x * weapon.scatterTargetScalar;
+        aimZ += scatterOffset.z * weapon.scatterTargetScalar;
+        primaryVictimEntityId = null;
+      }
+
+      attacker.attackScatterTargetsUnused[randomPick] = attacker.attackScatterTargetsUnused[attacker.attackScatterTargetsUnused.length - 1]!;
+      attacker.attackScatterTargetsUnused.pop();
+      // Source parity subset: Weapon::privateFireWeapon() consumes one ScatterTarget
+      // offset per shot from a randomized "unused" list until reload rebuilds it.
+      // TODO(C&C source parity): project scatter-target coordinates onto terrain layer
+      // height when vertical terrain data is represented in combat impact resolution.
+    }
+
+    let delivery: 'DIRECT' | 'PROJECTILE' = 'DIRECT';
+    let travelSpeed = weapon.weaponSpeed;
+    if (weapon.projectileObjectName) {
+      delivery = 'PROJECTILE';
+      // Source parity subset: projectile weapons in WeaponTemplate::fireWeaponTemplate()
+      // spawn ProjectileObject and defer damage to projectile update/collision.
+      // We represent this as a deterministic delayed impact without spawning a full
+      // projectile object graph yet.
+
+      const scatterRadius = this.resolveProjectileScatterRadiusForTarget(weapon, target);
+      if (scatterRadius > 0) {
+        const randomizedScatterRadius = scatterRadius * this.gameRandom.nextFloat();
+        const scatterAngleRadians = this.gameRandom.nextFloat() * (2 * Math.PI);
+        aimX += randomizedScatterRadius * Math.cos(scatterAngleRadians);
+        aimZ += randomizedScatterRadius * Math.sin(scatterAngleRadians);
+        primaryVictimEntityId = null;
+        // Source parity subset: projectile scatter path launches at a position (not victim object),
+        // so impact no longer homes to the moving target.
+        // TODO(C&C source parity): include terrain layer-height projection and explicit
+        // scatter-target list interaction nuances from WeaponTemplate::fireWeaponTemplate().
+      }
+      const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
+      travelSpeed = this.resolveScaledProjectileTravelSpeed(weapon, sourceToAimDistance);
+    } else {
+      // Source parity subset: Weapon::fireWeaponTemplate delays direct-damage resolution by
+      // distance / getWeaponSpeed().
+      // TODO(C&C source parity): mirror laser-handling behavior for non-projectile weapons.
+    }
+
+    const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
+    const travelFrames = sourceToAimDistance / travelSpeed;
+    let delayFrames = Number.isFinite(travelFrames) && travelFrames >= 1
+      ? Math.ceil(travelFrames)
+      : 0;
+    if (delivery === 'PROJECTILE') {
+      delayFrames = Math.max(1, delayFrames);
+    }
+
+    const impactX = weapon.damageDealtAtSelfPosition ? sourceX : aimX;
+    const impactZ = weapon.damageDealtAtSelfPosition ? sourceZ : aimZ;
+    const event: PendingWeaponDamageEvent = {
+      sourceEntityId: attacker.id,
+      primaryVictimEntityId,
+      impactX,
+      impactZ,
+      executeFrame: this.frameCounter + delayFrames,
+      delivery,
+      weapon,
+    };
+
+    if (delivery === 'DIRECT' && delayFrames <= 0) {
+      // Source parity subset: WeaponTemplate::fireWeaponTemplate() applies non-projectile
+      // damage immediately when delayInFrames < 1.0f instead of queuing delayed damage.
+      this.applyWeaponDamageEvent(event);
+      return;
+    }
+
+    this.pendingWeaponDamageEvents.push(event);
+
+    // TODO(C&C source parity): port projectile-object launch/collision/countermeasure and
+    // laser/scatter handling from Weapon::fireWeaponTemplate() instead of routing both
+    // direct and projectile delivery through pending impact events.
+  }
+
+  private setEntityAttackStatus(entity: MapEntity, isAttacking: boolean): void {
+    // TODO(C&C source parity): move IS_ATTACKING ownership from this combat-loop subset
+    // to full AI state-machine enter/exit transitions (AIAttackState onEnter/onExit).
+    if (isAttacking) {
+      entity.objectStatusFlags.add('IS_ATTACKING');
+    } else {
+      entity.objectStatusFlags.delete('IS_ATTACKING');
+    }
+  }
+
+  private setEntityAimingWeaponStatus(entity: MapEntity, isAiming: boolean): void {
+    // Source parity subset: AIAttackAimAtTargetState::onEnter() sets
+    // OBJECT_STATUS_IS_AIMING_WEAPON and onExit() clears it.
+    // TODO(C&C source parity): move this from combat-loop range checks to full
+    // attack state-machine transitions (pursue/approach/aim/fire).
+    if (isAiming) {
+      entity.objectStatusFlags.add('IS_AIMING_WEAPON');
+    } else {
+      entity.objectStatusFlags.delete('IS_AIMING_WEAPON');
+    }
+  }
+
+  private setEntityFiringWeaponStatus(entity: MapEntity, isFiring: boolean): void {
+    // Source parity subset: AIAttackFireWeaponState::onEnter() sets
+    // OBJECT_STATUS_IS_FIRING_WEAPON and onExit() clears it.
+    // TODO(C&C source parity): drive this from explicit fire-state enter/exit
+    // instead of one-frame fire pulses in updateCombat().
+    if (isFiring) {
+      entity.objectStatusFlags.add('IS_FIRING_WEAPON');
+    } else {
+      entity.objectStatusFlags.delete('IS_FIRING_WEAPON');
+    }
+  }
+
+  private setEntityIgnoringStealthStatus(entity: MapEntity, isIgnoringStealth: boolean): void {
+    // Source parity subset: AIAttackState::onEnter() sets OBJECT_STATUS_IGNORING_STEALTH
+    // when current weapon has ContinueAttackRange > 0, and AIAttackFireWeaponState::update()
+    // clears it after each fired shot.
+    // TODO(C&C source parity): drive this from full attack-state enter/exit and command-source
+    // flow (including attack-position mine clearing and force-attack exceptions).
+    if (isIgnoringStealth) {
+      entity.objectStatusFlags.add('IGNORING_STEALTH');
+    } else {
+      entity.objectStatusFlags.delete('IGNORING_STEALTH');
+    }
+  }
+
+  private refreshEntitySneakyMissWindow(entity: MapEntity): void {
+    if (entity.attackersMissPersistFrames <= 0) {
+      return;
+    }
+
+    // Source parity subset: JetAIUpdate::update() refreshes m_attackersMissExpireFrame while
+    // OBJECT_STATUS_IS_ATTACKING is set on the object.
+    if (entity.objectStatusFlags.has('IS_ATTACKING')) {
+      entity.attackersMissExpireFrame = this.frameCounter + entity.attackersMissPersistFrames;
+      return;
+    }
+
+    if (entity.attackersMissExpireFrame !== 0 && this.frameCounter >= entity.attackersMissExpireFrame) {
+      entity.attackersMissExpireFrame = 0;
+    }
+  }
+
+  private entityHasSneakyTargetingOffset(entity: MapEntity): boolean {
+    return entity.attackersMissExpireFrame !== 0 && this.frameCounter < entity.attackersMissExpireFrame;
+  }
+
+  private resolveEntitySneakyTargetingOffset(entity: MapEntity): VectorXZ | null {
+    if (!this.entityHasSneakyTargetingOffset(entity)) {
+      return null;
+    }
+
+    const forward = new THREE.Vector3(1, 0, 0).applyQuaternion(entity.mesh.quaternion);
+    const length = Math.hypot(forward.x, forward.z);
+    if (!Number.isFinite(length) || length <= 0) {
+      return { x: 0, z: 0 };
+    }
+
+    const scale = entity.sneakyOffsetWhenAttacking / length;
+    return {
+      x: forward.x * scale,
+      z: forward.z * scale,
+    };
+  }
+
+  private resolveScaledProjectileTravelSpeed(weapon: AttackWeaponProfile, sourceToAimDistance: number): number {
+    if (!weapon.scaleWeaponSpeed) {
+      return weapon.weaponSpeed;
+    }
+
+    const minRange = Math.max(0, weapon.minAttackRange - ATTACK_RANGE_CELL_EDGE_FUDGE);
+    const maxRange = Math.max(minRange, weapon.unmodifiedAttackRange);
+    const rangeRatio = (sourceToAimDistance - minRange) / (maxRange - minRange);
+    const scaledSpeed = (rangeRatio * (weapon.weaponSpeed - weapon.minWeaponSpeed)) + weapon.minWeaponSpeed;
+
+    // Source parity subset: DumbProjectileBehavior::projectileFireAtObjectOrPosition()
+    // scales launch speed from minimum-range to unmodified-attack-range distance.
+    // TODO(C&C source parity): mirror full dumb-projectile bezier-path distance (calcFlightPath)
+    // and per-projectile update/collision timing instead of straight-line travel delay.
+    return scaledSpeed;
+  }
+
+  private resolveProjectileScatterRadiusForTarget(weapon: AttackWeaponProfile, target: MapEntity): number {
+    let scatter = Math.max(0, weapon.scatterRadius);
+    if (target.category === 'infantry') {
+      scatter += Math.max(0, weapon.scatterRadiusVsInfantry);
+    }
+    return scatter;
+  }
+
+  private updatePendingWeaponDamage(): void {
+    if (this.pendingWeaponDamageEvents.length === 0) {
+      return;
+    }
+
+    const remainingEvents: PendingWeaponDamageEvent[] = [];
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.executeFrame > this.frameCounter) {
+        remainingEvents.push(event);
+        continue;
+      }
+      this.applyWeaponDamageEvent(event);
+    }
+
+    this.pendingWeaponDamageEvents.length = 0;
+    this.pendingWeaponDamageEvents.push(...remainingEvents);
+  }
+
+  private applyWeaponDamageEvent(event: PendingWeaponDamageEvent): void {
+    const weapon = event.weapon;
+    if (event.delivery === 'PROJECTILE') {
+      // Source parity subset: damage arrives via projectile detonation/collision timing.
+      // TODO(C&C source parity): replace with spawned projectile entities and
+      // shouldProjectileCollideWith()/ProjectileUpdateInterface behavior.
+    }
+    const source = this.spawnedEntities.get(event.sourceEntityId) ?? null;
+    const primaryVictim = event.primaryVictimEntityId !== null
+      ? (this.spawnedEntities.get(event.primaryVictimEntityId) ?? null)
+      : null;
+    const primaryVictimWasAlive = !!primaryVictim && !primaryVictim.destroyed && primaryVictim.canTakeDamage;
+
+    let impactX = event.impactX;
+    let impactZ = event.impactZ;
+    if (event.delivery === 'DIRECT' && primaryVictim && !primaryVictim.destroyed) {
+      impactX = primaryVictim.mesh.position.x;
+      impactZ = primaryVictim.mesh.position.z;
+    }
+
+    const primaryRadius = Math.max(0, weapon.primaryDamageRadius);
+    const secondaryRadius = Math.max(0, weapon.secondaryDamageRadius);
+    const radiusDamageAngle = Math.max(0, weapon.radiusDamageAngle);
+    const radiusDamageAngleCos = Math.cos(radiusDamageAngle);
+    const primaryRadiusSqr = primaryRadius * primaryRadius;
+    const effectRadius = Math.max(primaryRadius, secondaryRadius);
+    const effectRadiusSqr = effectRadius * effectRadius;
+    const sourceFacingVector = source
+      ? new THREE.Vector3(1, 0, 0).applyQuaternion(source.mesh.quaternion).normalize()
+      : null;
+
+    const victims: Array<{ entity: MapEntity; distanceSqr: number }> = [];
+    if (effectRadius > 0) {
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed || !entity.canTakeDamage) {
+          continue;
+        }
+        const dx = entity.mesh.position.x - impactX;
+        const dz = entity.mesh.position.z - impactZ;
+        const distanceSqr = dx * dx + dz * dz;
+        if (distanceSqr <= effectRadiusSqr) {
+          victims.push({ entity, distanceSqr });
+        }
+      }
+      victims.sort((left, right) => left.entity.id - right.entity.id);
+    } else if (primaryVictim && !primaryVictim.destroyed && primaryVictim.canTakeDamage) {
+      if (event.delivery === 'PROJECTILE') {
+        const collisionRadius = this.resolveProjectilePointCollisionRadius(primaryVictim);
+        const dx = primaryVictim.mesh.position.x - impactX;
+        const dz = primaryVictim.mesh.position.z - impactZ;
+        const distanceSqr = dx * dx + dz * dz;
+        if (distanceSqr <= collisionRadius * collisionRadius) {
+          victims.push({ entity: primaryVictim, distanceSqr: 0 });
+        } else {
+          const incidentalVictim = this.resolveProjectileIncidentalVictimForPointImpact(
+            source,
+            weapon,
+            primaryVictim.id,
+            impactX,
+            impactZ,
+          );
+          if (incidentalVictim) {
+            victims.push({ entity: incidentalVictim, distanceSqr: 0 });
+          }
+        }
+      } else {
+        victims.push({ entity: primaryVictim, distanceSqr: 0 });
+      }
+    } else if (event.delivery === 'PROJECTILE') {
+      const incidentalVictim = this.resolveProjectileIncidentalVictimForPointImpact(
+        source,
+        weapon,
+        primaryVictim?.id ?? null,
+        impactX,
+        impactZ,
+      );
+      if (incidentalVictim) {
+        victims.push({ entity: incidentalVictim, distanceSqr: 0 });
+      }
+    }
+
+    if (
+      victims.length === 0
+      && source
+      && (weapon.radiusDamageAffectsMask & WEAPON_KILLS_SELF) !== 0
+      && effectRadius <= 0
+    ) {
+      this.applyWeaponDamageAmount(source.id, source, HUGE_DAMAGE_AMOUNT, weapon.damageType);
+      return;
+    }
+
+    for (const victim of victims) {
+      const candidate = victim.entity;
+      let killSelf = false;
+
+      if (radiusDamageAngle < Math.PI) {
+        if (!source || !sourceFacingVector) {
+          continue;
+        }
+        const damageVector = new THREE.Vector3(
+          candidate.mesh.position.x - source.mesh.position.x,
+          0,
+          candidate.mesh.position.z - source.mesh.position.z,
+        ).normalize();
+        // Source parity subset: WeaponTemplate::dealDamageInternal gates radius damage by
+        // comparing source orientation to candidate direction against RadiusDamageAngle.
+        // TODO(C&C source parity): include full 3D source/candidate vectors once altitude and
+        // pitch-limited facing are represented in simulation data.
+        if (sourceFacingVector.dot(damageVector) < radiusDamageAngleCos) {
+          continue;
+        }
+      }
+
+      if (source && candidate !== primaryVictim) {
+        if (
+          (weapon.radiusDamageAffectsMask & WEAPON_KILLS_SELF) !== 0
+          && candidate.id === source.id
+        ) {
+          killSelf = true;
+        } else {
+          if (
+            (weapon.radiusDamageAffectsMask & WEAPON_AFFECTS_SELF) === 0
+            && candidate.id === source.id
+          ) {
+            continue;
+          }
+          if (
+            (weapon.radiusDamageAffectsMask & WEAPON_DOESNT_AFFECT_SIMILAR) !== 0
+            && this.getTeamRelationship(source, candidate) === RELATIONSHIP_ALLIES
+            && source.templateName.trim().toUpperCase() === candidate.templateName.trim().toUpperCase()
+          ) {
+            continue;
+          }
+
+          // TODO(C&C source parity): implement WEAPON_DOESNT_AFFECT_AIRBORNE via
+          // Object::isSignificantlyAboveTerrain once 3D movement altitude parity is represented.
+          let requiredMask = WEAPON_AFFECTS_NEUTRALS;
+          const relationship = this.getTeamRelationship(source, candidate);
+          if (relationship === RELATIONSHIP_ALLIES) {
+            requiredMask = WEAPON_AFFECTS_ALLIES;
+          } else if (relationship === RELATIONSHIP_ENEMIES) {
+            requiredMask = WEAPON_AFFECTS_ENEMIES;
+          }
+          if ((weapon.radiusDamageAffectsMask & requiredMask) === 0) {
+            continue;
+          }
+        }
+      }
+
+      const rawAmount = killSelf
+        ? HUGE_DAMAGE_AMOUNT
+        : (victim.distanceSqr <= primaryRadiusSqr ? weapon.primaryDamage : weapon.secondaryDamage);
+      this.applyWeaponDamageAmount(source?.id ?? null, candidate, rawAmount, weapon.damageType);
+    }
+
+    if (source && primaryVictimWasAlive && primaryVictim && primaryVictim.destroyed) {
+      this.tryContinueAttackOnVictimDeath(source, primaryVictim, weapon);
+    }
+
+    // TODO(C&C source parity): use 3D/bounding-volume damage distance checks from
+    // PartitionManager::iterateObjectsInRange(DAMAGE_RANGE_CALC_TYPE).
+  }
+
+  private tryContinueAttackOnVictimDeath(
+    attacker: MapEntity,
+    destroyedVictim: MapEntity,
+    weapon: AttackWeaponProfile,
+  ): void {
+    const continueRange = Math.max(0, weapon.continueAttackRange);
+    if (continueRange <= 0) {
+      return;
+    }
+    if (attacker.destroyed || !this.canEntityAttackFromStatus(attacker)) {
+      return;
+    }
+    if (attacker.attackTargetEntityId !== destroyedVictim.id) {
+      return;
+    }
+    const originalVictimPosition = attacker.attackOriginalVictimPosition;
+    if (!originalVictimPosition) {
+      return;
+    }
+
+    const replacementVictim = this.findContinueAttackVictim(
+      attacker,
+      destroyedVictim,
+      originalVictimPosition,
+      continueRange,
+    );
+    if (!replacementVictim) {
+      return;
+    }
+
+    attacker.attackTargetEntityId = replacementVictim.id;
+    // Source parity subset: AIAttackState::notifyNewVictimChosen() does not update
+    // m_originalVictimPos. Keep the initial victim position for chained reacquire.
+    // TODO(C&C source parity): source PartitionFilterSamePlayer uses controlling-player
+    // pointers from fully decoded map object ownership data. This port currently depends
+    // on string-keyed originalOwner and does not decode NameKey-keyed properties yet.
+    // Also mirror full Object::isOffMap/private-map-status semantics from
+    // AIAttackFireWeaponState.
+  }
+
+  private findContinueAttackVictim(
+    attacker: MapEntity,
+    destroyedVictim: MapEntity,
+    originalVictimPosition: VectorXZ,
+    continueRange: number,
+  ): MapEntity | null {
+    const continueRangeSqr = continueRange * continueRange;
+    const victimPlayerToken = destroyedVictim.controllingPlayerToken;
+    if (!victimPlayerToken) {
+      // TODO(C&C source parity): ContinueAttack uses PartitionFilterSamePlayer with
+      // victim->getControllingPlayer(). Do not reacquire when map ownership data is not
+      // available yet (e.g. unresolved NameKey-keyed originalOwner conversion).
+      return null;
+    }
+    let bestCandidate: MapEntity | null = null;
+    let bestDistanceSqr = Number.POSITIVE_INFINITY;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || !candidate.canTakeDamage) {
+        continue;
+      }
+      if (candidate.id === attacker.id || candidate.id === destroyedVictim.id) {
+        continue;
+      }
+      if (!this.canAttackerTargetEntity(attacker, candidate, attacker.attackCommandSource)) {
+        continue;
+      }
+      if (candidate.controllingPlayerToken !== victimPlayerToken) {
+        continue;
+      }
+
+      const dx = candidate.mesh.position.x - originalVictimPosition.x;
+      const dz = candidate.mesh.position.z - originalVictimPosition.z;
+      const distanceSqr = (dx * dx) + (dz * dz);
+      if (distanceSqr > continueRangeSqr) {
+        continue;
+      }
+
+      if (
+        !bestCandidate
+        || distanceSqr < bestDistanceSqr
+        || (distanceSqr === bestDistanceSqr && candidate.id < bestCandidate.id)
+      ) {
+        bestCandidate = candidate;
+        bestDistanceSqr = distanceSqr;
+      }
+    }
+
+    return bestCandidate;
+  }
+
+  private resolveProjectilePointCollisionRadius(entity: MapEntity): number {
+    if (entity.obstacleGeometry) {
+      return Math.max(0, Math.max(entity.obstacleGeometry.majorRadius, entity.obstacleGeometry.minorRadius));
+    }
+    if (entity.obstacleFootprint > 0) {
+      return entity.obstacleFootprint * (MAP_XY_FACTOR * 0.5);
+    }
+    if (entity.pathDiameter > 0) {
+      return Math.max(MAP_XY_FACTOR * 0.5, entity.pathDiameter * (MAP_XY_FACTOR * 0.5));
+    }
+
+    // Source parity subset: without full per-projectile collision volumes, approximate point-hit
+    // overlap by at least half a cell for small movers.
+    // TODO(C&C source parity): replace with spawned projectile entities and precise
+    // shouldProjectileCollideWith()/geometry intersection checks.
+    return MAP_XY_FACTOR * 0.5;
+  }
+
+  private resolveProjectileIncidentalVictimForPointImpact(
+    projectileLauncher: MapEntity | null,
+    weapon: AttackWeaponProfile,
+    intendedVictimId: number | null,
+    impactX: number,
+    impactZ: number,
+  ): MapEntity | null {
+    const candidates: MapEntity[] = [];
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || !candidate.canTakeDamage) {
+        continue;
+      }
+      if (intendedVictimId !== null && candidate.id === intendedVictimId) {
+        continue;
+      }
+      candidates.push(candidate);
+    }
+    candidates.sort((left, right) => left.id - right.id);
+
+    for (const candidate of candidates) {
+      const collisionRadius = this.resolveProjectilePointCollisionRadius(candidate);
+      const dx = candidate.mesh.position.x - impactX;
+      const dz = candidate.mesh.position.z - impactZ;
+      const distanceSqr = dx * dx + dz * dz;
+      if (distanceSqr > collisionRadius * collisionRadius) {
+        continue;
+      }
+      if (!this.shouldProjectileCollideWithEntity(projectileLauncher, weapon, candidate, intendedVictimId)) {
+        continue;
+      }
+      return candidate;
+    }
+
+    return null;
+  }
+
+  private shouldProjectileCollideWithEntity(
+    projectileLauncher: MapEntity | null,
+    weapon: AttackWeaponProfile,
+    candidate: MapEntity,
+    intendedVictimId: number | null,
+  ): boolean {
+    if (intendedVictimId !== null && candidate.id === intendedVictimId) {
+      return true;
+    }
+
+    if (projectileLauncher && projectileLauncher.id === candidate.id) {
+      return false;
+    }
+
+    if (projectileLauncher) {
+      const launcherContainer = this.resolveProjectileLauncherContainer(projectileLauncher);
+      if (launcherContainer && launcherContainer.id === candidate.id) {
+        return false;
+      }
+    }
+
+    if (
+      (weapon.damageType === 'FLAME' || weapon.damageType === 'PARTICLE_BEAM')
+      && candidate.objectStatusFlags.has('BURNED')
+    ) {
+      return false;
+    }
+
+    const kindOf = this.resolveEntityKindOfSet(candidate);
+    if (this.isAirfieldReservedForProjectileVictim(candidate, kindOf, intendedVictimId)) {
+      return false;
+    }
+
+    if (this.entityHasSneakyTargetingOffset(candidate)) {
+      return false;
+    }
+
+    let requiredMask = 0;
+    if (projectileLauncher) {
+      const relationship = this.getTeamRelationship(projectileLauncher, candidate);
+      if (relationship === RELATIONSHIP_ALLIES) {
+        requiredMask |= WEAPON_COLLIDE_ALLIES;
+      } else if (relationship === RELATIONSHIP_ENEMIES) {
+        requiredMask |= WEAPON_COLLIDE_ENEMIES;
+      }
+    }
+
+    if (kindOf.has('STRUCTURE')) {
+      const launcherSide = this.normalizeSide(projectileLauncher?.side);
+      const candidateSide = this.normalizeSide(candidate.side);
+      if (launcherSide && candidateSide && launcherSide === candidateSide) {
+        requiredMask |= WEAPON_COLLIDE_CONTROLLED_STRUCTURES;
+      } else {
+        requiredMask |= WEAPON_COLLIDE_STRUCTURES;
+      }
+    }
+    if (kindOf.has('SHRUBBERY')) {
+      requiredMask |= WEAPON_COLLIDE_SHRUBBERY;
+    }
+    if (kindOf.has('PROJECTILE')) {
+      requiredMask |= WEAPON_COLLIDE_PROJECTILE;
+    }
+    if (this.resolveEntityFenceWidth(candidate) > 0) {
+      requiredMask |= WEAPON_COLLIDE_WALLS;
+    }
+    if (kindOf.has('SMALL_MISSILE')) {
+      requiredMask |= WEAPON_COLLIDE_SMALL_MISSILES;
+    }
+    if (kindOf.has('BALLISTIC_MISSILE')) {
+      requiredMask |= WEAPON_COLLIDE_BALLISTIC_MISSILES;
+    }
+
+    if (requiredMask === 0) {
+      return false;
+    }
+    return (weapon.projectileCollideMask & requiredMask) !== 0;
+  }
+
+  private resolveProjectileLauncherContainer(projectileLauncher: MapEntity): MapEntity | null {
+    const containerId = projectileLauncher.parkingSpaceProducerId;
+    if (containerId === null) {
+      return null;
+    }
+
+    const container = this.spawnedEntities.get(containerId);
+    if (!container || container.destroyed) {
+      return null;
+    }
+
+    // Source parity subset: map getContainedBy() to parking producer containment.
+    // TODO(C&C source parity): extend to full transport/building containment once
+    // generic contain/transport behavior state exists in the simulation.
+    return container;
+  }
+
+  private isAirfieldReservedForProjectileVictim(
+    candidate: MapEntity,
+    candidateKindOf: Set<string>,
+    intendedVictimId: number | null,
+  ): boolean {
+    if (intendedVictimId === null) {
+      return false;
+    }
+    if (!candidateKindOf.has('FS_AIRFIELD')) {
+      return false;
+    }
+
+    const parkingProfile = candidate.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return false;
+    }
+
+    if (parkingProfile.occupiedSpaceEntityIds.has(intendedVictimId)) {
+      return true;
+    }
+
+    const intendedVictim = this.spawnedEntities.get(intendedVictimId);
+    if (intendedVictim?.parkingSpaceProducerId === candidate.id) {
+      return true;
+    }
+
+    // TODO(C&C source parity): model full ParkingPlaceBehaviorInterface::hasReservedSpace()
+    // checks for intended victim IDs that are reserved but not currently parked.
+    return false;
+  }
+
+  private resolveEntityKindOfSet(entity: MapEntity): Set<string> {
+    const kindOf = new Set<string>();
+    switch (entity.category) {
+      case 'building':
+        kindOf.add('STRUCTURE');
+        break;
+      case 'infantry':
+        kindOf.add('INFANTRY');
+        break;
+      case 'air':
+        kindOf.add('AIRCRAFT');
+        break;
+      case 'vehicle':
+      default:
+        break;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return kindOf;
+    }
+    const objectDef = this.findObjectDefByName(registry, entity.templateName);
+    if (!objectDef) {
+      return kindOf;
+    }
+    for (const flag of this.normalizeKindOf(objectDef.kindOf)) {
+      kindOf.add(flag);
+    }
+    return kindOf;
+  }
+
+  private resolveEntityFenceWidth(entity: MapEntity): number {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return 0;
+    }
+    const objectDef = this.findObjectDefByName(registry, entity.templateName);
+    if (!objectDef) {
+      return 0;
+    }
+    const fenceWidth = readNumericField(objectDef.fields, ['FenceWidth']) ?? 0;
+    if (!Number.isFinite(fenceWidth) || fenceWidth <= 0) {
+      return 0;
+    }
+    return fenceWidth;
+  }
+
+  private updateWeaponIdleAutoReload(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+
+      const weapon = entity.attackWeapon;
+      if (!weapon) {
+        continue;
+      }
+      if (weapon.autoReloadWhenIdleFrames <= 0) {
+        continue;
+      }
+
+      const forceReloadFrame = entity.attackForceReloadFrame;
+      if (forceReloadFrame <= 0 || this.frameCounter < forceReloadFrame) {
+        continue;
+      }
+
+      entity.attackForceReloadFrame = 0;
+      if (weapon.clipSize <= 0) {
+        continue;
+      }
+      if (entity.attackAmmoInClip >= weapon.clipSize) {
+        continue;
+      }
+
+      // Source parity subset: FiringTracker::update() calls Object::reloadAllAmmo(TRUE),
+      // forcing an immediate reload after sustained idle time.
+      entity.attackAmmoInClip = weapon.clipSize;
+      this.rebuildEntityScatterTargets(entity);
+      entity.attackReloadFinishFrame = 0;
+      if (entity.nextAttackFrame > this.frameCounter) {
+        entity.nextAttackFrame = this.frameCounter;
+      }
+
+      // TODO(C&C source parity): port full FiringTracker behavior
+      // (continuous-fire speedup/cooldown states and looping fire-audio management).
+    }
+  }
+
+  private computeAttackRetreatTarget(
+    attacker: MapEntity,
+    target: MapEntity,
+    weapon: AttackWeaponProfile,
+  ): VectorXZ | null {
+    const targetX = target.mesh.position.x;
+    const targetZ = target.mesh.position.z;
+    let awayX = attacker.mesh.position.x - targetX;
+    let awayZ = attacker.mesh.position.z - targetZ;
+    const length = Math.hypot(awayX, awayZ);
+    if (length <= 1e-6) {
+      awayX = 1;
+      awayZ = 0;
+    } else {
+      awayX /= length;
+      awayZ /= length;
+    }
+
+    const minAttackRange = Math.max(0, weapon.minAttackRange);
+    const attackRange = Math.max(minAttackRange, weapon.attackRange);
+    const desiredDistance = (attackRange + minAttackRange) * 0.5;
+    if (!Number.isFinite(desiredDistance) || desiredDistance <= 0) {
+      return null;
+    }
+
+    // Source parity subset: Weapon::computeApproachTarget() retreats too-close attackers to a
+    // point between minimum and maximum range.
+    // TODO(C&C source parity): port angleOffset/aircraft-facing/terrain-clipping behavior.
+    return {
+      x: targetX + awayX * desiredDistance,
+      z: targetZ + awayZ * desiredDistance,
+    };
+  }
+
+  private resetEntityWeaponTimingState(entity: MapEntity): void {
+    const clipSize = entity.attackWeapon?.clipSize ?? 0;
+    entity.attackAmmoInClip = clipSize > 0 ? clipSize : 0;
+    entity.attackReloadFinishFrame = 0;
+    entity.attackForceReloadFrame = 0;
+    this.rebuildEntityScatterTargets(entity);
+    entity.preAttackFinishFrame = 0;
+    entity.consecutiveShotsTargetEntityId = null;
+    entity.consecutiveShotsAtTarget = 0;
+  }
+
+  private rebuildEntityScatterTargets(entity: MapEntity): void {
+    const scatterTargetsCount = entity.attackWeapon?.scatterTargets.length ?? 0;
+    entity.attackScatterTargetsUnused = Array.from({ length: scatterTargetsCount }, (_entry, index) => index);
+  }
+
+  private getConsecutiveShotsFiredAtTarget(entity: MapEntity, targetEntityId: number): number {
+    if (entity.consecutiveShotsTargetEntityId !== targetEntityId) {
+      return 0;
+    }
+    return entity.consecutiveShotsAtTarget;
+  }
+
+  private resolveWeaponPreAttackDelayFrames(
+    attacker: MapEntity,
+    target: MapEntity,
+    weapon: AttackWeaponProfile,
+  ): number {
+    const delay = Math.max(0, Math.trunc(weapon.preAttackDelayFrames));
+    if (delay <= 0) {
+      return 0;
+    }
+
+    if (weapon.preAttackType === 'PER_ATTACK') {
+      if (this.getConsecutiveShotsFiredAtTarget(attacker, target.id) > 0) {
+        return 0;
+      }
+      return delay;
+    }
+
+    if (weapon.preAttackType === 'PER_CLIP') {
+      if (weapon.clipSize > 0 && attacker.attackAmmoInClip < weapon.clipSize) {
+        return 0;
+      }
+      return delay;
+    }
+
+    return delay;
+  }
+
+  private recordConsecutiveAttackShot(attacker: MapEntity, targetEntityId: number): void {
+    if (attacker.consecutiveShotsTargetEntityId === targetEntityId) {
+      attacker.consecutiveShotsAtTarget += 1;
+      return;
+    }
+    attacker.consecutiveShotsTargetEntityId = targetEntityId;
+    attacker.consecutiveShotsAtTarget = 1;
+  }
+
+  private resolveWeaponDelayFrames(weapon: AttackWeaponProfile): number {
+    const minDelay = Math.max(0, Math.trunc(weapon.minDelayFrames));
+    const maxDelay = Math.max(minDelay, Math.trunc(weapon.maxDelayFrames));
+    if (minDelay === maxDelay) {
+      return minDelay;
+    }
+    return this.gameRandom.nextRange(minDelay, maxDelay);
+  }
+
+  private applyWeaponDamageAmount(
+    sourceEntityId: number | null,
+    target: MapEntity,
+    amount: number,
+    damageType: string,
+  ): void {
+    if (!target.canTakeDamage || target.destroyed || !Number.isFinite(amount) || amount <= 0) {
+      return;
+    }
+
+    const adjustedDamage = this.adjustDamageByArmorSet(target, amount, damageType);
+    if (adjustedDamage <= 0) {
+      return;
+    }
+
+    target.health = Math.max(0, target.health - adjustedDamage);
+    if (target.health <= 0) {
+      this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
+    }
+  }
+
+  private adjustDamageByArmorSet(target: MapEntity, amount: number, damageType: string): number {
+    const normalizedType = damageType.trim().toUpperCase();
+    if (normalizedType === 'UNRESISTABLE') {
+      return amount;
+    }
+
+    const coefficients = target.armorDamageCoefficients;
+    if (!coefficients) {
+      return amount;
+    }
+
+    const coefficient = coefficients.get(normalizedType);
+    if (coefficient === undefined) {
+      return amount;
+    }
+
+    return Math.max(0, amount * coefficient);
+  }
+
+  private markEntityDestroyed(entityId: number, _attackerId: number): void {
+    void _attackerId;
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return;
+    }
+    this.cancelAndRefundAllProductionOnDeath(entity);
+    entity.destroyed = true;
+    entity.moving = false;
+    entity.moveTarget = null;
+    entity.movePath = [];
+    entity.pathIndex = 0;
+    entity.pathfindGoalCell = null;
+    entity.attackTargetEntityId = null;
+    entity.attackOriginalVictimPosition = null;
+    entity.attackCommandSource = 'AI';
+    this.onObjectDestroyed(entityId);
+  }
+
+  private cancelAndRefundAllProductionOnDeath(producer: MapEntity): void {
+    if (producer.productionQueue.length === 0) {
+      return;
+    }
+
+    // Source parity: ProductionUpdate::onDie() calls cancelAndRefundAllProduction(),
+    // which iterates queue entries through cancel paths to restore player money/state.
+    const productionLimit = 100;
+    for (let i = 0; i < productionLimit && producer.productionQueue.length > 0; i += 1) {
+      const production = producer.productionQueue[0];
+      if (!production) {
+        break;
+      }
+
+      if (production.type === 'UPGRADE' && production.upgradeType === 'PLAYER') {
+        this.setSideUpgradeInProduction(producer.side ?? '', production.upgradeName, false);
+      }
+      if (production.type === 'UNIT') {
+        this.releaseParkingDoorReservationForProduction(producer, production.productionId);
+      }
+
+      this.depositSideCredits(producer.side, production.buildCost);
+      producer.productionQueue.shift();
+    }
+  }
+
+  private finalizeDestroyedEntities(): void {
+    const destroyedEntityIds: number[] = [];
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        destroyedEntityIds.push(entity.id);
+      }
+    }
+
+    if (destroyedEntityIds.length === 0) {
+      return;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.attackTargetEntityId !== null && destroyedEntityIds.includes(entity.attackTargetEntityId)) {
+        entity.attackTargetEntityId = null;
+        entity.attackOriginalVictimPosition = null;
+        entity.attackCommandSource = 'AI';
+      }
+    }
+
+    for (const entityId of destroyedEntityIds) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity) {
+        continue;
+      }
+      if (entity.parkingSpaceProducerId !== null) {
+        const producer = this.spawnedEntities.get(entity.parkingSpaceProducerId);
+        if (producer?.parkingPlaceProfile) {
+          producer.parkingPlaceProfile.occupiedSpaceEntityIds.delete(entity.id);
+        }
+        entity.parkingSpaceProducerId = null;
+      }
+      this.scene.remove(entity.mesh);
+      this.spawnedEntities.delete(entityId);
+      if (this.selectedEntityId === entityId) {
+        this.selectedEntityId = null;
+      }
+    }
+  }
+
   private updateEntityMovement(dt: number): void {
     for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
       if (entity.canMove) {
         this.updatePathfindPosCell(entity);
       }
     }
 
     for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
       if (!entity.canMove || !entity.moving || entity.moveTarget === null) {
         continue;
       }
@@ -4234,6 +8721,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
+    this.pendingWeaponDamageEvents.length = 0;
     this.navigationGrid = null;
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
@@ -4406,6 +8894,21 @@ function readNumericListField(fields: Record<string, IniValue>, names: string[])
   }
 
   return null;
+}
+
+function readCoord3DField(
+  fields: Record<string, IniValue>,
+  names: string[],
+): { x: number; y: number; z: number } | null {
+  const values = readNumericListField(fields, names);
+  if (!values || values.length < 2) {
+    return null;
+  }
+  return {
+    x: values[0] ?? 0,
+    y: values[1] ?? 0,
+    z: values[2] ?? 0,
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {
