@@ -91,6 +91,29 @@ describe('IniDataRegistry', () => {
       expect(registry.objects.get('AdvTank')!.parent).toBe('BaseTank');
     });
 
+    it('indexes SpecialPower and ObjectCreationList definitions', () => {
+      registry.loadBlocks([
+        makeBlock('SpecialPower', 'SP_Tactical_Ability', {
+          Type: 'Instant',
+          SpecialPowerTemplate: 'OCL_Fx',
+        }, { parent: 'BaseSpecialPower' }),
+        makeBlock('ObjectCreationList', 'OCL_Fx', {
+          CreateAtEdge: 'No',
+        }),
+      ]);
+
+      const sp = registry.getSpecialPower('SP_Tactical_Ability');
+      const ocl = registry.getObjectCreationList('OCL_Fx');
+
+      expect(sp).toBeDefined();
+      expect(sp?.name).toBe('SP_Tactical_Ability');
+      expect(sp?.parent).toBe('BaseSpecialPower');
+      expect(sp?.fields).toMatchObject({ Type: 'Instant' });
+      expect(ocl).toBeDefined();
+      expect(ocl?.name).toBe('OCL_Fx');
+      expect(ocl?.fields).toMatchObject({ CreateAtEdge: 'No' });
+    });
+
     it('tracks unsupported block types', () => {
       registry.loadBlocks([
         makeBlock('CustomThing', 'Foo', {}),
@@ -386,6 +409,20 @@ describe('IniDataRegistry', () => {
         makeBlock('Object', 'TankA', { Side: 'China' }),
         makeBlock('Weapon', 'GunC', {}),
         makeBlock('Weapon', 'GunA', {}),
+        makeBlock('SpecialPower', 'Power_Z', {
+          Type: 'Instant',
+          SpecialPowerTemplate: 'OCL_01',
+        }),
+        makeBlock('SpecialPower', 'Power_A', {
+          Type: 'Instant',
+          SpecialPowerTemplate: 'OCL_02',
+        }),
+        makeBlock('ObjectCreationList', 'Spawn_Z', {
+          CreateAtEdge: 'No',
+        }),
+        makeBlock('ObjectCreationList', 'Spawn_A', {
+          CreateAtEdge: 'No',
+        }),
       ]);
 
       const bundle = registry.toBundle();
@@ -394,6 +431,10 @@ describe('IniDataRegistry', () => {
       expect(bundle.objects[1]!.name).toBe('TankZ');
       expect(bundle.weapons[0]!.name).toBe('GunA');
       expect(bundle.weapons[1]!.name).toBe('GunC');
+      expect(bundle.specialPowers?.[0]!.name).toBe('Power_A');
+      expect(bundle.specialPowers?.[1]!.name).toBe('Power_Z');
+      expect(bundle.objectCreationLists?.[0]!.name).toBe('Spawn_A');
+      expect(bundle.objectCreationLists?.[1]!.name).toBe('Spawn_Z');
       expect(bundle.stats.objects).toBe(2);
       expect(bundle.stats.weapons).toBe(2);
     });
@@ -464,6 +505,20 @@ describe('IniDataRegistry', () => {
           defaultMusicVolume: 0.5,
         },
         unsupportedBlockTypes: ['CommandButton'],
+        specialPowers: [
+          {
+            name: 'SP_A',
+            fields: { Type: 'Instant', SpecialPowerTemplate: 'OCL_01' },
+            blocks: [{ type: 'ModuleTag', name: 'Power', fields: {}, blocks: [] }],
+          },
+        ],
+        objectCreationLists: [
+          {
+            name: 'OCL_A',
+            fields: { CreateAtEdge: 'No' },
+            blocks: [{ type: 'Create', name: 'Create1', fields: {}, blocks: [] }],
+          },
+        ],
       };
 
       registry.loadBundle(bundle);
@@ -488,6 +543,8 @@ describe('IniDataRegistry', () => {
       expect(registry.getUnsupportedBlockTypes()).toEqual(['CommandButton']);
       expect(registry.errors).toHaveLength(1);
       expect(registry.errors[0]!.type).toBe('duplicate');
+      expect(registry.getSpecialPower('SP_A')?.fields).toMatchObject({ Type: 'Instant' });
+      expect(registry.getObjectCreationList('OCL_A')?.fields).toMatchObject({ CreateAtEdge: 'No' });
     });
 
     it('normalizes legacy CommandSet bundles that do not include slot metadata', () => {

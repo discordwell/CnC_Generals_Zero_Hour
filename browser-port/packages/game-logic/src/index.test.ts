@@ -2165,7 +2165,9 @@ function runObjectUpgradeAffectabilityTimeline(): {
           AddMaxHealth: 50,
           ChangeType: 'SAME_CURRENTHEALTH',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_UpgradeLab',
+      }),
     ],
     upgrades: [
       makeUpgradeDef('Upgrade_Unused', {
@@ -2187,6 +2189,27 @@ function runObjectUpgradeAffectabilityTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeUnused', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Unused',
+      }),
+      makeCommandButtonDef('Command_UpgradeB', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_B',
+      }),
+      makeCommandButtonDef('Command_UpgradeMoveObject', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Move_Object',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_UpgradeLab', {
+        1: 'Command_UpgradeUnused',
+        2: 'Command_UpgradeB',
+        3: 'Command_UpgradeMoveObject',
       }),
     ],
     locomotors: [
@@ -2249,7 +2272,9 @@ function runWeaponSetUpgradeCombatTimeline(): {
         makeBlock('Behavior', 'WeaponSetUpgrade ModuleTag_WeaponSet', {
           TriggeredBy: 'Upgrade_Weapon',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_UpgradeTank',
+      }),
       makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
       ]),
@@ -2271,6 +2296,17 @@ function runWeaponSetUpgradeCombatTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeWeapon', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Weapon',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_UpgradeTank', {
+        1: 'Command_UpgradeWeapon',
       }),
     ],
   });
@@ -2737,6 +2773,7 @@ function runUpgradeCommandSetGateTimeline(matchesUpgradeButton: boolean): {
   completedCounts: number[];
 } {
   const commandButtonName = matchesUpgradeButton ? 'Command_ResearchMove' : 'Command_NotAnUpgrade';
+  const commandButtonUpgrade = matchesUpgradeButton ? 'Upgrade_Move' : 'Upgrade_Attack';
   const commandName = matchesUpgradeButton ? 'PLAYER_UPGRADE' : 'UNIT_BUILD';
   const bundle = makeBundle({
     objects: [
@@ -2758,7 +2795,7 @@ function runUpgradeCommandSetGateTimeline(matchesUpgradeButton: boolean): {
     commandButtons: [
       makeCommandButtonDef(commandButtonName, {
         Command: commandName,
-        Upgrade: 'Upgrade_Move',
+        Upgrade: commandButtonUpgrade,
       }),
     ],
     commandSets: [
@@ -3131,7 +3168,9 @@ function runStatusBitsUpgradeTimeline(): {
           StatusToSet: 'STEALTHED',
           StatusToClear: 'EMPED',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_StatusLab',
+      }),
     ],
     upgrades: [
       makeUpgradeDef('Upgrade_Status_A', {
@@ -3143,6 +3182,22 @@ function runStatusBitsUpgradeTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 130,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeStatusA', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Status_A',
+      }),
+      makeCommandButtonDef('Command_UpgradeStatusB', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_Status_B',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusLab', {
+        1: 'Command_UpgradeStatusA',
+        2: 'Command_UpgradeStatusB',
       }),
     ],
   });
@@ -3193,7 +3248,9 @@ function runStatusBitsCombatTimeline(): {
           TriggeredBy: 'Upgrade_AttackRestore',
           StatusToClear: 'NO_ATTACK',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_StatusTank',
+      }),
       makeObjectDef('TargetTank', 'China', ['VEHICLE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
       ]),
@@ -3215,6 +3272,22 @@ function runStatusBitsCombatTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 120,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeNoAttack', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_NoAttack',
+      }),
+      makeCommandButtonDef('Command_UpgradeAttackRestore', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_AttackRestore',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_StatusTank', {
+        1: 'Command_UpgradeNoAttack',
+        2: 'Command_UpgradeAttackRestore',
       }),
     ],
   });
@@ -3396,7 +3469,9 @@ function runUpgradeRemovalMuxTimeline(): {
           AddMaxHealth: 30,
           ChangeType: 'SAME_CURRENTHEALTH',
         }),
-      ]),
+      ], {
+        CommandSet: 'CommandSet_UpgradeMuxLab',
+      }),
     ],
     upgrades: [
       makeUpgradeDef('Upgrade_A', {
@@ -3408,6 +3483,22 @@ function runUpgradeRemovalMuxTimeline(): {
         Type: 'OBJECT',
         BuildTime: 0.1,
         BuildCost: 100,
+      }),
+    ],
+    commandButtons: [
+      makeCommandButtonDef('Command_UpgradeA', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_A',
+      }),
+      makeCommandButtonDef('Command_UpgradeB', {
+        Command: 'OBJECT_UPGRADE',
+        Upgrade: 'Upgrade_B',
+      }),
+    ],
+    commandSets: [
+      makeCommandSetDef('CommandSet_UpgradeMuxLab', {
+        1: 'Command_UpgradeA',
+        2: 'Command_UpgradeB',
       }),
     ],
   });
