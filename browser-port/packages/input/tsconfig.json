@@ -11,6 +11,6 @@
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"],
   "references": [
-    { "path": "../core" }
+    { "path": "../engine" }
   ]
 }

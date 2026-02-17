@@ -5,7 +5,7 @@
  * original engine surface. Keeps behavior deterministic and minimal while avoiding
  * temporary fallback behavior.
  */
-import type { Subsystem } from '@generals/core';
+import type { Subsystem } from '@generals/engine';
 
 type ActiveAudioHandle = {
   source: OscillatorNode | AudioBufferSourceNode;

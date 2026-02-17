@@ -6,7 +6,12 @@
  */
 
 import * as THREE from 'three';
-import type { Subsystem } from '@generals/core';
+import type {
+  Subsystem,
+  DeterministicFrameSnapshot,
+  DeterministicGameLogicCrcSectionWriters,
+  XferCrcAccumulator,
+} from '@generals/engine';
 import { IniDataRegistry, type ObjectDef, type WeaponDef } from '@generals/ini-data';
 import type { IniBlock, IniValue } from '@generals/core';
 import {
@@ -324,6 +329,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
+  private readonly crcFloatScratch = new DataView(new ArrayBuffer(4));
 
   private isAttackMoveToMode = false;
   private previousAttackMoveToggleDown = false;
@@ -399,6 +405,24 @@ export class GameLogicSubsystem implements Subsystem {
 
   getPlacementSummary(): MapObjectPlacementSummary {
     return { ...this.placementSummary };
+  }
+
+  /**
+   * Source parity references:
+   * - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
+   *
+   * TODO(source parity): replace the section serializers below with direct
+   * ownership from object/partition/player/AI runtime ports as those systems
+   * are promoted from scaffolding to source-complete subsystems.
+   */
+  createDeterministicGameLogicCrcSectionWriters():
+    DeterministicGameLogicCrcSectionWriters<unknown> {
+    return {
+      writeObjects: (crc, snapshot) => this.writeDeterministicObjectsCrc(crc, snapshot),
+      writePartitionManager: (crc, snapshot) => this.writeDeterministicPartitionManagerCrc(crc, snapshot),
+      writePlayerList: (crc, snapshot) => this.writeDeterministicPlayerListCrc(crc, snapshot),
+      writeAi: (crc, snapshot) => this.writeDeterministicAiCrc(crc, snapshot),
+    };
   }
 
   /**
@@ -3866,6 +3890,312 @@ export class GameLogicSubsystem implements Subsystem {
       entity.mesh.rotation.y = Math.atan2(dz, dx) + Math.PI / 2;
       this.updatePathfindPosCell(entity);
     }
+  }
+
+  private writeDeterministicObjectsCrc(
+    crc: XferCrcAccumulator,
+    _snapshot: DeterministicFrameSnapshot<unknown>,
+  ): void {
+    // Source parity:
+    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
+    //   iterates m_objList order via getNextObject().
+    // We mirror runtime-owned insertion order instead of sorting by ID.
+    // TODO(source parity): replace this with the true object-list owner order
+    // once object lifecycle ownership is promoted from scaffolding.
+    const entities = Array.from(this.spawnedEntities.values());
+    crc.addUnsignedInt(entities.length >>> 0);
+
+    for (const entity of entities) {
+      this.addSignedIntCrc(crc, entity.id);
+      crc.addAsciiString(entity.templateName);
+      crc.addAsciiString(entity.category);
+      crc.addAsciiString(entity.side ?? '');
+      crc.addUnsignedByte(entity.resolved ? 1 : 0);
+      crc.addUnsignedByte(entity.selected ? 1 : 0);
+      crc.addUnsignedByte(entity.canMove ? 1 : 0);
+      crc.addUnsignedByte(entity.moving ? 1 : 0);
+      crc.addUnsignedByte(entity.blocksPath ? 1 : 0);
+      crc.addUnsignedByte(entity.pathfindCenterInCell ? 1 : 0);
+      crc.addUnsignedByte(entity.locomotorUpgradeEnabled ? 1 : 0);
+      crc.addUnsignedByte(entity.locomotorDownhillOnly ? 1 : 0);
+      crc.addUnsignedByte(entity.isUnmanned ? 1 : 0);
+      crc.addUnsignedByte(entity.attackNeedsLineOfSight ? 1 : 0);
+      crc.addUnsignedByte(entity.isImmobile ? 1 : 0);
+      crc.addUnsignedInt(Math.trunc(entity.crusherLevel) >>> 0);
+      crc.addUnsignedInt(Math.trunc(entity.crushableLevel) >>> 0);
+      crc.addUnsignedInt(Math.trunc(entity.pathDiameter) >>> 0);
+      crc.addUnsignedInt(Math.trunc(entity.obstacleFootprint) >>> 0);
+      crc.addUnsignedInt(Math.trunc(entity.pathIndex) >>> 0);
+      crc.addAsciiString(entity.activeLocomotorSet);
+      crc.addUnsignedInt(entity.locomotorSurfaceMask >>> 0);
+      this.addFloat32Crc(crc, entity.baseHeight);
+      this.addFloat32Crc(crc, entity.nominalHeight);
+      this.addFloat32Crc(crc, entity.speed);
+      this.addFloat32Crc(crc, entity.largestWeaponRange);
+      this.addFloat32Crc(crc, entity.mesh.position.x);
+      this.addFloat32Crc(crc, entity.mesh.position.y);
+      this.addFloat32Crc(crc, entity.mesh.position.z);
+      this.addFloat32Crc(crc, entity.mesh.rotation.y);
+      this.writeNullableVectorCrc(crc, entity.moveTarget);
+      this.writeVectorArrayCrc(crc, entity.movePath);
+      this.writeNullableGridCellCrc(crc, entity.pathfindGoalCell);
+      this.writeNullableGridCellCrc(crc, entity.pathfindPosCell);
+
+      if (entity.ignoredMovementObstacleId !== null) {
+        crc.addUnsignedByte(1);
+        this.addSignedIntCrc(crc, entity.ignoredMovementObstacleId);
+      } else {
+        crc.addUnsignedByte(0);
+      }
+
+      if (entity.obstacleGeometry) {
+        crc.addUnsignedByte(1);
+        crc.addAsciiString(entity.obstacleGeometry.shape);
+        this.addFloat32Crc(crc, entity.obstacleGeometry.majorRadius);
+        this.addFloat32Crc(crc, entity.obstacleGeometry.minorRadius);
+      } else {
+        crc.addUnsignedByte(0);
+      }
+
+      const locomotorSetNames = Array.from(entity.locomotorSets.keys()).sort();
+      crc.addUnsignedInt(locomotorSetNames.length >>> 0);
+      for (const setName of locomotorSetNames) {
+        const profile = entity.locomotorSets.get(setName);
+        if (!profile) {
+          continue;
+        }
+        crc.addAsciiString(setName);
+        crc.addUnsignedInt(profile.surfaceMask >>> 0);
+        crc.addUnsignedByte(profile.downhillOnly ? 1 : 0);
+        this.addFloat32Crc(crc, profile.movementSpeed);
+      }
+
+      const upgradeTriggers = Array.from(entity.locomotorUpgradeTriggers.values()).sort();
+      crc.addUnsignedInt(upgradeTriggers.length >>> 0);
+      for (const upgradeTrigger of upgradeTriggers) {
+        crc.addAsciiString(upgradeTrigger);
+      }
+    }
+  }
+
+  private writeDeterministicPartitionManagerCrc(
+    crc: XferCrcAccumulator,
+    _snapshot: DeterministicFrameSnapshot<unknown>,
+  ): void {
+    // Source parity:
+    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
+    //   xfers ThePartitionManager snapshot directly.
+    // TODO(source parity): swap these runtime-owned bridge/nav fields for
+    // serialized partition-manager snapshot data from the ported owner.
+    const grid = this.navigationGrid;
+    crc.addUnsignedByte(grid ? 1 : 0);
+    if (!grid) {
+      return;
+    }
+
+    this.addSignedIntCrc(crc, grid.width);
+    this.addSignedIntCrc(crc, grid.height);
+    this.addSignedIntCrc(crc, grid.zoneBlockWidth);
+    this.addSignedIntCrc(crc, grid.zoneBlockHeight);
+    this.addFloat32Crc(crc, grid.logicalMinX);
+    this.addFloat32Crc(crc, grid.logicalMinZ);
+    this.addFloat32Crc(crc, grid.logicalMaxX);
+    this.addFloat32Crc(crc, grid.logicalMaxZ);
+
+    this.writeUint8ArrayCrc(crc, grid.terrainType);
+    this.writeUint8ArrayCrc(crc, grid.blocked);
+    this.writeUint8ArrayCrc(crc, grid.pinched);
+    this.writeUint8ArrayCrc(crc, grid.bridge);
+    this.writeUint8ArrayCrc(crc, grid.bridgePassable);
+    this.writeUint8ArrayCrc(crc, grid.bridgeTransitions);
+    this.writeInt32ArrayCrc(crc, grid.bridgeSegmentByCell);
+    this.writeUint8ArrayCrc(crc, grid.zonePassable);
+
+    const segmentEntries = Array.from(this.bridgeSegments.entries()).sort(([leftId], [rightId]) => leftId - rightId);
+    crc.addUnsignedInt(segmentEntries.length >>> 0);
+    for (const [segmentId, segment] of segmentEntries) {
+      this.addSignedIntCrc(crc, segmentId);
+      crc.addUnsignedByte(segment.passable ? 1 : 0);
+      this.writeSignedNumberArrayCrc(crc, segment.cellIndices, true);
+      this.writeSignedNumberArrayCrc(crc, segment.transitionIndices, true);
+    }
+
+    const controlEntries = Array.from(this.bridgeSegmentByControlEntity.entries())
+      .sort(([leftId], [rightId]) => leftId - rightId);
+    crc.addUnsignedInt(controlEntries.length >>> 0);
+    for (const [entityId, segmentId] of controlEntries) {
+      this.addSignedIntCrc(crc, entityId);
+      this.addSignedIntCrc(crc, segmentId);
+    }
+  }
+
+  private writeDeterministicPlayerListCrc(
+    crc: XferCrcAccumulator,
+    _snapshot: DeterministicFrameSnapshot<unknown>,
+  ): void {
+    // Source parity:
+    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
+    //   xfers ThePlayerList snapshot directly.
+    // TODO(source parity): switch to ThePlayerList-equivalent snapshot data
+    // once player-list ownership is promoted from scaffolding.
+    this.addSignedIntCrc(crc, this.selectedEntityId ?? -1);
+    this.writeRelationshipOverridesCrc(crc, this.teamRelationshipOverrides);
+    this.writeRelationshipOverridesCrc(crc, this.playerRelationshipOverrides);
+    crc.addUnsignedInt(this.placementSummary.totalObjects >>> 0);
+    crc.addUnsignedInt(this.placementSummary.spawnedObjects >>> 0);
+    crc.addUnsignedInt(this.placementSummary.skippedObjects >>> 0);
+    crc.addUnsignedInt(this.placementSummary.resolvedObjects >>> 0);
+    crc.addUnsignedInt(this.placementSummary.unresolvedObjects >>> 0);
+  }
+
+  private writeDeterministicAiCrc(
+    crc: XferCrcAccumulator,
+    _snapshot: DeterministicFrameSnapshot<unknown>,
+  ): void {
+    // Source parity:
+    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
+    //   xfers TheAI snapshot directly.
+    // TODO(source parity): replace this transitional AI/runtime summary with
+    // serialized AI owner snapshot fields once AI system ownership is ported.
+    crc.addUnsignedInt(this.frameCounter >>> 0);
+    crc.addUnsignedInt(this.nextId >>> 0);
+    this.addFloat32Crc(crc, this.animationTime);
+    crc.addUnsignedByte(this.isAttackMoveToMode ? 1 : 0);
+    crc.addUnsignedByte(this.previousAttackMoveToggleDown ? 1 : 0);
+    crc.addUnsignedByte(this.config.renderUnknownObjects ? 1 : 0);
+    crc.addUnsignedByte(this.config.attackUsesLineOfSight ? 1 : 0);
+    this.addFloat32Crc(crc, this.config.defaultMoveSpeed);
+    this.addFloat32Crc(crc, this.config.terrainSnapSpeed);
+
+    crc.addUnsignedInt(this.commandQueue.length >>> 0);
+    for (const command of this.commandQueue) {
+      this.writeGameLogicCommandCrc(crc, command);
+    }
+  }
+
+  private writeGameLogicCommandCrc(crc: XferCrcAccumulator, command: GameLogicCommand): void {
+    crc.addAsciiString(command.type);
+    switch (command.type) {
+      case 'select':
+      case 'stop':
+      case 'bridgeDestroyed':
+      case 'bridgeRepaired':
+        this.addSignedIntCrc(crc, command.entityId);
+        return;
+      case 'clearSelection':
+        return;
+      case 'moveTo':
+        this.addSignedIntCrc(crc, command.entityId);
+        this.addFloat32Crc(crc, command.targetX);
+        this.addFloat32Crc(crc, command.targetZ);
+        return;
+      case 'attackMoveTo':
+        this.addSignedIntCrc(crc, command.entityId);
+        this.addFloat32Crc(crc, command.targetX);
+        this.addFloat32Crc(crc, command.targetZ);
+        this.addFloat32Crc(crc, command.attackDistance);
+        return;
+      case 'setLocomotorSet':
+        this.addSignedIntCrc(crc, command.entityId);
+        crc.addAsciiString(command.setName);
+        return;
+      case 'setLocomotorUpgrade':
+        this.addSignedIntCrc(crc, command.entityId);
+        crc.addUnsignedByte(command.enabled ? 1 : 0);
+        return;
+      case 'applyUpgrade':
+        this.addSignedIntCrc(crc, command.entityId);
+        crc.addAsciiString(command.upgradeName);
+        return;
+      default: {
+        const unsupported: never = command;
+        throw new Error(`Unsupported deterministic command type: ${(unsupported as { type: string }).type}`);
+      }
+    }
+  }
+
+  private writeRelationshipOverridesCrc(
+    crc: XferCrcAccumulator,
+    overrides: ReadonlyMap<string, number>,
+  ): void {
+    const entries = Array.from(overrides.entries()).sort(([left], [right]) => left.localeCompare(right));
+    crc.addUnsignedInt(entries.length >>> 0);
+    for (const [key, relationship] of entries) {
+      crc.addAsciiString(key);
+      this.addSignedIntCrc(crc, relationship);
+    }
+  }
+
+  private writeVectorArrayCrc(crc: XferCrcAccumulator, points: ReadonlyArray<VectorXZ>): void {
+    crc.addUnsignedInt(points.length >>> 0);
+    for (const point of points) {
+      this.addFloat32Crc(crc, point.x);
+      this.addFloat32Crc(crc, point.z);
+    }
+  }
+
+  private writeNullableVectorCrc(crc: XferCrcAccumulator, point: VectorXZ | null): void {
+    if (!point) {
+      crc.addUnsignedByte(0);
+      return;
+    }
+    crc.addUnsignedByte(1);
+    this.addFloat32Crc(crc, point.x);
+    this.addFloat32Crc(crc, point.z);
+  }
+
+  private writeNullableGridCellCrc(
+    crc: XferCrcAccumulator,
+    point: { x: number; z: number } | null,
+  ): void {
+    if (!point) {
+      crc.addUnsignedByte(0);
+      return;
+    }
+    crc.addUnsignedByte(1);
+    this.addSignedIntCrc(crc, point.x);
+    this.addSignedIntCrc(crc, point.z);
+  }
+
+  private writeSignedNumberArrayCrc(
+    crc: XferCrcAccumulator,
+    values: ReadonlyArray<number>,
+    sortValues: boolean,
+  ): void {
+    const normalized = sortValues ? [...values].sort((left, right) => left - right) : [...values];
+    crc.addUnsignedInt(normalized.length >>> 0);
+    for (const value of normalized) {
+      this.addSignedIntCrc(crc, value);
+    }
+  }
+
+  private writeUint8ArrayCrc(crc: XferCrcAccumulator, values: Uint8Array): void {
+    crc.addUnsignedInt(values.length >>> 0);
+    for (const value of values) {
+      crc.addUnsignedByte(value & 0xff);
+    }
+  }
+
+  private writeInt32ArrayCrc(crc: XferCrcAccumulator, values: Int32Array): void {
+    crc.addUnsignedInt(values.length >>> 0);
+    for (const value of values) {
+      this.addSignedIntCrc(crc, value);
+    }
+  }
+
+  private addSignedIntCrc(crc: XferCrcAccumulator, value: number): void {
+    if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff) {
+      throw new Error(`deterministic CRC value must be a signed 32-bit integer, got ${value}`);
+    }
+    crc.addUnsignedInt(value >>> 0);
+  }
+
+  private addFloat32Crc(crc: XferCrcAccumulator, value: number): void {
+    if (!Number.isFinite(value)) {
+      throw new Error(`deterministic CRC value must be finite, got ${value}`);
+    }
+    this.crcFloatScratch.setFloat32(0, Math.fround(value), true);
+    crc.addUnsignedInt(this.crcFloatScratch.getUint32(0, true));
   }
 
   private getRaycastTargets(): THREE.Object3D[] {

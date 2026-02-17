@@ -5,7 +5,7 @@
  * status messages and selected-object text while the full ControlBar port is
  * implemented in later phases.
  */
-import type { Subsystem } from '@generals/core';
+import type { Subsystem } from '@generals/engine';
 
 export class UiRuntime implements Subsystem {
   readonly name = '@generals/ui';

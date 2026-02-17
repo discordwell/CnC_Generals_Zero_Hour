@@ -73,6 +73,9 @@ Win64/
 
 # Dependency directories
 packages/
+# Browser-port workspace sources are tracked under browser-port/packages.
+!browser-port/packages/
+!browser-port/packages/**
 
 # Backup files
 *~
