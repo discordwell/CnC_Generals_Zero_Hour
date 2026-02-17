@@ -271,15 +271,17 @@ export class IniDataRegistry {
       this.commandButtons.set(commandButton.name, {
         ...commandButton,
         fields: { ...commandButton.fields },
-        blocks: [...commandButton.blocks],
-        options: [...commandButton.options],
+        blocks: [...(commandButton.blocks ?? [])],
+        commandTypeName: commandButton.commandTypeName ?? extractTokenString(commandButton.fields['Command']),
+        options: [...(commandButton.options ?? extractOptions(commandButton.fields['Options']))],
         unitSpecificSoundName: commandButton.unitSpecificSoundName,
       });
     }
     for (const commandSet of bundle.commandSets ?? []) {
+      const normalizedButtons = commandSet.buttons ?? [];
       const slottedButtons = normalizeCommandSetButtonSlots(
         commandSet.slottedButtons ??
-          commandSet.buttons.map((commandButtonName, index) => ({
+          normalizedButtons.map((commandButtonName, index) => ({
             slot: index + 1,
             commandButtonName,
           })),
