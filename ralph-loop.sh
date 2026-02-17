@@ -23,7 +23,7 @@ Examples:
   ./ralph-loop.sh --count 5 --prompt "Please continue." --session-id <SESSION_ID> --non-interactive -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --log-file /tmp/ralph-loop.log
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --plan-prompt "Assess status, then plan." -- -c model="gpt-5.3-codex-spark"
-  ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --progress-window 10 --min-delta-lines 500 -- -c model="gpt-5.3-codex-spark"
+  ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --progress-window 10 --min-delta-lines 200 -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --sandbox danger-full-access -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --bypass-sandbox -- -c model="gpt-5.3-codex-spark"
   ./ralph-loop.sh --count 20 --prompt "..." --session-id <SESSION_ID> --non-interactive --completion-poll-interval 5 --completion-timeout 120 -- -c model="gpt-5.3-codex-spark"
@@ -51,7 +51,7 @@ state_file=".ralph/session-state.md"
 codex_sandbox=""
 bypass_sandbox=0
 progress_window=10
-min_delta_lines=500
+min_delta_lines=200
 allow_low_progress=0
 new_agent=0
 completion_poll_interval=5
