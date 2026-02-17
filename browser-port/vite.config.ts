@@ -1,8 +1,11 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
+const APP_PUBLIC_DIR = resolve(__dirname, 'packages', 'app', 'public');
+
 export default defineConfig({
   root: resolve(__dirname, 'packages/app'),
+  publicDir: APP_PUBLIC_DIR,
   resolve: {
     alias: {
       '@generals/core': resolve(__dirname, 'packages/core/src'),

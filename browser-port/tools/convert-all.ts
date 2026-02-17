@@ -3,7 +3,7 @@
  * Master asset conversion pipeline for C&C Generals: Zero Hour Browser Port.
  *
  * Reads the original game directory and converts all assets into
- * browser-friendly formats under browser-port/public/assets/.
+ * browser-friendly formats under the app public assets directory.
  *
  * Usage:
  *   npm run convert:all -- --game-dir /path/to/generals
@@ -20,8 +20,313 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { addManifestEntry, createManifest, parseManifest, serializeManifest } from '@generals/core';
+import { fileURLToPath } from 'node:url';
+import {
+  addManifestEntry,
+  createManifest,
+  parseManifest,
+  serializeManifest,
+  type ConversionManifest,
+  type ManifestEntry,
+} from '@generals/core';
+import { RUNTIME_ASSET_BASE_URL, RUNTIME_MANIFEST_FILE } from '@generals/assets';
 import type { IniDataBundle, RegistryStats } from '@generals/ini-data';
+
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const APP_PUBLIC_DIR = path.join(PROJECT_ROOT, 'packages', 'app', 'public');
+const APP_PUBLIC_ASSETS_DIR = path.join(APP_PUBLIC_DIR, RUNTIME_ASSET_BASE_URL);
+const APP_PUBLIC_ASSETS_DISPLAY_PATH = `${path.relative(path.dirname(PROJECT_ROOT), APP_PUBLIC_ASSETS_DIR).replace(/\\/g, '/')}/`;
+const TOOLS_DIR = path.join(PROJECT_ROOT, 'tools');
+const TOOL_VERSION = '1.0.0';
+const RUNTIME_MANIFEST_FILENAME = RUNTIME_MANIFEST_FILE;
+const VALID_STEPS = new Set(['big', 'texture', 'w3d', 'map', 'ini']);
+const DEFAULT_OUTPUT_DIR = APP_PUBLIC_ASSETS_DIR;
+
+// ---------------------------------------------------------------------------
+// Path/hash helpers
+// ---------------------------------------------------------------------------
+
+function normalizeManifestPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+}
+
+function sanitizeManifestPathValue(pathValue: string, key: 'sourcePath' | 'outputPath'): string {
+  let normalized = normalizeManifestPath(pathValue).replace(/^\/+/, '');
+  if (key === 'outputPath') {
+    const runtimeBaseLower = RUNTIME_ASSET_BASE_URL.toLowerCase();
+    const runtimePrefix = `${runtimeBaseLower}/`;
+    const normalizedLower = normalized.toLowerCase();
+    if (normalizedLower === runtimeBaseLower) {
+      return '';
+    }
+    if (normalizedLower.startsWith(runtimePrefix)) {
+      normalized = normalized.slice(runtimePrefix.length);
+    }
+  }
+  return normalized;
+}
+
+function validateManifestPathValue(pathValue: string, key: 'sourcePath' | 'outputPath'): string | null {
+  if (pathValue.length === 0) {
+    return 'path cannot be empty';
+  }
+
+  if (/^[a-z]+:\/\//i.test(pathValue)) {
+    return 'path must be relative';
+  }
+
+  if (/^[A-Za-z]:($|\/)/.test(pathValue)) {
+    return 'path must be relative';
+  }
+
+  if (pathValue.includes('\\')) {
+    return 'path must use forward slashes';
+  }
+
+  if (pathValue.startsWith('/')) {
+    return 'path must be relative';
+  }
+
+  const segments = pathValue.split('/');
+  if (segments.some((segment) => segment.length === 0)) {
+    return 'path must not contain empty segments';
+  }
+  if (segments.includes('.')) {
+    return 'path must not contain "." segments';
+  }
+  if (segments.includes('..')) {
+    return 'path must not contain ".." segments';
+  }
+
+  if (key === 'outputPath') {
+    const runtimeBaseLower = RUNTIME_ASSET_BASE_URL.toLowerCase();
+    const runtimePrefix = `${runtimeBaseLower}/`;
+    const pathValueLower = pathValue.toLowerCase();
+    if (pathValueLower === runtimeBaseLower || pathValueLower.startsWith(runtimePrefix)) {
+      return `path must be relative to runtime base and must not include "${runtimePrefix}"`;
+    }
+  }
+
+  return null;
+}
+
+function sanitizeLoadedManifest(manifest: ConversionManifest, manifestPath: string): ConversionManifest {
+  let rewritten = 0;
+  let dropped = 0;
+  let deduped = 0;
+  const byOutputPath = new Map<string, ManifestEntry>();
+
+  for (const entry of manifest.entries) {
+    const sourcePath = sanitizeManifestPathValue(entry.sourcePath, 'sourcePath');
+    const outputPath = sanitizeManifestPathValue(entry.outputPath, 'outputPath');
+
+    if (sourcePath !== entry.sourcePath || outputPath !== entry.outputPath) {
+      rewritten += 1;
+    }
+
+    const sourcePathIssue = validateManifestPathValue(sourcePath, 'sourcePath');
+    const outputPathIssue = validateManifestPathValue(outputPath, 'outputPath');
+    if (sourcePathIssue || outputPathIssue) {
+      dropped += 1;
+      continue;
+    }
+
+    if (byOutputPath.has(outputPath)) {
+      deduped += 1;
+    }
+
+    byOutputPath.set(outputPath, {
+      ...entry,
+      sourcePath,
+      outputPath,
+    });
+  }
+
+  const entries = [...byOutputPath.values()];
+  if (rewritten > 0 || dropped > 0 || deduped > 0) {
+    console.warn(
+      `Normalized existing manifest "${manifestPath}" ` +
+      `(rewritten: ${rewritten}, dropped: ${dropped}, deduped: ${deduped}).`,
+    );
+  }
+
+  return {
+    ...manifest,
+    entries,
+    entryCount: entries.length,
+  };
+}
+
+function assertManifestPathSafety(manifest: ConversionManifest, manifestPath: string): void {
+  for (const entry of manifest.entries) {
+    const outputPathIssue = validateManifestPathValue(entry.outputPath, 'outputPath');
+    if (outputPathIssue) {
+      throw new Error(
+        `Refusing to write invalid manifest entry to ${manifestPath}: ` +
+        `outputPath "${entry.outputPath}" (${outputPathIssue})`,
+      );
+    }
+    const sourcePathIssue = validateManifestPathValue(entry.sourcePath, 'sourcePath');
+    if (sourcePathIssue) {
+      throw new Error(
+        `Refusing to write invalid manifest entry to ${manifestPath}: ` +
+        `sourcePath "${entry.sourcePath}" (${sourcePathIssue})`,
+      );
+    }
+  }
+}
+
+function isPathInside(parentDir: string, childPath: string): boolean {
+  const rel = path.relative(parentDir, childPath);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function fileHashHex(filePath: string): string {
+  const data = fs.readFileSync(filePath);
+  return createHash('sha256').update(data).digest('hex');
+}
+
+function sha256Hex(data: string): string {
+  return createHash('sha256').update(data).digest('hex');
+}
+
+function sourcePathForManifest(sourcePath: string, gameDir: string, outputDir: string): string {
+  const absoluteSourcePath = path.resolve(sourcePath);
+  const extractedDir = path.join(outputDir, '_extracted');
+
+  if (isPathInside(extractedDir, absoluteSourcePath)) {
+    return normalizeManifestPath(path.relative(outputDir, absoluteSourcePath));
+  }
+
+  if (isPathInside(gameDir, absoluteSourcePath)) {
+    return normalizeManifestPath(path.join('game', path.relative(gameDir, absoluteSourcePath)));
+  }
+
+  return normalizeManifestPath(path.relative(PROJECT_ROOT, absoluteSourcePath));
+}
+
+function outputPathForManifest(outputPath: string, outputDir: string): string | null {
+  const absoluteOutputPath = path.resolve(outputPath);
+  if (!isPathInside(outputDir, absoluteOutputPath)) {
+    return null;
+  }
+  return normalizeManifestPath(path.relative(outputDir, absoluteOutputPath));
+}
+
+function upsertManifestEntryByOutputPath(manifest: ConversionManifest, entry: ManifestEntry): void {
+  // Runtime loading indexes by outputPath, so keep output paths unique in the manifest.
+  manifest.entries = manifest.entries.filter((existing) => existing.outputPath !== entry.outputPath);
+  addManifestEntry(manifest, entry);
+}
+
+function addConvertedFileToManifest(
+  manifest: ConversionManifest,
+  options: {
+    sourcePath: string;
+    outputPath: string;
+    gameDir: string;
+    outputDir: string;
+    converter: string;
+    timestamp: string;
+  },
+): void {
+  const outputPath = outputPathForManifest(options.outputPath, options.outputDir);
+  if (!outputPath) {
+    console.warn(`Skipping manifest entry outside output dir: ${options.outputPath}`);
+    return;
+  }
+
+  if (!fs.existsSync(options.sourcePath) || !fs.existsSync(options.outputPath)) {
+    console.warn(`Skipping manifest entry with missing file(s): ${options.sourcePath} -> ${options.outputPath}`);
+    return;
+  }
+
+  upsertManifestEntryByOutputPath(manifest, {
+    sourcePath: sourcePathForManifest(options.sourcePath, options.gameDir, options.outputDir),
+    sourceHash: fileHashHex(options.sourcePath),
+    outputPath,
+    outputHash: fileHashHex(options.outputPath),
+    converter: options.converter,
+    converterVersion: TOOL_VERSION,
+    timestamp: options.timestamp,
+  });
+}
+
+function loadOrCreateManifest(manifestPath: string): ConversionManifest {
+  if (!fs.existsSync(manifestPath)) {
+    return createManifest();
+  }
+
+  const parsed = parseManifest(fs.readFileSync(manifestPath, 'utf-8'));
+  if (!parsed) {
+    console.warn(`Existing manifest is invalid JSON/schema, recreating: ${manifestPath}`);
+    return createManifest();
+  }
+
+  return sanitizeLoadedManifest(parsed, manifestPath);
+}
+
+function writeManifest(manifest: ConversionManifest, manifestPath: string): void {
+  assertManifestPathSafety(manifest, manifestPath);
+  manifest.generatedAt = new Date().toISOString();
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, serializeManifest(manifest));
+}
+
+function mergeIniManifest(
+  target: ConversionManifest,
+  manifestPath: string,
+  gameDir: string,
+  outputDir: string,
+): void {
+  if (!fs.existsSync(manifestPath)) return;
+
+  const parsed = parseManifest(fs.readFileSync(manifestPath, 'utf-8'));
+  if (!parsed) {
+    console.warn(`Skipping invalid INI manifest: ${manifestPath}`);
+    return;
+  }
+
+  for (const entry of parsed.entries) {
+    const absoluteOutputPath = path.resolve(PROJECT_ROOT, entry.outputPath);
+    const runtimeOutputPath = outputPathForManifest(absoluteOutputPath, outputDir);
+    if (!runtimeOutputPath) {
+      continue;
+    }
+
+    const absoluteSourcePath = path.resolve(PROJECT_ROOT, entry.sourcePath);
+    upsertManifestEntryByOutputPath(target, {
+      sourcePath: sourcePathForManifest(absoluteSourcePath, gameDir, outputDir),
+      sourceHash: entry.sourceHash,
+      outputPath: runtimeOutputPath,
+      outputHash: entry.outputHash,
+      converter: entry.converter,
+      converterVersion: entry.converterVersion,
+      timestamp: entry.timestamp,
+    });
+  }
+}
+
+function removeManifestEntries(
+  manifest: ConversionManifest,
+  outputDir: string,
+  predicate: (entry: ManifestEntry) => boolean,
+): number {
+  const removedEntries = manifest.entries.filter(predicate);
+  const previousCount = manifest.entries.length;
+  manifest.entries = manifest.entries.filter((entry) => !predicate(entry));
+  manifest.entryCount = manifest.entries.length;
+
+  for (const entry of removedEntries) {
+    const absoluteOutputPath = path.resolve(outputDir, entry.outputPath);
+    if (!isPathInside(outputDir, absoluteOutputPath)) {
+      continue;
+    }
+    fs.rmSync(absoluteOutputPath, { force: true });
+  }
+
+  return previousCount - manifest.entries.length;
+}
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -66,16 +371,21 @@ function parseArgs(): { gameDir: string; outputDir: string; steps: Set<string> }
   }
 
   if (!outputDir) {
-    outputDir = path.resolve(import.meta.dirname ?? '.', '..', 'public', 'assets');
+    outputDir = DEFAULT_OUTPUT_DIR;
   }
 
   // Default: run all steps
   if (steps.size === 0) {
-    steps.add('big');
-    steps.add('texture');
-    steps.add('w3d');
-    steps.add('map');
-    steps.add('ini');
+    for (const step of VALID_STEPS) {
+      steps.add(step);
+    }
+  }
+
+  const unknownSteps = [...steps].filter((step) => !VALID_STEPS.has(step));
+  if (unknownSteps.length > 0) {
+    console.error(`Error: Unknown step(s) in --only: ${unknownSteps.join(', ')}`);
+    console.error(`Valid steps: ${[...VALID_STEPS].join(', ')}`);
+    process.exit(1);
   }
 
   return { gameDir: path.resolve(gameDir), outputDir: path.resolve(outputDir), steps };
@@ -87,7 +397,7 @@ Usage: npm run convert:all -- --game-dir <path> [options]
 
 Options:
   --game-dir <path>   Path to C&C Generals: Zero Hour install directory (required)
-  --output <path>     Output directory (default: browser-port/public/assets/)
+  --output <path>     Output directory (default: ${APP_PUBLIC_ASSETS_DISPLAY_PATH})
   --only <steps>      Comma-separated list of steps to run: big,texture,w3d,map,ini
   --help              Show this help message
 
@@ -114,31 +424,112 @@ function findFiles(dir: string, ext: string): string[] {
       results.push(fullPath);
     }
   }
-  return results;
+  return results.sort((left, right) => left.localeCompare(right));
+}
+
+function stripLeadingSegment(relPath: string, segment: string): string {
+  const normalized = relPath.replace(/\\/g, '/');
+  const prefix = `${segment.toLowerCase()}/`;
+  return normalized.toLowerCase().startsWith(prefix)
+    ? normalized.slice(prefix.length)
+    : normalized;
+}
+
+function mapOutputRelativePath(file: string, gameDir: string, extractedDir: string): string {
+  const absoluteFilePath = path.resolve(file);
+
+  if (isPathInside(gameDir, absoluteFilePath)) {
+    const relativeFromGame = path.relative(gameDir, absoluteFilePath);
+    return stripLeadingSegment(relativeFromGame, 'maps');
+  }
+
+  if (isPathInside(extractedDir, absoluteFilePath)) {
+    // Keep extracted maps namespaced to avoid collisions with game-dir maps.
+    return path.join('_extracted', path.relative(extractedDir, absoluteFilePath));
+  }
+
+  return path.basename(absoluteFilePath);
+}
+
+interface GameIniParseConfig {
+  readonly parseDir: string;
+  readonly baseDir: string;
+}
+
+function hasSourceTreeMarker(gameDir: string, variantDir: 'Generals' | 'GeneralsMD'): boolean {
+  return fs.existsSync(path.join(gameDir, variantDir, 'Code', 'GameEngine', 'Source', 'Common', 'GameEngine.cpp'));
+}
+
+function listRuntimeIniRootCandidates(gameDir: string): GameIniParseConfig[] {
+  const rootDataIni = path.join(gameDir, 'Data', 'INI');
+  const runDataIni = path.join(gameDir, 'Run', 'Data', 'INI');
+  const zhSourceRunDataIni = path.join(gameDir, 'GeneralsMD', 'Run', 'Data', 'INI');
+  const generalsSourceRunDataIni = path.join(gameDir, 'Generals', 'Run', 'Data', 'INI');
+  const legacyDataRoot = path.join(gameDir, 'data');
+
+  // Source-derived precedence from GameEngine.cpp:
+  // - Runtime loads are rooted under Data\\INI\\... (Default + override + Object dir).
+  // - Zero Hour source checkouts commonly live under GeneralsMD/Run.
+  // - Legacy lower-case data trees are kept as the final fallback for older dumps.
+  const candidates: GameIniParseConfig[] = [
+    {
+      parseDir: rootDataIni,
+      baseDir: gameDir,
+    },
+    {
+      parseDir: runDataIni,
+      baseDir: path.join(gameDir, 'Run'),
+    },
+  ];
+
+  if (hasSourceTreeMarker(gameDir, 'GeneralsMD')) {
+    candidates.push({
+      parseDir: zhSourceRunDataIni,
+      baseDir: path.join(gameDir, 'GeneralsMD', 'Run'),
+    });
+  }
+
+  if (hasSourceTreeMarker(gameDir, 'Generals')) {
+    candidates.push({
+      parseDir: generalsSourceRunDataIni,
+      baseDir: path.join(gameDir, 'Generals', 'Run'),
+    });
+  }
+
+  candidates.push({
+    parseDir: legacyDataRoot,
+    baseDir: gameDir,
+  });
+
+  return candidates;
+}
+
+function resolveGameIniParseConfig(gameDir: string): GameIniParseConfig | null {
+  const runtimeCandidates = listRuntimeIniRootCandidates(gameDir);
+  for (const candidate of runtimeCandidates) {
+    if (fs.existsSync(candidate.parseDir)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
 // Step runners
 // ---------------------------------------------------------------------------
 
-const TOOLS_DIR = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
-
 function runTool(tool: string, args: string[]): boolean {
   const toolPath = path.join(TOOLS_DIR, tool, 'src', 'cli.ts');
   try {
     execFileSync('npx', ['tsx', toolPath, ...args], {
       stdio: 'inherit',
-      cwd: path.resolve(TOOLS_DIR, '..'),
+      cwd: PROJECT_ROOT,
     });
     return true;
   } catch {
     console.error(`  ⚠ Tool ${tool} failed for args: ${args.join(' ')}`);
     return false;
   }
-}
-
-function sha256Hex(data: string): string {
-  return createHash('sha256').update(data).digest('hex');
 }
 
 function ensureBundle(value: unknown): value is IniDataBundle {
@@ -243,32 +634,34 @@ function mergeAiConfig(
   };
 }
 
-function mergeManifest(manifest: ReturnType<typeof createManifest>, manifestPath: string): void {
-  if (!fs.existsSync(manifestPath)) return;
-
-  const parsed = parseManifest(fs.readFileSync(manifestPath, 'utf-8'));
-  if (!parsed) return;
-
-  for (const entry of parsed.entries) {
-    addManifestEntry(manifest, entry);
-  }
-}
-
 function stepExtractBig(gameDir: string, outputDir: string): void {
   console.log('\n═══ Step 1/5: Extracting .big archives ═══\n');
   const extractedDir = path.join(outputDir, '_extracted');
   const bigFiles = findFiles(gameDir, '.big');
   console.log(`Found ${bigFiles.length} .big archive(s)`);
 
+  let failures = 0;
   for (const bigFile of bigFiles) {
     const baseName = path.basename(bigFile, '.big');
     const outDir = path.join(extractedDir, baseName);
     console.log(`  Extracting: ${path.basename(bigFile)} → ${path.relative(outputDir, outDir)}`);
-    runTool('big-extractor', ['--input', bigFile, '--output', outDir]);
+    const converted = runTool('big-extractor', ['--input', bigFile, '--output', outDir]);
+    if (!converted) {
+      failures += 1;
+    }
+  }
+
+  if (failures > 0) {
+    throw new Error(`BIG extraction failed for ${failures} archive(s).`);
   }
 }
 
-function stepConvertTextures(outputDir: string): void {
+function stepConvertTextures(
+  gameDir: string,
+  outputDir: string,
+  runtimeManifest: ConversionManifest,
+  timestamp: string,
+): void {
   console.log('\n═══ Step 2/5: Converting textures ═══\n');
   const extractedDir = path.join(outputDir, '_extracted');
   const textureDir = path.join(outputDir, 'textures');
@@ -277,14 +670,37 @@ function stepConvertTextures(outputDir: string): void {
   const ddsFiles = findFiles(extractedDir, '.dds');
   console.log(`Found ${tgaFiles.length} .tga + ${ddsFiles.length} .dds texture(s)`);
 
-  for (const file of [...tgaFiles, ...ddsFiles]) {
+  let failures = 0;
+  for (const file of [...tgaFiles, ...ddsFiles].sort((left, right) => left.localeCompare(right))) {
     const relPath = path.relative(extractedDir, file);
-    const outPath = path.join(textureDir, relPath.replace(/\.(tga|dds)$/i, '.rgba'));
-    runTool('texture-converter', ['--input', file, '--output', path.dirname(outPath)]);
+    const normalizedRelPath = stripLeadingSegment(relPath, 'textures');
+    const outPath = path.join(textureDir, normalizedRelPath.replace(/\.(tga|dds)$/i, '.rgba'));
+    const converted = runTool('texture-converter', ['--input', file, '--output', path.dirname(outPath)]);
+    if (!converted || !fs.existsSync(outPath)) {
+      failures += 1;
+      continue;
+    }
+    addConvertedFileToManifest(runtimeManifest, {
+      sourcePath: file,
+      outputPath: outPath,
+      gameDir,
+      outputDir,
+      converter: 'texture-converter',
+      timestamp,
+    });
+  }
+
+  if (failures > 0) {
+    throw new Error(`Texture conversion failed for ${failures} file(s).`);
   }
 }
 
-function stepConvertW3d(outputDir: string): void {
+function stepConvertW3d(
+  gameDir: string,
+  outputDir: string,
+  runtimeManifest: ConversionManifest,
+  timestamp: string,
+): void {
   console.log('\n═══ Step 3/5: Converting W3D models ═══\n');
   const extractedDir = path.join(outputDir, '_extracted');
   const modelDir = path.join(outputDir, 'models');
@@ -292,33 +708,79 @@ function stepConvertW3d(outputDir: string): void {
   const w3dFiles = findFiles(extractedDir, '.w3d');
   console.log(`Found ${w3dFiles.length} .w3d model(s)`);
 
+  let failures = 0;
   for (const file of w3dFiles) {
     const relPath = path.relative(extractedDir, file);
-    const outPath = path.join(modelDir, relPath.replace(/\.w3d$/i, '.glb'));
+    const normalizedRelPath = stripLeadingSegment(relPath, 'models');
+    const outPath = path.join(modelDir, normalizedRelPath.replace(/\.w3d$/i, '.glb'));
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    runTool('w3d-converter', ['--input', file, '--output', outPath]);
+    const converted = runTool('w3d-converter', ['--input', file, '--output', outPath]);
+    if (!converted || !fs.existsSync(outPath)) {
+      failures += 1;
+      continue;
+    }
+    addConvertedFileToManifest(runtimeManifest, {
+      sourcePath: file,
+      outputPath: outPath,
+      gameDir,
+      outputDir,
+      converter: 'w3d-converter',
+      timestamp,
+    });
+  }
+
+  if (failures > 0) {
+    throw new Error(`W3D conversion failed for ${failures} file(s).`);
   }
 }
 
-function stepConvertMaps(gameDir: string, outputDir: string): void {
+function stepConvertMaps(
+  gameDir: string,
+  outputDir: string,
+  runtimeManifest: ConversionManifest,
+  timestamp: string,
+): void {
   console.log('\n═══ Step 4/5: Converting map files ═══\n');
   const mapDir = path.join(outputDir, 'maps');
+  const extractedDir = path.join(outputDir, '_extracted');
 
   // Maps can be in game dir or extracted from .big
   const gameMaps = findFiles(gameDir, '.map');
-  const extractedMaps = findFiles(path.join(outputDir, '_extracted'), '.map');
-  const allMaps = [...new Set([...gameMaps, ...extractedMaps])];
+  const extractedMaps = findFiles(extractedDir, '.map');
+  const allMaps = [...new Set([...gameMaps, ...extractedMaps])].sort((left, right) => left.localeCompare(right));
   console.log(`Found ${allMaps.length} .map file(s)`);
 
+  let failures = 0;
   for (const file of allMaps) {
-    const baseName = path.basename(file, '.map');
-    const outPath = path.join(mapDir, `${baseName}.json`);
+    const relativeMapPath = mapOutputRelativePath(file, gameDir, extractedDir);
+    const outPath = path.join(mapDir, relativeMapPath.replace(/\.map$/i, '.json'));
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    runTool('map-converter', ['--input', file, '--output', outPath]);
+    const converted = runTool('map-converter', ['--input', file, '--output', outPath]);
+    if (!converted || !fs.existsSync(outPath)) {
+      failures += 1;
+      continue;
+    }
+    addConvertedFileToManifest(runtimeManifest, {
+      sourcePath: file,
+      outputPath: outPath,
+      gameDir,
+      outputDir,
+      converter: 'map-converter',
+      timestamp,
+    });
+  }
+
+  if (failures > 0) {
+    throw new Error(`Map conversion failed for ${failures} file(s).`);
   }
 }
 
-function stepParseIni(gameDir: string, outputDir: string): void {
+function stepParseIni(
+  gameDir: string,
+  outputDir: string,
+  runtimeManifest: ConversionManifest,
+  timestamp: string,
+): void {
   console.log('\n═══ Step 5/5: Parsing INI game data ═══\n');
   const iniDir = path.join(outputDir, 'data');
   const extractedDir = path.join(outputDir, '_extracted');
@@ -330,31 +792,53 @@ function stepParseIni(gameDir: string, outputDir: string): void {
   const extractedBundlePath = path.join(iniDir, '_extracted', 'bundle.json');
   const mergedBundlePath = path.join(iniDir, 'ini-bundle.json');
   fs.mkdirSync(manifestDir, { recursive: true });
+  const iniOnlyManifest = createManifest();
+  const staleIniArtifacts = [
+    iniManifestPath,
+    gameManifestPath,
+    extractedManifestPath,
+    gameBundlePath,
+    extractedBundlePath,
+    mergedBundlePath,
+  ];
+  for (const artifactPath of staleIniArtifacts) {
+    fs.rmSync(artifactPath, { force: true });
+  }
 
   // INI files from game dir and extracted .big
-  const gameInis = findFiles(gameDir, '.ini');
+  const gameIniParseConfig = resolveGameIniParseConfig(gameDir);
+  if (!gameIniParseConfig) {
+    console.log('No runtime INI roots detected (Data/INI, Run/Data/INI, GeneralsMD/Run/Data/INI, Generals/Run/Data/INI, data); skipping game-dir INI parse.');
+  } else if (gameIniParseConfig.parseDir !== gameDir) {
+    console.log(`Using runtime INI root: ${path.relative(gameDir, gameIniParseConfig.parseDir)}`);
+  }
+
+  const gameInis = gameIniParseConfig ? findFiles(gameIniParseConfig.parseDir, '.ini') : [];
   const extractedInis = findFiles(extractedDir, '.ini');
   const allInis = [...new Set([...gameInis, ...extractedInis])];
   console.log(`Found ${allInis.length} .ini file(s)`);
 
-  if (gameInis.length > 0) {
-    runTool('ini-parser', [
+  if (gameInis.length > 0 && gameIniParseConfig) {
+    const converted = runTool('ini-parser', [
       '--dir',
-      gameDir,
+      gameIniParseConfig.parseDir,
       '--output',
       iniDir,
       '--base-dir',
-      gameDir,
+      gameIniParseConfig.baseDir,
       '--manifest',
       gameManifestPath,
       '--bundle',
       gameBundlePath,
     ]);
+    if (!converted) {
+      throw new Error('INI parser failed for game directory input.');
+    }
   }
 
   if (extractedInis.length > 0) {
     const extractedIniDir = path.join(iniDir, '_extracted');
-    runTool('ini-parser', [
+    const converted = runTool('ini-parser', [
       '--dir',
       extractedDir,
       '--output',
@@ -366,11 +850,15 @@ function stepParseIni(gameDir: string, outputDir: string): void {
       '--bundle',
       extractedBundlePath,
     ]);
+    if (!converted) {
+      throw new Error('INI parser failed for extracted asset input.');
+    }
   }
 
-  const manifest = createManifest();
-  mergeManifest(manifest, gameManifestPath);
-  mergeManifest(manifest, extractedManifestPath);
+  mergeIniManifest(runtimeManifest, gameManifestPath, gameDir, outputDir);
+  mergeIniManifest(runtimeManifest, extractedManifestPath, gameDir, outputDir);
+  mergeIniManifest(iniOnlyManifest, gameManifestPath, gameDir, outputDir);
+  mergeIniManifest(iniOnlyManifest, extractedManifestPath, gameDir, outputDir);
 
   if (allInis.length > 0) {
     const gameBundle = gameInis.length > 0 ? readBundle(gameBundlePath) : null;
@@ -390,25 +878,27 @@ function stepParseIni(gameDir: string, outputDir: string): void {
     }
 
     if (mergedBundle) {
+      mergedBundle.stats = mergeStats(mergedBundle);
       const serialized = JSON.stringify(mergedBundle, null, 2) + '\n';
       fs.writeFileSync(mergedBundlePath, serialized);
       const outputHash = sha256Hex(serialized);
-      mergedBundle.stats = mergeStats(mergedBundle);
-      addManifestEntry(manifest, {
+      const bundleEntry: ManifestEntry = {
         sourcePath: 'data/ini-bundle.json',
         sourceHash: outputHash,
-        outputPath: path.relative(process.cwd(), mergedBundlePath),
+        outputPath: 'data/ini-bundle.json',
         outputHash,
         converter: 'convert-all',
-        converterVersion: '1.0.0',
-        timestamp: new Date().toISOString(),
-      });
+        converterVersion: TOOL_VERSION,
+        timestamp,
+      };
+      upsertManifestEntryByOutputPath(runtimeManifest, bundleEntry);
+      upsertManifestEntryByOutputPath(iniOnlyManifest, bundleEntry);
       console.log(`INI data bundle written to ${mergedBundlePath}`);
     }
   }
 
   if (allInis.length > 0) {
-    fs.writeFileSync(iniManifestPath, serializeManifest(manifest));
+    writeManifest(iniOnlyManifest, iniManifestPath);
     console.log(`Conversion manifest written to ${iniManifestPath}`);
   }
 }
@@ -428,18 +918,42 @@ function main(): void {
   console.log(`Steps: ${[...steps].join(', ')}\n`);
 
   fs.mkdirSync(outputDir, { recursive: true });
+  const runtimeManifestPath = path.join(outputDir, RUNTIME_MANIFEST_FILENAME);
+  const runtimeManifest = loadOrCreateManifest(runtimeManifestPath);
+  const timestamp = new Date().toISOString();
 
   const startTime = Date.now();
 
   if (steps.has('big'))     stepExtractBig(gameDir, outputDir);
-  if (steps.has('texture')) stepConvertTextures(outputDir);
-  if (steps.has('w3d'))     stepConvertW3d(outputDir);
-  if (steps.has('map'))     stepConvertMaps(gameDir, outputDir);
-  if (steps.has('ini'))     stepParseIni(gameDir, outputDir);
+  if (steps.has('texture')) {
+    removeManifestEntries(runtimeManifest, outputDir, (entry) => entry.converter === 'texture-converter');
+    stepConvertTextures(gameDir, outputDir, runtimeManifest, timestamp);
+  }
+  if (steps.has('w3d')) {
+    removeManifestEntries(runtimeManifest, outputDir, (entry) => entry.converter === 'w3d-converter');
+    stepConvertW3d(gameDir, outputDir, runtimeManifest, timestamp);
+  }
+  if (steps.has('map')) {
+    removeManifestEntries(runtimeManifest, outputDir, (entry) => entry.converter === 'map-converter');
+    stepConvertMaps(gameDir, outputDir, runtimeManifest, timestamp);
+  }
+  if (steps.has('ini')) {
+    removeManifestEntries(
+      runtimeManifest,
+      outputDir,
+      (entry) =>
+        entry.converter === 'ini-parser'
+        || (entry.converter === 'convert-all' && entry.outputPath === 'data/ini-bundle.json'),
+    );
+    stepParseIni(gameDir, outputDir, runtimeManifest, timestamp);
+  }
+
+  writeManifest(runtimeManifest, runtimeManifestPath);
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\n✓ Conversion complete in ${elapsed}s`);
   console.log(`  Output: ${outputDir}`);
+  console.log(`  Runtime manifest: ${runtimeManifestPath}`);
 }
 
 main();

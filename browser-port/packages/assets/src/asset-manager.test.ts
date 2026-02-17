@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { AssetManager } from './asset-manager.js';
-import { AssetFetchError, AssetIntegrityError, AssetNotFoundError } from './errors.js';
+import { AssetFetchError, AssetIntegrityError, AssetNotFoundError, ManifestLoadError } from './errors.js';
 import { sha256Hex } from './hash.js';
+import {
+  DEFAULT_CONFIG,
+  RUNTIME_ASSET_BASE_URL,
+  RUNTIME_MANIFEST_FILE,
+  RUNTIME_MANIFEST_PUBLIC_PATH,
+} from './types.js';
 import type { ConversionManifest } from '@generals/core';
 
 // Helper: create a Response-like mock
@@ -45,6 +51,19 @@ describe('AssetManager', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   const mapJSON = JSON.stringify({ heightmap: { width: 64, height: 64 } });
+  const runtimeBaseUrl = RUNTIME_ASSET_BASE_URL;
+  const runtimeManifestUrl = RUNTIME_MANIFEST_PUBLIC_PATH;
+  const runtimeIniBundleUrl = `${runtimeBaseUrl}/data/ini-bundle.json`;
+  const runtimeMapUrl = `${runtimeBaseUrl}/maps/Alpine.json`;
+  const mixedCaseRuntimeBaseUrl = 'Assets';
+  const mixedCaseRuntimeManifestUrl = `${mixedCaseRuntimeBaseUrl}/${RUNTIME_MANIFEST_FILE}`;
+  const mixedCaseRuntimeMapUrl = `${mixedCaseRuntimeBaseUrl}/maps/Alpine.json`;
+  const cdnRuntimeBaseUrl = `https://cdn.example.com/${RUNTIME_ASSET_BASE_URL}`;
+  const cdnRuntimeMapUrl = `${cdnRuntimeBaseUrl}/maps/Alpine.json`;
+  const rootRuntimeBaseUrl = `/${RUNTIME_ASSET_BASE_URL}`;
+  const rootRuntimeManifestUrl = `${rootRuntimeBaseUrl}/${RUNTIME_MANIFEST_FILE}`;
+  const rootRuntimeMapUrl = `${rootRuntimeBaseUrl}/maps/Alpine.json`;
+  const rootRuntimeDoubleManifestUrl = `${rootRuntimeBaseUrl}/${RUNTIME_MANIFEST_PUBLIC_PATH}`;
   let mapHash: string;
 
   beforeEach(async () => {
@@ -63,18 +82,20 @@ describe('AssetManager', () => {
     manifest404?: boolean;
     cacheEnabled?: boolean;
     integrityChecks?: boolean;
+    requireManifest?: boolean;
   } = {}) {
     const {
       manifestEntries = [],
       manifest404 = false,
       cacheEnabled = false,
       integrityChecks = true,
+      requireManifest = false,
     } = opts;
 
     const manifest = makeManifest(manifestEntries);
 
     fetchMock.mockImplementation((url: string) => {
-      if (typeof url === 'string' && url.includes('manifest.json')) {
+      if (typeof url === 'string' && url.includes(RUNTIME_MANIFEST_FILE)) {
         if (manifest404) {
           return Promise.resolve(mockFetchResponse('', 404));
         }
@@ -89,11 +110,17 @@ describe('AssetManager', () => {
     return new AssetManager({
       cacheEnabled,
       integrityChecks,
+      requireManifest,
       dbName: 'test-am-' + Math.random(),
     });
   }
 
   describe('init', () => {
+    it('keeps runtime manifest constants aligned with default config', () => {
+      expect(RUNTIME_MANIFEST_PUBLIC_PATH).toBe(`${RUNTIME_ASSET_BASE_URL}/${RUNTIME_MANIFEST_FILE}`);
+      expect(DEFAULT_CONFIG.manifestUrl).toBe(RUNTIME_MANIFEST_PUBLIC_PATH);
+    });
+
     it('loads manifest on init', async () => {
       const am = createManager({ manifestEntries: [] });
       await am.init();
@@ -105,6 +132,30 @@ describe('AssetManager', () => {
       const am = createManager({ manifest404: true });
       await am.init();
       expect(am.hasManifest).toBe(false);
+      am.dispose();
+    });
+
+    it('throws when manifest is required and missing', async () => {
+      const am = createManager({ manifest404: true, requireManifest: true });
+      await expect(am.init()).rejects.toThrow(ManifestLoadError);
+      am.dispose();
+    });
+
+    it('throws when manifest is required and has duplicate output paths', async () => {
+      const duplicateOutputEntries: ConversionManifest['entries'] = [
+        makeMapEntry(mapHash),
+        {
+          sourcePath: 'maps/Another.map',
+          sourceHash: 'src-hash-2',
+          outputPath: 'maps/Alpine.json',
+          outputHash: 'other-hash',
+          converter: 'map-converter',
+          converterVersion: '1.0.0',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      ];
+      const am = createManager({ manifestEntries: duplicateOutputEntries, requireManifest: true });
+      await expect(am.init()).rejects.toThrow(ManifestLoadError);
       am.dispose();
     });
   });
@@ -169,6 +220,45 @@ describe('AssetManager', () => {
       am.dispose();
     });
 
+    it('throws AssetNotFoundError for unknown paths that include runtime base prefix', async () => {
+      const am = createManager({ manifestEntries: [] });
+      await am.init();
+
+      await expect(am.loadArrayBuffer(`${runtimeBaseUrl}/unknown/file.bin`)).rejects.toThrow(AssetNotFoundError);
+
+      am.dispose();
+    });
+
+    it('throws ManifestLoadError when manifest output paths include runtime base prefix', async () => {
+      const prefixedManifest = makeManifest([
+        {
+          ...makeMapEntry(mapHash),
+          outputPath: `${runtimeBaseUrl}/maps/Alpine.json`,
+        },
+      ]);
+
+      fetchMock.mockImplementation((url: string) => {
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(prefixedManifest)));
+        }
+        if (url === runtimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: runtimeBaseUrl,
+        manifestUrl: RUNTIME_MANIFEST_FILE,
+        requireManifest: true,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await expect(am.init()).rejects.toThrow(ManifestLoadError);
+
+      am.dispose();
+    });
+
     it('allows unknown paths when manifest is not loaded', async () => {
       const am = createManager({ manifest404: true });
       await am.init();
@@ -204,6 +294,24 @@ describe('AssetManager', () => {
       await am.init();
 
       await expect(am.loadArrayBuffer('https://evil.com/payload')).rejects.toThrow(AssetFetchError);
+
+      am.dispose();
+    });
+
+    it('rejects windows drive absolute paths', async () => {
+      const am = createManager({ manifest404: true });
+      await am.init();
+
+      await expect(am.loadArrayBuffer('C:/Windows/System32/kernel32.dll')).rejects.toThrow(AssetFetchError);
+
+      am.dispose();
+    });
+
+    it('rejects backslash-separated paths', async () => {
+      const am = createManager({ manifest404: true });
+      await am.init();
+
+      await expect(am.loadArrayBuffer('maps\\Alpine.json')).rejects.toThrow(AssetFetchError);
 
       am.dispose();
     });
@@ -292,7 +400,7 @@ describe('AssetManager', () => {
   describe('loadBatch', () => {
     it('loads multiple assets in parallel', async () => {
       fetchMock.mockImplementation((url: string) => {
-        if (typeof url === 'string' && url.includes('manifest.json')) {
+        if (typeof url === 'string' && url.includes(RUNTIME_MANIFEST_FILE)) {
           return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([]))));
         }
         return Promise.resolve(mockFetchResponse(mapJSON));
@@ -317,14 +425,14 @@ describe('AssetManager', () => {
   describe('baseUrl resolution', () => {
     it('prepends baseUrl to paths', async () => {
       fetchMock.mockImplementation((url: string) => {
-        if (typeof url === 'string' && url.includes('manifest.json')) {
+        if (typeof url === 'string' && url.includes(RUNTIME_MANIFEST_FILE)) {
           return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([]))));
         }
         return Promise.resolve(mockFetchResponse(mapJSON));
       });
 
       const am = new AssetManager({
-        baseUrl: 'https://cdn.example.com/assets',
+        baseUrl: cdnRuntimeBaseUrl,
         cacheEnabled: false,
         integrityChecks: false,
       });
@@ -334,7 +442,593 @@ describe('AssetManager', () => {
 
       // Check that fetch was called with the full URL
       const calls = fetchMock.mock.calls.map((c: unknown[]) => c[0]);
-      expect(calls).toContain('https://cdn.example.com/assets/maps/Alpine.json');
+      expect(calls).toContain(cdnRuntimeMapUrl);
+
+      am.dispose();
+    });
+
+    it('uses app runtime asset paths (<base>/<manifest> + <base>/<outputPath>)', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'data/ini-bundle.json',
+              sourceHash: 'src-hash',
+              outputPath: 'data/ini-bundle.json',
+              outputHash: mapHash,
+              converter: 'convert-all',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === runtimeIniBundleUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: runtimeBaseUrl,
+        manifestUrl: RUNTIME_MANIFEST_FILE,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('data/ini-bundle.json');
+
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).toContain(runtimeIniBundleUrl);
+
+      am.dispose();
+    });
+
+    it('uses app runtime manifest URL and fails fast when manifest is required but missing', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: runtimeBaseUrl,
+        manifestUrl: RUNTIME_MANIFEST_FILE,
+        requireManifest: true,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+
+      let initError: unknown = null;
+      try {
+        await am.init();
+      } catch (error) {
+        initError = error;
+      }
+
+      expect(initError).toBeInstanceOf(ManifestLoadError);
+      expect(initError).toMatchObject({ url: runtimeManifestUrl });
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).not.toContain(`${runtimeBaseUrl}/${runtimeManifestUrl}`);
+
+      am.dispose();
+    });
+
+    it('fails fast with root-relative baseUrl when manifestUrl already includes runtime base', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: rootRuntimeBaseUrl,
+        manifestUrl: runtimeManifestUrl,
+        requireManifest: true,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+
+      let initError: unknown = null;
+      try {
+        await am.init();
+      } catch (error) {
+        initError = error;
+      }
+
+      expect(initError).toBeInstanceOf(ManifestLoadError);
+      expect(initError).toMatchObject({ url: rootRuntimeManifestUrl });
+      expect(calls[0]).toBe(rootRuntimeManifestUrl);
+      expect(calls).not.toContain(rootRuntimeDoubleManifestUrl);
+
+      am.dispose();
+    });
+
+    it('does not double-prefix baseUrl when manifestUrl already includes it', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === runtimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: runtimeBaseUrl,
+        manifestUrl: runtimeManifestUrl,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).not.toContain(`${runtimeBaseUrl}/${runtimeManifestUrl}`);
+      expect(calls).toContain(runtimeMapUrl);
+
+      am.dispose();
+    });
+
+    it('accepts paths that already include runtime base prefix', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === runtimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: runtimeBaseUrl,
+        manifestUrl: RUNTIME_MANIFEST_FILE,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      const handle = await am.loadArrayBuffer(`${runtimeBaseUrl}/maps/Alpine.json`);
+
+      expect(handle.path).toBe('maps/Alpine.json');
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).toContain(runtimeMapUrl);
+      expect(calls).not.toContain(`${runtimeBaseUrl}/${runtimeBaseUrl}/maps/Alpine.json`);
+
+      am.dispose();
+    });
+
+    it('accepts paths that include mixed-case runtime base prefix', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === runtimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: runtimeBaseUrl,
+        manifestUrl: RUNTIME_MANIFEST_FILE,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      const handle = await am.loadArrayBuffer(`${mixedCaseRuntimeBaseUrl}/maps/Alpine.json`);
+
+      expect(handle.path).toBe('maps/Alpine.json');
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).toContain(runtimeMapUrl);
+      expect(calls).not.toContain(`${runtimeBaseUrl}/${mixedCaseRuntimeMapUrl}`);
+
+      am.dispose();
+    });
+
+    it('accepts mixed-case runtime-prefixed paths with root-relative baseUrl', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === rootRuntimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === rootRuntimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: rootRuntimeBaseUrl,
+        manifestUrl: RUNTIME_MANIFEST_FILE,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      const handle = await am.loadArrayBuffer(`${mixedCaseRuntimeBaseUrl}/maps/Alpine.json`);
+
+      expect(handle.path).toBe('maps/Alpine.json');
+      expect(calls[0]).toBe(rootRuntimeManifestUrl);
+      expect(calls).toContain(rootRuntimeMapUrl);
+      expect(calls).not.toContain(`/${mixedCaseRuntimeMapUrl}`);
+
+      am.dispose();
+    });
+
+    it('canonicalizes mixed-case manifestUrl when it already includes runtime base', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === runtimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: runtimeBaseUrl,
+        manifestUrl: mixedCaseRuntimeManifestUrl,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).not.toContain(mixedCaseRuntimeManifestUrl);
+      expect(calls).not.toContain(`${runtimeBaseUrl}/${mixedCaseRuntimeManifestUrl}`);
+      expect(calls).toContain(runtimeMapUrl);
+
+      am.dispose();
+    });
+
+    it('canonicalizes mixed-case manifestUrl with root-relative baseUrl', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === rootRuntimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === rootRuntimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: rootRuntimeBaseUrl,
+        manifestUrl: mixedCaseRuntimeManifestUrl,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe(rootRuntimeManifestUrl);
+      expect(calls).not.toContain(`/${mixedCaseRuntimeManifestUrl}`);
+      expect(calls).not.toContain(`${rootRuntimeBaseUrl}/${mixedCaseRuntimeManifestUrl}`);
+      expect(calls).toContain(rootRuntimeMapUrl);
+
+      am.dispose();
+    });
+
+    it('does not prefix absolute manifestUrl, but still prefixes relative asset paths', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === 'https://cdn.example.com/runtime/manifest.json') {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === cdnRuntimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: cdnRuntimeBaseUrl,
+        manifestUrl: 'https://cdn.example.com/runtime/manifest.json',
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe('https://cdn.example.com/runtime/manifest.json');
+      expect(calls).not.toContain(`${cdnRuntimeBaseUrl}/https://cdn.example.com/runtime/manifest.json`);
+      expect(calls).toContain(cdnRuntimeMapUrl);
+
+      am.dispose();
+    });
+
+    it('handles root-relative baseUrl without double-prefixing manifestUrl', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === rootRuntimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === rootRuntimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: rootRuntimeBaseUrl,
+        manifestUrl: runtimeManifestUrl,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe(rootRuntimeManifestUrl);
+      expect(calls).not.toContain(rootRuntimeDoubleManifestUrl);
+      expect(calls).toContain(rootRuntimeMapUrl);
+
+      am.dispose();
+    });
+
+    it('uses default manifestUrl correctly with root-relative baseUrl', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === rootRuntimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === rootRuntimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: rootRuntimeBaseUrl,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe(rootRuntimeManifestUrl);
+      expect(calls).not.toContain(rootRuntimeDoubleManifestUrl);
+      expect(calls).toContain(rootRuntimeMapUrl);
+
+      am.dispose();
+    });
+
+    it('normalizes trailing slash in root-relative baseUrl', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === rootRuntimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === rootRuntimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: `${rootRuntimeBaseUrl}/`,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe(rootRuntimeManifestUrl);
+      expect(calls).toContain(rootRuntimeMapUrl);
+      expect(calls).not.toContain(`${rootRuntimeBaseUrl}//${RUNTIME_MANIFEST_FILE}`);
+      expect(calls).not.toContain(`${rootRuntimeBaseUrl}//maps/Alpine.json`);
+
+      am.dispose();
+    });
+
+    it('normalizes ./manifestUrl with trailing-slash baseUrl', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === runtimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: `${runtimeBaseUrl}/`,
+        manifestUrl: `./${RUNTIME_MANIFEST_FILE}`,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('maps/Alpine.json');
+
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).toContain(runtimeMapUrl);
+      expect(calls).not.toContain(`${runtimeBaseUrl}//${RUNTIME_MANIFEST_FILE}`);
+      expect(calls).not.toContain(`${runtimeBaseUrl}//maps/Alpine.json`);
+
+      am.dispose();
+    });
+
+    it('normalizes repeated ./ prefixes and redundant separators', async () => {
+      const calls: string[] = [];
+      fetchMock.mockImplementation((url: string) => {
+        calls.push(url);
+        if (url === runtimeManifestUrl) {
+          return Promise.resolve(mockFetchResponse(JSON.stringify(makeManifest([
+            {
+              sourcePath: 'maps/Alpine.map',
+              sourceHash: 'src-hash',
+              outputPath: 'maps/Alpine.json',
+              outputHash: mapHash,
+              converter: 'map-converter',
+              converterVersion: '1.0.0',
+              timestamp: '2026-02-16T00:00:00.000Z',
+            },
+          ]))));
+        }
+        if (url === runtimeMapUrl) {
+          return Promise.resolve(mockFetchResponse(mapJSON));
+        }
+        return Promise.resolve(mockFetchResponse('', 404));
+      });
+
+      const am = new AssetManager({
+        baseUrl: `${runtimeBaseUrl}/`,
+        manifestUrl: `././${RUNTIME_MANIFEST_FILE}`,
+        cacheEnabled: false,
+        integrityChecks: true,
+      });
+      await am.init();
+
+      await am.loadArrayBuffer('././maps//./Alpine.json');
+
+      expect(calls[0]).toBe(runtimeManifestUrl);
+      expect(calls).toContain(runtimeMapUrl);
+      expect(calls).not.toContain(`${runtimeBaseUrl}/./${RUNTIME_MANIFEST_FILE}`);
+      expect(calls).not.toContain(`${runtimeBaseUrl}/./maps//./Alpine.json`);
+      expect(calls.some((url) => url.includes('/./'))).toBe(false);
 
       am.dispose();
     });

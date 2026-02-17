@@ -8,7 +8,11 @@
 
 import * as THREE from 'three';
 import { GameLoop, SubsystemRegistry } from '@generals/core';
-import { AssetManager } from '@generals/assets';
+import {
+  AssetManager,
+  RUNTIME_ASSET_BASE_URL,
+  RUNTIME_MANIFEST_FILE,
+} from '@generals/assets';
 import { TerrainVisual, WaterVisual } from '@generals/renderer';
 import type { MapDataJSON } from '@generals/renderer';
 import { InputManager, RTSCamera } from '@generals/input';
@@ -29,6 +33,28 @@ const loadingScreen = document.getElementById('loading-screen') as HTMLDivElemen
 function setLoadingProgress(percent: number, status: string): void {
   loadingBar.style.width = `${percent}%`;
   loadingStatus.textContent = status;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const runtimeAssetPrefixPattern = new RegExp(`^${escapeRegExp(RUNTIME_ASSET_BASE_URL)}/`, 'i');
+const runtimeAssetBasePattern = new RegExp(`^${escapeRegExp(RUNTIME_ASSET_BASE_URL)}$`, 'i');
+
+function normalizeRuntimeAssetPath(pathValue: string | null): string | null {
+  if (!pathValue) return null;
+  const normalized = pathValue
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^(?:\.\/)+/, '')
+    .replace(/^\/+/, '')
+    .replace(/\/\.\//g, '/')
+    .replace(/\/{2,}/g, '/');
+  if (runtimeAssetBasePattern.test(normalized)) {
+    return '';
+  }
+  return normalized.replace(runtimeAssetPrefixPattern, '');
 }
 
 // ============================================================================
@@ -88,7 +114,9 @@ async function init(): Promise<void> {
 
   // Asset Manager (first — must init before any asset loads)
   const assets = new AssetManager({
-    manifestUrl: 'assets/manifest.json',
+    baseUrl: RUNTIME_ASSET_BASE_URL,
+    manifestUrl: RUNTIME_MANIFEST_FILE,
+    requireManifest: true,
   });
   subsystems.register(assets);
 
@@ -119,6 +147,9 @@ async function init(): Promise<void> {
   const uiRuntime = new UiRuntime({ enableDebugOverlay: true });
   subsystems.register(uiRuntime);
 
+  // Initialize registered runtime subsystems before any asset fetches so
+  // AssetManager has the manifest and cache ready.
+  await subsystems.initAll();
 
   // ========================================================================
   // Game data (INI bundle)
@@ -134,19 +165,12 @@ async function init(): Promise<void> {
     iniDataRegistry.loadBundle(bundleHandle.data);
     iniDataInfo = `INI bundle loaded from ${bundleHandle.cached ? 'cache' : 'network'} ` +
       `(${bundleHandle.data.stats.objects} objects, ${bundleHandle.data.stats.weapons} weapons)`;
-  } catch {
-    try {
-      const response = await fetch('assets/data/ini-bundle.json');
-      if (response.ok) {
-        const bundle = (await response.json()) as IniDataBundle;
-        iniDataRegistry.loadBundle(bundle);
-        iniDataInfo = `INI bundle loaded via fetch fallback (${bundle.stats.objects} objects, ${bundle.stats.weapons} weapons)`;
-      } else {
-        console.warn('INI data bundle unavailable, continuing with fallback data path.');
-      }
-    } catch (fallbackErr) {
-      console.warn('INI data bundle unavailable, continuing without bundle.', fallbackErr);
-    }
+  } catch (bundleErr) {
+    throw new Error(
+      `Required runtime asset "data/ini-bundle.json" failed to load: ${
+        bundleErr instanceof Error ? bundleErr.message : String(bundleErr)
+      }`,
+    );
   }
 
   const iniDataStats = iniDataRegistry.getStats();
@@ -156,8 +180,7 @@ async function init(): Promise<void> {
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
   const gameLogic = new GameLogicSubsystem(scene, { attackUsesLineOfSight });
   subsystems.register(gameLogic);
-
-  await subsystems.initAll();
+  await gameLogic.init();
 
   setLoadingProgress(50, 'Loading terrain...');
   const dataSuffix = ` | INI: ${iniDataStats.objects} objects, ${iniDataStats.weapons} weapons`;
@@ -168,12 +191,18 @@ async function init(): Promise<void> {
   // ========================================================================
 
   const urlParams = new URLSearchParams(window.location.search);
-  const mapPath = urlParams.get('map');
+  const mapPathParam = urlParams.get('map');
+  const mapPath = normalizeRuntimeAssetPath(mapPathParam);
   let mapData: MapDataJSON;
 
   let loadedFromJSON = false;
 
-  if (mapPath) {
+  if (mapPathParam !== null) {
+    if (!mapPath) {
+      throw new Error(
+        `Requested map path "${mapPathParam}" is invalid after runtime normalization`,
+      );
+    }
     try {
       const handle = await assets.loadJSON<MapDataJSON>(mapPath, (loaded, total) => {
         const pct = total > 0 ? Math.round(50 + (loaded / total) * 20) : 60;
@@ -183,10 +212,9 @@ async function init(): Promise<void> {
       loadedFromJSON = true;
       console.log(`Map loaded via AssetManager (cached: ${handle.cached}, hash: ${handle.hash ?? 'n/a'})`);
     } catch (err) {
-      console.warn(`Failed to load map "${mapPath}":`, err);
-      console.log('Falling back to procedural demo terrain.');
-      const demo = terrainVisual.loadDemoTerrain();
-      mapData = demo.mapData;
+      throw new Error(
+        `Requested map "${mapPath}" failed to load: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   } else {
     const demo = terrainVisual.loadDemoTerrain();
