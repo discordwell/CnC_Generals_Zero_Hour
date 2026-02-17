@@ -22,17 +22,47 @@ class FakeAudioManager {
 
 class FakeGameLogic {
   selectedEntityId: number | null = null;
+  localPlayerSide = 'GDI';
   readonly submittedCommands: GameLogicCommand[] = [];
   localPlayerScienceNames: string[] = [];
+  commandCenterEntityId: number | null = null;
   localPlayerSciencePurchasePoints = 0;
   disabledScienceNames: string[] = [];
   hiddenScienceNames: string[] = [];
+  private readonly entityTemplateById = new Map<number, string>();
+  private readonly entitySideById = new Map<number, string>();
   private readonly attackMoveDistanceByEntity = new Map<number, number>();
   private readonly entityPositionById = new Map<number, readonly [number, number, number]>();
   private readonly shortcutSpecialPowerSourceByName = new Map<string, number>();
 
   getSelectedEntityId(): number | null {
     return this.selectedEntityId;
+  }
+
+  getPlayerSide(_playerIndex: number): string | null {
+    return this.localPlayerSide;
+  }
+
+  registerEntity(entityId: number, templateName: string, side = this.localPlayerSide): void {
+    this.entityTemplateById.set(entityId, templateName);
+    this.entitySideById.set(entityId, side);
+  }
+
+  getEntityIdsByTemplateAndSide(templateName: string, side: string): number[] {
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    const normalizedSide = side.trim().toUpperCase();
+    const matchingIds: number[] = [];
+    for (const [entityId, entityTemplate] of this.entityTemplateById) {
+      if (
+        entityTemplate.trim().toUpperCase() !== normalizedTemplateName
+        || this.entitySideById.get(entityId)?.trim().toUpperCase() !== normalizedSide
+      ) {
+        continue;
+      }
+      matchingIds.push(entityId);
+    }
+    matchingIds.sort((left, right) => left - right);
+    return matchingIds;
   }
 
   getAttackMoveDistanceForEntity(entityId: number): number {
@@ -63,6 +93,14 @@ class FakeGameLogic {
     return this.shortcutSpecialPowerSourceByName.get(
       specialPowerName.trim().toUpperCase(),
     ) ?? null;
+  }
+
+  resolveCommandCenterEntityId(): number | null {
+    return this.commandCenterEntityId;
+  }
+
+  getLocalPlayerSelectionIds(): readonly number[] {
+    return [];
   }
 
   setAttackMoveDistanceForEntity(entityId: number, distance: number): void {
@@ -386,6 +424,326 @@ describe('dispatchIssuedControlBarCommands', () => {
       },
     ]);
     expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('routes UNIT_BUILD commands to all selected objects', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_UnitBuild', {
+        Command: 'UNIT_BUILD',
+        Object: 'BattleBus',
+        UnitSpecificSound: 'UI_UnitBuild',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+    audioManager.validEvents.add('UI_UnitBuild');
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_UnitBuild', GUICommandType.GUI_COMMAND_UNIT_BUILD, {
+          selectedObjectIds: [4, 7],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'queueUnitProduction',
+        entityId: 4,
+        unitTemplateName: 'BattleBus',
+      },
+      {
+        type: 'queueUnitProduction',
+        entityId: 7,
+        unitTemplateName: 'BattleBus',
+      },
+    ]);
+    expect(audioManager.playedEvents).toEqual(['UI_UnitBuild']);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('shows TODO guidance when UNIT_BUILD buttons miss Object field', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_BadUnitBuild', {
+        Command: 'UNIT_BUILD',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_BadUnitBuild',
+          GUICommandType.GUI_COMMAND_UNIT_BUILD,
+          { selectedObjectIds: [1] },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_BadUnitBuild unit build template is not mapped yet.',
+    ]);
+  });
+
+  it('dispatches CANCEL_UNIT_BUILD when queue context includes productionId', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUnitBuild', {
+        Command: 'CANCEL_UNIT_BUILD',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CancelUnitBuild',
+          GUICommandType.GUI_COMMAND_CANCEL_UNIT_BUILD,
+          {
+            selectedObjectIds: [8],
+            contextPayload: {
+              productionId: 12,
+            },
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'cancelUnitProduction',
+        entityId: 8,
+        productionId: 12,
+      },
+    ]);
+  });
+
+  it('shows TODO guidance for CANCEL_UNIT_BUILD without queue context', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUnitBuild', {
+        Command: 'CANCEL_UNIT_BUILD',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CancelUnitBuild',
+          GUICommandType.GUI_COMMAND_CANCEL_UNIT_BUILD,
+          {
+            selectedObjectIds: [8],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_CancelUnitBuild cancel unit build needs a queued production id context to dispatch.',
+    ]);
+  });
+
+  it('requires a single selected source for CANCEL_UNIT_BUILD dispatch', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUnitBuild', {
+        Command: 'CANCEL_UNIT_BUILD',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CancelUnitBuild',
+          GUICommandType.GUI_COMMAND_CANCEL_UNIT_BUILD,
+          {
+            selectedObjectIds: [8, 9],
+            contextPayload: {
+              productionId: 12,
+            },
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'Cancel Unit Build requires a single selected source object.',
+    ]);
+  });
+
+  it('shows TODO guidance for GUI_COMMAND_DOZER_CONSTRUCT_CANCEL until build cancel placement is wired', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelDozer', {
+        Command: 'DOZER_CONSTRUCT_CANCEL',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_CancelDozer', GUICommandType.GUI_COMMAND_DOZER_CONSTRUCT_CANCEL, {
+          selectedObjectIds: [33],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_CancelDozer dozer construction cancel is not mapped to game logic yet.',
+    ]);
+  });
+
+  it('dispatches CANCEL_UPGRADE when queue context includes upgrade name', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUpgrade', {
+        Command: 'CANCEL_UPGRADE',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+    audioManager.validEvents.add('UI_CancelUpgrade');
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_CancelUpgrade', GUICommandType.GUI_COMMAND_CANCEL_UPGRADE, {
+          selectedObjectIds: [6],
+          contextPayload: {
+            upgradeName: 'Upgrade_Garrison',
+          },
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'cancelUpgradeProduction',
+        entityId: 6,
+        upgradeName: 'UPGRADE_GARRISON',
+      },
+    ]);
+  });
+
+  it('shows TODO guidance for CANCEL_UPGRADE without queued upgrade context', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUpgrade', {
+        Command: 'CANCEL_UPGRADE',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_CancelUpgrade', GUICommandType.GUI_COMMAND_CANCEL_UPGRADE, {
+          selectedObjectIds: [6],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_CancelUpgrade cancel upgrade needs queued upgrade context to dispatch.',
+    ]);
+  });
+
+  it('requires a single selected source for CANCEL_UPGRADE dispatch', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUpgrade', {
+        Command: 'CANCEL_UPGRADE',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CancelUpgrade',
+          GUICommandType.GUI_COMMAND_CANCEL_UPGRADE,
+          {
+            selectedObjectIds: [6, 7],
+            contextPayload: {
+              upgradeName: 'Upgrade_Garrison',
+            },
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'Cancel Upgrade requires a single selected source object.',
+    ]);
   });
 
   it('routes SPECIAL_POWER object-target commands to special-power runtime payloads', () => {
@@ -1128,6 +1486,420 @@ describe('dispatchIssuedControlBarCommands', () => {
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
       'TODO: Command_PurchaseScience has no purchasable science yet.',
+    ]);
+  });
+
+  it('blocks GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER when command-center source is unavailable', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerDozerDrop',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+          {
+            selectedObjectIds: [12],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: SpecialPowerDozerDrop from command center requires command-center source resolution parity.',
+    ]);
+  });
+
+  it('dispatches GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER with command-center source when available', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerDozerDrop',
+        UnitSpecificSound: 'UI_SpecialPower',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.commandCenterEntityId = 42;
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+    audioManager.validEvents.add('UI_SpecialPower');
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'issueSpecialPower',
+        commandButtonId: 'Command_CommandCenterPower',
+        specialPowerName: 'SpecialPowerDozerDrop',
+        commandOption: 0,
+        issuingEntityIds: [42],
+        sourceEntityId: 42,
+        targetEntityId: null,
+        targetX: null,
+        targetZ: null,
+      },
+    ]);
+    expect(audioManager.playedEvents).toEqual(['UI_SpecialPower']);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('treats GUI_COMMAND_NONE as no-op', () => {
+    const registry = new IniDataRegistry();
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_None',
+          GUICommandType.GUI_COMMAND_NONE,
+          {
+            selectedObjectIds: [1, 2],
+            targetObjectId: 99,
+            targetPosition: [10, 0, 20],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('treats GUI_COMMAND_NUM_COMMANDS as no-op', () => {
+    const registry = new IniDataRegistry();
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_Num', GUICommandType.GUI_COMMAND_NUM_COMMANDS, {
+          selectedObjectIds: [1],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('marks GUICOMMANDMODE_SABOTAGE_BUILDING as TODO until sabotage flow is wired', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_Sabotage', {
+        Command: 'SABOTAGE_BUILDING',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_Sabotage', GUICommandType.GUICOMMANDMODE_SABOTAGE_BUILDING, {
+          selectedObjectIds: [55],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_Sabotage sabotage building is not mapped to game logic yet (source: CommandXlat.cpp GUICOMMANDMODE_SABOTAGE_BUILDING + createEnterMessage(MSG_ENTER)).',
+    ]);
+  });
+
+  it('dispatches GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE to clear and select matching local-team units', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_SelectAll', {
+        Command: 'SELECT_ALL_UNITS_OF_TYPE',
+        Object: 'Tank',
+        UnitSpecificSound: 'UI_SelectAll',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.registerEntity(7, 'Tank', 'GDI');
+    gameLogic.registerEntity(11, 'Tank', 'GDI');
+    gameLogic.registerEntity(13, 'Tank', 'NOD');
+    gameLogic.registerEntity(21, 'Mantis', 'GDI');
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+    audioManager.validEvents.add('UI_SelectAll');
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_SelectAll',
+          GUICommandType.GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE,
+          {
+            selectedObjectIds: [99],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      { type: 'clearSelection' },
+      {
+        type: 'selectEntities',
+        entityIds: [7, 11],
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+    expect(audioManager.playedEvents).toEqual(['UI_SelectAll']);
+  });
+
+  it('shows TODO guidance when SELECT_ALL_UNITS_OF_TYPE button misses Object/ThingTemplate mapping', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_BadSelectAll', {
+        Command: 'SELECT_ALL_UNITS_OF_TYPE',
+        UnitSpecificSound: 'UI_SelectAll',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+    audioManager.validEvents.add('UI_SelectAll');
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_BadSelectAll',
+          GUICommandType.GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE,
+          {
+            selectedObjectIds: [99],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_BadSelectAll select-all-units button missing Object/ThingTemplate mapping.',
+    ]);
+  });
+
+  it('shows TODO guidance when local player side cannot be resolved for SELECT_ALL_UNITS_OF_TYPE', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_SelectAllWithoutSide', {
+        Command: 'SELECT_ALL_UNITS_OF_TYPE',
+        Object: 'Tank',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.localPlayerSide = '';
+    gameLogic.registerEntity(7, 'Tank', 'GDI');
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_SelectAllWithoutSide',
+          GUICommandType.GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE,
+          {
+            selectedObjectIds: [99],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_SelectAllWithoutSide select-all-units requires local player side resolution parity.',
+    ]);
+  });
+
+  it('marks remaining infrastructure-style commands as TODOs without fake dispatch', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_ExitContainer', {
+        Command: 'EXIT_CONTAINER',
+      }),
+      makeCommandButtonBlock('Command_Evacuate', {
+        Command: 'EVACUATE',
+      }),
+      makeCommandButtonBlock('Command_ExecuteRailedTransport', {
+        Command: 'EXECUTE_RAILED_TRANSPORT',
+      }),
+      makeCommandButtonBlock('Command_BeaconDelete', {
+        Command: 'BEACON_DELETE',
+      }),
+      makeCommandButtonBlock('Command_Sell', {
+        Command: 'SELL',
+      }),
+      makeCommandButtonBlock('Command_HackInternet', {
+        Command: 'HACK_INTERNET',
+      }),
+      makeCommandButtonBlock('Command_ToggleOvercharge', {
+        Command: 'TOGGLE_OVERCHARGE',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.selectedEntityId = 20;
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_ExitContainer', GUICommandType.GUI_COMMAND_EXIT_CONTAINER, {
+          selectedObjectIds: [20],
+        }),
+        makeCommand('Command_Evacuate', GUICommandType.GUI_COMMAND_EVACUATE, {
+          selectedObjectIds: [20],
+        }),
+        makeCommand(
+          'Command_ExecuteRailedTransport',
+          GUICommandType.GUI_COMMAND_EXECUTE_RAILED_TRANSPORT,
+          {
+            selectedObjectIds: [20],
+          },
+        ),
+        makeCommand('Command_BeaconDelete', GUICommandType.GUI_COMMAND_BEACON_DELETE, {
+          selectedObjectIds: [20],
+        }),
+        makeCommand('Command_Sell', GUICommandType.GUI_COMMAND_SELL, {
+          selectedObjectIds: [20],
+        }),
+        makeCommand('Command_HackInternet', GUICommandType.GUI_COMMAND_HACK_INTERNET, {
+          selectedObjectIds: [20],
+        }),
+        makeCommand(
+          'Command_ToggleOvercharge',
+          GUICommandType.GUI_COMMAND_TOGGLE_OVERCHARGE,
+          {
+            selectedObjectIds: [20],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_ExitContainer exit container is not mapped to game logic yet.',
+      'TODO: Command_Evacuate evacuate is not mapped to game logic yet.',
+      'TODO: Command_ExecuteRailedTransport execute railed transport is not mapped to game logic yet.',
+      'TODO: Command_BeaconDelete beacon delete is not mapped to game logic yet.',
+      'TODO: Command_Sell sell is not mapped to game logic yet.',
+      'TODO: Command_HackInternet hack internet is not mapped to game logic yet.',
+      'TODO: Command_ToggleOvercharge toggle overcharge is not mapped to game logic yet.',
+    ]);
+  });
+
+  it('marks weapon and mode commands as TODOs without behavior stubs', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_SwitchWeapon', {
+        Command: 'SWITCH_WEAPON',
+      }),
+      makeCommandButtonBlock('Command_FireWeapon', {
+        Command: 'FIRE_WEAPON',
+      }),
+      makeCommandButtonBlock('Command_CombatDrop', {
+        Command: 'COMBATDROP',
+      }),
+      makeCommandButtonBlock('Command_HijackVehicle', {
+        Command: 'HIJACK_VEHICLE',
+      }),
+      makeCommandButtonBlock('Command_ConvertCarbomb', {
+        Command: 'CONVERT_TO_CARBOMB',
+      }),
+      makeCommandButtonBlock('Command_PlaceBeacon', {
+        Command: 'PLACE_BEACON',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_SwitchWeapon', GUICommandType.GUI_COMMAND_SWITCH_WEAPON),
+        makeCommand('Command_FireWeapon', GUICommandType.GUI_COMMAND_FIRE_WEAPON),
+        makeCommand('Command_CombatDrop', GUICommandType.GUI_COMMAND_COMBATDROP),
+        makeCommand('Command_HijackVehicle', GUICommandType.GUICOMMANDMODE_HIJACK_VEHICLE),
+        makeCommand('Command_ConvertCarbomb', GUICommandType.GUICOMMANDMODE_CONVERT_TO_CARBOMB),
+        makeCommand('Command_PlaceBeacon', GUICommandType.GUICOMMANDMODE_PLACE_BEACON),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual([
+      'TODO: Command_SwitchWeapon switch weapon is not mapped to game logic yet.',
+      'TODO: Command_FireWeapon fire weapon is not mapped to game logic yet.',
+      'TODO: Command_CombatDrop combat drop is not mapped to game logic yet.',
+      'TODO: Command_HijackVehicle command mode is not mapped to game logic yet.',
+      'TODO: Command_ConvertCarbomb command mode is not mapped to game logic yet.',
+      'TODO: Command_PlaceBeacon beacon placement command is not mapped to game logic yet.',
     ]);
   });
 

@@ -589,6 +589,22 @@ async function init(): Promise<void> {
     }
   };
 
+  const resolveControlBarSlotFromKey = (key: string): number | null => {
+    if (/^[1-9]$/.test(key)) {
+      return Number.parseInt(key, 10);
+    }
+    if (key === '0') {
+      return 10;
+    }
+    if (key === '-') {
+      return 11;
+    }
+    if (key === '=') {
+      return 12;
+    }
+    return null;
+  };
+
   // F1 toggle wireframe
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F1') {
@@ -597,10 +613,10 @@ async function init(): Promise<void> {
       return;
     }
 
-    const slotIndex = Number.parseInt(e.key, 10);
-    if (Number.isInteger(slotIndex) && slotIndex >= 1 && slotIndex <= 9) {
+    const resolvedSlot = resolveControlBarSlotFromKey(e.key);
+    if (resolvedSlot !== null) {
       e.preventDefault();
-      activateControlBarSlot(slotIndex - 1);
+      activateControlBarSlot(resolvedSlot - 1);
     }
   });
 
@@ -780,8 +796,10 @@ async function init(): Promise<void> {
         }
       }
 
+      const selectedObjectIds = gameLogic.getLocalPlayerSelectionIds();
       uiRuntime.setSelectionState({
-        selectedObjectIds: selectedInfo ? [selectedInfo.id] : [],
+        selectedObjectIds:
+          selectedObjectIds.length > 0 ? selectedObjectIds : selectedInfo ? [selectedInfo.id] : [],
         selectedObjectName: selectedInfo?.templateName ?? '',
       });
       uiRuntime.setControlBarButtons(controlBarButtons);
@@ -822,7 +840,7 @@ async function init(): Promise<void> {
   console.log('Stage 3: Terrain + map entities bootstrapped.');
   console.log(`Terrain: ${heightmap.width}x${heightmap.height} (${mapPath ?? 'procedural demo'})`);
   console.log(`Placed ${objectPlacement.spawnedObjects}/${objectPlacement.totalObjects} objects from map data.`);
-  console.log('Controls: LMB=select, RMB=move/confirm target, 1-9=ControlBar slot, WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
+  console.log('Controls: LMB=select, RMB=move/confirm target, 1-12=ControlBar slot, WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
 }
 
 init().catch((err) => {
