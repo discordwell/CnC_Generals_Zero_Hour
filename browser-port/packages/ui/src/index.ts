@@ -1,11 +1,30 @@
 /**
  * @generals/ui
  *
- * Browser-side UI runtime used by the app shell. Keeps a small overlay for
- * status messages and selected-object text while the full ControlBar port is
- * implemented in later phases.
+ * Browser-side UI runtime with source-aligned ControlBar command primitives.
+ * The current rendering remains a lightweight overlay while command flow is
+ * ported from `ControlBar` / `InGameUI` interfaces.
  */
 import type { Subsystem } from '@generals/engine';
+
+import {
+  ControlBarModel,
+  type ControlBarActivationResult,
+  type ControlBarButton,
+  type ControlBarHudSlot,
+  type ControlBarCommandTarget,
+  type ControlBarSelectionState,
+  type IssuedControlBarCommand,
+  type PendingControlBarCommand,
+} from './control-bar.js';
+
+const MESSAGE_VISIBLE_MS = 4000;
+
+function describeTargetRequirement(
+  requirement: ControlBarHudSlot['targetRequirement'],
+): string {
+  return requirement;
+}
 
 export class UiRuntime implements Subsystem {
   readonly name = '@generals/ui';
@@ -14,15 +33,21 @@ export class UiRuntime implements Subsystem {
   private overlay: HTMLDivElement | null = null;
   private messageNode: HTMLDivElement | null = null;
   private selectedNode: HTMLDivElement | null = null;
+  private commandNode: HTMLDivElement | null = null;
   private debugNode: HTMLDivElement | null = null;
   private messageTimeout: ReturnType<typeof setTimeout> | null = null;
   private selectedText = '';
+  private selectedObjectIds: number[] = [];
   private debugEnabled = false;
   private containerWidth = 0;
   private containerHeight = 0;
+  private readonly controlBarModel = new ControlBarModel();
 
   constructor(options: UiRuntimeOptions = {}) {
     this.debugEnabled = options.enableDebugOverlay ?? false;
+    if (options.initialControlBarButtons?.length) {
+      this.controlBarModel.setButtons(options.initialControlBarButtons);
+    }
   }
 
   init(_root?: HTMLElement | null): void {
@@ -55,13 +80,29 @@ export class UiRuntime implements Subsystem {
     this.selectedNode.style.cssText = [
       'position: absolute',
       'left: 12px',
-      'bottom: 80px',
+      'bottom: 112px',
       'background: rgba(12, 20, 36, 0.58)',
       'border: 1px solid rgba(168, 178, 198, 0.35)',
       'padding: 6px 9px',
       'max-width: 55ch',
     ].join(';');
     this.selectedNode.textContent = 'Selected: <none>';
+
+    this.commandNode = document.createElement('div');
+    this.commandNode.style.cssText = [
+      'position: absolute',
+      'left: 50%',
+      'transform: translateX(-50%)',
+      'bottom: 18px',
+      'background: rgba(7, 10, 18, 0.82)',
+      'border: 1px solid rgba(168, 178, 198, 0.35)',
+      'padding: 8px 12px',
+      'min-width: 280px',
+      'max-width: 92vw',
+      'line-height: 1.35',
+      'white-space: pre-wrap',
+    ].join(';');
+    this.commandNode.textContent = 'ControlBar: no commands loaded';
 
     this.messageNode = document.createElement('div');
     this.messageNode.style.cssText = [
@@ -77,7 +118,7 @@ export class UiRuntime implements Subsystem {
       'display: none',
     ].join(';');
 
-    this.overlay.append(this.selectedNode, this.messageNode);
+    this.overlay.append(this.selectedNode, this.commandNode, this.messageNode);
 
     if (this.debugEnabled) {
       this.debugNode = document.createElement('div');
@@ -97,6 +138,7 @@ export class UiRuntime implements Subsystem {
     this.containerWidth = this.root.clientWidth;
     this.containerHeight = this.root.clientHeight;
     this.resize(this.containerWidth, this.containerHeight);
+    this.renderControlBar();
   }
 
   update(_deltaMs = 16): void {
@@ -104,14 +146,34 @@ export class UiRuntime implements Subsystem {
     if (!this.overlay || !this.messageNode || !this.selectedNode) {
       return;
     }
-    this.selectedNode.textContent = `Selected: ${this.selectedText || '<none>'}`;
+
+    const selection = this.controlBarModel.getSelectionState();
+    const selectedName = selection.selectedObjectName || this.selectedText || '<none>';
+    const selectedCount = selection.selectedObjectIds.length;
+    this.selectedNode.textContent =
+      selectedCount > 0
+        ? `Selected (${selectedCount}): ${selectedName}`
+        : `Selected: ${selectedName}`;
+
+    this.renderControlBar();
+
     if (this.debugNode && this.debugEnabled) {
-      this.debugNode.textContent = `UI runtime active • ${new Date().toLocaleTimeString()}`;
+      const pending = this.controlBarModel.getPendingCommand();
+      const pendingInfo = pending
+        ? `${pending.sourceButtonId} (${pending.targetKind})`
+        : 'none';
+      this.debugNode.textContent = `UI runtime active | pending: ${pendingInfo}`;
     }
   }
 
   reset(): void {
     this.selectedText = '';
+    this.selectedObjectIds = [];
+    this.controlBarModel.setSelectionState({
+      selectedObjectIds: [],
+      selectedObjectName: '',
+    });
+    this.controlBarModel.cancelPendingCommand();
     this.showMessage('');
   }
 
@@ -126,13 +188,15 @@ export class UiRuntime implements Subsystem {
     this.overlay = null;
     this.messageNode = null;
     this.selectedNode = null;
+    this.commandNode = null;
     this.debugNode = null;
     this.root = null;
     this.selectedText = '';
+    this.selectedObjectIds = [];
   }
 
   resize(_width = 0, _height = 0): void {
-    if (!this.overlay || !this.messageNode || !this.selectedNode || !_width || !_height) {
+    if (!this.overlay || !this.messageNode || !this.selectedNode || !this.commandNode || !_width || !_height) {
       return;
     }
 
@@ -146,6 +210,7 @@ export class UiRuntime implements Subsystem {
     this.overlay.style.height = `${safeHeight}px`;
     this.selectedNode.style.maxWidth = `${selectedWidth}px`;
     this.messageNode.style.maxWidth = `${Math.min(Math.floor(safeWidth * 0.85), 120 * 16)}px`;
+    this.commandNode.style.maxWidth = `${Math.min(Math.floor(safeWidth * 0.92), 140 * 16)}px`;
 
     const wireframePadding = this.debugEnabled ? 24 : 12;
     if (this.debugNode) {
@@ -156,7 +221,8 @@ export class UiRuntime implements Subsystem {
     }
 
     this.selectedNode.style.left = `${12}px`;
-    this.selectedNode.style.bottom = `${Math.max(40, Math.floor(safeHeight * 0.05))}px`;
+    this.selectedNode.style.bottom = `${Math.max(94, Math.floor(safeHeight * 0.11))}px`;
+    this.commandNode.style.bottom = `${Math.max(16, Math.floor(safeHeight * 0.02))}px`;
   }
 
   showMessage(message: string): void {
@@ -181,7 +247,7 @@ export class UiRuntime implements Subsystem {
         this.messageNode.style.display = 'none';
       }
       this.messageTimeout = null;
-    }, 4000);
+    }, MESSAGE_VISIBLE_MS);
   }
 
   clearMessage(): void {
@@ -202,6 +268,98 @@ export class UiRuntime implements Subsystem {
 
   setSelectedObjectName(name: string | null): void {
     this.selectedText = name ?? '';
+    this.refreshSelectionState();
+  }
+
+  setSelectedObjectIds(ids: readonly number[]): void {
+    this.selectedObjectIds = [...ids];
+    this.refreshSelectionState();
+  }
+
+  setSelectionState(selection: ControlBarSelectionState): void {
+    this.selectedObjectIds = [...selection.selectedObjectIds];
+    this.selectedText = selection.selectedObjectName;
+    this.controlBarModel.setSelectionState(selection);
+  }
+
+  getSelectionState(): ControlBarSelectionState {
+    return this.controlBarModel.getSelectionState();
+  }
+
+  setControlBarButtons(buttons: readonly ControlBarButton[]): void {
+    this.controlBarModel.setButtons(buttons);
+    this.renderControlBar();
+  }
+
+  getControlBarButtons(): readonly ControlBarButton[] {
+    return this.controlBarModel.getButtons();
+  }
+
+  activateControlBarButton(buttonId: string): ControlBarActivationResult {
+    const result = this.controlBarModel.activateButton(buttonId);
+    this.renderControlBar();
+    return result;
+  }
+
+  activateControlBarSlot(slot: number): ControlBarActivationResult {
+    const result = this.controlBarModel.activateSlot(slot);
+    this.renderControlBar();
+    return result;
+  }
+
+  commitPendingControlBarTarget(target: ControlBarCommandTarget): IssuedControlBarCommand | null {
+    const command = this.controlBarModel.commitPendingCommandTarget(target);
+    this.renderControlBar();
+    return command;
+  }
+
+  cancelPendingControlBarCommand(): void {
+    this.controlBarModel.cancelPendingCommand();
+    this.renderControlBar();
+  }
+
+  getPendingControlBarCommand(): PendingControlBarCommand | null {
+    return this.controlBarModel.getPendingCommand();
+  }
+
+  consumeIssuedCommands(): IssuedControlBarCommand[] {
+    return this.controlBarModel.consumeIssuedCommands();
+  }
+
+  private refreshSelectionState(): void {
+    this.controlBarModel.setSelectionState({
+      selectedObjectIds: this.selectedObjectIds,
+      selectedObjectName: this.selectedText,
+    });
+  }
+
+  private renderControlBar(): void {
+    if (!this.commandNode) {
+      return;
+    }
+
+    const hudSlots = this.controlBarModel.getHudSlots();
+    if (hudSlots.every((slot) => slot.state === 'empty')) {
+      this.commandNode.textContent = 'ControlBar: no commands loaded';
+      return;
+    }
+
+    const formatSlot = (slot: ControlBarHudSlot): string => {
+      const hotkey = slot.hotkey ? `[${slot.hotkey}] ` : '';
+      if (slot.state === 'empty') {
+        return `${slot.slot}. ${hotkey}<empty>`;
+      }
+      return `${slot.slot}. ${hotkey}${slot.label} (${slot.state}, ${describeTargetRequirement(slot.targetRequirement)})`;
+    };
+
+    const rowLength = 6;
+    const lines: string[] = [];
+    for (let rowStart = 0; rowStart < hudSlots.length; rowStart += rowLength) {
+      const row = hudSlots.slice(rowStart, rowStart + rowLength);
+      lines.push(row.map(formatSlot).join(' | '));
+    }
+
+    this.commandNode.textContent = `ControlBar\n${lines.join('\n')}`;
   }
 }
 
@@ -216,4 +374,25 @@ export function initializeUiOverlay(): void {
 
 export interface UiRuntimeOptions {
   enableDebugOverlay?: boolean;
+  initialControlBarButtons?: readonly ControlBarButton[];
 }
+
+export {
+  COMMAND_OPTION_NEED_OBJECT_TARGET,
+  COMMAND_OPTION_NEED_TARGET,
+  commandOptionMaskFromSourceNames,
+  CommandOption,
+  ControlBarModel,
+  guiCommandTypeFromSourceName,
+  GUICommandType,
+} from './control-bar.js';
+
+export type {
+  ControlBarActivationResult,
+  ControlBarButton,
+  ControlBarHudSlot,
+  ControlBarCommandTarget,
+  ControlBarSelectionState,
+  IssuedControlBarCommand,
+  PendingControlBarCommand,
+} from './control-bar.js';

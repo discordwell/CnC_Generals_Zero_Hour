@@ -1,30 +1,188 @@
 /**
  * @generals/audio
  *
- * Browser audio backend implementing the exported `AudioManager` contract from the
- * original engine surface. Keeps behavior deterministic and minimal while avoiding
- * temporary fallback behavior.
+ * Source-aligned audio runtime structure based on GameAudio interfaces:
+ * - AudioAffect category routing
+ * - AudioEventInfo registry lookup
+ * - Audio request queue (play/pause/stop)
+ *
+ * Device-specific Miles playback remains TODO.
  */
 import type { Subsystem } from '@generals/engine';
 
-type ActiveAudioHandle = {
-  source: OscillatorNode | AudioBufferSourceNode;
-  gain: GainNode;
-  startedAt: number;
-  durationMs: number;
-};
-
 type BrowserAudioContext = AudioContext;
 
+export enum AudioHandleSpecialValues {
+  AHSV_Error = 0,
+  AHSV_NoSound,
+  AHSV_Muted,
+  AHSV_NotForLocal,
+  AHSV_StopTheMusic,
+  AHSV_StopTheMusicFade,
+  AHSV_FirstHandle,
+}
+
+export enum AudioAffect {
+  AudioAffect_Music = 0x01,
+  AudioAffect_Sound = 0x02,
+  AudioAffect_Sound3D = 0x04,
+  AudioAffect_Speech = 0x08,
+  AudioAffect_All =
+    AudioAffect_Music |
+    AudioAffect_Sound |
+    AudioAffect_Sound3D |
+    AudioAffect_Speech,
+  AudioAffect_SystemSetting = 0x10,
+}
+
+export enum AudioType {
+  AT_Music,
+  AT_Streaming,
+  AT_SoundEffect,
+}
+
+export enum AudioPriority {
+  AP_LOWEST,
+  AP_LOW,
+  AP_NORMAL,
+  AP_HIGH,
+  AP_CRITICAL,
+}
+
+export enum SoundType {
+  ST_UI = 0x0001,
+  ST_WORLD = 0x0002,
+  ST_SHROUDED = 0x0004,
+  ST_GLOBAL = 0x0008,
+  ST_VOICE = 0x0010,
+  ST_PLAYER = 0x0020,
+  ST_ALLIES = 0x0040,
+  ST_ENEMIES = 0x0080,
+  ST_EVERYONE = 0x0100,
+}
+
+export enum AudioControl {
+  AC_LOOP = 0x0001,
+  AC_RANDOM = 0x0002,
+  AC_ALL = 0x0004,
+  AC_POSTDELAY = 0x0008,
+  AC_INTERRUPT = 0x0010,
+}
+
+export enum RequestType {
+  AR_Play,
+  AR_Pause,
+  AR_Stop,
+}
+
+export type AudioPlayerRelationship = 'allies' | 'enemies' | 'neutral';
+
+export type AudioPlayerRelationshipResolver = (
+  owningPlayerIndex: number,
+  localPlayerIndex: number,
+) => AudioPlayerRelationship;
+
+export type AudioObjectPositionResolver = (
+  objectId: number,
+) => readonly [number, number, number] | null;
+
+export type AudioDrawablePositionResolver = (
+  drawableId: number,
+) => readonly [number, number, number] | null;
+
+export type AudioShroudVisibilityResolver = (
+  localPlayerIndex: number,
+  position: readonly [number, number, number],
+) => boolean;
+
+const AUDIO_AFFECT_CHANNELS = [
+  AudioAffect.AudioAffect_Music,
+  AudioAffect.AudioAffect_Sound,
+  AudioAffect.AudioAffect_Sound3D,
+  AudioAffect.AudioAffect_Speech,
+] as const;
+
+type AudioAffectChannel = (typeof AUDIO_AFFECT_CHANNELS)[number];
+
+type AudioAffectVolumeTable = Record<AudioAffectChannel, number>;
+type AudioAffectStateTable = Record<AudioAffectChannel, boolean>;
+
+interface ResolvedAudioEvent {
+  event: AudioEventRTS;
+  info: AudioEventInfo;
+  affectMask: AudioAffect;
+  resolvedVolume: number;
+}
+
+interface AudioRequest {
+  request: RequestType;
+  pendingEvent?: ResolvedAudioEvent;
+  handleToInteractOn?: AudioHandle;
+  usePendingEvent: boolean;
+  requiresCheckForSample: boolean;
+}
+
+interface ActiveAudioEvent {
+  handle: AudioHandle;
+  event: AudioEventRTS;
+  info: AudioEventInfo;
+  affectMask: AudioAffect;
+  resolvedVolume: number;
+  paused: boolean;
+}
+
+type AudioLimitBucket = 'music' | 'speech' | 'sound2d' | 'sound3d';
+
+interface AudioLimitDecision {
+  allow: boolean;
+  handleToKill?: AudioHandle;
+}
+
 const DEFAULT_MUSIC_VOLUME = 0.6;
-const DEFAULT_SFX_VOLUME = 0.75;
-const DEFAULT_EVENT_DURATION_MS = 150;
-const DEFAULT_TRACK_FREQUENCY_HZ = 220;
+const DEFAULT_SOUND_VOLUME = 0.75;
+const DEFAULT_SOUND3D_VOLUME = 0.75;
+const DEFAULT_SPEECH_VOLUME = 0.6;
+// Source defaults from StaticGameLODInfo::StaticGameLODInfo.
+const DEFAULT_SAMPLE_COUNT_2D = 6;
+const DEFAULT_SAMPLE_COUNT_3D = 24;
+const DEFAULT_STREAM_COUNT = Number.POSITIVE_INFINITY;
+const DEFAULT_MIN_SAMPLE_VOLUME = 0;
+const DEFAULT_GLOBAL_MIN_RANGE: number | undefined = undefined;
+const DEFAULT_GLOBAL_MAX_RANGE: number | undefined = undefined;
+const PLAYER_RESTRICTED_SOUND_MASK =
+  SoundType.ST_PLAYER |
+  SoundType.ST_ALLIES |
+  SoundType.ST_ENEMIES |
+  SoundType.ST_EVERYONE;
 
 let sharedAudioContext: BrowserAudioContext | null = null;
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+}
+
+function normalizeOptionalAudioPreference(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.trunc(value);
+  return normalized >= 0 ? normalized : fallback;
+}
+
+function normalizeStreamCount(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_STREAM_COUNT;
+  }
+  const normalized = Math.trunc(value);
+  return normalized >= 0 ? normalized : DEFAULT_STREAM_COUNT;
 }
 
 function getOrCreateAudioContext(): BrowserAudioContext | null {
@@ -47,13 +205,32 @@ function getOrCreateAudioContext(): BrowserAudioContext | null {
   return sharedAudioContext;
 }
 
-function hashToFrequency(value: string): number {
-  let seed = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    seed = (seed * 31 + value.charCodeAt(i)) >>> 0;
+function normalizeAudioEvent(
+  eventOrName: AudioEventRTS | string,
+  position?: readonly [number, number, number],
+): AudioEventRTS {
+  if (typeof eventOrName === 'string') {
+    if (position) {
+      return {
+        eventName: eventOrName,
+        position,
+      };
+    }
+    return {
+      eventName: eventOrName,
+    };
   }
 
-  return 180 + (seed % 700);
+  if (position) {
+    return {
+      ...eventOrName,
+      position: eventOrName.position ?? position,
+    };
+  }
+
+  return {
+    ...eventOrName,
+  };
 }
 
 export class AudioManager implements Subsystem {
@@ -61,61 +238,135 @@ export class AudioManager implements Subsystem {
 
   private isInitialized = false;
   private context: BrowserAudioContext | null = null;
-  private musicTrack = '';
-  private trackIndex = 0;
-  private musicGain: GainNode | null = null;
-  private musicSource: OscillatorNode | AudioBufferSourceNode | null = null;
-  private audioEvents = new Map<number, ActiveAudioHandle>();
-  private nextHandle = 1;
+  private nextAudioHandle = AudioHandleSpecialValues.AHSV_FirstHandle;
+  private activeAudioEvents = new Map<AudioHandle, ActiveAudioEvent>();
+  private audioRequests: AudioRequest[] = [];
+  private allAudioEventInfo = new Map<string, AudioEventInfo>();
+  private adjustedVolumes = new Map<string, number>();
+
   private musicNames: string[] = [];
-  private masterVolume = 1;
-  private musicVolume = DEFAULT_MUSIC_VOLUME;
-  private sfxVolume = DEFAULT_SFX_VOLUME;
-  private pendingMusic = false;
+  private disallowSpeech = false;
+  private savedSystemVolumes: AudioAffectVolumeTable | null = null;
+
+  private readonly audioEnabled: AudioAffectStateTable = {
+    [AudioAffect.AudioAffect_Music]: true,
+    [AudioAffect.AudioAffect_Sound]: true,
+    [AudioAffect.AudioAffect_Sound3D]: true,
+    [AudioAffect.AudioAffect_Speech]: true,
+  };
+
+  private readonly scriptVolumes: AudioAffectVolumeTable = {
+    [AudioAffect.AudioAffect_Music]: 1,
+    [AudioAffect.AudioAffect_Sound]: 1,
+    [AudioAffect.AudioAffect_Sound3D]: 1,
+    [AudioAffect.AudioAffect_Speech]: 1,
+  };
+
+  private readonly systemVolumes: AudioAffectVolumeTable = {
+    [AudioAffect.AudioAffect_Music]: DEFAULT_MUSIC_VOLUME,
+    [AudioAffect.AudioAffect_Sound]: DEFAULT_SOUND_VOLUME,
+    [AudioAffect.AudioAffect_Sound3D]: DEFAULT_SOUND3D_VOLUME,
+    [AudioAffect.AudioAffect_Speech]: DEFAULT_SPEECH_VOLUME,
+  };
+
+  private listenerPosition: readonly [number, number, number] = [0, 0, 0];
+  private listenerForward: readonly [number, number, number] = [0, 0, 1];
+  private listenerUp: readonly [number, number, number] = [0, 1, 0];
+  private localPlayerIndex: number | null = null;
+  private max2DSamples = DEFAULT_SAMPLE_COUNT_2D;
+  private max3DSamples = DEFAULT_SAMPLE_COUNT_3D;
+  private maxStreams = DEFAULT_STREAM_COUNT;
+  private minSampleVolume = DEFAULT_MIN_SAMPLE_VOLUME;
+  private globalMinRange = DEFAULT_GLOBAL_MIN_RANGE;
+  private globalMaxRange = DEFAULT_GLOBAL_MAX_RANGE;
+  private relationshipResolver: AudioPlayerRelationshipResolver | null = null;
+  private readonly playerRelationshipOverrides = new Map<string, AudioPlayerRelationship>();
+  private objectPositionResolver: AudioObjectPositionResolver | null = null;
+  private drawablePositionResolver: AudioDrawablePositionResolver | null = null;
+  private shroudVisibilityResolver: AudioShroudVisibilityResolver | null = null;
+  private preferred3DProvider: string | null = null;
+  private preferredSpeakerType: string | null = null;
 
   constructor(options: AudioManagerOptions = {}) {
-    this.musicNames = options.musicTracks?.length
-      ? [...options.musicTracks]
-      : ['ambience', 'battle', 'build', 'victory'];
     this.context = options.context ?? null;
+    this.musicNames = options.musicTracks?.length ? [...options.musicTracks] : [];
+    this.localPlayerIndex = options.localPlayerIndex ?? null;
+    this.max2DSamples = normalizeNonNegativeInteger(
+      options.sampleCount2D,
+      DEFAULT_SAMPLE_COUNT_2D,
+    );
+    this.max3DSamples = normalizeNonNegativeInteger(
+      options.sampleCount3D,
+      DEFAULT_SAMPLE_COUNT_3D,
+    );
+    this.maxStreams = normalizeStreamCount(options.streamCount);
+    this.minSampleVolume = clamp01(options.minSampleVolume ?? DEFAULT_MIN_SAMPLE_VOLUME);
+    this.globalMinRange = this.normalizeNonNegativeReal(
+      options.globalMinRange,
+    ) ?? DEFAULT_GLOBAL_MIN_RANGE;
+    this.globalMaxRange = this.normalizeNonNegativeReal(
+      options.globalMaxRange,
+    ) ?? DEFAULT_GLOBAL_MAX_RANGE;
+    this.relationshipResolver = options.resolvePlayerRelationship ?? null;
+    this.objectPositionResolver = options.resolveObjectPosition ?? null;
+    this.drawablePositionResolver = options.resolveDrawablePosition ?? null;
+    this.shroudVisibilityResolver = options.resolveShroudVisibility ?? null;
+    this.preferred3DProvider = normalizeOptionalAudioPreference(options.preferred3DProvider);
+    this.preferredSpeakerType = normalizeOptionalAudioPreference(options.preferredSpeakerType);
+
+    if (options.eventInfos?.length) {
+      for (const eventInfo of options.eventInfos) {
+        this.addAudioEventInfo(eventInfo);
+      }
+    }
+
+    for (const trackName of this.musicNames) {
+      if (this.findAudioEventInfo(trackName)) {
+        continue;
+      }
+      this.addAudioEventInfo({
+        audioName: trackName,
+        soundType: AudioType.AT_Music,
+        type: SoundType.ST_UI,
+        volume: 1,
+        minVolume: 0,
+      });
+    }
   }
 
   init(): void {
     this.context = this.context ?? getOrCreateAudioContext();
     this.isInitialized = true;
-    if (this.context && this.context.state === 'suspended') {
+
+    if (this.context?.state === 'suspended') {
       void this.context.resume();
-    }
-    if (this.pendingMusic) {
-      this.pendingMusic = false;
-      this.nextMusicTrack();
     }
   }
 
   reset(): void {
     this.stopAllAudioImmediately();
-    this.musicTrack = '';
-    this.trackIndex = 0;
+    this.removeAllAudioRequests();
+    this.disallowSpeech = false;
+    this.savedSystemVolumes = null;
+    this.playerRelationshipOverrides.clear();
     this.isInitialized = true;
   }
 
   update(_deltaMs = 16): void {
-    if (!this.isInitialized || !this.context) {
-      void _deltaMs;
+    void _deltaMs;
+    if (!this.isInitialized) {
       return;
     }
 
-    const currentTime = this.context.currentTime * 1000;
-    for (const [handle, event] of [...this.audioEvents.entries()]) {
-      if (currentTime - event.startedAt * 1000 >= event.durationMs + 10) {
-        this.stopAudio(handle);
-      }
-    }
+    this.processRequestList();
+    this.refreshActivePositionalAudio();
   }
 
   dispose(): void {
     this.stopAllAudioImmediately();
+    this.removeAllAudioRequests();
     this.isInitialized = false;
+
     if (this.context && this.context.state !== 'closed') {
       void this.context.close();
     }
@@ -123,160 +374,561 @@ export class AudioManager implements Subsystem {
     sharedAudioContext = null;
   }
 
-  addAudioEvent(eventName: string, position = [0, 0, 0] as readonly [number, number, number]): number | null {
-    if (!this.isInitialized || !this.context || !eventName) {
-      return null;
+  allocateAudioRequest(useAudioEvent: boolean): AudioRequest {
+    return {
+      request: RequestType.AR_Play,
+      usePendingEvent: useAudioEvent,
+      requiresCheckForSample: false,
+    };
+  }
+
+  releaseAudioRequest(_requestToRelease: AudioRequest): void {
+    void _requestToRelease;
+  }
+
+  appendAudioRequest(request: AudioRequest): void {
+    this.audioRequests.push(request);
+  }
+
+  removeAllAudioRequests(): void {
+    this.audioRequests.length = 0;
+  }
+
+  processRequestList(): void {
+    if (this.audioRequests.length === 0) {
+      return;
     }
 
-    const ctx = this.context;
-    const now = ctx.currentTime;
-    const handle = this.nextHandle;
-    this.nextHandle += 1;
+    const requests = this.audioRequests;
+    this.audioRequests = [];
 
-    const gain = ctx.createGain();
-    gain.gain.value = this.masterVolume * this.sfxVolume;
-    gain.connect(ctx.destination);
+    for (const request of requests) {
+      switch (request.request) {
+        case RequestType.AR_Play: {
+          if (!request.pendingEvent || request.handleToInteractOn === undefined) {
+            break;
+          }
 
-    const source = ctx.createOscillator();
-    source.type = 'triangle';
-    source.frequency.value = hashToFrequency(eventName);
+          if (!this.canAllocateSampleForPlay(request.pendingEvent)) {
+            break;
+          }
 
-    const [x] = position;
-    const panner = ctx.createPanner();
-    panner.panningModel = 'equalpower';
-    panner.positionX.value = x;
-    panner.positionY.value = position[1];
-    panner.positionZ.value = position[2];
+          // TODO: Port MilesAudioManager::playAudioEvent path and connect this
+          // request queue to decoded/streamed assets with 2D/3D channel routing.
+          this.activeAudioEvents.set(request.handleToInteractOn, {
+            handle: request.handleToInteractOn,
+            event: request.pendingEvent.event,
+            info: request.pendingEvent.info,
+            affectMask: request.pendingEvent.affectMask,
+            resolvedVolume: request.pendingEvent.resolvedVolume,
+            paused: false,
+          });
+          break;
+        }
 
-    source.connect(panner);
-    panner.connect(gain);
+        case RequestType.AR_Pause: {
+          if (request.handleToInteractOn === undefined) {
+            break;
+          }
 
-    source.start(now);
-    source.stop(now + DEFAULT_EVENT_DURATION_MS / 1000);
-    source.addEventListener('ended', () => {
-      this.stopAudio(handle);
+          const active = this.activeAudioEvents.get(request.handleToInteractOn);
+          if (active) {
+            active.paused = true;
+          }
+          break;
+        }
+
+        case RequestType.AR_Stop: {
+          if (request.handleToInteractOn === undefined) {
+            break;
+          }
+
+          this.activeAudioEvents.delete(request.handleToInteractOn);
+          break;
+        }
+      }
+    }
+  }
+
+  private refreshActivePositionalAudio(): void {
+    for (const active of [...this.activeAudioEvents.values()]) {
+      if (
+        active.info.soundType !== AudioType.AT_SoundEffect
+        || !this.isPositionalSoundEffectEvent(active.event, active.info)
+      ) {
+        continue;
+      }
+
+      if (!this.resolveEventPosition(active.event)) {
+        // Source behavior from MilesAudioManager::processPlayingList:
+        // positional sounds stop when no current world position can be resolved.
+        this.activeAudioEvents.delete(active.handle);
+        continue;
+      }
+
+      const resolvedVolume = this.resolveEventVolume(active.event, active.info);
+      const distanceVolumeScale = this.resolveDistanceVolumeScale(active.event, active.info);
+      const resolvedEffectiveVolume = clamp01(resolvedVolume * distanceVolumeScale);
+      const isGlobal = ((active.info.type ?? 0) & SoundType.ST_GLOBAL) !== 0;
+      const isCritical =
+        (active.info.priority ?? AudioPriority.AP_NORMAL) === AudioPriority.AP_CRITICAL;
+
+      // Source behavior from MilesAudioManager::processPlayingList:
+      // non-global/non-critical 3D sounds are culled when effective volume
+      // falls below AudioSettings MinVolume.
+      if (
+        resolvedEffectiveVolume < this.minSampleVolume
+        && !isGlobal
+        && !isCritical
+      ) {
+        this.activeAudioEvents.delete(active.handle);
+        continue;
+      }
+
+      // Source parity: keep active event volume synchronized with current
+      // listener/object positions and runtime volume overrides.
+      active.resolvedVolume = resolvedEffectiveVolume;
+      this.activeAudioEvents.set(active.handle, active);
+    }
+
+    // TODO: Source parity gap. Miles additionally stops positional sounds when
+    // source events become "dead" via object lifecycle state.
+  }
+
+  newAudioEventInfo(audioName: string): AudioEventInfo {
+    const existing = this.findAudioEventInfo(audioName);
+    if (existing) {
+      return existing;
+    }
+
+    const info: AudioEventInfo = {
+      audioName,
+      soundType: AudioType.AT_SoundEffect,
+      priority: AudioPriority.AP_NORMAL,
+      type: SoundType.ST_WORLD,
+      control: 0,
+      volume: 1,
+      minVolume: 0,
+    };
+    this.allAudioEventInfo.set(audioName, info);
+    return info;
+  }
+
+  addAudioEventInfo(newEventInfo: AudioEventInfo): void {
+    this.allAudioEventInfo.set(newEventInfo.audioName, {
+      ...newEventInfo,
+      volume: newEventInfo.volume ?? 1,
+      minVolume: newEventInfo.minVolume ?? 0,
+      limit: this.normalizePositiveInteger(newEventInfo.limit),
+      minRange: this.normalizeNonNegativeReal(newEventInfo.minRange),
+      maxRange: this.normalizeNonNegativeReal(newEventInfo.maxRange),
+      type: newEventInfo.type ?? SoundType.ST_WORLD,
+      control: newEventInfo.control ?? 0,
+      priority: newEventInfo.priority ?? AudioPriority.AP_NORMAL,
+      soundType: newEventInfo.soundType ?? AudioType.AT_SoundEffect,
     });
+  }
 
-    this.audioEvents.set(handle, {
-      source,
-      gain,
-      startedAt: now,
-      durationMs: DEFAULT_EVENT_DURATION_MS,
-    });
+  findAudioEventInfo(eventName: string): AudioEventInfo | null {
+    return this.allAudioEventInfo.get(eventName) ?? null;
+  }
+
+  isValidAudioEvent(eventToCheck: AudioEventRTS | string): boolean {
+    const event =
+      typeof eventToCheck === 'string'
+        ? {
+            eventName: eventToCheck,
+          }
+        : eventToCheck;
+
+    if (!event.eventName) {
+      return false;
+    }
+
+    return this.findAudioEventInfo(event.eventName) !== null;
+  }
+
+  addTrackName(trackName: string): void {
+    this.musicNames.push(trackName);
+  }
+
+  nextTrackName(currentTrack: string): string {
+    let index = this.musicNames.findIndex((track) => track === currentTrack);
+    if (index >= 0) {
+      index += 1;
+    }
+
+    if (index < 0 || index >= this.musicNames.length) {
+      return this.musicNames[0] ?? '';
+    }
+
+    return this.musicNames[index] ?? '';
+  }
+
+  prevTrackName(currentTrack: string): string {
+    let index = this.musicNames.findIndex((track) => track === currentTrack);
+    if (index >= 0) {
+      index -= 1;
+    }
+
+    if (index < 0) {
+      return this.musicNames[this.musicNames.length - 1] ?? '';
+    }
+
+    return this.musicNames[index] ?? '';
+  }
+
+  addAudioEvent(eventToAdd: AudioEventRTS): AudioHandle;
+  addAudioEvent(
+    eventName: string,
+    position?: readonly [number, number, number],
+  ): AudioHandle;
+  addAudioEvent(
+    eventOrName: AudioEventRTS | string,
+    position?: readonly [number, number, number],
+  ): AudioHandle {
+    if (!this.isInitialized) {
+      return AudioHandleSpecialValues.AHSV_Error;
+    }
+
+    const event = normalizeAudioEvent(eventOrName, position);
+    if (!event.eventName || event.eventName === 'NoSound') {
+      return AudioHandleSpecialValues.AHSV_NoSound;
+    }
+
+    const info = this.findAudioEventInfo(event.eventName);
+    if (!info) {
+      return AudioHandleSpecialValues.AHSV_Error;
+    }
+
+    if (this.disallowSpeech && info.soundType === AudioType.AT_Streaming) {
+      return AudioHandleSpecialValues.AHSV_NoSound;
+    }
+
+    if (!this.shouldPlayLocally(event, info)) {
+      return AudioHandleSpecialValues.AHSV_NotForLocal;
+    }
+
+    const affectMask = this.resolveAffectMask(event, info);
+    // Source behavior from GameAudio::isOn/getAudioAffectFromEventInfo:
+    // channel muting is evaluated against the resolved affect mask, not the
+    // broader sound type.
+    if (!this.areAffectsEnabled(affectMask)) {
+      return AudioHandleSpecialValues.AHSV_NoSound;
+    }
+
+    const resolvedVolume = this.resolveEventVolume(event, info);
+    const minVolume = info.minVolume ?? 0;
+    if (resolvedVolume < Math.max(minVolume, this.minSampleVolume)) {
+      return AudioHandleSpecialValues.AHSV_Muted;
+    }
+
+    if (this.shouldCullByDistance(event, info)) {
+      return AudioHandleSpecialValues.AHSV_NoSound;
+    }
+    const distanceVolumeScale = this.resolveDistanceVolumeScale(event, info);
+    const resolvedEffectiveVolume = clamp01(resolvedVolume * distanceVolumeScale);
+
+    const isInterrupting = this.isInterruptingEvent(info);
+    if (this.violatesVoice(event, info) && !isInterrupting) {
+      return AudioHandleSpecialValues.AHSV_NoSound;
+    }
+
+    const limitDecision = this.evaluateLimitDecision(event, info);
+    if (!limitDecision.allow) {
+      return AudioHandleSpecialValues.AHSV_NoSound;
+    }
+    if (limitDecision.handleToKill !== undefined) {
+      this.removeAudioEvent(limitDecision.handleToKill);
+    }
+
+    const handle = this.allocateNewHandle();
+    const request = this.allocateAudioRequest(true);
+    request.request = RequestType.AR_Play;
+    request.pendingEvent = {
+      event,
+      info,
+      affectMask,
+      resolvedVolume: resolvedEffectiveVolume,
+    };
+    request.handleToInteractOn = handle;
+    this.appendAudioRequest(request);
 
     return handle;
   }
 
-  stopAudio(handle: number): void {
-    const event = this.audioEvents.get(handle);
-    if (!event) {
+  removeAudioEvent(audioEvent: AudioHandle | string): void {
+    if (typeof audioEvent === 'string') {
+      this.removePlayingAudio(audioEvent);
       return;
     }
 
-    if (this.audioEvents.delete(handle)) {
-      try {
-        event.source.stop(0);
-      } catch {
-        /* already stopped */
+    if (
+      audioEvent === AudioHandleSpecialValues.AHSV_StopTheMusic
+      || audioEvent === AudioHandleSpecialValues.AHSV_StopTheMusicFade
+    ) {
+      this.stopMusicTrack();
+      return;
+    }
+
+    if (audioEvent < AudioHandleSpecialValues.AHSV_FirstHandle) {
+      return;
+    }
+
+    const request = this.allocateAudioRequest(false);
+    request.request = RequestType.AR_Stop;
+    request.handleToInteractOn = audioEvent;
+    this.appendAudioRequest(request);
+  }
+
+  stopAudio(whichToAffect: AudioAffect): void {
+    this.stopByAffect(whichToAffect);
+  }
+
+  pauseAudio(whichToAffect: AudioAffect): void {
+    this.pauseByAffect(whichToAffect);
+    this.audioRequests = this.audioRequests.filter(
+      (request) => request.request !== RequestType.AR_Play,
+    );
+  }
+
+  resumeAudio(whichToAffect: AudioAffect): void {
+    for (const [handle, active] of this.activeAudioEvents) {
+      if ((active.affectMask & whichToAffect) !== 0) {
+        active.paused = false;
+        this.activeAudioEvents.set(handle, active);
       }
-      event.source.disconnect();
-      event.gain.disconnect();
     }
   }
 
-  pauseAudio(handle: number): void {
-    if (this.context && this.context.state === 'running') {
-      void this.context.suspend();
-    }
-    if (handle > 0) {
-      this.stopAudio(handle);
-    }
-  }
-
-  resumeAudio(_handle: number): void {
-    void _handle;
-    if (this.context && this.context.state === 'suspended') {
-      void this.context.resume();
-    }
-    if (!this.musicTrack && this.pendingMusic) {
-      this.nextMusicTrack();
+  pauseAmbient(shouldPause: boolean): void {
+    if (shouldPause) {
+      this.pauseAudio(AudioAffect.AudioAffect_Music);
+    } else {
+      this.resumeAudio(AudioAffect.AudioAffect_Music);
     }
   }
 
-  stopAllAudioImmediately(): void {
-    for (const handle of [...this.audioEvents.keys()]) {
-      const event = this.audioEvents.get(handle);
-      if (!event) {
+  loseFocus(): void {
+    if (this.savedSystemVolumes) {
+      return;
+    }
+
+    this.savedSystemVolumes = {
+      [AudioAffect.AudioAffect_Music]: this.systemVolumes[AudioAffect.AudioAffect_Music],
+      [AudioAffect.AudioAffect_Sound]: this.systemVolumes[AudioAffect.AudioAffect_Sound],
+      [AudioAffect.AudioAffect_Sound3D]: this.systemVolumes[AudioAffect.AudioAffect_Sound3D],
+      [AudioAffect.AudioAffect_Speech]: this.systemVolumes[AudioAffect.AudioAffect_Speech],
+    };
+
+    this.setVolume(
+      0,
+      AudioAffect.AudioAffect_All | AudioAffect.AudioAffect_SystemSetting,
+    );
+  }
+
+  regainFocus(): void {
+    if (!this.savedSystemVolumes) {
+      return;
+    }
+
+    this.setVolume(
+      this.savedSystemVolumes[AudioAffect.AudioAffect_Music],
+      AudioAffect.AudioAffect_Music | AudioAffect.AudioAffect_SystemSetting,
+    );
+    this.setVolume(
+      this.savedSystemVolumes[AudioAffect.AudioAffect_Sound],
+      AudioAffect.AudioAffect_Sound | AudioAffect.AudioAffect_SystemSetting,
+    );
+    this.setVolume(
+      this.savedSystemVolumes[AudioAffect.AudioAffect_Sound3D],
+      AudioAffect.AudioAffect_Sound3D | AudioAffect.AudioAffect_SystemSetting,
+    );
+    this.setVolume(
+      this.savedSystemVolumes[AudioAffect.AudioAffect_Speech],
+      AudioAffect.AudioAffect_Speech | AudioAffect.AudioAffect_SystemSetting,
+    );
+    this.savedSystemVolumes = null;
+  }
+
+  setAudioEventEnabled(eventToAffect: string, enable: boolean): void {
+    this.setAudioEventVolumeOverride(eventToAffect, enable ? -1 : 0);
+  }
+
+  setAudioEventVolumeOverride(eventToAffect: string, newVolume: number): void {
+    if (!eventToAffect) {
+      this.adjustedVolumes.clear();
+      return;
+    }
+
+    if (newVolume === -1) {
+      this.adjustedVolumes.delete(eventToAffect);
+      return;
+    }
+
+    const clamped = clamp01(newVolume);
+    this.adjustedVolumes.set(eventToAffect, clamped);
+    this.adjustVolumeOfPlayingAudio(eventToAffect, clamped);
+  }
+
+  removeDisabledEvents(): void {
+    this.removeAllDisabledAudio();
+  }
+
+  removeAllDisabledAudio(): void {
+    for (const active of [...this.activeAudioEvents.values()]) {
+      const adjusted = this.adjustedVolumes.get(active.event.eventName);
+      if (adjusted === 0) {
+        this.removeAudioEvent(active.handle);
+      }
+    }
+  }
+
+  adjustVolumeOfPlayingAudio(eventName: string, newVolume: number): void {
+    for (const [handle, active] of this.activeAudioEvents) {
+      if (active.event.eventName !== eventName) {
         continue;
       }
-      try {
-        event.source.stop();
-      } catch {
-        /* already stopped */
+
+      active.resolvedVolume = clamp01(newVolume);
+      this.activeAudioEvents.set(handle, active);
+    }
+  }
+
+  removePlayingAudio(eventName: string): void {
+    for (const active of [...this.activeAudioEvents.values()]) {
+      if (active.event.eventName === eventName) {
+        this.removeAudioEvent(active.handle);
       }
-      event.source.disconnect();
-      event.gain.disconnect();
-      this.audioEvents.delete(handle);
     }
-
-    this.stopMusicTrack();
-    this.musicTrack = '';
-    this.pendingMusic = false;
   }
 
-  nextMusicTrack(): void {
-    if (!this.musicNames.length) {
-      this.pendingMusic = true;
-      return;
+  isCurrentlyPlaying(handle: AudioHandle): boolean {
+    if (this.activeAudioEvents.has(handle)) {
+      return true;
     }
 
-    if (!this.musicTrack) {
-      this.trackIndex = 0;
-    } else {
-      this.trackIndex = (this.trackIndex + 1) % this.musicNames.length;
+    for (const request of this.audioRequests) {
+      if (request.request !== RequestType.AR_Play) {
+        continue;
+      }
+      if (request.handleToInteractOn !== handle) {
+        continue;
+      }
+      if (request.pendingEvent) {
+        return true;
+      }
     }
-    const nextName = this.musicNames[this.trackIndex] ?? '';
-    this.startMusicTrack(nextName);
+
+    return false;
   }
 
-  prevMusicTrack(): void {
-    if (!this.musicNames.length) {
-      return;
-    }
-
-    if (!this.musicTrack) {
-      this.trackIndex = Math.max(0, this.musicNames.length - 1);
-    } else {
-      this.trackIndex = (this.trackIndex - 1 + this.musicNames.length) % this.musicNames.length;
-    }
-    const name = this.musicNames[this.trackIndex] ?? '';
-    this.startMusicTrack(name);
+  isOn(whichToGet: AudioAffect): boolean {
+    const affect = this.resolvePrimaryAffect(whichToGet);
+    return this.audioEnabled[affect];
   }
 
-  isMusicPlaying(): boolean {
-    return this.musicSource !== null;
+  setOn(turnOn: boolean, whichToAffect: AudioAffect): void {
+    this.forEachAffectInMask(whichToAffect, (affect) => {
+      this.audioEnabled[affect] = turnOn;
+    });
   }
 
-  getMusicTrackName(): string {
-    return this.musicTrack;
+  setVolume(volume: number, whichToAffect: AudioAffect): void {
+    const normalized = clamp01(volume);
+    const useSystemSetting =
+      (whichToAffect & AudioAffect.AudioAffect_SystemSetting) !== 0;
+
+    this.forEachAffectInMask(whichToAffect, (affect) => {
+      if (useSystemSetting) {
+        this.systemVolumes[affect] = normalized;
+      } else {
+        this.scriptVolumes[affect] = normalized;
+      }
+    });
+  }
+
+  getVolume(whichToGet: AudioAffect): number {
+    const affect = this.resolvePrimaryAffect(whichToGet);
+    return this.scriptVolumes[affect] * this.systemVolumes[affect];
   }
 
   setMusicVolume(volume: number): void {
-    this.musicVolume = clamp01(volume);
-    if (this.musicGain) {
-      this.musicGain.gain.value = this.masterVolume * this.musicVolume;
-    }
+    this.setVolume(
+      clamp01(volume),
+      AudioAffect.AudioAffect_Music | AudioAffect.AudioAffect_SystemSetting,
+    );
   }
 
   setSfxVolume(volume: number): void {
-    this.sfxVolume = clamp01(volume);
-    const target = this.masterVolume * this.sfxVolume;
-    for (const event of this.audioEvents.values()) {
-      event.gain.gain.value = target;
+    const normalized = clamp01(volume);
+    this.setVolume(
+      normalized,
+      AudioAffect.AudioAffect_Sound | AudioAffect.AudioAffect_SystemSetting,
+    );
+    this.setVolume(
+      normalized,
+      AudioAffect.AudioAffect_Sound3D | AudioAffect.AudioAffect_SystemSetting,
+    );
+  }
+
+  nextMusicTrack(): void {
+    const trackName = this.nextTrackName(this.getMusicTrackName());
+    if (!trackName) {
+      return;
     }
+
+    this.startMusicTrack(trackName);
+  }
+
+  prevMusicTrack(): void {
+    const trackName = this.prevTrackName(this.getMusicTrackName());
+    if (!trackName) {
+      return;
+    }
+
+    this.startMusicTrack(trackName);
+  }
+
+  isMusicPlaying(): boolean {
+    for (const active of this.activeAudioEvents.values()) {
+      if (
+        (active.affectMask & AudioAffect.AudioAffect_Music) !== 0
+        && !active.paused
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  getMusicTrackName(): string {
+    for (const request of this.audioRequests) {
+      if (request.request !== RequestType.AR_Play) {
+        continue;
+      }
+      const pendingEvent = request.pendingEvent;
+      if (!pendingEvent) {
+        continue;
+      }
+      if (pendingEvent.info.soundType === AudioType.AT_Music) {
+        return pendingEvent.event.eventName;
+      }
+    }
+
+    for (const active of this.activeAudioEvents.values()) {
+      if (active.info.soundType === AudioType.AT_Music) {
+        return active.event.eventName;
+      }
+    }
+
+    return '';
   }
 
   setListenerPosition(position: readonly [number, number, number]): void {
+    this.listenerPosition = position;
+
     if (!this.context) {
       return;
     }
@@ -287,21 +939,38 @@ export class AudioManager implements Subsystem {
       positionZ?: AudioParam;
       setPosition?: (x: number, y: number, z: number) => void;
     };
+
     if (listener.positionX && listener.positionY && listener.positionZ) {
       listener.positionX.value = position[0];
       listener.positionY.value = position[1];
       listener.positionZ.value = position[2];
       return;
     }
-    if (listener.setPosition) {
-      listener.setPosition(position[0], position[1], position[2]);
-    }
+
+    listener.setPosition?.(position[0], position[1], position[2]);
+  }
+
+  getListenerPosition(): readonly [number, number, number] {
+    return this.listenerPosition;
+  }
+
+  getListenerOrientation(): {
+    forward: readonly [number, number, number];
+    up: readonly [number, number, number];
+  } {
+    return {
+      forward: this.listenerForward,
+      up: this.listenerUp,
+    };
   }
 
   setListenerOrientation(
     forward: readonly [number, number, number],
     up: readonly [number, number, number],
   ): void {
+    this.listenerForward = forward;
+    this.listenerUp = up;
+
     if (!this.context) {
       return;
     }
@@ -322,13 +991,14 @@ export class AudioManager implements Subsystem {
         zUp: number,
       ) => void;
     };
+
     if (
-      listener.forwardX &&
-      listener.forwardY &&
-      listener.forwardZ &&
-      listener.upX &&
-      listener.upY &&
-      listener.upZ
+      listener.forwardX
+      && listener.forwardY
+      && listener.forwardZ
+      && listener.upX
+      && listener.upY
+      && listener.upZ
     ) {
       listener.forwardX.value = forward[0];
       listener.forwardY.value = forward[1];
@@ -338,55 +1008,715 @@ export class AudioManager implements Subsystem {
       listener.upZ.value = up[2];
       return;
     }
-    if (listener.setOrientation) {
-      listener.setOrientation(
-        forward[0],
-        forward[1],
-        forward[2],
-        up[0],
-        up[1],
-        up[2],
-      );
+
+    listener.setOrientation?.(
+      forward[0],
+      forward[1],
+      forward[2],
+      up[0],
+      up[1],
+      up[2],
+    );
+  }
+
+  setLocalPlayerIndex(playerIndex: number | null): void {
+    if (playerIndex === null || !Number.isFinite(playerIndex)) {
+      this.localPlayerIndex = null;
+      return;
+    }
+
+    this.localPlayerIndex = Math.trunc(playerIndex);
+  }
+
+  setPlayerRelationship(
+    owningPlayerIndex: number,
+    localPlayerIndex: number,
+    relationship: AudioPlayerRelationship,
+  ): void {
+    if (!Number.isFinite(owningPlayerIndex) || !Number.isFinite(localPlayerIndex)) {
+      return;
+    }
+
+    const key = this.playerRelationshipKey(
+      Math.trunc(owningPlayerIndex),
+      Math.trunc(localPlayerIndex),
+    );
+    this.playerRelationshipOverrides.set(key, relationship);
+  }
+
+  setPlayerRelationshipResolver(
+    resolver: AudioPlayerRelationshipResolver | null,
+  ): void {
+    this.relationshipResolver = resolver;
+  }
+
+  setObjectPositionResolver(resolver: AudioObjectPositionResolver | null): void {
+    this.objectPositionResolver = resolver;
+  }
+
+  setDrawablePositionResolver(resolver: AudioDrawablePositionResolver | null): void {
+    this.drawablePositionResolver = resolver;
+  }
+
+  setSampleCounts(sampleCount2D: number, sampleCount3D: number): void {
+    this.max2DSamples = normalizeNonNegativeInteger(
+      sampleCount2D,
+      DEFAULT_SAMPLE_COUNT_2D,
+    );
+    this.max3DSamples = normalizeNonNegativeInteger(
+      sampleCount3D,
+      DEFAULT_SAMPLE_COUNT_3D,
+    );
+  }
+
+  setStreamCount(streamCount: number): void {
+    this.maxStreams = normalizeStreamCount(streamCount);
+  }
+
+  setGlobalMinVolume(minSampleVolume: number): void {
+    this.minSampleVolume = clamp01(minSampleVolume);
+  }
+
+  setGlobalRanges(globalMinRange: number | undefined, globalMaxRange: number | undefined): void {
+    this.globalMinRange = this.normalizeNonNegativeReal(globalMinRange);
+    this.globalMaxRange = this.normalizeNonNegativeReal(globalMaxRange);
+  }
+
+  setPreferredProvider(providerName: string | null | undefined): void {
+    this.preferred3DProvider = normalizeOptionalAudioPreference(providerName);
+  }
+
+  getPreferredProvider(): string | null {
+    return this.preferred3DProvider;
+  }
+
+  setPreferredSpeaker(speakerType: string | null | undefined): void {
+    this.preferredSpeakerType = normalizeOptionalAudioPreference(speakerType);
+  }
+
+  getPreferredSpeaker(): string | null {
+    return this.preferredSpeakerType;
+  }
+
+  setShroudVisibilityResolver(resolver: AudioShroudVisibilityResolver | null): void {
+    this.shroudVisibilityResolver = resolver;
+  }
+
+  clearPlayerRelationships(): void {
+    this.playerRelationshipOverrides.clear();
+  }
+
+  stopAllAudioImmediately(): void {
+    this.removeAllAudioRequests();
+    this.activeAudioEvents.clear();
+  }
+
+  getActiveAudioEventCount(): number {
+    return this.activeAudioEvents.size;
+  }
+
+  getQueuedRequestCount(): number {
+    return this.audioRequests.length;
+  }
+
+  getActiveResolvedVolume(handle: AudioHandle): number | null {
+    const active = this.activeAudioEvents.get(handle);
+    return active?.resolvedVolume ?? null;
+  }
+
+  private resolvePrimaryAffect(whichToGet: AudioAffect): AudioAffectChannel {
+    if ((whichToGet & AudioAffect.AudioAffect_Music) !== 0) {
+      return AudioAffect.AudioAffect_Music;
+    }
+
+    if ((whichToGet & AudioAffect.AudioAffect_Sound) !== 0) {
+      return AudioAffect.AudioAffect_Sound;
+    }
+
+    if ((whichToGet & AudioAffect.AudioAffect_Sound3D) !== 0) {
+      return AudioAffect.AudioAffect_Sound3D;
+    }
+
+    return AudioAffect.AudioAffect_Speech;
+  }
+
+  private forEachAffectInMask(
+    whichToAffect: AudioAffect,
+    callback: (affect: AudioAffectChannel) => void,
+  ): void {
+    for (const affect of AUDIO_AFFECT_CHANNELS) {
+      if ((whichToAffect & affect) !== 0) {
+        callback(affect);
+      }
     }
   }
 
-  private stopMusicTrack(): void {
-    if (this.musicSource) {
-      try {
-        this.musicSource.stop();
-      } catch {
-        /* no-op */
-      }
-      this.musicSource.disconnect();
-      this.musicSource = null;
+  private allocateNewHandle(): AudioHandle {
+    const handle = this.nextAudioHandle;
+    this.nextAudioHandle += 1;
+    return handle;
+  }
+
+  private normalizePositiveInteger(value: number | undefined): number | undefined {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return undefined;
     }
-    if (this.musicGain) {
-      this.musicGain.disconnect();
-      this.musicGain = null;
+
+    const normalized = Math.trunc(value);
+    return normalized > 0 ? normalized : undefined;
+  }
+
+  private normalizeNonNegativeReal(value: number | undefined): number | undefined {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return undefined;
+    }
+    return value >= 0 ? value : undefined;
+  }
+
+  private resolveAffectMask(event: AudioEventRTS, info: AudioEventInfo): AudioAffect {
+    if (event.audioAffect !== undefined) {
+      return event.audioAffect;
+    }
+
+    switch (info.soundType) {
+      case AudioType.AT_Music:
+        return AudioAffect.AudioAffect_Music;
+      case AudioType.AT_Streaming:
+        return AudioAffect.AudioAffect_Speech;
+      case AudioType.AT_SoundEffect:
+        return this.isPositionalSoundEffectEvent(event, info)
+          ? AudioAffect.AudioAffect_Sound3D
+          : AudioAffect.AudioAffect_Sound;
+      default:
+        return AudioAffect.AudioAffect_Sound;
+    }
+  }
+
+  private isPositionalSoundEffectEvent(
+    event: AudioEventRTS,
+    info: AudioEventInfo,
+  ): boolean {
+    if (((info.type ?? 0) & SoundType.ST_WORLD) === 0) {
+      return false;
+    }
+
+    // Source behavior from AudioEventRTS::isPositionalAudio:
+    // ST_WORLD events are positional when bound to world coordinates, object IDs,
+    // or drawable IDs.
+    return (
+      Array.isArray(event.position)
+      || event.objectId !== undefined
+      || event.drawableId !== undefined
+    );
+  }
+
+  private shouldCullByDistance(event: AudioEventRTS, info: AudioEventInfo): boolean {
+    if (info.soundType !== AudioType.AT_SoundEffect) {
+      return false;
+    }
+    if (!this.isPositionalSoundEffectEvent(event, info)) {
+      return false;
+    }
+    if (((info.type ?? 0) & SoundType.ST_GLOBAL) !== 0) {
+      // Source behavior from SoundManager::canPlayNow:
+      // positional ST_GLOBAL events skip distance/shroud culling gates.
+      return false;
+    }
+    if ((info.priority ?? AudioPriority.AP_NORMAL) === AudioPriority.AP_CRITICAL) {
+      return false;
+    }
+
+    const distanceContext = this.resolveDistanceCullContext(event, info);
+    if (!distanceContext) {
+      // TODO: Source parity gap: unresolved object/drawable audio IDs should use
+      // source ownership state to derive current world position.
+      return false;
+    }
+
+    const { eventPosition, distance, maxRange } = distanceContext;
+    if (typeof maxRange !== 'number' || !Number.isFinite(maxRange) || maxRange <= 0) {
+      return false;
+    }
+
+    // Source behavior from SoundManager::canPlayNow:
+    // positional, non-critical sounds are muted at MaxRange.
+    if (distance >= maxRange) {
+      return true;
+    }
+
+    if (((info.type ?? 0) & SoundType.ST_SHROUDED) === 0) {
+      return false;
+    }
+    if (this.localPlayerIndex === null || !this.shroudVisibilityResolver) {
+      // TODO: Source parity gap: ST_SHROUDED filtering should be backed by
+      // game shroud data for the local player.
+      return false;
+    }
+
+    // Source behavior from SoundManager::canPlayNow:
+    // ST_SHROUDED positional sounds are culled when local shroud is not clear.
+    return !this.shroudVisibilityResolver(this.localPlayerIndex, eventPosition);
+  }
+
+  private resolveDistanceVolumeScale(event: AudioEventRTS, info: AudioEventInfo): number {
+    if (info.soundType !== AudioType.AT_SoundEffect) {
+      return 1;
+    }
+    if (!this.isPositionalSoundEffectEvent(event, info)) {
+      return 1;
+    }
+
+    const distanceContext = this.resolveDistanceCullContext(event, info);
+    if (!distanceContext) {
+      return 1;
+    }
+
+    const { distance, minRange, maxRange } = distanceContext;
+    if (typeof maxRange === 'number' && Number.isFinite(maxRange) && maxRange > 0 && distance >= maxRange) {
+      return 0;
+    }
+    if (typeof minRange !== 'number' || !Number.isFinite(minRange) || minRange <= 0) {
+      return 1;
+    }
+    if (distance <= minRange) {
+      return 1;
+    }
+
+    // Source behavior from MilesAudioManager::getEffectiveVolume:
+    // for positional sounds beyond min distance, volume scales by minRange / distance.
+    return minRange / distance;
+  }
+
+  private resolveDistanceCullContext(
+    event: AudioEventRTS,
+    info: AudioEventInfo,
+  ): {
+    eventPosition: readonly [number, number, number];
+    distance: number;
+    minRange: number | undefined;
+    maxRange: number | undefined;
+  } | null {
+    const eventPosition = this.resolveEventPosition(event);
+    if (!eventPosition) {
+      return null;
+    }
+
+    const [listenerX, listenerY, listenerZ] = this.listenerPosition;
+    const [eventX, eventY, eventZ] = eventPosition;
+    const dx = listenerX - eventX;
+    const dy = listenerY - eventY;
+    const dz = listenerZ - eventZ;
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const { minRange, maxRange } = this.resolveDistanceCullRanges(info);
+    return {
+      eventPosition,
+      distance,
+      minRange,
+      maxRange,
+    };
+  }
+
+  private resolveDistanceCullRanges(
+    info: AudioEventInfo,
+  ): { minRange: number | undefined; maxRange: number | undefined } {
+    if (((info.type ?? 0) & SoundType.ST_GLOBAL) !== 0) {
+      // Source behavior from MilesAudioManager::playSample3D/getEffectiveVolume:
+      // ST_GLOBAL events use AudioSettings global ranges instead of event ranges.
+      return {
+        minRange: this.globalMinRange,
+        maxRange: this.globalMaxRange,
+      };
+    }
+    return {
+      minRange: info.minRange,
+      maxRange: info.maxRange,
+    };
+  }
+
+  private resolveEventPosition(
+    event: AudioEventRTS,
+  ): readonly [number, number, number] | null {
+    if (Array.isArray(event.position)) {
+      return event.position;
+    }
+
+    if (event.objectId !== undefined && this.objectPositionResolver) {
+      return this.objectPositionResolver(event.objectId);
+    }
+
+    if (event.drawableId !== undefined && this.drawablePositionResolver) {
+      return this.drawablePositionResolver(event.drawableId);
+    }
+
+    return null;
+  }
+
+  private isInterruptingEvent(info: AudioEventInfo): boolean {
+    return ((info.control ?? 0) & AudioControl.AC_INTERRUPT) !== 0;
+  }
+
+  private violatesVoice(event: AudioEventRTS, info: AudioEventInfo): boolean {
+    if (((info.type ?? 0) & SoundType.ST_VOICE) === 0) {
+      return false;
+    }
+
+    const objectId = event.objectId;
+    // Source behavior from SoundManager::violatesVoice:
+    // voice gating requires a non-zero object owner.
+    if (objectId === undefined || objectId === 0) {
+      return false;
+    }
+
+    return this.isObjectPlayingVoice(objectId);
+  }
+
+  private isObjectPlayingVoice(objectId: number): boolean {
+    for (const active of this.activeAudioEvents.values()) {
+      if (active.event.objectId !== objectId) {
+        continue;
+      }
+      if (((active.info.type ?? 0) & SoundType.ST_VOICE) !== 0) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private resolveLimitBucket(
+    event: AudioEventRTS,
+    info: AudioEventInfo,
+  ): AudioLimitBucket {
+    switch (info.soundType) {
+      case AudioType.AT_Music:
+        return 'music';
+      case AudioType.AT_Streaming:
+        return 'speech';
+      case AudioType.AT_SoundEffect:
+      default:
+        return this.isPositionalSoundEffectEvent(event, info)
+          ? 'sound3d'
+          : 'sound2d';
+    }
+  }
+
+  private canAllocateSampleForPlay(pendingEvent: ResolvedAudioEvent): boolean {
+    const { event, info } = pendingEvent;
+    if (info.soundType === AudioType.AT_Music) {
+      return true;
+    }
+
+    const bucket = this.resolveLimitBucket(event, info);
+    const sampleLimit =
+      bucket === 'sound3d'
+        ? this.max3DSamples
+        : bucket === 'sound2d'
+          ? this.max2DSamples
+          : bucket === 'speech'
+            ? this.maxStreams
+          : 0;
+    if (bucket !== 'sound2d' && bucket !== 'sound3d' && bucket !== 'speech') {
+      return true;
+    }
+    if (sampleLimit <= 0) {
+      return false;
+    }
+
+    if (this.countActiveByBucket(bucket) < sampleLimit) {
+      return true;
+    }
+
+    // Source behavior from MilesAudioManager::killLowestPrioritySoundImmediately:
+    // when sample pools are saturated, lower-priority active audio in the same
+    // dimensional bucket can be replaced.
+    const handleToKill = this.findLowestPriorityHandleForBucket(
+      bucket,
+      info.priority ?? AudioPriority.AP_NORMAL,
+    );
+    if (handleToKill !== null) {
+      this.activeAudioEvents.delete(handleToKill);
+      return true;
+    }
+
+    if (this.isInterruptingEvent(info)) {
+      const matchingHandle = this.findOldestActiveHandle(event.eventName, bucket);
+      if (matchingHandle !== null) {
+        // TODO: Source parity gap. canPlayNow checks isPlayingAlready() for
+        // interrupt sounds, but final allocation also depends on live Miles
+        // sample handles. Until that path is ported, we deterministically
+        // replace the oldest matching sound in the same bucket.
+        this.activeAudioEvents.delete(matchingHandle);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private countActiveByBucket(bucket: AudioLimitBucket): number {
+    let count = 0;
+    for (const active of this.activeAudioEvents.values()) {
+      if (this.resolveLimitBucket(active.event, active.info) !== bucket) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  private findLowestPriorityHandleForBucket(
+    bucket: AudioLimitBucket,
+    incomingPriority: AudioPriority,
+  ): AudioHandle | null {
+    if (incomingPriority === AudioPriority.AP_LOWEST) {
+      return null;
+    }
+
+    let lowestPriorityHandle: AudioHandle | null = null;
+    let lowestPriority: AudioPriority = incomingPriority;
+    for (const active of this.activeAudioEvents.values()) {
+      if (this.resolveLimitBucket(active.event, active.info) !== bucket) {
+        continue;
+      }
+      const activePriority = active.info.priority ?? AudioPriority.AP_NORMAL;
+      if (activePriority >= incomingPriority) {
+        continue;
+      }
+      if (
+        lowestPriorityHandle === null
+        || activePriority < lowestPriority
+      ) {
+        lowestPriorityHandle = active.handle;
+        lowestPriority = activePriority;
+        if (lowestPriority === AudioPriority.AP_LOWEST) {
+          return lowestPriorityHandle;
+        }
+      }
+    }
+
+    return lowestPriorityHandle;
+  }
+
+  private evaluateLimitDecision(
+    event: AudioEventRTS,
+    info: AudioEventInfo,
+  ): AudioLimitDecision {
+    const limit = info.limit ?? 0;
+    if (limit <= 0) {
+      return { allow: true };
+    }
+
+    const bucket = this.resolveLimitBucket(event, info);
+    const queuedCount = this.countQueuedPlayRequests(event.eventName, bucket);
+    const activeCount = this.countActiveEvents(event.eventName, bucket);
+    const totalCount = queuedCount + activeCount;
+    const isInterrupting = this.isInterruptingEvent(info);
+
+    // Source behavior from MilesAudioManager::doesViolateLimit:
+    // interrupting sounds can replace the oldest active match when current-frame
+    // queued requests have not already consumed the full limit.
+    if (isInterrupting && queuedCount < limit) {
+      if (totalCount < limit) {
+        return { allow: true };
+      }
+
+      const oldestActiveHandle = this.findOldestActiveHandle(event.eventName, bucket);
+      if (oldestActiveHandle !== null) {
+        return {
+          allow: true,
+          handleToKill: oldestActiveHandle,
+        };
+      }
+    }
+
+    return {
+      allow: totalCount < limit,
+    };
+  }
+
+  private countQueuedPlayRequests(
+    eventName: string,
+    bucket: AudioLimitBucket,
+  ): number {
+    let count = 0;
+    for (const request of this.audioRequests) {
+      if (request.request !== RequestType.AR_Play || !request.pendingEvent) {
+        continue;
+      }
+      if (request.pendingEvent.event.eventName !== eventName) {
+        continue;
+      }
+      if (this.resolveLimitBucket(request.pendingEvent.event, request.pendingEvent.info) !== bucket) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  private countActiveEvents(eventName: string, bucket: AudioLimitBucket): number {
+    let count = 0;
+    for (const active of this.activeAudioEvents.values()) {
+      if (active.event.eventName !== eventName) {
+        continue;
+      }
+      if (this.resolveLimitBucket(active.event, active.info) !== bucket) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  private findOldestActiveHandle(
+    eventName: string,
+    bucket: AudioLimitBucket,
+  ): AudioHandle | null {
+    for (const active of this.activeAudioEvents.values()) {
+      if (active.event.eventName !== eventName) {
+        continue;
+      }
+      if (this.resolveLimitBucket(active.event, active.info) !== bucket) {
+        continue;
+      }
+      return active.handle;
+    }
+    return null;
+  }
+
+  private shouldPlayLocally(event: AudioEventRTS, info: AudioEventInfo): boolean {
+    if (info.soundType === AudioType.AT_Music) {
+      return true;
+    }
+
+    const soundTypeMask = info.type ?? 0;
+    if ((soundTypeMask & PLAYER_RESTRICTED_SOUND_MASK) === 0) {
+      // Source fallback: unspecified player filters are treated as globally audible.
+      return true;
+    }
+
+    if ((soundTypeMask & SoundType.ST_EVERYONE) !== 0) {
+      return true;
+    }
+
+    if (
+      (soundTypeMask & SoundType.ST_PLAYER) !== 0 &&
+      (soundTypeMask & SoundType.ST_UI) !== 0 &&
+      event.playerIndex === undefined
+    ) {
+      // Source behavior: UI sounds scoped to player can still play when no owner
+      // player is provided.
+      return true;
+    }
+
+    if (event.playerIndex === undefined || this.localPlayerIndex === null) {
+      return false;
+    }
+
+    if ((soundTypeMask & SoundType.ST_PLAYER) !== 0) {
+      return event.playerIndex === this.localPlayerIndex;
+    }
+
+    const relationship = this.resolvePlayerRelationship(
+      event.playerIndex,
+      this.localPlayerIndex,
+    );
+    if ((soundTypeMask & SoundType.ST_ALLIES) !== 0) {
+      // Source behavior: ALLIES does not include the local player themselves.
+      return event.playerIndex !== this.localPlayerIndex && relationship === 'allies';
+    }
+
+    if ((soundTypeMask & SoundType.ST_ENEMIES) !== 0) {
+      return relationship === 'enemies';
+    }
+
+    return false;
+  }
+
+  private resolvePlayerRelationship(
+    owningPlayerIndex: number,
+    localPlayerIndex: number,
+  ): AudioPlayerRelationship {
+    if (this.relationshipResolver) {
+      return this.relationshipResolver(owningPlayerIndex, localPlayerIndex);
+    }
+
+    const relationshipOverride = this.playerRelationshipOverrides.get(
+      this.playerRelationshipKey(owningPlayerIndex, localPlayerIndex),
+    );
+    if (relationshipOverride) {
+      return relationshipOverride;
+    }
+
+    if (owningPlayerIndex === localPlayerIndex) {
+      return 'allies';
+    }
+
+    // TODO: Source parity gap: relation defaults should come from team graph.
+    // Without a game-state resolver we conservatively treat unknown players as
+    // neutral.
+    return 'neutral';
+  }
+
+  private playerRelationshipKey(
+    owningPlayerIndex: number,
+    localPlayerIndex: number,
+  ): string {
+    return `${owningPlayerIndex}\u0000${localPlayerIndex}`;
+  }
+
+  private areAffectsEnabled(affectMask: AudioAffect): boolean {
+    for (const affect of AUDIO_AFFECT_CHANNELS) {
+      if ((affectMask & affect) !== 0 && !this.audioEnabled[affect]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private resolveEventVolume(event: AudioEventRTS, info: AudioEventInfo): number {
+    const adjusted = this.adjustedVolumes.get(event.eventName);
+    if (adjusted !== undefined) {
+      return adjusted;
+    }
+
+    if (event.volume !== undefined) {
+      return clamp01(event.volume);
+    }
+
+    return clamp01(info.volume ?? 1);
+  }
+
+  private stopByAffect(whichToAffect: AudioAffect): void {
+    for (const active of [...this.activeAudioEvents.values()]) {
+      if ((active.affectMask & whichToAffect) !== 0) {
+        this.removeAudioEvent(active.handle);
+      }
+    }
+  }
+
+  private pauseByAffect(whichToAffect: AudioAffect): void {
+    for (const active of [...this.activeAudioEvents.values()]) {
+      if ((active.affectMask & whichToAffect) !== 0) {
+        const request = this.allocateAudioRequest(false);
+        request.request = RequestType.AR_Pause;
+        request.handleToInteractOn = active.handle;
+        this.appendAudioRequest(request);
+      }
     }
   }
 
   private startMusicTrack(trackName: string): void {
-    if (!this.context) {
-      this.pendingMusic = true;
-      return;
-    }
-
-    if (!this.isInitialized) {
-      this.pendingMusic = true;
-      return;
-    }
-
     this.stopMusicTrack();
-    this.musicTrack = trackName;
-    this.musicSource = this.context.createOscillator();
-    this.musicGain = this.context.createGain();
-    this.musicGain.gain.value = this.masterVolume * this.musicVolume;
-    this.musicSource.connect(this.musicGain);
-    this.musicGain.connect(this.context.destination);
-    this.musicSource.type = 'sawtooth';
-    this.musicSource.frequency.value = DEFAULT_TRACK_FREQUENCY_HZ + this.trackIndex * 40;
-    this.musicSource.start(this.context.currentTime);
+    this.addAudioEvent({
+      eventName: trackName,
+      audioAffect: AudioAffect.AudioAffect_Music,
+    });
+  }
+
+  private stopMusicTrack(): void {
+    this.stopByAffect(AudioAffect.AudioAffect_Music);
   }
 }
 
@@ -398,8 +1728,46 @@ export function initializeAudioContext(): void {
 
 export type AudioHandle = number;
 
+export interface AudioEventInfo {
+  audioName: string;
+  filename?: string;
+  soundType?: AudioType;
+  priority?: AudioPriority;
+  type?: number;
+  control?: number;
+  volume?: number;
+  minVolume?: number;
+  limit?: number;
+  minRange?: number;
+  maxRange?: number;
+}
+
+export interface AudioEventRTS {
+  eventName: string;
+  position?: readonly [number, number, number];
+  objectId?: number;
+  drawableId?: number;
+  volume?: number;
+  audioAffect?: AudioAffect;
+  playerIndex?: number;
+}
+
 export interface AudioManagerOptions {
   debugLabel?: string;
   musicTracks?: string[];
   context?: BrowserAudioContext | null;
+  eventInfos?: readonly AudioEventInfo[];
+  localPlayerIndex?: number | null;
+  sampleCount2D?: number;
+  sampleCount3D?: number;
+  streamCount?: number;
+  minSampleVolume?: number;
+  globalMinRange?: number;
+  globalMaxRange?: number;
+  resolvePlayerRelationship?: AudioPlayerRelationshipResolver;
+  resolveObjectPosition?: AudioObjectPositionResolver;
+  resolveDrawablePosition?: AudioDrawablePositionResolver;
+  resolveShroudVisibility?: AudioShroudVisibilityResolver;
+  preferred3DProvider?: string | null;
+  preferredSpeakerType?: string | null;
 }

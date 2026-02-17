@@ -99,19 +99,92 @@ describe('IniDataRegistry', () => {
       expect(registry.getUnsupportedBlockTypes()).toEqual(['CustomThing']);
     });
 
-    it('indexes command button/set blocks and skips other known non-indexed types', () => {
+    it('indexes CommandButton/CommandSet/AudioEvent families and skips other known non-indexed types', () => {
       registry.loadBlocks([
-        makeBlock('CommandButton', 'Btn1', { Command: 'PLAYER_UPGRADE', Upgrade: 'Upgrade_Armor' }),
-        makeBlock('CommandSet', 'Set1', { 1: 'Btn1' }),
+        makeBlock('CommandButton', 'Btn1', {
+          Command: 'ATTACK_MOVE',
+          Options: 'NEED_TARGET_POS OK_FOR_MULTI_SELECT',
+          UnitSpecificSound: 'UnitSound_AttackMove',
+        }),
+        makeBlock('CommandSet', 'Set1', {
+          1: 'Btn1',
+          2: 'BtnMissing',
+        }),
+        makeBlock('CommandButton', 'BtnNoSound', {
+          Command: 'STOP',
+          UnitSpecificSound: 'NoSound',
+        }),
         makeBlock('FXList', 'FX1', {}),
-        makeBlock('AudioEvent', 'Sound1', {}),
+        makeBlock('AudioEvent', 'Sound1', {
+          Priority: 'HIGH',
+          Type: 'WORLD PLAYER',
+          Control: 'RANDOM',
+          Volume: '75%',
+          MinVolume: '10%',
+          Limit: '2',
+          MinRange: '10',
+          MaxRange: '250',
+        }),
+        makeBlock('MusicTrack', 'Track1', {
+          Filename: 'music/track1.mp3',
+          Type: 'UI',
+        }),
+        makeBlock('DialogEvent', 'Dialog1', {
+          Type: 'VOICE PLAYER',
+        }),
+        makeBlock('MiscAudio', '', {
+          GUIClickSound: 'ClickFX',
+          NoCanDoSound: 'ErrorFX',
+          RadarNotifyOnlineSound: 'RadarOnline',
+        }),
         makeBlock('AI', 'AI', { AttackUsesLineOfSight: '0' }),
       ]);
 
       expect(registry.objects.size).toBe(0);
-      expect(registry.commandButtons.get('Btn1')?.fields['Upgrade']).toBe('Upgrade_Armor');
-      expect(registry.commandSets.get('Set1')?.fields['1']).toBe('Btn1');
+      expect(registry.commandButtons.get('Btn1')?.commandTypeName).toBe('ATTACK_MOVE');
+      expect(registry.commandButtons.get('Btn1')?.options).toEqual([
+        'NEED_TARGET_POS',
+        'OK_FOR_MULTI_SELECT',
+      ]);
+      expect(registry.commandButtons.get('Btn1')?.unitSpecificSoundName).toBe('UnitSound_AttackMove');
+      expect(registry.commandButtons.get('BtnNoSound')?.unitSpecificSoundName).toBeUndefined();
+      expect(registry.commandSets.get('Set1')?.buttons).toEqual(['Btn1', 'BtnMissing']);
+      expect(registry.commandSets.get('Set1')?.slottedButtons).toEqual([
+        { slot: 1, commandButtonName: 'Btn1' },
+        { slot: 2, commandButtonName: 'BtnMissing' },
+      ]);
+      expect(registry.getAudioEvent('Sound1')?.soundType).toBe('sound');
+      expect(registry.getAudioEvent('Sound1')?.priorityName).toBe('HIGH');
+      expect(registry.getAudioEvent('Sound1')?.typeNames).toEqual(['WORLD', 'PLAYER']);
+      expect(registry.getAudioEvent('Sound1')?.controlNames).toEqual(['RANDOM']);
+      expect(registry.getAudioEvent('Sound1')?.volume).toBeCloseTo(0.75);
+      expect(registry.getAudioEvent('Sound1')?.minVolume).toBeCloseTo(0.1);
+      expect(registry.getAudioEvent('Sound1')?.limit).toBe(2);
+      expect(registry.getAudioEvent('Sound1')?.minRange).toBe(10);
+      expect(registry.getAudioEvent('Sound1')?.maxRange).toBe(250);
+      expect(registry.getAudioEvent('Track1')?.soundType).toBe('music');
+      expect(registry.getAudioEvent('Track1')?.filename).toBe('music/track1.mp3');
+      expect(registry.getAudioEvent('Dialog1')?.soundType).toBe('streaming');
+      expect(registry.getMiscAudio()?.guiClickSoundName).toBe('ClickFX');
+      expect(registry.getMiscAudio()?.noCanDoSoundName).toBe('ErrorFX');
+      expect(registry.getMiscAudio()?.entries['RadarNotifyOnlineSound']).toBe('RadarOnline');
       expect(registry.getUnsupportedBlockTypes()).toEqual([]);
+    });
+
+    it('keeps sparse CommandSet slots and ignores out-of-range slots', () => {
+      registry.loadBlocks([
+        makeBlock('CommandSet', 'SparseSet', {
+          1: 'BtnA',
+          3: 'BtnC',
+          13: 'BtnOutOfRange',
+        }),
+      ]);
+
+      expect(registry.commandSets.get('SparseSet')?.buttons).toEqual(['BtnA', 'BtnC']);
+      expect(registry.commandSets.get('SparseSet')?.slottedButtons).toEqual([
+        { slot: 1, commandButtonName: 'BtnA' },
+        { slot: 3, commandButtonName: 'BtnC' },
+      ]);
     });
 
     it('indexes AI block config values', () => {
@@ -120,6 +193,38 @@ describe('IniDataRegistry', () => {
       ]);
 
       expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
+    });
+
+    it('indexes AudioSettings runtime fields', () => {
+      registry.loadBlocks([
+        makeBlock('AudioSettings', '', {
+          SampleCount2D: '10',
+          SampleCount3D: '28',
+          StreamCount: '3',
+          MinSampleVolume: '12%',
+          GlobalMinRange: '35',
+          GlobalMaxRange: '275',
+          Relative2DVolume: '-25%',
+          DefaultSoundVolume: '80%',
+          Default3DSoundVolume: '70%',
+          DefaultSpeechVolume: '60%',
+          DefaultMusicVolume: '55%',
+        }),
+      ]);
+
+      expect(registry.getAudioSettings()).toEqual({
+        sampleCount2D: 10,
+        sampleCount3D: 28,
+        streamCount: 3,
+        minSampleVolume: 0.12,
+        globalMinRange: 35,
+        globalMaxRange: 275,
+        relative2DVolume: -0.25,
+        defaultSoundVolume: 0.8,
+        default3DSoundVolume: 0.7,
+        defaultSpeechVolume: 0.6,
+        defaultMusicVolume: 0.55,
+      });
     });
 
     it('parses Locomotor Speed from INI data', () => {
@@ -267,6 +372,9 @@ describe('IniDataRegistry', () => {
       expect(stats.upgrades).toBe(1);
       expect(stats.sciences).toBe(1);
       expect(stats.factions).toBe(1);
+      expect(stats.audioEvents).toBe(0);
+      expect(stats.commandButtons).toBe(0);
+      expect(stats.commandSets).toBe(0);
       expect(stats.totalBlocks).toBe(7);
     });
   });
@@ -339,6 +447,9 @@ describe('IniDataRegistry', () => {
           upgrades: 1,
           sciences: 1,
           factions: 1,
+          audioEvents: 0,
+          commandButtons: 0,
+          commandSets: 0,
           unresolvedInheritance: 0,
           totalBlocks: 5,
         },
@@ -353,6 +464,19 @@ describe('IniDataRegistry', () => {
         ai: {
           attackUsesLineOfSight: false,
         },
+        audioSettings: {
+          sampleCount2D: 12,
+          sampleCount3D: 36,
+          streamCount: 4,
+          minSampleVolume: 0.1,
+          globalMinRange: 40,
+          globalMaxRange: 320,
+          relative2DVolume: -0.2,
+          defaultSoundVolume: 0.8,
+          default3DSoundVolume: 0.7,
+          defaultSpeechVolume: 0.6,
+          defaultMusicVolume: 0.5,
+        },
         unsupportedBlockTypes: ['CommandButton'],
       };
 
@@ -363,9 +487,81 @@ describe('IniDataRegistry', () => {
       expect(registry.getCommandButton('Command_UpgradeA')?.fields['Upgrade']).toBe('UpgradeA');
       expect(registry.getCommandSet('Set_Upgrade')?.fields['1']).toBe('Command_UpgradeA');
       expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
+      expect(registry.getAudioSettings()).toEqual({
+        sampleCount2D: 12,
+        sampleCount3D: 36,
+        streamCount: 4,
+        minSampleVolume: 0.1,
+        globalMinRange: 40,
+        globalMaxRange: 320,
+        relative2DVolume: -0.2,
+        defaultSoundVolume: 0.8,
+        default3DSoundVolume: 0.7,
+        defaultSpeechVolume: 0.6,
+        defaultMusicVolume: 0.5,
+      });
+      expect(registry.getMiscAudio()).toBeUndefined();
       expect(registry.getUnsupportedBlockTypes()).toEqual(['CommandButton']);
       expect(registry.errors).toHaveLength(1);
       expect(registry.errors[0]!.type).toBe('duplicate');
+    });
+
+    it('normalizes legacy CommandSet bundles that do not include slot metadata', () => {
+      registry.loadBundle({
+        objects: [],
+        weapons: [],
+        armors: [],
+        upgrades: [],
+        sciences: [],
+        factions: [],
+        commandButtons: [],
+        commandSets: [
+          {
+            name: 'LegacySet',
+            fields: {},
+            buttons: ['BtnOne', 'BtnTwo'],
+          },
+        ],
+        stats: {
+          objects: 0,
+          weapons: 0,
+          armors: 0,
+          upgrades: 0,
+          sciences: 0,
+          factions: 0,
+          audioEvents: 0,
+          commandButtons: 0,
+          commandSets: 1,
+          unresolvedInheritance: 0,
+          totalBlocks: 0,
+        },
+        errors: [],
+        unsupportedBlockTypes: [],
+      });
+
+      expect(registry.commandSets.get('LegacySet')?.slottedButtons).toEqual([
+        { slot: 1, commandButtonName: 'BtnOne' },
+        { slot: 2, commandButtonName: 'BtnTwo' },
+      ]);
+    });
+  });
+
+  describe('MiscAudio merging', () => {
+    it('merges repeated MiscAudio blocks with later overrides', () => {
+      registry.loadBlocks([
+        makeBlock('MiscAudio', '', {
+          GUIClickSound: 'Click_A',
+          NoCanDoSound: 'NoCanDo_A',
+        }),
+      ]);
+      registry.loadBlocks([
+        makeBlock('MiscAudio', '', {
+          GUIClickSound: 'Click_B',
+        }),
+      ]);
+
+      expect(registry.getMiscAudio()?.guiClickSoundName).toBe('Click_B');
+      expect(registry.getMiscAudio()?.noCanDoSoundName).toBe('NoCanDo_A');
     });
   });
 

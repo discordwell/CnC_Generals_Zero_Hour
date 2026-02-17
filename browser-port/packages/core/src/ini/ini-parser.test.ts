@@ -276,6 +276,24 @@ End
       expect(result.blocks[0]!.name).toBe('');
       expect(result.blocks[0]!.fields['AttackUsesLineOfSight']).toBe(false);
     });
+
+    it('parses AudioSettings block without name', () => {
+      const source = `
+AudioSettings
+  SampleCount2D = 8
+  SampleCount3D = 28
+  StreamCount = 3
+End
+`;
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks).toHaveLength(1);
+      expect(result.blocks[0]!.type).toBe('AudioSettings');
+      expect(result.blocks[0]!.name).toBe('');
+      expect(result.blocks[0]!.fields['SampleCount2D']).toBe(8);
+      expect(result.blocks[0]!.fields['SampleCount3D']).toBe(28);
+      expect(result.blocks[0]!.fields['StreamCount']).toBe(3);
+    });
   });
 
   describe('+= additive fields', () => {
