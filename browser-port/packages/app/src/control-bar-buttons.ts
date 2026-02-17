@@ -495,10 +495,17 @@ function intersectControlBarButtonLists(
 
   return Array.from(commonBySlot.entries())
     .sort(([left], [right]) => left - right)
-    .map(([, entry]) => ({
-      ...entry.button,
-      enabled: entry.canAnySource,
-    }));
+    .map(([, entry]) => {
+      const commandOption = (
+        (entry.button.commandOption ?? CommandOption.COMMAND_OPTION_NONE)
+        & ~CommandOption.OK_FOR_MULTI_SELECT
+      ) >>> 0;
+      return {
+        ...entry.button,
+        commandOption,
+        enabled: entry.canAnySource,
+      };
+    });
 }
 
 export function buildControlBarButtonsForSelections(

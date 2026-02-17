@@ -604,6 +604,27 @@ export function dispatchIssuedControlBarCommands(
           break;
         }
 
+        const contextPayload = resolveContextCommandPayload(command.contextPayload);
+        let targetEntityId = command.targetObjectId ?? contextPayload.targetObjectId;
+        let targetPosition = command.targetPosition ?? contextPayload.targetPosition;
+
+        if ((command.commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0) {
+          if (targetEntityId === null) {
+            uiRuntime.showMessage('Special Power from command center requires an object target.');
+            break;
+          }
+          targetPosition = null;
+        } else if ((command.commandOption & CommandOption.NEED_TARGET_POS) !== 0) {
+          if (!targetPosition) {
+            uiRuntime.showMessage('Special Power from command center requires a world target.');
+            break;
+          }
+          targetEntityId = null;
+        } else {
+          targetEntityId = null;
+          targetPosition = null;
+        }
+
         gameLogic.submitCommand({
           type: 'issueSpecialPower',
           commandButtonId: command.sourceButtonId,
@@ -611,9 +632,9 @@ export function dispatchIssuedControlBarCommands(
           commandOption: command.commandOption,
           issuingEntityIds: [commandCenterEntityId],
           sourceEntityId: commandCenterEntityId,
-          targetEntityId: null,
-          targetX: null,
-          targetZ: null,
+          targetEntityId,
+          targetX: targetPosition ? targetPosition[0] : null,
+          targetZ: targetPosition ? targetPosition[2] : null,
         });
         playCommandAudio();
         break;

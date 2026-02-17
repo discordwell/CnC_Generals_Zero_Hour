@@ -9961,12 +9961,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       selected.selected = true;
-      selected.mesh.material = this.getMaterial({
-        category: selected.category,
-        resolved: selected.resolved,
-        side: selected.side,
-        selected: true,
-      });
     }
   }
 
