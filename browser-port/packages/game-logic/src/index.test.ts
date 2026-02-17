@@ -4450,6 +4450,11 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getEntityState(1)?.animationState).toBe('DIE');
     logic.update(1 / 30);
     expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getRenderableEntityStates().some((entity) => entity.id === 1)).toBe(true);
+    expect(logic.getRenderableEntityStates().find((entity) => entity.id === 1)?.animationState).toBe('DIE');
+
+    logic.update(1 / 30);
+    expect(logic.getRenderableEntityStates().some((entity) => entity.id === 1)).toBe(false);
   });
 
   it('applies deterministic direct-fire combat with source attack range and shot delay semantics', () => {

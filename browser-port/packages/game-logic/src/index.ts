@@ -809,6 +809,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly shortcutSpecialPowerSourceByName = new Map<string, Map<number, number>>();
   private readonly shortcutSpecialPowerNamesByEntityId = new Map<number, Set<string>>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
+  private readonly pendingDyingRenderableStates = new Map<number, {
+    state: RenderableEntityState;
+    expireFrame: number;
+  }>();
   private localPlayerSciencePurchasePoints = 0;
   private localPlayerIndex = 0;
 
@@ -888,7 +892,17 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   getRenderableEntityStates(): RenderableEntityState[] {
-    return Array.from(this.spawnedEntities.values()).map((entity) => ({
+    const renderableStates = Array.from(this.spawnedEntities.values()).map((entity) =>
+      this.makeRenderableEntityState(entity),
+    );
+    const pendingDyingStates = Array.from(this.pendingDyingRenderableStates.values())
+      .map((pending) => pending.state);
+
+    return [...renderableStates, ...pendingDyingStates];
+  }
+
+  private makeRenderableEntityState(entity: MapEntity): RenderableEntityState {
+    return {
       id: entity.id,
       templateName: entity.templateName,
       resolved: entity.resolved,
@@ -901,7 +915,7 @@ export class GameLogicSubsystem implements Subsystem {
       z: entity.z,
       rotationY: entity.rotationY,
       animationState: entity.animationState,
-    }));
+    };
   }
 
   /**
@@ -1009,6 +1023,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateWeaponIdleAutoReload();
     this.updatePendingWeaponDamage();
     this.finalizeDestroyedEntities();
+    this.cleanupDyingRenderableStates();
   }
 
   submitCommand(command: GameLogicCommand): void {
@@ -8779,6 +8794,10 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetEntityId = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    this.pendingDyingRenderableStates.set(entityId, {
+      state: this.makeRenderableEntityState(entity),
+      expireFrame: this.frameCounter + 1,
+    });
     this.onObjectDestroyed(entityId);
   }
 
@@ -8843,6 +8862,14 @@ export class GameLogicSubsystem implements Subsystem {
       this.spawnedEntities.delete(entityId);
       if (this.selectedEntityId === entityId) {
         this.selectedEntityId = null;
+      }
+    }
+  }
+
+  private cleanupDyingRenderableStates(): void {
+    for (const [entityId, pending] of this.pendingDyingRenderableStates.entries()) {
+      if (this.frameCounter > pending.expireFrame) {
+        this.pendingDyingRenderableStates.delete(entityId);
       }
     }
   }
