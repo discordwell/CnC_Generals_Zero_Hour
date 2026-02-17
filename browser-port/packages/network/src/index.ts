@@ -32,6 +32,7 @@ interface WrapperChunk {
 interface NetworkUser {
   id: number;
   name: string;
+  side?: string;
 }
 
 interface FileTransferRecord {
@@ -54,6 +55,14 @@ type TransportLike = {
   getUnknownPacketsPerSecond?: () => number;
   sendLocalCommandDirect?: (command: unknown, relayMask: number) => void;
 };
+
+type TransportMetricName =
+  | 'getIncomingBytesPerSecond'
+  | 'getIncomingPacketsPerSecond'
+  | 'getOutgoingBytesPerSecond'
+  | 'getOutgoingPacketsPerSecond'
+  | 'getUnknownBytesPerSecond'
+  | 'getUnknownPacketsPerSecond';
 
 const MAX_FRAME_RATE = 300;
 const MAX_SLOTS = 16;
@@ -121,6 +130,7 @@ export class NetworkManager implements Subsystem {
   private pingRepeats = 5;
   private chatHistory: ChatMessage[] = [];
   private playerNames = new Map<number, string>();
+  private playerSides = new Map<number, string>();
   private disconnectedPlayers = new Set<number>();
   private fileTransfers = new Map<number, FileTransferRecord>();
   private activeWrapperAssemblies = new Map<number, WrapperAssembly>();
@@ -166,6 +176,7 @@ export class NetworkManager implements Subsystem {
     this.pingsReceived = 0;
     this.frameQueueReady.clear();
     this.disconnectedPlayers.clear();
+    this.playerSides.clear();
     this.frameReady = true;
 
     if (this.forceSinglePlayer) {
@@ -201,6 +212,7 @@ export class NetworkManager implements Subsystem {
     this.pendingFrameNotices = 0;
     this.chatHistory.length = 0;
     this.fileTransfers.clear();
+    this.playerSides.clear();
     this.slotAverageFPS.fill(-1);
     this.slotAverageLatency.fill(-1);
     this.packetRouterSlot = -1;
@@ -217,6 +229,7 @@ export class NetworkManager implements Subsystem {
     this.disconnectedPlayers.clear();
     this.chatHistory.length = 0;
     this.fileTransfers.clear();
+    this.playerSides.clear();
     this.lastPacketRouterQuerySender = -1;
     this.lastPacketRouterAckSender = -1;
     this.activeWrapperAssemblies.clear();
@@ -441,6 +454,7 @@ export class NetworkManager implements Subsystem {
     if (this.forceSinglePlayer) {
       this.numPlayers = 1;
       this.playerNames.clear();
+      this.playerSides.clear();
       this.playerNames.set(this.localPlayerID, this.localPlayerName);
       this.disconnectedPlayers.clear();
       this.frameQueueReady.clear();
@@ -456,9 +470,13 @@ export class NetworkManager implements Subsystem {
     this.pendingFrameNotices = 0;
     this.frameReady = true;
     this.playerNames.clear();
+    this.playerSides.clear();
 
     for (const user of resolvedList) {
       this.playerNames.set(user.id, user.name);
+      if (user.side) {
+        this.playerSides.set(user.id, user.side);
+      }
     }
 
     this.numPlayers = Math.max(1, this.playerNames.size);
@@ -491,6 +509,12 @@ export class NetworkManager implements Subsystem {
       localPlayerId?: unknown;
       localPlayerID?: unknown;
       localPlayerName?: unknown;
+      localPlayerSide?: unknown;
+      localSide?: unknown;
+      localFaction?: unknown;
+      getLocalPlayerSide?: () => unknown;
+      getLocalSide?: () => unknown;
+      getLocalFaction?: () => unknown;
       getSlot?: (slotNum: number) => unknown;
       getConstSlot?: (slotNum: number) => unknown;
     };
@@ -559,12 +583,25 @@ export class NetworkManager implements Subsystem {
       return trimmed.length > 0 ? trimmed : fallback;
     };
 
+    const normalizePlayerSide = (value: unknown): string | null => {
+      if (typeof value !== 'string') {
+        return null;
+      }
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
     type UserCandidate = {
       id?: number;
       name?: string;
       slot?: number;
       playerId?: number;
       player?: string;
+      side?: string;
+      faction?: string;
+      playerSide?: string;
+      army?: string;
+      country?: string;
       isHuman?: boolean | number;
       isAI?: boolean | number | string;
       isOccupied?: boolean | number | string;
@@ -659,6 +696,18 @@ export class NetworkManager implements Subsystem {
           ?? readSlotProperty(slotCandidate, 'user'),
         `Player ${index + 1}`,
       );
+      const side = normalizePlayerSide(
+        readSlotProperty(slotCandidate, 'side')
+          ?? readSlotProperty(slotCandidate, 'faction')
+          ?? readSlotProperty(slotCandidate, 'playerSide')
+          ?? readSlotProperty(slotCandidate, 'army')
+          ?? readSlotProperty(slotCandidate, 'country')
+          ?? readSlotProperty(slotCandidate, 'getSide')
+          ?? readSlotProperty(slotCandidate, 'getFaction'),
+      );
+      // TODO: Source parity gap: game slots can expose only getPlayerTemplate()
+      // (index into PlayerTemplateStore). Resolve that index to Side when the
+      // PlayerTemplate subsystem is wired into browser runtime session data.
 
       const slotId = typeof idCandidate === 'number' && idCandidate >= 0 ? idCandidate : index;
       if (slotId >= MAX_SLOTS) {
@@ -668,6 +717,7 @@ export class NetworkManager implements Subsystem {
       candidates.push({
         id: slotId,
         name,
+        side: side ?? undefined,
         isHuman: true,
       });
     };
@@ -746,6 +796,14 @@ export class NetworkManager implements Subsystem {
     if (localPlayerNameCandidate) {
       this.localPlayerName = localPlayerNameCandidate;
     }
+    const localPlayerSideCandidate = normalizePlayerSide(
+      maybeUsers.localPlayerSide
+        ?? maybeUsers.localSide
+        ?? maybeUsers.localFaction
+        ?? maybeUsers.getLocalPlayerSide?.()
+        ?? maybeUsers.getLocalSide?.()
+        ?? maybeUsers.getLocalFaction?.(),
+    );
 
     const packetRouterSlotCandidate = normalizeSlotValue(
       maybeUsers.packetRouterSlot ?? maybeUsers.getPacketRouterSlot?.(),
@@ -793,10 +851,32 @@ export class NetworkManager implements Subsystem {
       const name = this.normalizePlayerName(
         candidate.name ?? candidate.player ?? `Player ${idCandidate + 1}`,
       );
+      const side = normalizePlayerSide(
+        candidate.side
+          ?? candidate.faction
+          ?? candidate.playerSide
+          ?? candidate.army
+          ?? candidate.country,
+      );
+      const previous = normalizedById.get(idCandidate);
       normalizedById.set(idCandidate, {
         id: idCandidate,
         name,
+        side: side ?? previous?.side,
       });
+    }
+
+    if (localPlayerSideCandidate) {
+      const localCandidate = normalizedById.get(this.localPlayerID);
+      if (localCandidate) {
+        localCandidate.side = localPlayerSideCandidate;
+      } else {
+        normalizedById.set(this.localPlayerID, {
+          id: this.localPlayerID,
+          name: this.localPlayerName,
+          side: localPlayerSideCandidate,
+        });
+      }
     }
 
     const localEntry = normalizedById.get(this.localPlayerID);
@@ -1063,6 +1143,16 @@ export class NetworkManager implements Subsystem {
       return this.localPlayerName;
     }
     return `Player ${playerNum + 1}`;
+  }
+
+  getPlayerSide(playerNum = 0): string | null {
+    return this.playerSides.get(playerNum) ?? null;
+  }
+
+  getKnownPlayerSlots(): number[] {
+    const slots = new Set<number>(this.playerNames.keys());
+    slots.add(this.localPlayerID);
+    return [...slots].sort((left, right) => left - right);
   }
 
   getNumPlayers(): number {
@@ -1705,6 +1795,10 @@ export class NetworkManager implements Subsystem {
         dataOffset: Math.trunc(dataOffset),
         chunkData: new Uint8Array(),
       };
+    }
+
+    if (data === null) {
+      return null;
     }
 
     const chunkData = data;
@@ -2388,7 +2482,7 @@ export class NetworkManager implements Subsystem {
     return this.getPingsRecieved();
   }
 
-  private callTransportMetric(name: keyof TransportLike): number {
+  private callTransportMetric(name: TransportMetricName): number {
     const transport = this.transport as TransportLike | null;
     if (!transport) {
       return 0;

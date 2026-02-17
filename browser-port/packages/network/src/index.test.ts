@@ -311,6 +311,70 @@ describe('NetworkManager.parseUserList', () => {
     expect(manager.getPlayerName(1)).toBe('Bob');
   });
 
+  it('captures player side strings from slot metadata', () => {
+    const manager = new NetworkManager({
+      localPlayerID: 0,
+      localPlayerName: 'Host',
+    });
+    const game = {
+      localSlotNum: 0,
+      localPlayerSide: 'America',
+      getNumPlayers: () => 3,
+      getConstSlot: (slotNum: number) => {
+        if (slotNum === 0) {
+          return {
+            id: 0,
+            name: 'Host',
+            isHuman: true,
+            side: 'America',
+          };
+        }
+        if (slotNum === 1) {
+          return {
+            id: 1,
+            name: 'Ally',
+            isHuman: true,
+            getSide: () => 'China',
+          };
+        }
+        if (slotNum === 2) {
+          return {
+            id: 2,
+            name: 'Enemy',
+            isHuman: true,
+            faction: 'GLA',
+          };
+        }
+        return null;
+      },
+    };
+
+    manager.parseUserList(game);
+
+    expect(manager.getPlayerSide(0)).toBe('America');
+    expect(manager.getPlayerSide(1)).toBe('China');
+    expect(manager.getPlayerSide(2)).toBe('GLA');
+    expect(manager.getPlayerSide(3)).toBeNull();
+  });
+
+  it('reports known player slots from parsed users and local slot', () => {
+    const manager = new NetworkManager({
+      localPlayerID: 4,
+      localPlayerName: 'Local',
+    });
+    const game = {
+      localSlotNum: 4,
+      players: [
+        { id: 1, name: 'One', isHuman: true, side: 'America' },
+        { id: 3, name: 'Three', isHuman: true, side: 'China' },
+      ],
+    };
+
+    manager.parseUserList(game);
+
+    expect(manager.getKnownPlayerSlots()).toEqual([1, 3, 4]);
+  });
+
   it('tracks disconnected players as disconnected from connected count', () => {
     const manager = new NetworkManager({
       localPlayerID: 0,

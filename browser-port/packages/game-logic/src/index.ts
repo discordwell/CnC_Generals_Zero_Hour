@@ -51,6 +51,34 @@ export interface AttackMoveToCommand {
   attackDistance: number;
 }
 
+export enum GuardMode {
+  GUARDMODE_NORMAL = 0,
+  GUARDMODE_GUARD_WITHOUT_PURSUIT = 1,
+  GUARDMODE_GUARD_FLYING_UNITS_ONLY = 2,
+}
+
+export interface GuardPositionCommand {
+  type: 'guardPosition';
+  entityId: number;
+  targetX: number;
+  targetZ: number;
+  guardMode: GuardMode;
+}
+
+export interface GuardObjectCommand {
+  type: 'guardObject';
+  entityId: number;
+  targetEntityId: number;
+  guardMode: GuardMode;
+}
+
+export interface SetRallyPointCommand {
+  type: 'setRallyPoint';
+  entityId: number;
+  targetX: number;
+  targetZ: number;
+}
+
 export interface StopCommand {
   type: 'stop';
   entityId: number;
@@ -84,17 +112,69 @@ export interface ApplyUpgradeCommand {
   upgradeName: string;
 }
 
+export interface ApplyPlayerUpgradeCommand {
+  type: 'applyPlayerUpgrade';
+  upgradeName: string;
+}
+
+export interface GrantScienceCommand {
+  type: 'grantScience';
+  scienceName: string;
+}
+
+export interface PurchaseScienceCommand {
+  type: 'purchaseScience';
+  scienceName: string;
+  scienceCost: number;
+}
+
+export interface IssueSpecialPowerCommand {
+  type: 'issueSpecialPower';
+  commandButtonId: string;
+  specialPowerName: string;
+  commandOption: number;
+  issuingEntityIds: number[];
+  sourceEntityId: number | null;
+  targetEntityId: number | null;
+  targetX: number | null;
+  targetZ: number | null;
+}
+
 export type GameLogicCommand =
   | SelectByIdCommand
   | ClearSelectionCommand
   | MoveToCommand
   | AttackMoveToCommand
+  | GuardPositionCommand
+  | GuardObjectCommand
+  | SetRallyPointCommand
   | StopCommand
   | BridgeDestroyedCommand
   | BridgeRepairedCommand
   | SetLocomotorSetCommand
   | SetLocomotorUpgradeCommand
-  | ApplyUpgradeCommand;
+  | ApplyUpgradeCommand
+  | ApplyPlayerUpgradeCommand
+  | GrantScienceCommand
+  | PurchaseScienceCommand
+  | IssueSpecialPowerCommand;
+
+export interface SelectedEntityInfo {
+  id: number;
+  templateName: string;
+  category: ObjectCategory;
+  side?: string;
+  resolved: boolean;
+  canMove: boolean;
+  hasAutoRallyPoint: boolean;
+  isUnmanned: boolean;
+  isDozer: boolean;
+  isMoving: boolean;
+  appliedUpgradeNames: string[];
+}
+
+export type EntityRelationship = 'enemies' | 'neutral' | 'allies';
+export type LocalScienceAvailability = 'enabled' | 'disabled' | 'hidden';
 
 export interface GameLogicConfig {
   /**
@@ -121,7 +201,7 @@ const RELATIONSHIP_NEUTRAL = 1;
 const RELATIONSHIP_ALLIES = 2;
 type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTRAL | typeof RELATIONSHIP_ALLIES;
 
-type ObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
+export type ObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
 
 interface VectorXZ {
   x: number;
@@ -171,6 +251,7 @@ const NAV_BRIDGE_IMPASSABLE = 7;
 
 const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
 const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
+const SOURCE_DISABLED_SHORTCUT_SPECIAL_POWER_READY_FRAME = 0xffffffff - 10;
 
 const LOCOMOTORSURFACE_GROUND = 1 << 0;
 const LOCOMOTORSURFACE_WATER = 1 << 1;
@@ -263,8 +344,11 @@ interface MapEntity {
   mesh: THREE.Mesh;
   baseHeight: number;
   nominalHeight: number;
+  hasAutoRallyPoint: boolean;
+  rallyPoint: VectorXZ | null;
   selected: boolean;
   canMove: boolean;
+  isDozer: boolean;
   crusherLevel: number;
   crushableLevel: number;
   canBeSquished: boolean;
@@ -274,6 +358,7 @@ interface MapEntity {
   largestWeaponRange: number;
   locomotorSets: Map<string, LocomotorSetProfile>;
   locomotorUpgradeTriggers: Set<string>;
+  appliedUpgrades: Set<string>;
   locomotorUpgradeEnabled: boolean;
   activeLocomotorSet: string;
   locomotorSurfaceMask: number;
@@ -284,6 +369,9 @@ interface MapEntity {
   obstacleGeometry: ObstacleGeometry | null;
   obstacleFootprint: number;
   ignoredMovementObstacleId: number | null;
+  guardMode: GuardMode;
+  guardTargetEntityId: number | null;
+  guardTargetPosition: VectorXZ | null;
   movePath: VectorXZ[];
   pathIndex: number;
   moving: boolean;
@@ -324,9 +412,14 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
-
-  private isAttackMoveToMode = false;
-  private previousAttackMoveToggleDown = false;
+  private readonly playerSideByIndex = new Map<number, string>();
+  private readonly localPlayerUpgrades = new Set<string>();
+  private readonly localPlayerSciences = new Set<string>();
+  private localPlayerSciencePurchasePoints = 0;
+  private readonly localPlayerScienceAvailability = new Map<string, LocalScienceAvailability>();
+  private readonly shortcutSpecialPowerSourceByName = new Map<string, Map<number, number>>();
+  private readonly shortcutSpecialPowerNamesByEntityId = new Map<number, Set<string>>();
+  private lastIssuedSpecialPowerCommand: IssueSpecialPowerCommand | null = null;
 
   private placementSummary: MapObjectPlacementSummary = {
     totalObjects: 0,
@@ -404,19 +497,12 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Minimal RTS interaction:
    * - Left click: select a spawned entity.
-   * - Right click: issue move/attack-move based on attack-move mode.
-   * - Press A (edge-triggered) to toggle one-shot attack-move mode.
+   * - Right click: issue move command.
    */
   handlePointerInput(
     input: InputState,
     camera: THREE.Camera,
   ): void {
-    const attackMoveToggleDown = input.keysDown.has('a');
-    if (attackMoveToggleDown && !this.previousAttackMoveToggleDown) {
-      this.isAttackMoveToMode = !this.isAttackMoveToMode;
-    }
-    this.previousAttackMoveToggleDown = attackMoveToggleDown;
-
     if (input.leftMouseClick) {
       const pickedEntityId = this.pickObjectByMouse(input, camera);
       if (pickedEntityId === null) {
@@ -428,25 +514,12 @@ export class GameLogicSubsystem implements Subsystem {
     if (input.rightMouseClick && this.selectedEntityId !== null) {
       const moveTarget = this.getMoveTargetFromMouse(input, camera);
       if (moveTarget !== null) {
-        const selectedEntity = this.spawnedEntities.get(this.selectedEntityId);
-        const attackDistance = this.resolveAttackMoveDistance(selectedEntity);
-        if (this.isAttackMoveToMode) {
-          this.submitCommand({
-            type: 'attackMoveTo',
-            entityId: this.selectedEntityId,
-            targetX: moveTarget.x,
-            targetZ: moveTarget.z,
-            attackDistance,
-          });
-          this.isAttackMoveToMode = false;
-        } else {
-          this.submitCommand({
-            type: 'moveTo',
-            entityId: this.selectedEntityId,
-            targetX: moveTarget.x,
-            targetZ: moveTarget.z,
-          });
-        }
+        this.submitCommand({
+          type: 'moveTo',
+          entityId: this.selectedEntityId,
+          targetX: moveTarget.x,
+          targetZ: moveTarget.z,
+        });
       }
     }
   }
@@ -465,8 +538,416 @@ export class GameLogicSubsystem implements Subsystem {
     this.commandQueue.push(command);
   }
 
+  getSelectedEntityInfo(): SelectedEntityInfo | null {
+    if (this.selectedEntityId === null) {
+      return null;
+    }
+
+    const selectedEntity = this.spawnedEntities.get(this.selectedEntityId);
+    if (!selectedEntity) {
+      return null;
+    }
+
+    return {
+      id: selectedEntity.id,
+      templateName: selectedEntity.templateName,
+      category: selectedEntity.category,
+      side: selectedEntity.side,
+      resolved: selectedEntity.resolved,
+      canMove: selectedEntity.canMove,
+      hasAutoRallyPoint: selectedEntity.hasAutoRallyPoint,
+      isUnmanned: selectedEntity.isUnmanned,
+      isDozer: selectedEntity.isDozer,
+      isMoving: selectedEntity.moving,
+      appliedUpgradeNames: [...selectedEntity.appliedUpgrades],
+    };
+  }
+
   getSelectedEntityId(): number | null {
     return this.selectedEntityId;
+  }
+
+  getEntityWorldPosition(entityId: number): readonly [number, number, number] | null {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return null;
+    }
+    return [
+      entity.mesh.position.x,
+      entity.mesh.position.y,
+      entity.mesh.position.z,
+    ];
+  }
+
+  getEntityRallyPoint(entityId: number): readonly [number, number, number] | null {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.rallyPoint) {
+      return null;
+    }
+
+    const y = this.mapHeightmap
+      ? this.mapHeightmap.getInterpolatedHeight(entity.rallyPoint.x, entity.rallyPoint.z)
+      : 0;
+    return [entity.rallyPoint.x, y, entity.rallyPoint.z];
+  }
+
+  getEntityRelationship(sourceEntityId: number, targetEntityId: number): EntityRelationship | null {
+    const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+    const targetEntity = this.spawnedEntities.get(targetEntityId);
+    if (!sourceEntity || !targetEntity) {
+      return null;
+    }
+
+    return this.relationshipValueToLabel(this.getTeamRelationship(sourceEntity, targetEntity));
+  }
+
+  setPlayerSide(playerIndex: number, side: string | null | undefined): void {
+    const normalizedPlayerIndex = this.normalizePlayerIndex(playerIndex);
+    if (normalizedPlayerIndex === null) {
+      return;
+    }
+
+    const normalizedSide = this.normalizeSide(side ?? '');
+    if (!normalizedSide) {
+      this.playerSideByIndex.delete(normalizedPlayerIndex);
+      return;
+    }
+    this.playerSideByIndex.set(normalizedPlayerIndex, normalizedSide);
+  }
+
+  getPlayerSide(playerIndex: number): string | null {
+    const normalizedPlayerIndex = this.normalizePlayerIndex(playerIndex);
+    if (normalizedPlayerIndex === null) {
+      return null;
+    }
+    return this.playerSideByIndex.get(normalizedPlayerIndex) ?? null;
+  }
+
+  getPlayerRelationshipByIndex(
+    sourcePlayerIndex: number,
+    targetPlayerIndex: number,
+  ): EntityRelationship {
+    const normalizedSourcePlayerIndex = this.normalizePlayerIndex(sourcePlayerIndex);
+    const normalizedTargetPlayerIndex = this.normalizePlayerIndex(targetPlayerIndex);
+    if (normalizedSourcePlayerIndex === null || normalizedTargetPlayerIndex === null) {
+      return 'neutral';
+    }
+
+    if (normalizedSourcePlayerIndex === normalizedTargetPlayerIndex) {
+      return 'allies';
+    }
+
+    const sourceSide = this.playerSideByIndex.get(normalizedSourcePlayerIndex);
+    const targetSide = this.playerSideByIndex.get(normalizedTargetPlayerIndex);
+    if (!sourceSide || !targetSide) {
+      // TODO: Source parity gap: player index -> side assignment should come
+      // from the Player subsystem/session data.
+      return 'neutral';
+    }
+
+    return this.relationshipValueToLabel(
+      this.getTeamRelationshipBySides(sourceSide, targetSide),
+    );
+  }
+
+  getAttackMoveDistanceForEntity(entityId: number): number {
+    const selectedEntity = this.spawnedEntities.get(entityId);
+    return this.resolveAttackMoveDistance(selectedEntity);
+  }
+
+  getLocalPlayerUpgradeNames(): string[] {
+    return [...this.localPlayerUpgrades];
+  }
+
+  getLocalPlayerScienceNames(): string[] {
+    return [...this.localPlayerSciences];
+  }
+
+  getLocalPlayerSciencePurchasePoints(): number {
+    return this.localPlayerSciencePurchasePoints;
+  }
+
+  setLocalPlayerSciencePurchasePoints(points: number): void {
+    if (!Number.isFinite(points)) {
+      this.localPlayerSciencePurchasePoints = 0;
+      return;
+    }
+
+    this.localPlayerSciencePurchasePoints = Math.max(0, Math.trunc(points));
+  }
+
+  setLocalPlayerScienceAvailability(
+    scienceName: string,
+    availability: LocalScienceAvailability,
+  ): boolean {
+    const normalizedScience = scienceName.trim().toUpperCase();
+    if (!normalizedScience) {
+      return false;
+    }
+
+    if (availability === 'enabled') {
+      this.localPlayerScienceAvailability.delete(normalizedScience);
+      return true;
+    }
+
+    this.localPlayerScienceAvailability.set(normalizedScience, availability);
+    return true;
+  }
+
+  getLocalPlayerDisabledScienceNames(): string[] {
+    const disabled: string[] = [];
+    for (const [scienceName, availability] of this.localPlayerScienceAvailability) {
+      if (availability === 'disabled') {
+        disabled.push(scienceName);
+      }
+    }
+    return disabled;
+  }
+
+  getLocalPlayerHiddenScienceNames(): string[] {
+    const hidden: string[] = [];
+    for (const [scienceName, availability] of this.localPlayerScienceAvailability) {
+      if (availability === 'hidden') {
+        hidden.push(scienceName);
+      }
+    }
+    return hidden;
+  }
+
+  getLastIssuedSpecialPowerCommand(): IssueSpecialPowerCommand | null {
+    if (!this.lastIssuedSpecialPowerCommand) {
+      return null;
+    }
+    return {
+      ...this.lastIssuedSpecialPowerCommand,
+      issuingEntityIds: [...this.lastIssuedSpecialPowerCommand.issuingEntityIds],
+    };
+  }
+
+  setShortcutSpecialPowerSourceEntity(
+    specialPowerName: string,
+    sourceEntityId: number | null,
+  ): boolean {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName) {
+      return false;
+    }
+
+    if (sourceEntityId === null) {
+      this.clearTrackedShortcutSpecialPowerName(normalizedSpecialPowerName);
+      return true;
+    }
+
+    if (!Number.isFinite(sourceEntityId)) {
+      return false;
+    }
+
+    this.clearTrackedShortcutSpecialPowerName(normalizedSpecialPowerName);
+    return this.trackShortcutSpecialPowerSourceEntity(
+      normalizedSpecialPowerName,
+      Math.trunc(sourceEntityId),
+      0,
+    );
+  }
+
+  trackShortcutSpecialPowerSourceEntity(
+    specialPowerName: string,
+    sourceEntityId: number,
+    readyFrame: number,
+  ): boolean {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName) {
+      return false;
+    }
+    if (!Number.isFinite(sourceEntityId)) {
+      return false;
+    }
+
+    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
+    const normalizedReadyFrame = Number.isFinite(readyFrame)
+      ? Math.max(0, Math.trunc(readyFrame))
+      : SOURCE_DISABLED_SHORTCUT_SPECIAL_POWER_READY_FRAME;
+
+    let sourcesForPower = this.shortcutSpecialPowerSourceByName.get(normalizedSpecialPowerName);
+    if (!sourcesForPower) {
+      sourcesForPower = new Map<number, number>();
+      this.shortcutSpecialPowerSourceByName.set(normalizedSpecialPowerName, sourcesForPower);
+    }
+    sourcesForPower.set(normalizedSourceEntityId, normalizedReadyFrame);
+
+    let powersForEntity = this.shortcutSpecialPowerNamesByEntityId.get(normalizedSourceEntityId);
+    if (!powersForEntity) {
+      powersForEntity = new Set<string>();
+      this.shortcutSpecialPowerNamesByEntityId.set(normalizedSourceEntityId, powersForEntity);
+    }
+    powersForEntity.add(normalizedSpecialPowerName);
+    return true;
+  }
+
+  clearTrackedShortcutSpecialPowerSourceEntity(sourceEntityId: number): void {
+    if (!Number.isFinite(sourceEntityId)) {
+      return;
+    }
+    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
+    const powersForEntity = this.shortcutSpecialPowerNamesByEntityId.get(normalizedSourceEntityId);
+    if (!powersForEntity) {
+      return;
+    }
+
+    for (const specialPowerName of powersForEntity) {
+      const sourcesForPower = this.shortcutSpecialPowerSourceByName.get(specialPowerName);
+      if (!sourcesForPower) {
+        continue;
+      }
+      sourcesForPower.delete(normalizedSourceEntityId);
+      if (sourcesForPower.size === 0) {
+        this.shortcutSpecialPowerSourceByName.delete(specialPowerName);
+      }
+    }
+
+    this.shortcutSpecialPowerNamesByEntityId.delete(normalizedSourceEntityId);
+  }
+
+  resolveShortcutSpecialPowerSourceEntityReadyFrame(specialPowerName: string): number | null {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName) {
+      return null;
+    }
+    const sourcesForPower = this.shortcutSpecialPowerSourceByName.get(normalizedSpecialPowerName);
+    if (!sourcesForPower || sourcesForPower.size === 0) {
+      return null;
+    }
+
+    const staleEntityIds: number[] = [];
+    let bestReadyFrame: number | null = null;
+    for (const [entityId, readyFrame] of sourcesForPower) {
+      if (!this.spawnedEntities.has(entityId)) {
+        staleEntityIds.push(entityId);
+        continue;
+      }
+      if (bestReadyFrame === null || readyFrame < bestReadyFrame) {
+        bestReadyFrame = readyFrame;
+      }
+    }
+
+    for (const staleEntityId of staleEntityIds) {
+      this.clearTrackedShortcutSpecialPowerSourceEntity(staleEntityId);
+    }
+
+    return bestReadyFrame;
+  }
+
+  resolveShortcutSpecialPowerSourceEntityId(specialPowerName: string): number | null {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName) {
+      return null;
+    }
+
+    const sourcesForPower = this.shortcutSpecialPowerSourceByName.get(normalizedSpecialPowerName);
+    if (!sourcesForPower || sourcesForPower.size === 0) {
+      return null;
+    }
+
+    // Source behavior from Player::findMostReadyShortcutSpecialPowerOfType:
+    // choose the source object with the lowest ready frame for this power.
+    // TODO: Source parity gap: ready-frame values currently come from command
+    // card availability state, not live SpecialPowerModule cooldown frames.
+    const staleEntityIds: number[] = [];
+    let bestEntityId: number | null = null;
+    let bestReadyFrame = Number.POSITIVE_INFINITY;
+    for (const [entityId, readyFrame] of sourcesForPower) {
+      if (!this.spawnedEntities.has(entityId)) {
+        staleEntityIds.push(entityId);
+        continue;
+      }
+
+      if (readyFrame < bestReadyFrame) {
+        bestEntityId = entityId;
+        bestReadyFrame = readyFrame;
+      }
+    }
+
+    for (const staleEntityId of staleEntityIds) {
+      this.clearTrackedShortcutSpecialPowerSourceEntity(staleEntityId);
+    }
+
+    return bestEntityId;
+  }
+
+  private normalizeShortcutSpecialPowerName(specialPowerName: string): string | null {
+    const normalizedSpecialPowerName = specialPowerName.trim().toUpperCase();
+    return normalizedSpecialPowerName || null;
+  }
+
+  private clearTrackedShortcutSpecialPowerName(normalizedSpecialPowerName: string): void {
+    const sourcesForPower = this.shortcutSpecialPowerSourceByName.get(normalizedSpecialPowerName);
+    if (!sourcesForPower) {
+      return;
+    }
+
+    for (const sourceEntityId of sourcesForPower.keys()) {
+      const powersForEntity = this.shortcutSpecialPowerNamesByEntityId.get(sourceEntityId);
+      if (!powersForEntity) {
+        continue;
+      }
+      powersForEntity.delete(normalizedSpecialPowerName);
+      if (powersForEntity.size === 0) {
+        this.shortcutSpecialPowerNamesByEntityId.delete(sourceEntityId);
+      }
+    }
+
+    this.shortcutSpecialPowerSourceByName.delete(normalizedSpecialPowerName);
+  }
+
+  grantLocalPlayerUpgrade(upgradeName: string): boolean {
+    const normalizedUpgrade = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgrade) {
+      return false;
+    }
+    this.localPlayerUpgrades.add(normalizedUpgrade);
+    return true;
+  }
+
+  grantLocalPlayerScience(scienceName: string): boolean {
+    const normalizedScience = scienceName.trim().toUpperCase();
+    if (!normalizedScience) {
+      return false;
+    }
+    this.localPlayerSciences.add(normalizedScience);
+    return true;
+  }
+
+  purchaseLocalPlayerScience(scienceName: string, scienceCost: number): boolean {
+    const normalizedScience = scienceName.trim().toUpperCase();
+    if (!normalizedScience) {
+      return false;
+    }
+
+    const normalizedCost = Number.isFinite(scienceCost) ? Math.trunc(scienceCost) : 0;
+    if (normalizedCost <= 0) {
+      return false;
+    }
+    if (this.localPlayerSciences.has(normalizedScience)) {
+      return false;
+    }
+    if (!this.isLocalSciencePurchasable(normalizedScience)) {
+      return false;
+    }
+    if (this.localPlayerSciencePurchasePoints < normalizedCost) {
+      return false;
+    }
+
+    this.localPlayerSciencePurchasePoints -= normalizedCost;
+    this.localPlayerSciences.add(normalizedScience);
+    return true;
+  }
+
+  resolveMoveTargetFromInput(input: InputState, camera: THREE.Camera): { x: number; z: number } | null {
+    return this.getMoveTargetFromMouse(input, camera);
+  }
+
+  resolveObjectTargetFromInput(input: InputState, camera: THREE.Camera): number | null {
+    return this.pickObjectByMouse(input, camera);
   }
 
   setBridgeSegmentPassable(segmentId: number, passable: boolean): boolean {
@@ -586,16 +1067,32 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  setEntityRallyPoint(entityId: number, targetX: number, targetZ: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.hasAutoRallyPoint) {
+      return false;
+    }
+
+    entity.rallyPoint = this.clampToWorldBounds(targetX, targetZ);
+    return true;
+  }
+
   applyUpgradeToEntity(entityId: number, upgradeName: string): boolean {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
       return false;
     }
     const normalizedUpgrade = upgradeName.trim().toUpperCase();
-    if (!normalizedUpgrade || !entity.locomotorUpgradeTriggers.has(normalizedUpgrade)) {
+    if (!normalizedUpgrade) {
       return false;
     }
-    return this.setEntityLocomotorUpgrade(entityId, true);
+
+    entity.appliedUpgrades.add(normalizedUpgrade);
+
+    if (entity.locomotorUpgradeTriggers.has(normalizedUpgrade)) {
+      this.setEntityLocomotorUpgrade(entityId, true);
+    }
+    return true;
   }
 
   reset(): void {
@@ -607,6 +1104,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.animationTime = 0;
     this.mapHeightmap = null;
     this.navigationGrid = null;
+    this.localPlayerUpgrades.clear();
+    this.localPlayerSciences.clear();
+    this.localPlayerSciencePurchasePoints = 0;
+    this.localPlayerScienceAvailability.clear();
+    this.shortcutSpecialPowerSourceByName.clear();
+    this.shortcutSpecialPowerNamesByEntityId.clear();
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -653,6 +1156,7 @@ export class GameLogicSubsystem implements Subsystem {
     const locomotorSetProfiles = this.resolveLocomotorProfiles(objectDef, iniDataRegistry);
     const locomotorUpgradeTriggers = this.extractLocomotorUpgradeTriggers(objectDef);
     const largestWeaponRange = this.resolveLargestWeaponRange(objectDef, iniDataRegistry);
+    const hasAutoRallyPoint = normalizedKindOf.has('AUTO_RALLYPOINT');
     const locomotorProfile = locomotorSetProfiles.get(LOCOMOTORSET_NORMAL) ?? {
       surfaceMask: NO_SURFACES,
       downhillOnly: false,
@@ -694,6 +1198,8 @@ export class GameLogicSubsystem implements Subsystem {
       mesh,
       baseHeight,
       nominalHeight,
+      hasAutoRallyPoint,
+      rallyPoint: null,
       selected: false,
       crusherLevel: combatProfile.crusherLevel,
       crushableLevel: combatProfile.crushableLevel,
@@ -702,8 +1208,10 @@ export class GameLogicSubsystem implements Subsystem {
       attackNeedsLineOfSight,
       isImmobile,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
+      isDozer: normalizedKindOf.has('DOZER'),
       locomotorSets: locomotorSetProfiles,
       locomotorUpgradeTriggers,
+      appliedUpgrades: new Set<string>(),
       locomotorUpgradeEnabled: false,
       activeLocomotorSet: LOCOMOTORSET_NORMAL,
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
@@ -715,6 +1223,9 @@ export class GameLogicSubsystem implements Subsystem {
       obstacleFootprint,
       largestWeaponRange,
       ignoredMovementObstacleId: null,
+      guardMode: GuardMode.GUARDMODE_NORMAL,
+      guardTargetEntityId: null,
+      guardTargetPosition: null,
       movePath: [],
       pathIndex: 0,
       moving: false,
@@ -1024,6 +1535,26 @@ export class GameLogicSubsystem implements Subsystem {
     return side ? side.trim().toLowerCase() : '';
   }
 
+  private normalizePlayerIndex(playerIndex: number): number | null {
+    if (!Number.isFinite(playerIndex)) {
+      return null;
+    }
+    const normalizedPlayerIndex = Math.trunc(playerIndex);
+    return normalizedPlayerIndex >= 0 ? normalizedPlayerIndex : null;
+  }
+
+  private relationshipValueToLabel(relationship: number): EntityRelationship {
+    switch (relationship) {
+      case RELATIONSHIP_ENEMIES:
+        return 'enemies';
+      case RELATIONSHIP_ALLIES:
+        return 'allies';
+      case RELATIONSHIP_NEUTRAL:
+      default:
+        return 'neutral';
+    }
+  }
+
   private relationshipKey(sourceSide: string, targetSide: string): string {
     return `${sourceSide}\u0000${targetSide}`;
   }
@@ -1090,6 +1621,11 @@ export class GameLogicSubsystem implements Subsystem {
   clearTeamRelationshipOverrides(): void {
     this.teamRelationshipOverrides.clear();
     this.playerRelationshipOverrides.clear();
+  }
+
+  private isLocalSciencePurchasable(scienceName: string): boolean {
+    const availability = this.localPlayerScienceAvailability.get(scienceName) ?? 'enabled';
+    return availability === 'enabled';
   }
 
   private canCrushOrSquish(
@@ -1476,20 +2012,22 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    if (this.mapHeightmap) {
-      const maxWorldX = Math.max(0, this.mapHeightmap.worldWidth - 0.0001);
-      const maxWorldZ = Math.max(0, this.mapHeightmap.worldDepth - 0.0001);
-      const clampedX = clamp(hitPoint.x, 0, maxWorldX);
-      const clampedZ = clamp(hitPoint.z, 0, maxWorldZ);
+    return this.clampToWorldBounds(hitPoint.x, hitPoint.z);
+  }
+
+  private clampToWorldBounds(worldX: number, worldZ: number): VectorXZ {
+    if (!this.mapHeightmap) {
       return {
-        x: clampedX,
-        z: clampedZ,
+        x: worldX,
+        z: worldZ,
       };
     }
 
+    const maxWorldX = Math.max(0, this.mapHeightmap.worldWidth - 0.0001);
+    const maxWorldZ = Math.max(0, this.mapHeightmap.worldDepth - 0.0001);
     return {
-      x: hitPoint.x,
-      z: hitPoint.z,
+      x: clamp(worldX, 0, maxWorldX),
+      z: clamp(worldZ, 0, maxWorldZ),
     };
   }
 
@@ -1526,6 +2064,24 @@ export class GameLogicSubsystem implements Subsystem {
           command.attackDistance,
         );
         return;
+      case 'guardPosition':
+        this.issueGuardPosition(
+          command.entityId,
+          command.targetX,
+          command.targetZ,
+          command.guardMode,
+        );
+        return;
+      case 'guardObject':
+        this.issueGuardObject(
+          command.entityId,
+          command.targetEntityId,
+          command.guardMode,
+        );
+        return;
+      case 'setRallyPoint':
+        this.setEntityRallyPoint(command.entityId, command.targetX, command.targetZ);
+        return;
       case 'stop':
         this.stopEntity(command.entityId);
         return;
@@ -1543,6 +2099,18 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       case 'applyUpgrade':
         this.applyUpgradeToEntity(command.entityId, command.upgradeName);
+        return;
+      case 'applyPlayerUpgrade':
+        this.grantLocalPlayerUpgrade(command.upgradeName);
+        return;
+      case 'grantScience':
+        this.grantLocalPlayerScience(command.scienceName);
+        return;
+      case 'purchaseScience':
+        this.purchaseLocalPlayerScience(command.scienceName, command.scienceCost);
+        return;
+      case 'issueSpecialPower':
+        this.issueSpecialPower(command);
         return;
       default:
         return;
@@ -1576,12 +2144,98 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePathfindGoalCellFromPath(entity);
   }
 
+  private issueGuardPosition(
+    entityId: number,
+    targetX: number,
+    targetZ: number,
+    guardMode: GuardMode,
+  ): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return;
+    }
+
+    entity.guardMode = guardMode;
+    entity.guardTargetEntityId = null;
+    entity.guardTargetPosition = this.clampToWorldBounds(targetX, targetZ);
+
+    // Source behavior from GUICommandTranslator::doGuardCommand:
+    // guard commands resolve to guard-position actions, which can move units to
+    // the guard location when needed.
+    this.issueMoveTo(entityId, entity.guardTargetPosition.x, entity.guardTargetPosition.z);
+
+    // TODO: Source parity gap: full AIGuard state machine behavior (outer/inner
+    // guard radii, retaliation, and no-pursuit constraints) is not ported yet.
+  }
+
+  private issueGuardObject(
+    entityId: number,
+    targetEntityId: number,
+    guardMode: GuardMode,
+  ): void {
+    const entity = this.spawnedEntities.get(entityId);
+    const target = this.spawnedEntities.get(targetEntityId);
+    if (!entity || !target) {
+      return;
+    }
+
+    entity.guardMode = guardMode;
+    entity.guardTargetEntityId = targetEntityId;
+    entity.guardTargetPosition = null;
+
+    // Source behavior from GUICommandTranslator::doGuardCommand:
+    // object-target guard orders are distinct from position guards.
+    this.issueMoveTo(entityId, target.mesh.position.x, target.mesh.position.z);
+
+    // TODO: Source parity gap: follow/retarget updates for moving guarded objects
+    // are not ported yet.
+  }
+
+  private issueSpecialPower(command: IssueSpecialPowerCommand): void {
+    const validIssuingEntityIds = command.issuingEntityIds.filter((entityId) =>
+      this.spawnedEntities.has(entityId),
+    );
+
+    const sourceEntityId = command.sourceEntityId;
+    if (sourceEntityId !== null && !this.spawnedEntities.has(sourceEntityId)) {
+      return;
+    }
+
+    const targetEntityId = command.targetEntityId;
+    if (targetEntityId !== null && !this.spawnedEntities.has(targetEntityId)) {
+      return;
+    }
+
+    let targetX: number | null = null;
+    let targetZ: number | null = null;
+    if (command.targetX !== null && command.targetZ !== null) {
+      const clampedTarget = this.clampToWorldBounds(command.targetX, command.targetZ);
+      targetX = clampedTarget.x;
+      targetZ = clampedTarget.z;
+    }
+
+    this.lastIssuedSpecialPowerCommand = {
+      ...command,
+      issuingEntityIds: validIssuingEntityIds,
+      sourceEntityId,
+      targetEntityId,
+      targetX,
+      targetZ,
+    };
+
+    // TODO: Source parity gap: wire special-power execution into ActionManager /
+    // MessageStream equivalents (cooldown, readiness, and per-power behaviors).
+  }
+
   private stopEntity(entityId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) return;
 
     this.updatePathfindPosCell(entity);
     entity.moving = false;
+    entity.guardMode = GuardMode.GUARDMODE_NORMAL;
+    entity.guardTargetEntityId = null;
+    entity.guardTargetPosition = null;
     entity.moveTarget = null;
     entity.movePath = [];
     entity.pathIndex = 0;
@@ -3911,6 +4565,8 @@ export class GameLogicSubsystem implements Subsystem {
       this.scene.remove(entity.mesh);
     }
     this.spawnedEntities.clear();
+    this.shortcutSpecialPowerSourceByName.clear();
+    this.shortcutSpecialPowerNamesByEntityId.clear();
     this.selectedEntityId = null;
   }
 }

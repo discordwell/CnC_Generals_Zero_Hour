@@ -59,6 +59,51 @@ export interface LocomotorDef {
   speed?: number;
 }
 
+export interface CommandButtonDef {
+  name: string;
+  fields: Record<string, IniValue>;
+  blocks: IniBlock[];
+  commandTypeName?: string;
+  options: string[];
+  unitSpecificSoundName?: string;
+}
+
+export interface CommandSetButtonSlot {
+  slot: number;
+  commandButtonName: string;
+}
+
+export interface CommandSetDef {
+  name: string;
+  fields: Record<string, IniValue>;
+  buttons: string[];
+  slottedButtons?: CommandSetButtonSlot[];
+}
+
+export type AudioEventSoundType = 'music' | 'streaming' | 'sound';
+
+export interface AudioEventDef {
+  name: string;
+  fields: Record<string, IniValue>;
+  blocks: IniBlock[];
+  soundType: AudioEventSoundType;
+  priorityName?: string;
+  typeNames: string[];
+  controlNames: string[];
+  volume?: number;
+  minVolume?: number;
+  limit?: number;
+  minRange?: number;
+  maxRange?: number;
+  filename?: string;
+}
+
+export interface MiscAudioDef {
+  entries: Record<string, string>;
+  guiClickSoundName?: string;
+  noCanDoSoundName?: string;
+}
+
 export interface RegistryStats {
   objects: number;
   weapons: number;
@@ -66,6 +111,9 @@ export interface RegistryStats {
   upgrades: number;
   sciences: number;
   factions: number;
+  audioEvents: number;
+  commandButtons: number;
+  commandSets: number;
   unresolvedInheritance: number;
   totalBlocks: number;
 }
@@ -82,6 +130,20 @@ export interface AiConfig {
   attackUsesLineOfSight?: boolean;
 }
 
+export interface AudioSettingsConfig {
+  sampleCount2D?: number;
+  sampleCount3D?: number;
+  streamCount?: number;
+  minSampleVolume?: number;
+  globalMinRange?: number;
+  globalMaxRange?: number;
+  relative2DVolume?: number;
+  defaultSoundVolume?: number;
+  default3DSoundVolume?: number;
+  defaultSpeechVolume?: number;
+  defaultMusicVolume?: number;
+}
+
 export interface IniDataBundle {
   objects: ObjectDef[];
   weapons: WeaponDef[];
@@ -90,7 +152,12 @@ export interface IniDataBundle {
   sciences: ScienceDef[];
   factions: FactionDef[];
   locomotors?: LocomotorDef[];
+  audioEvents?: AudioEventDef[];
+  miscAudio?: MiscAudioDef;
+  commandButtons?: CommandButtonDef[];
+  commandSets?: CommandSetDef[];
   ai?: AiConfig;
+  audioSettings?: AudioSettingsConfig;
   stats: RegistryStats;
   errors: RegistryError[];
   unsupportedBlockTypes: string[];
@@ -108,8 +175,13 @@ export class IniDataRegistry {
   readonly sciences = new Map<string, ScienceDef>();
   readonly factions = new Map<string, FactionDef>();
   readonly locomotors = new Map<string, LocomotorDef>();
+  readonly audioEvents = new Map<string, AudioEventDef>();
+  readonly commandButtons = new Map<string, CommandButtonDef>();
+  readonly commandSets = new Map<string, CommandSetDef>();
   readonly errors: RegistryError[] = [];
   private ai: AiConfig | undefined;
+  private audioSettings: AudioSettingsConfig | undefined;
+  private miscAudio: MiscAudioDef | undefined;
 
   private unsupportedBlockTypes = new Set<string>();
 
@@ -139,8 +211,13 @@ export class IniDataRegistry {
     this.sciences.clear();
     this.factions.clear();
     this.locomotors.clear();
+    this.audioEvents.clear();
+    this.commandButtons.clear();
+    this.commandSets.clear();
     this.errors.length = 0;
     this.unsupportedBlockTypes.clear();
+    this.miscAudio = undefined;
+    this.audioSettings = undefined;
 
     for (const object of bundle.objects) {
       this.objects.set(object.name, {
@@ -181,9 +258,50 @@ export class IniDataRegistry {
         surfaces: [...locomotor.surfaces],
       });
     }
+    for (const audioEvent of bundle.audioEvents ?? []) {
+      this.audioEvents.set(audioEvent.name, {
+        ...audioEvent,
+        fields: { ...audioEvent.fields },
+        blocks: [...audioEvent.blocks],
+        typeNames: [...audioEvent.typeNames],
+        controlNames: [...audioEvent.controlNames],
+      });
+    }
+    for (const commandButton of bundle.commandButtons ?? []) {
+      this.commandButtons.set(commandButton.name, {
+        ...commandButton,
+        fields: { ...commandButton.fields },
+        blocks: [...commandButton.blocks],
+        options: [...commandButton.options],
+        unitSpecificSoundName: commandButton.unitSpecificSoundName,
+      });
+    }
+    for (const commandSet of bundle.commandSets ?? []) {
+      const slottedButtons = normalizeCommandSetButtonSlots(
+        commandSet.slottedButtons ??
+          commandSet.buttons.map((commandButtonName, index) => ({
+            slot: index + 1,
+            commandButtonName,
+          })),
+      );
+      this.commandSets.set(commandSet.name, {
+        ...commandSet,
+        fields: { ...commandSet.fields },
+        buttons: slottedButtons.map((entry) => entry.commandButtonName),
+        slottedButtons,
+      });
+    }
+    this.miscAudio = bundle.miscAudio
+      ? {
+          entries: { ...bundle.miscAudio.entries },
+          guiClickSoundName: bundle.miscAudio.guiClickSoundName,
+          noCanDoSoundName: bundle.miscAudio.noCanDoSoundName,
+        }
+      : undefined;
 
     this.errors.push(...bundle.errors);
     this.ai = bundle.ai ? { ...bundle.ai } : undefined;
+    this.audioSettings = bundle.audioSettings ? { ...bundle.audioSettings } : undefined;
     for (const unsupported of bundle.unsupportedBlockTypes) {
       this.unsupportedBlockTypes.add(unsupported);
     }
@@ -239,8 +357,35 @@ export class IniDataRegistry {
     return this.ai ? { ...this.ai } : undefined;
   }
 
+  getAudioSettings(): AudioSettingsConfig | undefined {
+    return this.audioSettings ? { ...this.audioSettings } : undefined;
+  }
+
   getLocomotor(name: string): LocomotorDef | undefined {
     return this.locomotors.get(name);
+  }
+
+  getAudioEvent(name: string): AudioEventDef | undefined {
+    return this.audioEvents.get(name);
+  }
+
+  getCommandButton(name: string): CommandButtonDef | undefined {
+    return this.commandButtons.get(name);
+  }
+
+  getCommandSet(name: string): CommandSetDef | undefined {
+    return this.commandSets.get(name);
+  }
+
+  getMiscAudio(): MiscAudioDef | undefined {
+    if (!this.miscAudio) {
+      return undefined;
+    }
+    return {
+      entries: { ...this.miscAudio.entries },
+      guiClickSoundName: this.miscAudio.guiClickSoundName,
+      noCanDoSoundName: this.miscAudio.noCanDoSoundName,
+    };
   }
 
   /** Get summary statistics. */
@@ -252,9 +397,14 @@ export class IniDataRegistry {
       upgrades: this.upgrades.size,
       sciences: this.sciences.size,
       factions: this.factions.size,
+      audioEvents: this.audioEvents.size,
+      commandButtons: this.commandButtons.size,
+      commandSets: this.commandSets.size,
       unresolvedInheritance: this.getUnresolvedInheritanceCount(),
       totalBlocks: this.objects.size + this.weapons.size + this.armors.size +
-        this.upgrades.size + this.sciences.size + this.factions.size + this.locomotors.size,
+        this.upgrades.size + this.sciences.size + this.factions.size + this.locomotors.size +
+        this.audioEvents.size +
+        this.commandButtons.size + this.commandSets.size,
     };
   }
 
@@ -275,7 +425,18 @@ export class IniDataRegistry {
       sciences: [...this.sciences.values()].sort((a, b) => a.name.localeCompare(b.name)),
       factions: [...this.factions.values()].sort((a, b) => a.name.localeCompare(b.name)),
       locomotors: [...this.locomotors.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      audioEvents: [...this.audioEvents.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      miscAudio: this.miscAudio
+        ? {
+            entries: { ...this.miscAudio.entries },
+            guiClickSoundName: this.miscAudio.guiClickSoundName,
+            noCanDoSoundName: this.miscAudio.noCanDoSoundName,
+          }
+        : undefined,
+      commandButtons: [...this.commandButtons.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      commandSets: [...this.commandSets.values()].sort((a, b) => a.name.localeCompare(b.name)),
       ai: this.ai ? { ...this.ai } : undefined,
+      audioSettings: this.audioSettings ? { ...this.audioSettings } : undefined,
       stats,
       errors: [...this.errors],
       unsupportedBlockTypes: this.getUnsupportedBlockTypes(),
@@ -368,17 +529,67 @@ export class IniDataRegistry {
         });
         break;
 
-      // Known but not indexed block types — skip silently
       case 'CommandButton':
-      case 'CommandSet':
+        addDefinition(this.commandButtons, block.type, {
+          name: block.name,
+          fields: block.fields,
+          blocks: block.blocks,
+          commandTypeName: extractTokenString(block.fields['Command']),
+          options: extractOptions(block.fields['Options']),
+          unitSpecificSoundName: extractAudioEventName(block.fields['UnitSpecificSound']),
+        });
+        break;
+
+      case 'CommandSet': {
+        const slottedButtons = extractCommandSetButtonSlots(block.fields);
+        addDefinition(this.commandSets, block.type, {
+          name: block.name,
+          fields: block.fields,
+          buttons: slottedButtons.map((entry) => entry.commandButtonName),
+          slottedButtons,
+        });
+        break;
+      }
+
+      case 'AudioEvent':
+      case 'MusicTrack':
+      case 'DialogEvent':
+        addDefinition(this.audioEvents, block.type, {
+          name: block.name,
+          fields: block.fields,
+          blocks: block.blocks,
+          soundType: audioEventSoundTypeFromBlockType(block.type),
+          priorityName: extractTokenString(block.fields['Priority'])?.toUpperCase(),
+          typeNames: extractOptions(block.fields['Type']),
+          controlNames: extractOptions(block.fields['Control']),
+          volume: extractPercentToReal(block.fields['Volume']),
+          minVolume: extractPercentToReal(block.fields['MinVolume']),
+          limit: extractInteger(block.fields['Limit']),
+          minRange: extractNumber(block.fields['MinRange']),
+          maxRange: extractNumber(block.fields['MaxRange']),
+          filename: extractTokenString(block.fields['Filename']) ?? extractTokenString(block.fields['Sounds']),
+        });
+        break;
+
+      case 'MiscAudio': {
+        const entries = {
+          ...(this.miscAudio?.entries ?? {}),
+          ...extractAudioEventEntries(block.fields),
+        };
+        this.miscAudio = {
+          entries,
+          guiClickSoundName: entries['GUIClickSound'],
+          noCanDoSoundName: entries['NoCanDoSound'],
+        };
+        break;
+      }
+
+      // Known but not indexed block types — skip silently
       case 'SpecialPower':
       case 'DamageFX':
       case 'FXList':
       case 'ObjectCreationList':
-      case 'AudioEvent':
       case 'Multisound':
-      case 'MusicTrack':
-      case 'DialogEvent':
       case 'EvaEvent':
       case 'MappedImage':
       case 'ParticleSystem':
@@ -405,7 +616,6 @@ export class IniDataRegistry {
       case 'ControlBarScheme':
       case 'ControlBarResizer':
       case 'ShellMenuScheme':
-      case 'MiscAudio':
       case 'LocomotorSet':
       case 'ClientBehavior':
       case 'ClientUpdate':
@@ -418,6 +628,29 @@ export class IniDataRegistry {
           ...this.ai,
           attackUsesLineOfSight: extractBoolean(block.fields['AttackUsesLineOfSight']) ??
             this.ai?.attackUsesLineOfSight,
+        };
+        break;
+
+      case 'AudioSettings':
+        this.audioSettings = {
+          ...this.audioSettings,
+          sampleCount2D: extractInteger(block.fields['SampleCount2D']) ?? this.audioSettings?.sampleCount2D,
+          sampleCount3D: extractInteger(block.fields['SampleCount3D']) ?? this.audioSettings?.sampleCount3D,
+          streamCount: extractInteger(block.fields['StreamCount']) ?? this.audioSettings?.streamCount,
+          minSampleVolume:
+            extractPercentToReal(block.fields['MinSampleVolume']) ?? this.audioSettings?.minSampleVolume,
+          globalMinRange: extractInteger(block.fields['GlobalMinRange']) ?? this.audioSettings?.globalMinRange,
+          globalMaxRange: extractInteger(block.fields['GlobalMaxRange']) ?? this.audioSettings?.globalMaxRange,
+          relative2DVolume:
+            extractSignedPercentToReal(block.fields['Relative2DVolume']) ?? this.audioSettings?.relative2DVolume,
+          defaultSoundVolume:
+            extractPercentToReal(block.fields['DefaultSoundVolume']) ?? this.audioSettings?.defaultSoundVolume,
+          default3DSoundVolume:
+            extractPercentToReal(block.fields['Default3DSoundVolume']) ?? this.audioSettings?.default3DSoundVolume,
+          defaultSpeechVolume:
+            extractPercentToReal(block.fields['DefaultSpeechVolume']) ?? this.audioSettings?.defaultSpeechVolume,
+          defaultMusicVolume:
+            extractPercentToReal(block.fields['DefaultMusicVolume']) ?? this.audioSettings?.defaultMusicVolume,
         };
         break;
 
@@ -497,9 +730,94 @@ export class IniDataRegistry {
 // Helpers
 // ---------------------------------------------------------------------------
 
+const MAX_COMMAND_SET_SLOTS = 12;
+
 function extractString(value: IniValue | undefined): string | undefined {
   if (typeof value === 'string') return value;
   return undefined;
+}
+
+function extractTokenString(value: IniValue | undefined): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined;
+  }
+  const tokens = flattenIniStrings(value)
+    .flatMap((entry) => entry.split(/[\s,;|]+/))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) {
+    return undefined;
+  }
+  return tokens[0];
+}
+
+function extractAudioEventName(value: IniValue | undefined): string | undefined {
+  const token = extractTokenString(value);
+  if (!token) {
+    return undefined;
+  }
+  if (token.toLowerCase() === 'nosound') {
+    return undefined;
+  }
+  return token;
+}
+
+function extractOptions(value: IniValue | undefined): string[] {
+  if (typeof value === 'undefined') {
+    return [];
+  }
+
+  return flattenIniStrings(value)
+    .flatMap((entry) => entry.split(/[\s,;|]+/))
+    .map((entry) => entry.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function extractAudioEventEntries(fields: Record<string, IniValue>): Record<string, string> {
+  const entries: Record<string, string> = {};
+  for (const [fieldName, value] of Object.entries(fields)) {
+    const eventName = extractAudioEventName(value);
+    if (!eventName) {
+      continue;
+    }
+    entries[fieldName] = eventName;
+  }
+  return entries;
+}
+
+function normalizeCommandSetButtonSlots(slottedButtons: readonly CommandSetButtonSlot[]): CommandSetButtonSlot[] {
+  return slottedButtons
+    .filter((entry) =>
+      Number.isInteger(entry.slot) &&
+      entry.slot >= 1 &&
+      entry.slot <= MAX_COMMAND_SET_SLOTS &&
+      typeof entry.commandButtonName === 'string' &&
+      entry.commandButtonName.trim().length > 0,
+    )
+    .map((entry) => ({
+      slot: entry.slot,
+      commandButtonName: entry.commandButtonName.trim(),
+    }))
+    .sort((a, b) => a.slot - b.slot);
+}
+
+function extractCommandSetButtonSlots(fields: Record<string, IniValue>): CommandSetButtonSlot[] {
+  const entries = Object.entries(fields)
+    .map(([key, value]) => {
+      const slot = Number(key);
+      if (!Number.isInteger(slot) || slot <= 0 || slot > MAX_COMMAND_SET_SLOTS) {
+        return null;
+      }
+      const commandButtonName = extractTokenString(value);
+      if (!commandButtonName) {
+        return null;
+      }
+      return { slot, commandButtonName };
+    })
+    .filter((entry): entry is { slot: number; commandButtonName: string } => entry !== null)
+    .sort((a, b) => a.slot - b.slot);
+
+  return entries;
 }
 
 function extractStringArray(value: IniValue | undefined): string[] | undefined {
@@ -527,6 +845,109 @@ function extractNumber(value: IniValue | undefined): number | undefined {
   }
   const candidate = values[0];
   return Number.isFinite(candidate) ? candidate : undefined;
+}
+
+function extractInteger(value: IniValue | undefined): number | undefined {
+  const numberValue = extractNumber(value);
+  if (numberValue === undefined) {
+    return undefined;
+  }
+  return Math.trunc(numberValue);
+}
+
+function extractPercentToReal(value: IniValue | undefined): number | undefined {
+  if (typeof value === 'undefined') {
+    return undefined;
+  }
+
+  if (typeof value === 'string') {
+    const token = value.trim();
+    if (!token) {
+      return undefined;
+    }
+    if (token.endsWith('%')) {
+      const rawPercent = Number(token.slice(0, -1).trim());
+      if (!Number.isFinite(rawPercent)) {
+        return undefined;
+      }
+      return Math.min(1, Math.max(0, rawPercent / 100));
+    }
+  }
+
+  let numeric: number | undefined;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const parsed = extractPercentToReal(entry as IniValue);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+    return undefined;
+  } else if (typeof value === 'number') {
+    numeric = value;
+  } else if (typeof value === 'boolean') {
+    numeric = value ? 1 : 0;
+  } else if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return undefined;
+    }
+    numeric = parsed;
+  }
+
+  if (numeric === undefined || !Number.isFinite(numeric)) {
+    return undefined;
+  }
+
+  const normalized = numeric > 1 ? numeric / 100 : numeric;
+  return Math.min(1, Math.max(0, normalized));
+}
+
+function extractSignedPercentToReal(value: IniValue | undefined): number | undefined {
+  if (typeof value === 'undefined') {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const parsed = extractSignedPercentToReal(entry as IniValue);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+
+  let numeric: number | undefined;
+  if (typeof value === 'string') {
+    const token = value.trim();
+    if (!token) {
+      return undefined;
+    }
+    if (token.endsWith('%')) {
+      const rawPercent = Number(token.slice(0, -1).trim());
+      if (!Number.isFinite(rawPercent)) {
+        return undefined;
+      }
+      numeric = rawPercent / 100;
+    } else {
+      const parsed = Number(token);
+      if (!Number.isFinite(parsed)) {
+        return undefined;
+      }
+      numeric = parsed > 1 || parsed < -1 ? parsed / 100 : parsed;
+    }
+  } else if (typeof value === 'number') {
+    numeric = value > 1 || value < -1 ? value / 100 : value;
+  } else if (typeof value === 'boolean') {
+    numeric = value ? 1 : 0;
+  }
+
+  if (numeric === undefined || !Number.isFinite(numeric)) {
+    return undefined;
+  }
+
+  return Math.min(1, Math.max(-1, numeric));
 }
 
 function readNumericValues(value: IniValue | undefined): number[] {
@@ -599,4 +1020,16 @@ function locomotorSurfaceMaskFromNames(names: string[]): number {
     }
   }
   return mask;
+}
+
+function audioEventSoundTypeFromBlockType(blockType: string): AudioEventSoundType {
+  switch (blockType) {
+    case 'MusicTrack':
+      return 'music';
+    case 'DialogEvent':
+      return 'streaming';
+    case 'AudioEvent':
+    default:
+      return 'sound';
+  }
 }
