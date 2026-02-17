@@ -15,6 +15,7 @@ export interface RenderableEntityState {
   id: number;
   renderAssetPath: string | null;
   renderAssetResolved: boolean;
+  renderAssetCandidates?: readonly string[];
   x: number;
   y: number;
   z: number;
@@ -218,10 +219,10 @@ export class ObjectVisualManager {
   }
 
   private syncVisualAsset(visual: VisualAssetState, state: RenderableEntityState): void {
-    const desiredPath = this.selectAssetPath(state.renderAssetPath, state.renderAssetResolved);
+    const candidateAssetPaths = this.collectCandidateAssetPaths(state);
     const entityId = visual.root.userData.entityId as number;
 
-    if (!desiredPath) {
+    if (candidateAssetPaths.length === 0) {
       if (visual.currentModel !== null) {
         this.removeModel(visual);
       }
@@ -234,17 +235,18 @@ export class ObjectVisualManager {
       return;
     }
 
-    if (visual.assetPath === desiredPath && visual.currentModel !== null) {
+    if (visual.currentModel !== null && visual.assetPath !== null && candidateAssetPaths.includes(visual.assetPath)) {
       this.unresolvedEntityIds.delete(entityId);
       this.updatePlaceholderVisibility(entityId, false);
       return;
     }
 
-    visual.assetPath = desiredPath;
     visual.loadToken += 1;
     const loadToken = visual.loadToken;
-    const normalizedCandidates = this.resolveCandidateAssetPaths(desiredPath);
+    visual.assetPath = candidateAssetPaths[0] ?? null;
+    const normalizedCandidates = candidateAssetPaths;
     this.updatePlaceholderVisibility(entityId, true);
+    this.removeModel(visual);
 
     void (async () => {
       for (const candidate of normalizedCandidates) {
@@ -290,6 +292,39 @@ export class ObjectVisualManager {
         this.unresolvedEntityIds.add(entityId);
       }
     })();
+  }
+
+  private collectCandidateAssetPaths(state: RenderableEntityState): string[] {
+    const primaryPath = this.selectAssetPath(state.renderAssetPath, state.renderAssetResolved);
+    if (!primaryPath) {
+      return [];
+    }
+
+    const requested: string[] = [];
+    const seen = new Set<string>();
+    const pushCandidates = (rawCandidate: string): void => {
+      for (const candidate of this.resolveCandidateAssetPaths(rawCandidate)) {
+        if (!candidate || seen.has(candidate)) {
+          continue;
+        }
+        seen.add(candidate);
+        requested.push(candidate);
+      }
+    };
+
+    pushCandidates(primaryPath);
+    for (const candidate of state.renderAssetCandidates ?? []) {
+      const token = candidate.trim();
+      if (!token || token.toUpperCase() === 'NONE') {
+        continue;
+      }
+      if (token.toUpperCase() === primaryPath.toUpperCase()) {
+        continue;
+      }
+      pushCandidates(token);
+    }
+
+    return requested;
   }
 
   private updatePlaceholderVisibility(entityId: number, visible: boolean): void {

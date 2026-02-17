@@ -153,6 +153,37 @@ describe('ObjectVisualManager', () => {
     expect(placeholder?.visible).toBe(true);
   });
 
+  it('falls back through render-asset candidates when an early candidate fails to load', async () => {
+    const scene = new THREE.Scene();
+    const requested: string[] = [];
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async (assetPath: string) => {
+        requested.push(assetPath);
+        if (assetPath === 'primary.gltf') {
+          throw new Error('missing model');
+        }
+        return modelWithAnimationClips();
+      },
+    });
+
+    manager.sync([
+      makeMeshState({
+        id: 5,
+        renderAssetPath: 'primary',
+        renderAssetResolved: true,
+        renderAssetCandidates: ['primary', 'secondary'],
+      }),
+    ], 1 / 30);
+    await flushModelLoadQueue();
+
+    expect(requested).toEqual(['primary.gltf', 'secondary.gltf']);
+    expect(manager.getUnresolvedEntityIds()).toEqual([]);
+    expect(manager.getVisualState(5)?.hasModel).toBe(true);
+    const placeholder = getPlaceholderMesh(manager, 5);
+    expect(placeholder).toBeTruthy();
+    expect(placeholder?.visible).toBe(false);
+  });
+
   it('prioritizes extension conversions and explicit defaults for source asset hints', async () => {
     const scene = new THREE.Scene();
     const requestedPaths: string[] = [];
