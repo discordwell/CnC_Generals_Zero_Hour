@@ -4,7 +4,12 @@
 
 export { AssetType } from './types.js';
 export type { AssetHandle, AssetManagerConfig, ProgressCallback, CachedAssetEntry } from './types.js';
-export { DEFAULT_CONFIG } from './types.js';
+export {
+  DEFAULT_CONFIG,
+  RUNTIME_ASSET_BASE_URL,
+  RUNTIME_MANIFEST_FILE,
+  RUNTIME_MANIFEST_PUBLIC_PATH,
+} from './types.js';
 
 export {
   AssetError,

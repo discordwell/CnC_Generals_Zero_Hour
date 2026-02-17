@@ -12,7 +12,7 @@
 import type { Subsystem } from '@generals/core';
 import type { AssetHandle, AssetManagerConfig, ProgressCallback } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
-import { AssetFetchError, AssetIntegrityError, AssetNotFoundError } from './errors.js';
+import { AssetFetchError, AssetIntegrityError, AssetNotFoundError, ManifestLoadError } from './errors.js';
 import { sha256Hex } from './hash.js';
 import { RuntimeManifest, loadManifest } from './manifest-loader.js';
 import { CacheStore } from './cache.js';
@@ -36,12 +36,18 @@ export class AssetManager implements Subsystem {
   // ===========================================================================
 
   async init(): Promise<void> {
-    // Load manifest with graceful fallback.
-    // In browser dev/demo mode the manifest may not exist yet, so we continue
-    // in asset-only fallback mode when it cannot be loaded.
+    const manifestUrl = this.resolveUrl(this.config.manifestUrl);
+
+    // Load manifest. For app/runtime-integrated flows this can be strict.
     try {
-      this.manifest = await loadManifest(this.resolveUrl(this.config.manifestUrl));
+      this.manifest = await loadManifest(manifestUrl);
+      if (!this.manifest && this.config.requireManifest) {
+        throw new ManifestLoadError(manifestUrl, 'HTTP 404');
+      }
     } catch (error) {
+      if (this.config.requireManifest) {
+        throw error;
+      }
       console.warn('AssetManager: manifest unavailable, proceeding without manifest.', error);
       this.manifest = null;
     }
@@ -134,27 +140,28 @@ export class AssetManager implements Subsystem {
 
   private async loadRaw(path: string, onProgress?: ProgressCallback): Promise<AssetHandle<ArrayBuffer>> {
     this.validatePath(path);
+    const normalizedPath = this.normalizeAssetPath(path);
 
-    const manifestEntry = this.manifest?.getByOutputPath(path);
+    const manifestEntry = this.manifest?.getByOutputPath(normalizedPath);
     const expectedHash = manifestEntry?.outputHash ?? null;
 
     // If manifest is loaded and integrity checks are on, require the path to be known
     if (this.manifest && this.config.integrityChecks && !manifestEntry) {
-      throw new AssetNotFoundError(path);
+      throw new AssetNotFoundError(normalizedPath);
     }
 
     // 1. Check IndexedDB cache
     if (this.cache) {
-      const cached = await this.cache.get(path, expectedHash ?? undefined);
+      const cached = await this.cache.get(normalizedPath, expectedHash ?? undefined);
       if (cached) {
         onProgress?.(cached.size, cached.size);
-        return { path, data: cached.data, hash: cached.hash, cached: true };
+        return { path: normalizedPath, data: cached.data, hash: cached.hash, cached: true };
       }
     }
 
     // 2. Fetch with in-flight deduplication (clone buffer to prevent detach issues)
-    const shared = await this.fetchDeduped(path, onProgress);
-    const data = this.inflight.has(path) ? shared.slice(0) : shared;
+    const shared = await this.fetchDeduped(normalizedPath, onProgress);
+    const data = this.inflight.has(normalizedPath) ? shared.slice(0) : shared;
 
     // 3. Integrity check
     let actualHash: string | null = null;
@@ -167,14 +174,14 @@ export class AssetManager implements Subsystem {
 
     // 4. Cache write (fire-and-forget)
     if (this.cache && actualHash) {
-      this.cache.put(path, data, actualHash).catch((e) => console.warn('Cache write failed:', e));
+      this.cache.put(normalizedPath, data, actualHash).catch((e) => console.warn('Cache write failed:', e));
     } else if (this.cache && !actualHash) {
       sha256Hex(data).then((hash) => {
-        this.cache?.put(path, data, hash).catch((e) => console.warn('Cache write failed:', e));
+        this.cache?.put(normalizedPath, data, hash).catch((e) => console.warn('Cache write failed:', e));
       }).catch((e) => console.warn('Hash computation for cache failed:', e));
     }
 
-    return { path, data, hash: actualHash, cached: false };
+    return { path: normalizedPath, data, hash: actualHash, cached: false };
   }
 
   private fetchDeduped(path: string, onProgress?: ProgressCallback): Promise<ArrayBuffer> {
@@ -243,14 +250,83 @@ export class AssetManager implements Subsystem {
   }
 
   private validatePath(path: string): void {
-    if (path.includes('..') || path.startsWith('/') || /^[a-z]+:\/\//i.test(path)) {
+    if (
+      path.includes('..')
+      || path.includes('\\')
+      || path.startsWith('/')
+      || /^[a-z]+:\/\//i.test(path)
+      || /^[A-Za-z]:($|[\\/])/.test(path)
+    ) {
       throw new AssetFetchError(path, 0);
     }
+  }
+
+  private normalizeRelativePath(path: string): string {
+    return path
+      .replace(/^(?:\.\/)+/, '')
+      .replace(/^\/+/, '')
+      .replace(/\/\.\//g, '/')
+      .replace(/\/{2,}/g, '/');
+  }
+
+  private normalizeAssetPath(path: string): string {
+    const normalizedPath = this.normalizeRelativePath(path);
+    const basePrefix = this.basePathPrefix();
+    if (basePrefix) {
+      const normalizedPathLower = normalizedPath.toLowerCase();
+      const basePrefixLower = basePrefix.toLowerCase();
+      if (normalizedPathLower === basePrefixLower) {
+        return '';
+      }
+      if (normalizedPathLower.startsWith(`${basePrefixLower}/`)) {
+        return normalizedPath.slice(basePrefix.length + 1);
+      }
+    }
+    return normalizedPath;
+  }
+
+  private basePathPrefix(): string | null {
+    const base = this.config.baseUrl.trim();
+    if (!base) return null;
+
+    let basePath = base;
+    if (/^[a-z]+:\/\//i.test(base)) {
+      try {
+        basePath = new URL(base).pathname;
+      } catch {
+        return null;
+      }
+    }
+
+    const normalizedBasePath = this.normalizeRelativePath(basePath).replace(/\/+$/, '');
+    return normalizedBasePath.length > 0 ? normalizedBasePath : null;
   }
 
   private resolveUrl(path: string): string {
     const base = this.config.baseUrl;
     if (!base) return path;
-    return base.endsWith('/') ? `${base}${path}` : `${base}/${path}`;
+
+    // Absolute/protocol URLs bypass baseUrl prefixing.
+    if (path.startsWith('/') || /^[a-z]+:\/\//i.test(path)) {
+      return path;
+    }
+
+    const normalizedBase = base.replace(/\/+$/, '');
+    const normalizedPath = this.normalizeRelativePath(path);
+    const matchBase = normalizedBase.replace(/^\/+/, '');
+    const matchPath = normalizedPath.replace(/^\/+/, '');
+    const matchBaseLower = matchBase.toLowerCase();
+    const matchPathLower = matchPath.toLowerCase();
+
+    // If the path already starts with the base segment, don't double-prefix it.
+    if (matchPathLower === matchBaseLower) {
+      return normalizedBase;
+    }
+    if (matchPathLower.startsWith(`${matchBaseLower}/`)) {
+      const suffix = matchPath.slice(matchBase.length + 1);
+      return suffix.length > 0 ? `${normalizedBase}/${suffix}` : normalizedBase;
+    }
+
+    return `${normalizedBase}/${normalizedPath}`;
   }
 }

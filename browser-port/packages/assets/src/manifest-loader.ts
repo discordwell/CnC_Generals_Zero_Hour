@@ -6,6 +6,7 @@
 import type { ConversionManifest, ManifestEntry } from '@generals/core';
 import { parseManifest } from '@generals/core';
 import { ManifestLoadError } from './errors.js';
+import { RUNTIME_ASSET_BASE_URL } from './types.js';
 
 /**
  * Indexed wrapper around ConversionManifest for efficient runtime lookups.
@@ -47,6 +48,79 @@ export class RuntimeManifest {
   }
 }
 
+function findDuplicatePath(
+  manifest: ConversionManifest,
+  key: 'sourcePath' | 'outputPath',
+): string | null {
+  const seen = new Set<string>();
+  for (const entry of manifest.entries) {
+    const value = entry[key];
+    if (seen.has(value)) {
+      return value;
+    }
+    seen.add(value);
+  }
+  return null;
+}
+
+function validateManifestPath(pathValue: string, key: 'sourcePath' | 'outputPath'): string | null {
+  if (pathValue.length === 0) {
+    return 'Path cannot be empty';
+  }
+
+  if (/^[a-z]+:\/\//i.test(pathValue)) {
+    return 'Path must be relative';
+  }
+
+  if (/^[A-Za-z]:($|\/)/.test(pathValue)) {
+    return 'Path must be relative';
+  }
+
+  if (pathValue.includes('\\')) {
+    return 'Path must use forward slashes';
+  }
+
+  if (pathValue.startsWith('/')) {
+    return 'Path must be relative';
+  }
+
+  const segments = pathValue.split('/');
+  if (segments.some((segment) => segment.length === 0)) {
+    return 'Path must not contain empty segments';
+  }
+  if (segments.includes('.')) {
+    return 'Path must not contain "." segments';
+  }
+  if (segments.includes('..')) {
+    return 'Path must not contain ".." segments';
+  }
+
+  if (key === 'outputPath') {
+    const runtimeBaseLower = RUNTIME_ASSET_BASE_URL.toLowerCase();
+    const runtimePrefix = `${runtimeBaseLower}/`;
+    const pathValueLower = pathValue.toLowerCase();
+    if (pathValueLower === runtimeBaseLower || pathValueLower.startsWith(runtimePrefix)) {
+      return `Path must be relative to runtime base and must not include "${runtimePrefix}"`;
+    }
+  }
+
+  return null;
+}
+
+function findInvalidPath(
+  manifest: ConversionManifest,
+  key: 'sourcePath' | 'outputPath',
+): { path: string; reason: string } | null {
+  for (const entry of manifest.entries) {
+    const value = entry[key];
+    const reason = validateManifestPath(value, key);
+    if (reason) {
+      return { path: value, reason };
+    }
+  }
+  return null;
+}
+
 /**
  * Fetch and parse the conversion manifest.
  * Returns null on 404 (manifest-optional design).
@@ -73,6 +147,32 @@ export async function loadManifest(url: string): Promise<RuntimeManifest | null>
 
   if (!manifest) {
     throw new ManifestLoadError(url, 'Invalid manifest JSON');
+  }
+
+  const duplicateOutputPath = findDuplicatePath(manifest, 'outputPath');
+  if (duplicateOutputPath) {
+    throw new ManifestLoadError(url, `Duplicate outputPath: ${duplicateOutputPath}`);
+  }
+
+  const duplicateSourcePath = findDuplicatePath(manifest, 'sourcePath');
+  if (duplicateSourcePath) {
+    throw new ManifestLoadError(url, `Duplicate sourcePath: ${duplicateSourcePath}`);
+  }
+
+  const invalidOutputPath = findInvalidPath(manifest, 'outputPath');
+  if (invalidOutputPath) {
+    throw new ManifestLoadError(
+      url,
+      `Invalid outputPath: ${invalidOutputPath.path} (${invalidOutputPath.reason})`,
+    );
+  }
+
+  const invalidSourcePath = findInvalidPath(manifest, 'sourcePath');
+  if (invalidSourcePath) {
+    throw new ManifestLoadError(
+      url,
+      `Invalid sourcePath: ${invalidSourcePath.path} (${invalidSourcePath.reason})`,
+    );
   }
 
   return new RuntimeManifest(manifest);
