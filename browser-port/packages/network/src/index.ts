@@ -4,29 +4,73 @@
  * Lightweight offline-capable `NetworkInterface`-compatible runtime used while the
  * native network transport is being ported.
  */
-import type { Subsystem } from '@generals/core';
+import {
+  DeterministicFrameState,
+  DeterministicStateKernel,
+  FrameResendArchive,
+  NetworkCommandIdSequencer,
+  NETCOMMANDTYPE_ACKBOTH,
+  NETCOMMANDTYPE_ACKSTAGE1,
+  NETCOMMANDTYPE_ACKSTAGE2,
+  NETCOMMANDTYPE_CHAT,
+  NETCOMMANDTYPE_DESTROYPLAYER,
+  NETCOMMANDTYPE_DISCONNECTCHAT,
+  NETCOMMANDTYPE_DISCONNECTEND,
+  NETCOMMANDTYPE_DISCONNECTFRAME,
+  NETCOMMANDTYPE_DISCONNECTKEEPALIVE,
+  NETCOMMANDTYPE_DISCONNECTPLAYER,
+  NETCOMMANDTYPE_DISCONNECTSCREENOFF,
+  NETCOMMANDTYPE_DISCONNECTSTART,
+  NETCOMMANDTYPE_DISCONNECTVOTE,
+  NETCOMMANDTYPE_FILE,
+  NETCOMMANDTYPE_FILEANNOUNCE,
+  NETCOMMANDTYPE_FILEPROGRESS,
+  NETCOMMANDTYPE_FRAMEINFO,
+  NETCOMMANDTYPE_FRAMERESENDREQUEST,
+  NETCOMMANDTYPE_GAMECOMMAND,
+  NETCOMMANDTYPE_KEEPALIVE,
+  NETCOMMANDTYPE_LOADCOMPLETE,
+  NETCOMMANDTYPE_MANGLERQUERY,
+  NETCOMMANDTYPE_MANGLERRESPONSE,
+  NETCOMMANDTYPE_PACKETROUTERACK,
+  NETCOMMANDTYPE_PACKETROUTERQUERY,
+  NETCOMMANDTYPE_PLAYERLEAVE,
+  NETCOMMANDTYPE_PROGRESS,
+  NETCOMMANDTYPE_RUNAHEAD,
+  NETCOMMANDTYPE_RUNAHEADMETRICS,
+  NETCOMMANDTYPE_TIMEOUTSTART,
+  NETCOMMANDTYPE_WRAPPER,
+  SOURCE_FRAMES_TO_KEEP,
+  doesNetworkCommandRequireCommandId,
+  resolveNetworkDirectWrappedCandidate,
+  resolveNetworkAssembledWrappedCandidate,
+  resolveNetworkMessageGetter,
+  resolveNetworkMaskFromMessage,
+  resolveNetworkNumericField,
+  resolveNetworkNumericFieldFromMessage,
+  resolveNetworkPlayerFromMessage,
+  resolveNetworkFileCommandIdFromMessage,
+  parseNetworkFrameInfoMessage,
+  parseNetworkFrameResendRequestMessage,
+  parseNetworkPacketRouterQueryMessage,
+  parseNetworkPacketRouterAckMessage,
+  isNetworkPacketRouterAckFromCurrentRouter,
+  resolveNetworkTextFieldFromMessage,
+  resolveNetworkCommandTypeFromMessage,
+  isNetworkCommandSynchronized,
+  hashDeterministicFrameMetadata,
+} from '@generals/engine';
+import type {
+  GameLogicCrcConsensus,
+  DeterministicGameLogicCrcSectionWriters,
+  NetworkWrapperAssembly,
+  Subsystem,
+} from '@generals/engine';
 
 interface ChatMessage {
   sender: number;
   text: string;
   mask: number;
-}
-
-interface WrapperAssembly {
-  chunks: Uint8Array;
-  chunkReceived: Uint8Array;
-  expectedChunks: number;
-  totalLength: number;
-  receivedChunks: number;
-}
-
-interface WrapperChunk {
-  wrappedCommandID: number;
-  chunkNumber: number;
-  numChunks: number;
-  totalDataLength: number;
-  dataOffset: number;
-  chunkData: Uint8Array;
 }
 
 interface NetworkUser {
@@ -55,41 +99,20 @@ type TransportLike = {
   sendLocalCommandDirect?: (command: unknown, relayMask: number) => void;
 };
 
+type TransportMetricName =
+  | 'getIncomingBytesPerSecond'
+  | 'getIncomingPacketsPerSecond'
+  | 'getOutgoingBytesPerSecond'
+  | 'getOutgoingPacketsPerSecond'
+  | 'getUnknownBytesPerSecond'
+  | 'getUnknownPacketsPerSecond';
+
 const MAX_FRAME_RATE = 300;
 const MAX_SLOTS = 16;
 const DEFAULT_FRAME_RATE = 30;
 const DEFAULT_RUN_AHEAD = 30;
-const NETCOMMANDTYPE_ACKBOTH = 0;
-const NETCOMMANDTYPE_ACKSTAGE1 = 1;
-const NETCOMMANDTYPE_ACKSTAGE2 = 2;
-const NETCOMMANDTYPE_FRAMEINFO = 3;
-const NETCOMMANDTYPE_GAMECOMMAND = 4;
-const NETCOMMANDTYPE_PLAYERLEAVE = 5;
-const NETCOMMANDTYPE_RUNAHEADMETRICS = 6;
-const NETCOMMANDTYPE_RUNAHEAD = 7;
-const NETCOMMANDTYPE_DESTROYPLAYER = 8;
-const NETCOMMANDTYPE_CHAT = 11;
-const NETCOMMANDTYPE_DISCONNECTCHAT = 10;
-const NETCOMMANDTYPE_KEEPALIVE = 9;
-const NETCOMMANDTYPE_PROGRESS = 14;
-const NETCOMMANDTYPE_MANGLERQUERY = 12;
-const NETCOMMANDTYPE_MANGLERRESPONSE = 13;
-const NETCOMMANDTYPE_LOADCOMPLETE = 15;
-const NETCOMMANDTYPE_TIMEOUTSTART = 16;
-const NETCOMMANDTYPE_WRAPPER = 17;
-const NETCOMMANDTYPE_FILE = 18;
-const NETCOMMANDTYPE_FILEANNOUNCE = 19;
-const NETCOMMANDTYPE_FILEPROGRESS = 20;
-const NETCOMMANDTYPE_FRAMERESENDREQUEST = 21;
-const NETCOMMANDTYPE_DISCONNECTSTART = 22;
-const NETCOMMANDTYPE_DISCONNECTKEEPALIVE = 23;
-const NETCOMMANDTYPE_DISCONNECTPLAYER = 24;
-const NETCOMMANDTYPE_PACKETROUTERQUERY = 25;
-const NETCOMMANDTYPE_PACKETROUTERACK = 26;
-const NETCOMMANDTYPE_DISCONNECTVOTE = 27;
-const NETCOMMANDTYPE_DISCONNECTFRAME = 28;
-const NETCOMMANDTYPE_DISCONNECTSCREENOFF = 29;
-const NETCOMMANDTYPE_DISCONNECTEND = 30;
+const SOURCE_NETWORK_PLAYER_TIMEOUT_MS = 60000;
+const SOURCE_NETWORK_DISCONNECT_SCREEN_NOTIFY_TIMEOUT_MS = 15000;
 
 /**
  * Represents the single-player/default network state that keeps the game logic in sync
@@ -103,27 +126,34 @@ export class NetworkManager implements Subsystem {
   private localPlayerID = 0;
   private localPlayerName = 'Player 1';
   private numPlayers = 1;
-  private gameFrame = 0;
+  private readonly deterministicState = new DeterministicStateKernel<unknown>({
+    frameHashProvider: hashDeterministicFrameMetadata,
+  });
+  private readonly frameState = new DeterministicFrameState();
   private lastExecutionFrame = 0;
   private frameRate = DEFAULT_FRAME_RATE;
   private runAhead = DEFAULT_RUN_AHEAD;
-  private frameReady = false;
-  private expectedNetworkFrame = 0;
   private networkOn = true;
-  private pendingFrameNotices = 0;
   private lastUpdateMs = 0;
-  private frameQueueReady = new Set<number>();
   private pingFrame = 0;
   private pingsSent = 0;
   private pingsReceived = 0;
   private lastPingMs = 0;
   private pingPeriodMs = 10000;
   private pingRepeats = 5;
+  private disconnectTimeoutMs = 10000;
+  private disconnectPlayerTimeoutMs = SOURCE_NETWORK_PLAYER_TIMEOUT_MS;
+  private disconnectScreenNotifyTimeoutMs = SOURCE_NETWORK_DISCONNECT_SCREEN_NOTIFY_TIMEOUT_MS;
+  private disconnectKeepAliveIntervalMs = 500;
   private chatHistory: ChatMessage[] = [];
   private playerNames = new Map<number, string>();
   private disconnectedPlayers = new Set<number>();
   private fileTransfers = new Map<number, FileTransferRecord>();
-  private activeWrapperAssemblies = new Map<number, WrapperAssembly>();
+  private activeWrapperAssemblies = new Map<number, NetworkWrapperAssembly>();
+  private readonly frameResendArchive = new FrameResendArchive({
+    framesToKeep: SOURCE_FRAMES_TO_KEEP,
+  });
+  private readonly commandIdSequencer = new NetworkCommandIdSequencer();
   private commandIdSeed = 1;
   private crcMismatch = false;
   private loadProgress = 0;
@@ -138,6 +168,13 @@ export class NetworkManager implements Subsystem {
   private packetRouterEvents: PacketRouterEvents;
 
   constructor(options: NetworkManagerOptions = {}) {
+    this.deterministicState.onFrameHashMismatch(() => {
+      this.crcMismatch = true;
+    });
+    this.deterministicState.onGameLogicCrcMismatch(() => {
+      this.crcMismatch = true;
+    });
+
     this.forceSinglePlayer = options.forceSinglePlayer ?? false;
     if (typeof options.localPlayerID === 'number' && Number.isInteger(options.localPlayerID)) {
       this.localPlayerID = Math.max(0, options.localPlayerID);
@@ -151,22 +188,45 @@ export class NetworkManager implements Subsystem {
     if (typeof options.runAhead === 'number' && Number.isFinite(options.runAhead) && options.runAhead >= 0) {
       this.runAhead = Math.max(0, Math.floor(options.runAhead));
     }
+    if (typeof options.disconnectTimeoutMs === 'number' && Number.isFinite(options.disconnectTimeoutMs)) {
+      this.disconnectTimeoutMs = Math.max(0, options.disconnectTimeoutMs);
+    }
+    if (typeof options.disconnectPlayerTimeoutMs === 'number' && Number.isFinite(options.disconnectPlayerTimeoutMs)) {
+      this.disconnectPlayerTimeoutMs = Math.max(0, options.disconnectPlayerTimeoutMs);
+    }
+    if (
+      typeof options.disconnectScreenNotifyTimeoutMs === 'number'
+      && Number.isFinite(options.disconnectScreenNotifyTimeoutMs)
+    ) {
+      this.disconnectScreenNotifyTimeoutMs = Math.max(0, options.disconnectScreenNotifyTimeoutMs);
+    }
+    if (
+      typeof options.disconnectKeepAliveIntervalMs === 'number'
+      && Number.isFinite(options.disconnectKeepAliveIntervalMs)
+    ) {
+      this.disconnectKeepAliveIntervalMs = Math.max(0, options.disconnectKeepAliveIntervalMs);
+    }
+    if (options.gameLogicCrcSectionWriters) {
+      this.deterministicState.setGameLogicCrcSectionWriters(options.gameLogicCrcSectionWriters);
+    }
     this.packetRouterEvents = options.packetRouterEvents ?? {};
   }
 
   init(): void {
     this.started = true;
-    this.gameFrame = 0;
+    this.deterministicState.reset({ initialFrame: 0 });
     this.lastExecutionFrame = -1;
-    this.expectedNetworkFrame = 0;
+    this.frameState.reset({
+      initialFrameReady: true,
+      initialExpectedNetworkFrame: 0,
+      initialPendingFrameNotices: 0,
+    });
     this.lastUpdateMs = performance.now();
     this.lastPingMs = this.lastUpdateMs;
     this.pingFrame = 0;
     this.pingsSent = 0;
     this.pingsReceived = 0;
-    this.frameQueueReady.clear();
     this.disconnectedPlayers.clear();
-    this.frameReady = true;
 
     if (this.forceSinglePlayer) {
       this.numPlayers = 1;
@@ -183,22 +243,24 @@ export class NetworkManager implements Subsystem {
     this.packetRouterSlot = 0;
     this.lastPacketRouterQuerySender = -1;
     this.lastPacketRouterAckSender = -1;
+    this.frameResendArchive.reset();
     this.activeWrapperAssemblies.clear();
   }
 
   reset(): void {
-    this.gameFrame = 0;
+    this.deterministicState.reset({ initialFrame: 0 });
     this.lastExecutionFrame = 0;
-    this.expectedNetworkFrame = 0;
-    this.frameReady = this.forceSinglePlayer;
-    this.frameQueueReady.clear();
+    this.frameState.reset({
+      initialFrameReady: this.forceSinglePlayer,
+      initialExpectedNetworkFrame: 0,
+      initialPendingFrameNotices: 0,
+    });
     this.disconnectedPlayers.clear();
     this.lastUpdateMs = performance.now();
     this.lastPingMs = this.lastUpdateMs;
     this.pingFrame = 0;
     this.pingsSent = 0;
     this.pingsReceived = 0;
-    this.pendingFrameNotices = 0;
     this.chatHistory.length = 0;
     this.fileTransfers.clear();
     this.slotAverageFPS.fill(-1);
@@ -206,48 +268,221 @@ export class NetworkManager implements Subsystem {
     this.packetRouterSlot = -1;
     this.lastPacketRouterQuerySender = -1;
     this.lastPacketRouterAckSender = -1;
+    this.frameResendArchive.reset();
     this.activeWrapperAssemblies.clear();
   }
 
   dispose(): void {
     this.started = false;
-    this.frameReady = false;
-    this.pendingFrameNotices = 0;
-    this.frameQueueReady.clear();
+    this.deterministicState.clearCommands();
+    this.frameState.reset({
+      initialFrameReady: false,
+      initialExpectedNetworkFrame: 0,
+      initialPendingFrameNotices: 0,
+    });
     this.disconnectedPlayers.clear();
     this.chatHistory.length = 0;
     this.fileTransfers.clear();
     this.lastPacketRouterQuerySender = -1;
     this.lastPacketRouterAckSender = -1;
+    this.frameResendArchive.reset();
     this.activeWrapperAssemblies.clear();
   }
 
-  private asByteArray(payload: unknown): Uint8Array | null {
-    if (payload instanceof Uint8Array) {
-      return payload;
+  private get frameReady(): boolean {
+    return this.frameState.isFrameReady();
+  }
+
+  private set frameReady(ready: boolean) {
+    this.frameState.setFrameReady(ready);
+  }
+
+  private get pendingFrameNotices(): number {
+    return this.frameState.getPendingFrameNotices();
+  }
+
+  private set pendingFrameNotices(count: number) {
+    const safeCount = Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0;
+    this.frameState.setPendingFrameNotices(safeCount);
+  }
+
+  private get frameQueueReady(): Set<number> {
+    return this.frameState.getReadyFrames();
+  }
+
+  private getGameFrameValue(): number {
+    return this.deterministicState.getFrame();
+  }
+
+  private advanceGameFrame(): number {
+    return this.deterministicState.advanceFrame();
+  }
+
+  private pruneDeterministicValidationWindow(frame: number): void {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    const framesToKeep = this.frameResendArchive.getFramesToKeep();
+    // Source parity:
+    // - Generals/Code/GameEngine/Source/GameNetwork/NetworkUtil.cpp (FRAMES_TO_KEEP from MAX_FRAMES_AHEAD)
+    // - Generals/Code/GameEngine/Source/GameNetwork/ConnectionManager.cpp (getFrameCommandList reset window)
+    // getFrameCommandList(frame) resets exactly (frame - FRAMES_TO_KEEP), which means
+    // frames strictly below (frame - FRAMES_TO_KEEP + 1) are no longer retained.
+    const minFrame = Math.max(0, safeFrame - framesToKeep + 1);
+    this.deterministicState.pruneValidationBefore(minFrame);
+  }
+
+  private captureLocalFrameHash(frame = this.getGameFrameValue()): number {
+    return this.deterministicState.recordLocalFrameHash(undefined, frame);
+  }
+
+  private queueIncomingDeterministicCommand(commandType: number, message: unknown): void {
+    if (!message || typeof message !== 'object') {
+      return;
     }
-    if (payload instanceof ArrayBuffer) {
-      return new Uint8Array(payload);
+
+    const msg = message as { [key: string]: unknown };
+    const player = resolveNetworkPlayerFromMessage(msg) ?? this.localPlayerID;
+    const commandId = resolveNetworkNumericFieldFromMessage(
+      msg,
+      ['commandId', 'sortNumber', 'id', 'commandID', 'frame', 'executionFrame'],
+      ['getCommandID', 'getID', 'getSortNumber', 'getFrame', 'getExecutionFrame'],
+    );
+
+    const sortNumber = commandId === null ? 0 : Math.trunc(commandId);
+    const safePlayer = Math.max(0, Math.trunc(player));
+    const dedupeKey = commandId === null ? undefined : `${commandType}:${safePlayer}:${sortNumber}`;
+
+    this.deterministicState.enqueueCommand({
+      commandType,
+      playerId: safePlayer,
+      sortNumber,
+      payload: msg,
+      dedupeKey,
+    });
+  }
+
+  private recordSynchronizedFrameCommand(commandType: number, message: unknown): void {
+    // FrameInfo commands are synchronized in source policy but are handled through
+    // processFrameInfoCommand() for frame-count ownership instead of command replay.
+    if (!isNetworkCommandSynchronized(commandType) || commandType === NETCOMMANDTYPE_FRAMEINFO) {
+      return;
     }
-    if (ArrayBuffer.isView(payload)) {
-      const view = payload as ArrayBufferView;
-      return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    if (!message || typeof message !== 'object') {
+      return;
     }
-    if (typeof payload === 'string') {
-      return new TextEncoder().encode(payload);
+
+    const msg = message as { [key: string]: unknown };
+    const sender = resolveNetworkPlayerFromMessage(msg);
+    const frame = resolveNetworkNumericFieldFromMessage(
+      msg,
+      ['executionFrame', 'frame', 'gameFrame'],
+      ['getExecutionFrame', 'getFrame'],
+    );
+
+    if (sender === null || frame === null) {
+      return;
     }
-    if (Array.isArray(payload)) {
-      const bytes = new Uint8Array(payload.length);
-      for (let index = 0; index < payload.length; index += 1) {
-        const value = this.resolveNumericField(payload[index]);
-        if (value === null) {
-          return null;
-        }
-        bytes[index] = value;
+
+    const safeSender = Math.trunc(sender);
+    const safeFrame = Math.trunc(frame);
+    if (
+      !Number.isInteger(safeSender)
+      || !Number.isInteger(safeFrame)
+      || safeSender < 0
+      || safeSender >= MAX_SLOTS
+      || safeFrame < 0
+    ) {
+      return;
+    }
+
+    this.frameState.recordFrameCommand(safeSender, safeFrame);
+    this.frameResendArchive.recordSynchronizedCommand(
+      safeSender,
+      safeFrame,
+      msg,
+    );
+    this.reconcileFrameCommandState(safeFrame, [safeSender]);
+  }
+
+  private reconcileFrameCommandState(frame: number, playerIds: ReadonlyArray<number> = []): {
+    status: 'ready' | 'not-ready' | 'resend';
+    pendingPlayers: number[];
+    continuationAllowed: boolean;
+    readyToAdvance: boolean;
+    disconnectScreenTransitionedToOff: boolean;
+  } {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    const connectedPlayerIds = this.getConnectedPlayerIds();
+    const uniquePlayerIds = new Set<number>(connectedPlayerIds);
+    for (const playerId of playerIds) {
+      const safePlayerId = Math.trunc(playerId);
+      if (safePlayerId < 0 || safePlayerId >= MAX_SLOTS) {
+        continue;
       }
-      return bytes;
+      uniquePlayerIds.add(safePlayerId);
     }
-    return null;
+    const evaluation = this.frameState.evaluateFrameExecutionReadiness(
+      safeFrame,
+      uniquePlayerIds.values(),
+      this.localPlayerID,
+    );
+
+    if (evaluation.status === 'resend') {
+      for (const request of evaluation.resendRequests) {
+        this.sendFrameResendRequestCommand(request.playerId, request.frame);
+      }
+    }
+
+    if (evaluation.disconnectScreenTransitionedToOff) {
+      this.notifyOthersOfNewFrame(evaluation.frame);
+    }
+
+    return {
+      status: evaluation.status,
+      pendingPlayers: evaluation.pendingPlayers,
+      continuationAllowed: evaluation.continuationAllowed,
+      readyToAdvance: evaluation.readyToAdvance,
+      disconnectScreenTransitionedToOff: evaluation.disconnectScreenTransitionedToOff,
+    };
+  }
+
+  private sendFrameResendRequestCommand(playerId: number, frame: number): void {
+    const safePlayerId = Math.trunc(playerId);
+    const safeFrame = Math.trunc(frame);
+    if (
+      !Number.isInteger(safePlayerId)
+      || !Number.isInteger(safeFrame)
+      || safePlayerId < 0
+      || safePlayerId >= MAX_SLOTS
+      || safeFrame < 0
+    ) {
+      return;
+    }
+
+    const resendTarget = this.frameState.resolveFrameResendTarget(
+      safePlayerId,
+      this.disconnectedPlayers.has(safePlayerId)
+        ? this.getConnectedPlayerIds()
+        : [safePlayerId, ...this.getConnectedPlayerIds()],
+    );
+    if (resendTarget === null || resendTarget < 0 || resendTarget >= MAX_SLOTS) {
+      return;
+    }
+
+    const transport = this.transport as TransportLike | null;
+    const directSend = transport?.sendLocalCommandDirect;
+    if (typeof directSend !== 'function') {
+      return;
+    }
+
+    const message = {
+      commandType: NETCOMMANDTYPE_FRAMERESENDREQUEST,
+      type: 'frameresendrequest',
+      sender: this.localPlayerID,
+      frameToResend: safeFrame,
+      frame: safeFrame,
+    };
+    this.assignCommandIdIfRequired(message);
+    directSend.call(transport, message, 1 << resendTarget);
   }
 
   /**
@@ -262,15 +497,220 @@ export class NetworkManager implements Subsystem {
     }
 
     const now = performance.now();
+    this.updateDisconnectTimeoutState(now);
     if (now - this.lastUpdateMs >= 1000 / this.frameRate) {
       this.lastUpdateMs = now;
-      this.gameFrame += 1;
-      this.lastExecutionFrame = Math.max(this.lastExecutionFrame, this.gameFrame + this.runAhead);
-      this.pendingFrameNotices = Math.max(0, this.pendingFrameNotices - 1);
-      this.frameQueueReady.add(this.gameFrame);
-      this.frameReady = true;
+      const gameFrame = this.getGameFrameValue();
+      this.consumeReadyFrame(gameFrame);
+      this.captureLocalFrameHash(gameFrame);
+      this.deterministicState.clearCommands();
+      const nextGameFrame = this.advanceGameFrame();
+      this.frameResendArchive.pruneHistory(nextGameFrame);
+      this.frameState.notePlayerAdvancedFrame(this.localPlayerID, nextGameFrame);
+      this.lastExecutionFrame = Math.max(this.lastExecutionFrame, nextGameFrame + this.runAhead);
+      this.frameState.decrementPendingFrameNotices();
+      this.frameState.markFrameReady(nextGameFrame);
       this.tickPings(now);
     }
+  }
+
+  private updateDisconnectTimeoutState(nowMs: number): void {
+    const connectedPlayerIds = this.getConnectedPlayerIds();
+    const stall = this.frameState.evaluateDisconnectStall(
+      this.getGameFrameValue(),
+      nowMs,
+      this.disconnectTimeoutMs,
+      this.disconnectKeepAliveIntervalMs,
+    );
+
+    if (stall.shouldTurnOnScreen) {
+      this.frameState.resetDisconnectPlayerTimeouts(
+        this.localPlayerID,
+        connectedPlayerIds,
+        nowMs,
+      );
+    }
+
+    if (stall.state === 'screen-on') {
+      const status = this.frameState.evaluateDisconnectStatus({
+        frame: this.getGameFrameValue(),
+        nowMs,
+        localPlayerId: this.localPlayerID,
+        connectedPlayerIds,
+        packetRouterSlot: this.packetRouterSlot,
+        playerTimeoutMs: this.disconnectPlayerTimeoutMs,
+        disconnectScreenNotifyTimeoutMs: this.disconnectScreenNotifyTimeoutMs,
+        packetRouterFallbackSlots: connectedPlayerIds,
+      });
+
+      if (status.shouldNotifyOthersOfCurrentFrame) {
+        this.notifyOthersOfCurrentFrame();
+      }
+
+      for (const playerId of status.playersToDisconnect) {
+        this.disconnectTimedOutPlayer(playerId, status.frame);
+      }
+    }
+
+    if (stall.shouldSendKeepAlive) {
+      this.sendDisconnectKeepAliveCommand();
+    }
+  }
+
+  private disconnectTimedOutPlayer(playerId: number, disconnectFrame: number): void {
+    const safePlayerId = Math.trunc(playerId);
+    const safeDisconnectFrame = Math.max(0, Math.trunc(disconnectFrame));
+    if (
+      !Number.isInteger(safePlayerId)
+      || safePlayerId < 0
+      || safePlayerId >= MAX_SLOTS
+      || safePlayerId === this.localPlayerID
+      || !this.isPlayerConnected(safePlayerId)
+    ) {
+      return;
+    }
+
+    this.sendDisconnectPlayerCommand(safePlayerId, safeDisconnectFrame);
+    this.sendDestroyPlayerCommand(safePlayerId);
+    this.markPlayerDisconnected(safePlayerId);
+  }
+
+  /**
+   * Source parity:
+   * - DisconnectManager::sendDisconnectCommand + disconnectPlayer.
+   *
+   * - Generals/Code/GameEngine/Source/GameNetwork/DisconnectManager.cpp
+   *   (DisconnectManager::sendDisconnectCommand)
+   */
+  private sendDisconnectPlayerCommand(disconnectSlot: number, disconnectFrame: number): void {
+    const safeDisconnectSlot = Math.trunc(disconnectSlot);
+    const safeDisconnectFrame = Math.max(0, Math.trunc(disconnectFrame));
+    if (
+      !Number.isInteger(safeDisconnectSlot)
+      || safeDisconnectSlot < 0
+      || safeDisconnectSlot >= MAX_SLOTS
+    ) {
+      return;
+    }
+
+    const transport = this.transport as TransportLike | null;
+    const directSend = transport?.sendLocalCommandDirect;
+    if (typeof directSend !== 'function') {
+      return;
+    }
+
+    let relayMask = 0;
+    for (const playerId of this.getConnectedPlayerIds()) {
+      if (playerId === this.localPlayerID) {
+        continue;
+      }
+      relayMask |= (1 << playerId);
+    }
+    if (relayMask === 0) {
+      return;
+    }
+
+    const message = {
+      commandType: NETCOMMANDTYPE_DISCONNECTPLAYER,
+      type: 'disconnectplayer',
+      sender: this.localPlayerID,
+      playerID: this.localPlayerID,
+      disconnectSlot: safeDisconnectSlot,
+      slot: safeDisconnectSlot,
+      disconnectFrame: safeDisconnectFrame,
+      frame: safeDisconnectFrame,
+    };
+    this.assignCommandIdIfRequired(message);
+    this.stageLocalCommandForDeterministicSync(message.commandType, message);
+    directSend.call(transport, message, relayMask);
+  }
+
+  /**
+   * Source parity:
+   * - Generals/Code/GameEngine/Source/GameNetwork/DisconnectManager.cpp
+   *   (DisconnectManager::sendPlayerDestruct)
+   *
+   * - Generals/Code/GameEngine/Source/GameNetwork/ConnectionManager.cpp
+   *   (ConnectionManager::sendLocalCommand local frame-data insertion path)
+   */
+  private sendDestroyPlayerCommand(playerSlot: number): void {
+    const safePlayerSlot = Math.trunc(playerSlot);
+    if (
+      !Number.isInteger(safePlayerSlot)
+      || safePlayerSlot < 0
+      || safePlayerSlot >= MAX_SLOTS
+    ) {
+      return;
+    }
+
+    const transport = this.transport as TransportLike | null;
+    const directSend = transport?.sendLocalCommandDirect;
+    if (typeof directSend !== 'function') {
+      return;
+    }
+
+    let relayMask = 0;
+    for (const playerId of this.getConnectedPlayerIds()) {
+      if (playerId === this.localPlayerID) {
+        continue;
+      }
+      relayMask |= (1 << playerId);
+    }
+    if (relayMask === 0) {
+      return;
+    }
+
+    const executionFrame = this.getExecutionFrame() + 1;
+    const message = {
+      commandType: NETCOMMANDTYPE_DESTROYPLAYER,
+      type: 'destroyplayer',
+      sender: this.localPlayerID,
+      playerID: this.localPlayerID,
+      playerIndex: safePlayerSlot,
+      slot: safePlayerSlot,
+      executionFrame,
+      frame: executionFrame,
+    };
+    this.assignCommandIdIfRequired(message);
+    this.stageLocalCommandForDeterministicSync(message.commandType, message);
+    directSend.call(transport, message, relayMask);
+  }
+
+  /**
+   * Source parity:
+   * - Generals/Code/GameEngine/Source/GameNetwork/ConnectionManager.cpp
+   *   (ConnectionManager::sendLocalCommand adds local command into frame data before relay)
+   */
+  private stageLocalCommandForDeterministicSync(commandType: number, message: unknown): void {
+    this.queueIncomingDeterministicCommand(commandType, message);
+    this.recordSynchronizedFrameCommand(commandType, message);
+  }
+
+  private sendDisconnectKeepAliveCommand(): void {
+    const transport = this.transport as TransportLike | null;
+    const directSend = transport?.sendLocalCommandDirect;
+    if (typeof directSend !== 'function') {
+      return;
+    }
+
+    let relayMask = 0;
+    for (const playerId of this.getConnectedPlayerIds()) {
+      if (playerId === this.localPlayerID) {
+        continue;
+      }
+      relayMask |= (1 << playerId);
+    }
+    if (relayMask === 0) {
+      return;
+    }
+
+    const message = {
+      commandType: NETCOMMANDTYPE_DISCONNECTKEEPALIVE,
+      type: 'disconnectkeepalive',
+      sender: this.localPlayerID,
+      playerID: this.localPlayerID,
+    };
+    directSend.call(transport, message, relayMask);
   }
 
   private tickPings(now = performance.now()): void {
@@ -280,7 +720,7 @@ export class NetworkManager implements Subsystem {
 
     if (now - this.lastPingMs >= this.pingPeriodMs) {
       this.lastPingMs = now;
-      this.pingFrame = this.gameFrame;
+      this.pingFrame = this.getGameFrameValue();
       this.pingsSent = this.pingRepeats;
       this.pingsReceived = this.pingRepeats;
     }
@@ -298,10 +738,12 @@ export class NetworkManager implements Subsystem {
    * @returns true when a command was consumed.
    */
   processIncomingCommand(message: unknown): boolean {
-    const commandType = this.resolveCommandType(message);
+    const commandType = resolveNetworkCommandTypeFromMessage(message);
     if (commandType === null) {
       return false;
     }
+    this.queueIncomingDeterministicCommand(commandType, message);
+    this.recordSynchronizedFrameCommand(commandType, message);
 
     if (commandType === NETCOMMANDTYPE_FRAMEINFO) {
       this.processFrameInfoCommand(message);
@@ -434,7 +876,94 @@ export class NetworkManager implements Subsystem {
   }
 
   isFrameDataReady(): boolean {
-    return this.frameReady;
+    if (!this.frameReady) {
+      return false;
+    }
+    return this.areFrameCommandsReady(this.getGameFrameValue());
+  }
+
+  setFrameContinuationGate(gate: ((frame: number) => boolean) | null): void {
+    this.frameState.setContinuationGate(gate);
+  }
+
+  setDisconnectTimeout(disconnectTimeoutMs: number): void {
+    if (!Number.isFinite(disconnectTimeoutMs)) {
+      return;
+    }
+    this.disconnectTimeoutMs = Math.max(0, disconnectTimeoutMs);
+  }
+
+  setDisconnectPlayerTimeout(disconnectPlayerTimeoutMs: number): void {
+    if (!Number.isFinite(disconnectPlayerTimeoutMs)) {
+      return;
+    }
+    this.disconnectPlayerTimeoutMs = Math.max(0, disconnectPlayerTimeoutMs);
+  }
+
+  setDisconnectScreenNotifyTimeout(disconnectScreenNotifyTimeoutMs: number): void {
+    if (!Number.isFinite(disconnectScreenNotifyTimeoutMs)) {
+      return;
+    }
+    this.disconnectScreenNotifyTimeoutMs = Math.max(0, disconnectScreenNotifyTimeoutMs);
+  }
+
+  setDisconnectKeepAliveInterval(disconnectKeepAliveIntervalMs: number): void {
+    if (!Number.isFinite(disconnectKeepAliveIntervalMs)) {
+      return;
+    }
+    this.disconnectKeepAliveIntervalMs = Math.max(0, disconnectKeepAliveIntervalMs);
+  }
+
+  private getConnectedPlayerIds(): number[] {
+    const connected = new Set<number>();
+    if (this.isPlayerConnected(this.localPlayerID)) {
+      connected.add(this.localPlayerID);
+    }
+
+    if (this.playerNames.size > 0) {
+      for (const slot of this.playerNames.keys()) {
+        if (this.isPlayerConnected(slot)) {
+          connected.add(slot);
+        }
+      }
+    } else {
+      for (let slot = 0; slot < this.numPlayers; slot += 1) {
+        if (this.isPlayerConnected(slot)) {
+          connected.add(slot);
+        }
+      }
+    }
+
+    if (connected.size === 0) {
+      connected.add(this.localPlayerID);
+    }
+
+    return [...connected.values()];
+  }
+
+  private areFrameCommandsReady(frame: number): boolean {
+    return this.reconcileFrameCommandState(frame).readyToAdvance;
+  }
+
+  /**
+   * Source parity:
+   * - Network::RelayCommandsToCommandList consumes frame data only after allCommandsReady.
+   * - ConnectionManager::getFrameCommandList then clears consumed-frame ownership.
+   */
+  consumeReadyFrame(frame = this.getGameFrameValue()): boolean {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    const readiness = this.reconcileFrameCommandState(safeFrame);
+    if (!readiness.readyToAdvance) {
+      return false;
+    }
+
+    this.frameState.consumeFrameCommandData(safeFrame);
+    this.pruneDeterministicValidationWindow(safeFrame);
+    return true;
+  }
+
+  getPendingFrameCommandPlayers(frame = this.getGameFrameValue()): number[] {
+    return this.reconcileFrameCommandState(frame).pendingPlayers;
   }
 
   parseUserList(game: unknown): void {
@@ -828,7 +1357,7 @@ export class NetworkManager implements Subsystem {
     this.pendingFrameNotices = 0;
     this.disconnectedPlayers.clear();
     this.lastPingMs = performance.now();
-    this.pingFrame = this.gameFrame;
+    this.pingFrame = this.getGameFrameValue();
     this.pingsSent = this.pingRepeats;
     this.pingsReceived = this.pingRepeats;
   }
@@ -967,10 +1496,114 @@ export class NetworkManager implements Subsystem {
   }
 
   voteForPlayerDisconnect(slot = 0): void {
-    if (slot < 0) {
+    if (slot < 0 || slot >= MAX_SLOTS) {
       return;
     }
-    this.markPlayerDisconnected(slot);
+    if (slot === this.localPlayerID) {
+      return;
+    }
+    if (this.frameState.hasDisconnectVote(slot, this.localPlayerID)) {
+      return;
+    }
+
+    const voteFrame = this.getGameFrameValue();
+    this.frameState.recordDisconnectVote(
+      slot,
+      voteFrame,
+      this.localPlayerID,
+    );
+    this.sendDisconnectVoteCommand(slot, voteFrame);
+  }
+
+  private sendDisconnectVoteCommand(slot: number, voteFrame: number): void {
+    const transport = this.transport as TransportLike | null;
+    const directSend = transport?.sendLocalCommandDirect;
+    if (typeof directSend !== 'function') {
+      return;
+    }
+
+    let relayMask = 0;
+    for (const playerId of this.getConnectedPlayerIds()) {
+      if (playerId === this.localPlayerID) {
+        continue;
+      }
+      relayMask |= (1 << playerId);
+    }
+    if (relayMask === 0) {
+      return;
+    }
+
+    const message = {
+      commandType: NETCOMMANDTYPE_DISCONNECTVOTE,
+      type: 'disconnectvote',
+      sender: this.localPlayerID,
+      playerID: this.localPlayerID,
+      voteSlot: slot,
+      slot,
+      voteFrame,
+    };
+    this.assignCommandIdIfRequired(message);
+    directSend.call(transport, message, relayMask);
+  }
+
+  private assignCommandIdIfRequired(message: { commandType: number; commandId?: number }): void {
+    if (!doesNetworkCommandRequireCommandId(message.commandType)) {
+      return;
+    }
+    message.commandId = this.commandIdSequencer.generateNextCommandId();
+  }
+
+  private sendFrameDataToPlayer(playerId: number, startingFrame: number): void {
+    const safePlayerId = Math.trunc(playerId);
+    const safeStartingFrame = Math.trunc(startingFrame);
+    if (
+      !Number.isInteger(safePlayerId)
+      || !Number.isInteger(safeStartingFrame)
+      || safePlayerId < 0
+      || safePlayerId >= MAX_SLOTS
+      || safeStartingFrame < 0
+    ) {
+      return;
+    }
+
+    const transport = this.transport as TransportLike | null;
+    const directSend = transport?.sendLocalCommandDirect;
+    if (typeof directSend !== 'function') {
+      return;
+    }
+
+    const currentFrame = this.getGameFrameValue();
+    const resendPlan = this.frameResendArchive.buildResendPlan(
+      safePlayerId,
+      safeStartingFrame,
+      currentFrame,
+      this.getConnectedPlayerIds(),
+    );
+    const relayMask = 1 << safePlayerId;
+
+    for (const framePlan of resendPlan.frames) {
+      for (const commandEntry of framePlan.commands) {
+        directSend.call(
+          transport,
+          { ...commandEntry.command },
+          relayMask,
+        );
+      }
+
+      for (const frameInfo of framePlan.frameInfo) {
+        const frameInfoMessage = {
+          commandType: NETCOMMANDTYPE_FRAMEINFO,
+          type: 'frameinfo',
+          sender: frameInfo.senderPlayerId,
+          playerID: frameInfo.senderPlayerId,
+          frame: frameInfo.frame,
+          executionFrame: frameInfo.frame,
+          commandCount: frameInfo.commandCount,
+        };
+        this.assignCommandIdIfRequired(frameInfoMessage);
+        directSend.call(transport, frameInfoMessage, relayMask);
+      }
+    }
   }
 
   isPacketRouter(): boolean {
@@ -1050,6 +1683,114 @@ export class NetworkManager implements Subsystem {
     return this.loadProgress;
   }
 
+  getGameFrame(): number {
+    return this.getGameFrameValue();
+  }
+
+  getDeterministicFrameHash(frame = this.getGameFrameValue()): number {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    return this.captureLocalFrameHash(safeFrame);
+  }
+
+  getDeterministicFrameHashFrames(): {
+    local: number[];
+    remote: number[];
+  } {
+    return {
+      local: this.deterministicState.getLocalFrameHashFrames(),
+      remote: this.deterministicState.getRemoteFrameHashFrames(),
+    };
+  }
+
+  getDeterministicFrameHashMismatchFrames(): number[] {
+    return this.deterministicState.getFrameHashMismatchFrames();
+  }
+
+  getDeterministicValidationFramesToKeep(): number {
+    return this.frameResendArchive.getFramesToKeep();
+  }
+
+  getDeterministicGameLogicCrc(frame = this.getGameFrameValue()): number | null {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    const localGameLogicCrc = this.deterministicState.computeGameLogicCrc(safeFrame);
+    if (localGameLogicCrc === null) {
+      return null;
+    }
+    return this.deterministicState.recordLocalGameLogicCrc(localGameLogicCrc, safeFrame);
+  }
+
+  setDeterministicGameLogicCrcSectionWriters(
+    sectionWriters: DeterministicGameLogicCrcSectionWriters<unknown> | null,
+  ): void {
+    this.deterministicState.setGameLogicCrcSectionWriters(sectionWriters);
+  }
+
+  hasPendingDeterministicGameLogicCrcValidation(frame?: number): boolean {
+    if (typeof frame === 'number') {
+      const safeFrame = Math.max(0, Math.trunc(frame));
+      return this.deterministicState.hasPendingGameLogicCrcValidation(safeFrame);
+    }
+    return this.deterministicState.hasPendingGameLogicCrcValidation();
+  }
+
+  getPendingDeterministicGameLogicCrcValidationFrames(): number[] {
+    return this.deterministicState.getPendingGameLogicCrcValidationFrames();
+  }
+
+  getPendingDeterministicGameLogicCrcValidationPlayers(frame: number): number[] {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    return this.deterministicState.getPendingGameLogicCrcValidationPlayers(safeFrame);
+  }
+
+  getDeterministicGameLogicCrcFrames(): {
+    local: number[];
+    remote: number[];
+  } {
+    return {
+      local: this.deterministicState.getLocalGameLogicCrcFrames(),
+      remote: this.deterministicState.getRemoteGameLogicCrcFrames(),
+    };
+  }
+
+  getDeterministicGameLogicCrcMismatchFrames(): number[] {
+    return this.deterministicState.getGameLogicCrcMismatchFrames();
+  }
+
+  pruneDeterministicValidationBefore(frame: number): void {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    this.deterministicState.pruneValidationBefore(safeFrame);
+  }
+
+  getDeterministicGameLogicCrcConsensus(frame = this.getGameFrameValue()): GameLogicCrcConsensus {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    this.getDeterministicGameLogicCrc(safeFrame);
+    return this.deterministicState.evaluateGameLogicCrcConsensus(
+      safeFrame,
+      this.getConnectedPlayerIds(),
+      this.localPlayerID,
+    );
+  }
+
+  getExpectedFrameCommandCount(frame: number, playerId: number): number | null {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    const safePlayerId = Math.max(0, Math.trunc(playerId));
+    return this.frameState.getExpectedFrameCommandCount(safePlayerId, safeFrame);
+  }
+
+  getReceivedFrameCommandCount(frame: number, playerId: number): number {
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    const safePlayerId = Math.max(0, Math.trunc(playerId));
+    return this.frameState.getReceivedFrameCommandCount(safePlayerId, safeFrame);
+  }
+
+  sawFrameCommandCountMismatch(): boolean {
+    return this.frameState.hasObservedFrameCommandMismatch();
+  }
+
+  getFrameResendRequests(): ReadonlyArray<{ playerId: number; frame: number }> {
+    return this.frameState.getFrameResendRequests();
+  }
+
   getLocalPlayerID(): number {
     return this.localPlayerID;
   }
@@ -1119,95 +1860,8 @@ export class NetworkManager implements Subsystem {
     return value === undefined ? -1 : value;
   }
 
-  private resolveNumericField(value: unknown): number | null {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed.length) {
-        return null;
-      }
-      const parsed = Number(trimmed);
-      return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-  }
-
-  private resolveTextField(value: unknown): string | null {
-    if (typeof value !== 'string') {
-      return null;
-    }
-    const trimmed = value.trim();
-    return trimmed.length ? trimmed : null;
-  }
-
-  private resolveMessageGetter(message: { [key: string]: unknown }, method: string): unknown {
-    const getter = message[method];
-    if (typeof getter !== 'function') {
-      return undefined;
-    }
-    try {
-      return getter.call(message);
-    } catch {
-      return undefined;
-    }
-  }
-
-  private resolveNumericFieldFromMessage(message: { [key: string]: unknown }, keys: string[], getters: string[] = []): number | null {
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(message, key)) {
-        continue;
-      }
-      const value = this.resolveNumericField(message[key]);
-      if (value !== null) {
-        return value;
-      }
-    }
-
-    for (const getter of getters) {
-      const value = this.resolveMessageGetter(message, getter);
-      const resolved = this.resolveNumericField(value);
-      if (resolved !== null) {
-        return resolved;
-      }
-    }
-
-    return null;
-  }
-
-  private resolveTextFieldFromMessage(message: { [key: string]: unknown }, keys: string[], getters: string[] = []): string | null {
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(message, key)) {
-        continue;
-      }
-      const value = this.resolveTextField(message[key]);
-      if (value !== null) {
-        return value;
-      }
-    }
-
-    for (const getter of getters) {
-      const value = this.resolveMessageGetter(message, getter);
-      const resolved = this.resolveTextField(value);
-      if (resolved !== null) {
-        return resolved;
-      }
-    }
-
-    return null;
-  }
-
-  private resolvePlayerFromMessage(message: { [key: string]: unknown }): number | null {
-    return this.resolveNumericFieldFromMessage(
-      message,
-      ['playerID', 'player', 'sender', 'slot', 'disconnectSlot', 'voteSlot', 'slotId', 'playerId', 'playerNumber'],
-      ['getPlayerID', 'getPlayer', 'getSender', 'getSlot', 'getDisconnectSlot', 'getVoteSlot'],
-    );
-  }
-
   private clampPercent(value: unknown): number | null {
-    const resolved = this.resolveNumericField(value);
+    const resolved = resolveNetworkNumericField(value);
     if (resolved === null) {
       return null;
     }
@@ -1215,31 +1869,23 @@ export class NetworkManager implements Subsystem {
   }
 
   private clampProgress(value: unknown): number | null {
-    const resolved = this.resolveNumericField(value);
+    const resolved = resolveNetworkNumericField(value);
     if (resolved === null) {
       return null;
     }
     return Math.max(0, Math.min(100, Math.trunc(resolved)));
   }
 
-  private resolveFileCommandId(message: { [key: string]: unknown }): number | null {
-    return this.resolveNumericFieldFromMessage(message, ['commandId', 'fileId', 'fileID', 'id', 'wrappedCommandID']);
-  }
-
-  private resolveMaskFromMessage(message: { [key: string]: unknown }, keys: string[]): number {
-    return this.resolveNumericFieldFromMessage(message, keys, ['getPlayerMask', 'getFrameMask']) ?? 0;
-  }
-
   private ensureFileTransferFromMessage(message: { [key: string]: unknown }, options: { commandId?: number } = {}): void {
     const path = this.normalizeFilePath(
-      this.resolveTextFieldFromMessage(message, ['path', 'filePath', 'filename', 'fileName', 'realFilename', 'portableFilename']) ?? '',
+      resolveNetworkTextFieldFromMessage(message, ['path', 'filePath', 'filename', 'fileName', 'realFilename', 'portableFilename']) ?? '',
     );
     if (!path) {
       return;
     }
 
     const commandId = options.commandId
-      ?? this.resolveFileCommandId(message)
+      ?? resolveNetworkFileCommandIdFromMessage(message)
       ?? this.commandIdSeed++;
     const resolvedCommandId = Math.trunc(commandId);
 
@@ -1252,7 +1898,7 @@ export class NetworkManager implements Subsystem {
       transfer = this.findTransferByPath(path);
     }
 
-    const mask = this.resolveMaskFromMessage(message, ['playerMask', 'mask', 'recipientMask']);
+    const mask = resolveNetworkMaskFromMessage(message, ['playerMask', 'mask', 'recipientMask']);
     if (!transfer || transfer.commandId !== resolvedCommandId || transfer.path !== path) {
       this.fileTransfers.set(resolvedCommandId, {
         commandId: resolvedCommandId,
@@ -1288,29 +1934,39 @@ export class NetworkManager implements Subsystem {
   }
 
   processFrameInfoCommand(message: unknown): void {
-    if (!message || typeof message !== 'object') {
+    const parsedFrameInfo = parseNetworkFrameInfoMessage(message, {
+      maxSlots: MAX_SLOTS,
+    });
+    if (!parsedFrameInfo) {
       return;
     }
-    const msg = message as { [key: string]: unknown };
-    const sender = this.resolvePlayerFromMessage(msg);
-    const frame = this.resolveNumericFieldFromMessage(msg, ['frame', 'executionFrame', 'gameFrame', 'frameInfo']);
-    const commandCount = this.resolveNumericFieldFromMessage(msg, ['commandCount', 'count']);
+    const sender = parsedFrameInfo.sender;
+    const safeFrame = parsedFrameInfo.frame;
 
-    if (frame === null || sender === null) {
+    if (parsedFrameInfo.commandCount !== null) {
+      this.frameState.setFrameCommandCount(sender, safeFrame, parsedFrameInfo.commandCount);
+      this.frameResendArchive.setFrameCommandCount(sender, safeFrame, parsedFrameInfo.commandCount);
+    }
+    this.frameState.notePlayerAdvancedFrame(sender, safeFrame);
+    this.frameState.markFrameReady(safeFrame);
+    this.reconcileFrameCommandState(safeFrame, [sender]);
+
+    const resolvedHash = parsedFrameInfo.hash;
+    if (!resolvedHash) {
       return;
     }
 
-    const safeFrame = Math.trunc(frame);
-    if (!Number.isInteger(safeFrame) || safeFrame < 0 || sender < 0 || sender >= MAX_SLOTS) {
+    if (resolvedHash.kind === 'frame-hash') {
+      this.captureLocalFrameHash(safeFrame);
+      this.deterministicState.recordRemoteFrameHash(safeFrame, sender, resolvedHash.value);
       return;
     }
 
-    void commandCount;
-    this.expectedNetworkFrame = Math.max(this.expectedNetworkFrame, safeFrame);
-    if (!this.frameQueueReady.has(safeFrame)) {
-      this.frameQueueReady.add(safeFrame);
-    }
-    this.frameReady = true;
+    // Keep remote logic CRCs even when local section writers are unavailable yet.
+    // Once local GameLogic CRC ownership is configured, kernel reconciliation will
+    // evaluate cached remote values against locally published CRCs.
+    this.deterministicState.recordRemoteGameLogicCrc(safeFrame, sender, resolvedHash.value);
+    this.getDeterministicGameLogicCrc(safeFrame);
   }
 
   processDisconnectChatCommand(message: unknown): void {
@@ -1318,8 +1974,8 @@ export class NetworkManager implements Subsystem {
       return;
     }
     const msg = message as { [key: string]: unknown };
-    const sender = this.resolvePlayerFromMessage(msg);
-    const text = this.resolveTextFieldFromMessage(msg, ['text', 'message', 'chat', 'content']);
+    const sender = resolveNetworkPlayerFromMessage(msg);
+    const text = resolveNetworkTextFieldFromMessage(msg, ['text', 'message', 'chat', 'content']);
     if (sender === null || text === null) {
       return;
     }
@@ -1336,12 +1992,12 @@ export class NetworkManager implements Subsystem {
       return;
     }
     const msg = message as { [key: string]: unknown };
-    const sender = this.resolvePlayerFromMessage(msg);
-    const text = this.resolveTextFieldFromMessage(msg, ['text', 'message', 'chat', 'content']);
+    const sender = resolveNetworkPlayerFromMessage(msg);
+    const text = resolveNetworkTextFieldFromMessage(msg, ['text', 'message', 'chat', 'content']);
     if (sender === null || text === null) {
       return;
     }
-    const mask = this.resolveMaskFromMessage(msg, ['playerMask', 'mask']);
+    const mask = resolveNetworkMaskFromMessage(msg, ['playerMask', 'mask']);
     this.chatHistory.push({
       sender,
       text,
@@ -1354,7 +2010,7 @@ export class NetworkManager implements Subsystem {
       return;
     }
     const msg = message as { [key: string]: unknown };
-    const percent = this.resolveNumericFieldFromMessage(msg, ['percentage', 'percent', 'progress']);
+    const percent = resolveNetworkNumericFieldFromMessage(msg, ['percentage', 'percent', 'progress']);
     const clampedPercent = this.clampPercent(percent);
     if (clampedPercent === null) {
       return;
@@ -1375,12 +2031,12 @@ export class NetworkManager implements Subsystem {
       return;
     }
     const msg = message as { [key: string]: unknown };
-    const commandId = this.resolveFileCommandId(msg);
+    const commandId = resolveNetworkFileCommandIdFromMessage(msg);
     this.ensureFileTransferFromMessage(msg, { commandId: commandId ?? undefined });
-    const sender = this.resolvePlayerFromMessage(msg);
-    const mask = this.resolveMaskFromMessage(msg, ['playerMask', 'mask']);
+    const sender = resolveNetworkPlayerFromMessage(msg);
+    const mask = resolveNetworkMaskFromMessage(msg, ['playerMask', 'mask']);
     const path = this.normalizeFilePath(
-      this.resolveTextFieldFromMessage(msg, ['path', 'filePath', 'filename', 'fileName', 'realFilename', 'portableFilename']) ?? '',
+      resolveNetworkTextFieldFromMessage(msg, ['path', 'filePath', 'filename', 'fileName', 'realFilename', 'portableFilename']) ?? '',
     );
     if (!path) {
       return;
@@ -1396,12 +2052,12 @@ export class NetworkManager implements Subsystem {
       return;
     }
     const msg = message as { [key: string]: unknown };
-    const path = this.resolveTextFieldFromMessage(msg, ['path', 'filePath', 'filename', 'fileName', 'realFilename', 'portableFilename']);
+    const path = resolveNetworkTextFieldFromMessage(msg, ['path', 'filePath', 'filename', 'fileName', 'realFilename', 'portableFilename']);
     if (!path) {
       return;
     }
-    const commandId = this.resolveFileCommandId(msg) ?? this.sendFileAnnounce(path);
-    const mask = this.resolveMaskFromMessage(msg, ['playerMask', 'mask', 'recipientMask']);
+    const commandId = resolveNetworkFileCommandIdFromMessage(msg) ?? this.sendFileAnnounce(path);
+    const mask = resolveNetworkMaskFromMessage(msg, ['playerMask', 'mask', 'recipientMask']);
     this.ensureFileTransferFromMessage(msg, { commandId });
     if (commandId !== null) {
       if (commandId >= this.commandIdSeed) {
@@ -1420,9 +2076,9 @@ export class NetworkManager implements Subsystem {
       return;
     }
     const msg = message as { [key: string]: unknown };
-    const commandId = this.resolveFileCommandId(msg);
-    const sender = this.resolvePlayerFromMessage(msg);
-    const progress = this.resolveNumericFieldFromMessage(msg, ['progress']);
+    const commandId = resolveNetworkFileCommandIdFromMessage(msg);
+    const sender = resolveNetworkPlayerFromMessage(msg);
+    const progress = resolveNetworkNumericFieldFromMessage(msg, ['progress']);
     if (commandId === null || sender === null || progress === null) {
       return;
     }
@@ -1430,24 +2086,42 @@ export class NetworkManager implements Subsystem {
     this.updateFileProgress(Math.trunc(commandId), Math.trunc(sender), progress);
   }
 
-  processFrameResendRequestCommand(_message: unknown): void {
-    this.pendingFrameNotices += 1;
-    this.frameReady = true;
+  processFrameResendRequestCommand(message: unknown): void {
+    const parsedRequest = parseNetworkFrameResendRequestMessage(message, {
+      maxSlots: MAX_SLOTS,
+    });
+    if (!parsedRequest) {
+      return;
+    }
+
+    if (
+      parsedRequest.frameToResend !== null
+      && parsedRequest.sender !== this.localPlayerID
+      && this.isPlayerConnected(parsedRequest.sender)
+    ) {
+      this.sendFrameDataToPlayer(parsedRequest.sender, parsedRequest.frameToResend);
+      return;
+    }
+
+    /**
+     * TODO(source parity): remove this fallback once connection-state ownership
+     * and resend handshake parity are fully ported.
+     *
+     * Source references:
+     * - Generals/Code/GameEngine/Source/GameNetwork/ConnectionManager.cpp
+     *   (ConnectionManager::processFrameResendRequest)
+     */
+    this.frameState.incrementPendingFrameNotices();
   }
 
   private processPacketRouterQueryCommand(message: unknown): void {
-    if (!message || typeof message !== 'object') {
+    const parsedQuery = parseNetworkPacketRouterQueryMessage(message, {
+      maxSlots: MAX_SLOTS,
+    });
+    if (!parsedQuery) {
       return;
     }
-    const msg = message as { [key: string]: unknown };
-    const querySender = this.resolvePlayerFromMessage(msg);
-    if (querySender === null) {
-      return;
-    }
-
-    if (querySender < 0 || querySender >= MAX_SLOTS) {
-      return;
-    }
+    const querySender = parsedQuery.sender;
 
     this.lastPacketRouterQuerySender = querySender;
     if (!this.isPacketRouter()) {
@@ -1470,22 +2144,22 @@ export class NetworkManager implements Subsystem {
   }
 
   private processPacketRouterAckCommand(message: unknown): void {
-    if (!message || typeof message !== 'object') {
+    const parsedAck = parseNetworkPacketRouterAckMessage(message, {
+      maxSlots: MAX_SLOTS,
+    });
+    if (!parsedAck) {
       return;
     }
-    const msg = message as { [key: string]: unknown };
-    const ackSender = this.resolvePlayerFromMessage(msg);
-    if (ackSender === null) {
+    const ackSender = parsedAck.sender;
+
+    if (!isNetworkPacketRouterAckFromCurrentRouter(ackSender, this.packetRouterSlot)) {
       return;
     }
 
-    if (ackSender < 0 || ackSender >= MAX_SLOTS) {
-      return;
-    }
-    if (ackSender !== this.packetRouterSlot) {
-      return;
-    }
-
+    this.frameState.resetPacketRouterTimeout(performance.now());
+    // Source parity: DisconnectManager::processPacketRouterAck sets
+    // disconnect state to SCREENON until allCommandsReady flips it off.
+    this.frameState.markDisconnectScreenOn();
     this.lastPacketRouterAckSender = ackSender;
     this.packetRouterEvents.onPacketRouterAckReceived?.(ackSender, this.packetRouterSlot);
   }
@@ -1494,637 +2168,23 @@ export class NetworkManager implements Subsystem {
     if (!message || typeof message !== 'object') {
       return;
     }
-    const wrappedCandidate = message as {
-      wrapped?: unknown;
-      command?: unknown;
-      inner?: unknown;
-    };
-    const wrapped = wrappedCandidate.wrapped ?? wrappedCandidate.command ?? wrappedCandidate.inner;
-    if (wrapped && typeof wrapped === 'object') {
-      const wrappedHandled = this.processIncomingCommand(wrapped);
+
+    const directWrapped = resolveNetworkDirectWrappedCandidate(message);
+    if (directWrapped) {
+      const wrappedHandled = this.processIncomingCommand(directWrapped);
       if (wrappedHandled) {
         return;
       }
     }
 
-    const chunk = this.parseWrapperChunk(message);
-    if (!chunk) {
-      return;
-    }
-
-    if (chunk.numChunks === 0) {
-      this.activeWrapperAssemblies.delete(chunk.wrappedCommandID);
-      return;
-    }
-
-    if (!this.activeWrapperAssemblies.has(chunk.wrappedCommandID)) {
-      this.activeWrapperAssemblies.set(chunk.wrappedCommandID, {
-        chunks: new Uint8Array(chunk.totalDataLength),
-        chunkReceived: new Uint8Array(chunk.numChunks),
-        expectedChunks: chunk.numChunks,
-        totalLength: chunk.totalDataLength,
-        receivedChunks: 0,
-      });
-    }
-
-    const assembly = this.activeWrapperAssemblies.get(chunk.wrappedCommandID);
-    if (!assembly) {
-      return;
-    }
-    if (
-      chunk.chunkNumber < 0
-      || chunk.chunkNumber >= assembly.expectedChunks
-    ) {
-      return;
-    }
-    if (chunk.dataOffset + chunk.chunkData.byteLength > assembly.totalLength) {
-      return;
-    }
-
-    if (assembly.chunkReceived[chunk.chunkNumber] === 1) {
-      return;
-    }
-
-    assembly.chunkReceived[chunk.chunkNumber] = 1;
-    assembly.receivedChunks += 1;
-    assembly.chunks.set(chunk.chunkData, chunk.dataOffset);
-
-    if (!this.isWrapperAssemblyComplete(assembly)) {
-      return;
-    }
-
-    this.activeWrapperAssemblies.delete(chunk.wrappedCommandID);
-    const parsedWrapped = this.parseWrappedNetCommand(assembly.chunks);
+    const parsedWrapped = resolveNetworkAssembledWrappedCandidate(
+      message,
+      this.activeWrapperAssemblies,
+    );
     if (!parsedWrapped) {
       return;
     }
     this.processIncomingCommand(parsedWrapped);
-  }
-
-  private isWrapperAssemblyComplete(assembly: WrapperAssembly): boolean {
-    return assembly.receivedChunks === assembly.expectedChunks;
-  }
-
-  private parseWrapperChunk(message: unknown): WrapperChunk | null {
-    if (!message || typeof message !== 'object') {
-      return null;
-    }
-
-    const candidate = message as {
-      payload?: unknown;
-      wrapped?: unknown;
-      commandType?: unknown;
-      command?: unknown;
-      inner?: unknown;
-      wrappedCommandID?: unknown;
-      wrappedCmdID?: unknown;
-      wrappedCommandId?: unknown;
-      wrappedCmdId?: unknown;
-      chunkNumber?: unknown;
-      numChunks?: unknown;
-      totalDataLength?: unknown;
-      dataOffset?: unknown;
-      data?: unknown;
-      dataLength?: unknown;
-    };
-
-    const fromPayload = this.parseWrapperChunkFromBinary(candidate.payload);
-    if (fromPayload) {
-      return fromPayload;
-    }
-
-    const fromDataObject = this.parseWrapperChunkFromObject(candidate);
-    if (fromDataObject) {
-      return fromDataObject;
-    }
-
-    return null;
-  }
-
-  private parseWrapperChunkFromBinary(payload: unknown): WrapperChunk | null {
-    const data = this.asByteArray(payload);
-    if (!data) {
-      return null;
-    }
-    return this.parseWrapperChunkFromByteBuffer(data);
-  }
-
-  private parseWrapperChunkFromObject(message: {
-    wrappedCommandID?: unknown;
-    wrappedCmdID?: unknown;
-    wrappedCommandId?: unknown;
-    wrappedCmdId?: unknown;
-    chunkNumber?: unknown;
-    numChunks?: unknown;
-    totalDataLength?: unknown;
-    dataOffset?: unknown;
-    dataLength?: unknown;
-    data?: unknown;
-    payload?: unknown;
-  }): WrapperChunk | null {
-    const wrappedCommandID = this.resolveNumericField(
-      message.wrappedCommandID ?? message.wrappedCmdID ?? message.wrappedCommandId ?? message.wrappedCmdId,
-    );
-    const chunkNumber = this.resolveNumericField(message.chunkNumber);
-    const numChunks = this.resolveNumericField(message.numChunks);
-    const totalDataLength = this.resolveNumericField(message.totalDataLength);
-    const dataOffset = this.resolveNumericField(message.dataOffset);
-    const explicitDataLength = this.resolveNumericField(message.dataLength);
-    const hasDataField = message.data !== undefined || message.payload !== undefined;
-    const data = hasDataField ? this.asByteArray(message.data ?? message.payload) : null;
-    if (
-      wrappedCommandID === null
-      || chunkNumber === null
-      || numChunks === null
-      || totalDataLength === null
-      || dataOffset === null
-      || (numChunks !== 0 && !data)
-    ) {
-      return null;
-    }
-
-    if (
-      !Number.isFinite(wrappedCommandID)
-      || !Number.isFinite(chunkNumber)
-      || !Number.isFinite(numChunks)
-      || !Number.isFinite(totalDataLength)
-      || !Number.isFinite(dataOffset)
-    ) {
-      return null;
-    }
-
-    if (
-      !Number.isInteger(wrappedCommandID)
-      || !Number.isInteger(chunkNumber)
-      || !Number.isInteger(numChunks)
-      || !Number.isInteger(totalDataLength)
-      || !Number.isInteger(dataOffset)
-    ) {
-      return null;
-    }
-
-    if (
-      wrappedCommandID < 0
-      || chunkNumber < 0
-      || numChunks < 0
-      || totalDataLength < 0
-      || dataOffset < 0
-    ) {
-      return null;
-    }
-
-    if (numChunks === 0) {
-      if (
-        chunkNumber !== 0
-        || dataOffset !== 0
-        || totalDataLength !== 0
-        || (data !== null && data.length !== 0)
-      ) {
-        return null;
-      }
-    } else if (data === null || chunkNumber >= numChunks || dataOffset > totalDataLength) {
-      return null;
-    }
-
-    if (explicitDataLength !== null) {
-      if (numChunks === 0) {
-        if (explicitDataLength !== 0) {
-          return null;
-        }
-      } else if (data === null || explicitDataLength !== data.length) {
-        return null;
-      }
-    }
-
-    if (numChunks === 0) {
-      return {
-        wrappedCommandID: Math.trunc(wrappedCommandID),
-        chunkNumber: Math.trunc(chunkNumber),
-        numChunks: Math.trunc(numChunks),
-        totalDataLength: Math.trunc(totalDataLength),
-        dataOffset: Math.trunc(dataOffset),
-        chunkData: new Uint8Array(),
-      };
-    }
-
-    const chunkData = data;
-
-    if (chunkData.byteLength + dataOffset > totalDataLength) {
-      return null;
-    }
-
-    return {
-      wrappedCommandID: Math.trunc(wrappedCommandID),
-      chunkNumber: Math.trunc(chunkNumber),
-      numChunks: Math.trunc(numChunks),
-      totalDataLength: Math.trunc(totalDataLength),
-      dataOffset: Math.trunc(dataOffset),
-      chunkData,
-    };
-  }
-
-  private parseWrapperChunkFromByteBuffer(bytes: Uint8Array): WrapperChunk | null {
-    if (bytes.length < 2 + 4 + 4 + 4 + 4 + 4) {
-      return null;
-    }
-    const dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const wrappedCommandID = dataView.getUint16(0, true);
-    const chunkNumber = dataView.getUint32(2, true);
-    const numChunks = dataView.getUint32(6, true);
-    const totalDataLength = dataView.getUint32(10, true);
-    const dataLength = dataView.getUint32(14, true);
-    const dataOffset = dataView.getUint32(18, true);
-    const payloadStart = 22;
-    if (numChunks === 0) {
-      if (chunkNumber !== 0 || totalDataLength !== 0 || dataOffset !== 0 || dataLength !== 0 || payloadStart !== bytes.length) {
-        return null;
-      }
-      return {
-        wrappedCommandID,
-        chunkNumber,
-        numChunks,
-        totalDataLength,
-        dataOffset,
-        chunkData: new Uint8Array(),
-      };
-    }
-
-    if (
-      chunkNumber >= numChunks
-      || dataOffset > totalDataLength
-      || dataOffset + dataLength > totalDataLength
-      || payloadStart + dataLength > bytes.length
-    ) {
-      return null;
-    }
-    const chunkData = bytes.subarray(payloadStart, payloadStart + dataLength);
-
-    return {
-      wrappedCommandID,
-      chunkNumber,
-      numChunks,
-      totalDataLength,
-      dataOffset,
-      chunkData,
-    };
-  }
-
-  private parseWrappedNetCommand(raw: Uint8Array): { [key: string]: unknown } | null {
-    const data = this.asByteArray(raw);
-    if (!data || data.length === 0) {
-      return null;
-    }
-
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    let index = 0;
-
-    let commandType: number | null = null;
-    let sender: number | null = null;
-    let executionFrame: number | null = null;
-    let commandId: number | null = null;
-
-    const readUint8 = (): number | null => {
-      if (index >= data.length) {
-        return null;
-      }
-      const value = view.getUint8(index);
-      index += 1;
-      return value;
-    };
-    const readUint16 = (): number | null => {
-      if (index + 2 > data.length) {
-        return null;
-      }
-      const value = view.getUint16(index, true);
-      index += 2;
-      return value;
-    };
-    const readUint32 = (): number | null => {
-      if (index + 4 > data.length) {
-        return null;
-      }
-      const value = view.getUint32(index, true);
-      index += 4;
-      return value;
-    };
-    const readInt32 = (): number | null => {
-      if (index + 4 > data.length) {
-        return null;
-      }
-      const value = view.getInt32(index, true);
-      index += 4;
-      return value;
-    };
-    const readFloat32 = (): number | null => {
-      if (index + 4 > data.length) {
-        return null;
-      }
-      const value = view.getFloat32(index, true);
-      index += 4;
-      return value;
-    };
-    const readUtf16 = (): string | null => {
-      const length = readUint8();
-      if (length === null) {
-        return null;
-      }
-      const chars: number[] = [];
-      for (let i = 0; i < length; i += 1) {
-        const charCode = this.readUint16FromView(view, index, data.length);
-        if (charCode === null) {
-          return null;
-        }
-        chars.push(charCode);
-        index += 2;
-      }
-      return String.fromCharCode(...chars);
-    };
-    const readAsciiPath = (): string | null => {
-      const chars: number[] = [];
-      while (index < data.length) {
-        const charCode = readUint8();
-        if (charCode === null) {
-          return null;
-        }
-        if (charCode === 0) {
-          break;
-        }
-        chars.push(charCode);
-      }
-      return String.fromCharCode(...chars);
-    };
-
-    while (index < data.length) {
-      const marker = readUint8();
-      if (marker === null) {
-        return null;
-      }
-      if (marker === 'T'.charCodeAt(0)) {
-        const next = readUint8();
-        if (next === null) {
-          return null;
-        }
-        commandType = next;
-        continue;
-      }
-      if (marker === 'F'.charCodeAt(0)) {
-        const next = readUint32();
-        if (next === null) {
-          return null;
-        }
-        executionFrame = next;
-        continue;
-      }
-      if (marker === 'P'.charCodeAt(0)) {
-        const next = readUint8();
-        if (next === null) {
-          return null;
-        }
-        sender = next;
-        continue;
-      }
-      if (marker === 'R'.charCodeAt(0)) {
-        const next = readUint8();
-        if (next === null) {
-          return null;
-        }
-        void next;
-        continue;
-      }
-      if (marker === 'C'.charCodeAt(0)) {
-        const next = readUint16();
-        if (next === null) {
-          return null;
-        }
-        commandId = next;
-        continue;
-      }
-      if (marker === 'D'.charCodeAt(0)) {
-        break;
-      }
-      return null;
-    }
-
-    if (commandType === null) {
-      return null;
-    }
-
-    const command: { [key: string]: unknown } = { commandType };
-    if (sender !== null) {
-      command.sender = sender;
-    }
-    if (executionFrame !== null) {
-      command.executionFrame = executionFrame;
-    }
-    if (commandId !== null) {
-      command.commandId = commandId;
-    }
-
-    if (commandType === NETCOMMANDTYPE_FRAMEINFO) {
-      const commandCount = readUint16();
-      if (commandCount === null) {
-        return null;
-      }
-      command.commandCount = commandCount;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_RUNAHEADMETRICS) {
-      const averageLatency = readFloat32();
-      const averageFps = readUint16();
-      if (averageLatency === null || averageFps === null) {
-        return null;
-      }
-      command.averageLatency = averageLatency;
-      command.averageFps = averageFps;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_RUNAHEAD) {
-      const runAhead = readUint16();
-      const frameRate = readUint8();
-      if (runAhead === null || frameRate === null) {
-        return null;
-      }
-      command.runAhead = runAhead;
-      command.frameRate = frameRate;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_PLAYERLEAVE) {
-      const leavingPlayerID = readUint8();
-      if (leavingPlayerID === null) {
-        return null;
-      }
-      command.leavingPlayerID = leavingPlayerID;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_DESTROYPLAYER) {
-      const playerIndex = readUint32();
-      if (playerIndex === null) {
-        return null;
-      }
-      command.playerIndex = playerIndex;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_DISCONNECTCHAT) {
-      const text = readUtf16();
-      if (text === null) {
-        return null;
-      }
-      command.text = text;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_CHAT) {
-      const text = readUtf16();
-      const playerMask = readInt32();
-      if (text === null || playerMask === null) {
-        return null;
-      }
-      command.text = text;
-      command.playerMask = playerMask;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_PROGRESS) {
-      const percentage = readUint8();
-      if (percentage === null) {
-        return null;
-      }
-      command.percentage = percentage;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_FILE) {
-      const path = readAsciiPath();
-      const fileDataLength = readUint32();
-      if (path === null || fileDataLength === null) {
-        return null;
-      }
-      if (fileDataLength > data.length - index) {
-        return null;
-      }
-      command.path = path;
-      index += fileDataLength;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_FILEANNOUNCE) {
-      const path = readAsciiPath();
-      const commandIdValue = readUint16();
-      const playerMask = readUint8();
-      if (path === null || commandIdValue === null || playerMask === null) {
-        return null;
-      }
-      command.path = path;
-      command.commandId = commandIdValue;
-      command.playerMask = playerMask;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_FILEPROGRESS) {
-      const commandIdValue = readUint16();
-      const progress = readInt32();
-      if (commandIdValue === null || progress === null) {
-        return null;
-      }
-      command.commandId = commandIdValue;
-      command.progress = progress;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_FRAMERESENDREQUEST) {
-      const frame = readUint32();
-      if (frame === null) {
-        return null;
-      }
-      command.frame = frame;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_DISCONNECTPLAYER) {
-      const slot = readUint8();
-      const disconnectFrame = readUint32();
-      if (slot === null || disconnectFrame === null) {
-        return null;
-      }
-      command.slot = slot;
-      command.disconnectFrame = disconnectFrame;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_DISCONNECTVOTE) {
-      const slot = readUint8();
-      const voteFrame = readUint32();
-      if (slot === null || voteFrame === null) {
-        return null;
-      }
-      command.voteSlot = slot;
-      command.voteFrame = voteFrame;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_DISCONNECTFRAME) {
-      const frame = readUint32();
-      if (frame === null) {
-        return null;
-      }
-      command.frame = frame;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_DISCONNECTSCREENOFF) {
-      const newFrame = readUint32();
-      if (newFrame === null) {
-        return null;
-      }
-      command.newFrame = newFrame;
-      return command;
-    }
-
-    if (commandType === NETCOMMANDTYPE_WRAPPER) {
-      const wrappedCommandID = readUint16();
-      const chunkNumber = readUint32();
-      const numChunks = readUint32();
-      const totalDataLength = readUint32();
-      const dataLength = readUint32();
-      const dataOffset = readUint32();
-      if (
-        wrappedCommandID === null
-        || chunkNumber === null
-        || numChunks === null
-        || totalDataLength === null
-        || dataLength === null
-        || dataOffset === null
-      ) {
-        return null;
-      }
-      const payloadStart = index;
-      if (payloadStart + dataLength > data.length) {
-        return null;
-      }
-      index += dataLength;
-      command.wrappedCommandID = wrappedCommandID;
-      command.chunkNumber = chunkNumber;
-      command.numChunks = numChunks;
-      command.totalDataLength = totalDataLength;
-      command.dataOffset = dataOffset;
-      command.data = data.subarray(payloadStart, payloadStart + dataLength);
-      return command;
-    }
-
-    return command;
-  }
-
-  private readUint16FromView(view: DataView, index: number, length: number): number | null {
-    if (index + 2 > length) {
-      return null;
-    }
-    const value = view.getUint16(index, true);
-    return value;
   }
 
   processDisconnectCommand(commandType: number, message: unknown): void {
@@ -2132,12 +2192,145 @@ export class NetworkManager implements Subsystem {
       return;
     }
 
+    const msg = message as { [key: string]: unknown };
+    const sender = resolveNetworkPlayerFromMessage(msg);
+
     if (commandType === NETCOMMANDTYPE_DISCONNECTKEEPALIVE) {
+      if (sender === null) {
+        return;
+      }
+      const safeSender = Math.trunc(sender);
+      if (
+        safeSender < 0
+        || safeSender >= MAX_SLOTS
+        || !this.isPlayerConnected(safeSender)
+      ) {
+        return;
+      }
+      this.frameState.resetDisconnectPlayerTimeoutForPlayer(
+        safeSender,
+        this.localPlayerID,
+        performance.now(),
+      );
       return;
     }
 
-    const msg = message as { [key: string]: unknown };
-    const slot = this.resolvePlayerFromMessage(msg);
+    if (commandType === NETCOMMANDTYPE_DISCONNECTFRAME) {
+      const frame = resolveNetworkNumericFieldFromMessage(
+        msg,
+        ['disconnectFrame', 'frame'],
+        ['getDisconnectFrame', 'getFrame'],
+      );
+      if (sender === null || frame === null) {
+        return;
+      }
+
+      const safeSender = Math.trunc(sender);
+      const safeFrame = Math.trunc(frame);
+      if (
+        safeSender < 0
+        || safeSender >= MAX_SLOTS
+        || safeFrame < 0
+      ) {
+        return;
+      }
+
+      const evaluation = this.frameState.recordDisconnectFrame(
+        safeSender,
+        safeFrame,
+        this.localPlayerID,
+        this.getConnectedPlayerIds(),
+      );
+
+      for (const resendTarget of evaluation.resendTargets) {
+        this.sendFrameDataToPlayer(resendTarget.playerId, resendTarget.frame);
+      }
+      return;
+    }
+
+    if (commandType === NETCOMMANDTYPE_DISCONNECTVOTE) {
+      const voteSlot = resolveNetworkNumericFieldFromMessage(
+        msg,
+        ['voteSlot', 'slot', 'disconnectSlot'],
+        ['getVoteSlot', 'getSlot', 'getDisconnectSlot'],
+      );
+      const voteFrame = resolveNetworkNumericFieldFromMessage(
+        msg,
+        ['voteFrame', 'frame'],
+        ['getVoteFrame', 'getFrame'],
+      );
+      if (sender === null || voteSlot === null || voteFrame === null) {
+        return;
+      }
+
+      const safeSender = Math.trunc(sender);
+      const safeVoteSlot = Math.trunc(voteSlot);
+      const safeVoteFrame = Math.trunc(voteFrame);
+      if (
+        safeSender < 0
+        || safeSender >= MAX_SLOTS
+        || safeVoteSlot < 0
+        || safeVoteSlot >= MAX_SLOTS
+        || safeVoteFrame < 0
+      ) {
+        return;
+      }
+
+      const senderDisconnectSlot = this.frameState.translatedSlotPosition(
+        safeSender,
+        this.localPlayerID,
+      );
+      if (!this.frameState.isDisconnectPlayerInGame(
+        senderDisconnectSlot,
+        this.localPlayerID,
+        this.getConnectedPlayerIds(),
+        this.getNumPlayers(),
+        this.getGameFrameValue(),
+      )) {
+        return;
+      }
+
+      this.frameState.recordDisconnectVote(
+        safeVoteSlot,
+        safeVoteFrame,
+        safeSender,
+      );
+      return;
+    }
+
+    if (commandType === NETCOMMANDTYPE_DISCONNECTSCREENOFF) {
+      const newFrame = resolveNetworkNumericFieldFromMessage(
+        msg,
+        ['newFrame', 'frame'],
+        ['getNewFrame', 'getFrame'],
+      );
+      if (sender === null || newFrame === null) {
+        return;
+      }
+
+      const safeSender = Math.trunc(sender);
+      const safeFrame = Math.trunc(newFrame);
+      if (
+        safeSender < 0
+        || safeSender >= MAX_SLOTS
+        || safeFrame < 0
+      ) {
+        return;
+      }
+
+      this.frameState.recordDisconnectScreenOff(safeSender, safeFrame);
+      return;
+    }
+
+    if (commandType !== NETCOMMANDTYPE_DISCONNECTPLAYER) {
+      return;
+    }
+
+    const slot = resolveNetworkNumericFieldFromMessage(
+      msg,
+      ['disconnectSlot', 'slot', 'playerIndex'],
+      ['getDisconnectSlot', 'getSlot', 'getPlayerIndex'],
+    );
     if (slot === null) {
       return;
     }
@@ -2172,8 +2365,8 @@ export class NetworkManager implements Subsystem {
       getSlot?: () => unknown;
     };
 
-    const player = this.resolvePlayerFromMessage(msg);
-    const averageFps = this.resolveNumericFieldFromMessage(
+    const player = resolveNetworkPlayerFromMessage(msg);
+    const averageFps = resolveNetworkNumericFieldFromMessage(
       msg,
       ['averageFps', 'avgFps'],
       ['getAverageFps', 'getAverageFPS'],
@@ -2204,8 +2397,8 @@ export class NetworkManager implements Subsystem {
 
     this.slotAverageFPS[slot] = fps;
 
-    const averageLatency = this.resolveNumericField(
-      this.resolveMessageGetter(msg, 'getAverageLatency') ?? msg.averageLatency,
+    const averageLatency = resolveNetworkNumericField(
+      resolveNetworkMessageGetter(msg, 'getAverageLatency') ?? msg.averageLatency,
     );
     if (averageLatency !== null) {
       this.slotAverageLatency[slot] = averageLatency;
@@ -2228,12 +2421,12 @@ export class NetworkManager implements Subsystem {
       getFrameRate?: () => unknown;
     };
 
-    const newRunAhead = this.resolveNumericFieldFromMessage(
+    const newRunAhead = resolveNetworkNumericFieldFromMessage(
       msg,
       ['newRunAhead', 'runAhead'],
       ['getNewRunAhead', 'getRunAhead'],
     );
-    const newFrameRate = this.resolveNumericFieldFromMessage(
+    const newFrameRate = resolveNetworkNumericFieldFromMessage(
       msg,
       ['newFrameRate', 'frameRate'],
       ['getNewFrameRate', 'getFrameRate'],
@@ -2253,7 +2446,7 @@ export class NetworkManager implements Subsystem {
 
     this.runAhead = safeRunAhead;
     this.frameRate = Math.max(1, Math.min(MAX_FRAME_RATE, safeFrameRate));
-    this.lastExecutionFrame = Math.max(this.lastExecutionFrame, this.gameFrame + this.runAhead);
+    this.lastExecutionFrame = Math.max(this.lastExecutionFrame, this.getGameFrameValue() + this.runAhead);
   }
 
   processPlayerLeaveCommand(message: unknown): void {
@@ -2266,7 +2459,7 @@ export class NetworkManager implements Subsystem {
       getLeavingPlayerID?: () => unknown;
       getSlot?: () => unknown;
     };
-    const slot = this.resolveNumericFieldFromMessage(
+    const slot = resolveNetworkNumericFieldFromMessage(
       msg,
       ['leavingPlayerID', 'slot'],
       ['getLeavingPlayerID', 'getSlot'],
@@ -2292,7 +2485,7 @@ export class NetworkManager implements Subsystem {
       getPlayerIndex?: () => unknown;
       getSlot?: () => unknown;
     };
-    const slot = this.resolveNumericFieldFromMessage(
+    const slot = resolveNetworkNumericFieldFromMessage(
       msg,
       ['playerIndex', 'slot'],
       ['getPlayerIndex', 'getSlot'],
@@ -2351,13 +2544,13 @@ export class NetworkManager implements Subsystem {
   }
 
   notifyOthersOfCurrentFrame(): void {
-    this.notifyOthersOfNewFrame(this.gameFrame);
+    this.notifyOthersOfNewFrame(this.getGameFrameValue());
   }
 
   notifyOthersOfNewFrame(frame: number): void {
-    this.expectedNetworkFrame = Math.max(this.expectedNetworkFrame, frame);
-    this.pendingFrameNotices += 1;
-    this.frameReady = true;
+    const safeFrame = Math.max(0, Math.trunc(frame));
+    this.frameState.noteExpectedNetworkFrame(safeFrame);
+    this.frameState.incrementPendingFrameNotices();
   }
 
   getExecutionFrame(): number {
@@ -2365,7 +2558,7 @@ export class NetworkManager implements Subsystem {
       return 0;
     }
 
-    return Math.max(this.lastExecutionFrame, this.gameFrame + this.runAhead);
+    return Math.max(this.lastExecutionFrame, this.getGameFrameValue() + this.runAhead);
   }
 
   toggleNetworkOn(): void {
@@ -2388,7 +2581,7 @@ export class NetworkManager implements Subsystem {
     return this.getPingsRecieved();
   }
 
-  private callTransportMetric(name: keyof TransportLike): number {
+  private callTransportMetric(name: TransportMetricName): number {
     const transport = this.transport as TransportLike | null;
     if (!transport) {
       return 0;
@@ -2401,140 +2594,6 @@ export class NetworkManager implements Subsystem {
     return typeof value === 'number' && Number.isFinite(value) ? value : 0;
   }
 
-  private resolveCommandType(message: unknown): number | null {
-    if (!message || typeof message !== 'object') {
-      return null;
-    }
-
-    const candidate = message as {
-      commandType?: unknown;
-      netCommandType?: unknown;
-      type?: unknown;
-      kind?: unknown;
-      getCommandType?: () => unknown;
-      getNetCommandType?: () => unknown;
-    };
-
-    const commandType = this.resolveNumericField(
-      candidate.commandType
-      ?? candidate.netCommandType
-      ?? candidate.type
-      ?? candidate.kind
-      ?? this.resolveMessageGetter(candidate, 'getCommandType')
-      ?? this.resolveMessageGetter(candidate, 'getNetCommandType'),
-    );
-    if (commandType !== null) {
-      return Math.trunc(commandType);
-    }
-
-    const commandTypeName = this.resolveTextField(
-      candidate.type
-      ?? candidate.kind
-      ?? candidate.commandType
-      ?? candidate.netCommandType
-      ?? this.resolveMessageGetter(candidate, 'getCommandType')
-      ?? this.resolveMessageGetter(candidate, 'getNetCommandType'),
-    );
-    if (commandTypeName === null) {
-      return null;
-    }
-
-    const commandTypeKey = commandTypeName.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalized = commandTypeKey.replace(/^netcommandtype/, '');
-
-    if (normalized === 'runaheadmetrics') {
-      return NETCOMMANDTYPE_RUNAHEADMETRICS;
-    }
-    if (normalized === 'ackboth') {
-      return NETCOMMANDTYPE_ACKBOTH;
-    }
-    if (normalized === 'ackstage1') {
-      return NETCOMMANDTYPE_ACKSTAGE1;
-    }
-    if (normalized === 'ackstage2') {
-      return NETCOMMANDTYPE_ACKSTAGE2;
-    }
-    if (normalized === 'gamecommand') {
-      return NETCOMMANDTYPE_GAMECOMMAND;
-    }
-    if (normalized === 'runahead') {
-      return NETCOMMANDTYPE_RUNAHEAD;
-    }
-    if (normalized === 'playerleave') {
-      return NETCOMMANDTYPE_PLAYERLEAVE;
-    }
-    if (normalized === 'destroyplayer') {
-      return NETCOMMANDTYPE_DESTROYPLAYER;
-    }
-    if (normalized === 'frameinfo') {
-      return NETCOMMANDTYPE_FRAMEINFO;
-    }
-    if (normalized === 'progress') {
-      return NETCOMMANDTYPE_PROGRESS;
-    }
-    if (normalized === 'loadcomplete') {
-      return NETCOMMANDTYPE_LOADCOMPLETE;
-    }
-    if (normalized === 'timeoutstart') {
-      return NETCOMMANDTYPE_TIMEOUTSTART;
-    }
-    if (normalized === 'keepalive') {
-      return NETCOMMANDTYPE_KEEPALIVE;
-    }
-    if (normalized === 'disconnectchat') {
-      return NETCOMMANDTYPE_DISCONNECTCHAT;
-    }
-    if (normalized === 'chat') {
-      return NETCOMMANDTYPE_CHAT;
-    }
-    if (normalized === 'wrapper') {
-      return NETCOMMANDTYPE_WRAPPER;
-    }
-    if (normalized === 'file') {
-      return NETCOMMANDTYPE_FILE;
-    }
-    if (normalized === 'fileannounce') {
-      return NETCOMMANDTYPE_FILEANNOUNCE;
-    }
-    if (normalized === 'fileprogress') {
-      return NETCOMMANDTYPE_FILEPROGRESS;
-    }
-    if (normalized === 'frameresendrequest') {
-      return NETCOMMANDTYPE_FRAMERESENDREQUEST;
-    }
-    if (normalized === 'disconnectstart') {
-      return NETCOMMANDTYPE_DISCONNECTSTART;
-    }
-    if (normalized === 'disconnectkeepalive') {
-      return NETCOMMANDTYPE_DISCONNECTKEEPALIVE;
-    }
-    if (normalized === 'disconnectplayer') {
-      return NETCOMMANDTYPE_DISCONNECTPLAYER;
-    }
-    if (normalized === 'manglerquery') {
-      return NETCOMMANDTYPE_MANGLERQUERY;
-    }
-    if (normalized === 'manglerresponse') {
-      return NETCOMMANDTYPE_MANGLERRESPONSE;
-    }
-    if (normalized === 'packetrouterquery') {
-      return NETCOMMANDTYPE_PACKETROUTERQUERY;
-    }
-    if (normalized === 'packetrouterack') {
-      return NETCOMMANDTYPE_PACKETROUTERACK;
-    }
-    if (normalized === 'disconnectvote') {
-      return NETCOMMANDTYPE_DISCONNECTVOTE;
-    }
-    if (normalized === 'disconnectframe') {
-      return NETCOMMANDTYPE_DISCONNECTFRAME;
-    }
-    if (normalized === 'disconnectscreenoff') {
-      return NETCOMMANDTYPE_DISCONNECTSCREENOFF;
-    }
-
-    return null;
-  }
 }
 
 let networkClientSingleton: NetworkManager | null = null;
@@ -2559,5 +2618,10 @@ export interface NetworkManagerOptions {
   localPlayerName?: string;
   frameRate?: number;
   runAhead?: number;
+  disconnectTimeoutMs?: number;
+  disconnectPlayerTimeoutMs?: number;
+  disconnectScreenNotifyTimeoutMs?: number;
+  disconnectKeepAliveIntervalMs?: number;
+  gameLogicCrcSectionWriters?: DeterministicGameLogicCrcSectionWriters<unknown>;
   packetRouterEvents?: PacketRouterEvents;
 }

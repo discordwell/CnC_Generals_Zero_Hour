@@ -14,7 +14,7 @@
  */
 
 import * as THREE from 'three';
-import type { Subsystem } from '@generals/core';
+import type { Subsystem } from '@generals/engine';
 import type { InputState, CameraConfig, CameraState } from './types.js';
 import { DEFAULT_CAMERA_CONFIG } from './types.js';
 

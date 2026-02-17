@@ -9,7 +9,7 @@
  *  - Streaming progress reporting
  */
 
-import type { Subsystem } from '@generals/core';
+import type { Subsystem } from '@generals/engine';
 import type { AssetHandle, AssetManagerConfig, ProgressCallback } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
 import { AssetFetchError, AssetIntegrityError, AssetNotFoundError } from './errors.js';

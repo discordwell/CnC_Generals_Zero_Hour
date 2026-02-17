@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import type { Subsystem } from '@generals/core';
+import type { Subsystem } from '@generals/engine';
 import { HeightmapGrid } from './heightmap.js';
 import { TerrainMeshBuilder } from './terrain-mesh-builder.js';
 import type { TerrainChunk } from './terrain-mesh-builder.js';

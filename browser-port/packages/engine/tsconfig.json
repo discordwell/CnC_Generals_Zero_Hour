@@ -9,6 +9,5 @@
     "rootDir": "src"
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"],
-  "references": [{ "path": "../core" }]
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
 }

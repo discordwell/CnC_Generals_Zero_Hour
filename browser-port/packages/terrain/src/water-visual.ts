@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import type { Subsystem } from '@generals/core';
+import type { Subsystem } from '@generals/engine';
 import type { MapDataJSON, PolygonTriggerJSON, TerrainConfig } from './types.js';
 import { DEFAULT_TERRAIN_CONFIG } from './types.js';
 

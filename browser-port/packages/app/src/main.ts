@@ -7,7 +7,7 @@
  */
 
 import * as THREE from 'three';
-import { GameLoop, SubsystemRegistry } from '@generals/core';
+import { GameLoop, SubsystemRegistry } from '@generals/engine';
 import { AssetManager } from '@generals/assets';
 import { TerrainVisual, WaterVisual } from '@generals/renderer';
 import type { MapDataJSON } from '@generals/renderer';
@@ -155,6 +155,9 @@ async function init(): Promise<void> {
   // Game logic + object visuals
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
   const gameLogic = new GameLogicSubsystem(scene, { attackUsesLineOfSight });
+  networkManager.setDeterministicGameLogicCrcSectionWriters(
+    gameLogic.createDeterministicGameLogicCrcSectionWriters(),
+  );
   subsystems.register(gameLogic);
 
   await subsystems.initAll();

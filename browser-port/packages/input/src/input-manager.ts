@@ -6,7 +6,7 @@
  * resets per-frame accumulators (wheel delta, drag delta).
  */
 
-import type { Subsystem } from '@generals/core';
+import type { Subsystem } from '@generals/engine';
 import type { InputState } from './types.js';
 
 export class InputManager implements Subsystem {

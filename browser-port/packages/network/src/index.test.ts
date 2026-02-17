@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 
 import { NetworkManager, getNetworkClient, initializeNetworkClient } from './index.js';
+import type { DeterministicCommand } from '@generals/engine';
+import { GameLogicSubsystem } from '@generals/game-logic';
+import { IniDataRegistry } from '@generals/ini-data';
+import { HeightmapGrid, type MapDataJSON } from '@generals/terrain';
 
 const NETCOMMANDTYPE_WRAPPER = 17;
 const NETCOMMANDTYPE_CHAT = 11;
@@ -8,6 +13,34 @@ const NETCOMMANDTYPE_RUNAHEADMETRICS = 6;
 const NETCOMMANDTYPE_RUNAHEAD = 7;
 const NETCOMMANDTYPE_PACKETROUTERQUERY = 25;
 const NETCOMMANDTYPE_PACKETROUTERACK = 26;
+const EMPTY_HEIGHTMAP_BASE64 = 'AAAAAA==';
+
+function createMinimalMapData(): MapDataJSON {
+  return {
+    heightmap: {
+      width: 2,
+      height: 2,
+      borderSize: 0,
+      data: EMPTY_HEIGHTMAP_BASE64,
+    },
+    objects: [
+      {
+        position: {
+          x: 5,
+          y: 5,
+          z: 0,
+        },
+        angle: 0,
+        templateName: 'NetworkCrcEntity',
+        flags: 0,
+        properties: {},
+      },
+    ],
+    triggers: [],
+    textureClasses: [],
+    blendTileCount: 0,
+  };
+}
 
 function appendUint8(bytes: number[], value: number): void {
   bytes.push(value & 0xff);
@@ -436,6 +469,1116 @@ describe('NetworkManager.parseUserList', () => {
     expect(manager.getNumPlayers()).toBe(2);
     expect(manager.getPlayerName(1)).toBe('Active');
     expect(manager.getPlayerName(4)).toBe('FallbackLocal');
+  });
+});
+
+describe('Network deterministic kernel integration', () => {
+  it('advances deterministic frame ownership during update ticks', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      frameRate: 60,
+    });
+    manager.init();
+
+    const internals = manager as unknown as { lastUpdateMs: number };
+    internals.lastUpdateMs = performance.now() - 1000;
+
+    expect(manager.getGameFrame()).toBe(0);
+    manager.update();
+    expect(manager.getGameFrame()).toBe(1);
+    expect(manager.getExecutionFrame()).toBeGreaterThanOrEqual(31);
+  });
+
+  it('sends disconnect keepalive when frame stall exceeds timeout', async () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      frameRate: 300,
+      disconnectTimeoutMs: 0,
+      disconnectKeepAliveIntervalMs: 20,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    const directSends: Array<{ command: unknown; relayMask: number }> = [];
+    manager.attachTransport({
+      sendLocalCommandDirect: (command: unknown, relayMask: number) => {
+        directSends.push({ command, relayMask });
+      },
+    });
+    manager.init();
+    manager.setDisconnectTimeout(0);
+    manager.setDisconnectKeepAliveInterval(20);
+
+    const internals = manager as unknown as {
+      lastUpdateMs: number;
+    };
+
+    // First update seeds stall observation state.
+    internals.lastUpdateMs = performance.now();
+    manager.update();
+
+    // Second update after a short pause triggers timeout keepalive.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    internals.lastUpdateMs = performance.now();
+    manager.update();
+
+    expect(directSends).toHaveLength(1);
+    expect(directSends[0]?.relayMask).toBe(1 << 1);
+    expect(directSends[0]?.command).toMatchObject({
+      commandType: 23,
+      sender: 0,
+    });
+
+    // Keepalive pacing should suppress immediate resend.
+    internals.lastUpdateMs = performance.now();
+    manager.update();
+    expect(directSends).toHaveLength(1);
+
+    // After interval elapses, keepalive should send again.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    internals.lastUpdateMs = performance.now();
+    manager.update();
+    expect(directSends).toHaveLength(2);
+  });
+
+  it('resets disconnect timeout tracking on keepalive packets', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      disconnectTimeoutMs: 0,
+      disconnectPlayerTimeoutMs: 20,
+      disconnectKeepAliveIntervalMs: 1000,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+    manager.init();
+
+    const internals = manager as unknown as {
+      updateDisconnectTimeoutState: (nowMs: number) => void;
+      frameState: {
+        translatedSlotPosition: (slot: number, localSlot: number) => number;
+        hasDisconnectPlayerTimedOut: (
+          translatedSlot: number,
+          nowMs: number,
+          playerTimeoutMs: number,
+        ) => boolean;
+      };
+    };
+    const base = performance.now();
+
+    internals.updateDisconnectTimeoutState(base);
+    internals.updateDisconnectTimeoutState(base + 1);
+
+    const translatedSlot = internals.frameState.translatedSlotPosition(1, manager.getLocalPlayerID());
+    expect(internals.frameState.hasDisconnectPlayerTimedOut(translatedSlot, base + 25, 20)).toBe(true);
+
+    expect(manager.processIncomingCommand({
+      commandType: 23,
+      sender: 1,
+    })).toBe(true);
+
+    const keepAliveAppliedAt = performance.now();
+    expect(internals.frameState.hasDisconnectPlayerTimedOut(translatedSlot, keepAliveAppliedAt + 5, 20)).toBe(false);
+  });
+
+  it('disconnects timed-out peers when local player owns packet-router responsibility', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      disconnectTimeoutMs: 0,
+      disconnectPlayerTimeoutMs: 5,
+      disconnectKeepAliveIntervalMs: 1000,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+    manager.setPacketRouterSlot(0);
+
+    const directSends: Array<{ command: unknown; relayMask: number }> = [];
+    manager.attachTransport({
+      sendLocalCommandDirect: (command: unknown, relayMask: number) => {
+        directSends.push({ command, relayMask });
+      },
+    });
+    manager.init();
+
+    const internals = manager as unknown as {
+      updateDisconnectTimeoutState: (nowMs: number) => void;
+      deterministicState: {
+        peekCommands: () => ReadonlyArray<Readonly<DeterministicCommand<unknown>>>;
+      };
+    };
+    const base = performance.now();
+
+    internals.updateDisconnectTimeoutState(base);
+    internals.updateDisconnectTimeoutState(base + 1);
+    internals.updateDisconnectTimeoutState(base + 20);
+
+    expect(manager.isPlayerConnected(1)).toBe(false);
+    const disconnectCommand = directSends.find((entry) => {
+      const command = entry.command as { commandType?: unknown };
+      return command.commandType === 24;
+    });
+    const destroyCommand = directSends.find((entry) => {
+      const command = entry.command as { commandType?: unknown };
+      return command.commandType === 8;
+    });
+    expect(disconnectCommand?.relayMask).toBe(1 << 1);
+    expect(disconnectCommand?.command).toMatchObject({
+      commandType: 24,
+      sender: 0,
+      disconnectSlot: 1,
+      disconnectFrame: 0,
+    });
+    expect(destroyCommand?.relayMask).toBe(1 << 1);
+    expect(destroyCommand?.command).toMatchObject({
+      commandType: 8,
+      sender: 0,
+      playerIndex: 1,
+    });
+    expect((destroyCommand?.command as { executionFrame?: number }).executionFrame).toBeGreaterThanOrEqual(31);
+
+    const localQueuedCommandTypes = internals.deterministicState.peekCommands().map((command) => command.commandType);
+    expect(localQueuedCommandTypes).toContain(24);
+    expect(localQueuedCommandTypes).toContain(8);
+  });
+
+  it('validates optional frame hashes from frameinfo packets and flags mismatches', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 5,
+    })).toBe(true);
+
+    const matchingHash = manager.getDeterministicFrameHash(5);
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 5,
+      frameHash: matchingHash,
+    })).toBe(true);
+    expect(manager.sawCRCMismatch()).toBe(false);
+    expect(manager.getDeterministicFrameHashMismatchFrames()).toEqual([]);
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 5,
+      frameHash: (matchingHash + 1) >>> 0,
+    })).toBe(true);
+    expect(manager.sawCRCMismatch()).toBe(true);
+    expect(manager.getDeterministicFrameHashMismatchFrames()).toEqual([5]);
+  });
+
+  it('validates logic CRC from frameinfo packets when GameLogic CRC writers are configured', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      gameLogicCrcSectionWriters: {
+        writeObjects: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.nextObjectId >>> 0);
+        },
+        writePartitionManager: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.frame >>> 0);
+        },
+        writePlayerList: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.commands.length >>> 0);
+        },
+        writeAi: (crc) => {
+          crc.addUnsignedInt(0);
+        },
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 7,
+    })).toBe(true);
+
+    const matchingCrc = manager.getDeterministicGameLogicCrc(7);
+    expect(matchingCrc).not.toBeNull();
+    if (matchingCrc === null) {
+      throw new Error('expected GameLogic CRC to be available');
+    }
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 7,
+      logicCRC: matchingCrc,
+    })).toBe(true);
+    expect(manager.sawCRCMismatch()).toBe(false);
+    expect(manager.getDeterministicGameLogicCrcMismatchFrames()).toEqual([]);
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 7,
+      logicCRC: (matchingCrc + 1) >>> 0,
+    })).toBe(true);
+    expect(manager.sawCRCMismatch()).toBe(true);
+    expect(manager.getDeterministicGameLogicCrcMismatchFrames()).toEqual([7]);
+  });
+
+  it('validates logic CRC using GameLogicSubsystem-owned section writers', () => {
+    const subsystem = new GameLogicSubsystem(new THREE.Scene());
+    const heightmap = new HeightmapGrid(2, 2, 0, new Uint8Array([0, 0, 0, 0]));
+    subsystem.loadMapObjects(createMinimalMapData(), new IniDataRegistry(), heightmap);
+
+    try {
+      const manager = new NetworkManager({
+        localPlayerName: 'Host',
+        localPlayerID: 0,
+      });
+      manager.setDeterministicGameLogicCrcSectionWriters(
+        subsystem.createDeterministicGameLogicCrcSectionWriters(),
+      );
+
+      const localCrc = manager.getDeterministicGameLogicCrc(13);
+      expect(localCrc).not.toBeNull();
+      if (localCrc === null) {
+        throw new Error('expected GameLogic CRC from GameLogicSubsystem writers');
+      }
+
+      expect(manager.processIncomingCommand({
+        commandType: 3,
+        sender: 1,
+        frame: 13,
+        logicCRC: localCrc,
+      })).toBe(true);
+      expect(manager.sawCRCMismatch()).toBe(false);
+
+      expect(manager.processIncomingCommand({
+        commandType: 3,
+        sender: 1,
+        frame: 13,
+        logicCRC: (localCrc + 1) >>> 0,
+      })).toBe(true);
+      expect(manager.sawCRCMismatch()).toBe(true);
+    } finally {
+      subsystem.dispose();
+    }
+  });
+
+  it('does not force metadata hash comparison for logic CRC when GameLogic CRC writers are unavailable', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 11,
+      logicCRC: 0x12345678,
+    })).toBe(true);
+    expect(manager.sawCRCMismatch()).toBe(false);
+  });
+
+  it('reconciles cached remote logic CRC once local section writers are configured', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 12,
+      logicCRC: 0xffffffff,
+    })).toBe(true);
+    expect(manager.sawCRCMismatch()).toBe(false);
+
+    manager.setDeterministicGameLogicCrcSectionWriters({
+      writeObjects: (crc) => {
+        crc.addUnsignedInt(0x11111111);
+      },
+      writePartitionManager: (crc) => {
+        crc.addUnsignedInt(0x22222222);
+      },
+      writePlayerList: (crc) => {
+        crc.addUnsignedInt(0x33333333);
+      },
+      writeAi: (crc) => {
+        crc.addUnsignedInt(0x44444444);
+      },
+    });
+
+    const localCrc = manager.getDeterministicGameLogicCrc(12);
+    expect(localCrc).not.toBeNull();
+    expect(manager.sawCRCMismatch()).toBe(true);
+  });
+
+  it('exposes pending logic-CRC validation state until local CRC is published', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 21,
+      logicCRC: 0x10101010,
+    })).toBe(true);
+
+    expect(manager.hasPendingDeterministicGameLogicCrcValidation()).toBe(true);
+    expect(manager.hasPendingDeterministicGameLogicCrcValidation(21)).toBe(true);
+    expect(manager.getPendingDeterministicGameLogicCrcValidationFrames()).toEqual([21]);
+    expect(manager.getPendingDeterministicGameLogicCrcValidationPlayers(21)).toEqual([1]);
+
+    manager.setDeterministicGameLogicCrcSectionWriters({
+      writeObjects: (crc) => {
+        crc.addUnsignedInt(0x11111111);
+      },
+      writePartitionManager: (crc) => {
+        crc.addUnsignedInt(0x22222222);
+      },
+      writePlayerList: (crc) => {
+        crc.addUnsignedInt(0x33333333);
+      },
+      writeAi: (crc) => {
+        crc.addUnsignedInt(0x44444444);
+      },
+    });
+    manager.getDeterministicGameLogicCrc(21);
+
+    expect(manager.hasPendingDeterministicGameLogicCrcValidation()).toBe(false);
+    expect(manager.getPendingDeterministicGameLogicCrcValidationFrames()).toEqual([]);
+    expect(manager.getPendingDeterministicGameLogicCrcValidationPlayers(21)).toEqual([]);
+  });
+
+  it('exposes deterministic validation frame indexes and prunes old data', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      gameLogicCrcSectionWriters: {
+        writeObjects: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.nextObjectId >>> 0);
+        },
+        writePartitionManager: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.frame >>> 0);
+        },
+        writePlayerList: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.commands.length >>> 0);
+        },
+        writeAi: (crc) => {
+          crc.addUnsignedInt(0);
+        },
+      },
+    });
+
+    const frameHash2 = manager.getDeterministicFrameHash(2);
+    const frameHash7 = manager.getDeterministicFrameHash(7);
+    manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 2,
+      frameHash: frameHash2,
+    });
+    manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 7,
+      frameHash: frameHash7,
+    });
+
+    const logicCrc2 = manager.getDeterministicGameLogicCrc(2);
+    const logicCrc7 = manager.getDeterministicGameLogicCrc(7);
+    if (logicCrc2 === null || logicCrc7 === null) {
+      throw new Error('expected local GameLogic CRC values');
+    }
+    manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 2,
+      logicCRC: logicCrc2,
+    });
+    manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 7,
+      logicCRC: logicCrc7,
+    });
+
+    expect(manager.getDeterministicFrameHashFrames()).toEqual({
+      local: [2, 7],
+      remote: [2, 7],
+    });
+    expect(manager.getDeterministicGameLogicCrcFrames()).toEqual({
+      local: [2, 7],
+      remote: [2, 7],
+    });
+    expect(manager.getDeterministicValidationFramesToKeep()).toBe(65);
+
+    manager.pruneDeterministicValidationBefore(7);
+    expect(manager.getDeterministicFrameHashFrames()).toEqual({
+      local: [7],
+      remote: [7],
+    });
+    expect(manager.getDeterministicGameLogicCrcFrames()).toEqual({
+      local: [7],
+      remote: [7],
+    });
+  });
+
+  it('auto-prunes deterministic validation caches by source frame retention window during update', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      frameRate: 300,
+      gameLogicCrcSectionWriters: {
+        writeObjects: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.nextObjectId >>> 0);
+        },
+        writePartitionManager: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.frame >>> 0);
+        },
+        writePlayerList: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.commands.length >>> 0);
+        },
+        writeAi: (crc) => {
+          crc.addUnsignedInt(0);
+        },
+      },
+    });
+    manager.init();
+
+    const baselineFrame = manager.getGameFrame();
+    const baselineHash = manager.getDeterministicFrameHash(baselineFrame);
+    const baselineLogicCrc = manager.getDeterministicGameLogicCrc(baselineFrame);
+    if (baselineLogicCrc === null) {
+      throw new Error('expected baseline GameLogic CRC value');
+    }
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: baselineFrame,
+      frameHash: baselineHash,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: baselineFrame,
+      logicCRC: baselineLogicCrc,
+    })).toBe(true);
+
+    expect(manager.getDeterministicFrameHashFrames()).toEqual({
+      local: [baselineFrame],
+      remote: [baselineFrame],
+    });
+    expect(manager.getDeterministicGameLogicCrcFrames()).toEqual({
+      local: [baselineFrame],
+      remote: [baselineFrame],
+    });
+
+    const internals = manager as unknown as { lastUpdateMs: number };
+    const framesToKeep = manager.getDeterministicValidationFramesToKeep();
+    for (let step = 0; step < framesToKeep + 2; step += 1) {
+      internals.lastUpdateMs = performance.now() - 1000;
+      manager.update();
+    }
+
+    expect(manager.getDeterministicFrameHashFrames().remote).toEqual([]);
+    expect(manager.getDeterministicGameLogicCrcFrames()).toEqual({
+      local: [],
+      remote: [],
+    });
+    expect(manager.getDeterministicFrameHashFrames().local).not.toContain(baselineFrame);
+  });
+
+  it('prunes deterministic validation caches when consumed frame ownership advances', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      gameLogicCrcSectionWriters: {
+        writeObjects: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.nextObjectId >>> 0);
+        },
+        writePartitionManager: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.frame >>> 0);
+        },
+        writePlayerList: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.commands.length >>> 0);
+        },
+        writeAi: (crc) => {
+          crc.addUnsignedInt(0);
+        },
+      },
+    });
+
+    const frameHash1 = manager.getDeterministicFrameHash(1);
+    const frameHash66 = manager.getDeterministicFrameHash(66);
+    const logicCrc1 = manager.getDeterministicGameLogicCrc(1);
+    const logicCrc66 = manager.getDeterministicGameLogicCrc(66);
+    if (logicCrc1 === null || logicCrc66 === null) {
+      throw new Error('expected local GameLogic CRC values');
+    }
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 1,
+      frameHash: frameHash1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 1,
+      logicCRC: logicCrc1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 66,
+      frameHash: frameHash66,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 66,
+      logicCRC: logicCrc66,
+    })).toBe(true);
+
+    expect(manager.getDeterministicFrameHashFrames()).toEqual({
+      local: [1, 66],
+      remote: [1, 66],
+    });
+    expect(manager.getDeterministicGameLogicCrcFrames()).toEqual({
+      local: [1, 66],
+      remote: [1, 66],
+    });
+
+    expect(manager.consumeReadyFrame(66)).toBe(true);
+    expect(manager.getDeterministicFrameHashFrames()).toEqual({
+      local: [66],
+      remote: [66],
+    });
+    expect(manager.getDeterministicGameLogicCrcFrames()).toEqual({
+      local: [66],
+      remote: [66],
+    });
+  });
+
+  it('tracks deterministic mismatch frame indexes and prunes them with validation windows', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      gameLogicCrcSectionWriters: {
+        writeObjects: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.nextObjectId >>> 0);
+        },
+        writePartitionManager: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.frame >>> 0);
+        },
+        writePlayerList: (crc, snapshot) => {
+          crc.addUnsignedInt(snapshot.commands.length >>> 0);
+        },
+        writeAi: (crc) => {
+          crc.addUnsignedInt(0);
+        },
+      },
+    });
+
+    const frameHash = manager.getDeterministicFrameHash(2);
+    const logicCrc = manager.getDeterministicGameLogicCrc(2);
+    if (logicCrc === null) {
+      throw new Error('expected local GameLogic CRC value');
+    }
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 2,
+      frameHash: (frameHash + 1) >>> 0,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 2,
+      logicCRC: (logicCrc + 1) >>> 0,
+    })).toBe(true);
+
+    expect(manager.getDeterministicFrameHashMismatchFrames()).toEqual([2]);
+    expect(manager.getDeterministicGameLogicCrcMismatchFrames()).toEqual([2]);
+
+    manager.pruneDeterministicValidationBefore(3);
+    expect(manager.getDeterministicFrameHashMismatchFrames()).toEqual([]);
+    expect(manager.getDeterministicGameLogicCrcMismatchFrames()).toEqual([]);
+  });
+
+  it('reports source-style logic-CRC consensus status across connected players', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 3,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 2) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : `Peer ${slotNum}`,
+          isHuman: true,
+        };
+      },
+    });
+
+    manager.setDeterministicGameLogicCrcSectionWriters({
+      writeObjects: (crc) => {
+        crc.addUnsignedInt(0x11111111);
+      },
+      writePartitionManager: (crc) => {
+        crc.addUnsignedInt(0x22222222);
+      },
+      writePlayerList: (crc) => {
+        crc.addUnsignedInt(0x33333333);
+      },
+      writeAi: (crc) => {
+        crc.addUnsignedInt(0x44444444);
+      },
+    });
+
+    const localCrc = manager.getDeterministicGameLogicCrc(30);
+    expect(localCrc).not.toBeNull();
+    if (localCrc === null) {
+      throw new Error('expected local logic CRC');
+    }
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 30,
+      logicCRC: localCrc,
+    })).toBe(true);
+
+    const pending = manager.getDeterministicGameLogicCrcConsensus(30);
+    expect(pending.status).toBe('pending');
+    expect(pending.missingPlayerIds).toEqual([2]);
+
+    const synchronizedCrc = manager.getDeterministicGameLogicCrc(30);
+    expect(synchronizedCrc).not.toBeNull();
+    if (synchronizedCrc === null) {
+      throw new Error('expected synchronized local logic CRC');
+    }
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 30,
+      logicCRC: synchronizedCrc,
+    })).toBe(true);
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 2,
+      frame: 30,
+      logicCRC: synchronizedCrc,
+    })).toBe(true);
+
+    const matched = manager.getDeterministicGameLogicCrcConsensus(30);
+    expect(matched.status).toBe('match');
+    expect(matched.mismatchedPlayerIds).toEqual([]);
+    expect(matched.validatorCrc).toBe(synchronizedCrc);
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 2,
+      frame: 30,
+      logicCRC: (synchronizedCrc + 1) >>> 0,
+    })).toBe(true);
+
+    const mismatched = manager.getDeterministicGameLogicCrcConsensus(30);
+    expect(mismatched.status).toBe('mismatch');
+    expect(mismatched.mismatchedPlayerIds).toEqual([2]);
+  });
+
+  it('resets frame readiness state on repeated init', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.init();
+
+    const internals = manager as unknown as {
+      frameQueueReady: Set<number>;
+      pendingFrameNotices: number;
+    };
+
+    manager.processFrameInfoCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 6,
+    });
+    manager.notifyOthersOfNewFrame(6);
+
+    expect(internals.frameQueueReady.size).toBeGreaterThan(0);
+    expect(internals.pendingFrameNotices).toBe(1);
+
+    manager.init();
+    expect(internals.frameQueueReady.size).toBe(0);
+    expect(internals.pendingFrameNotices).toBe(0);
+    expect(manager.isFrameDataReady()).toBe(true);
+  });
+
+  it('tracks frame command counts and surfaces mismatch validation', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    const directSends: Array<{ command: unknown; relayMask: number }> = [];
+    manager.attachTransport({
+      sendLocalCommandDirect: (command: unknown, relayMask: number) => {
+        directSends.push({ command, relayMask });
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 9,
+      commandCount: 2,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 3,
+      frame: 9,
+      commandCount: 1,
+    })).toBe(true);
+    expect(manager.getExpectedFrameCommandCount(9, 1)).toBe(2);
+    expect(manager.getReceivedFrameCommandCount(9, 1)).toBe(0);
+    expect(manager.sawFrameCommandCountMismatch()).toBe(false);
+
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 9,
+      commandId: 100,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 9,
+      commandId: 101,
+    })).toBe(true);
+    expect(manager.getReceivedFrameCommandCount(9, 1)).toBe(2);
+    expect(manager.sawFrameCommandCountMismatch()).toBe(false);
+
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 9,
+      commandId: 102,
+    })).toBe(true);
+    expect(manager.getExpectedFrameCommandCount(9, 1)).toBeNull();
+    expect(manager.getExpectedFrameCommandCount(9, 3)).toBeNull();
+    expect(manager.getReceivedFrameCommandCount(9, 1)).toBe(0);
+    expect(manager.sawFrameCommandCountMismatch()).toBe(true);
+    expect(manager.getFrameResendRequests()).toEqual([{ playerId: 1, frame: 9 }]);
+
+    expect(directSends).toHaveLength(1);
+    expect(directSends[0]?.relayMask).toBe(1 << 1);
+    expect(directSends[0]?.command).toMatchObject({
+      commandType: 21,
+      frameToResend: 9,
+      sender: 0,
+      commandId: 64001,
+    });
+  });
+
+  it('requests frame resend when synchronized commands arrive before frame info', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    const directSends: Array<{ command: unknown; relayMask: number }> = [];
+    manager.attachTransport({
+      sendLocalCommandDirect: (command: unknown, relayMask: number) => {
+        directSends.push({ command, relayMask });
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 0,
+      commandId: 700,
+    })).toBe(true);
+
+    expect(manager.sawFrameCommandCountMismatch()).toBe(true);
+    expect(manager.getFrameResendRequests()).toEqual([{ playerId: 1, frame: 0 }]);
+    expect(directSends).toHaveLength(1);
+    expect(directSends[0]?.relayMask).toBe(1 << 1);
+    expect(directSends[0]?.command).toMatchObject({
+      commandType: 21,
+      frameToResend: 0,
+      sender: 0,
+      commandId: 64001,
+    });
+  });
+
+  it('falls back resend target to first connected slot when source slot is disconnected', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 5,
+      slot: 1,
+    })).toBe(true);
+
+    const directSends: Array<{ command: unknown; relayMask: number }> = [];
+    manager.attachTransport({
+      sendLocalCommandDirect: (command: unknown, relayMask: number) => {
+        directSends.push({ command, relayMask });
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 4,
+      commandCount: 1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 4,
+      commandId: 810,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 4,
+      commandId: 811,
+    })).toBe(true);
+
+    expect(manager.sawFrameCommandCountMismatch()).toBe(true);
+    expect(manager.getFrameResendRequests()).toEqual([{ playerId: 1, frame: 4 }]);
+    expect(directSends).toHaveLength(1);
+    expect(directSends[0]?.relayMask).toBe(1 << 0);
+    expect(directSends[0]?.command).toMatchObject({
+      commandType: 21,
+      frameToResend: 4,
+      sender: 0,
+      commandId: 64001,
+    });
+  });
+
+  it('gates frame readiness on connected-player command completion', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    expect(manager.isFrameDataReady()).toBe(false);
+    expect(manager.getPendingFrameCommandPlayers(0)).toEqual([1]);
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 0,
+      commandCount: 2,
+    })).toBe(true);
+    expect(manager.isFrameDataReady()).toBe(false);
+
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 0,
+      commandId: 200,
+    })).toBe(true);
+    expect(manager.isFrameDataReady()).toBe(false);
+
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 0,
+      commandId: 201,
+    })).toBe(true);
+    expect(manager.getPendingFrameCommandPlayers(0)).toEqual([]);
+    expect(manager.isFrameDataReady()).toBe(true);
+  });
+
+  it('consumes ready frame command ownership and requires fresh frame data afterwards', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 0,
+      commandCount: 1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 0,
+      commandId: 500,
+    })).toBe(true);
+
+    expect(manager.isFrameDataReady()).toBe(true);
+    expect(manager.consumeReadyFrame(0)).toBe(true);
+    expect(manager.isFrameDataReady()).toBe(false);
+    expect(manager.getPendingFrameCommandPlayers(0)).toEqual([1]);
+    expect(manager.consumeReadyFrame(0)).toBe(false);
+  });
+
+  it('applies continuation gate after frame commands are ready', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 0,
+      commandCount: 1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 0,
+      commandId: 900,
+    })).toBe(true);
+    expect(manager.isFrameDataReady()).toBe(true);
+
+    manager.setFrameContinuationGate(() => false);
+    expect(manager.isFrameDataReady()).toBe(false);
+
+    manager.setFrameContinuationGate(() => true);
+    expect(manager.isFrameDataReady()).toBe(true);
   });
 });
 
@@ -970,6 +2113,7 @@ describe('Network per-slot FPS metrics', () => {
     const beforeNotices = internals.pendingFrameNotices;
     const handled = manager.processIncomingCommand({
       commandType: 'netcommandtype_frameResendRequest',
+      sender: 1,
     });
 
     expect(handled).toBe(true);
@@ -1476,6 +2620,48 @@ describe('Network incoming command handlers', () => {
     expect(internals.pendingFrameNotices).toBe(beforeNotices + 1);
   });
 
+  it('serves frame resend request for connected remote sender when frame is provided', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    const internals = manager as unknown as {
+      pendingFrameNotices: number;
+      sendFrameDataToPlayer: (playerId: number, frame: number) => void;
+    };
+    const resendCalls: Array<{ playerId: number; frame: number }> = [];
+    internals.sendFrameDataToPlayer = (playerId: number, frame: number) => {
+      resendCalls.push({ playerId, frame });
+    };
+
+    const beforeNotices = internals.pendingFrameNotices;
+    const handled = manager.processIncomingCommand({
+      commandType: 21,
+      sender: 1,
+      frameToResend: 13,
+    });
+
+    expect(handled).toBe(true);
+    expect(resendCalls).toEqual([{ playerId: 1, frame: 13 }]);
+    expect(internals.pendingFrameNotices).toBe(beforeNotices);
+  });
+
   it('consumes packet router query commands as no-op marker packets', () => {
     const manager = new NetworkManager({
       localPlayerName: 'Host',
@@ -1624,6 +2810,95 @@ describe('Network incoming command handlers', () => {
     expect(handled).toBe(true);
     expect(manager.getLastPacketRouterAckSender()).toBe(2);
     expect(ackNotifications).toEqual([[2, 2]]);
+  });
+
+  it('resets packet-router wait timeout baseline on matching packet-router ack', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 2,
+    });
+    manager.setPacketRouterSlot(2);
+
+    const internals = manager as unknown as {
+      frameState: {
+        getPacketRouterTimeoutResetMs: () => number | null;
+        evaluateWaitForPacketRouter: (
+          nowMs: number,
+          playerTimeoutMs: number,
+        ) => { remainingMs: number; timedOut: boolean };
+      };
+    };
+
+    expect(internals.frameState.getPacketRouterTimeoutResetMs()).toBeNull();
+    expect(manager.processIncomingCommand({
+      type: 'packetrouterack',
+      sender: 2,
+    })).toBe(true);
+
+    const timeoutResetMs = internals.frameState.getPacketRouterTimeoutResetMs();
+    expect(timeoutResetMs).not.toBeNull();
+
+    const baseline = timeoutResetMs ?? 0;
+    expect(internals.frameState.evaluateWaitForPacketRouter(baseline + 1, 10)).toEqual({
+      remainingMs: 9,
+      timedOut: false,
+    });
+    expect(internals.frameState.evaluateWaitForPacketRouter(baseline + 11, 10)).toEqual({
+      remainingMs: 0,
+      timedOut: true,
+    });
+  });
+
+  it('switches disconnect continuation screen on packet-router ack and clears on ready frame', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.setPacketRouterSlot(1);
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
+
+    const internals = manager as unknown as {
+      frameState: { getDisconnectContinuationState: () => string };
+      pendingFrameNotices: number;
+    };
+
+    expect(internals.frameState.getDisconnectContinuationState()).toBe('screen-off');
+    expect(manager.processIncomingCommand({
+      type: 'packetrouterack',
+      sender: 1,
+    })).toBe(true);
+    expect(internals.frameState.getDisconnectContinuationState()).toBe('screen-on');
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 1,
+      frame: 0,
+      commandCount: 1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 1,
+      executionFrame: 0,
+      commandId: 1200,
+    })).toBe(true);
+
+    expect(manager.isFrameDataReady()).toBe(true);
+    expect(internals.frameState.getDisconnectContinuationState()).toBe('screen-off');
+    expect(internals.pendingFrameNotices).toBe(1);
   });
 
   it('unwraps wrapper commands for dispatch to inner command', () => {
@@ -3316,7 +4591,7 @@ describe('Network incoming command handlers', () => {
     });
   });
 
-  it('marks disconnect players and ignores keepalive disconnect packets', () => {
+  it('marks disconnect players and ignores keepalive/vote packets from disconnected senders', () => {
     const manager = new NetworkManager({
       localPlayerName: 'Host',
       localPlayerID: 0,
@@ -3324,11 +4599,16 @@ describe('Network incoming command handlers', () => {
     manager.parseUserList({
       localPlayerName: 'Host',
       getNumPlayers: () => 2,
-      getSlot: (slotNum: number) => ({
-        id: slotNum,
-        name: `Player ${slotNum + 1}`,
-        isHuman: true,
-      }),
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: `Player ${slotNum + 1}`,
+          isHuman: true,
+        };
+      },
     });
 
     const disconnectHandled = manager.processIncomingCommand({
@@ -3343,5 +4623,298 @@ describe('Network incoming command handlers', () => {
       player: 1,
     });
     expect(keepAliveHandled).toBe(true);
+
+    const voteHandled = manager.processIncomingCommand({
+      commandType: 27,
+      sender: 1,
+      voteSlot: 0,
+      voteFrame: 8,
+    });
+    const internals = manager as unknown as {
+      frameState: {
+        getDisconnectVoteCount: (slot: number, frame: number) => number;
+        getDisconnectFrame: (playerId: number) => number;
+        hasDisconnectFrameReceipt: (playerId: number) => boolean;
+      };
+    };
+    expect(voteHandled).toBe(true);
+    expect(manager.isPlayerConnected(0)).toBe(true);
+    expect(internals.frameState.getDisconnectVoteCount(0, 8)).toBe(0);
+
+    const frameHandled = manager.processIncomingCommand({
+      commandType: 28,
+      sender: 1,
+      frame: 9,
+    });
+    expect(frameHandled).toBe(true);
+    expect(manager.isPlayerConnected(0)).toBe(true);
+    expect(internals.frameState.getDisconnectFrame(1)).toBe(9);
+    expect(internals.frameState.hasDisconnectFrameReceipt(1)).toBe(true);
+
+    const screenOffHandled = manager.processIncomingCommand({
+      commandType: 29,
+      sender: 1,
+      newFrame: 10,
+    });
+    expect(screenOffHandled).toBe(true);
+    expect(manager.isPlayerConnected(0)).toBe(true);
+    expect(internals.frameState.getDisconnectFrame(1)).toBe(10);
+    expect(internals.frameState.hasDisconnectFrameReceipt(1)).toBe(false);
+    expect(internals.frameState.getDisconnectVoteCount(0, 8)).toBe(0);
+  });
+
+  it('replays archived frame commands and frame info when a peer is behind on disconnect frame', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+      frameRate: 300,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: `Player ${slotNum + 1}`,
+          isHuman: true,
+        };
+      },
+    });
+
+    manager.init();
+    const internals = manager as unknown as { lastUpdateMs: number };
+    for (let i = 0; i < 3; i += 1) {
+      internals.lastUpdateMs = performance.now() - 1000;
+      manager.update();
+    }
+    expect(manager.getGameFrame()).toBeGreaterThanOrEqual(3);
+
+    const directSends: Array<{ command: unknown; relayMask: number }> = [];
+    manager.attachTransport({
+      sendLocalCommandDirect: (command: unknown, relayMask: number) => {
+        directSends.push({ command, relayMask });
+      },
+    });
+
+    expect(manager.processIncomingCommand({
+      commandType: 3,
+      sender: 0,
+      frame: 1,
+      commandCount: 1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 4,
+      sender: 0,
+      executionFrame: 1,
+      commandId: 501,
+      payload: 'local-cached-command',
+    })).toBe(true);
+
+    expect(manager.processIncomingCommand({
+      commandType: 28,
+      sender: 1,
+      frame: 1,
+    })).toBe(true);
+    expect(manager.processIncomingCommand({
+      commandType: 28,
+      sender: 0,
+      frame: 2,
+    })).toBe(true);
+
+    expect(directSends.length).toBeGreaterThanOrEqual(3);
+
+    const replayedCommand = directSends.find((entry) => {
+      const command = entry.command as { commandType?: unknown; commandId?: unknown };
+      return command.commandType === 4 && command.commandId === 501;
+    });
+    expect(replayedCommand?.relayMask).toBe(1 << 1);
+
+    const replayedFrameInfo = directSends.find((entry) => {
+      const command = entry.command as {
+        commandType?: unknown;
+        sender?: unknown;
+        frame?: unknown;
+        commandCount?: unknown;
+      };
+      return (
+        command.commandType === 3
+        && command.sender === 0
+        && command.frame === 1
+        && command.commandCount === 1
+      );
+    });
+    expect(replayedFrameInfo?.relayMask).toBe(1 << 1);
+    expect(typeof (replayedFrameInfo?.command as { commandId?: unknown }).commandId).toBe('number');
+  });
+
+  it('records disconnect votes from connected senders', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: `Player ${slotNum + 1}`,
+          isHuman: true,
+        };
+      },
+    });
+
+    const internals = manager as unknown as {
+      frameState: {
+        getDisconnectVoteCount: (slot: number, frame: number) => number;
+      };
+    };
+
+    const voteHandled = manager.processIncomingCommand({
+      commandType: 27,
+      sender: 1,
+      voteSlot: 0,
+      voteFrame: 8,
+    });
+
+    expect(voteHandled).toBe(true);
+    expect(internals.frameState.getDisconnectVoteCount(0, 8)).toBe(1);
+  });
+
+  it('ignores disconnect votes from senders already voted out on the current frame', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getNumPlayers: () => 3,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 2) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: `Player ${slotNum + 1}`,
+          isHuman: true,
+        };
+      },
+    });
+
+    const internals = manager as unknown as {
+      frameState: {
+        getDisconnectVoteCount: (slot: number, frame: number) => number;
+      };
+    };
+
+    manager.voteForPlayerDisconnect(1);
+    expect(manager.processIncomingCommand({
+      commandType: 27,
+      sender: 2,
+      voteSlot: 1,
+      voteFrame: 0,
+    })).toBe(true);
+    expect(internals.frameState.getDisconnectVoteCount(1, 0)).toBe(2);
+
+    expect(manager.processIncomingCommand({
+      commandType: 27,
+      sender: 1,
+      voteSlot: 2,
+      voteFrame: 0,
+    })).toBe(true);
+    expect(internals.frameState.getDisconnectVoteCount(2, 0)).toBe(0);
+  });
+
+  it('records local disconnect votes without immediate disconnect side-effects', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: `Player ${slotNum + 1}`,
+          isHuman: true,
+        };
+      },
+    });
+
+    const internals = manager as unknown as {
+      frameState: {
+        getDisconnectVoteCount: (slot: number, frame: number) => number;
+      };
+    };
+
+    manager.voteForPlayerDisconnect(1);
+    expect(internals.frameState.getDisconnectVoteCount(1, manager.getGameFrame())).toBe(1);
+    expect(manager.isPlayerConnected(1)).toBe(true);
+
+    manager.voteForPlayerDisconnect(0);
+    expect(internals.frameState.getDisconnectVoteCount(0, manager.getGameFrame())).toBe(0);
+  });
+
+  it('emits disconnect vote command once per target until local vote is reset', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: `Player ${slotNum + 1}`,
+          isHuman: true,
+        };
+      },
+    });
+
+    const directSends: Array<{ command: unknown; relayMask: number }> = [];
+    manager.attachTransport({
+      sendLocalCommandDirect: (command: unknown, relayMask: number) => {
+        directSends.push({ command, relayMask });
+      },
+    });
+
+    manager.voteForPlayerDisconnect(1);
+    expect(directSends).toHaveLength(1);
+    expect(directSends[0]?.relayMask).toBe(1 << 1);
+    expect(directSends[0]?.command).toMatchObject({
+      commandType: 27,
+      sender: 0,
+      playerID: 0,
+      voteSlot: 1,
+      voteFrame: 0,
+      commandId: 64001,
+    });
+
+    manager.voteForPlayerDisconnect(1);
+    expect(directSends).toHaveLength(1);
+
+    expect(manager.processIncomingCommand({
+      commandType: 29,
+      sender: 0,
+      newFrame: 0,
+    })).toBe(true);
+
+    manager.voteForPlayerDisconnect(1);
+    expect(directSends).toHaveLength(2);
+    expect((directSends[1]?.command as { commandId?: number }).commandId).toBe(64002);
   });
 });
