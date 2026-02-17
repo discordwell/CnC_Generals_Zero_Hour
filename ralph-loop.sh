@@ -720,7 +720,12 @@ while (( run_index < iterations )); do
   log_event "$run_index" "ended" "$run_phase" "$exit_code" "$elapsed" "$session_label"
 
   current_changed_lines="$(count_changed_lines)"
-  window_delta=$((current_changed_lines - window_start_lines))
+  raw_window_delta=$((current_changed_lines - window_start_lines))
+  if (( raw_window_delta < 0 )); then
+    window_delta=0
+  else
+    window_delta="$raw_window_delta"
+  fi
   log_state "$run_index" "$run_phase" "$exit_code" "$elapsed" "$current_changed_lines" "$min_delta_lines" "$window_delta" "$summary_count"
 
   if (( done_detected == 1 )); then
