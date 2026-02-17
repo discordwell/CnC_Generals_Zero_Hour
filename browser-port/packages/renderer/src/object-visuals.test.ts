@@ -124,6 +124,9 @@ describe('ObjectVisualManager', () => {
 
     expect(modelLoaderCalls).toEqual(['unit-model.gltf']);
     expect(manager.getVisualState(7)?.hasModel).toBe(true);
+    expect(manager.getVisualState(7)?.animationState).toBeNull();
+
+    manager.sync([makeMeshState({ id: 7, renderAssetPath: 'unit-model' })], 1 / 30);
     expect(manager.getVisualState(7)?.animationState).toBe('IDLE');
 
     manager.sync([makeMeshState({ id: 7, animationState: 'MOVE', renderAssetPath: 'unit-model' })], 1 / 30);
@@ -187,7 +190,7 @@ describe('ObjectVisualManager', () => {
     const manager = new ObjectVisualManager(scene, null, {
       modelLoader: async (assetPath: string) => {
         requested.push(assetPath);
-        if (assetPath === 'primary.gltf') {
+        if (assetPath === 'primary.gltf' || assetPath === 'primary.glb') {
           throw new Error('missing model');
         }
         return modelWithAnimationClips();
@@ -204,7 +207,7 @@ describe('ObjectVisualManager', () => {
     ], 1 / 30);
     await flushModelLoadQueue();
 
-    expect(requested).toEqual(['primary.gltf', 'secondary.gltf']);
+    expect(requested).toEqual(['primary.gltf', 'primary.glb', 'secondary.gltf']);
     expect(manager.getUnresolvedEntityIds()).toEqual([]);
     expect(manager.getVisualState(5)?.hasModel).toBe(true);
     const placeholder = getPlaceholderMesh(manager, 5);
