@@ -1319,6 +1319,7 @@ export class GameLogicSubsystem implements Subsystem {
     id: number;
     templateName: string;
     resolved: boolean;
+    renderAssetCandidates: string[];
     renderAssetPath: string | null;
     renderAssetResolved: boolean;
     health: number;
@@ -1343,6 +1344,7 @@ export class GameLogicSubsystem implements Subsystem {
       id: entity.id,
       templateName: entity.templateName,
       resolved: entity.resolved,
+      renderAssetCandidates: entity.renderAssetCandidates,
       renderAssetPath: entity.renderAssetPath,
       renderAssetResolved: entity.renderAssetResolved,
       health: entity.health,
