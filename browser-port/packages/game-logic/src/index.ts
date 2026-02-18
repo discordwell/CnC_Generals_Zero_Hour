@@ -16,8 +16,6 @@ import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
   IniDataRegistry,
   type ArmorDef,
-  type CommandButtonDef,
-  type CommandSetDef,
   type SpecialPowerDef,
   type ObjectDef,
   type ScienceDef,
@@ -33,374 +31,47 @@ import {
   type MapObjectJSON,
 } from '@generals/terrain';
 import type { InputState } from '@generals/input';
+import {
+  clamp,
+  coerceStringArray,
+  nominalHeightForCategory,
+  pointInPolygon,
+  readBooleanField,
+  readCoord3DField,
+  readNumericField,
+  readNumericList,
+  readNumericListField,
+  readStringField,
+  readStringList,
+  toByte,
+} from './ini-readers.js';
+import {
+  findArmorDefByName,
+  findCommandButtonDefByName,
+  findCommandSetDefByName,
+  findObjectDefByName,
+  findScienceDefByName,
+  findUpgradeDefByName,
+  findWeaponDefByName,
+  resolveUpgradeBuildCost,
+  resolveUpgradeBuildTimeFrames,
+  resolveUpgradeType,
+} from './registry-lookups.js';
+import {
+  type EntityRelationship,
+  type GameLogicCommand,
+  type GameLogicConfig,
+  type IssueSpecialPowerCommand,
+  type LocalScienceAvailability,
+  type MapObjectPlacementSummary,
+  type RenderAnimationState,
+  type RenderAnimationStateClipCandidates,
+  type RenderableEntityState,
+  type RenderableObjectCategory,
+  type SelectedEntityInfo,
+} from './types.js';
 
-export interface MapObjectPlacementSummary {
-  totalObjects: number;
-  spawnedObjects: number;
-  skippedObjects: number;
-  resolvedObjects: number;
-  unresolvedObjects: number;
-}
-
-export type RenderAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE';
-export type RenderAnimationStateClipCandidates = Partial<Record<RenderAnimationState, string[]>>;
-
-export type RenderableObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
-
-export interface RenderableEntityState {
-  id: number;
-  templateName: string;
-  resolved: boolean;
-  renderAssetCandidates: string[];
-  renderAssetPath: string | null;
-  renderAssetResolved: boolean;
-  renderAnimationStateClips?: RenderAnimationStateClipCandidates;
-  category: RenderableObjectCategory;
-  x: number;
-  y: number;
-  z: number;
-  rotationY: number;
-  animationState: RenderAnimationState;
-}
-
-export interface SelectByIdCommand {
-  type: 'select';
-  entityId: number;
-}
-
-export interface ClearSelectionCommand {
-  type: 'clearSelection';
-}
-
-export interface SelectEntitySetCommand {
-  type: 'selectEntities';
-  entityIds: number[];
-}
-
-export interface MoveToCommand {
-  type: 'moveTo';
-  entityId: number;
-  targetX: number;
-  targetZ: number;
-}
-
-export interface AttackMoveToCommand {
-  type: 'attackMoveTo';
-  entityId: number;
-  targetX: number;
-  targetZ: number;
-  attackDistance: number;
-}
-
-export enum GuardMode {
-  GUARDMODE_NORMAL = 0,
-  GUARDMODE_GUARD_WITHOUT_PURSUIT = 1,
-  GUARDMODE_GUARD_FLYING_UNITS_ONLY = 2,
-}
-
-export interface GuardPositionCommand {
-  type: 'guardPosition';
-  entityId: number;
-  targetX: number;
-  targetZ: number;
-  guardMode: GuardMode;
-}
-
-export interface GuardObjectCommand {
-  type: 'guardObject';
-  entityId: number;
-  targetEntityId: number;
-  guardMode: GuardMode;
-}
-
-export interface SetRallyPointCommand {
-  type: 'setRallyPoint';
-  entityId: number;
-  targetX: number;
-  targetZ: number;
-}
-
-export interface AttackEntityCommand {
-  type: 'attackEntity';
-  entityId: number;
-  targetEntityId: number;
-  commandSource?: AttackCommandSource;
-}
-
-export interface FireWeaponCommand {
-  type: 'fireWeapon';
-  entityId: number;
-  weaponSlot: number;
-  maxShotsToFire: number;
-  targetObjectId: number | null;
-  targetPosition: readonly [number, number, number] | null;
-}
-
-export interface StopCommand {
-  type: 'stop';
-  entityId: number;
-}
-
-export interface BridgeDestroyedCommand {
-  type: 'bridgeDestroyed';
-  entityId: number;
-}
-
-export interface BridgeRepairedCommand {
-  type: 'bridgeRepaired';
-  entityId: number;
-}
-
-export interface SetLocomotorSetCommand {
-  type: 'setLocomotorSet';
-  entityId: number;
-  setName: string;
-}
-
-export interface SetLocomotorUpgradeCommand {
-  type: 'setLocomotorUpgrade';
-  entityId: number;
-  enabled: boolean;
-}
-
-export interface CaptureEntityCommand {
-  type: 'captureEntity';
-  entityId: number;
-  newSide: string;
-}
-
-export interface ApplyUpgradeCommand {
-  type: 'applyUpgrade';
-  entityId: number;
-  upgradeName: string;
-}
-
-export interface QueueUnitProductionCommand {
-  type: 'queueUnitProduction';
-  entityId: number;
-  unitTemplateName: string;
-}
-
-export interface CancelUnitProductionCommand {
-  type: 'cancelUnitProduction';
-  entityId: number;
-  productionId: number;
-}
-
-export interface QueueUpgradeProductionCommand {
-  type: 'queueUpgradeProduction';
-  entityId: number;
-  upgradeName: string;
-}
-
-export interface CancelUpgradeProductionCommand {
-  type: 'cancelUpgradeProduction';
-  entityId: number;
-  upgradeName: string;
-}
-
-export interface SetSideCreditsCommand {
-  type: 'setSideCredits';
-  side: string;
-  amount: number;
-}
-
-export interface AddSideCreditsCommand {
-  type: 'addSideCredits';
-  side: string;
-  amount: number;
-}
-
-export interface SetSidePlayerTypeCommand {
-  type: 'setSidePlayerType';
-  side: string;
-  playerType: 'HUMAN' | 'COMPUTER';
-}
-
-export interface GrantSideScienceCommand {
-  type: 'grantSideScience';
-  side: string;
-  scienceName: string;
-}
-
-export interface ApplyPlayerUpgradeCommand {
-  type: 'applyPlayerUpgrade';
-  upgradeName: string;
-}
-
-export interface PurchaseScienceCommand {
-  type: 'purchaseScience';
-  scienceName: string;
-  scienceCost: number;
-}
-
-export interface IssueSpecialPowerCommand {
-  type: 'issueSpecialPower';
-  commandButtonId: string;
-  specialPowerName: string;
-  commandOption: number;
-  issuingEntityIds: number[];
-  sourceEntityId: number | null;
-  targetEntityId: number | null;
-  targetX: number | null;
-  targetZ: number | null;
-}
-
-export interface SwitchWeaponCommand {
-  type: 'switchWeapon';
-  entityId: number;
-  weaponSlot: number;
-}
-
-export interface SellCommand {
-  type: 'sell';
-  entityId: number;
-}
-
-export interface ExitContainerCommand {
-  type: 'exitContainer';
-  entityId: number;
-}
-
-export interface EvacuateCommand {
-  type: 'evacuate';
-  entityId: number;
-}
-
-export interface ExecuteRailedTransportCommand {
-  type: 'executeRailedTransport';
-  entityId: number;
-}
-
-export interface BeaconDeleteCommand {
-  type: 'beaconDelete';
-  entityId: number;
-}
-
-export interface HackInternetCommand {
-  type: 'hackInternet';
-  entityId: number;
-}
-
-export interface ToggleOverchargeCommand {
-  type: 'toggleOvercharge';
-  entityId: number;
-}
-
-export interface CombatDropCommand {
-  type: 'combatDrop';
-  entityId: number;
-  targetObjectId: number | null;
-  targetPosition: readonly [number, number, number] | null;
-}
-
-export interface PlaceBeaconCommand {
-  type: 'placeBeacon';
-  targetPosition: readonly [number, number, number];
-}
-
-export interface EnterObjectCommand {
-  type: 'enterObject';
-  entityId: number;
-  targetObjectId: number;
-  action: 'hijackVehicle' | 'convertToCarBomb' | 'sabotageBuilding';
-}
-
-export interface ConstructBuildingCommand {
-  type: 'constructBuilding';
-  entityId: number;
-  templateName: string;
-  targetPosition: readonly [number, number, number];
-  angle: number;
-  lineEndPosition: readonly [number, number, number] | null;
-}
-
-export interface CancelDozerConstructionCommand {
-  type: 'cancelDozerConstruction';
-  entityId: number;
-}
-
-export type GameLogicCommand =
-  | SelectByIdCommand
-  | SelectEntitySetCommand
-  | ClearSelectionCommand
-  | MoveToCommand
-  | AttackMoveToCommand
-  | GuardPositionCommand
-  | GuardObjectCommand
-  | SetRallyPointCommand
-  | AttackEntityCommand
-  | FireWeaponCommand
-  | StopCommand
-  | BridgeDestroyedCommand
-  | BridgeRepairedCommand
-  | SetLocomotorSetCommand
-  | SetLocomotorUpgradeCommand
-  | CaptureEntityCommand
-  | ApplyUpgradeCommand
-  | QueueUnitProductionCommand
-  | CancelUnitProductionCommand
-  | QueueUpgradeProductionCommand
-  | CancelUpgradeProductionCommand
-  | SetSideCreditsCommand
-  | AddSideCreditsCommand
-  | SetSidePlayerTypeCommand
-  | GrantSideScienceCommand
-  | ApplyPlayerUpgradeCommand
-  | PurchaseScienceCommand
-  | IssueSpecialPowerCommand
-  | ExitContainerCommand
-  | EvacuateCommand
-  | ExecuteRailedTransportCommand
-  | BeaconDeleteCommand
-  | SellCommand
-  | HackInternetCommand
-  | ToggleOverchargeCommand
-  | CombatDropCommand
-  | PlaceBeaconCommand
-  | EnterObjectCommand
-  | ConstructBuildingCommand
-  | CancelDozerConstructionCommand
-  | SwitchWeaponCommand;
-
-export interface SelectedEntityInfo {
-  id: number;
-  templateName: string;
-  category: ObjectCategory;
-  side?: string;
-  resolved: boolean;
-  canMove: boolean;
-  hasAutoRallyPoint: boolean;
-  isUnmanned: boolean;
-  isDozer: boolean;
-  isMoving: boolean;
-  appliedUpgradeNames: string[];
-  objectStatusFlags: string[];
-}
-
-export type EntityRelationship = 'enemies' | 'neutral' | 'allies';
-export type LocalScienceAvailability = 'enabled' | 'disabled' | 'hidden';
-
-export interface GameLogicConfig {
-  /**
-   * Optional renderer-side object picker callback for pointer selection/hit-testing.
-   */
-  pickObjectByInput?: (input: InputState, camera: THREE.Camera) => number | null;
-  /**
-   * Include unresolved objects as magenta placeholders.
-   * If false, unresolved templates are skipped entirely.
-   */
-  renderUnknownObjects: boolean;
-  /** Units default speed, in world units per second. */
-  defaultMoveSpeed: number;
-  /** Terrain snap speed while moving. */
-  terrainSnapSpeed: number;
-  /**
-   * If true, attack-move LOS checks are active for movers with
-   * ATTACK_NEEDS_LINE_OF_SIGHT.
-   */
-  attackUsesLineOfSight: boolean;
-}
+export * from './types.js';
 
 const TEST_CRUSH_ONLY = 0;
 const TEST_SQUISH_ONLY = 1;
@@ -1228,7 +899,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const registry = this.iniDataRegistry;
     const objectDef = registry
-      ? this.findObjectDefByName(registry, selected.templateName)
+      ? findObjectDefByName(registry, selected.templateName)
       : undefined;
     const normalizedKindOf = this.normalizeKindOf(objectDef?.kindOf);
     return {
@@ -1817,7 +1488,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!registry) {
       return false;
     }
-    const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+    const scienceDef = findScienceDefByName(registry, normalizedScienceName);
     if (!scienceDef) {
       return false;
     }
@@ -1888,7 +1559,7 @@ export class GameLogicSubsystem implements Subsystem {
       return 0;
     }
 
-    const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+    const scienceDef = findScienceDefByName(registry, normalizedScienceName);
     if (!scienceDef) {
       return 0;
     }
@@ -1987,7 +1658,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!registry) {
       return false;
     }
-    const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+    const scienceDef = findScienceDefByName(registry, normalizedScienceName);
     if (!scienceDef) {
       return false;
     }
@@ -2183,7 +1854,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.completedUpgrades.add(normalizedUpgrade);
 
     if (this.iniDataRegistry) {
-      const upgradeDef = this.findUpgradeDefByName(this.iniDataRegistry, normalizedUpgrade);
+      const upgradeDef = findUpgradeDefByName(this.iniDataRegistry, normalizedUpgrade);
       if (upgradeDef) {
         const existingModuleIds = new Set(entity.upgradeModules.map((module) => module.id));
         const modulesFromUpgrade = this.extractUpgradeModulesFromBlocks(
@@ -2769,147 +2440,6 @@ export class GameLogicSubsystem implements Subsystem {
     );
   }
 
-  private findWeaponDefByName(iniDataRegistry: IniDataRegistry, weaponName: string): WeaponDef | undefined {
-    const direct = iniDataRegistry.getWeapon(weaponName);
-    if (direct) {
-      return direct;
-    }
-
-    const normalizedWeaponName = weaponName.toUpperCase();
-    for (const [registryWeaponName, weaponDef] of iniDataRegistry.weapons.entries()) {
-      if (registryWeaponName.toUpperCase() === normalizedWeaponName) {
-        return weaponDef;
-      }
-    }
-
-    return undefined;
-  }
-
-  private findArmorDefByName(iniDataRegistry: IniDataRegistry, armorName: string): ArmorDef | undefined {
-    const direct = iniDataRegistry.getArmor(armorName);
-    if (direct) {
-      return direct;
-    }
-
-    const normalizedArmorName = armorName.toUpperCase();
-    for (const [registryArmorName, armorDef] of iniDataRegistry.armors.entries()) {
-      if (registryArmorName.toUpperCase() === normalizedArmorName) {
-        return armorDef;
-      }
-    }
-
-    return undefined;
-  }
-
-  private findObjectDefByName(iniDataRegistry: IniDataRegistry, objectName: string): ObjectDef | undefined {
-    const direct = iniDataRegistry.getObject(objectName);
-    if (direct) {
-      return direct;
-    }
-
-    const normalizedObjectName = objectName.toUpperCase();
-    for (const [registryObjectName, objectDef] of iniDataRegistry.objects.entries()) {
-      if (registryObjectName.toUpperCase() === normalizedObjectName) {
-        return objectDef;
-      }
-    }
-
-    return undefined;
-  }
-
-  private findUpgradeDefByName(iniDataRegistry: IniDataRegistry, upgradeName: string): UpgradeDef | undefined {
-    const direct = iniDataRegistry.getUpgrade(upgradeName);
-    if (direct) {
-      return direct;
-    }
-
-    const normalizedUpgradeName = upgradeName.toUpperCase();
-    for (const [registryUpgradeName, upgradeDef] of iniDataRegistry.upgrades.entries()) {
-      if (registryUpgradeName.toUpperCase() === normalizedUpgradeName) {
-        return upgradeDef;
-      }
-    }
-
-    return undefined;
-  }
-
-  private findCommandButtonDefByName(
-    iniDataRegistry: IniDataRegistry,
-    commandButtonName: string,
-  ): CommandButtonDef | undefined {
-    const direct = iniDataRegistry.getCommandButton(commandButtonName);
-    if (direct) {
-      return direct;
-    }
-
-    const normalizedCommandButtonName = commandButtonName.toUpperCase();
-    for (const [registryCommandButtonName, commandButtonDef] of iniDataRegistry.commandButtons.entries()) {
-      if (registryCommandButtonName.toUpperCase() === normalizedCommandButtonName) {
-        return commandButtonDef;
-      }
-    }
-
-    return undefined;
-  }
-
-  private findCommandSetDefByName(iniDataRegistry: IniDataRegistry, commandSetName: string): CommandSetDef | undefined {
-    const direct = iniDataRegistry.getCommandSet(commandSetName);
-    if (direct) {
-      return direct;
-    }
-
-    const normalizedCommandSetName = commandSetName.toUpperCase();
-    for (const [registryCommandSetName, commandSetDef] of iniDataRegistry.commandSets.entries()) {
-      if (registryCommandSetName.toUpperCase() === normalizedCommandSetName) {
-        return commandSetDef;
-      }
-    }
-
-    return undefined;
-  }
-
-  private findScienceDefByName(iniDataRegistry: IniDataRegistry, scienceName: string): ScienceDef | undefined {
-    const direct = iniDataRegistry.getScience(scienceName);
-    if (direct) {
-      return direct;
-    }
-
-    const normalizedScienceName = scienceName.toUpperCase();
-    for (const [registryScienceName, scienceDef] of iniDataRegistry.sciences.entries()) {
-      if (registryScienceName.toUpperCase() === normalizedScienceName) {
-        return scienceDef;
-      }
-    }
-
-    return undefined;
-  }
-
-  private resolveUpgradeType(upgradeDef: UpgradeDef): 'PLAYER' | 'OBJECT' {
-    const type = readStringField(upgradeDef.fields, ['Type'])?.toUpperCase();
-    if (type === 'OBJECT') {
-      return 'OBJECT';
-    }
-    return 'PLAYER';
-  }
-
-  private resolveUpgradeBuildTimeFrames(upgradeDef: UpgradeDef): number {
-    const buildTimeSeconds = readNumericField(upgradeDef.fields, ['BuildTime']) ?? 0;
-    if (!Number.isFinite(buildTimeSeconds)) {
-      return 0;
-    }
-    return Math.trunc(buildTimeSeconds * LOGIC_FRAME_RATE);
-  }
-
-  private resolveUpgradeBuildCost(upgradeDef: UpgradeDef): number {
-    const buildCostRaw = readNumericField(upgradeDef.fields, ['BuildCost']) ?? 0;
-    if (!Number.isFinite(buildCostRaw)) {
-      return 0;
-    }
-    // Source parity note: C&C upgrade cost calc does not apply kind-of production
-    // cost modifiers; only object build/production costs are affected in this path.
-    return Math.max(0, Math.trunc(buildCostRaw));
-  }
-
   private extractIniValueTokens(value: IniValue | undefined): string[][] {
     if (typeof value === 'undefined') {
       return [];
@@ -3401,7 +2931,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (normalizedForcedWeaponSlot !== null) {
       const weaponName = selectedSet.weaponNamesBySlot[normalizedForcedWeaponSlot];
       if (weaponName) {
-        const forcedWeapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+        const forcedWeapon = findWeaponDefByName(iniDataRegistry, weaponName);
         if (forcedWeapon) {
           const profile = this.resolveWeaponProfileFromDef(forcedWeapon);
           if (profile) {
@@ -3415,7 +2945,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!weaponName) {
         continue;
       }
-      const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+      const weapon = findWeaponDefByName(iniDataRegistry, weaponName);
       if (!weapon) {
         continue;
       }
@@ -3443,7 +2973,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (normalizedForcedWeaponSlot !== null) {
       const weaponName = selectedSet.weaponNamesBySlot[normalizedForcedWeaponSlot];
       if (weaponName) {
-        const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+        const weapon = findWeaponDefByName(iniDataRegistry, weaponName);
         if (weapon) {
           const weaponProfile = this.resolveWeaponProfileFromDef(weapon);
           if (weaponProfile) {
@@ -3458,7 +2988,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!weaponName) {
         continue;
       }
-      const weapon = this.findWeaponDefByName(iniDataRegistry, weaponName);
+      const weapon = findWeaponDefByName(iniDataRegistry, weaponName);
       if (!weapon) {
         continue;
       }
@@ -3484,7 +3014,7 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    const armorDef = this.findArmorDefByName(iniDataRegistry, selectedSet.armorName);
+    const armorDef = findArmorDefByName(iniDataRegistry, selectedSet.armorName);
     if (!armorDef) {
       return null;
     }
@@ -4361,7 +3891,7 @@ export class GameLogicSubsystem implements Subsystem {
     sideState.powerBonus += bonus;
   }
 
-  private removePowerPlantUpgradeFromEntity(entity: MapEntity, module: UpgradeModuleProfile): void {
+  private removePowerPlantUpgradeFromEntity(entity: MapEntity, _module: UpgradeModuleProfile): void {
     const side = this.normalizeSide(entity.side);
     if (!side) {
       return;
@@ -5681,7 +5211,7 @@ export class GameLogicSubsystem implements Subsystem {
           return;
         }
 
-        const scienceDef = this.findScienceDefByName(registry, normalizedScienceName);
+        const scienceDef = findScienceDefByName(registry, normalizedScienceName);
         if (!scienceDef) {
           return;
         }
@@ -6079,7 +5609,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!registry) {
       return false;
     }
-    const unitDef = this.findObjectDefByName(registry, unitTemplateName);
+    const unitDef = findObjectDefByName(registry, unitTemplateName);
     if (!unitDef) {
       return false;
     }
@@ -6450,7 +5980,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!registry) {
       return false;
     }
-    const upgradeDef = this.findUpgradeDefByName(registry, upgradeName);
+    const upgradeDef = findUpgradeDefByName(registry, upgradeName);
     if (!upgradeDef) {
       return false;
     }
@@ -6466,8 +5996,8 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const upgradeType = this.resolveUpgradeType(upgradeDef);
-    const producerObjectDef = this.findObjectDefByName(registry, producer.templateName);
+    const upgradeType = resolveUpgradeType(upgradeDef);
+    const producerObjectDef = findObjectDefByName(registry, producer.templateName);
     const commandSetName = producerObjectDef
       ? this.resolveEntityCommandSetName(producer, producerObjectDef)
       : null;
@@ -6511,7 +6041,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    const buildCost = this.resolveUpgradeBuildCost(upgradeDef);
+    const buildCost = resolveUpgradeBuildCost(upgradeDef);
     if (!this.canAffordUpgrade(producerSide, buildCost)) {
       return false;
     }
@@ -6520,7 +6050,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const totalProductionFrames = this.resolveUpgradeBuildTimeFrames(upgradeDef);
+    const totalProductionFrames = resolveUpgradeBuildTimeFrames(upgradeDef, LOGIC_FRAME_RATE);
     producer.productionQueue.push({
       type: 'UPGRADE',
       upgradeName: normalizedUpgradeName,
@@ -6558,7 +6088,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const producerObjectDef = this.findObjectDefByName(registry, producer.templateName);
+    const producerObjectDef = findObjectDefByName(registry, producer.templateName);
     if (!producerObjectDef) {
       return false;
     }
@@ -6572,7 +6102,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const commandSetDef = this.findCommandSetDefByName(registry, commandSetName);
+    const commandSetDef = findCommandSetDefByName(registry, commandSetName);
     if (!commandSetDef) {
       return false;
     }
@@ -6588,7 +6118,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const commandButtonDef = this.findCommandButtonDefByName(registry, commandButtonName);
+      const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
       if (!commandButtonDef) {
         continue;
       }
@@ -6733,7 +6263,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const candidateDef = this.findObjectDefByName(registry, candidateTemplateName);
+    const candidateDef = findObjectDefByName(registry, candidateTemplateName);
     if (!candidateDef) {
       return false;
     }
@@ -6856,8 +6386,8 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const leftDef = this.findObjectDefByName(registry, normalizedLeft);
-    const rightDef = this.findObjectDefByName(registry, normalizedRight);
+    const leftDef = findObjectDefByName(registry, normalizedLeft);
+    const rightDef = findObjectDefByName(registry, normalizedRight);
     return this.areEquivalentObjectTemplates(leftDef, rightDef);
   }
 
@@ -6963,7 +6493,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const unitDef = this.findObjectDefByName(registry, production.templateName);
+    const unitDef = findObjectDefByName(registry, production.templateName);
     if (!unitDef) {
       this.removeProductionEntry(producer, production.productionId);
       return;
@@ -7024,7 +6554,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const registry = this.iniDataRegistry;
     if (registry) {
-      const upgradeDef = this.findUpgradeDefByName(registry, normalizedUpgradeName);
+      const upgradeDef = findUpgradeDefByName(registry, normalizedUpgradeName);
       if (upgradeDef) {
         for (const module of this.extractUpgradeModulesFromBlocks(
           upgradeDef.blocks ?? [],
@@ -10514,7 +10044,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!registry) {
       return kindOf;
     }
-    const objectDef = this.findObjectDefByName(registry, entity.templateName);
+    const objectDef = findObjectDefByName(registry, entity.templateName);
     if (!objectDef) {
       return kindOf;
     }
@@ -10634,7 +10164,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!registry) {
       return 0;
     }
-    const objectDef = this.findObjectDefByName(registry, entity.templateName);
+    const objectDef = findObjectDefByName(registry, entity.templateName);
     if (!objectDef) {
       return 0;
     }
@@ -11590,189 +11120,4 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.clear();
     this.selectedEntityId = null;
   }
-}
-
-// ============================================================================
-// Geometry and material helpers
-// ============================================================================
-
-function nominalHeightForCategory(category: ObjectCategory): number {
-  switch (category) {
-    case 'air':
-      return 2.4;
-    case 'building':
-      return 8;
-    case 'infantry':
-      return 2;
-    case 'vehicle':
-      return 3;
-    case 'unknown':
-    default:
-      return 2;
-  }
-}
-
-function coerceStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === 'string');
-}
-
-function readStringList(fields: Record<string, IniValue>, names: string[]): string[] {
-  for (const name of names) {
-    const values = readStringListValue(fields[name]);
-    if (values.length > 0) {
-      return values;
-    }
-  }
-
-  return [];
-}
-
-function readStringListValue(value: IniValue | undefined): string[] {
-  if (typeof value === 'string') {
-    return value
-      .split(/[\s,;]+/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-  if (Array.isArray(value)) {
-    return value
-      .flatMap((entry) => readStringListValue(entry as IniValue))
-      .filter((entry) => typeof entry === 'string')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-
-  return [];
-}
-
-function readBooleanField(fields: Record<string, IniValue>, names: string[]): boolean | null {
-  for (const name of names) {
-    const value = fields[name];
-    if (typeof value === 'boolean') {
-      return value;
-    }
-    if (typeof value === 'number') {
-      return value !== 0;
-    }
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      if (normalized === 'yes' || normalized === 'true' || normalized === '1') {
-        return true;
-      }
-      if (normalized === 'no' || normalized === 'false' || normalized === '0') {
-        return false;
-      }
-    }
-  }
-
-  return null;
-}
-
-function readStringField(fields: Record<string, IniValue>, names: string[]): string | null {
-  for (const name of names) {
-    const value = fields[name];
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (trimmed.length > 0) {
-        return trimmed;
-      }
-    }
-  }
-
-  return null;
-}
-
-function readNumericList(values: IniValue | undefined): number[] {
-  if (typeof values === 'undefined') return [];
-  if (typeof values === 'number') return [values];
-  if (typeof values === 'string') {
-    const parts = values
-      .split(/[\s,;]+/)
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => Number(part));
-    return parts.filter((value) => Number.isFinite(value));
-  }
-  if (Array.isArray(values)) {
-    return values.flatMap((value) => readNumericList(value as IniValue)).filter((value) => Number.isFinite(value));
-  }
-  return [];
-}
-
-function readNumericField(fields: Record<string, IniValue>, names: string[]): number | null {
-  for (const name of names) {
-    const values = readNumericList(fields[name]);
-    if (values.length > 0 && Number.isFinite(values[0])) {
-      const [value] = values;
-      if (value !== undefined) {
-        return value;
-      }
-    }
-  }
-
-  return null;
-}
-
-function toByte(value: number | null | undefined): number {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
-    return 0;
-  }
-  const normalized = Math.trunc(value);
-  return Math.max(0, Math.min(255, normalized));
-}
-
-function readNumericListField(fields: Record<string, IniValue>, names: string[]): number[] | null {
-  for (const name of names) {
-    const values = readNumericList(fields[name]);
-    if (values.length > 0) {
-      return values;
-    }
-  }
-
-  return null;
-}
-
-function readCoord3DField(
-  fields: Record<string, IniValue>,
-  names: string[],
-): { x: number; y: number; z: number } | null {
-  const values = readNumericListField(fields, names);
-  if (!values || values.length < 2) {
-    return null;
-  }
-  return {
-    x: values[0] ?? 0,
-    y: values[1] ?? 0,
-    z: values[2] ?? 0,
-  };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function pointInPolygon(
-  x: number,
-  y: number,
-  points: Array<{ x: number; y: number; z: number }>,
-): boolean {
-  if (points.length < 3) return false;
-
-  let inside = false;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i]!;
-    const b = points[(i + 1) % points.length]!;
-    const aY = a.y;
-    const bY = b.y;
-    if ((aY > y) !== (bY > y)) {
-      const ratio = (y - aY) / (bY - aY);
-      const intersectX = a.x + ratio * (b.x - a.x);
-      if (intersectX > x) {
-        inside = !inside;
-      }
-    }
-  }
-
-  return inside;
 }
