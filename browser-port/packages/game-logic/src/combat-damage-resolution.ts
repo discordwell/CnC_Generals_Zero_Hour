@@ -21,6 +21,40 @@ interface ProjectileIncidentalCandidateLike {
   canTakeDamage: boolean;
 }
 
+interface ProjectileCollisionWeaponLike {
+  damageType: string;
+  projectileCollideMask: number;
+}
+
+interface ProjectileCollisionLauncherLike {
+  id: number;
+  side?: string;
+}
+
+interface ProjectileCollisionCandidateLike extends ProjectileIncidentalCandidateLike {
+  side?: string;
+  objectStatusFlags: Set<string>;
+  parkingPlaceProfile: { occupiedSpaceEntityIds: Set<number> } | null;
+  parkingSpaceProducerId: number | null;
+}
+
+interface ProjectileCollisionMasksLike {
+  collideAllies: number;
+  collideEnemies: number;
+  collideControlledStructures: number;
+  collideStructures: number;
+  collideShrubbery: number;
+  collideProjectile: number;
+  collideWalls: number;
+  collideSmallMissiles: number;
+  collideBallisticMissiles: number;
+}
+
+interface ProjectileCollisionRelationshipLike {
+  allies: number;
+  enemies: number;
+}
+
 interface VectorXZ {
   x: number;
   z: number;
@@ -128,4 +162,127 @@ export function resolveProjectileIncidentalVictimForPointImpact<TCandidate exten
   }
 
   return null;
+}
+
+export function isAirfieldReservedForProjectileVictim<
+  TCandidate extends Pick<ProjectileCollisionCandidateLike, 'id' | 'parkingPlaceProfile' | 'parkingSpaceProducerId'>,
+>(
+  candidate: TCandidate,
+  candidateKindOf: Set<string>,
+  intendedVictimId: number | null,
+  resolveEntityById: (entityId: number) => TCandidate | null,
+): boolean {
+  if (intendedVictimId === null) {
+    return false;
+  }
+  if (!candidateKindOf.has('FS_AIRFIELD')) {
+    return false;
+  }
+
+  const parkingProfile = candidate.parkingPlaceProfile;
+  if (!parkingProfile) {
+    return false;
+  }
+
+  if (parkingProfile.occupiedSpaceEntityIds.has(intendedVictimId)) {
+    return true;
+  }
+
+  const intendedVictim = resolveEntityById(intendedVictimId);
+  if (intendedVictim?.parkingSpaceProducerId === candidate.id) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldProjectileCollideWithEntity<
+  TLauncher extends ProjectileCollisionLauncherLike,
+  TCandidate extends ProjectileCollisionCandidateLike,
+>(
+  projectileLauncher: TLauncher | null,
+  weapon: ProjectileCollisionWeaponLike,
+  candidate: TCandidate,
+  intendedVictimId: number | null,
+  resolveProjectileLauncherContainer: (launcher: TLauncher) => { id: number } | null,
+  resolveEntityKindOfSet: (candidate: TCandidate) => Set<string>,
+  isAirfieldReservedForProjectileVictimFn: (
+    candidate: TCandidate,
+    candidateKindOf: Set<string>,
+    intendedVictimId: number | null,
+  ) => boolean,
+  entityHasSneakyTargetingOffset: (candidate: TCandidate) => boolean,
+  getTeamRelationship: (launcher: TLauncher, candidate: TCandidate) => number,
+  normalizeSide: (side: string | undefined) => string | null,
+  resolveEntityFenceWidth: (candidate: TCandidate) => number,
+  relationshipMasks: ProjectileCollisionRelationshipLike,
+  collisionMasks: ProjectileCollisionMasksLike,
+): boolean {
+  if (intendedVictimId !== null && candidate.id === intendedVictimId) {
+    return true;
+  }
+  if (projectileLauncher && projectileLauncher.id === candidate.id) {
+    return false;
+  }
+
+  if (projectileLauncher) {
+    const launcherContainer = resolveProjectileLauncherContainer(projectileLauncher);
+    if (launcherContainer && launcherContainer.id === candidate.id) {
+      return false;
+    }
+  }
+
+  if (
+    (weapon.damageType === 'FLAME' || weapon.damageType === 'PARTICLE_BEAM')
+    && candidate.objectStatusFlags.has('BURNED')
+  ) {
+    return false;
+  }
+
+  const kindOf = resolveEntityKindOfSet(candidate);
+  if (isAirfieldReservedForProjectileVictimFn(candidate, kindOf, intendedVictimId)) {
+    return false;
+  }
+  if (entityHasSneakyTargetingOffset(candidate)) {
+    return false;
+  }
+
+  let requiredMask = 0;
+  if (projectileLauncher) {
+    const relationship = getTeamRelationship(projectileLauncher, candidate);
+    if (relationship === relationshipMasks.allies) {
+      requiredMask |= collisionMasks.collideAllies;
+    } else if (relationship === relationshipMasks.enemies) {
+      requiredMask |= collisionMasks.collideEnemies;
+    }
+  }
+
+  if (kindOf.has('STRUCTURE')) {
+    const launcherSide = normalizeSide(projectileLauncher?.side);
+    const candidateSide = normalizeSide(candidate.side);
+    if (launcherSide && candidateSide && launcherSide === candidateSide) {
+      requiredMask |= collisionMasks.collideControlledStructures;
+    } else {
+      requiredMask |= collisionMasks.collideStructures;
+    }
+  }
+  if (kindOf.has('SHRUBBERY')) {
+    requiredMask |= collisionMasks.collideShrubbery;
+  }
+  if (kindOf.has('PROJECTILE')) {
+    requiredMask |= collisionMasks.collideProjectile;
+  }
+  if (resolveEntityFenceWidth(candidate) > 0) {
+    requiredMask |= collisionMasks.collideWalls;
+  }
+  if (kindOf.has('SMALL_MISSILE')) {
+    requiredMask |= collisionMasks.collideSmallMissiles;
+  }
+  if (kindOf.has('BALLISTIC_MISSILE')) {
+    requiredMask |= collisionMasks.collideBallisticMissiles;
+  }
+
+  if (requiredMask === 0) {
+    return false;
+  }
+  return (weapon.projectileCollideMask & requiredMask) !== 0;
 }

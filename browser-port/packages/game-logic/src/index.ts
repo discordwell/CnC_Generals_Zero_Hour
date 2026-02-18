@@ -34,7 +34,12 @@ import type { InputState } from '@generals/input';
 import {
   adjustDamageByArmorSet as adjustDamageByArmorSetImpl,
   computeAttackRetreatTarget as computeAttackRetreatTargetImpl,
+  entityHasSneakyTargetingOffset as entityHasSneakyTargetingOffsetImpl,
   recordConsecutiveAttackShot as recordConsecutiveAttackShotImpl,
+  rebuildEntityScatterTargets as rebuildEntityScatterTargetsImpl,
+  refreshEntitySneakyMissWindow as refreshEntitySneakyMissWindowImpl,
+  resetEntityWeaponTimingState as resetEntityWeaponTimingStateImpl,
+  resolveEntitySneakyTargetingOffset as resolveEntitySneakyTargetingOffsetImpl,
   resolveProjectileScatterRadiusForCategory as resolveProjectileScatterRadiusForCategoryImpl,
   resolveScaledProjectileTravelSpeed as resolveScaledProjectileTravelSpeedImpl,
   resolveWeaponDelayFrames as resolveWeaponDelayFramesImpl,
@@ -43,11 +48,15 @@ import {
   setEntityAttackStatus as setEntityAttackStatusImpl,
   setEntityFiringWeaponStatus as setEntityFiringWeaponStatusImpl,
   setEntityIgnoringStealthStatus as setEntityIgnoringStealthStatusImpl,
+  updateWeaponIdleAutoReload as updateWeaponIdleAutoReloadImpl,
 } from './combat-helpers.js';
+import { isPassengerAllowedToFireFromContainingObject as isPassengerAllowedToFireFromContainingObjectImpl } from './combat-containment.js';
 import {
   findContinueAttackVictim as findContinueAttackVictimImpl,
+  isAirfieldReservedForProjectileVictim as isAirfieldReservedForProjectileVictimImpl,
   resolveProjectileIncidentalVictimForPointImpact as resolveProjectileIncidentalVictimForPointImpactImpl,
   resolveProjectilePointCollisionRadius as resolveProjectilePointCollisionRadiusImpl,
+  shouldProjectileCollideWithEntity as shouldProjectileCollideWithEntityImpl,
 } from './combat-damage-resolution.js';
 import {
   clamp,
@@ -8821,42 +8830,17 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private refreshEntitySneakyMissWindow(entity: MapEntity): void {
-    if (entity.attackersMissPersistFrames <= 0) {
-      return;
-    }
-
     // Source parity subset: JetAIUpdate::update() refreshes m_attackersMissExpireFrame while
     // OBJECT_STATUS_IS_ATTACKING is set on the object.
-    if (entity.objectStatusFlags.has('IS_ATTACKING')) {
-      entity.attackersMissExpireFrame = this.frameCounter + entity.attackersMissPersistFrames;
-      return;
-    }
-
-    if (entity.attackersMissExpireFrame !== 0 && this.frameCounter >= entity.attackersMissExpireFrame) {
-      entity.attackersMissExpireFrame = 0;
-    }
+    refreshEntitySneakyMissWindowImpl(entity, this.frameCounter);
   }
 
   private entityHasSneakyTargetingOffset(entity: MapEntity): boolean {
-    return entity.attackersMissExpireFrame !== 0 && this.frameCounter < entity.attackersMissExpireFrame;
+    return entityHasSneakyTargetingOffsetImpl(entity, this.frameCounter);
   }
 
   private resolveEntitySneakyTargetingOffset(entity: MapEntity): VectorXZ | null {
-    if (!this.entityHasSneakyTargetingOffset(entity)) {
-      return null;
-    }
-
-    const forward = this.resolveForwardUnitVector(entity);
-    const length = Math.hypot(forward.x, forward.z);
-    if (!Number.isFinite(length) || length <= 0) {
-      return { x: 0, z: 0 };
-    }
-
-    const scale = entity.sneakyOffsetWhenAttacking / length;
-    return {
-      x: forward.x * scale,
-      z: forward.z * scale,
-    };
+    return resolveEntitySneakyTargetingOffsetImpl(entity, this.frameCounter, this.resolveForwardUnitVector(entity));
   }
 
   private resolveScaledProjectileTravelSpeed(weapon: AttackWeaponProfile, sourceToAimDistance: number): number {
@@ -9151,76 +9135,31 @@ export class GameLogicSubsystem implements Subsystem {
     candidate: MapEntity,
     intendedVictimId: number | null,
   ): boolean {
-    if (intendedVictimId !== null && candidate.id === intendedVictimId) {
-      return true;
-    }
-
-    if (projectileLauncher && projectileLauncher.id === candidate.id) {
-      return false;
-    }
-
-    if (projectileLauncher) {
-      const launcherContainer = this.resolveProjectileLauncherContainer(projectileLauncher);
-      if (launcherContainer && launcherContainer.id === candidate.id) {
-        return false;
-      }
-    }
-
-    if (
-      (weapon.damageType === 'FLAME' || weapon.damageType === 'PARTICLE_BEAM')
-      && candidate.objectStatusFlags.has('BURNED')
-    ) {
-      return false;
-    }
-
-    const kindOf = this.resolveEntityKindOfSet(candidate);
-    if (this.isAirfieldReservedForProjectileVictim(candidate, kindOf, intendedVictimId)) {
-      return false;
-    }
-
-    if (this.entityHasSneakyTargetingOffset(candidate)) {
-      return false;
-    }
-
-    let requiredMask = 0;
-    if (projectileLauncher) {
-      const relationship = this.getTeamRelationship(projectileLauncher, candidate);
-      if (relationship === RELATIONSHIP_ALLIES) {
-        requiredMask |= WEAPON_COLLIDE_ALLIES;
-      } else if (relationship === RELATIONSHIP_ENEMIES) {
-        requiredMask |= WEAPON_COLLIDE_ENEMIES;
-      }
-    }
-
-    if (kindOf.has('STRUCTURE')) {
-      const launcherSide = this.normalizeSide(projectileLauncher?.side);
-      const candidateSide = this.normalizeSide(candidate.side);
-      if (launcherSide && candidateSide && launcherSide === candidateSide) {
-        requiredMask |= WEAPON_COLLIDE_CONTROLLED_STRUCTURES;
-      } else {
-        requiredMask |= WEAPON_COLLIDE_STRUCTURES;
-      }
-    }
-    if (kindOf.has('SHRUBBERY')) {
-      requiredMask |= WEAPON_COLLIDE_SHRUBBERY;
-    }
-    if (kindOf.has('PROJECTILE')) {
-      requiredMask |= WEAPON_COLLIDE_PROJECTILE;
-    }
-    if (this.resolveEntityFenceWidth(candidate) > 0) {
-      requiredMask |= WEAPON_COLLIDE_WALLS;
-    }
-    if (kindOf.has('SMALL_MISSILE')) {
-      requiredMask |= WEAPON_COLLIDE_SMALL_MISSILES;
-    }
-    if (kindOf.has('BALLISTIC_MISSILE')) {
-      requiredMask |= WEAPON_COLLIDE_BALLISTIC_MISSILES;
-    }
-
-    if (requiredMask === 0) {
-      return false;
-    }
-    return (weapon.projectileCollideMask & requiredMask) !== 0;
+    return shouldProjectileCollideWithEntityImpl(
+      projectileLauncher,
+      weapon,
+      candidate,
+      intendedVictimId,
+      (launcher) => this.resolveProjectileLauncherContainer(launcher),
+      (entity) => this.resolveEntityKindOfSet(entity),
+      (entity, kindOf, victimId) => this.isAirfieldReservedForProjectileVictim(entity, kindOf, victimId),
+      (entity) => this.entityHasSneakyTargetingOffset(entity),
+      (launcher, entity) => this.getTeamRelationship(launcher, entity),
+      (side) => this.normalizeSide(side),
+      (entity) => this.resolveEntityFenceWidth(entity),
+      { allies: RELATIONSHIP_ALLIES, enemies: RELATIONSHIP_ENEMIES },
+      {
+        collideAllies: WEAPON_COLLIDE_ALLIES,
+        collideEnemies: WEAPON_COLLIDE_ENEMIES,
+        collideControlledStructures: WEAPON_COLLIDE_CONTROLLED_STRUCTURES,
+        collideStructures: WEAPON_COLLIDE_STRUCTURES,
+        collideShrubbery: WEAPON_COLLIDE_SHRUBBERY,
+        collideProjectile: WEAPON_COLLIDE_PROJECTILE,
+        collideWalls: WEAPON_COLLIDE_WALLS,
+        collideSmallMissiles: WEAPON_COLLIDE_SMALL_MISSILES,
+        collideBallisticMissiles: WEAPON_COLLIDE_BALLISTIC_MISSILES,
+      },
+    );
   }
 
   private resolveProjectileLauncherContainer(projectileLauncher: MapEntity): MapEntity | null {
@@ -9245,30 +9184,14 @@ export class GameLogicSubsystem implements Subsystem {
     candidateKindOf: Set<string>,
     intendedVictimId: number | null,
   ): boolean {
-    if (intendedVictimId === null) {
-      return false;
-    }
-    if (!candidateKindOf.has('FS_AIRFIELD')) {
-      return false;
-    }
-
-    const parkingProfile = candidate.parkingPlaceProfile;
-    if (!parkingProfile) {
-      return false;
-    }
-
-    if (parkingProfile.occupiedSpaceEntityIds.has(intendedVictimId)) {
-      return true;
-    }
-
-    const intendedVictim = this.spawnedEntities.get(intendedVictimId);
-    if (intendedVictim?.parkingSpaceProducerId === candidate.id) {
-      return true;
-    }
-
     // TODO(C&C source parity): model full ParkingPlaceBehaviorInterface::hasReservedSpace()
     // checks for intended victim IDs that are reserved but not currently parked.
-    return false;
+    return isAirfieldReservedForProjectileVictimImpl(
+      candidate,
+      candidateKindOf,
+      intendedVictimId,
+      (entityId) => this.spawnedEntities.get(entityId) ?? null,
+    );
   }
 
   private resolveEntityKindOfSet(entity: MapEntity): Set<string> {
@@ -9320,91 +9243,13 @@ export class GameLogicSubsystem implements Subsystem {
     // - OpenContain recursively delegates to a parent container; OverlordContain redirect chains
     //   similarly in the engine.
     //   (OpenContain.cpp:1035, OverlordContain.cpp:99)
-    const kindOf = this.resolveEntityKindOfSet(entity);
-    const isInfantry = kindOf.has('INFANTRY');
-    const isPortableStructure = kindOf.has('PORTABLE_STRUCTURE');
-    const visited = new Set<number>();
-
-    const isAllowed = (currentContainer: MapEntity): boolean => {
-      if (visited.has(currentContainer.id)) {
-        // Cycle-guard for malformed nesting in test data.
-        return false;
-      }
-      visited.add(currentContainer.id);
-
-      const containProfile = currentContainer.containProfile;
-      if (!containProfile) {
-        // Unknown container module shape: keep permissive behavior.
-        return true;
-      }
-
-      const parent = this.resolveEntityContainingObject(currentContainer);
-      const parentProfile = parent?.containProfile;
-      const isParentOverlordStyle = parentProfile?.moduleType === 'OVERLORD' || parentProfile?.moduleType === 'HELIX';
-
-      if (containProfile.moduleType === 'OPEN') {
-        if (!containProfile.passengersAllowedToFire) {
-          return false;
-        }
-        return parent ? isAllowed(parent) : true;
-      }
-
-      if (containProfile.moduleType === 'TRANSPORT') {
-        if (!isInfantry) {
-          return false;
-        }
-
-        if (parent && isParentOverlordStyle) {
-          return isAllowed(parent);
-        }
-
-        return containProfile.passengersAllowedToFire;
-      }
-
-      if (containProfile.moduleType === 'OVERLORD') {
-        if (!isInfantry && !isPortableStructure) {
-          return false;
-        }
-        if (parent) {
-          return false;
-        }
-        return containProfile.passengersAllowedToFire;
-      }
-
-      if (containProfile.moduleType === 'HELIX') {
-        if (parent) {
-          return false;
-        }
-        if (isPortableStructure) {
-          const payloadTemplateNames = currentContainer.containProfile?.portableStructureTemplateNames;
-          const templateName = entity.templateName.toUpperCase();
-          if (payloadTemplateNames && payloadTemplateNames.length > 0 && !payloadTemplateNames.includes(templateName)) {
-            return false;
-          }
-          // Source parity: HelixContain::isPassengerAllowedToFire returns true only for the
-          // currently tracked portableStructureID; nested riders always fail.
-          // (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Contain/HelixContain.cpp:364-373)
-          return currentContainer.helixPortableRiderId === entity.id;
-        }
-        if (!isInfantry) {
-          return false;
-        }
-        return containProfile.passengersAllowedToFire;
-      }
-
-      if (containProfile.moduleType === 'GARRISON') {
-        // GarrisonContain.cpp returns TRUE only when container is not disabled.
-        // See Generals/Code/GameEngine/Source/GameLogic/Object/Contain/GarrisonContain.cpp.
-        if (this.entityHasObjectStatus(currentContainer, 'DISABLED_SUBDUED')) {
-          return false;
-        }
-        return true;
-      }
-
-      return true;
-    };
-
-    return isAllowed(container);
+    return isPassengerAllowedToFireFromContainingObjectImpl(
+      entity,
+      container,
+      (targetEntity) => this.resolveEntityKindOfSet(targetEntity),
+      (targetEntity) => this.resolveEntityContainingObject(targetEntity),
+      (targetEntity, statusName) => this.entityHasObjectStatus(targetEntity, statusName),
+    );
   }
 
   private resolveEntityFenceWidth(entity: MapEntity): number {
@@ -9424,44 +9269,12 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updateWeaponIdleAutoReload(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
+    // Source parity subset: FiringTracker::update() calls Object::reloadAllAmmo(TRUE),
+    // forcing an immediate reload after sustained idle time.
+    updateWeaponIdleAutoReloadImpl(this.spawnedEntities.values(), this.frameCounter);
 
-      const weapon = entity.attackWeapon;
-      if (!weapon) {
-        continue;
-      }
-      if (weapon.autoReloadWhenIdleFrames <= 0) {
-        continue;
-      }
-
-      const forceReloadFrame = entity.attackForceReloadFrame;
-      if (forceReloadFrame <= 0 || this.frameCounter < forceReloadFrame) {
-        continue;
-      }
-
-      entity.attackForceReloadFrame = 0;
-      if (weapon.clipSize <= 0) {
-        continue;
-      }
-      if (entity.attackAmmoInClip >= weapon.clipSize) {
-        continue;
-      }
-
-      // Source parity subset: FiringTracker::update() calls Object::reloadAllAmmo(TRUE),
-      // forcing an immediate reload after sustained idle time.
-      entity.attackAmmoInClip = weapon.clipSize;
-      this.rebuildEntityScatterTargets(entity);
-      entity.attackReloadFinishFrame = 0;
-      if (entity.nextAttackFrame > this.frameCounter) {
-        entity.nextAttackFrame = this.frameCounter;
-      }
-
-      // TODO(C&C source parity): port full FiringTracker behavior
-      // (continuous-fire speedup/cooldown states and looping fire-audio management).
-    }
+    // TODO(C&C source parity): port full FiringTracker behavior
+    // (continuous-fire speedup/cooldown states and looping fire-audio management).
   }
 
   private computeAttackRetreatTarget(
@@ -9476,19 +9289,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resetEntityWeaponTimingState(entity: MapEntity): void {
-    const clipSize = entity.attackWeapon?.clipSize ?? 0;
-    entity.attackAmmoInClip = clipSize > 0 ? clipSize : 0;
-    entity.attackReloadFinishFrame = 0;
-    entity.attackForceReloadFrame = 0;
-    this.rebuildEntityScatterTargets(entity);
-    entity.preAttackFinishFrame = 0;
-    entity.consecutiveShotsTargetEntityId = null;
-    entity.consecutiveShotsAtTarget = 0;
+    resetEntityWeaponTimingStateImpl(entity);
   }
 
   private rebuildEntityScatterTargets(entity: MapEntity): void {
-    const scatterTargetsCount = entity.attackWeapon?.scatterTargets.length ?? 0;
-    entity.attackScatterTargetsUnused = Array.from({ length: scatterTargetsCount }, (_entry, index) => index);
+    rebuildEntityScatterTargetsImpl(entity);
   }
 
   private resolveWeaponPreAttackDelayFrames(

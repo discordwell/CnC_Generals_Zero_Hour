@@ -29,6 +29,36 @@ interface CombatDamageTargetLike {
   armorDamageCoefficients: ReadonlyMap<string, number> | null;
 }
 
+interface VectorXZLike {
+  x: number;
+  z: number;
+}
+
+interface CombatSneakyWindowEntityLike extends CombatEntityStatusLike {
+  attackersMissPersistFrames: number;
+  attackersMissExpireFrame: number;
+  sneakyOffsetWhenAttacking: number;
+}
+
+interface CombatWeaponScatterLike {
+  clipSize: number;
+  scatterTargets: readonly unknown[];
+  autoReloadWhenIdleFrames: number;
+}
+
+interface CombatWeaponTimingEntityLike {
+  destroyed: boolean;
+  attackWeapon: CombatWeaponScatterLike | null;
+  attackAmmoInClip: number;
+  attackReloadFinishFrame: number;
+  attackForceReloadFrame: number;
+  attackScatterTargetsUnused: number[];
+  preAttackFinishFrame: number;
+  consecutiveShotsTargetEntityId: number | null;
+  consecutiveShotsAtTarget: number;
+  nextAttackFrame: number;
+}
+
 export function setEntityAttackStatus(entity: CombatEntityStatusLike, isAttacking: boolean): void {
   if (isAttacking) {
     entity.objectStatusFlags.add('IS_ATTACKING');
@@ -92,7 +122,7 @@ export function computeAttackRetreatTarget(
   attackerZ: number,
   targetX: number,
   targetZ: number,
-  weapon: Pick<CombatWeaponLike, 'minAttackRange' | 'minDelayFrames' | 'maxDelayFrames'> & { attackRange: number },
+  weapon: Pick<CombatWeaponLike, 'minAttackRange'> & { attackRange: number },
 ): { x: number; z: number } | null {
   let awayX = attackerX - targetX;
   let awayZ = attackerZ - targetZ;
@@ -200,4 +230,105 @@ export function adjustDamageByArmorSet(
   }
 
   return Math.max(0, amount * coefficient);
+}
+
+export function refreshEntitySneakyMissWindow(
+  entity: CombatSneakyWindowEntityLike,
+  frameCounter: number,
+): void {
+  if (entity.attackersMissPersistFrames <= 0) {
+    return;
+  }
+  if (entity.objectStatusFlags.has('IS_ATTACKING')) {
+    entity.attackersMissExpireFrame = frameCounter + entity.attackersMissPersistFrames;
+    return;
+  }
+  if (entity.attackersMissExpireFrame !== 0 && frameCounter >= entity.attackersMissExpireFrame) {
+    entity.attackersMissExpireFrame = 0;
+  }
+}
+
+export function entityHasSneakyTargetingOffset(
+  entity: Pick<CombatSneakyWindowEntityLike, 'attackersMissExpireFrame'>,
+  frameCounter: number,
+): boolean {
+  return entity.attackersMissExpireFrame !== 0 && frameCounter < entity.attackersMissExpireFrame;
+}
+
+export function resolveEntitySneakyTargetingOffset(
+  entity: CombatSneakyWindowEntityLike,
+  frameCounter: number,
+  forward: VectorXZLike,
+): VectorXZLike | null {
+  if (!entityHasSneakyTargetingOffset(entity, frameCounter)) {
+    return null;
+  }
+  const length = Math.hypot(forward.x, forward.z);
+  if (!Number.isFinite(length) || length <= 0) {
+    return { x: 0, z: 0 };
+  }
+  const scale = entity.sneakyOffsetWhenAttacking / length;
+  return {
+    x: forward.x * scale,
+    z: forward.z * scale,
+  };
+}
+
+export function rebuildEntityScatterTargets(
+  entity: Pick<CombatWeaponTimingEntityLike, 'attackWeapon' | 'attackScatterTargetsUnused'>,
+): void {
+  const scatterTargetsCount = entity.attackWeapon?.scatterTargets.length ?? 0;
+  entity.attackScatterTargetsUnused = Array.from({ length: scatterTargetsCount }, (_entry, index) => index);
+}
+
+export function resetEntityWeaponTimingState(
+  entity: Pick<
+    CombatWeaponTimingEntityLike,
+    | 'attackWeapon'
+    | 'attackAmmoInClip'
+    | 'attackReloadFinishFrame'
+    | 'attackForceReloadFrame'
+    | 'attackScatterTargetsUnused'
+    | 'preAttackFinishFrame'
+    | 'consecutiveShotsTargetEntityId'
+    | 'consecutiveShotsAtTarget'
+  >,
+): void {
+  const clipSize = entity.attackWeapon?.clipSize ?? 0;
+  entity.attackAmmoInClip = clipSize > 0 ? clipSize : 0;
+  entity.attackReloadFinishFrame = 0;
+  entity.attackForceReloadFrame = 0;
+  rebuildEntityScatterTargets(entity);
+  entity.preAttackFinishFrame = 0;
+  entity.consecutiveShotsTargetEntityId = null;
+  entity.consecutiveShotsAtTarget = 0;
+}
+
+export function updateWeaponIdleAutoReload(
+  entities: Iterable<CombatWeaponTimingEntityLike>,
+  frameCounter: number,
+): void {
+  for (const entity of entities) {
+    if (entity.destroyed) {
+      continue;
+    }
+    const weapon = entity.attackWeapon;
+    if (!weapon || weapon.autoReloadWhenIdleFrames <= 0) {
+      continue;
+    }
+    const forceReloadFrame = entity.attackForceReloadFrame;
+    if (forceReloadFrame <= 0 || frameCounter < forceReloadFrame) {
+      continue;
+    }
+    entity.attackForceReloadFrame = 0;
+    if (weapon.clipSize <= 0 || entity.attackAmmoInClip >= weapon.clipSize) {
+      continue;
+    }
+    entity.attackAmmoInClip = weapon.clipSize;
+    rebuildEntityScatterTargets(entity);
+    entity.attackReloadFinishFrame = 0;
+    if (entity.nextAttackFrame > frameCounter) {
+      entity.nextAttackFrame = frameCounter;
+    }
+  }
 }
