@@ -1,0 +1,225 @@
+interface VectorXZLike {
+  x: number;
+  z: number;
+}
+
+interface CombatUpdateWeaponLike {
+  minAttackRange: number;
+  attackRange: number;
+  clipSize: number;
+  autoReloadWhenIdleFrames: number;
+  clipReloadFrames: number;
+}
+
+interface CombatUpdateEntityLike {
+  id: number;
+  x: number;
+  z: number;
+  destroyed: boolean;
+  canMove: boolean;
+  moving: boolean;
+  moveTarget: VectorXZLike | null;
+  movePath: VectorXZLike[];
+  pathIndex: number;
+  pathfindGoalCell: { x: number; z: number } | null;
+  preAttackFinishFrame: number;
+  attackTargetEntityId: number | null;
+  attackTargetPosition: VectorXZLike | null;
+  attackWeapon: CombatUpdateWeaponLike | null;
+  attackCommandSource: string;
+  attackOriginalVictimPosition: VectorXZLike | null;
+  nextAttackFrame: number;
+  attackAmmoInClip: number;
+  attackReloadFinishFrame: number;
+  attackForceReloadFrame: number;
+}
+
+interface CombatUpdateConstants {
+  attackMinRangeDistanceSqrFudge: number;
+  pathfindCellSize: number;
+}
+
+interface CombatUpdateContext<TEntity extends CombatUpdateEntityLike> {
+  entities: Iterable<TEntity>;
+  frameCounter: number;
+  constants: CombatUpdateConstants;
+  findEntityById(entityId: number): TEntity | null;
+  findFireWeaponTargetForPosition(attacker: TEntity, targetX: number, targetZ: number): TEntity | null;
+  canEntityAttackFromStatus(entity: TEntity): boolean;
+  canAttackerTargetEntity(attacker: TEntity, target: TEntity, commandSource: string): boolean;
+  setEntityAttackStatus(entity: TEntity, isAttacking: boolean): void;
+  setEntityAimingWeaponStatus(entity: TEntity, isAiming: boolean): void;
+  setEntityFiringWeaponStatus(entity: TEntity, isFiring: boolean): void;
+  setEntityIgnoringStealthStatus(entity: TEntity, isIgnoringStealth: boolean): void;
+  refreshEntitySneakyMissWindow(entity: TEntity): void;
+  issueMoveTo(entityId: number, targetX: number, targetZ: number, attackDistance?: number): void;
+  computeAttackRetreatTarget(
+    attacker: TEntity,
+    target: TEntity,
+    weapon: CombatUpdateWeaponLike,
+  ): VectorXZLike | null;
+  rebuildEntityScatterTargets(entity: TEntity): void;
+  resolveWeaponPreAttackDelayFrames(
+    attacker: TEntity,
+    target: TEntity,
+    weapon: CombatUpdateWeaponLike,
+  ): number;
+  queueWeaponDamageEvent(attacker: TEntity, target: TEntity, weapon: CombatUpdateWeaponLike): void;
+  recordConsecutiveAttackShot(attacker: TEntity, targetEntityId: number): void;
+  resolveWeaponDelayFrames(weapon: CombatUpdateWeaponLike): number;
+  resolveTargetAnchorPosition(target: TEntity): VectorXZLike;
+}
+
+function clearImmediateCombatState<TEntity extends CombatUpdateEntityLike>(
+  entity: TEntity,
+  context: CombatUpdateContext<TEntity>,
+): void {
+  context.setEntityAttackStatus(entity, false);
+  context.setEntityAimingWeaponStatus(entity, false);
+  context.setEntityIgnoringStealthStatus(entity, false);
+  context.refreshEntitySneakyMissWindow(entity);
+  entity.preAttackFinishFrame = 0;
+}
+
+export function updateCombat<TEntity extends CombatUpdateEntityLike>(
+  context: CombatUpdateContext<TEntity>,
+): void {
+  for (const attacker of context.entities) {
+    if (attacker.destroyed) {
+      continue;
+    }
+
+    context.setEntityFiringWeaponStatus(attacker, false);
+    if (!context.canEntityAttackFromStatus(attacker)) {
+      clearImmediateCombatState(attacker, context);
+      continue;
+    }
+
+    const targetId = attacker.attackTargetEntityId;
+    const targetPosition = attacker.attackTargetPosition;
+    const weapon = attacker.attackWeapon;
+    if ((targetId === null && targetPosition === null) || !weapon) {
+      clearImmediateCombatState(attacker, context);
+      continue;
+    }
+
+    let target = targetId === null ? null : context.findEntityById(targetId);
+    if (!target && targetPosition !== null) {
+      target = context.findFireWeaponTargetForPosition(attacker, targetPosition.x, targetPosition.z);
+      if (!target) {
+        clearImmediateCombatState(attacker, context);
+        if (attacker.canMove) {
+          const attackRange = Math.max(0, weapon.attackRange);
+          context.issueMoveTo(attacker.id, targetPosition.x, targetPosition.z, attackRange);
+        }
+        continue;
+      }
+
+      attacker.attackTargetEntityId = target.id;
+      const targetAnchor = context.resolveTargetAnchorPosition(target);
+      attacker.attackOriginalVictimPosition = {
+        x: targetAnchor.x,
+        z: targetAnchor.z,
+      };
+    }
+
+    if (!target || !context.canAttackerTargetEntity(attacker, target, attacker.attackCommandSource)) {
+      attacker.attackTargetEntityId = null;
+      attacker.attackOriginalVictimPosition = null;
+      if (!targetPosition) {
+        attacker.attackCommandSource = 'AI';
+      }
+      clearImmediateCombatState(attacker, context);
+      continue;
+    }
+
+    context.setEntityAttackStatus(attacker, true);
+    context.refreshEntitySneakyMissWindow(attacker);
+
+    const dx = target.x - attacker.x;
+    const dz = target.z - attacker.z;
+    const distanceSqr = dx * dx + dz * dz;
+    const minAttackRange = Math.max(0, weapon.minAttackRange);
+    const minAttackRangeSqr = minAttackRange * minAttackRange;
+    const attackRange = Math.max(0, weapon.attackRange);
+    const attackRangeSqr = attackRange * attackRange;
+    if (distanceSqr < Math.max(0, minAttackRangeSqr - context.constants.attackMinRangeDistanceSqrFudge)) {
+      context.setEntityAimingWeaponStatus(attacker, false);
+      if (attacker.canMove && minAttackRange > context.constants.pathfindCellSize) {
+        const retreatTarget = context.computeAttackRetreatTarget(attacker, target, weapon);
+        if (retreatTarget) {
+          context.issueMoveTo(attacker.id, retreatTarget.x, retreatTarget.z);
+        }
+      }
+      attacker.preAttackFinishFrame = 0;
+      continue;
+    }
+
+    if (distanceSqr > attackRangeSqr) {
+      context.setEntityAimingWeaponStatus(attacker, false);
+      if (attacker.canMove) {
+        context.issueMoveTo(attacker.id, target.x, target.z, attackRange);
+      }
+      attacker.preAttackFinishFrame = 0;
+      continue;
+    }
+
+    if (attacker.moving) {
+      attacker.moving = false;
+      attacker.moveTarget = null;
+      attacker.movePath = [];
+      attacker.pathIndex = 0;
+      attacker.pathfindGoalCell = null;
+    }
+    context.setEntityAimingWeaponStatus(attacker, true);
+
+    if (context.frameCounter < attacker.nextAttackFrame) {
+      continue;
+    }
+
+    if (weapon.clipSize > 0 && attacker.attackAmmoInClip <= 0) {
+      if (context.frameCounter < attacker.attackReloadFinishFrame) {
+        continue;
+      }
+      attacker.attackAmmoInClip = weapon.clipSize;
+      context.rebuildEntityScatterTargets(attacker);
+    }
+
+    if (attacker.preAttackFinishFrame > context.frameCounter) {
+      continue;
+    }
+
+    if (attacker.preAttackFinishFrame === 0) {
+      const preAttackDelay = context.resolveWeaponPreAttackDelayFrames(attacker, target, weapon);
+      if (preAttackDelay > 0) {
+        attacker.preAttackFinishFrame = context.frameCounter + preAttackDelay;
+        if (attacker.preAttackFinishFrame > context.frameCounter) {
+          continue;
+        }
+      }
+    }
+
+    context.setEntityAimingWeaponStatus(attacker, false);
+    context.setEntityFiringWeaponStatus(attacker, true);
+    context.queueWeaponDamageEvent(attacker, target, weapon);
+    context.setEntityIgnoringStealthStatus(attacker, false);
+    attacker.preAttackFinishFrame = 0;
+    context.recordConsecutiveAttackShot(attacker, target.id);
+    if (weapon.autoReloadWhenIdleFrames > 0) {
+      attacker.attackForceReloadFrame = context.frameCounter + weapon.autoReloadWhenIdleFrames;
+    } else {
+      attacker.attackForceReloadFrame = 0;
+    }
+
+    if (weapon.clipSize > 0) {
+      attacker.attackAmmoInClip = Math.max(0, attacker.attackAmmoInClip - 1);
+      if (attacker.attackAmmoInClip <= 0) {
+        attacker.attackReloadFinishFrame = context.frameCounter + weapon.clipReloadFrames;
+        attacker.nextAttackFrame = attacker.attackReloadFinishFrame;
+        continue;
+      }
+    }
+
+    attacker.nextAttackFrame = context.frameCounter + context.resolveWeaponDelayFrames(weapon);
+  }
+}

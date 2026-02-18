@@ -58,6 +58,7 @@ import {
   resolveProjectilePointCollisionRadius as resolveProjectilePointCollisionRadiusImpl,
   shouldProjectileCollideWithEntity as shouldProjectileCollideWithEntityImpl,
 } from './combat-damage-resolution.js';
+import { updateCombat as updateCombatImpl } from './combat-update.js';
 import {
   clamp,
   coerceStringArray,
@@ -8542,159 +8543,42 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updateCombat(): void {
-    for (const attacker of this.spawnedEntities.values()) {
-      if (attacker.destroyed) {
-        continue;
-      }
-      this.setEntityFiringWeaponStatus(attacker, false);
-      if (!this.canEntityAttackFromStatus(attacker)) {
-        this.setEntityAttackStatus(attacker, false);
-        this.setEntityAimingWeaponStatus(attacker, false);
-        this.setEntityIgnoringStealthStatus(attacker, false);
-        this.refreshEntitySneakyMissWindow(attacker);
-        attacker.preAttackFinishFrame = 0;
-        continue;
-      }
-
-      const targetId = attacker.attackTargetEntityId;
-      const targetPosition = attacker.attackTargetPosition;
-      const weapon = attacker.attackWeapon;
-      if ((targetId === null && targetPosition === null) || !weapon) {
-        this.setEntityAttackStatus(attacker, false);
-        this.setEntityAimingWeaponStatus(attacker, false);
-        this.setEntityIgnoringStealthStatus(attacker, false);
-        this.refreshEntitySneakyMissWindow(attacker);
-        attacker.preAttackFinishFrame = 0;
-        continue;
-      }
-
-      let target = targetId === null ? null : this.spawnedEntities.get(targetId);
-      if (!target && targetPosition !== null) {
-        target = this.findFireWeaponTargetForPosition(attacker, targetPosition.x, targetPosition.z);
-        if (!target) {
-          this.setEntityAttackStatus(attacker, false);
-          this.setEntityAimingWeaponStatus(attacker, false);
-          this.setEntityIgnoringStealthStatus(attacker, false);
-          this.refreshEntitySneakyMissWindow(attacker);
-          attacker.preAttackFinishFrame = 0;
-          if (attacker.canMove) {
-            const attackRange = Math.max(0, weapon.attackRange);
-            this.issueMoveTo(attacker.id, targetPosition.x, targetPosition.z, attackRange);
-          }
-          continue;
-        }
-        attacker.attackTargetEntityId = target.id;
-        attacker.attackOriginalVictimPosition = {
-          x: target.mesh.position.x,
-          z: target.mesh.position.z,
-        };
-      }
-      if (!target || !this.canAttackerTargetEntity(attacker, target, attacker.attackCommandSource)) {
-        attacker.attackTargetEntityId = null;
-        attacker.attackOriginalVictimPosition = null;
-        if (!targetPosition) {
-          attacker.attackCommandSource = 'AI';
-        }
-        this.setEntityAttackStatus(attacker, false);
-        this.setEntityAimingWeaponStatus(attacker, false);
-        this.setEntityIgnoringStealthStatus(attacker, false);
-        this.refreshEntitySneakyMissWindow(attacker);
-        attacker.preAttackFinishFrame = 0;
-        continue;
-      }
-
-      this.setEntityAttackStatus(attacker, true);
-      this.refreshEntitySneakyMissWindow(attacker);
-
-      const dx = target.x - attacker.x;
-      const dz = target.z - attacker.z;
-      const distanceSqr = dx * dx + dz * dz;
-      const minAttackRange = Math.max(0, weapon.minAttackRange);
-      const minAttackRangeSqr = minAttackRange * minAttackRange;
-      const attackRange = Math.max(0, weapon.attackRange);
-      const attackRangeSqr = attackRange * attackRange;
-      if (distanceSqr < Math.max(0, minAttackRangeSqr - ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE)) {
-        this.setEntityAimingWeaponStatus(attacker, false);
-        if (attacker.canMove && minAttackRange > PATHFIND_CELL_SIZE) {
-          const retreatTarget = this.computeAttackRetreatTarget(attacker, target, weapon);
-          if (retreatTarget) {
-            this.issueMoveTo(attacker.id, retreatTarget.x, retreatTarget.z);
-          }
-        }
-        attacker.preAttackFinishFrame = 0;
-        continue;
-      }
-
-      if (distanceSqr > attackRangeSqr) {
-        this.setEntityAimingWeaponStatus(attacker, false);
-        if (attacker.canMove) {
-          this.issueMoveTo(attacker.id, target.x, target.z, attackRange);
-        }
-        attacker.preAttackFinishFrame = 0;
-        continue;
-      }
-
-      if (attacker.moving) {
-        attacker.moving = false;
-        attacker.moveTarget = null;
-        attacker.movePath = [];
-        attacker.pathIndex = 0;
-        attacker.pathfindGoalCell = null;
-      }
-      this.setEntityAimingWeaponStatus(attacker, true);
-
-      if (this.frameCounter < attacker.nextAttackFrame) {
-        continue;
-      }
-
-      // TODO(C&C source parity): replace this per-entity weapon timing model with full
-      // WeaponStatus state handling (PRE_ATTACK/BETWEEN_FIRING_SHOTS/OUT_OF_AMMO), including
-      // shared reload timing across weapon slots and firing-tracker integration.
-      if (weapon.clipSize > 0 && attacker.attackAmmoInClip <= 0) {
-        if (this.frameCounter < attacker.attackReloadFinishFrame) {
-          continue;
-        }
-        attacker.attackAmmoInClip = weapon.clipSize;
-        this.rebuildEntityScatterTargets(attacker);
-      }
-
-      if (attacker.preAttackFinishFrame > this.frameCounter) {
-        continue;
-      }
-
-      if (attacker.preAttackFinishFrame === 0) {
-        const preAttackDelay = this.resolveWeaponPreAttackDelayFrames(attacker, target, weapon);
-        if (preAttackDelay > 0) {
-          attacker.preAttackFinishFrame = this.frameCounter + preAttackDelay;
-          if (attacker.preAttackFinishFrame > this.frameCounter) {
-            continue;
-          }
-        }
-      }
-
-      this.setEntityAimingWeaponStatus(attacker, false);
-      this.setEntityFiringWeaponStatus(attacker, true);
-      this.queueWeaponDamageEvent(attacker, target, weapon);
-      this.setEntityIgnoringStealthStatus(attacker, false);
-      attacker.preAttackFinishFrame = 0;
-      this.recordConsecutiveAttackShot(attacker, target.id);
-      if (weapon.autoReloadWhenIdleFrames > 0) {
-        attacker.attackForceReloadFrame = this.frameCounter + weapon.autoReloadWhenIdleFrames;
-      } else {
-        attacker.attackForceReloadFrame = 0;
-      }
-
-      if (weapon.clipSize > 0) {
-        attacker.attackAmmoInClip = Math.max(0, attacker.attackAmmoInClip - 1);
-        if (attacker.attackAmmoInClip <= 0) {
-          attacker.attackReloadFinishFrame = this.frameCounter + weapon.clipReloadFrames;
-          attacker.nextAttackFrame = attacker.attackReloadFinishFrame;
-          continue;
-        }
-      }
-
-      attacker.nextAttackFrame = this.frameCounter + this.resolveWeaponDelayFrames(weapon);
-    }
+    updateCombatImpl({
+      entities: this.spawnedEntities.values(),
+      frameCounter: this.frameCounter,
+      constants: {
+        attackMinRangeDistanceSqrFudge: ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE,
+        pathfindCellSize: PATHFIND_CELL_SIZE,
+      },
+      findEntityById: (entityId) => this.spawnedEntities.get(entityId) ?? null,
+      findFireWeaponTargetForPosition: (attacker, targetX, targetZ) =>
+        this.findFireWeaponTargetForPosition(attacker, targetX, targetZ),
+      canEntityAttackFromStatus: (entity) => this.canEntityAttackFromStatus(entity),
+      canAttackerTargetEntity: (attacker, target, commandSource) =>
+        this.canAttackerTargetEntity(attacker, target, commandSource as AttackCommandSource),
+      setEntityAttackStatus: (entity, isAttacking) => this.setEntityAttackStatus(entity, isAttacking),
+      setEntityAimingWeaponStatus: (entity, isAiming) => this.setEntityAimingWeaponStatus(entity, isAiming),
+      setEntityFiringWeaponStatus: (entity, isFiring) => this.setEntityFiringWeaponStatus(entity, isFiring),
+      setEntityIgnoringStealthStatus: (entity, isIgnoringStealth) =>
+        this.setEntityIgnoringStealthStatus(entity, isIgnoringStealth),
+      refreshEntitySneakyMissWindow: (entity) => this.refreshEntitySneakyMissWindow(entity),
+      issueMoveTo: (entityId, targetX, targetZ, attackDistance) =>
+        this.issueMoveTo(entityId, targetX, targetZ, attackDistance),
+      computeAttackRetreatTarget: (attacker, target, weapon) =>
+        this.computeAttackRetreatTarget(attacker, target, weapon),
+      rebuildEntityScatterTargets: (entity) => this.rebuildEntityScatterTargets(entity),
+      resolveWeaponPreAttackDelayFrames: (attacker, target, weapon) =>
+        this.resolveWeaponPreAttackDelayFrames(attacker, target, weapon),
+      queueWeaponDamageEvent: (attacker, target, weapon) =>
+        this.queueWeaponDamageEvent(attacker, target, weapon),
+      recordConsecutiveAttackShot: (attacker, targetEntityId) =>
+        this.recordConsecutiveAttackShot(attacker, targetEntityId),
+      resolveWeaponDelayFrames: (weapon) => this.resolveWeaponDelayFrames(weapon),
+      resolveTargetAnchorPosition: (target) => ({
+        x: (target as { mesh?: { position?: { x?: number } } }).mesh?.position?.x ?? target.x,
+        z: (target as { mesh?: { position?: { z?: number } } }).mesh?.position?.z ?? target.z,
+      }),
+    });
   }
 
   private queueWeaponDamageEvent(attacker: MapEntity, target: MapEntity, weapon: AttackWeaponProfile): void {
