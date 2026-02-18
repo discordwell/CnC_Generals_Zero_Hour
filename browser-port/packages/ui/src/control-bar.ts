@@ -79,6 +79,7 @@ export enum GUICommandType {
   GUICOMMANDMODE_CONVERT_TO_CARBOMB,
   GUICOMMANDMODE_SABOTAGE_BUILDING,
   GUICOMMANDMODE_PLACE_BEACON,
+  GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
   GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT,
   GUI_COMMAND_SPECIAL_POWER_CONSTRUCT,
   GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT,
@@ -120,6 +121,7 @@ const GUI_COMMAND_NAME_TO_TYPE = new Map<string, GUICommandType>([
   ['CONVERT_TO_CARBOMB', GUICommandType.GUICOMMANDMODE_CONVERT_TO_CARBOMB],
   ['SABOTAGE_BUILDING', GUICommandType.GUICOMMANDMODE_SABOTAGE_BUILDING],
   ['PLACE_BEACON', GUICommandType.GUICOMMANDMODE_PLACE_BEACON],
+  ['SPECIAL_POWER_FROM_COMMAND_CENTER', GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER],
   ['SPECIAL_POWER_FROM_SHORTCUT', GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT],
   ['SPECIAL_POWER_CONSTRUCT', GUICommandType.GUI_COMMAND_SPECIAL_POWER_CONSTRUCT],
   ['SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT', GUICommandType.GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT],
@@ -309,8 +311,15 @@ function sourceSlotHotkey(slot: number): string | undefined {
   if (slot >= 1 && slot <= 9) {
     return `${slot}`;
   }
-  // TODO: Source parity gap. Slots 10-12 support additional input bindings in
-  // game key maps; only numeric hotkeys 1-9 are wired in app input so far.
+  if (slot === 10) {
+    return '0';
+  }
+  if (slot === 11) {
+    return '-';
+  }
+  if (slot === 12) {
+    return '=';
+  }
   return undefined;
 }
 
@@ -404,10 +413,6 @@ export class ControlBarModel {
       if (!normalized) {
         continue;
       }
-      // TODO: Source parity gap: true multi-select command cards are built from
-      // per-slot command intersections across all selected objects. This model
-      // currently receives a prebuilt button list and can only apply option-based
-      // filtering.
       if (!shouldExposeForCurrentSelection(normalized, this.selectionState)) {
         continue;
       }

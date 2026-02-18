@@ -227,6 +227,9 @@ describe('ControlBarModel', () => {
     expect(guiCommandTypeFromSourceName('GUI_COMMAND_STOP')).toBe(
       GUICommandType.GUI_COMMAND_STOP,
     );
+    expect(guiCommandTypeFromSourceName('SPECIAL_POWER_FROM_COMMAND_CENTER')).toBe(
+      GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+    );
     expect(guiCommandTypeFromSourceName('invalid')).toBeNull();
 
     expect(
@@ -364,6 +367,35 @@ describe('ControlBarModel', () => {
       commandOption: CommandOption.NEED_TARGET_POS,
       selectedObjectIds: [11],
       targetPosition: [25, 0, 40],
+    });
+  });
+
+  it('activates 10-12 slot buttons by slot index', () => {
+    const model = new ControlBarModel();
+    model.setSelectionState({
+      selectedObjectIds: [4],
+      selectedObjectName: 'Tank',
+    });
+    model.setButtons([
+      {
+        id: 'slot-10-stop',
+        slot: 10,
+        label: 'Stop',
+        commandType: GUICommandType.GUI_COMMAND_STOP,
+      },
+    ]);
+
+    const activation = model.activateSlot(10);
+    expect(activation.status).toBe('issued');
+    if (activation.status !== 'issued') {
+      throw new Error('Expected slot 10 command to issue');
+    }
+
+    expect(activation.command).toEqual({
+      sourceButtonId: 'slot-10-stop',
+      commandType: GUICommandType.GUI_COMMAND_STOP,
+      commandOption: CommandOption.COMMAND_OPTION_NONE,
+      selectedObjectIds: [4],
     });
   });
 
@@ -506,14 +538,14 @@ describe('ControlBarModel', () => {
     expect(hud[1]?.hotkey).toBe('2');
   });
 
-  it('assigns numeric hotkeys only for slots 1-9', () => {
+  it('assigns numeric/top-row hotkeys for 12 control bar slots', () => {
     const model = new ControlBarModel();
     const hud = model.getHudSlots();
 
     expect(hud[0]?.hotkey).toBe('1');
     expect(hud[8]?.hotkey).toBe('9');
-    expect(hud[9]?.hotkey).toBeUndefined();
-    expect(hud[10]?.hotkey).toBeUndefined();
-    expect(hud[11]?.hotkey).toBeUndefined();
+    expect(hud[9]?.hotkey).toBe('0');
+    expect(hud[10]?.hotkey).toBe('-');
+    expect(hud[11]?.hotkey).toBe('=');
   });
 });
