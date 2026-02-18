@@ -1039,6 +1039,10 @@ export function dispatchIssuedControlBarCommands(
           uiRuntime.showMessage('Cancel Unit Build requires a single selected source object.');
           break;
         }
+        const selectedEntityId = selectedEntityIds[0];
+        if (selectedEntityId === undefined) {
+          break;
+        }
         const contextPayload = resolveContextCommandPayload(command.contextPayload);
         if (contextPayload.productionId === null) {
           uiRuntime.showMessage(
@@ -1048,7 +1052,7 @@ export function dispatchIssuedControlBarCommands(
         }
         gameLogic.submitCommand({
           type: 'cancelUnitProduction',
-          entityId: selectedEntityIds[0],
+          entityId: selectedEntityId,
           productionId: contextPayload.productionId,
         });
         playCommandAudio();
@@ -1073,6 +1077,10 @@ export function dispatchIssuedControlBarCommands(
           uiRuntime.showMessage('Cancel Upgrade requires a single selected source object.');
           break;
         }
+        const selectedEntityId = selectedEntityIds[0];
+        if (selectedEntityId === undefined) {
+          break;
+        }
         const contextPayload = resolveContextCommandPayload(command.contextPayload);
         const upgradeName = contextPayload.upgradeName;
         if (!upgradeName) {
@@ -1083,7 +1091,7 @@ export function dispatchIssuedControlBarCommands(
         }
         gameLogic.submitCommand({
           type: 'cancelUpgradeProduction',
-          entityId: selectedEntityIds[0],
+          entityId: selectedEntityId,
           upgradeName,
         });
         playCommandAudio();

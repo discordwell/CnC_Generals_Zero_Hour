@@ -5936,4 +5936,179 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     const second = runProducerDeathUnitRefundTimeline();
     expect(first).toEqual(second);
   });
+
+  it('routes constructBuilding commands through dozer placement and cost spending', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], []),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('Dozer', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [20, 0, 20],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(300);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([2]);
+  });
+
+  it('runs sell command teardown and refunds structure value after sell timer completes', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [], {
+          BuildCost: 300,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('CommandCenter', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.submitCommand({ type: 'sell', entityId: 1 });
+
+    for (let frame = 0; frame < 190; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getSideCredits('America')).toBe(300);
+  });
+
+  it('resolves enterObject hijack actions by transferring target ownership and consuming source unit', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], []),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], []),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Hijacker', 8, 8), makeMapObject('EnemyVehicle', 10, 8)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getEntityIdsByTemplateAndSide('EnemyVehicle', 'America')).toEqual([2]);
+  });
+
+  it('starts HackInternet command loops and deposits periodic side credits', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InternetHacker', 'China', ['INFANTRY'], [
+          makeBlock('Behavior', 'HackInternetAIUpdate ModuleTag_Hack', {
+            UnpackTime: 0,
+            CashUpdateDelay: 0,
+            RegularCashAmount: 25,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('InternetHacker', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 0 });
+    logic.submitCommand({ type: 'hackInternet', entityId: 1 });
+
+    for (let frame = 0; frame < 4; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getSideCredits('China')).toBe(75);
+  });
+
+  it('routes combatDrop commands to passenger evacuate + target attack intents', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CombatTransport', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [0, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+        ]),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('DropInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'DropRifle'] }),
+        ], {
+          BuildCost: 0,
+          BuildTime: 0.1,
+        }),
+      ],
+      weapons: [
+        makeWeaponDef('DropRifle', {
+          AttackRange: 80,
+          PrimaryDamage: 5,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CombatTransport', 8, 8), makeMapObject('EnemyTarget', 10, 8)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'DropInfantry' });
+    for (let frame = 0; frame < 6; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const passengerId = logic.getEntityIdsByTemplate('DropInfantry')[0];
+    expect(passengerId).toBeDefined();
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: 2,
+      targetPosition: null,
+    });
+    for (let frame = 0; frame < 8; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const passengerState = logic.getEntityState(passengerId!);
+    expect(passengerState).not.toBeNull();
+    expect(passengerState?.attackTargetEntityId).toBe(2);
+  });
 });

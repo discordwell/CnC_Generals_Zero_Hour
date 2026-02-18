@@ -428,11 +428,11 @@ function intersectControlBarButtonLists(
     return [];
   }
 
+  const firstSet = buttonSets[0] ?? [];
   if (buttonSets.length === 1) {
-    return [...buttonSets[0]];
+    return [...firstSet];
   }
 
-  const firstSet = buttonSets[0] ?? [];
   const commonBySlot = new Map<number, {
     button: ControlBarButton;
     canAnySource: boolean;
@@ -445,7 +445,7 @@ function intersectControlBarButtonLists(
     if (isMultiSelectButton(button) && !commonBySlot.has(slot)) {
       commonBySlot.set(slot, {
         button,
-        canAnySource: button.enabled,
+        canAnySource: button.enabled === true,
       });
     }
   }
@@ -471,7 +471,7 @@ function intersectControlBarButtonLists(
         continue;
       }
       if (commonButton.button.id === nextButton.id) {
-        commonButton.canAnySource = commonButton.canAnySource || nextButton.enabled;
+        commonButton.canAnySource = commonButton.canAnySource || nextButton.enabled === true;
         continue;
       }
       if (isAttackMoveButton(commonButton.button) || isAttackMoveButton(nextButton)) {
@@ -487,7 +487,7 @@ function intersectControlBarButtonLists(
       if (isAttackMoveButton(currentButton)) {
         commonBySlot.set(slot, {
           button: currentButton,
-          canAnySource: currentButton.enabled,
+          canAnySource: currentButton.enabled === true,
         });
       }
     }

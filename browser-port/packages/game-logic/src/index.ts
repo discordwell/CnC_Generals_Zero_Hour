@@ -7,10 +7,8 @@
 
 import * as THREE from 'three';
 import type {
-  DeterministicFrameSnapshot,
   DeterministicGameLogicCrcSectionWriters,
   Subsystem,
-  XferCrcAccumulator,
 } from '@generals/engine';
 import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
@@ -68,6 +66,13 @@ import {
   updatePathfindPosCell as updatePathfindPosCellImpl,
 } from './navigation-pathfinding.js';
 import {
+  createDeterministicGameLogicCrcSectionWriters as createDeterministicGameLogicCrcSectionWritersImpl,
+} from './deterministic-state.js';
+import {
+  resolveRenderAssetProfile as resolveRenderAssetProfileImpl,
+  shouldPathfindObstacle as shouldPathfindObstacleImpl,
+} from './render-profile-helpers.js';
+import {
   clamp,
   coerceStringArray,
   nominalHeightForCategory,
@@ -102,7 +107,6 @@ import {
   areEquivalentTemplateNames as areEquivalentTemplateNamesImpl,
   doesTemplateMatchMaxSimultaneousType as doesTemplateMatchMaxSimultaneousTypeImpl,
   isStructureObjectDef as isStructureObjectDefImpl,
-  resolveMaxSimultaneousLinkKey as resolveMaxSimultaneousLinkKeyImpl,
   resolveMaxSimultaneousOfType as resolveMaxSimultaneousOfTypeImpl,
   resolveProductionQuantity as resolveProductionQuantityImpl,
 } from './production-templates.js';
@@ -141,9 +145,14 @@ import {
   removeRadarUpgradeFromSide as removeRadarUpgradeFromSideImpl,
 } from './upgrade-modules.js';
 import {
+  type CancelDozerConstructionCommand,
+  type CombatDropCommand,
+  type ConstructBuildingCommand,
+  type EnterObjectCommand,
   type EntityRelationship,
   type GameLogicCommand,
   type GameLogicConfig,
+  type HackInternetCommand,
   type IssueSpecialPowerCommand,
   type LocalScienceAvailability,
   type MapObjectPlacementSummary,
@@ -151,6 +160,7 @@ import {
   type RenderAnimationStateClipCandidates,
   type RenderableEntityState,
   type RenderableObjectCategory,
+  type SellCommand,
   type SelectedEntityInfo,
 } from './types.js';
 
@@ -201,6 +211,10 @@ const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
 const ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE = 0.5;
 const LOGIC_FRAME_RATE = 30;
 const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
+const SOURCE_FRAMES_TO_ALLOW_SCAFFOLD = LOGIC_FRAME_RATE * 1.5;
+const SOURCE_TOTAL_FRAMES_TO_SELL_OBJECT = LOGIC_FRAME_RATE * 3;
+const SOURCE_DEFAULT_SELL_PERCENTAGE = 1.0;
+const SOURCE_HACK_FALLBACK_CASH_AMOUNT = 1;
 
 const NAV_CLEAR = 0;
 const NAV_WATER = 1;
@@ -542,6 +556,37 @@ interface PendingWeaponDamageEvent {
   weapon: AttackWeaponProfile;
 }
 
+interface SellingEntityState {
+  sellFrame: number;
+  constructionPercent: number;
+}
+
+interface HackInternetProfile {
+  unpackTimeFrames: number;
+  cashUpdateDelayFrames: number;
+  regularCashAmount: number;
+  veteranCashAmount: number;
+  eliteCashAmount: number;
+  heroicCashAmount: number;
+}
+
+interface HackInternetRuntimeState {
+  cashUpdateDelayFrames: number;
+  cashAmountPerCycle: number;
+  nextCashFrame: number;
+}
+
+interface PendingEnterObjectActionState {
+  targetObjectId: number;
+  action: EnterObjectCommand['action'];
+}
+
+interface PendingCombatDropActionState {
+  targetObjectId: number | null;
+  targetX: number;
+  targetZ: number;
+}
+
 interface MapEntity {
   id: number;
   templateName: string;
@@ -668,7 +713,6 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
-  private readonly crcFloatScratch = new DataView(new ArrayBuffer(4));
   private readonly sideCredits = new Map<string, number>();
   private readonly sidePlayerTypes = new Map<string, SidePlayerType>();
   private readonly sideUpgradesInProduction = new Map<string, Set<string>>();
@@ -687,6 +731,10 @@ export class GameLogicSubsystem implements Subsystem {
     state: RenderableEntityState;
     expireFrame: number;
   }>();
+  private readonly sellingEntities = new Map<number, SellingEntityState>();
+  private readonly hackInternetStateByEntityId = new Map<number, HackInternetRuntimeState>();
+  private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
+  private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
   private localPlayerSciencePurchasePoints = 0;
   private localPlayerIndex = 0;
 
@@ -803,12 +851,26 @@ export class GameLogicSubsystem implements Subsystem {
    */
   createDeterministicGameLogicCrcSectionWriters():
     DeterministicGameLogicCrcSectionWriters<unknown> {
-    return {
-      writeObjects: (crc, snapshot) => this.writeDeterministicObjectsCrc(crc, snapshot),
-      writePartitionManager: (crc, snapshot) => this.writeDeterministicPartitionManagerCrc(crc, snapshot),
-      writePlayerList: (crc, snapshot) => this.writeDeterministicPlayerListCrc(crc, snapshot),
-      writeAi: (crc, snapshot) => this.writeDeterministicAiCrc(crc, snapshot),
-    };
+    return createDeterministicGameLogicCrcSectionWritersImpl({
+      spawnedEntities: this.spawnedEntities,
+      navigationGrid: this.navigationGrid,
+      bridgeSegments: this.bridgeSegments,
+      bridgeSegmentByControlEntity: this.bridgeSegmentByControlEntity,
+      selectedEntityId: this.selectedEntityId,
+      teamRelationshipOverrides: this.teamRelationshipOverrides,
+      playerRelationshipOverrides: this.playerRelationshipOverrides,
+      placementSummary: this.placementSummary,
+      sideKindOfProductionCostModifiers: this.sideKindOfProductionCostModifiers,
+      sidePowerBonus: this.sidePowerBonus,
+      sideRadarState: this.sideRadarState,
+      frameCounter: this.frameCounter,
+      nextId: this.nextId,
+      animationTime: this.animationTime,
+      isAttackMoveToMode: this.isAttackMoveToMode,
+      previousAttackMoveToggleDown: this.previousAttackMoveToggleDown,
+      config: this.config,
+      commandQueue: this.commandQueue,
+    });
   }
 
   /**
@@ -894,6 +956,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProduction();
     this.updateCombat();
     this.updateEntityMovement(dt);
+    this.updatePendingEnterObjectActions();
+    this.updatePendingCombatDropActions();
+    this.updateHackInternet();
+    this.updateSellingEntities();
     this.updateRenderStates();
     this.updateWeaponIdleAutoReload();
     this.updatePendingWeaponDamage();
@@ -1550,7 +1616,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private getSciencePurchaseCost(scienceDef: ScienceDef): number {
     const costRaw = readNumericField(scienceDef.fields, ['SciencePurchasePointCost']);
-    if (!Number.isFinite(costRaw)) {
+    if (costRaw === null || !Number.isFinite(costRaw)) {
       return 0;
     }
     return Math.max(0, Math.trunc(costRaw));
@@ -2192,180 +2258,7 @@ export class GameLogicSubsystem implements Subsystem {
     renderAssetResolved: boolean;
     renderAnimationStateClips: RenderAnimationStateClipCandidates;
   } {
-    const renderAssetCandidates = this.collectRenderAssetCandidates(objectDef);
-    const renderAssetPath = this.resolveRenderAssetPathFromCandidates(renderAssetCandidates);
-    return {
-      renderAssetCandidates,
-      renderAssetPath,
-      renderAssetResolved: renderAssetPath !== null,
-      renderAnimationStateClips: this.collectRenderAnimationStateClips(objectDef),
-    };
-  }
-
-  private collectRenderAssetCandidates(objectDef: ObjectDef | undefined): string[] {
-    if (!objectDef) {
-      return [];
-    }
-
-    const candidates: string[] = [];
-    candidates.push(...this.collectRenderAssetCandidatesInFields(objectDef.fields));
-
-    for (const block of objectDef.blocks) {
-      candidates.push(...this.collectRenderAssetCandidatesInBlock(block));
-    }
-
-    return candidates.filter((candidate) => candidate !== null).map((candidate) => candidate.trim()).filter(Boolean);
-  }
-
-  private resolveRenderAssetPathFromCandidates(renderAssetCandidates: string[]): string | null {
-    for (const candidate of renderAssetCandidates) {
-      if (candidate.length === 0) {
-        continue;
-      }
-      if (candidate.toUpperCase() === 'NONE') {
-        continue;
-      }
-      return candidate;
-    }
-    return null;
-  }
-
-  private collectRenderAssetCandidatesInBlock(block: IniBlock): string[] {
-    const candidates = this.collectRenderAssetCandidatesInFields(block.fields);
-    for (const childBlock of block.blocks) {
-      candidates.push(...this.collectRenderAssetCandidatesInBlock(childBlock));
-    }
-    return candidates;
-  }
-
-  private collectRenderAssetCandidatesInFields(fields: Record<string, IniValue>): string[] {
-    const candidateFieldNames = ['Model', 'ModelName', 'FileName'];
-    const candidates: string[] = [];
-    for (const fieldName of candidateFieldNames) {
-      const value = this.readIniFieldValue(fields, fieldName);
-      for (const tokenGroup of this.extractIniValueTokens(value)) {
-        for (const token of tokenGroup) {
-          if (typeof token === 'string') {
-            const trimmed = token.trim();
-            if (trimmed.length > 0) {
-              candidates.push(trimmed);
-            }
-          }
-        }
-      }
-    }
-    return candidates;
-  }
-
-  private collectRenderAnimationStateClips(objectDef: ObjectDef | undefined): RenderAnimationStateClipCandidates {
-    if (!objectDef) {
-      return {};
-    }
-
-    const renderAnimationStateClips: RenderAnimationStateClipCandidates = {};
-    const used = new Map<RenderAnimationState, Set<string>>();
-
-    const addClip = (state: RenderAnimationState, clipName: string): void => {
-      const trimmed = clipName.trim();
-      if (!trimmed || trimmed.toUpperCase() === 'NONE') {
-        return;
-      }
-      const seen = used.get(state) ?? new Set<string>();
-      const canonical = trimmed.toUpperCase();
-      if (seen.has(canonical)) {
-        return;
-      }
-      seen.add(canonical);
-      used.set(state, seen);
-      renderAnimationStateClips[state] = renderAnimationStateClips[state] ?? [];
-      renderAnimationStateClips[state]!.push(trimmed);
-    };
-
-    const visitBlock = (block: IniBlock): void => {
-      if (block.type.toUpperCase() === 'MODELCONDITIONSTATE') {
-        const inferredStateFromName = this.inferRenderAnimationStateFromConditionStateName(block.name);
-        for (const [fieldName, fieldValue] of Object.entries(block.fields)) {
-          const inferredState = this.inferRenderAnimationStateFromFieldName(
-            fieldName,
-            inferredStateFromName,
-          );
-          if (!inferredState) {
-            continue;
-          }
-
-          for (const tokenGroup of this.extractIniValueTokens(fieldValue)) {
-            for (const token of tokenGroup) {
-              if (typeof token === 'string') {
-                addClip(inferredState, token);
-              }
-            }
-          }
-        }
-      }
-
-      for (const childBlock of block.blocks) {
-        visitBlock(childBlock);
-      }
-    };
-
-    for (const block of objectDef.blocks) {
-      visitBlock(block);
-    }
-
-    return renderAnimationStateClips;
-  }
-
-  private inferRenderAnimationStateFromFieldName(
-    fieldName: string,
-    fallback: RenderAnimationState | null,
-  ): RenderAnimationState | null {
-    const normalizedFieldName = fieldName.toUpperCase();
-    // Source parser supports only `Animation` and `IdleAnimation` for condition-state
-    // clips (see W3DModelDraw::parseConditionState).
-    if (normalizedFieldName === 'ANIMATION') {
-      return fallback;
-    }
-    if (normalizedFieldName === 'IDLEANIMATION') {
-      return 'IDLE';
-    }
-    return null;
-  }
-
-  private inferRenderAnimationStateFromConditionStateName(conditionStateName: string): RenderAnimationState | null {
-    const normalizedConditionStateName = conditionStateName.toUpperCase();
-    if (
-      normalizedConditionStateName.includes('ATTACK')
-      || normalizedConditionStateName.includes('FIRING')
-      || normalizedConditionStateName.includes('PREATTACK')
-      || normalizedConditionStateName.includes('RELOADING')
-      || normalizedConditionStateName.includes('BETWEEN_FIRING_SHOTS')
-      || normalizedConditionStateName.includes('USING_WEAPON')
-    ) {
-      return 'ATTACK';
-    }
-    if (normalizedConditionStateName.includes('MOVE') || normalizedConditionStateName.includes('RUN')
-      || normalizedConditionStateName.includes('WALK')
-      || normalizedConditionStateName.includes('MOVING')) {
-      return 'MOVE';
-    }
-    if (
-      normalizedConditionStateName.includes('DEATH')
-      || normalizedConditionStateName.includes('DIE')
-      || normalizedConditionStateName.includes('DEAD')
-      || normalizedConditionStateName.includes('DESTROY')
-      || normalizedConditionStateName.includes('DYING')
-    ) {
-      return 'DIE';
-    }
-    if (
-      normalizedConditionStateName.includes('IDLE')
-      || normalizedConditionStateName.includes('STAND')
-      || normalizedConditionStateName.includes('DEFAULT')
-      || normalizedConditionStateName.includes('NORMAL')
-    ) {
-      return 'IDLE';
-    }
-    return null;
+    return resolveRenderAssetProfileImpl(objectDef);
   }
 
   private resolveForwardUnitVector(entity: MapEntity): { x: number; z: number } {
@@ -2420,35 +2313,15 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private shouldPathfindObstacle(objectDef: ObjectDef | undefined): boolean {
-    if (!objectDef) {
-      return false;
-    }
-
-    const kinds = this.normalizeKindOf(objectDef.kindOf);
-    const hasKindOf = (kind: string): boolean => kinds.has(kind);
-
-    if (hasKindOf('MINE') || hasKindOf('PROJECTILE') || hasKindOf('BRIDGE_TOWER')) {
-      return false;
-    }
-
-    if (!hasKindOf('STRUCTURE')) {
-      return false;
-    }
-
-    if (this.isMobileObject(objectDef, kinds)) {
-      return false;
-    }
-
-    if (this.isSmallGeometry(objectDef.fields)) {
-      return false;
-    }
-
-    const heightAboveTerrain = readNumericField(objectDef.fields, ['HeightAboveTerrain', 'Height']);
-    if (heightAboveTerrain !== null && heightAboveTerrain > MAP_XY_FACTOR && !hasKindOf('BLAST_CRATER')) {
-      return false;
-    }
-
-    return true;
+    return shouldPathfindObstacleImpl(
+      objectDef,
+      {
+        mapXyFactor: MAP_XY_FACTOR,
+        normalizeKindOf: (kindOf) => this.normalizeKindOf(kindOf),
+        isMobileObject: (nextObjectDef, kinds) => this.isMobileObject(nextObjectDef, kinds),
+        isSmallGeometry: (fields) => this.isSmallGeometry(fields),
+      },
+    );
   }
 
   private resolveAttackMoveDistance(entity: MapEntity | undefined): number {
@@ -2830,6 +2703,9 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private normalizeWeaponSlot(weaponSlot: number | null): number | null {
+    if (weaponSlot === null || !Number.isFinite(weaponSlot)) {
+      return null;
+    }
     const normalized = Math.trunc(weaponSlot);
     if (!Number.isFinite(normalized) || normalized < 0 || normalized > 2) {
       return null;
@@ -3526,6 +3402,45 @@ export class GameLogicSubsystem implements Subsystem {
       sneakyOffsetWhenAttacking,
       attackersMissPersistFrames,
     };
+  }
+
+  private extractHackInternetProfile(objectDef: ObjectDef | undefined): HackInternetProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: HackInternetProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'HACKINTERNETAIUPDATE') {
+          const unpackTimeMs = readNumericField(block.fields, ['UnpackTime']) ?? 0;
+          const cashUpdateDelayMs = readNumericField(block.fields, ['CashUpdateDelay']) ?? 0;
+          profile = {
+            unpackTimeFrames: this.msToLogicFrames(unpackTimeMs),
+            cashUpdateDelayFrames: this.msToLogicFrames(cashUpdateDelayMs),
+            regularCashAmount: Math.max(0, Math.trunc(readNumericField(block.fields, ['RegularCashAmount']) ?? 0)),
+            veteranCashAmount: Math.max(0, Math.trunc(readNumericField(block.fields, ['VeteranCashAmount']) ?? 0)),
+            eliteCashAmount: Math.max(0, Math.trunc(readNumericField(block.fields, ['EliteCashAmount']) ?? 0)),
+            heroicCashAmount: Math.max(0, Math.trunc(readNumericField(block.fields, ['HeroicCashAmount']) ?? 0)),
+          };
+          return;
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
   }
 
   private extractUpgradeModules(objectDef: ObjectDef | undefined): UpgradeModuleProfile[] {
@@ -4950,10 +4865,12 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'moveTo':
+        this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
         return;
       case 'attackMoveTo':
+        this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(
           command.entityId,
@@ -4963,16 +4880,19 @@ export class GameLogicSubsystem implements Subsystem {
         );
         return;
       case 'guardPosition':
+        this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
         return;
       case 'guardObject':
+        this.cancelEntityCommandPathActions(command.entityId);
         this.issueAttackEntity(command.entityId, command.targetEntityId, 'PLAYER');
         return;
       case 'setRallyPoint':
         this.setEntityRallyPoint(command.entityId, command.targetX, command.targetZ);
         return;
       case 'attackEntity':
+        this.cancelEntityCommandPathActions(command.entityId);
         this.issueAttackEntity(
           command.entityId,
           command.targetEntityId,
@@ -4980,6 +4900,7 @@ export class GameLogicSubsystem implements Subsystem {
         );
         return;
       case 'fireWeapon':
+        this.cancelEntityCommandPathActions(command.entityId);
         this.issueFireWeapon(
           command.entityId,
           command.weaponSlot,
@@ -4989,6 +4910,7 @@ export class GameLogicSubsystem implements Subsystem {
         );
         return;
       case 'switchWeapon': {
+        this.cancelEntityCommandPathActions(command.entityId);
         const entity = this.spawnedEntities.get(command.entityId);
         const weaponSlot = this.normalizeWeaponSlot(command.weaponSlot);
         if (!entity || entity.destroyed || weaponSlot === null) {
@@ -4999,6 +4921,7 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'stop':
+        this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
         return;
@@ -5099,12 +5022,10 @@ export class GameLogicSubsystem implements Subsystem {
         this.routeIssueSpecialPowerCommand(command);
         return;
       case 'exitContainer':
-        // TODO(source parity): wire MSG_EXIT / object containment exit path.
-        // Source source file: ControlBarCommandProcessing.cpp and GameLogicDispatch.cpp MSG_EXIT.
+        this.handleExitContainerCommand(command.entityId);
         return;
       case 'evacuate': {
-        // TODO(source parity): wire group-level MSG_EVACUATE handling.
-        // Source behavior lives in GameLogicDispatch.cpp MSG_EVACUATE with selected-group semantics.
+        this.handleEvacuateCommand(command.entityId);
         return;
       }
       case 'executeRailedTransport':
@@ -5114,44 +5035,30 @@ export class GameLogicSubsystem implements Subsystem {
         // TODO(source parity): Source GUI_COMMAND_BEACON_DELETE path currently no message in current code path.
         return;
       case 'hackInternet':
-        // TODO(source parity): wire MSG_INTERNET_HACK / HackInternetAIUpdate behavior.
+        this.handleHackInternetCommand(command);
         return;
       case 'toggleOvercharge':
         // TODO(source parity): wire MSG_TOGGLE_OVERCHARGE / power plant overcharge behavior.
         return;
       case 'combatDrop':
-        // TODO(source parity): wire MSG_COMBATDROP_AT_OBJECT / MSG_COMBATDROP_AT_LOCATION and AI/group update.
+        this.handleCombatDropCommand(command);
         return;
       case 'placeBeacon':
         // TODO(source parity): Source path is GameMessage::MSG_PLACE_BEACON via GUICommandTranslator.
         // Requires terrain/world placement validation and single-instance beacon limits.
         return;
       case 'enterObject':
-        // TODO(source parity): Source path is GUI CommandXlat createEnterMessage -> MSG_ENTER.
-        // command.action is currently preserved for future action-specific validation parity.
-        // In source, this also carries sabotage/hijack/car-bomb semantics through target/action validity.
+        this.handleEnterObjectCommand(command);
         return;
       case 'constructBuilding':
-        // TODO(source parity): Source path is GUI_COMMAND_DOZER_CONSTRUCT placement flow:
-        // GUICommandTranslator/GUI callbacks -> MSG_DOZER_CONSTRUCT / MSG_DOZER_CONSTRUCT_LINE.
+        this.handleConstructBuildingCommand(command);
         return;
       case 'cancelDozerConstruction':
-        // TODO(source parity): Source path is MSG_DOZER_CANCEL_CONSTRUCT with ownership/status checks.
+        this.handleCancelDozerConstructionCommand(command);
         return;
-      case 'sell': {
-        const entity = this.spawnedEntities.get(command.entityId);
-        if (!entity || entity.destroyed) {
-          return;
-        }
-        if (entity.category !== 'building') {
-          return;
-        }
-        // TODO(source parity): Implement sellObject equivalent.
-        // Source behavior from AIGroup::groupSell / BuildAssistant::sellObject includes
-        // timed teardown + refund logic and contain/parking side effects.
-        this.markEntityDestroyed(command.entityId, -1);
+      case 'sell':
+        this.handleSellCommand(command);
         return;
-      }
       default:
         return;
     }
@@ -5265,6 +5172,598 @@ export class GameLogicSubsystem implements Subsystem {
     // TODO(source parity): replace this with full module dispatch from SpecialPowerTemplate lookup.
     // See GeneralsMD/Code/GameLogic/Object/SpecialPower/* for execution modules and
     // ControlBarCommand.cpp for object-target dispatch semantics.
+  }
+
+  private cancelEntityCommandPathActions(entityId: number): void {
+    this.hackInternetStateByEntityId.delete(entityId);
+    this.pendingEnterObjectActions.delete(entityId);
+    this.pendingCombatDropActions.delete(entityId);
+  }
+
+  private handleExitContainerCommand(entityId: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return;
+    }
+
+    const containerId = entity.parkingSpaceProducerId ?? entity.helixCarrierId;
+    if (containerId === null) {
+      return;
+    }
+
+    const container = this.spawnedEntities.get(containerId);
+    if (!container || container.destroyed) {
+      this.releaseEntityFromContainer(entity);
+      return;
+    }
+
+    this.cancelEntityCommandPathActions(entity.id);
+    this.releaseEntityFromContainer(entity);
+    entity.x = container.x;
+    entity.z = container.z;
+    entity.y = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
+    this.updatePathfindPosCell(entity);
+
+    if (entity.canMove) {
+      this.issueMoveTo(entity.id, container.x + MAP_XY_FACTOR, container.z);
+    }
+  }
+
+  private handleEvacuateCommand(entityId: number): void {
+    const container = this.spawnedEntities.get(entityId);
+    if (!container || container.destroyed) {
+      return;
+    }
+
+    this.cancelEntityCommandPathActions(container.id);
+    this.evacuateContainedEntities(container, container.x, container.z, null);
+  }
+
+  private handleHackInternetCommand(command: HackInternetCommand): void {
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    if (!objectDef) {
+      return;
+    }
+
+    const profile = this.extractHackInternetProfile(objectDef);
+    if (!profile) {
+      return;
+    }
+
+    // Source parity subset: MSG_INTERNET_HACK clears active AI state and enters
+    // HackInternetAIUpdate (UNPACKING -> HACK_INTERNET persistent loop).
+    this.cancelEntityCommandPathActions(entity.id);
+    this.clearAttackTarget(entity.id);
+    this.stopEntity(entity.id);
+
+    const cashUpdateDelayFrames = Math.max(0, profile.cashUpdateDelayFrames);
+    const cashAmountPerCycle = profile.regularCashAmount > 0
+      ? profile.regularCashAmount
+      : SOURCE_HACK_FALLBACK_CASH_AMOUNT;
+    const initialDelayFrames = Math.max(1, profile.unpackTimeFrames + cashUpdateDelayFrames);
+    this.hackInternetStateByEntityId.set(entity.id, {
+      cashUpdateDelayFrames,
+      cashAmountPerCycle,
+      nextCashFrame: this.frameCounter + initialDelayFrames,
+    });
+  }
+
+  private handleCombatDropCommand(command: CombatDropCommand): void {
+    const source = this.spawnedEntities.get(command.entityId);
+    if (!source || source.destroyed) {
+      return;
+    }
+
+    let targetObjectId: number | null = null;
+    let targetX: number;
+    let targetZ: number;
+    if (command.targetObjectId !== null) {
+      const target = this.spawnedEntities.get(command.targetObjectId);
+      if (!target || target.destroyed) {
+        return;
+      }
+      targetObjectId = target.id;
+      targetX = target.x;
+      targetZ = target.z;
+    } else if (command.targetPosition !== null) {
+      targetX = command.targetPosition[0];
+      targetZ = command.targetPosition[2];
+    } else {
+      return;
+    }
+
+    // Source parity subset: MSG_COMBATDROP routes through AIGroup::groupCombatDrop,
+    // which delegates per-unit AI combat-drop behavior.
+    this.cancelEntityCommandPathActions(source.id);
+    this.clearAttackTarget(source.id);
+    this.issueMoveTo(source.id, targetX, targetZ);
+    this.pendingCombatDropActions.set(source.id, {
+      targetObjectId,
+      targetX,
+      targetZ,
+    });
+  }
+
+  private handleEnterObjectCommand(command: EnterObjectCommand): void {
+    const source = this.spawnedEntities.get(command.entityId);
+    const target = this.spawnedEntities.get(command.targetObjectId);
+    if (!source || !target || source.destroyed || target.destroyed) {
+      return;
+    }
+
+    // Source parity subset: MSG_ENTER routes through AIGroup::groupEnter into
+    // aiEnter target-action state. We track pending enter intent and resolve a
+    // minimal action subset on contact.
+    this.cancelEntityCommandPathActions(source.id);
+    this.clearAttackTarget(source.id);
+    this.issueMoveTo(source.id, target.x, target.z);
+    this.pendingEnterObjectActions.set(source.id, {
+      targetObjectId: target.id,
+      action: command.action,
+    });
+  }
+
+  private handleConstructBuildingCommand(command: ConstructBuildingCommand): void {
+    const constructor = this.spawnedEntities.get(command.entityId);
+    if (!constructor || constructor.destroyed) {
+      return;
+    }
+
+    const constructorKindOf = this.resolveEntityKindOfSet(constructor);
+    if (!constructorKindOf.has('DOZER')) {
+      return;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return;
+    }
+
+    const objectDef = findObjectDefByName(registry, command.templateName);
+    if (!objectDef) {
+      return;
+    }
+
+    const side = this.normalizeSide(constructor.side);
+    if (!side) {
+      return;
+    }
+    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
+      return;
+    }
+
+    const placementPositions = this.resolveConstructPlacementPositions(command, objectDef);
+    if (placementPositions.length === 0) {
+      return;
+    }
+
+    // Source parity subset: BuildAssistant::buildObjectNow/LineNow placement flow
+    // is routed here, while full BuildAssistant legality/path checks remain TODO.
+    const buildCost = this.resolveObjectBuildCost(objectDef, side);
+    const maxSimultaneousOfType = this.resolveMaxSimultaneousOfType(objectDef);
+    for (const [x, y, z] of placementPositions) {
+      if (maxSimultaneousOfType > 0) {
+        const existingCount = this.countActiveEntitiesForMaxSimultaneousForSide(side, objectDef);
+        if (existingCount >= maxSimultaneousOfType) {
+          break;
+        }
+      }
+
+      if (buildCost > 0) {
+        const withdrawn = this.withdrawSideCredits(side, buildCost);
+        if (withdrawn < buildCost) {
+          if (withdrawn > 0) {
+            this.depositSideCredits(side, withdrawn);
+          }
+          break;
+        }
+      }
+
+      const created = this.spawnConstructedObject(
+        constructor,
+        objectDef,
+        [x, y, z],
+        command.angle,
+      );
+      if (!created) {
+        if (buildCost > 0) {
+          this.depositSideCredits(side, buildCost);
+        }
+        break;
+      }
+    }
+  }
+
+  private handleCancelDozerConstructionCommand(command: CancelDozerConstructionCommand): void {
+    const building = this.spawnedEntities.get(command.entityId);
+    if (!building || building.destroyed || building.category !== 'building') {
+      return;
+    }
+
+    // Source parity: MSG_DOZER_CANCEL_CONSTRUCT only applies to structures under construction.
+    if (!this.entityHasObjectStatus(building, 'UNDER_CONSTRUCTION')) {
+      return;
+    }
+
+    if (!this.entityHasObjectStatus(building, 'RECONSTRUCTING')) {
+      const objectDef = this.resolveObjectDefByTemplateName(building.templateName);
+      if (objectDef) {
+        const amount = this.resolveObjectBuildCost(objectDef, building.side ?? '');
+        this.depositSideCredits(building.side, amount);
+      }
+    }
+
+    this.markEntityDestroyed(building.id, -1);
+  }
+
+  private handleSellCommand(command: SellCommand): void {
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed) {
+      return;
+    }
+    if (entity.category !== 'building') {
+      return;
+    }
+    if (this.sellingEntities.has(entity.id)) {
+      return;
+    }
+
+    // Source parity subset: BuildAssistant::sellObject starts a timed teardown
+    // (construction-percent countdown) and refunds queue production immediately.
+    this.cancelEntityCommandPathActions(entity.id);
+    this.clearAttackTarget(entity.id);
+    this.stopEntity(entity.id);
+    this.cancelAndRefundAllProductionOnDeath(entity);
+    entity.objectStatusFlags.add('SOLD');
+    entity.objectStatusFlags.add('UNSELECTABLE');
+    this.removeEntityFromSelection(entity.id);
+
+    if (entity.parkingPlaceProfile) {
+      const parkedEntityIds = Array.from(entity.parkingPlaceProfile.occupiedSpaceEntityIds.values());
+      for (const parkedEntityId of parkedEntityIds) {
+        this.markEntityDestroyed(parkedEntityId, entity.id);
+      }
+    }
+
+    // TODO(C&C source parity): contain->onSelling() passenger behavior is module-specific
+    // and should be routed through full contain module ownership once ported.
+    this.sellingEntities.set(entity.id, {
+      sellFrame: this.frameCounter,
+      constructionPercent: 99.9,
+    });
+  }
+
+  private updatePendingEnterObjectActions(): void {
+    for (const [sourceId, pending] of this.pendingEnterObjectActions.entries()) {
+      const source = this.spawnedEntities.get(sourceId);
+      const target = this.spawnedEntities.get(pending.targetObjectId);
+      if (!source || !target || source.destroyed || target.destroyed) {
+        this.pendingEnterObjectActions.delete(sourceId);
+        continue;
+      }
+
+      const distance = Math.hypot(target.x - source.x, target.z - source.z);
+      const reachDistance = this.resolveEntityInteractionDistance(source, target);
+      if (distance > reachDistance) {
+        if (!source.moving) {
+          this.issueMoveTo(source.id, target.x, target.z);
+        }
+        continue;
+      }
+
+      this.resolvePendingEnterObjectAction(source, target, pending.action);
+      this.pendingEnterObjectActions.delete(sourceId);
+    }
+  }
+
+  private resolvePendingEnterObjectAction(
+    source: MapEntity,
+    target: MapEntity,
+    action: EnterObjectCommand['action'],
+  ): void {
+    if (this.getTeamRelationship(source, target) === RELATIONSHIP_ALLIES) {
+      return;
+    }
+
+    if (action === 'hijackVehicle' || action === 'convertToCarBomb') {
+      if (target.category !== 'vehicle') {
+        return;
+      }
+      const sourceSide = this.normalizeSide(source.side);
+      if (!sourceSide) {
+        return;
+      }
+
+      this.captureEntity(target.id, sourceSide);
+      if (action === 'convertToCarBomb') {
+        target.objectStatusFlags.add('CARBOMB');
+        // TODO(C&C source parity): convert-to-carbomb should route through full
+        // model-condition/special-power ownership instead of status token only.
+      }
+      this.markEntityDestroyed(source.id, target.id);
+      return;
+    }
+
+    if (action === 'sabotageBuilding' && target.category === 'building') {
+      target.objectStatusFlags.add('DISABLED_HACKED');
+      this.stopEntity(source.id);
+      // TODO(C&C source parity): sabotage duration/recovery should come from the
+      // owning special-power update module instead of persistent status.
+    }
+  }
+
+  private updatePendingCombatDropActions(): void {
+    for (const [sourceId, pending] of this.pendingCombatDropActions.entries()) {
+      const source = this.spawnedEntities.get(sourceId);
+      if (!source || source.destroyed) {
+        this.pendingCombatDropActions.delete(sourceId);
+        continue;
+      }
+
+      if (source.moving) {
+        continue;
+      }
+
+      const distance = Math.hypot(pending.targetX - source.x, pending.targetZ - source.z);
+      const dropReachDistance = this.resolveEntityMajorRadius(source) + MAP_XY_FACTOR;
+      if (distance > dropReachDistance) {
+        this.issueMoveTo(source.id, pending.targetX, pending.targetZ);
+        continue;
+      }
+
+      this.evacuateContainedEntities(source, pending.targetX, pending.targetZ, pending.targetObjectId);
+      this.pendingCombatDropActions.delete(sourceId);
+    }
+  }
+
+  private updateHackInternet(): void {
+    for (const [entityId, hackState] of this.hackInternetStateByEntityId.entries()) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        this.hackInternetStateByEntityId.delete(entityId);
+        continue;
+      }
+
+      if (this.frameCounter < hackState.nextCashFrame) {
+        continue;
+      }
+
+      this.depositSideCredits(entity.side, hackState.cashAmountPerCycle);
+      const cycleDelay = Math.max(1, hackState.cashUpdateDelayFrames);
+      hackState.nextCashFrame = this.frameCounter + cycleDelay;
+    }
+  }
+
+  private updateSellingEntities(): void {
+    for (const [entityId, sellState] of this.sellingEntities.entries()) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        this.sellingEntities.delete(entityId);
+        continue;
+      }
+
+      if (this.frameCounter - sellState.sellFrame >= SOURCE_FRAMES_TO_ALLOW_SCAFFOLD) {
+        sellState.constructionPercent -= (100.0 / SOURCE_TOTAL_FRAMES_TO_SELL_OBJECT);
+      }
+
+      if (sellState.constructionPercent <= -50.0) {
+        this.depositSideCredits(entity.side, this.resolveSellRefundAmount(entity));
+        this.markEntityDestroyed(entity.id, -1);
+        this.sellingEntities.delete(entityId);
+      }
+    }
+  }
+
+  private resolveSellRefundAmount(entity: MapEntity): number {
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    if (!objectDef) {
+      return 0;
+    }
+
+    const refundValue = readNumericField(objectDef.fields, ['RefundValue']) ?? 0;
+    if (refundValue > 0) {
+      return Math.max(0, Math.trunc(refundValue));
+    }
+
+    // Source parity subset: BuildAssistant::update() uses GlobalData::m_sellPercentage.
+    // The transitional runtime currently mirrors source default (1.0) until
+    // global-data ownership is ported into game-logic.
+    const cost = this.resolveObjectBuildCost(objectDef, entity.side ?? '');
+    return Math.max(0, Math.trunc(cost * SOURCE_DEFAULT_SELL_PERCENTAGE));
+  }
+
+  private resolveConstructPlacementPositions(
+    command: ConstructBuildingCommand,
+    objectDef: ObjectDef,
+  ): Array<readonly [number, number, number]> {
+    const startX = command.targetPosition[0];
+    const startZ = command.targetPosition[2];
+    const startY = this.resolveGroundHeight(startX, startZ);
+
+    const kindOf = this.normalizeKindOf(objectDef.kindOf);
+    if (!command.lineEndPosition || !kindOf.has('LINEBUILD')) {
+      return [[startX, startY, startZ]];
+    }
+
+    const endX = command.lineEndPosition[0];
+    const endZ = command.lineEndPosition[2];
+    const deltaX = endX - startX;
+    const deltaZ = endZ - startZ;
+    const length = Math.hypot(deltaX, deltaZ);
+    if (length <= 0) {
+      return [[startX, startY, startZ]];
+    }
+
+    const majorRadius = this.resolveObjectDefMajorRadius(objectDef);
+    const tileSize = majorRadius > 0 ? majorRadius * 2 : MAP_XY_FACTOR;
+    const directionX = deltaX / length;
+    const directionZ = deltaZ / length;
+    const tilesNeeded = Math.max(1, Math.trunc(length / tileSize) + 1);
+    const positions: Array<readonly [number, number, number]> = [];
+    for (let index = 0; index < tilesNeeded; index += 1) {
+      const distance = Math.min(length, index * tileSize);
+      const x = startX + directionX * distance;
+      const z = startZ + directionZ * distance;
+      const y = this.resolveGroundHeight(x, z);
+      positions.push([x, y, z]);
+    }
+
+    return positions;
+  }
+
+  private resolveObjectDefMajorRadius(objectDef: ObjectDef): number {
+    const obstacleGeometry = this.resolveObstacleGeometry(objectDef);
+    if (obstacleGeometry && obstacleGeometry.majorRadius > 0) {
+      return obstacleGeometry.majorRadius;
+    }
+    return MAP_XY_FACTOR / 2;
+  }
+
+  private spawnConstructedObject(
+    constructor: MapEntity,
+    objectDef: ObjectDef,
+    worldPosition: readonly [number, number, number],
+    angle: number,
+  ): MapEntity | null {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return null;
+    }
+
+    const mapObject: MapObjectJSON = {
+      templateName: objectDef.name,
+      angle: THREE.MathUtils.radToDeg(angle),
+      flags: 0,
+      position: {
+        x: worldPosition[0],
+        y: worldPosition[2],
+        z: worldPosition[1] - this.resolveGroundHeight(worldPosition[0], worldPosition[2]),
+      },
+      properties: {},
+    };
+
+    const created = this.createMapEntity(mapObject, objectDef, registry, this.mapHeightmap);
+    if (constructor.side !== undefined) {
+      created.side = constructor.side;
+    }
+    created.controllingPlayerToken = constructor.controllingPlayerToken;
+    this.spawnedEntities.set(created.id, created);
+    return created;
+  }
+
+  private resolveObjectDefByTemplateName(templateName: string): ObjectDef | null {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return null;
+    }
+    return findObjectDefByName(registry, templateName) ?? null;
+  }
+
+  private resolveGroundHeight(worldX: number, worldZ: number): number {
+    if (!this.mapHeightmap) {
+      return 0;
+    }
+    return this.mapHeightmap.getInterpolatedHeight(worldX, worldZ);
+  }
+
+  private resolveEntityMajorRadius(entity: MapEntity): number {
+    if (entity.obstacleGeometry && entity.obstacleGeometry.majorRadius > 0) {
+      return entity.obstacleGeometry.majorRadius;
+    }
+    if (entity.pathDiameter > 0) {
+      return (entity.pathDiameter * MAP_XY_FACTOR) / 2;
+    }
+    return MAP_XY_FACTOR / 2;
+  }
+
+  private resolveEntityInteractionDistance(source: MapEntity, target: MapEntity): number {
+    const sourceRadius = this.resolveEntityMajorRadius(source);
+    const targetRadius = this.resolveEntityMajorRadius(target);
+    const combined = sourceRadius + targetRadius;
+    return combined > 0 ? combined : MAP_XY_FACTOR;
+  }
+
+  private collectContainedEntityIds(containerId: number): number[] {
+    const entityIds = new Set<number>();
+    const container = this.spawnedEntities.get(containerId);
+    if (container?.parkingPlaceProfile) {
+      for (const entityId of container.parkingPlaceProfile.occupiedSpaceEntityIds.values()) {
+        entityIds.add(entityId);
+      }
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (entity.parkingSpaceProducerId === containerId || entity.helixCarrierId === containerId) {
+        entityIds.add(entity.id);
+      }
+    }
+
+    return Array.from(entityIds.values()).sort((left, right) => left - right);
+  }
+
+  private releaseEntityFromContainer(entity: MapEntity): void {
+    if (entity.parkingSpaceProducerId !== null) {
+      const parkingProducer = this.spawnedEntities.get(entity.parkingSpaceProducerId);
+      if (parkingProducer?.parkingPlaceProfile) {
+        parkingProducer.parkingPlaceProfile.occupiedSpaceEntityIds.delete(entity.id);
+      }
+      entity.parkingSpaceProducerId = null;
+    }
+
+    if (entity.helixCarrierId !== null) {
+      const helixCarrier = this.spawnedEntities.get(entity.helixCarrierId);
+      if (helixCarrier?.helixPortableRiderId === entity.id) {
+        helixCarrier.helixPortableRiderId = null;
+      }
+      entity.helixCarrierId = null;
+    }
+  }
+
+  private evacuateContainedEntities(
+    container: MapEntity,
+    targetX: number,
+    targetZ: number,
+    targetObjectId: number | null,
+  ): void {
+    const passengerIds = this.collectContainedEntityIds(container.id);
+    if (passengerIds.length === 0) {
+      return;
+    }
+
+    const target = targetObjectId !== null ? this.spawnedEntities.get(targetObjectId) : null;
+    for (const passengerId of passengerIds) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        continue;
+      }
+
+      this.releaseEntityFromContainer(passenger);
+      passenger.x = container.x;
+      passenger.z = container.z;
+      passenger.y = this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
+      this.updatePathfindPosCell(passenger);
+
+      if (
+        target
+        && !target.destroyed
+        && this.getTeamRelationship(passenger, target) === RELATIONSHIP_ENEMIES
+      ) {
+        this.issueAttackEntity(passenger.id, target.id, 'PLAYER');
+        if (passenger.attackTargetEntityId === null && passenger.canMove) {
+          this.issueMoveTo(passenger.id, targetX, targetZ);
+        }
+      } else if (passenger.canMove) {
+        this.issueMoveTo(passenger.id, targetX, targetZ);
+      }
+    }
   }
 
   private queueUnitProduction(entityId: number, unitTemplateName: string): boolean {
@@ -5714,10 +6213,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   private resolveMaxSimultaneousOfType(objectDef: ObjectDef): number {
     return resolveMaxSimultaneousOfTypeImpl(objectDef);
-  }
-
-  private resolveMaxSimultaneousLinkKey(objectDef: ObjectDef): string | null {
-    return resolveMaxSimultaneousLinkKeyImpl(objectDef);
   }
 
   private isStructureObjectDef(objectDef: ObjectDef): boolean {
@@ -6266,8 +6761,8 @@ export class GameLogicSubsystem implements Subsystem {
       if (!this.canAttackerTargetEntity(attacker, candidate, attacker.attackCommandSource)) {
         continue;
       }
-      const dx = candidate.mesh.position.x - targetX;
-      const dz = candidate.mesh.position.z - targetZ;
+      const dx = candidate.x - targetX;
+      const dz = candidate.z - targetZ;
       const distanceSqr = dx * dx + dz * dz;
       if (distanceSqr > attackRangeSqr) {
         continue;
@@ -7052,15 +7547,15 @@ export class GameLogicSubsystem implements Subsystem {
       issueMoveTo: (entityId, targetX, targetZ, attackDistance) =>
         this.issueMoveTo(entityId, targetX, targetZ, attackDistance),
       computeAttackRetreatTarget: (attacker, target, weapon) =>
-        this.computeAttackRetreatTarget(attacker, target, weapon),
+        this.computeAttackRetreatTarget(attacker, target, weapon as AttackWeaponProfile),
       rebuildEntityScatterTargets: (entity) => this.rebuildEntityScatterTargets(entity),
       resolveWeaponPreAttackDelayFrames: (attacker, target, weapon) =>
-        this.resolveWeaponPreAttackDelayFrames(attacker, target, weapon),
+        this.resolveWeaponPreAttackDelayFrames(attacker, target, weapon as AttackWeaponProfile),
       queueWeaponDamageEvent: (attacker, target, weapon) =>
-        this.queueWeaponDamageEvent(attacker, target, weapon),
+        this.queueWeaponDamageEvent(attacker, target, weapon as AttackWeaponProfile),
       recordConsecutiveAttackShot: (attacker, targetEntityId) =>
         this.recordConsecutiveAttackShot(attacker, targetEntityId),
-      resolveWeaponDelayFrames: (weapon) => this.resolveWeaponDelayFrames(weapon),
+      resolveWeaponDelayFrames: (weapon) => this.resolveWeaponDelayFrames(weapon as AttackWeaponProfile),
       resolveTargetAnchorPosition: (target) => ({
         x: (target as { mesh?: { position?: { x?: number } } }).mesh?.position?.x ?? target.x,
         z: (target as { mesh?: { position?: { z?: number } } }).mesh?.position?.z ?? target.z,
@@ -7479,6 +7974,20 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed) {
       return;
     }
+
+    this.cancelEntityCommandPathActions(entityId);
+    this.sellingEntities.delete(entityId);
+    for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
+      if (pendingAction.targetObjectId === entityId) {
+        this.pendingEnterObjectActions.delete(sourceId);
+      }
+    }
+    for (const pendingAction of this.pendingCombatDropActions.values()) {
+      if (pendingAction.targetObjectId === entityId) {
+        pendingAction.targetObjectId = null;
+      }
+    }
+
     const completedUpgradeNames = Array.from(entity.completedUpgrades.values());
     for (const completedUpgradeName of completedUpgradeNames) {
       this.removeEntityUpgrade(entity, completedUpgradeName);
@@ -7573,9 +8082,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.helixPortableRiderId = null;
       }
       this.spawnedEntities.delete(entityId);
-      if (this.selectedEntityId === entityId) {
-        this.selectedEntityId = null;
-      }
+      this.removeEntityFromSelection(entityId);
     }
   }
 
@@ -7671,517 +8178,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private writeDeterministicObjectsCrc(
-    crc: XferCrcAccumulator,
-    _snapshot: DeterministicFrameSnapshot<unknown>,
-  ): void {
-    // Source parity:
-    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
-    //   iterates m_objList order via getNextObject().
-    // We mirror runtime-owned insertion order instead of sorting by ID.
-    // TODO(source parity): replace this with the true object-list owner order
-    // once object lifecycle ownership is promoted from scaffolding.
-    const entities = Array.from(this.spawnedEntities.values());
-    crc.addUnsignedInt(entities.length >>> 0);
-
-    for (const entity of entities) {
-      this.addSignedIntCrc(crc, entity.id);
-      crc.addAsciiString(entity.templateName);
-      crc.addAsciiString(entity.category);
-      crc.addAsciiString(entity.side ?? '');
-      crc.addUnsignedByte(entity.resolved ? 1 : 0);
-      crc.addUnsignedByte(entity.selected ? 1 : 0);
-      crc.addUnsignedByte(entity.canMove ? 1 : 0);
-      crc.addUnsignedByte(entity.moving ? 1 : 0);
-      crc.addUnsignedByte(entity.blocksPath ? 1 : 0);
-      crc.addUnsignedByte(entity.pathfindCenterInCell ? 1 : 0);
-      crc.addUnsignedByte(entity.locomotorUpgradeEnabled ? 1 : 0);
-      crc.addUnsignedByte(entity.locomotorDownhillOnly ? 1 : 0);
-      crc.addUnsignedByte(entity.isUnmanned ? 1 : 0);
-      crc.addUnsignedByte(entity.attackNeedsLineOfSight ? 1 : 0);
-      crc.addUnsignedByte(entity.isImmobile ? 1 : 0);
-      crc.addUnsignedInt(Math.trunc(entity.crusherLevel) >>> 0);
-      crc.addUnsignedInt(Math.trunc(entity.crushableLevel) >>> 0);
-      if (entity.helixCarrierId !== null) {
-        crc.addUnsignedByte(1);
-        // Deterministic state: include helix rider/carrier linkage used by HELIX contain rules.
-        this.addSignedIntCrc(crc, entity.helixCarrierId);
-      } else {
-        crc.addUnsignedByte(0);
-      }
-      if (entity.helixPortableRiderId !== null) {
-        crc.addUnsignedByte(1);
-        // Deterministic state: include helix rider/carrier linkage used by HELIX contain rules.
-        this.addSignedIntCrc(crc, entity.helixPortableRiderId);
-      } else {
-        crc.addUnsignedByte(0);
-      }
-      crc.addUnsignedInt(Math.trunc(entity.pathDiameter) >>> 0);
-      crc.addUnsignedInt(Math.trunc(entity.obstacleFootprint) >>> 0);
-      crc.addUnsignedInt(Math.trunc(entity.pathIndex) >>> 0);
-      crc.addAsciiString(entity.activeLocomotorSet);
-      crc.addUnsignedInt(entity.locomotorSurfaceMask >>> 0);
-      crc.addUnsignedByte(entity.forcedWeaponSlot === null ? 255 : entity.forcedWeaponSlot);
-      this.addFloat32Crc(crc, entity.baseHeight);
-      this.addFloat32Crc(crc, entity.nominalHeight);
-      this.addFloat32Crc(crc, entity.speed);
-      this.addFloat32Crc(crc, entity.largestWeaponRange);
-      this.addFloat32Crc(crc, entity.x);
-      this.addFloat32Crc(crc, entity.y);
-      this.addFloat32Crc(crc, entity.z);
-      this.addFloat32Crc(crc, entity.rotationY);
-      this.writeNullableVectorCrc(crc, entity.moveTarget);
-      this.writeVectorArrayCrc(crc, entity.movePath);
-      this.writeNullableGridCellCrc(crc, entity.pathfindGoalCell);
-      this.writeNullableGridCellCrc(crc, entity.pathfindPosCell);
-
-      if (entity.ignoredMovementObstacleId !== null) {
-        crc.addUnsignedByte(1);
-        this.addSignedIntCrc(crc, entity.ignoredMovementObstacleId);
-      } else {
-        crc.addUnsignedByte(0);
-      }
-
-      if (entity.obstacleGeometry) {
-        crc.addUnsignedByte(1);
-        crc.addAsciiString(entity.obstacleGeometry.shape);
-        this.addFloat32Crc(crc, entity.obstacleGeometry.majorRadius);
-        this.addFloat32Crc(crc, entity.obstacleGeometry.minorRadius);
-      } else {
-        crc.addUnsignedByte(0);
-      }
-
-      const locomotorSetNames = Array.from(entity.locomotorSets.keys()).sort();
-      crc.addUnsignedInt(locomotorSetNames.length >>> 0);
-      for (const setName of locomotorSetNames) {
-        const profile = entity.locomotorSets.get(setName);
-        if (!profile) {
-          continue;
-        }
-        crc.addAsciiString(setName);
-        crc.addUnsignedInt(profile.surfaceMask >>> 0);
-        crc.addUnsignedByte(profile.downhillOnly ? 1 : 0);
-        this.addFloat32Crc(crc, profile.movementSpeed);
-      }
-
-      const upgradeTriggers = Array.from(entity.locomotorUpgradeTriggers.values()).sort();
-      crc.addUnsignedInt(upgradeTriggers.length >>> 0);
-      for (const upgradeTrigger of upgradeTriggers) {
-        crc.addAsciiString(upgradeTrigger);
-      }
-    }
-  }
-
-  private writeDeterministicPartitionManagerCrc(
-    crc: XferCrcAccumulator,
-    _snapshot: DeterministicFrameSnapshot<unknown>,
-  ): void {
-    // Source parity:
-    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
-    //   xfers ThePartitionManager snapshot directly.
-    // TODO(source parity): swap these runtime-owned bridge/nav fields for
-    // serialized partition-manager snapshot data from the ported owner.
-    const grid = this.navigationGrid;
-    crc.addUnsignedByte(grid ? 1 : 0);
-    if (!grid) {
-      return;
-    }
-
-    this.addSignedIntCrc(crc, grid.width);
-    this.addSignedIntCrc(crc, grid.height);
-    this.addSignedIntCrc(crc, grid.zoneBlockWidth);
-    this.addSignedIntCrc(crc, grid.zoneBlockHeight);
-    this.addFloat32Crc(crc, grid.logicalMinX);
-    this.addFloat32Crc(crc, grid.logicalMinZ);
-    this.addFloat32Crc(crc, grid.logicalMaxX);
-    this.addFloat32Crc(crc, grid.logicalMaxZ);
-
-    this.writeUint8ArrayCrc(crc, grid.terrainType);
-    this.writeUint8ArrayCrc(crc, grid.blocked);
-    this.writeUint8ArrayCrc(crc, grid.pinched);
-    this.writeUint8ArrayCrc(crc, grid.bridge);
-    this.writeUint8ArrayCrc(crc, grid.bridgePassable);
-    this.writeUint8ArrayCrc(crc, grid.bridgeTransitions);
-    this.writeInt32ArrayCrc(crc, grid.bridgeSegmentByCell);
-    this.writeUint8ArrayCrc(crc, grid.zonePassable);
-
-    const segmentEntries = Array.from(this.bridgeSegments.entries()).sort(([leftId], [rightId]) => leftId - rightId);
-    crc.addUnsignedInt(segmentEntries.length >>> 0);
-    for (const [segmentId, segment] of segmentEntries) {
-      this.addSignedIntCrc(crc, segmentId);
-      crc.addUnsignedByte(segment.passable ? 1 : 0);
-      this.writeSignedNumberArrayCrc(crc, segment.cellIndices, true);
-      this.writeSignedNumberArrayCrc(crc, segment.transitionIndices, true);
-    }
-
-    const controlEntries = Array.from(this.bridgeSegmentByControlEntity.entries())
-      .sort(([leftId], [rightId]) => leftId - rightId);
-    crc.addUnsignedInt(controlEntries.length >>> 0);
-    for (const [entityId, segmentId] of controlEntries) {
-      this.addSignedIntCrc(crc, entityId);
-      this.addSignedIntCrc(crc, segmentId);
-    }
-  }
-
-  private writeDeterministicPlayerListCrc(
-    crc: XferCrcAccumulator,
-    _snapshot: DeterministicFrameSnapshot<unknown>,
-  ): void {
-    // Source parity:
-    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
-    //   xfers ThePlayerList snapshot directly.
-    // TODO(source parity): switch to ThePlayerList-equivalent snapshot data
-    // once player-list ownership is promoted from scaffolding.
-    this.addSignedIntCrc(crc, this.selectedEntityId ?? -1);
-    this.writeRelationshipOverridesCrc(crc, this.teamRelationshipOverrides);
-    this.writeRelationshipOverridesCrc(crc, this.playerRelationshipOverrides);
-    crc.addUnsignedInt(this.placementSummary.totalObjects >>> 0);
-    crc.addUnsignedInt(this.placementSummary.spawnedObjects >>> 0);
-    crc.addUnsignedInt(this.placementSummary.skippedObjects >>> 0);
-    crc.addUnsignedInt(this.placementSummary.resolvedObjects >>> 0);
-    crc.addUnsignedInt(this.placementSummary.unresolvedObjects >>> 0);
-    this.writeCostModifierUpgradeStatesCrc(crc, this.sideKindOfProductionCostModifiers);
-    this.writeSidePowerStateCrc(crc, this.sidePowerBonus);
-    this.writeSideRadarStateCrc(crc, this.sideRadarState);
-  }
-
-  private writeDeterministicAiCrc(
-    crc: XferCrcAccumulator,
-    _snapshot: DeterministicFrameSnapshot<unknown>,
-  ): void {
-    // Source parity:
-    // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
-    //   xfers TheAI snapshot directly.
-    // TODO(source parity): replace this transitional AI/runtime summary with
-    // serialized AI owner snapshot fields once AI system ownership is ported.
-    crc.addUnsignedInt(this.frameCounter >>> 0);
-    crc.addUnsignedInt(this.nextId >>> 0);
-    this.addFloat32Crc(crc, this.animationTime);
-    crc.addUnsignedByte(this.isAttackMoveToMode ? 1 : 0);
-    crc.addUnsignedByte(this.previousAttackMoveToggleDown ? 1 : 0);
-    crc.addUnsignedByte(this.config.renderUnknownObjects ? 1 : 0);
-    crc.addUnsignedByte(this.config.attackUsesLineOfSight ? 1 : 0);
-    this.addFloat32Crc(crc, this.config.defaultMoveSpeed);
-    this.addFloat32Crc(crc, this.config.terrainSnapSpeed);
-
-    crc.addUnsignedInt(this.commandQueue.length >>> 0);
-    for (const command of this.commandQueue) {
-      this.writeGameLogicCommandCrc(crc, command);
-    }
-  }
-
-  private writeGameLogicCommandCrc(crc: XferCrcAccumulator, command: GameLogicCommand): void {
-    crc.addAsciiString(command.type);
-    switch (command.type) {
-      case 'select':
-      case 'stop':
-      case 'bridgeDestroyed':
-      case 'bridgeRepaired':
-        this.addSignedIntCrc(crc, command.entityId);
-        return;
-      case 'clearSelection':
-        return;
-      case 'moveTo':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addFloat32Crc(crc, command.targetX);
-        this.addFloat32Crc(crc, command.targetZ);
-        return;
-      case 'attackMoveTo':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addFloat32Crc(crc, command.targetX);
-        this.addFloat32Crc(crc, command.targetZ);
-        this.addFloat32Crc(crc, command.attackDistance);
-        return;
-      case 'guardPosition':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addFloat32Crc(crc, command.targetX);
-        this.addFloat32Crc(crc, command.targetZ);
-        this.addSignedIntCrc(crc, command.guardMode);
-        return;
-      case 'guardObject':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addSignedIntCrc(crc, command.targetEntityId);
-        this.addSignedIntCrc(crc, command.guardMode);
-        return;
-      case 'setRallyPoint':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addFloat32Crc(crc, command.targetX);
-        this.addFloat32Crc(crc, command.targetZ);
-        return;
-      case 'attackEntity':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addSignedIntCrc(crc, command.targetEntityId);
-        crc.addAsciiString(command.commandSource ?? 'PLAYER');
-        return;
-      case 'fireWeapon':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addSignedIntCrc(crc, command.weaponSlot);
-        this.addSignedIntCrc(crc, command.maxShotsToFire);
-        this.addSignedIntCrc(crc, command.targetObjectId ?? -1);
-        this.addFloat32Crc(crc, command.targetPosition?.[0] ?? 0);
-        this.addFloat32Crc(crc, command.targetPosition?.[1] ?? 0);
-        this.addFloat32Crc(crc, command.targetPosition?.[2] ?? 0);
-        return;
-      case 'setLocomotorSet':
-        this.addSignedIntCrc(crc, command.entityId);
-        crc.addAsciiString(command.setName);
-        return;
-      case 'setLocomotorUpgrade':
-        this.addSignedIntCrc(crc, command.entityId);
-        crc.addUnsignedByte(command.enabled ? 1 : 0);
-        return;
-      case 'captureEntity':
-        this.addSignedIntCrc(crc, command.entityId);
-        crc.addAsciiString(command.newSide);
-        return;
-      case 'applyUpgrade':
-        this.addSignedIntCrc(crc, command.entityId);
-        crc.addAsciiString(command.upgradeName);
-        return;
-      case 'queueUnitProduction':
-        this.addSignedIntCrc(crc, command.entityId);
-        crc.addAsciiString(command.unitTemplateName);
-        return;
-      case 'cancelUnitProduction':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addSignedIntCrc(crc, command.productionId);
-        return;
-      case 'queueUpgradeProduction':
-      case 'cancelUpgradeProduction':
-        this.addSignedIntCrc(crc, command.entityId);
-        crc.addAsciiString(command.upgradeName);
-        return;
-      case 'setSideCredits':
-      case 'addSideCredits':
-        crc.addAsciiString(command.side);
-        this.addSignedIntCrc(crc, command.amount);
-        return;
-      case 'setSidePlayerType':
-        crc.addAsciiString(command.side);
-        crc.addAsciiString(command.playerType);
-        return;
-      case 'grantSideScience':
-        crc.addAsciiString(command.side);
-        crc.addAsciiString(command.scienceName);
-        return;
-      case 'applyPlayerUpgrade':
-        crc.addAsciiString(command.upgradeName);
-        return;
-      case 'purchaseScience':
-        crc.addAsciiString(command.scienceName);
-        return;
-      case 'issueSpecialPower':
-        crc.addAsciiString(command.commandButtonId);
-        crc.addAsciiString(command.specialPowerName);
-        this.addSignedIntCrc(crc, command.commandOption);
-        this.addSignedIntCrc(crc, command.sourceEntityId ?? -1);
-        this.addSignedIntCrc(crc, command.targetEntityId ?? -1);
-        this.addFloat32Crc(crc, command.targetX ?? 0);
-        this.addFloat32Crc(crc, command.targetZ ?? 0);
-        this.writeSignedNumberArrayCrc(crc, command.issuingEntityIds, true);
-        return;
-      case 'exitContainer':
-      case 'evacuate':
-      case 'executeRailedTransport':
-      case 'beaconDelete':
-      case 'hackInternet':
-      case 'toggleOvercharge':
-        this.addSignedIntCrc(crc, command.entityId);
-        return;
-      case 'combatDrop':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addSignedIntCrc(crc, command.targetObjectId ?? -1);
-        this.addFloat32Crc(crc, command.targetPosition?.[0] ?? 0);
-        this.addFloat32Crc(crc, command.targetPosition?.[1] ?? 0);
-        this.addFloat32Crc(crc, command.targetPosition?.[2] ?? 0);
-        return;
-      case 'placeBeacon':
-        this.addFloat32Crc(crc, command.targetPosition[0]);
-        this.addFloat32Crc(crc, command.targetPosition[1]);
-        this.addFloat32Crc(crc, command.targetPosition[2]);
-        return;
-      case 'enterObject':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addSignedIntCrc(crc, command.targetObjectId);
-        crc.addAsciiString(command.action);
-        return;
-      case 'constructBuilding':
-        this.addSignedIntCrc(crc, command.entityId);
-        crc.addAsciiString(command.templateName);
-        this.addFloat32Crc(crc, command.targetPosition[0]);
-        this.addFloat32Crc(crc, command.targetPosition[1]);
-        this.addFloat32Crc(crc, command.targetPosition[2]);
-        this.addFloat32Crc(crc, command.angle);
-        if (command.lineEndPosition === null) {
-          crc.addUnsignedByte(0);
-        } else {
-          crc.addUnsignedByte(1);
-          this.addFloat32Crc(crc, command.lineEndPosition[0]);
-          this.addFloat32Crc(crc, command.lineEndPosition[1]);
-          this.addFloat32Crc(crc, command.lineEndPosition[2]);
-        }
-        return;
-      case 'cancelDozerConstruction':
-        this.addSignedIntCrc(crc, command.entityId);
-        return;
-      case 'sell':
-        this.addSignedIntCrc(crc, command.entityId);
-        return;
-      case 'switchWeapon':
-        this.addSignedIntCrc(crc, command.entityId);
-        this.addSignedIntCrc(crc, command.weaponSlot);
-        return;
-      default: {
-        const unsupported: never = command;
-        throw new Error(`Unsupported deterministic command type: ${(unsupported as { type: string }).type}`);
-      }
-    }
-  }
-
-  private writeRelationshipOverridesCrc(
-    crc: XferCrcAccumulator,
-    overrides: ReadonlyMap<string, number>,
-  ): void {
-    const entries = Array.from(overrides.entries()).sort(([left], [right]) => left.localeCompare(right));
-    crc.addUnsignedInt(entries.length >>> 0);
-    for (const [key, relationship] of entries) {
-      crc.addAsciiString(key);
-      this.addSignedIntCrc(crc, relationship);
-    }
-  }
-
-  private writeCostModifierUpgradeStatesCrc(
-    crc: XferCrcAccumulator,
-    sideModifiers: ReadonlyMap<string, KindOfProductionCostModifier[]>,
-  ): void {
-    const sideEntries = Array.from(sideModifiers.entries()).sort(([left], [right]) => left.localeCompare(right));
-    crc.addUnsignedInt(sideEntries.length >>> 0);
-    for (const [side, modifiers] of sideEntries) {
-      crc.addAsciiString(side);
-      const sortedModifiers = [...modifiers].sort((left, right) => {
-        const leftKindOf = Array.from(left.kindOf).sort().join('|');
-        const rightKindOf = Array.from(right.kindOf).sort().join('|');
-        if (leftKindOf < rightKindOf) {
-          return -1;
-        }
-        if (leftKindOf > rightKindOf) {
-          return 1;
-        }
-        if (left.multiplier !== right.multiplier) {
-          return left.multiplier - right.multiplier;
-        }
-        return left.refCount - right.refCount;
-      });
-      crc.addUnsignedInt(sortedModifiers.length >>> 0);
-      for (const modifier of sortedModifiers) {
-        const kindOf = Array.from(modifier.kindOf).sort();
-        crc.addUnsignedInt(kindOf.length >>> 0);
-        for (const kindOfToken of kindOf) {
-          crc.addAsciiString(kindOfToken);
-        }
-        this.addFloat32Crc(crc, modifier.multiplier);
-        crc.addSignedIntCrc(crc, modifier.refCount);
-      }
-    }
-  }
-
-  private writeSidePowerStateCrc(
-    crc: XferCrcAccumulator,
-    sidePowerState: ReadonlyMap<string, SidePowerState>,
-  ): void {
-    const sideEntries = Array.from(sidePowerState.entries()).sort(([left], [right]) => left.localeCompare(right));
-    crc.addUnsignedInt(sideEntries.length >>> 0);
-    for (const [side, state] of sideEntries) {
-      crc.addAsciiString(side);
-      this.addFloat32Crc(crc, state.powerBonus);
-    }
-  }
-
-  private writeSideRadarStateCrc(
-    crc: XferCrcAccumulator,
-    sideRadarState: ReadonlyMap<string, SideRadarState>,
-  ): void {
-    const sideEntries = Array.from(sideRadarState.entries()).sort(([left], [right]) => left.localeCompare(right));
-    crc.addUnsignedInt(sideEntries.length >>> 0);
-    for (const [side, state] of sideEntries) {
-      crc.addAsciiString(side);
-      crc.addUnsignedInt(state.radarCount >>> 0);
-      crc.addUnsignedInt(state.disableProofRadarCount >>> 0);
-    }
-  }
-
-  private writeVectorArrayCrc(crc: XferCrcAccumulator, points: ReadonlyArray<VectorXZ>): void {
-    crc.addUnsignedInt(points.length >>> 0);
-    for (const point of points) {
-      this.addFloat32Crc(crc, point.x);
-      this.addFloat32Crc(crc, point.z);
-    }
-  }
-
-  private writeNullableVectorCrc(crc: XferCrcAccumulator, point: VectorXZ | null): void {
-    if (!point) {
-      crc.addUnsignedByte(0);
-      return;
-    }
-    crc.addUnsignedByte(1);
-    this.addFloat32Crc(crc, point.x);
-    this.addFloat32Crc(crc, point.z);
-  }
-
-  private writeNullableGridCellCrc(
-    crc: XferCrcAccumulator,
-    point: { x: number; z: number } | null,
-  ): void {
-    if (!point) {
-      crc.addUnsignedByte(0);
-      return;
-    }
-    crc.addUnsignedByte(1);
-    this.addSignedIntCrc(crc, point.x);
-    this.addSignedIntCrc(crc, point.z);
-  }
-
-  private writeSignedNumberArrayCrc(
-    crc: XferCrcAccumulator,
-    values: ReadonlyArray<number>,
-    sortValues: boolean,
-  ): void {
-    const normalized = sortValues ? [...values].sort((left, right) => left - right) : [...values];
-    crc.addUnsignedInt(normalized.length >>> 0);
-    for (const value of normalized) {
-      this.addSignedIntCrc(crc, value);
-    }
-  }
-
-  private writeUint8ArrayCrc(crc: XferCrcAccumulator, values: Uint8Array): void {
-    crc.addUnsignedInt(values.length >>> 0);
-    for (const value of values) {
-      crc.addUnsignedByte(value & 0xff);
-    }
-  }
-
-  private writeInt32ArrayCrc(crc: XferCrcAccumulator, values: Int32Array): void {
-    crc.addUnsignedInt(values.length >>> 0);
-    for (const value of values) {
-      this.addSignedIntCrc(crc, value);
-    }
-  }
-
-  private addSignedIntCrc(crc: XferCrcAccumulator, value: number): void {
-    if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff) {
-      throw new Error(`deterministic CRC value must be a signed 32-bit integer, got ${value}`);
-    }
-    crc.addUnsignedInt(value >>> 0);
-  }
-
-  private addFloat32Crc(crc: XferCrcAccumulator, value: number): void {
-    if (!Number.isFinite(value)) {
-      throw new Error(`deterministic CRC value must be finite, got ${value}`);
-    }
-    this.crcFloatScratch.setFloat32(0, Math.fround(value), true);
-    crc.addUnsignedInt(this.crcFloatScratch.getUint32(0, true));
-  }
-
   private clearEntitySelectionState(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.selected) {
@@ -8200,6 +8196,27 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       selected.selected = true;
+    }
+  }
+
+  private removeEntityFromSelection(entityId: number): void {
+    let changed = false;
+    if (this.selectedEntityId === entityId) {
+      this.selectedEntityId = null;
+      changed = true;
+    }
+
+    const nextSelectedEntityIds = this.selectedEntityIds.filter((selectedId) => selectedId !== entityId);
+    if (nextSelectedEntityIds.length !== this.selectedEntityIds.length) {
+      this.selectedEntityIds = nextSelectedEntityIds;
+      if (this.selectedEntityId === null) {
+        this.selectedEntityId = nextSelectedEntityIds[0] ?? null;
+      }
+      changed = true;
+    }
+
+    if (changed) {
+      this.updateSelectionHighlight();
     }
   }
 
@@ -8227,12 +8244,17 @@ export class GameLogicSubsystem implements Subsystem {
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
     this.pendingWeaponDamageEvents.length = 0;
+    this.sellingEntities.clear();
+    this.hackInternetStateByEntityId.clear();
+    this.pendingEnterObjectActions.clear();
+    this.pendingCombatDropActions.clear();
     this.navigationGrid = null;
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
     this.shortcutSpecialPowerSourceByName.clear();
     this.shortcutSpecialPowerNamesByEntityId.clear();
     this.spawnedEntities.clear();
+    this.selectedEntityIds = [];
     this.selectedEntityId = null;
   }
 }

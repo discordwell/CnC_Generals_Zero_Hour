@@ -150,7 +150,7 @@ export function resolveSharedShortcutSpecialPowerReadyFrame(
   }
 
   const sharedReadyFrame = sharedShortcutSpecialPowerReadyFrames.get(normalizedSpecialPowerName);
-  if (!Number.isFinite(sharedReadyFrame)) {
+  if (sharedReadyFrame === undefined || !Number.isFinite(sharedReadyFrame)) {
     // Source parity: shared special powers are player-global and start at frame 0 (ready immediately)
     // unless explicitly started by prior usage.
     return frameCounter;
@@ -178,7 +178,7 @@ export function resolveShortcutSpecialPowerSourceEntityReadyFrameBySource(
   }
 
   const readyFrame = sourcesForPower.get(normalizedSourceEntityId);
-  if (!Number.isFinite(readyFrame)) {
+  if (readyFrame === undefined || !Number.isFinite(readyFrame)) {
     return frameCounter;
   }
 
@@ -266,11 +266,12 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
   const needsTargetPosition = (commandOption & COMMAND_OPTION_NEED_TARGET_POS) !== 0;
 
   if (needsObjectTarget) {
-    if (!Number.isFinite(command.targetEntityId)) {
+    if (command.targetEntityId === null || !Number.isFinite(command.targetEntityId)) {
       return;
     }
 
-    const targetEntity = context.spawnedEntities.get(Math.trunc(command.targetEntityId));
+    const targetEntityId = Math.trunc(command.targetEntityId);
+    const targetEntity = context.spawnedEntities.get(targetEntityId);
     if (!targetEntity || targetEntity.destroyed) {
       return;
     }

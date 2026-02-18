@@ -233,6 +233,9 @@ export function removeCostModifierUpgradeFromSide(
   }
 
   const modifier = modifiers[index];
+  if (!modifier) {
+    return;
+  }
   modifier.refCount -= 1;
   if (modifier.refCount <= 0) {
     modifiers.splice(index, 1);

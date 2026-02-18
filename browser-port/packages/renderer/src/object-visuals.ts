@@ -402,7 +402,9 @@ export class ObjectVisualManager {
   private removeModel(visual: VisualAssetState): void {
     if (visual.mixer) {
       visual.mixer.stopAllAction();
-      visual.mixer.uncacheRoot(visual.currentModel);
+      if (visual.currentModel) {
+        visual.mixer.uncacheRoot(visual.currentModel);
+      }
       visual.mixer = null;
     }
     visual.actions.clear();
