@@ -24,7 +24,6 @@ import {
 } from '@generals/ini-data';
 import {
   MAP_XY_FACTOR,
-  MAP_HEIGHT_SCALE,
   base64ToUint8Array,
   type HeightmapGrid,
   type MapDataJSON,
@@ -52,13 +51,22 @@ import {
 } from './combat-helpers.js';
 import { isPassengerAllowedToFireFromContainingObject as isPassengerAllowedToFireFromContainingObjectImpl } from './combat-containment.js';
 import {
-  findContinueAttackVictim as findContinueAttackVictimImpl,
+  applyWeaponDamageEvent as applyWeaponDamageEventImpl,
+  type CombatDamageEventContext,
+  updatePendingWeaponDamage as updatePendingWeaponDamageImpl,
+} from './combat-damage-events.js';
+import {
   isAirfieldReservedForProjectileVictim as isAirfieldReservedForProjectileVictimImpl,
   resolveProjectileIncidentalVictimForPointImpact as resolveProjectileIncidentalVictimForPointImpactImpl,
   resolveProjectilePointCollisionRadius as resolveProjectilePointCollisionRadiusImpl,
   shouldProjectileCollideWithEntity as shouldProjectileCollideWithEntityImpl,
 } from './combat-damage-resolution.js';
 import { updateCombat as updateCombatImpl } from './combat-update.js';
+import {
+  findPath as findPathImpl,
+  updatePathfindGoalCellFromPath as updatePathfindGoalCellFromPathImpl,
+  updatePathfindPosCell as updatePathfindPosCellImpl,
+} from './navigation-pathfinding.js';
 import {
   clamp,
   coerceStringArray,
@@ -185,27 +193,19 @@ interface NavigationGrid {
 }
 
 const PATHFIND_CELL_SIZE = MAP_XY_FACTOR;
-const COST_ORTHOGONAL = 10;
-const COST_DIAGONAL = 14;
 const CLIFF_HEIGHT_DELTA = 9.8;
 const PATHFIND_ZONE_BLOCK_SIZE = 10;
-const MAX_PATH_COST = 1e9;
-const MAX_SEARCH_NODES = 500_000;
-const MAX_RECONSTRUCT_STEPS = 2_000;
 const NO_ATTACK_DISTANCE = 0;
 const ATTACK_MOVE_DISTANCE_FUDGE = 3 * MAP_XY_FACTOR;
 const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
 const ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE = 0.5;
-const ATTACK_LOS_TERRAIN_FUDGE = 0.5;
 const LOGIC_FRAME_RATE = 30;
 const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
 
 const NAV_CLEAR = 0;
 const NAV_WATER = 1;
 const NAV_CLIFF = 2;
-const NAV_RUBBLE = 3;
 const NAV_OBSTACLE = 4;
-const NAV_BRIDGE = 5;
 const NAV_IMPASSABLE = 6;
 const NAV_BRIDGE_IMPASSABLE = 7;
 
@@ -213,11 +213,6 @@ const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
 const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
 const SOURCE_DISABLED_SHORTCUT_SPECIAL_POWER_READY_FRAME = 0xffffffff - 10;
 
-const LOCOMOTORSURFACE_GROUND = 1 << 0;
-const LOCOMOTORSURFACE_WATER = 1 << 1;
-const LOCOMOTORSURFACE_CLIFF = 1 << 2;
-const LOCOMOTORSURFACE_AIR = 1 << 3;
-const LOCOMOTORSURFACE_RUBBLE = 1 << 4;
 const LOCOMOTORSET_NORMAL = 'SET_NORMAL';
 const LOCOMOTORSET_NORMAL_UPGRADED = 'SET_NORMAL_UPGRADED';
 const LOCOMOTORSET_FREEFALL = 'SET_FREEFALL';
@@ -227,7 +222,6 @@ const LOCOMOTORSET_TAXIING = 'SET_TAXIING';
 const LOCOMOTORSET_SUPERSONIC = 'SET_SUPERSONIC';
 const LOCOMOTORSET_SLUGGISH = 'SET_SLUGGISH';
 const NO_SURFACES = 0;
-const SOURCE_DEFAULT_PASSABLE_SURFACES = NO_SURFACES;
 const SOURCE_LOCOMOTOR_SET_NAMES = new Set<string>([
   LOCOMOTORSET_NORMAL,
   LOCOMOTORSET_NORMAL_UPGRADED,
@@ -353,37 +347,6 @@ interface LocomotorSetProfile {
   surfaceMask: number;
   downhillOnly: boolean;
   movementSpeed: number;
-}
-
-interface PathfindingProfile {
-  acceptableSurfaces: number;
-  downhillOnly: boolean;
-  canPassObstacle: boolean;
-  canUseBridge: boolean;
-  avoidPinched: boolean;
-  pathDiameter: number;
-}
-
-interface PathingOccupationResult {
-  enemyFixed: boolean;
-  allyMoving: boolean;
-  allyFixedCount: number;
-  allyGoal: boolean;
-}
-
-// PathfindCell::CellFlags values mirrored from GeneralsMD AIPathfind.h.
-const UNIT_NO_UNITS = 0x00;
-const UNIT_GOAL = 0x01;
-const UNIT_PRESENT_MOVING = 0x02;
-const UNIT_PRESENT_FIXED = 0x03;
-const UNIT_GOAL_OTHER_MOVING = 0x05;
-
-interface MovementOccupancyGrid {
-  width: number;
-  height: number;
-  flags: Uint8Array;
-  unitIds: Int32Array;
-  goalUnitIds: Int32Array;
 }
 
 interface BridgeSegmentState {
@@ -6346,26 +6309,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updatePathfindGoalCellFromPath(entity: MapEntity): void {
-    const destination = entity.movePath[entity.movePath.length - 1];
-    if (!destination) {
-      entity.pathfindGoalCell = null;
-      return;
-    }
-    const [goalCellX, goalCellZ] = this.worldToGrid(destination.x, destination.z);
-    if (goalCellX === null || goalCellZ === null) {
-      entity.pathfindGoalCell = null;
-      return;
-    }
-    entity.pathfindGoalCell = { x: goalCellX, z: goalCellZ };
+    updatePathfindGoalCellFromPathImpl(entity, (worldX, worldZ) => this.worldToGrid(worldX, worldZ));
   }
 
   private updatePathfindPosCell(entity: MapEntity): void {
-    const [cellX, cellZ] = this.worldToGrid(entity.x, entity.z);
-    if (cellX === null || cellZ === null) {
-      entity.pathfindPosCell = null;
-      return;
-    }
-    entity.pathfindPosCell = { x: cellX, z: cellZ };
+    updatePathfindPosCellImpl(entity, (worldX, worldZ) => this.worldToGrid(worldX, worldZ));
   }
 
   private findPath(
@@ -6376,1488 +6324,27 @@ export class GameLogicSubsystem implements Subsystem {
     mover?: MapEntity,
     attackDistance = NO_ATTACK_DISTANCE,
   ): VectorXZ[] {
-    if (!this.navigationGrid) {
-      return [{ x: targetX, z: targetZ }];
-    }
-
-    const grid = this.navigationGrid;
-    const movementProfile = this.getMovementProfile(mover);
-    if (movementProfile.acceptableSurfaces === NO_SURFACES) {
-      return [];
-    }
-    const start = this.worldToGrid(startX, startZ);
-    const goal = this.worldToGrid(targetX, targetZ);
-
-    const startCellX = start[0];
-    const startCellZ = start[1];
-    const goalCellX = goal[0];
-    const goalCellZ = goal[1];
-
-    if (startCellX === null || startCellZ === null || goalCellX === null || goalCellZ === null) {
-      return [];
-    }
-
-    const startCandidate = this.canOccupyCell(startCellX, startCellZ, movementProfile, this.navigationGrid, true)
-      ? { x: startCellX, z: startCellZ }
-      : this.findNearestPassableCell(startCellX, startCellZ, grid, movementProfile, true);
-    if (!startCandidate) {
-      return [];
-    }
-
-    const effectiveStart = startCandidate;
-
-    const effectiveGoal = this.findNearestPassableCell(goalCellX, goalCellZ, grid, movementProfile, true);
-    if (!effectiveGoal) {
-      return [];
-    }
-
-    const startIndex = effectiveStart.z * grid.width + effectiveStart.x;
-    const goalIndex = effectiveGoal.z * grid.width + effectiveGoal.x;
-    const total = grid.width * grid.height;
-    const isHuman = true;
-
-    const open: number[] = [];
-    const parent = new Int32Array(total);
-    const gCost = new Float64Array(total);
-    const fCost = new Float64Array(total);
-    const inOpen = new Uint8Array(total);
-    const inClosed = new Uint8Array(total);
-    parent.fill(-1);
-
-    for (let i = 0; i < total; i++) {
-      gCost[i] = Number.POSITIVE_INFINITY;
-      fCost[i] = Number.POSITIVE_INFINITY;
-    }
-
-    const estimateToGoal = (cellX: number, cellZ: number): number => {
-      if (attackDistance === NO_ATTACK_DISTANCE) {
-        return this.pathHeuristic(cellX, cellZ, effectiveGoal.x, effectiveGoal.z);
-      }
-
-      const heuristic = COST_ORTHOGONAL * Math.hypot(cellX - effectiveGoal.x, cellZ - effectiveGoal.z);
-      return Math.max(0, heuristic - attackDistance / 2);
-    };
-
-    const isWithinAttackDistance = (cellX: number, cellZ: number): boolean => {
-      if (attackDistance === NO_ATTACK_DISTANCE) {
-        return false;
-      }
-      const deltaX = (cellX - effectiveGoal.x) * PATHFIND_CELL_SIZE;
-      const deltaZ = (cellZ - effectiveGoal.z) * PATHFIND_CELL_SIZE;
-      const effectiveRange = Math.max(0, attackDistance - ATTACK_RANGE_CELL_EDGE_FUDGE);
-      return deltaX * deltaX + deltaZ * deltaZ <= effectiveRange * effectiveRange;
-    };
-
-    const needsAttackLineOfSight = this.config.attackUsesLineOfSight && !!mover?.attackNeedsLineOfSight;
-    const shouldCheckAttackTerrain = needsAttackLineOfSight && !mover?.isImmobile;
-
-    const isAttackLineBlockedByObstacle = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
-      if (!grid) {
-        return false;
-      }
-      const skipObstacleChecks = mover?.category === 'air' ? 3 : 0;
-
-      const fromCell = this.worldToGrid(fromX, fromZ);
-      const toCell = this.worldToGrid(toX, toZ);
-      if (fromCell[0] === null || fromCell[1] === null || toCell[0] === null || toCell[1] === null) {
-        return true;
-      }
-
-      const startCellX = fromCell[0];
-      const startCellZ = fromCell[1];
-      const endCellX = toCell[0];
-      const endCellZ = toCell[1];
-
-      if (startCellX === endCellX && startCellZ === endCellZ) {
-        return false;
-      }
-
-      const deltaX = Math.abs(endCellX - startCellX);
-      const deltaZ = Math.abs(endCellZ - startCellZ);
-
-      let xinc1 = 1;
-      let xinc2 = 1;
-      if (endCellX < startCellX) {
-        xinc1 = -1;
-        xinc2 = -1;
-      }
-
-      let zinc1 = 1;
-      let zinc2 = 1;
-      if (endCellZ < startCellZ) {
-        zinc1 = -1;
-        zinc2 = -1;
-      }
-
-      let den: number;
-      let num: number;
-      let numadd: number;
-      const numpixels = deltaX >= deltaZ ? deltaX : deltaZ;
-      if (deltaX >= deltaZ) {
-        xinc1 = 0;
-        zinc2 = 0;
-        den = deltaX;
-        num = Math.floor(deltaX / 2);
-        numadd = deltaZ;
-      } else {
-        xinc2 = 0;
-        zinc1 = 0;
-        den = deltaZ;
-        num = Math.floor(deltaZ / 2);
-        numadd = deltaX;
-      }
-
-      const skipObstacleChecksRef = { current: skipObstacleChecks };
-      const checkCell = (cellX: number, cellZ: number): boolean => {
-        if (skipObstacleChecksRef.current > 0) {
-          skipObstacleChecksRef.current -= 1;
-          return false;
-        }
-        if (!this.isCellInBounds(cellX, cellZ, grid)) {
-          return true;
-        }
-        const cellIndex = cellZ * grid.width + cellX;
-        if (grid.terrainType[cellIndex] === NAV_OBSTACLE) {
-          return true;
-        }
-        return false;
-      };
-
-      let x = startCellX;
-      let z = startCellZ;
-
-      for (let curpixel = 0; curpixel <= numpixels; curpixel++) {
-        if (checkCell(x, z)) {
-          return true;
-        }
-
-        num += numadd;
-        if (num >= den) {
-          num -= den;
-          x += xinc1;
-          z += zinc1;
-          if (checkCell(x, z)) {
-            return true;
-          }
-        }
-        x += xinc2;
-        z += zinc2;
-      }
-
-      return false;
-    };
-
-    const isAttackLineBlockedByTerrain = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
-      const heightmap = this.mapHeightmap;
-      if (!heightmap || !shouldCheckAttackTerrain) {
-        return false;
-      }
-
-      const [fromCellX, fromCellZ] = this.worldToGrid(fromX, fromZ);
-      const [toCellX, toCellZ] = this.worldToGrid(toX, toZ);
-      if (fromCellX === null || fromCellZ === null || toCellX === null || toCellZ === null) {
-        return false;
-      }
-
-      const maxWorldX = Math.max(0, heightmap.worldWidth - 0.0001);
-      const maxWorldZ = Math.max(0, heightmap.worldDepth - 0.0001);
-      const fromHeight = heightmap.getInterpolatedHeight(clamp(fromX, 0, maxWorldX), clamp(fromZ, 0, maxWorldZ));
-      const toHeight = heightmap.getInterpolatedHeight(clamp(toX, 0, maxWorldX), clamp(toZ, 0, maxWorldZ));
-      const rayDeltaHeight = toHeight - fromHeight;
-
-      const getCellTopHeight = (cellX: number, cellZ: number): number => {
-        const x0 = clamp(cellX, 0, heightmap.width - 2);
-        const z0 = clamp(cellZ, 0, heightmap.height - 2);
-        const x1 = x0 + 1;
-        const z1 = z0 + 1;
-        return Math.max(
-          heightmap.getRawHeight(x0, z0),
-          heightmap.getRawHeight(x1, z0),
-          heightmap.getRawHeight(x0, z1),
-          heightmap.getRawHeight(x1, z1),
-        ) * MAP_HEIGHT_SCALE;
-      };
-
-      const deltaX = Math.abs(toCellX - fromCellX);
-      const deltaZ = Math.abs(toCellZ - fromCellZ);
-      if (deltaX === 0 && deltaZ === 0) {
-        return false;
-      }
-
-      let xinc1 = 1;
-      let xinc2 = 1;
-      if (toCellX < fromCellX) {
-        xinc1 = -1;
-        xinc2 = -1;
-      }
-
-      let zinc1 = 1;
-      let zinc2 = 1;
-      if (toCellZ < fromCellZ) {
-        zinc1 = -1;
-        zinc2 = -1;
-      }
-
-      let den: number;
-      let num: number;
-      let numadd: number;
-      const numpixels = deltaX >= deltaZ ? deltaX : deltaZ;
-      if (deltaX >= deltaZ) {
-        xinc1 = 0;
-        zinc2 = 0;
-        den = deltaX;
-        num = Math.floor(deltaX / 2);
-        numadd = deltaZ;
-      } else {
-        xinc2 = 0;
-        zinc1 = 0;
-        den = deltaZ;
-        num = Math.floor(deltaZ / 2);
-        numadd = deltaX;
-      }
-
-      const isCellBlockedByTerrain = (cellX: number, cellZ: number, step: number): boolean => {
-        const terrainHeight = getCellTopHeight(cellX, cellZ);
-        const t = numpixels <= 0 ? 0 : step / numpixels;
-        const rayHeight = fromHeight + rayDeltaHeight * t;
-        return terrainHeight > rayHeight + ATTACK_LOS_TERRAIN_FUDGE;
-      };
-
-      let x = fromCellX;
-      let z = fromCellZ;
-      for (let curpixel = 0; curpixel <= numpixels; curpixel++) {
-        if (isCellBlockedByTerrain(x, z, curpixel)) {
-          return true;
-        }
-
-        num += numadd;
-        if (num >= den) {
-          num -= den;
-          x += xinc1;
-          z += zinc1;
-          if (isCellBlockedByTerrain(x, z, curpixel)) {
-            return true;
-          }
-        }
-        x += xinc2;
-        z += zinc2;
-      }
-
-      return false;
-    };
-
-    const isNearSelfForAttackMove = (cellX: number, cellZ: number): boolean => {
-      const threshold = PATHFIND_CELL_SIZE * 0.5;
-      const selfToCellX = this.gridToWorld(cellX, cellZ).x - startX;
-      const selfToCellZ = this.gridToWorld(cellX, cellZ).z - startZ;
-      return selfToCellX * selfToCellX + selfToCellZ * selfToCellZ < threshold * threshold;
-    };
-
-    const isAttackLineBlocked = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
-      if (!needsAttackLineOfSight) {
-        return false;
-      }
-      if (isAttackLineBlockedByTerrain(fromX, fromZ, toX, toZ)) {
-        return true;
-      }
-      if (isAttackLineBlockedByObstacle(fromX, fromZ, toX, toZ)) {
-        return true;
-      }
-      return false;
-    };
-
-    if (attackDistance !== NO_ATTACK_DISTANCE) {
-      const toTargetDeltaX = targetX - startX;
-      const toTargetDeltaZ = targetZ - startZ;
-      const targetDistance = Math.hypot(toTargetDeltaX, toTargetDeltaZ);
-      if (targetDistance > 0) {
-        const stepX = (toTargetDeltaX / targetDistance) * PATHFIND_CELL_SIZE;
-        const stepZ = (toTargetDeltaZ / targetDistance) * PATHFIND_CELL_SIZE;
-        for (let i = 1; i < 10; i++) {
-          const testX = startX + stepX * i * 0.5;
-          const testZ = startZ + stepZ * i * 0.5;
-          const [testCellX, testCellZ] = this.worldToGrid(testX, testZ);
-          if (testCellX === null || testCellZ === null) {
-            break;
-          }
-          if (!this.canOccupyCell(testCellX, testCellZ, movementProfile, grid)) {
-            break;
-          }
-          const dx = testX - targetX;
-          const dz = testZ - targetZ;
-          const testDistSqr = dx * dx + dz * dz;
-          if (testDistSqr > attackDistance * attackDistance) {
-            continue;
-          }
-          if (isNearSelfForAttackMove(testCellX, testCellZ)) {
-            continue;
-          }
-          if (isAttackLineBlocked(startX, startZ, testX, testZ)) {
-            continue;
-          }
-          return [{ x: startX, z: startZ }, { x: testX, z: testZ }];
-        }
-      }
-    }
-
-    const buildPathFromGoal = (resolvedGoalIndex: number): VectorXZ[] => {
-      const pathCells = this.reconstructPath(parent, startIndex, resolvedGoalIndex);
-      if (grid.pinched[resolvedGoalIndex] === 1) {
-        const resolvedGoalParentIndex = parent[resolvedGoalIndex];
-        if (
-          resolvedGoalParentIndex !== undefined
-          && resolvedGoalParentIndex >= 0
-          && grid.pinched[resolvedGoalParentIndex] === 0
-        ) {
-          pathCells.pop();
-        }
-      }
-    const smoothed = this.smoothCellPath(
-      pathCells,
-      movementProfile,
+    return findPathImpl(
+      {
+        config: this.config,
+        mapHeightmap: this.mapHeightmap,
+        navigationGrid: this.navigationGrid,
+        spawnedEntities: this.spawnedEntities,
+        worldToGrid: (worldX, worldZ) => this.worldToGrid(worldX, worldZ),
+        gridFromIndex: (index) => this.gridFromIndex(index),
+        gridToWorld: (cellX, cellZ) => this.gridToWorld(cellX, cellZ),
+        isCellInBounds: (cellX, cellZ, nav) => this.isCellInBounds(cellX, cellZ, nav ?? this.navigationGrid),
+        getTeamRelationship: (sourceEntity, targetEntity) => this.getTeamRelationship(sourceEntity, targetEntity),
+        canCrushOrSquish: (sourceEntity, targetEntity) => this.canCrushOrSquish(sourceEntity, targetEntity),
+        relationshipAllies: RELATIONSHIP_ALLIES,
+      },
+      startX,
+      startZ,
+      targetX,
+      targetZ,
       mover,
-      movementOccupancy,
-      attackDistance === NO_ATTACK_DISTANCE,
+      attackDistance,
     );
-      const pathWorld = smoothed.map((cell) => this.gridToWorld(cell.x, cell.z));
-      if (pathWorld.length === 0) {
-        return [{ x: startX, z: startZ }];
-      }
-
-      const first = pathWorld[0];
-      if (first && (Math.abs(first.x - startX) > 0.0001 || Math.abs(first.z - startZ) > 0.0001)) {
-        pathWorld.unshift({ x: startX, z: startZ });
-      }
-      return pathWorld;
-    };
-
-    gCost[startIndex] = 0;
-    fCost[startIndex] = estimateToGoal(effectiveStart.x, effectiveStart.z);
-    open.push(startIndex);
-    inOpen[startIndex] = 1;
-
-    const deltaX = [1, 0, -1, 0, 1, -1, -1, 1];
-    const deltaZ = [0, 1, 0, -1, 1, 1, -1, -1];
-    const adjacent = [0, 1, 2, 3, 0];
-    const neighborFlags = [false, false, false, false, false, false, false, false];
-    const movementOccupancy = this.buildMovementOccupancyGrid(grid);
-    let searched = 0;
-
-    while (open.length > 0) {
-      searched += 1;
-      if (searched > MAX_SEARCH_NODES) {
-        break;
-      }
-
-      let bestOpenIndex = 0;
-      const startOpenIndex = open[0];
-      if (startOpenIndex === undefined) {
-        break;
-      }
-      let bestF = fCost[startOpenIndex] ?? MAX_PATH_COST;
-      for (let i = 1; i < open.length; i++) {
-        const candidateIndex = open[i];
-        if (candidateIndex === undefined) continue;
-        const candidateF = fCost[candidateIndex];
-        if (candidateF === undefined) continue;
-        if (candidateF < bestF) {
-          bestF = candidateF;
-          bestOpenIndex = i;
-        }
-      }
-
-      const currentIndex = open[bestOpenIndex];
-      if (currentIndex === undefined) {
-        break;
-      }
-      open.splice(bestOpenIndex, 1);
-      inOpen[currentIndex] = 0;
-      inClosed[currentIndex] = 1;
-
-      const [currentCellX, currentCellZ] = this.gridFromIndex(currentIndex);
-      if (
-        attackDistance !== NO_ATTACK_DISTANCE
-        && currentIndex !== startIndex
-        && isWithinAttackDistance(currentCellX, currentCellZ)
-        && !isNearSelfForAttackMove(currentCellX, currentCellZ)
-      ) {
-        const currentWorld = this.gridToWorld(currentCellX, currentCellZ);
-        if (!isAttackLineBlocked(startX, startZ, currentWorld.x, currentWorld.z)) {
-          return buildPathFromGoal(currentIndex);
-        }
-      }
-
-      if (currentIndex === goalIndex && attackDistance === NO_ATTACK_DISTANCE) {
-        return buildPathFromGoal(goalIndex);
-      }
-
-      const parentCellIndex = parent[currentIndex];
-      let parentCellX: number | undefined;
-      let parentCellZ: number | undefined;
-      if (parentCellIndex !== undefined && parentCellIndex >= 0) {
-        [parentCellX, parentCellZ] = this.gridFromIndex(parentCellIndex);
-      }
-
-      for (let i = 0; i < deltaX.length; i++) {
-        neighborFlags[i] = false;
-        const dirX = deltaX[i];
-        const dirZ = deltaZ[i];
-        if (dirX === undefined || dirZ === undefined) {
-          continue;
-        }
-        const neighborX = currentCellX + dirX;
-        const neighborZ = currentCellZ + dirZ;
-        if (!this.isCellInBounds(neighborX, neighborZ, grid)) {
-          continue;
-        }
-        if (isHuman && !this.isInsideLogicalBounds(neighborX, neighborZ, grid)) {
-          continue;
-        }
-        const neighborIndex = neighborZ * grid.width + neighborX;
-        const alreadyOnList = inOpen[neighborIndex] === 1 || inClosed[neighborIndex] === 1;
-        const notZonePassable = ((movementProfile.acceptableSurfaces & LOCOMOTORSURFACE_GROUND) !== 0)
-          && !this.isZonePassable(neighborX, neighborZ, grid);
-
-        if (!this.canTraverseBridgeTransition(currentCellX, currentCellZ, neighborX, neighborZ, movementProfile, grid)) {
-          continue;
-        }
-        if (!this.canMoveToCell(currentCellX, currentCellZ, neighborX, neighborZ, movementProfile)) {
-          continue;
-        }
-        if (i >= 4) {
-          const side1Index = adjacent[i - 4];
-          const side2Index = adjacent[i - 3];
-          const side1Passable = side1Index === undefined ? false : neighborFlags[side1Index];
-          const side2Passable = side2Index === undefined ? false : neighborFlags[side2Index];
-          if (!side1Passable && !side2Passable) {
-            continue;
-          }
-        }
-
-        const clearDiameter = this.clearCellForDiameter(neighborX, neighborZ, movementProfile.pathDiameter, movementProfile, grid);
-        if (clearDiameter === 0) {
-          continue;
-        }
-        if (!this.canOccupyCell(neighborX, neighborZ, movementProfile, grid)) {
-          continue;
-        }
-
-        neighborFlags[i] = true;
-
-        let stepCost = this.pathCost(currentCellX, currentCellZ, neighborX, neighborZ, grid, movementProfile);
-        const occupation = this.checkForMovement(
-          neighborX,
-          neighborZ,
-          mover,
-          grid,
-          effectiveStart,
-          i,
-          false,
-          movementOccupancy,
-        );
-        if (occupation.enemyFixed) {
-          continue;
-        }
-        if (notZonePassable) {
-          stepCost += 100 * COST_ORTHOGONAL;
-        }
-        if (grid.blocked[neighborIndex] === 1) {
-          stepCost += 100 * COST_ORTHOGONAL;
-        }
-        if (occupation.allyMoving && Math.abs(neighborX - effectiveStart.x) < 10 && Math.abs(neighborZ - effectiveStart.z) < 10) {
-          stepCost += 3 * COST_DIAGONAL;
-        }
-        if (occupation.allyFixedCount > 0) {
-          stepCost += 3 * COST_DIAGONAL;
-        }
-
-        const costRemaining = estimateToGoal(neighborX, neighborZ);
-        if (attackDistance !== NO_ATTACK_DISTANCE && occupation.allyGoal) {
-          if (mover?.category === 'vehicle') {
-            stepCost += 3 * COST_ORTHOGONAL;
-          } else {
-            stepCost += COST_ORTHOGONAL;
-          }
-        }
-
-        if (neighborIndex !== goalIndex && movementProfile.pathDiameter > 0 && clearDiameter < movementProfile.pathDiameter) {
-          const delta = movementProfile.pathDiameter - clearDiameter;
-          stepCost += 0.6 * (delta * COST_ORTHOGONAL);
-        }
-
-        if (
-          parentCellIndex !== undefined
-          && parentCellIndex >= 0
-          && parentCellX !== undefined
-          && parentCellZ !== undefined
-        ) {
-          const grandParentIndex = parent[parentCellIndex];
-          if (grandParentIndex !== undefined && grandParentIndex >= 0) {
-            const [grandCellX, grandCellZ] = this.gridFromIndex(grandParentIndex);
-            const prevDirX = parentCellX - currentCellX;
-            const prevDirZ = parentCellZ - currentCellZ;
-            const nextDirX = grandCellX - parentCellX;
-            const nextDirZ = grandCellZ - parentCellZ;
-
-            if (prevDirX !== nextDirX || prevDirZ !== nextDirZ) {
-              const dot = prevDirX * nextDirX + prevDirZ * nextDirZ;
-              if (dot > 0) {
-                stepCost += 4;
-              } else if (dot === 0) {
-                stepCost += 8;
-              } else {
-                stepCost += 16;
-              }
-            }
-          }
-        }
-
-        const currentG = gCost[currentIndex];
-        const neighborG = gCost[neighborIndex];
-        if (currentG === undefined || neighborG === undefined) {
-          continue;
-        }
-        const tentativeG = currentG + stepCost;
-        if (tentativeG >= neighborG) {
-          continue;
-        }
-
-        parent[neighborIndex] = currentIndex;
-        gCost[neighborIndex] = tentativeG;
-        fCost[neighborIndex] = tentativeG + costRemaining;
-        if (alreadyOnList) {
-          if (inClosed[neighborIndex] === 1) {
-            inClosed[neighborIndex] = 0;
-            open.push(neighborIndex);
-            inOpen[neighborIndex] = 1;
-          }
-        } else {
-          open.push(neighborIndex);
-          inOpen[neighborIndex] = 1;
-        }
-      }
-    }
-
-    return [];
-  }
-
-  private getMovementProfile(entity?: MapEntity): PathfindingProfile {
-    const rawMask = (entity as { locomotorSurfaceMask?: number } | undefined)?.locomotorSurfaceMask;
-    const rawDownhillOnly = (entity as { locomotorDownhillOnly?: boolean } | undefined)?.locomotorDownhillOnly;
-    const rawDiameter = (entity as { pathDiameter?: number } | undefined)?.pathDiameter;
-    const mask = typeof rawMask === 'number' ? rawMask : SOURCE_DEFAULT_PASSABLE_SURFACES;
-    const downhillOnly = rawDownhillOnly === true;
-    const pathDiameter = typeof rawDiameter === 'number' && rawDiameter >= 0 && Number.isFinite(rawDiameter)
-      ? Math.max(0, Math.trunc(rawDiameter))
-      : 0;
-
-    return {
-      acceptableSurfaces: mask,
-      downhillOnly,
-      canPassObstacle: (mask & LOCOMOTORSURFACE_AIR) !== 0,
-      canUseBridge: true,
-      avoidPinched: false,
-      pathDiameter,
-    };
-  }
-
-  private getPathfindRadiusAndCenter(entity?: MapEntity): { pathRadius: number; centerInCell: boolean } {
-    const pathRadius = Math.max(0, Math.trunc((entity as { pathDiameter?: number } | undefined)?.pathDiameter ?? 0));
-    const centerInCell = entity?.pathfindCenterInCell ?? ((pathRadius & 1) === 1);
-    return { pathRadius, centerInCell };
-  }
-
-  private canMoveToCell(
-    fromX: number,
-    fromZ: number,
-    toX: number,
-    toZ: number,
-    movementProfile: PathfindingProfile,
-  ): boolean {
-    if (movementProfile.downhillOnly && this.mapHeightmap) {
-      const fromHeight = this.mapHeightmap.getWorldHeight(fromX * MAP_XY_FACTOR, fromZ * MAP_XY_FACTOR);
-      const toHeight = this.mapHeightmap.getWorldHeight(toX * MAP_XY_FACTOR, toZ * MAP_XY_FACTOR);
-      return toHeight <= fromHeight;
-    }
-
-    return true;
-  }
-
-  private isInsideLogicalBounds(cellX: number, cellZ: number, grid: NavigationGrid): boolean {
-    const hasLogicalBounds = (
-      Number.isFinite(grid.logicalMinX)
-      && Number.isFinite(grid.logicalMaxX)
-      && Number.isFinite(grid.logicalMinZ)
-      && Number.isFinite(grid.logicalMaxZ)
-    );
-    if (!hasLogicalBounds || grid.logicalMinX > grid.logicalMaxX || grid.logicalMinZ > grid.logicalMaxZ) {
-      return true;
-    }
-
-    return (
-      cellX >= grid.logicalMinX
-      && cellX <= grid.logicalMaxX
-      && cellZ >= grid.logicalMinZ
-      && cellZ <= grid.logicalMaxZ
-    );
-  }
-
-  private checkForMovement(
-    cellX: number,
-    cellZ: number,
-    mover: MapEntity | undefined,
-    grid: NavigationGrid | null,
-    effectiveStart: { x: number; z: number },
-    directionIndex: number,
-    considerTransient = false,
-    movementOccupancy?: MovementOccupancyGrid,
-  ): PathingOccupationResult {
-    void effectiveStart;
-    void directionIndex;
-    const result: PathingOccupationResult = {
-      enemyFixed: false,
-      allyMoving: false,
-      allyFixedCount: 0,
-      allyGoal: false,
-    };
-
-    if (!mover || !grid) {
-      return result;
-    }
-    const occupancy = movementOccupancy ?? this.buildMovementOccupancyGrid(grid);
-
-    const { pathRadius: movementRadius, centerInCell } = this.getPathfindRadiusAndCenter(mover);
-    const numCellsAbove = movementRadius === 0
-      ? 1
-      : movementRadius + (centerInCell ? 1 : 0);
-    const maxAlly = 5;
-    const maxCellX = cellX + numCellsAbove;
-    const maxCellZ = cellZ + numCellsAbove;
-    const ignoredObstacleId = mover.ignoredMovementObstacleId;
-
-    const allies: number[] = [];
-    for (let i = cellX - movementRadius; i < maxCellX; i++) {
-      for (let j = cellZ - movementRadius; j < maxCellZ; j++) {
-        if (!this.isCellInBounds(i, j, grid)) {
-          result.enemyFixed = true;
-          return result;
-        }
-
-        const cellIndex = j * occupancy.width + i;
-        if (cellIndex < 0 || cellIndex >= occupancy.flags.length) {
-          result.enemyFixed = true;
-          return result;
-        }
-
-        const flags = occupancy.flags[cellIndex] ?? UNIT_NO_UNITS;
-        const posUnit = occupancy.unitIds[cellIndex] ?? -1;
-        if (flags === UNIT_GOAL || flags === UNIT_GOAL_OTHER_MOVING) {
-          result.allyGoal = true;
-        }
-        if (flags === UNIT_NO_UNITS) {
-          continue;
-        }
-        if (posUnit === mover.id) {
-          continue;
-        }
-        if (ignoredObstacleId !== null && posUnit === ignoredObstacleId) {
-          continue;
-        }
-
-        const unit = this.spawnedEntities.get(posUnit);
-        if (!unit) {
-          continue;
-        }
-
-        let check = false;
-        if (flags === UNIT_PRESENT_MOVING || flags === UNIT_GOAL_OTHER_MOVING) {
-          const isAlly = this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES;
-          if (isAlly) {
-            result.allyMoving = true;
-          }
-          if (considerTransient) {
-            check = true;
-          }
-        }
-
-        if (flags === UNIT_PRESENT_FIXED) {
-          check = true;
-        }
-
-        if (check && mover.ignoredMovementObstacleId !== null && mover.ignoredMovementObstacleId === unit.id) {
-          check = false;
-        }
-
-        if (!check) {
-          continue;
-        }
-
-        if (mover.category === 'infantry' && unit.category === 'infantry') {
-          continue;
-        }
-
-        if (this.getTeamRelationship(mover, unit) === RELATIONSHIP_ALLIES) {
-          if (!unit.canMove || (considerTransient && unit.moving)) {
-            result.enemyFixed = true;
-            return result;
-          }
-          if (!allies.includes(unit.id)) {
-            result.allyFixedCount += 1;
-            if (allies.length < maxAlly) {
-              allies.push(unit.id);
-            }
-          }
-          continue;
-        }
-
-        if (!this.canCrushOrSquish(mover, unit)) {
-          result.enemyFixed = true;
-        }
-      }
-    }
-
-    return result;
-  }
-
-  private buildMovementOccupancyGrid(grid: NavigationGrid): MovementOccupancyGrid {
-    const total = grid.width * grid.height;
-    const flags = new Uint8Array(total);
-    const unitIds = new Int32Array(total);
-    const goalUnitIds = new Int32Array(total);
-    unitIds.fill(-1);
-    goalUnitIds.fill(-1);
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (!entity.blocksPath && entity.pathDiameter <= 0 && entity.obstacleFootprint <= 0) {
-        continue;
-      }
-
-      const entityPosCell = entity.pathfindPosCell;
-      if (!entityPosCell) {
-        continue;
-      }
-
-      const { pathRadius: entityRadius, centerInCell } = this.getPathfindRadiusAndCenter(entity);
-      const numCellsAbove = entityRadius === 0 ? 1 : entityRadius + (centerInCell ? 1 : 0);
-
-      const flag = entity.moving ? UNIT_PRESENT_MOVING : UNIT_PRESENT_FIXED;
-      for (let i = entityPosCell.x - entityRadius; i < entityPosCell.x + numCellsAbove; i++) {
-        for (let j = entityPosCell.z - entityRadius; j < entityPosCell.z + numCellsAbove; j++) {
-          if (!this.isCellInBounds(i, j, grid)) {
-            continue;
-          }
-          const index = j * grid.width + i;
-          const posUnit = unitIds[index] ?? -1;
-          if (posUnit === entity.id) {
-            continue;
-          }
-
-          const goalUnit = goalUnitIds[index] ?? -1;
-          if (goalUnit === entity.id) {
-            flags[index] = UNIT_PRESENT_FIXED;
-          } else if (goalUnit === -1) {
-            flags[index] = flag;
-          } else {
-            flags[index] = UNIT_GOAL_OTHER_MOVING;
-          }
-
-          unitIds[index] = entity.id;
-        }
-      }
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      const goal = this.getEntityGoalCell(entity);
-      if (!goal) {
-        continue;
-      }
-      const { pathRadius: movementRadius, centerInCell } = this.getPathfindRadiusAndCenter(entity);
-      const numCellsAbove = movementRadius === 0
-        ? 1
-        : movementRadius + (centerInCell ? 1 : 0);
-      const maxCellX = goal.x + numCellsAbove;
-      const maxCellZ = goal.z + numCellsAbove;
-
-      for (let i = goal.x - movementRadius; i < maxCellX; i++) {
-        for (let j = goal.z - movementRadius; j < maxCellZ; j++) {
-          if (!this.isCellInBounds(i, j, grid)) {
-            continue;
-          }
-          const index = j * grid.width + i;
-          goalUnitIds[index] = entity.id;
-
-          const posUnit = unitIds[index] ?? -1;
-          if (posUnit === entity.id) {
-            if (entity.pathfindGoalCell) {
-              flags[index] = UNIT_GOAL_OTHER_MOVING;
-            } else {
-              flags[index] = UNIT_PRESENT_FIXED;
-            }
-            goalUnitIds[index] = entity.id;
-            continue;
-          }
-
-          flags[index] = posUnit === -1 ? UNIT_GOAL : UNIT_GOAL_OTHER_MOVING;
-          goalUnitIds[index] = entity.id;
-        }
-      }
-    }
-
-    return {
-      width: grid.width,
-      height: grid.height,
-      flags,
-      unitIds,
-      goalUnitIds,
-    };
-  }
-
-  private getEntityGoalCell(entity: MapEntity): { x: number; z: number } | null {
-    return entity.pathfindGoalCell;
-  }
-
-  private pathCost(
-    fromX: number,
-    fromZ: number,
-    toX: number,
-    toZ: number,
-    grid: NavigationGrid,
-    profile: PathfindingProfile,
-  ): number {
-    const index = toZ * grid.width + toX;
-    if (index < 0 || index >= grid.terrainType.length) {
-      return MAX_PATH_COST;
-    }
-    const type = grid.terrainType[index];
-    if (type === undefined) {
-      return MAX_PATH_COST;
-    }
-    const isDiagonal = Math.abs(toX - fromX) === 1 && Math.abs(toZ - fromZ) === 1;
-    let cost = isDiagonal ? COST_DIAGONAL : COST_ORTHOGONAL;
-
-    const toSurfaces = this.validLocomotorSurfacesForCellType(type, grid, index);
-    if ((profile.acceptableSurfaces & toSurfaces) === 0) {
-      return MAX_PATH_COST;
-    }
-    if (!this.canMoveToCell(fromX, fromZ, toX, toZ, profile)) {
-      return MAX_PATH_COST;
-    }
-
-    const blocked = grid.blocked[index];
-    if (blocked === undefined || (blocked === 1 && !profile.canPassObstacle)) {
-      return MAX_PATH_COST;
-    }
-
-    const pinched = grid.pinched[index] ?? 0;
-    if (type === NAV_CLIFF && pinched === 0) {
-      const fromWorldX = fromX * MAP_XY_FACTOR;
-      const fromWorldZ = fromZ * MAP_XY_FACTOR;
-      const toWorldX = toX * MAP_XY_FACTOR;
-      const toWorldZ = toZ * MAP_XY_FACTOR;
-      if (this.mapHeightmap && Math.abs(
-        this.mapHeightmap.getWorldHeight(fromWorldX, fromWorldZ)
-        - this.mapHeightmap.getWorldHeight(toWorldX, toWorldZ),
-      ) < MAP_XY_FACTOR) {
-        cost += 7 * COST_DIAGONAL;
-      }
-    }
-    if (pinched === 1) {
-      cost += COST_DIAGONAL;
-    }
-
-    return cost;
-  }
-
-  private pathHeuristic(cellX: number, cellZ: number, targetX: number, targetZ: number): number {
-    const dx = Math.abs(cellX - targetX);
-    const dz = Math.abs(cellZ - targetZ);
-    if (dx > dz) {
-      return COST_ORTHOGONAL * dx + (COST_ORTHOGONAL * dz) / 2;
-    }
-    return COST_ORTHOGONAL * dz + (COST_ORTHOGONAL * dx) / 2;
-  }
-
-  private reconstructPath(parent: Int32Array, startIndex: number, goalIndex: number): { x: number; z: number }[] {
-    const cells: { x: number; z: number }[] = [];
-    let current = goalIndex;
-    let steps = 0;
-    while (current !== startIndex && current >= 0 && steps < MAX_RECONSTRUCT_STEPS) {
-      const [x, z] = this.gridFromIndex(current);
-      cells.push({ x, z });
-      const next = parent[current];
-      if (next === undefined || next < 0) {
-        break;
-      }
-      current = next;
-      steps += 1;
-    }
-
-    cells.reverse();
-    const [startX, startZ] = this.gridFromIndex(startIndex);
-    cells.unshift({ x: startX, z: startZ });
-    return cells;
-  }
-
-  private smoothCellPath(
-    cells: { x: number; z: number }[],
-    profile: PathfindingProfile,
-    mover?: MapEntity,
-    movementOccupancy?: MovementOccupancyGrid,
-    preserveAllyGoalCells = false,
-  ): { x: number; z: number }[] {
-    if (cells.length <= 2) {
-      return cells;
-    }
-
-    const smoothed: { x: number; z: number }[] = [];
-    let anchor = 0;
-    let candidate = 2;
-    smoothed.push(cells[0]!);
-    const optimizeProfile: PathfindingProfile = {
-      ...profile,
-      // Match source Path::optimize() behavior for LOS: allow pinched cells while
-      // line-of-sight evaluating and defer pinched handling to movement checks.
-      avoidPinched: false,
-    };
-
-    while (anchor < cells.length - 1) {
-      if (candidate >= cells.length) {
-        const last = smoothed[smoothed.length - 1];
-        const goal = cells[cells.length - 1];
-        if (!last || !goal || last.x !== goal.x || last.z !== goal.z) {
-          if (goal) {
-            smoothed.push(goal);
-          }
-        }
-        break;
-      }
-
-      if (this.gridLineClear(
-        cells[anchor]!,
-        cells[candidate]!,
-        this.navigationGrid,
-        optimizeProfile,
-        mover,
-        movementOccupancy,
-      )) {
-        if (
-          preserveAllyGoalCells
-          && this.pathSegmentContainsAllyGoal(cells, anchor, candidate, movementOccupancy, this.navigationGrid)
-        ) {
-          if (candidate - anchor > 1) {
-            smoothed.push(cells[candidate - 1]!);
-            anchor = candidate - 1;
-            candidate = anchor + 2;
-          } else {
-            candidate += 1;
-          }
-          continue;
-        }
-        candidate += 1;
-      } else if (this.canBypassClearanceFailureAsMonotonicSegment(cells, anchor, candidate)) {
-        candidate += 1;
-      } else {
-        smoothed.push(cells[candidate - 1]!);
-        anchor = candidate - 1;
-        candidate = anchor + 2;
-      }
-    }
-
-    return smoothed;
-  }
-
-  private pathSegmentContainsAllyGoal(
-    cells: { x: number; z: number }[],
-    startIndex: number,
-    endIndex: number,
-    movementOccupancy?: MovementOccupancyGrid,
-    grid?: NavigationGrid | null,
-  ): boolean {
-    if (!movementOccupancy || endIndex - startIndex <= 1) {
-      return false;
-    }
-
-    for (let i = startIndex + 1; i < endIndex; i++) {
-      const cell = cells[i];
-      if (!cell) {
-        continue;
-      }
-      if (!this.isCellInBounds(cell.x, cell.z, grid ?? this.navigationGrid)) {
-        return true;
-      }
-      const index = cell.z * movementOccupancy.width + cell.x;
-      if (index < 0 || index >= movementOccupancy.flags.length) {
-        return true;
-      }
-      const flags = movementOccupancy.flags[index];
-      if (flags === UNIT_GOAL || flags === UNIT_GOAL_OTHER_MOVING) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private canBypassClearanceFailureAsMonotonicSegment(
-    cells: { x: number; z: number }[],
-    anchorIndex: number,
-    candidateIndex: number,
-  ): boolean {
-    if (anchorIndex < 0 || candidateIndex <= anchorIndex || candidateIndex >= cells.length) {
-      return false;
-    }
-
-    const anchor = cells[anchorIndex];
-    const candidate = cells[candidateIndex];
-    if (!anchor || !candidate) {
-      return false;
-    }
-
-    const deltaX = candidate.x - anchor.x;
-    const deltaZ = candidate.z - anchor.z;
-    if (deltaX === 0) {
-      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
-        const prev = cells[i - 1];
-        const cur = cells[i];
-        if (!prev || !cur || cur.x - prev.x !== 0) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (deltaZ === 0) {
-      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
-        const prev = cells[i - 1];
-        const cur = cells[i];
-        if (!prev || !cur || cur.z - prev.z !== 0) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (deltaX === deltaZ) {
-      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
-        const prev = cells[i - 1];
-        const cur = cells[i];
-        if (!prev || !cur || cur.z - prev.z !== cur.x - prev.x) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (deltaX === -deltaZ) {
-      for (let i = anchorIndex + 1; i <= candidateIndex; i++) {
-        const prev = cells[i - 1];
-        const cur = cells[i];
-        if (!prev || !cur || cur.z - prev.z !== - (cur.x - prev.x)) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    return false;
-  }
-
-  private gridLineClear(
-    start: { x: number; z: number },
-    end: { x: number; z: number },
-    grid: NavigationGrid | null,
-    profile: PathfindingProfile,
-    mover?: MapEntity,
-    movementOccupancy?: MovementOccupancyGrid,
-  ): boolean {
-    if (!grid) return false;
-    const effectiveStart = start;
-    if (start.x === end.x && start.z === end.z) {
-      if (mover) {
-        const occupation = this.checkForMovement(
-          start.x,
-          start.z,
-          mover,
-          grid,
-          effectiveStart,
-          0,
-          false,
-          movementOccupancy,
-        );
-        if (occupation.enemyFixed || occupation.allyFixedCount > 0) {
-          return false;
-        }
-      }
-      if (profile.avoidPinched && grid.pinched[start.z * grid.width + start.x] === 1) {
-        return false;
-      }
-      if (!this.canLineOfSightOccupyCell(start.x, start.z, profile, grid)) {
-        return false;
-      }
-      return true;
-    }
-
-    const deltaX = Math.abs(end.x - start.x);
-    const deltaZ = Math.abs(end.z - start.z);
-
-    let xinc1: number;
-    let xinc2: number;
-    if (end.x >= start.x) {
-      xinc1 = 1;
-      xinc2 = 1;
-    } else {
-      xinc1 = -1;
-      xinc2 = -1;
-    }
-
-    let zinc1: number;
-    let zinc2: number;
-    if (end.z >= start.z) {
-      zinc1 = 1;
-      zinc2 = 1;
-    } else {
-      zinc1 = -1;
-      zinc2 = -1;
-    }
-
-    let den: number;
-    let num: number;
-    let numadd: number;
-    const numpixels = deltaX >= deltaZ ? deltaX : deltaZ;
-    if (deltaX >= deltaZ) {
-      xinc1 = 0;
-      zinc2 = 0;
-      den = deltaX;
-      num = Math.floor(deltaX / 2);
-      numadd = deltaZ;
-    } else {
-      xinc2 = 0;
-      zinc1 = 0;
-      den = deltaZ;
-      num = Math.floor(deltaZ / 2);
-      numadd = deltaX;
-    }
-
-    const checkCell = (
-      cellX: number,
-      cellZ: number,
-    ): boolean => {
-      if (mover) {
-        const occupation = this.checkForMovement(
-          cellX,
-          cellZ,
-          mover,
-          grid,
-          effectiveStart,
-          0,
-          false,
-          movementOccupancy,
-        );
-        if (occupation.enemyFixed || occupation.allyFixedCount > 0) {
-          return false;
-        }
-      }
-      if (profile.avoidPinched && grid.pinched[cellZ * grid.width + cellX] === 1) {
-        return false;
-      }
-      if (!this.canLineOfSightOccupyCell(cellX, cellZ, profile, grid)) {
-        return false;
-      }
-      return true;
-    };
-
-    let x = start.x;
-    let z = start.z;
-
-    for (let curpixel = 0; curpixel <= numpixels; curpixel++) {
-      if (!checkCell(x, z)) {
-        return false;
-      }
-
-      num += numadd;
-      if (num >= den) {
-        num -= den;
-        x += xinc1;
-        z += zinc1;
-        if (!checkCell(x, z)) {
-          return false;
-        }
-      }
-      x += xinc2;
-      z += zinc2;
-    }
-
-    return true;
-  }
-
-  private canOccupyCell(
-    cellX: number,
-    cellZ: number,
-    profile: PathfindingProfile,
-    nav: NavigationGrid | null = this.navigationGrid,
-    exact = false,
-  ): boolean {
-    if (!nav || !this.isCellInBounds(cellX, cellZ, nav)) {
-      return false;
-    }
-    const exactDiameter = profile.pathDiameter ?? 0;
-    const clearDiameter = this.clearCellForDiameter(cellX, cellZ, exactDiameter, profile, nav);
-    if (clearDiameter < 1) {
-      return false;
-    }
-
-    if (exactDiameter > 0 && exact && clearDiameter !== exactDiameter) {
-      return false;
-    }
-    return true;
-  }
-
-  private canLineOfSightOccupyCell(
-    cellX: number,
-    cellZ: number,
-    profile: PathfindingProfile,
-    nav: NavigationGrid | null = this.navigationGrid,
-  ): boolean {
-    // Mirrors source Pathfinder::validMovementPosition flow used by line-of-sight checks:
-    // occupancy and bridge checks already happened in gridLineClear; this checks
-    // terrain/surface compatibility only.
-    if (!nav || !this.isCellInBounds(cellX, cellZ, nav)) {
-      return false;
-    }
-    return this.canOccupyCellCenter(cellX, cellZ, profile, nav);
-  }
-
-  private clearCellForDiameter(
-    cellX: number,
-    cellZ: number,
-    pathDiameter: number,
-    profile: PathfindingProfile,
-    nav: NavigationGrid,
-  ): number {
-    const normalizedPathDiameter = Number.isFinite(pathDiameter) ? Math.max(0, Math.trunc(pathDiameter)) : 0;
-    const clearDiameter = this.clearCellForExactDiameter(cellX, cellZ, normalizedPathDiameter, profile, nav);
-    if (clearDiameter === 0) {
-      if (normalizedPathDiameter < 2) {
-        return 0;
-      }
-      return this.clearCellForDiameter(cellX, cellZ, normalizedPathDiameter - 2, profile, nav);
-    }
-    return clearDiameter;
-  }
-
-  private clearCellForExactDiameter(
-    cellX: number,
-    cellZ: number,
-    pathDiameter: number,
-    profile: PathfindingProfile,
-    nav: NavigationGrid,
-  ): number {
-    if (!this.canOccupyCellCenter(cellX, cellZ, profile, nav)) {
-      return 0;
-    }
-
-    const radius = Math.max(0, Math.trunc(pathDiameter / 2));
-    const numCellsAbove = radius + 1;
-    const cutCorners = radius > 1;
-
-    for (let i = cellX - radius; i < cellX + numCellsAbove; i++) {
-      const isMinOrMaxX = i === cellX - radius;
-      const isMaxX = i === cellX + numCellsAbove - 1;
-      const xMinOrMax = isMinOrMaxX || isMaxX;
-      for (let j = cellZ - radius; j < cellZ + numCellsAbove; j++) {
-        const isMinOrMaxZ = j === cellZ - radius;
-        const isMaxZ = j === cellZ + numCellsAbove - 1;
-        const zMinOrMax = isMinOrMaxZ || isMaxZ;
-        if (xMinOrMax && zMinOrMax && cutCorners) {
-          continue;
-        }
-        if (!this.isCellInBounds(i, j, nav)) {
-          return 0;
-        }
-        if (!this.canOccupyCellCenter(i, j, profile, nav)) {
-          return 0;
-        }
-      }
-    }
-
-    if (Math.floor(radius) === 0) {
-      return 1;
-    }
-    return radius * 2;
-  }
-
-  private canOccupyCellCenter(
-    cellX: number,
-    cellZ: number,
-    profile: PathfindingProfile,
-    nav: NavigationGrid,
-  ): boolean {
-    const index = cellZ * nav.width + cellX;
-    const terrain = nav.terrainType[index];
-    if (terrain === undefined) {
-      return false;
-    }
-    if (nav.bridgePassable[index] === 1) {
-      const bridgeSurfaces = LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;
-      if (!profile.canUseBridge || (profile.acceptableSurfaces & bridgeSurfaces) === 0) {
-        return false;
-      }
-      return true;
-    }
-    if (nav.blocked[index] === 1 && !profile.canPassObstacle) {
-      return false;
-    }
-    const cellSurfaces = this.validLocomotorSurfacesForCellType(terrain, nav, index);
-    if ((profile.acceptableSurfaces & cellSurfaces) === 0) {
-      return false;
-    }
-    if (profile.avoidPinched && nav.pinched[index] === 1) {
-      return false;
-    }
-    return true;
-  }
-
-  private isZoneBlockIndex(cellX: number, cellZ: number, grid: NavigationGrid): number {
-    const blockX = Math.floor(cellX / PATHFIND_ZONE_BLOCK_SIZE);
-    const blockY = Math.floor(cellZ / PATHFIND_ZONE_BLOCK_SIZE);
-    if (blockX < 0 || blockX >= grid.zoneBlockWidth) {
-      return -1;
-    }
-    if (blockY < 0 || blockY >= grid.zoneBlockHeight) {
-      return -1;
-    }
-    return blockY * grid.zoneBlockWidth + blockX;
-  }
-
-  private isZonePassable(cellX: number, cellZ: number, grid: NavigationGrid): boolean {
-    const blockIndex = this.isZoneBlockIndex(cellX, cellZ, grid);
-    if (blockIndex < 0) {
-      return false;
-    }
-    if (!grid.zonePassable || blockIndex >= grid.zonePassable.length) {
-      return true;
-    }
-    return grid.zonePassable[blockIndex] === 1;
-  }
-
-  private validLocomotorSurfacesForCellType(
-    terrainType: number,
-    nav: NavigationGrid,
-    cellIndex: number,
-  ): number {
-    if (nav.bridgePassable[cellIndex] === 1) {
-      return LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;
-    }
-    switch (terrainType) {
-      case NAV_OBSTACLE:
-      case NAV_IMPASSABLE:
-      case NAV_BRIDGE_IMPASSABLE:
-        return LOCOMOTORSURFACE_AIR;
-      case NAV_CLEAR:
-        return LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR;
-      case NAV_WATER:
-        return LOCOMOTORSURFACE_WATER | LOCOMOTORSURFACE_AIR;
-      case NAV_RUBBLE:
-        return LOCOMOTORSURFACE_RUBBLE | LOCOMOTORSURFACE_AIR;
-      case NAV_CLIFF:
-        return LOCOMOTORSURFACE_CLIFF | LOCOMOTORSURFACE_AIR;
-      case NAV_BRIDGE:
-        return nav.bridgePassable[cellIndex] === 1
-          ? LOCOMOTORSURFACE_GROUND | LOCOMOTORSURFACE_AIR
-          : LOCOMOTORSURFACE_AIR;
-      default:
-        return NO_SURFACES;
-    }
-  }
-
-  private canTraverseBridgeTransition(
-    fromX: number,
-    fromZ: number,
-    toX: number,
-    toZ: number,
-    profile: PathfindingProfile,
-    nav: NavigationGrid | null = this.navigationGrid,
-  ): boolean {
-    if (!nav) {
-      return false;
-    }
-    if (!this.isCellInBounds(fromX, fromZ, nav) || !this.isCellInBounds(toX, toZ, nav)) {
-      return false;
-    }
-    const fromIndex = fromZ * nav.width + fromX;
-    const toIndex = toZ * nav.width + toX;
-    const fromBridge = nav.bridgePassable[fromIndex] === 1;
-    const toBridge = nav.bridgePassable[toIndex] === 1;
-
-    if (!fromBridge && !toBridge) {
-      return true;
-    }
-    if (fromBridge && toBridge) {
-      return true;
-    }
-    if (!profile.canUseBridge) {
-      return false;
-    }
-    return nav.bridgeTransitions[fromIndex] === 1 || nav.bridgeTransitions[toIndex] === 1;
-  }
-
-  private findNearestPassableCell(
-    cellX: number,
-    cellZ: number,
-    grid: NavigationGrid,
-    profile: PathfindingProfile,
-    exact = false,
-    maxOffset = 400,
-  ): { x: number; z: number } | null {
-    if (this.canOccupyCell(cellX, cellZ, profile, grid, exact)) {
-      return { x: cellX, z: cellZ };
-    }
-
-    let delta = 1;
-    let i = cellX;
-    let j = cellZ;
-    let remaining = maxOffset;
-    let count: number;
-
-    while (remaining > 0) {
-      for (count = delta; count > 0 && remaining > 0; count--) {
-        i += 1;
-        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
-          return { x: i, z: j };
-        }
-        remaining--;
-      }
-
-      for (count = delta; count > 0 && remaining > 0; count--) {
-        j += 1;
-        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
-          return { x: i, z: j };
-        }
-        remaining--;
-      }
-
-      delta += 1;
-
-      for (count = delta; count > 0 && remaining > 0; count--) {
-        i -= 1;
-        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
-          return { x: i, z: j };
-        }
-        remaining--;
-      }
-
-      for (count = delta; count > 0 && remaining > 0; count--) {
-        j -= 1;
-        if (this.isCellInBounds(i, j, grid) && this.canOccupyCell(i, j, profile, grid, exact)) {
-          return { x: i, z: j };
-        }
-        remaining--;
-      }
-
-      delta += 1;
-    }
-
-    return null;
   }
 
   private buildNavigationGrid(mapData: MapDataJSON | null, heightmap: HeightmapGrid | null): NavigationGrid | null {
@@ -8671,7 +7158,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (delivery === 'DIRECT' && delayFrames <= 0) {
       // Source parity subset: WeaponTemplate::fireWeaponTemplate() applies non-projectile
       // damage immediately when delayInFrames < 1.0f instead of queuing delayed damage.
-      this.applyWeaponDamageEvent(event);
+      applyWeaponDamageEventImpl(this.createCombatDamageEventContext(), event);
       return;
     }
 
@@ -8743,307 +7230,84 @@ export class GameLogicSubsystem implements Subsystem {
     return resolveProjectileScatterRadiusForCategoryImpl(weapon, target.category);
   }
 
-  private updatePendingWeaponDamage(): void {
-    if (this.pendingWeaponDamageEvents.length === 0) {
-      return;
-    }
-
-    const remainingEvents: PendingWeaponDamageEvent[] = [];
-    for (const event of this.pendingWeaponDamageEvents) {
-      if (event.executeFrame > this.frameCounter) {
-        remainingEvents.push(event);
-        continue;
-      }
-      this.applyWeaponDamageEvent(event);
-    }
-
-    this.pendingWeaponDamageEvents.length = 0;
-    this.pendingWeaponDamageEvents.push(...remainingEvents);
-  }
-
-  private applyWeaponDamageEvent(event: PendingWeaponDamageEvent): void {
-    const weapon = event.weapon;
-    if (event.delivery === 'PROJECTILE') {
-      // Source parity subset: damage arrives via projectile detonation/collision timing.
-      // TODO(C&C source parity): replace with spawned projectile entities and
-      // shouldProjectileCollideWith()/ProjectileUpdateInterface behavior.
-    }
-    const source = this.spawnedEntities.get(event.sourceEntityId) ?? null;
-    const primaryVictim = event.primaryVictimEntityId !== null
-      ? (this.spawnedEntities.get(event.primaryVictimEntityId) ?? null)
-      : null;
-    const primaryVictimWasAlive = !!primaryVictim && !primaryVictim.destroyed && primaryVictim.canTakeDamage;
-
-    let impactX = event.impactX;
-    let impactZ = event.impactZ;
-    if (event.delivery === 'DIRECT' && primaryVictim && !primaryVictim.destroyed) {
-      impactX = primaryVictim.x;
-      impactZ = primaryVictim.z;
-    }
-
-    const primaryRadius = Math.max(0, weapon.primaryDamageRadius);
-    const secondaryRadius = Math.max(0, weapon.secondaryDamageRadius);
-    const radiusDamageAngle = Math.max(0, weapon.radiusDamageAngle);
-    const radiusDamageAngleCos = Math.cos(radiusDamageAngle);
-    const primaryRadiusSqr = primaryRadius * primaryRadius;
-    const effectRadius = Math.max(primaryRadius, secondaryRadius);
-    const effectRadiusSqr = effectRadius * effectRadius;
-    const sourceFacingVector = source
-      ? new THREE.Vector3(
-        this.resolveForwardUnitVector(source).x,
-        0,
-        this.resolveForwardUnitVector(source).z,
-      ).normalize()
-      : null;
-
-    const victims: Array<{ entity: MapEntity; distanceSqr: number }> = [];
-    if (effectRadius > 0) {
-      for (const entity of this.spawnedEntities.values()) {
-        if (entity.destroyed || !entity.canTakeDamage) {
-          continue;
-        }
-        const dx = entity.x - impactX;
-        const dz = entity.z - impactZ;
-        const distanceSqr = dx * dx + dz * dz;
-        if (distanceSqr <= effectRadiusSqr) {
-          victims.push({ entity, distanceSqr });
-        }
-      }
-      victims.sort((left, right) => left.entity.id - right.entity.id);
-    } else if (primaryVictim && !primaryVictim.destroyed && primaryVictim.canTakeDamage) {
-      if (event.delivery === 'PROJECTILE') {
-        const collisionRadius = this.resolveProjectilePointCollisionRadius(primaryVictim);
-        const dx = primaryVictim.x - impactX;
-        const dz = primaryVictim.z - impactZ;
-        const distanceSqr = dx * dx + dz * dz;
-        if (distanceSqr <= collisionRadius * collisionRadius) {
-          victims.push({ entity: primaryVictim, distanceSqr: 0 });
-        } else {
-          const incidentalVictim = this.resolveProjectileIncidentalVictimForPointImpact(
-            source,
-            weapon,
-            primaryVictim.id,
-            impactX,
-            impactZ,
-          );
-          if (incidentalVictim) {
-            victims.push({ entity: incidentalVictim, distanceSqr: 0 });
-          }
-        }
-      } else {
-        victims.push({ entity: primaryVictim, distanceSqr: 0 });
-      }
-    } else if (event.delivery === 'PROJECTILE') {
-      const incidentalVictim = this.resolveProjectileIncidentalVictimForPointImpact(
-        source,
+  private createCombatDamageEventContext(): CombatDamageEventContext<
+    MapEntity,
+    AttackWeaponProfile,
+    PendingWeaponDamageEvent
+  > {
+    return {
+      frameCounter: this.frameCounter,
+      pendingEvents: this.pendingWeaponDamageEvents,
+      entitiesById: this.spawnedEntities,
+      resolveForwardUnitVector: (entity) => this.resolveForwardUnitVector(entity),
+      resolveProjectilePointCollisionRadius: (entity) => resolveProjectilePointCollisionRadiusImpl(entity, MAP_XY_FACTOR),
+      resolveProjectileIncidentalVictimForPointImpact: (
+        projectileLauncher,
         weapon,
-        primaryVictim?.id ?? null,
+        intendedVictimId,
         impactX,
         impactZ,
-      );
-      if (incidentalVictim) {
-        victims.push({ entity: incidentalVictim, distanceSqr: 0 });
-      }
-    }
-
-    if (
-      victims.length === 0
-      && source
-      && (weapon.radiusDamageAffectsMask & WEAPON_KILLS_SELF) !== 0
-      && effectRadius <= 0
-    ) {
-      this.applyWeaponDamageAmount(source.id, source, HUGE_DAMAGE_AMOUNT, weapon.damageType);
-      return;
-    }
-
-    for (const victim of victims) {
-      const candidate = victim.entity;
-      let killSelf = false;
-
-      if (radiusDamageAngle < Math.PI) {
-        if (!source || !sourceFacingVector) {
-          continue;
-        }
-        const damageVector = new THREE.Vector3(
-          candidate.x - source.x,
-          0,
-          candidate.z - source.z,
-        ).normalize();
-        // Source parity subset: WeaponTemplate::dealDamageInternal gates radius damage by
-        // comparing source orientation to candidate direction against RadiusDamageAngle.
-        // TODO(C&C source parity): include full 3D source/candidate vectors once altitude and
-        // pitch-limited facing are represented in simulation data.
-        if (sourceFacingVector.dot(damageVector) < radiusDamageAngleCos) {
-          continue;
-        }
-      }
-
-      if (source && candidate !== primaryVictim) {
-        if (
-          (weapon.radiusDamageAffectsMask & WEAPON_KILLS_SELF) !== 0
-          && candidate.id === source.id
-        ) {
-          killSelf = true;
-        } else {
-          if (
-            (weapon.radiusDamageAffectsMask & WEAPON_AFFECTS_SELF) === 0
-            && candidate.id === source.id
-          ) {
-            continue;
-          }
-          if (
-            (weapon.radiusDamageAffectsMask & WEAPON_DOESNT_AFFECT_SIMILAR) !== 0
-            && this.getTeamRelationship(source, candidate) === RELATIONSHIP_ALLIES
-            && source.templateName.trim().toUpperCase() === candidate.templateName.trim().toUpperCase()
-          ) {
-            continue;
-          }
-
-          // TODO(C&C source parity): implement WEAPON_DOESNT_AFFECT_AIRBORNE via
-          // Object::isSignificantlyAboveTerrain once 3D movement altitude parity is represented.
-          let requiredMask = WEAPON_AFFECTS_NEUTRALS;
-          const relationship = this.getTeamRelationship(source, candidate);
-          if (relationship === RELATIONSHIP_ALLIES) {
-            requiredMask = WEAPON_AFFECTS_ALLIES;
-          } else if (relationship === RELATIONSHIP_ENEMIES) {
-            requiredMask = WEAPON_AFFECTS_ENEMIES;
-          }
-          if ((weapon.radiusDamageAffectsMask & requiredMask) === 0) {
-            continue;
-          }
-        }
-      }
-
-      const rawAmount = killSelf
-        ? HUGE_DAMAGE_AMOUNT
-        : (victim.distanceSqr <= primaryRadiusSqr ? weapon.primaryDamage : weapon.secondaryDamage);
-      this.applyWeaponDamageAmount(source?.id ?? null, candidate, rawAmount, weapon.damageType);
-    }
-
-    if (source && primaryVictimWasAlive && primaryVictim && primaryVictim.destroyed) {
-      this.tryContinueAttackOnVictimDeath(source, primaryVictim, weapon);
-    }
-
-    // TODO(C&C source parity): use 3D/bounding-volume damage distance checks from
-    // PartitionManager::iterateObjectsInRange(DAMAGE_RANGE_CALC_TYPE).
-  }
-
-  private tryContinueAttackOnVictimDeath(
-    attacker: MapEntity,
-    destroyedVictim: MapEntity,
-    weapon: AttackWeaponProfile,
-  ): void {
-    const continueRange = Math.max(0, weapon.continueAttackRange);
-    if (continueRange <= 0) {
-      return;
-    }
-    if (attacker.destroyed || !this.canEntityAttackFromStatus(attacker)) {
-      return;
-    }
-    if (attacker.attackTargetEntityId !== destroyedVictim.id) {
-      return;
-    }
-    const originalVictimPosition = attacker.attackOriginalVictimPosition;
-    if (!originalVictimPosition) {
-      return;
-    }
-
-    const replacementVictim = this.findContinueAttackVictim(
-      attacker,
-      destroyedVictim,
-      originalVictimPosition,
-      continueRange,
-    );
-    if (!replacementVictim) {
-      return;
-    }
-
-    attacker.attackTargetEntityId = replacementVictim.id;
-    // Source parity subset: AIAttackState::notifyNewVictimChosen() does not update
-    // m_originalVictimPos. Keep the initial victim position for chained reacquire.
-    // TODO(C&C source parity): source PartitionFilterSamePlayer uses controlling-player
-    // pointers from fully decoded map object ownership data. This port currently depends
-    // on string-keyed originalOwner and does not decode NameKey-keyed properties yet.
-    // Also mirror full Object::isOffMap/private-map-status semantics from
-    // AIAttackFireWeaponState.
-  }
-
-  private findContinueAttackVictim(
-    attacker: MapEntity,
-    destroyedVictim: MapEntity,
-    originalVictimPosition: VectorXZ,
-    continueRange: number,
-  ): MapEntity | null {
-    // TODO(C&C source parity): ContinueAttack uses PartitionFilterSamePlayer with
-    // victim->getControllingPlayer(). Do not reacquire when map ownership data is not
-    // available yet (e.g. unresolved NameKey-keyed originalOwner conversion).
-    return findContinueAttackVictimImpl(
-      attacker.id,
-      destroyedVictim.id,
-      destroyedVictim.controllingPlayerToken,
-      originalVictimPosition,
-      continueRange,
-      this.spawnedEntities.values(),
-      (candidate) => this.canAttackerTargetEntity(attacker, candidate, attacker.attackCommandSource),
-    );
-  }
-
-  private resolveProjectilePointCollisionRadius(entity: MapEntity): number {
-    // Source parity subset: without full per-projectile collision volumes, approximate point-hit
-    // overlap by at least half a cell for small movers.
-    // TODO(C&C source parity): replace with spawned projectile entities and precise
-    // shouldProjectileCollideWith()/geometry intersection checks.
-    return resolveProjectilePointCollisionRadiusImpl(entity, MAP_XY_FACTOR);
-  }
-
-  private resolveProjectileIncidentalVictimForPointImpact(
-    projectileLauncher: MapEntity | null,
-    weapon: AttackWeaponProfile,
-    intendedVictimId: number | null,
-    impactX: number,
-    impactZ: number,
-  ): MapEntity | null {
-    return resolveProjectileIncidentalVictimForPointImpactImpl(
-      this.spawnedEntities.values(),
-      intendedVictimId,
-      impactX,
-      impactZ,
-      (candidate) => this.resolveProjectilePointCollisionRadius(candidate),
-      (candidate) => this.shouldProjectileCollideWithEntity(projectileLauncher, weapon, candidate, intendedVictimId),
-    );
-  }
-
-  private shouldProjectileCollideWithEntity(
-    projectileLauncher: MapEntity | null,
-    weapon: AttackWeaponProfile,
-    candidate: MapEntity,
-    intendedVictimId: number | null,
-  ): boolean {
-    return shouldProjectileCollideWithEntityImpl(
-      projectileLauncher,
-      weapon,
-      candidate,
-      intendedVictimId,
-      (launcher) => this.resolveProjectileLauncherContainer(launcher),
-      (entity) => this.resolveEntityKindOfSet(entity),
-      (entity, kindOf, victimId) => this.isAirfieldReservedForProjectileVictim(entity, kindOf, victimId),
-      (entity) => this.entityHasSneakyTargetingOffset(entity),
-      (launcher, entity) => this.getTeamRelationship(launcher, entity),
-      (side) => this.normalizeSide(side),
-      (entity) => this.resolveEntityFenceWidth(entity),
-      { allies: RELATIONSHIP_ALLIES, enemies: RELATIONSHIP_ENEMIES },
-      {
-        collideAllies: WEAPON_COLLIDE_ALLIES,
-        collideEnemies: WEAPON_COLLIDE_ENEMIES,
-        collideControlledStructures: WEAPON_COLLIDE_CONTROLLED_STRUCTURES,
-        collideStructures: WEAPON_COLLIDE_STRUCTURES,
-        collideShrubbery: WEAPON_COLLIDE_SHRUBBERY,
-        collideProjectile: WEAPON_COLLIDE_PROJECTILE,
-        collideWalls: WEAPON_COLLIDE_WALLS,
-        collideSmallMissiles: WEAPON_COLLIDE_SMALL_MISSILES,
-        collideBallisticMissiles: WEAPON_COLLIDE_BALLISTIC_MISSILES,
+      ) => resolveProjectileIncidentalVictimForPointImpactImpl(
+        this.spawnedEntities.values(),
+        intendedVictimId,
+        impactX,
+        impactZ,
+        (candidate) => resolveProjectilePointCollisionRadiusImpl(candidate, MAP_XY_FACTOR),
+        (candidate) => shouldProjectileCollideWithEntityImpl(
+          projectileLauncher,
+          weapon,
+          candidate,
+          intendedVictimId,
+          (launcher) => this.resolveProjectileLauncherContainer(launcher),
+          (entity) => this.resolveEntityKindOfSet(entity),
+          (entity, kindOf, victimId) => isAirfieldReservedForProjectileVictimImpl(
+            entity,
+            kindOf,
+            victimId,
+            (entityId) => this.spawnedEntities.get(entityId) ?? null,
+          ),
+          (entity) => this.entityHasSneakyTargetingOffset(entity),
+          (launcher, entity) => this.getTeamRelationship(launcher, entity),
+          (side) => this.normalizeSide(side),
+          (entity) => this.resolveEntityFenceWidth(entity),
+          { allies: RELATIONSHIP_ALLIES, enemies: RELATIONSHIP_ENEMIES },
+          {
+            collideAllies: WEAPON_COLLIDE_ALLIES,
+            collideEnemies: WEAPON_COLLIDE_ENEMIES,
+            collideControlledStructures: WEAPON_COLLIDE_CONTROLLED_STRUCTURES,
+            collideStructures: WEAPON_COLLIDE_STRUCTURES,
+            collideShrubbery: WEAPON_COLLIDE_SHRUBBERY,
+            collideProjectile: WEAPON_COLLIDE_PROJECTILE,
+            collideWalls: WEAPON_COLLIDE_WALLS,
+            collideSmallMissiles: WEAPON_COLLIDE_SMALL_MISSILES,
+            collideBallisticMissiles: WEAPON_COLLIDE_BALLISTIC_MISSILES,
+          },
+        ),
+      ),
+      getTeamRelationship: (attacker, target) => this.getTeamRelationship(attacker, target),
+      applyWeaponDamageAmount: (sourceEntityId, target, amount, damageType) =>
+        this.applyWeaponDamageAmount(sourceEntityId, target, amount, damageType),
+      canEntityAttackFromStatus: (entity) => this.canEntityAttackFromStatus(entity),
+      canAttackerTargetEntity: (attacker, target, commandSource) =>
+        this.canAttackerTargetEntity(attacker, target, commandSource as AttackCommandSource),
+      masks: {
+        affectsSelf: WEAPON_AFFECTS_SELF,
+        affectsAllies: WEAPON_AFFECTS_ALLIES,
+        affectsEnemies: WEAPON_AFFECTS_ENEMIES,
+        affectsNeutrals: WEAPON_AFFECTS_NEUTRALS,
+        killsSelf: WEAPON_KILLS_SELF,
+        doesntAffectSimilar: WEAPON_DOESNT_AFFECT_SIMILAR,
       },
-    );
+      relationships: {
+        allies: RELATIONSHIP_ALLIES,
+        enemies: RELATIONSHIP_ENEMIES,
+      },
+      hugeDamageAmount: HUGE_DAMAGE_AMOUNT,
+    };
+  }
+
+  private updatePendingWeaponDamage(): void {
+    updatePendingWeaponDamageImpl(this.createCombatDamageEventContext());
   }
 
   private resolveProjectileLauncherContainer(projectileLauncher: MapEntity): MapEntity | null {
@@ -9061,21 +7325,6 @@ export class GameLogicSubsystem implements Subsystem {
     // TODO(C&C source parity): extend to full transport/building containment once
     // generic contain/transport behavior state exists in the simulation.
     return container;
-  }
-
-  private isAirfieldReservedForProjectileVictim(
-    candidate: MapEntity,
-    candidateKindOf: Set<string>,
-    intendedVictimId: number | null,
-  ): boolean {
-    // TODO(C&C source parity): model full ParkingPlaceBehaviorInterface::hasReservedSpace()
-    // checks for intended victim IDs that are reserved but not currently parked.
-    return isAirfieldReservedForProjectileVictimImpl(
-      candidate,
-      candidateKindOf,
-      intendedVictimId,
-      (entityId) => this.spawnedEntities.get(entityId) ?? null,
-    );
   }
 
   private resolveEntityKindOfSet(entity: MapEntity): Set<string> {
