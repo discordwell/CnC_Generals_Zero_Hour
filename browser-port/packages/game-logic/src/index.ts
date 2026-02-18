@@ -32,6 +32,19 @@ import {
 } from '@generals/terrain';
 import type { InputState } from '@generals/input';
 import {
+  adjustDamageByArmorSet as adjustDamageByArmorSetImpl,
+  computeAttackRetreatTarget as computeAttackRetreatTargetImpl,
+  recordConsecutiveAttackShot as recordConsecutiveAttackShotImpl,
+  resolveProjectileScatterRadiusForCategory as resolveProjectileScatterRadiusForCategoryImpl,
+  resolveScaledProjectileTravelSpeed as resolveScaledProjectileTravelSpeedImpl,
+  resolveWeaponDelayFrames as resolveWeaponDelayFramesImpl,
+  resolveWeaponPreAttackDelayFrames as resolveWeaponPreAttackDelayFramesImpl,
+  setEntityAimingWeaponStatus as setEntityAimingWeaponStatusImpl,
+  setEntityAttackStatus as setEntityAttackStatusImpl,
+  setEntityFiringWeaponStatus as setEntityFiringWeaponStatusImpl,
+  setEntityIgnoringStealthStatus as setEntityIgnoringStealthStatusImpl,
+} from './combat-helpers.js';
+import {
   clamp,
   coerceStringArray,
   nominalHeightForCategory,
@@ -8774,11 +8787,7 @@ export class GameLogicSubsystem implements Subsystem {
   private setEntityAttackStatus(entity: MapEntity, isAttacking: boolean): void {
     // TODO(C&C source parity): move IS_ATTACKING ownership from this combat-loop subset
     // to full AI state-machine enter/exit transitions (AIAttackState onEnter/onExit).
-    if (isAttacking) {
-      entity.objectStatusFlags.add('IS_ATTACKING');
-    } else {
-      entity.objectStatusFlags.delete('IS_ATTACKING');
-    }
+    setEntityAttackStatusImpl(entity, isAttacking);
   }
 
   private setEntityAimingWeaponStatus(entity: MapEntity, isAiming: boolean): void {
@@ -8786,11 +8795,7 @@ export class GameLogicSubsystem implements Subsystem {
     // OBJECT_STATUS_IS_AIMING_WEAPON and onExit() clears it.
     // TODO(C&C source parity): move this from combat-loop range checks to full
     // attack state-machine transitions (pursue/approach/aim/fire).
-    if (isAiming) {
-      entity.objectStatusFlags.add('IS_AIMING_WEAPON');
-    } else {
-      entity.objectStatusFlags.delete('IS_AIMING_WEAPON');
-    }
+    setEntityAimingWeaponStatusImpl(entity, isAiming);
   }
 
   private setEntityFiringWeaponStatus(entity: MapEntity, isFiring: boolean): void {
@@ -8798,11 +8803,7 @@ export class GameLogicSubsystem implements Subsystem {
     // OBJECT_STATUS_IS_FIRING_WEAPON and onExit() clears it.
     // TODO(C&C source parity): drive this from explicit fire-state enter/exit
     // instead of one-frame fire pulses in updateCombat().
-    if (isFiring) {
-      entity.objectStatusFlags.add('IS_FIRING_WEAPON');
-    } else {
-      entity.objectStatusFlags.delete('IS_FIRING_WEAPON');
-    }
+    setEntityFiringWeaponStatusImpl(entity, isFiring);
   }
 
   private setEntityIgnoringStealthStatus(entity: MapEntity, isIgnoringStealth: boolean): void {
@@ -8811,11 +8812,7 @@ export class GameLogicSubsystem implements Subsystem {
     // clears it after each fired shot.
     // TODO(C&C source parity): drive this from full attack-state enter/exit and command-source
     // flow (including attack-position mine clearing and force-attack exceptions).
-    if (isIgnoringStealth) {
-      entity.objectStatusFlags.add('IGNORING_STEALTH');
-    } else {
-      entity.objectStatusFlags.delete('IGNORING_STEALTH');
-    }
+    setEntityIgnoringStealthStatusImpl(entity, isIgnoringStealth);
   }
 
   private refreshEntitySneakyMissWindow(entity: MapEntity): void {
@@ -8858,28 +8855,19 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveScaledProjectileTravelSpeed(weapon: AttackWeaponProfile, sourceToAimDistance: number): number {
-    if (!weapon.scaleWeaponSpeed) {
-      return weapon.weaponSpeed;
-    }
-
-    const minRange = Math.max(0, weapon.minAttackRange - ATTACK_RANGE_CELL_EDGE_FUDGE);
-    const maxRange = Math.max(minRange, weapon.unmodifiedAttackRange);
-    const rangeRatio = (sourceToAimDistance - minRange) / (maxRange - minRange);
-    const scaledSpeed = (rangeRatio * (weapon.weaponSpeed - weapon.minWeaponSpeed)) + weapon.minWeaponSpeed;
-
     // Source parity subset: DumbProjectileBehavior::projectileFireAtObjectOrPosition()
     // scales launch speed from minimum-range to unmodified-attack-range distance.
     // TODO(C&C source parity): mirror full dumb-projectile bezier-path distance (calcFlightPath)
     // and per-projectile update/collision timing instead of straight-line travel delay.
-    return scaledSpeed;
+    return resolveScaledProjectileTravelSpeedImpl(
+      weapon,
+      sourceToAimDistance,
+      ATTACK_RANGE_CELL_EDGE_FUDGE,
+    );
   }
 
   private resolveProjectileScatterRadiusForTarget(weapon: AttackWeaponProfile, target: MapEntity): number {
-    let scatter = Math.max(0, weapon.scatterRadius);
-    if (target.category === 'infantry') {
-      scatter += Math.max(0, weapon.scatterRadiusVsInfantry);
-    }
-    return scatter;
+    return resolveProjectileScatterRadiusForCategoryImpl(weapon, target.category);
   }
 
   private updatePendingWeaponDamage(): void {
@@ -9536,33 +9524,10 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     weapon: AttackWeaponProfile,
   ): VectorXZ | null {
-    const targetX = target.x;
-    const targetZ = target.z;
-    let awayX = attacker.x - targetX;
-    let awayZ = attacker.z - targetZ;
-    const length = Math.hypot(awayX, awayZ);
-    if (length <= 1e-6) {
-      awayX = 1;
-      awayZ = 0;
-    } else {
-      awayX /= length;
-      awayZ /= length;
-    }
-
-    const minAttackRange = Math.max(0, weapon.minAttackRange);
-    const attackRange = Math.max(minAttackRange, weapon.attackRange);
-    const desiredDistance = (attackRange + minAttackRange) * 0.5;
-    if (!Number.isFinite(desiredDistance) || desiredDistance <= 0) {
-      return null;
-    }
-
     // Source parity subset: Weapon::computeApproachTarget() retreats too-close attackers to a
     // point between minimum and maximum range.
     // TODO(C&C source parity): port angleOffset/aircraft-facing/terrain-clipping behavior.
-    return {
-      x: targetX + awayX * desiredDistance,
-      z: targetZ + awayZ * desiredDistance,
-    };
+    return computeAttackRetreatTargetImpl(attacker.x, attacker.z, target.x, target.z, weapon);
   }
 
   private resetEntityWeaponTimingState(entity: MapEntity): void {
@@ -9581,56 +9546,23 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackScatterTargetsUnused = Array.from({ length: scatterTargetsCount }, (_entry, index) => index);
   }
 
-  private getConsecutiveShotsFiredAtTarget(entity: MapEntity, targetEntityId: number): number {
-    if (entity.consecutiveShotsTargetEntityId !== targetEntityId) {
-      return 0;
-    }
-    return entity.consecutiveShotsAtTarget;
-  }
-
   private resolveWeaponPreAttackDelayFrames(
     attacker: MapEntity,
     target: MapEntity,
     weapon: AttackWeaponProfile,
   ): number {
-    const delay = Math.max(0, Math.trunc(weapon.preAttackDelayFrames));
-    if (delay <= 0) {
-      return 0;
-    }
-
-    if (weapon.preAttackType === 'PER_ATTACK') {
-      if (this.getConsecutiveShotsFiredAtTarget(attacker, target.id) > 0) {
-        return 0;
-      }
-      return delay;
-    }
-
-    if (weapon.preAttackType === 'PER_CLIP') {
-      if (weapon.clipSize > 0 && attacker.attackAmmoInClip < weapon.clipSize) {
-        return 0;
-      }
-      return delay;
-    }
-
-    return delay;
+    return resolveWeaponPreAttackDelayFramesImpl(attacker, target.id, weapon);
   }
 
   private recordConsecutiveAttackShot(attacker: MapEntity, targetEntityId: number): void {
-    if (attacker.consecutiveShotsTargetEntityId === targetEntityId) {
-      attacker.consecutiveShotsAtTarget += 1;
-      return;
-    }
-    attacker.consecutiveShotsTargetEntityId = targetEntityId;
-    attacker.consecutiveShotsAtTarget = 1;
+    recordConsecutiveAttackShotImpl(attacker, targetEntityId);
   }
 
   private resolveWeaponDelayFrames(weapon: AttackWeaponProfile): number {
-    const minDelay = Math.max(0, Math.trunc(weapon.minDelayFrames));
-    const maxDelay = Math.max(minDelay, Math.trunc(weapon.maxDelayFrames));
-    if (minDelay === maxDelay) {
-      return minDelay;
-    }
-    return this.gameRandom.nextRange(minDelay, maxDelay);
+    return resolveWeaponDelayFramesImpl(
+      weapon,
+      (minDelay, maxDelay) => this.gameRandom.nextRange(minDelay, maxDelay),
+    );
   }
 
   private applyWeaponDamageAmount(
@@ -9655,22 +9587,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private adjustDamageByArmorSet(target: MapEntity, amount: number, damageType: string): number {
-    const normalizedType = damageType.trim().toUpperCase();
-    if (normalizedType === 'UNRESISTABLE') {
-      return amount;
-    }
-
-    const coefficients = target.armorDamageCoefficients;
-    if (!coefficients) {
-      return amount;
-    }
-
-    const coefficient = coefficients.get(normalizedType);
-    if (coefficient === undefined) {
-      return amount;
-    }
-
-    return Math.max(0, amount * coefficient);
+    return adjustDamageByArmorSetImpl(target, amount, damageType);
   }
 
   private markEntityDestroyed(entityId: number, _attackerId: number): void {
