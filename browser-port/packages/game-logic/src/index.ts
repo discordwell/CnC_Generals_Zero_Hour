@@ -50,6 +50,14 @@ import {
   resolveBuildableStatus as resolveBuildableStatusImpl,
 } from './production-prerequisites.js';
 import {
+  canExitProducedUnitViaParking as canExitProducedUnitViaParkingImpl,
+  hasAvailableParkingSpace as hasAvailableParkingSpaceImpl,
+  releaseParkingDoorReservationForProduction as releaseParkingDoorReservationForProductionImpl,
+  reserveParkingDoorForQueuedUnit as reserveParkingDoorForQueuedUnitImpl,
+  reserveParkingSpaceForProducedUnit as reserveParkingSpaceForProducedUnitImpl,
+  shouldReserveParkingDoorWhenQueued as shouldReserveParkingDoorWhenQueuedImpl,
+} from './production-parking.js';
+import {
   resolveQueueProductionNaturalRallyPoint as resolveQueueProductionNaturalRallyPointImpl,
   resolveQueueSpawnLocation as resolveQueueSpawnLocationImpl,
   tickQueueExitGate as tickQueueExitGateImpl,
@@ -5355,25 +5363,19 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private hasAvailableParkingSpaceFor(producer: MapEntity, unitDef: ObjectDef): boolean {
-    const parkingProfile = producer.parkingPlaceProfile;
-    if (!parkingProfile) {
-      return true;
-    }
-
     if (!this.shouldReserveParkingDoorWhenQueued(unitDef)) {
       return true;
     }
 
-    this.pruneParkingOccupancy(producer);
-    this.pruneParkingReservations(producer);
-    return (parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size)
-      < parkingProfile.totalSpaces;
+    return hasAvailableParkingSpaceImpl(
+      producer.parkingPlaceProfile,
+      producer.productionQueue,
+      this.spawnedEntities,
+    );
   }
 
   private shouldReserveParkingDoorWhenQueued(unitDef: ObjectDef): boolean {
-    // Source parity: ParkingPlaceBehavior::shouldReserveDoorWhenQueued() bypasses parking
-    // reservation for KINDOF_PRODUCED_AT_HELIPAD units.
-    return !this.normalizeKindOf(unitDef.kindOf).has('PRODUCED_AT_HELIPAD');
+    return shouldReserveParkingDoorWhenQueuedImpl(unitDef.kindOf);
   }
 
   private reserveParkingDoorForQueuedUnit(
@@ -5381,67 +5383,20 @@ export class GameLogicSubsystem implements Subsystem {
     unitDef: ObjectDef,
     productionId: number,
   ): boolean {
-    const parkingProfile = producer.parkingPlaceProfile;
-    if (!parkingProfile) {
-      return true;
-    }
-
     if (!this.shouldReserveParkingDoorWhenQueued(unitDef)) {
       return true;
     }
 
-    this.pruneParkingOccupancy(producer);
-    this.pruneParkingReservations(producer);
-    if ((parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size) >= parkingProfile.totalSpaces) {
-      return false;
-    }
-
-    // Source parity subset: ProductionUpdate::queueCreateUnit() reserves an exit door up front
-    // via ParkingPlaceBehavior::reserveDoorForExit() for units that require hangar parking.
-    parkingProfile.reservedProductionIds.add(productionId);
-    return true;
+    return reserveParkingDoorForQueuedUnitImpl(
+      producer.parkingPlaceProfile,
+      producer.productionQueue,
+      this.spawnedEntities,
+      productionId,
+    );
   }
 
   private releaseParkingDoorReservationForProduction(producer: MapEntity, productionId: number): void {
-    const parkingProfile = producer.parkingPlaceProfile;
-    if (!parkingProfile) {
-      return;
-    }
-    parkingProfile.reservedProductionIds.delete(productionId);
-  }
-
-  private pruneParkingReservations(producer: MapEntity): void {
-    const parkingProfile = producer.parkingPlaceProfile;
-    if (!parkingProfile || parkingProfile.reservedProductionIds.size === 0) {
-      return;
-    }
-
-    const activeUnitProductionIds = new Set<number>();
-    for (const entry of producer.productionQueue) {
-      if (entry.type === 'UNIT') {
-        activeUnitProductionIds.add(entry.productionId);
-      }
-    }
-
-    for (const reservedProductionId of Array.from(parkingProfile.reservedProductionIds.values())) {
-      if (!activeUnitProductionIds.has(reservedProductionId)) {
-        parkingProfile.reservedProductionIds.delete(reservedProductionId);
-      }
-    }
-  }
-
-  private pruneParkingOccupancy(producer: MapEntity): void {
-    const parkingProfile = producer.parkingPlaceProfile;
-    if (!parkingProfile) {
-      return;
-    }
-
-    for (const occupiedEntityId of Array.from(parkingProfile.occupiedSpaceEntityIds.values())) {
-      const occupiedEntity = this.spawnedEntities.get(occupiedEntityId);
-      if (!occupiedEntity || occupiedEntity.destroyed) {
-        parkingProfile.occupiedSpaceEntityIds.delete(occupiedEntityId);
-      }
-    }
+    releaseParkingDoorReservationForProductionImpl(producer.parkingPlaceProfile, productionId);
   }
 
   private canSideBuildUnitTemplate(side: string, unitDef: ObjectDef): boolean {
@@ -6034,23 +5989,16 @@ export class GameLogicSubsystem implements Subsystem {
     unitDef: ObjectDef,
     productionId: number,
   ): boolean {
-    const parkingProfile = producer.parkingPlaceProfile;
-    if (!parkingProfile) {
-      return true;
-    }
-
     if (!this.shouldReserveParkingDoorWhenQueued(unitDef)) {
       return true;
     }
 
-    this.pruneParkingOccupancy(producer);
-    this.pruneParkingReservations(producer);
-    if (parkingProfile.reservedProductionIds.has(productionId)) {
-      return true;
-    }
-
-    return (parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size)
-      < parkingProfile.totalSpaces;
+    return canExitProducedUnitViaParkingImpl(
+      producer.parkingPlaceProfile,
+      producer.productionQueue,
+      this.spawnedEntities,
+      productionId,
+    );
   }
 
   private spawnProducedUnit(producer: MapEntity, unitDef: ObjectDef, productionId: number): MapEntity | null {
@@ -6097,24 +6045,20 @@ export class GameLogicSubsystem implements Subsystem {
     producedUnitDef: ObjectDef,
     productionId: number,
   ): boolean {
-    const parkingProfile = producer.parkingPlaceProfile;
-    if (!parkingProfile) {
-      return true;
-    }
-
     if (!this.shouldReserveParkingDoorWhenQueued(producedUnitDef)) {
       return true;
     }
 
-    this.pruneParkingOccupancy(producer);
-    this.pruneParkingReservations(producer);
-    if (parkingProfile.reservedProductionIds.has(productionId)) {
-      parkingProfile.reservedProductionIds.delete(productionId);
-    } else if ((parkingProfile.occupiedSpaceEntityIds.size + parkingProfile.reservedProductionIds.size) >= parkingProfile.totalSpaces) {
+    if (!reserveParkingSpaceForProducedUnitImpl(
+      producer.parkingPlaceProfile,
+      producer.productionQueue,
+      this.spawnedEntities,
+      productionId,
+      producedUnit.id,
+    )) {
       return false;
     }
 
-    parkingProfile.occupiedSpaceEntityIds.add(producedUnit.id);
     producedUnit.parkingSpaceProducerId = producer.id;
     if (producer.containProfile?.moduleType === 'HELIX') {
       const producedKindOf = this.resolveEntityKindOfSet(producedUnit);
