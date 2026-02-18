@@ -46,6 +46,10 @@ import {
   toByte,
 } from './ini-readers.js';
 import {
+  extractProductionPrerequisiteGroups as extractProductionPrerequisiteGroupsImpl,
+  resolveBuildableStatus as resolveBuildableStatusImpl,
+} from './production-prerequisites.js';
+import {
   findArmorDefByName,
   findCommandButtonDefByName,
   findCommandSetDefByName,
@@ -58,12 +62,27 @@ import {
   resolveUpgradeType,
 } from './registry-lookups.js';
 import {
+  canAffordSideCredits as canAffordSideCreditsImpl,
+  depositSideCredits as depositSideCreditsImpl,
+  withdrawSideCredits as withdrawSideCreditsImpl,
+} from './side-credits.js';
+import {
   routeIssueSpecialPowerCommand as routeIssueSpecialPowerCommandImpl,
   resolveSharedShortcutSpecialPowerReadyFrame as resolveSharedShortcutSpecialPowerReadyFrameImpl,
   resolveShortcutSpecialPowerSourceEntityReadyFrameBySource as
     resolveShortcutSpecialPowerSourceEntityReadyFrameBySourceImpl,
   setSpecialPowerReadyFrame as setSpecialPowerReadyFrameImpl,
 } from './special-power-routing.js';
+import {
+  applyCostModifierUpgradeToSide as applyCostModifierUpgradeToSideImpl,
+  applyKindOfProductionCostModifiers as applyKindOfProductionCostModifiersImpl,
+  applyPowerPlantUpgradeToSide as applyPowerPlantUpgradeToSideImpl,
+  applyRadarUpgradeToSide as applyRadarUpgradeToSideImpl,
+  extractUpgradeModulesFromBlocks as extractUpgradeModulesFromBlocksImpl,
+  removeCostModifierUpgradeFromSide as removeCostModifierUpgradeFromSideImpl,
+  removePowerPlantUpgradeFromSide as removePowerPlantUpgradeFromSideImpl,
+  removeRadarUpgradeFromSide as removeRadarUpgradeFromSideImpl,
+} from './upgrade-modules.js';
 import {
   type EntityRelationship,
   type GameLogicCommand,
@@ -3509,118 +3528,16 @@ export class GameLogicSubsystem implements Subsystem {
     blocks: IniBlock[] = [],
     sourceUpgradeName: string | null = null,
   ): UpgradeModuleProfile[] {
-    const modules: UpgradeModuleProfile[] = [];
-    let index = 0;
-
-    const visitBlock = (block: IniBlock): void => {
-      const blockType = block.type.toUpperCase();
-      if (blockType === 'BEHAVIOR') {
-        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-        if (
-          moduleType === 'LOCOMOTORSETUPGRADE'
-          || moduleType === 'MAXHEALTHUPGRADE'
-          || moduleType === 'ARMORUPGRADE'
-          || moduleType === 'WEAPONSETUPGRADE'
-          || moduleType === 'COMMANDSETUPGRADE'
-          || moduleType === 'STATUSBITSUPGRADE'
-          || moduleType === 'STEALTHUPGRADE'
-          || moduleType === 'WEAPONBONUSUPGRADE'
-          || moduleType === 'COSTMODIFIERUPGRADE'
-          || moduleType === 'GRANTSCIENCEUPGRADE'
-          || moduleType === 'POWERPLANTUPGRADE'
-          || moduleType === 'RADARUPGRADE'
-          || moduleType === 'PASSENGERSFIREUPGRADE'
-          || moduleType === 'UNPAUSESPECIALPOWERUPGRADE'
-        ) {
-          const triggeredBy = new Set(this.parseUpgradeNames(block.fields['TriggeredBy']));
-          const conflictsWith = new Set(this.parseUpgradeNames(block.fields['ConflictsWith']));
-          const removesUpgrades = new Set(this.parseUpgradeNames(block.fields['RemovesUpgrades']));
-          const requiresAllTriggers = readBooleanField(block.fields, ['RequiresAllTriggers']) === true;
-          const addMaxHealth = moduleType === 'MAXHEALTHUPGRADE'
-            ? (readNumericField(block.fields, ['AddMaxHealth']) ?? 0)
-            : 0;
-          const statusToSet = moduleType === 'STATUSBITSUPGRADE'
-            ? new Set(this.parseObjectStatusNames(block.fields['StatusToSet']))
-            : new Set<string>();
-          const statusToClear = moduleType === 'STATUSBITSUPGRADE'
-            ? new Set(this.parseObjectStatusNames(block.fields['StatusToClear']))
-            : new Set<string>();
-          const changeTypeRaw = readStringField(block.fields, ['ChangeType'])?.toUpperCase() ?? 'SAME_CURRENTHEALTH';
-          const maxHealthChangeType: MaxHealthChangeTypeName =
-            changeTypeRaw === 'PRESERVE_RATIO' || changeTypeRaw === 'ADD_CURRENT_HEALTH_TOO'
-              ? changeTypeRaw
-              : 'SAME_CURRENTHEALTH';
-          const commandSetName = moduleType === 'COMMANDSETUPGRADE'
-            ? (readStringField(block.fields, ['CommandSet'])?.trim().toUpperCase() ?? '')
-            : '';
-          const commandSetAltName = moduleType === 'COMMANDSETUPGRADE'
-            ? (readStringField(block.fields, ['CommandSetAlt'])?.trim().toUpperCase() ?? '')
-            : '';
-          const commandSetAltTriggerUpgradeRaw = moduleType === 'COMMANDSETUPGRADE'
-            ? (readStringField(block.fields, ['TriggerAlt'])?.trim().toUpperCase() ?? '')
-            : '';
-          const commandSetAltTriggerUpgrade = commandSetAltTriggerUpgradeRaw && commandSetAltTriggerUpgradeRaw !== 'NONE'
-            ? commandSetAltTriggerUpgradeRaw
-            : null;
-          const effectKindOf = moduleType === 'COSTMODIFIERUPGRADE'
-            ? new Set(this.parseKindOf(block.fields['EffectKindOf']))
-            : new Set<string>();
-          const effectPercent = moduleType === 'COSTMODIFIERUPGRADE'
-            ? (this.parsePercent(block.fields['Percentage']) ?? 0)
-            : 0;
-          const grantScienceName = moduleType === 'GRANTSCIENCEUPGRADE'
-            ? (readStringField(block.fields, ['GrantScience'])?.trim().toUpperCase() ?? '')
-            : '';
-          const radarIsDisableProof = moduleType === 'RADARUPGRADE'
-            ? readBooleanField(block.fields, ['DisableProof']) ?? false
-            : false;
-          const specialPowerTemplateName = moduleType === 'UNPAUSESPECIALPOWERUPGRADE'
-            ? (readStringField(block.fields, ['SpecialPowerTemplate'])?.trim().toUpperCase() ?? '')
-            : '';
-          const moduleId = sourceUpgradeName === null
-            ? `${moduleType}:${block.name}:${index}`
-            : `${moduleType}:${block.name}:${index}:${sourceUpgradeName}`;
-          index += 1;
-          modules.push({
-            id: moduleId,
-            moduleType,
-            sourceUpgradeName,
-            triggeredBy,
-            conflictsWith,
-            removesUpgrades,
-            requiresAllTriggers,
-            addMaxHealth,
-            maxHealthChangeType,
-            statusToSet,
-            statusToClear,
-            commandSetName: commandSetName && commandSetName !== 'NONE' ? commandSetName : null,
-            commandSetAltName: commandSetAltName && commandSetAltName !== 'NONE' ? commandSetAltName : null,
-            commandSetAltTriggerUpgrade,
-            effectKindOf,
-            effectPercent,
-            grantScienceName,
-            radarIsDisableProof,
-            specialPowerTemplateName,
-          });
-        }
-        // TODO(C&C source parity): port additional UpgradeModule types beyond
-        // ArmorSet/WeaponSet/CommandSet/StatusBits/Locomotor/MaxHealth/CostModifier/
-        // GrantScience/UnpauseSpecialPower upgrades.
-        // PowerPlantUpgrade and RadarUpgrade are wired here, and
-        // TODO(source parity): port additional modules (for example
-        // Overcharge/WeaponOverride variants) when needed.
-      }
-
-      for (const child of block.blocks) {
-        visitBlock(child);
-      }
-    };
-
-    for (const block of blocks) {
-      visitBlock(block);
-    }
-
-    return modules;
+    return extractUpgradeModulesFromBlocksImpl(
+      blocks,
+      sourceUpgradeName,
+      {
+        parseUpgradeNames: (value) => this.parseUpgradeNames(value),
+        parseObjectStatusNames: (value) => this.parseObjectStatusNames(value),
+        parseKindOf: (value) => this.parseKindOf(value),
+        parsePercent: (value) => this.parsePercent(value),
+      },
+    );
   }
 
   private applyUnpauseSpecialPowerUpgradeModule(
@@ -3665,20 +3582,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity: Player::addKindOfProductionCostChange updates a refcounted side production list.
-    const modifiers = this.getSideKindOfProductionCostModifiers(normalizedSide);
-    const existingModifier = modifiers.find((modifier) => (
-      modifier.multiplier === module.effectPercent
-      && this.areKindOfTokenSetsEquivalent(modifier.kindOf, module.effectKindOf)
-    ));
-    if (existingModifier) {
-      existingModifier.refCount += 1;
-      return;
-    }
-    modifiers.push({
-      kindOf: new Set(module.effectKindOf),
-      multiplier: module.effectPercent,
-      refCount: 1,
-    });
+    applyCostModifierUpgradeToSideImpl(this.getSideKindOfProductionCostModifiers(normalizedSide), module);
   }
 
   private removeCostModifierUpgradeFromSide(side: string, module: UpgradeModuleProfile): void {
@@ -3687,21 +3591,8 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const modifiers = this.getSideKindOfProductionCostModifiers(normalizedSide);
-    const index = modifiers.findIndex((modifier) => (
-      modifier.multiplier === module.effectPercent
-      && this.areKindOfTokenSetsEquivalent(modifier.kindOf, module.effectKindOf)
-    ));
-    if (index < 0) {
-      return;
-    }
-
     // Source parity: Player::removeKindOfProductionCostChange decrements refcount and removes at zero.
-    const modifier = modifiers[index];
-    modifier.refCount -= 1;
-    if (modifier.refCount <= 0) {
-      modifiers.splice(index, 1);
-    }
+    removeCostModifierUpgradeFromSideImpl(this.getSideKindOfProductionCostModifiers(normalizedSide), module);
   }
 
   private removeCostModifierUpgradeFromEntity(entity: MapEntity, module: UpgradeModuleProfile): void {
@@ -3821,48 +3712,16 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private applyKindOfProductionCostModifiers(buildCost: number, side: string, kindOf: Set<string>): number {
-    if (!Number.isFinite(buildCost) || buildCost < 0) {
-      return 0;
-    }
     const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide || kindOf.size === 0) {
+    if (!normalizedSide) {
       return buildCost;
     }
 
-    let nextCost = buildCost;
-    for (const modifier of this.getSideKindOfProductionCostModifiers(normalizedSide)) {
-      if (modifier.kindOf.size === 0) {
-        continue;
-      }
-
-      let matchesKindOf = false;
-      for (const kindOfToken of modifier.kindOf) {
-        if (kindOf.has(kindOfToken)) {
-          matchesKindOf = true;
-          break;
-        }
-      }
-
-      if (!matchesKindOf) {
-        continue;
-      }
-
-      nextCost *= 1 + modifier.multiplier;
-    }
-
-    return nextCost;
-  }
-
-  private areKindOfTokenSetsEquivalent(left: Set<string>, right: Set<string>): boolean {
-    if (left.size !== right.size) {
-      return false;
-    }
-    for (const token of left) {
-      if (!right.has(token)) {
-        return false;
-      }
-    }
-    return true;
+    return applyKindOfProductionCostModifiersImpl(
+      buildCost,
+      kindOf,
+      this.getSideKindOfProductionCostModifiers(normalizedSide),
+    );
   }
 
   private applyPowerPlantUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
@@ -3877,7 +3736,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private applyPowerPlantUpgradeToSide(
     side: string,
-    module: UpgradeModuleProfile,
+    _module: UpgradeModuleProfile,
     entity: MapEntity,
   ): void {
     const normalizedSide = this.normalizeSide(side);
@@ -3886,9 +3745,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity: PowerPlantUpgrade.cpp adds energy from the templated object.
-    const bonus = Number.isFinite(entity.energyBonus) ? entity.energyBonus : 0;
     const sideState = this.getSidePowerStateMap(normalizedSide);
-    sideState.powerBonus += bonus;
+    applyPowerPlantUpgradeToSideImpl(sideState, entity.energyBonus);
   }
 
   private removePowerPlantUpgradeFromEntity(entity: MapEntity, _module: UpgradeModuleProfile): void {
@@ -3909,10 +3767,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity: PowerPlantUpgrade.cpp mirrors removePowerBonus() on upgrade removal/capture.
-    const bonus = Number.isFinite(entity.energyBonus) ? entity.energyBonus : 0;
     const sideState = this.getSidePowerStateMap(normalizedSide);
-    sideState.powerBonus -= bonus;
-    if (sideState.powerBonus <= 0) {
+    if (removePowerPlantUpgradeFromSideImpl(sideState, entity.energyBonus)) {
       this.sidePowerBonus.delete(normalizedSide);
     }
   }
@@ -3934,10 +3790,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const state = this.getSideRadarStateMap(normalizedSide);
-    state.radarCount += 1;
-    if (module.radarIsDisableProof) {
-      state.disableProofRadarCount += 1;
-    }
+    applyRadarUpgradeToSideImpl(state, module.radarIsDisableProof);
   }
 
   private removeRadarUpgradeFromEntity(entity: MapEntity, module: UpgradeModuleProfile): void {
@@ -3955,11 +3808,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const state = this.getSideRadarStateMap(normalizedSide);
-    state.radarCount = Math.max(0, state.radarCount - 1);
-    if (module.radarIsDisableProof) {
-      state.disableProofRadarCount = Math.max(0, state.disableProofRadarCount - 1);
-    }
-    if (state.radarCount <= 0 && state.disableProofRadarCount <= 0) {
+    if (removeRadarUpgradeFromSideImpl(state, module.radarIsDisableProof)) {
       this.sideRadarState.delete(normalizedSide);
     }
   }
@@ -5621,135 +5470,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveBuildableStatus(objectDef: ObjectDef): 'YES' | 'IGNORE_PREREQUISITES' | 'NO' | 'ONLY_BY_AI' {
-    const tokens = this.extractIniValueTokens(objectDef.fields['Buildable']).flatMap((group) => group);
-    const token = tokens[0]?.trim().toUpperCase() ?? '';
-    if (token === 'IGNORE_PREREQUISITES') {
-      return 'IGNORE_PREREQUISITES';
-    }
-    if (token === 'NO') {
-      return 'NO';
-    }
-    if (token === 'ONLY_BY_AI') {
-      return 'ONLY_BY_AI';
-    }
-    if (token === 'YES') {
-      return 'YES';
-    }
-
-    const numericStatus = readNumericField(objectDef.fields, ['Buildable']);
-    if (numericStatus !== null) {
-      const normalized = Math.trunc(numericStatus);
-      if (normalized === 1) {
-        return 'IGNORE_PREREQUISITES';
-      }
-      if (normalized === 2) {
-        return 'NO';
-      }
-      if (normalized === 3) {
-        return 'ONLY_BY_AI';
-      }
-      return 'YES';
-    }
-
-    return 'YES';
+    return resolveBuildableStatusImpl(objectDef, (value) => this.extractIniValueTokens(value));
   }
 
   private extractProductionPrerequisiteGroups(objectDef: ObjectDef): ProductionPrerequisiteGroup[] {
-    const groups: ProductionPrerequisiteGroup[] = [];
-
-    const addObjectGroup = (names: string[]): void => {
-      const normalized = names
-        .map((name) => name.trim().toUpperCase())
-        .filter((name) => name.length > 0 && name !== 'NONE');
-      if (normalized.length === 0) {
-        return;
-      }
-      groups.push({ objectAlternatives: normalized, scienceRequirements: [] });
-    };
-
-    const addScienceGroup = (names: string[]): void => {
-      const normalized = names
-        .map((name) => name.trim().toUpperCase())
-        .filter((name) => name.length > 0 && name !== 'NONE');
-      if (normalized.length === 0) {
-        return;
-      }
-      groups.push({ objectAlternatives: [], scienceRequirements: normalized });
-    };
-
-    const parseTokensAsPrereqGroup = (tokens: string[]): void => {
-      if (tokens.length === 0) {
-        return;
-      }
-      const head = tokens[0]?.trim().toUpperCase() ?? '';
-      const tail = tokens.slice(1);
-      if (head === 'OBJECT') {
-        addObjectGroup(tail);
-      } else if (head === 'SCIENCE') {
-        addScienceGroup(tail);
-      }
-    };
-
-    const parsePrereqValueWithPrefix = (prefix: 'OBJECT' | 'SCIENCE', value: IniValue | undefined): void => {
-      for (const tokens of this.extractIniValueTokens(value)) {
-        if (prefix === 'OBJECT') {
-          addObjectGroup(tokens);
-        } else {
-          addScienceGroup(tokens);
-        }
-      }
-    };
-
-    for (const tokens of this.extractIniValueTokens(objectDef.fields['Prerequisites'])) {
-      parseTokensAsPrereqGroup(tokens);
-    }
-    for (const tokens of this.extractIniValueTokens(objectDef.fields['Prerequisite'])) {
-      parseTokensAsPrereqGroup(tokens);
-    }
-
-    const visitBlock = (block: IniBlock): void => {
-      const blockType = block.type.toUpperCase();
-      if (blockType === 'PREREQUISITE' || blockType === 'PREREQUISITES') {
-        const headerTokens = block.name
-          .split(/[\s,;|]+/)
-          .map((token) => token.trim())
-          .filter((token) => token.length > 0);
-        parseTokensAsPrereqGroup(headerTokens);
-
-        parsePrereqValueWithPrefix('OBJECT', block.fields['Object']);
-        parsePrereqValueWithPrefix('SCIENCE', block.fields['Science']);
-        parsePrereqValueWithPrefix('OBJECT', block.fields['OBJECT']);
-        parsePrereqValueWithPrefix('SCIENCE', block.fields['SCIENCE']);
-      }
-
-      if (blockType === 'OBJECT') {
-        const names = block.name
-          .split(/[\s,;|]+/)
-          .map((token) => token.trim())
-          .filter((token) => token.length > 0);
-        if (names.length > 0) {
-          addObjectGroup(names);
-        }
-      } else if (blockType === 'SCIENCE') {
-        const sciences = block.name
-          .split(/[\s,;|]+/)
-          .map((token) => token.trim())
-          .filter((token) => token.length > 0);
-        if (sciences.length > 0) {
-          addScienceGroup(sciences);
-        }
-      }
-
-      for (const child of block.blocks) {
-        visitBlock(child);
-      }
-    };
-
-    for (const block of objectDef.blocks) {
-      visitBlock(block);
-    }
-
-    return groups;
+    return extractProductionPrerequisiteGroupsImpl(objectDef, (value) => this.extractIniValueTokens(value));
   }
 
   private cancelUnitProduction(entityId: number, productionId: number): boolean {
@@ -5887,10 +5612,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Generals/Code/GameEngine/Source/Common/System/Upgrade.cpp returns false if
     // money < upgradeTemplate->calcCostToBuild(player), and nothing else.
     const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    return Math.max(0, this.getSideCredits(normalizedSide)) >= Math.max(0, Math.trunc(buildCost));
+    return canAffordSideCreditsImpl(this.sideCredits, normalizedSide, buildCost);
   }
 
   private canEntityProduceUpgrade(
@@ -6577,35 +6299,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   private withdrawSideCredits(side: string | undefined, amount: number): number {
     const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return 0;
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return 0;
-    }
-
-    const current = this.sideCredits.get(normalizedSide) ?? 0;
-    const requested = Math.max(0, Math.trunc(amount));
-    const withdrawn = Math.min(requested, current);
-    if (withdrawn === 0) {
-      return 0;
-    }
-    this.sideCredits.set(normalizedSide, current - withdrawn);
-    return withdrawn;
+    return withdrawSideCreditsImpl(this.sideCredits, normalizedSide, amount);
   }
 
   private depositSideCredits(side: string | undefined, amount: number): void {
     const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return;
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return;
-    }
-
-    const current = this.sideCredits.get(normalizedSide) ?? 0;
-    const deposit = Math.max(0, Math.trunc(amount));
-    this.sideCredits.set(normalizedSide, current + deposit);
+    depositSideCreditsImpl(this.sideCredits, normalizedSide, amount);
   }
 
   private issueMoveTo(
