@@ -65,11 +65,35 @@ export interface MapObjectJSON {
   properties: Record<string, string>;
 }
 
+/** A waypoint node extracted from map object data. */
+export interface WaypointNodeJSON {
+  id: number;
+  name: string;
+  position: MapPoint;
+  pathLabel1?: string;
+  pathLabel2?: string;
+  pathLabel3?: string;
+  biDirectional?: boolean;
+}
+
+/** A directed waypoint link extracted from the WaypointsList chunk. */
+export interface WaypointLinkJSON {
+  waypoint1: number;
+  waypoint2: number;
+}
+
+/** Complete waypoint payload from map data. */
+export interface WaypointDataJSON {
+  nodes: WaypointNodeJSON[];
+  links: WaypointLinkJSON[];
+}
+
 /** Complete converted map JSON structure (matches map-converter output). */
 export interface MapDataJSON {
   heightmap: HeightmapDataJSON;
   objects: MapObjectJSON[];
   triggers: PolygonTriggerJSON[];
+  waypoints?: WaypointDataJSON;
   textureClasses: string[];
   blendTileCount: number;
   /**

@@ -217,6 +217,8 @@ describe('MAP golden fixtures', () => {
 
     // Triggers
     expect(parsed.triggers).toHaveLength(2);
+    expect(parsed.waypoints.nodes).toHaveLength(0);
+    expect(parsed.waypoints.links).toHaveLength(0);
 
     const t1 = parsed.triggers[0]!;
     expect(t1.name).toBe('PlayerStart_0');

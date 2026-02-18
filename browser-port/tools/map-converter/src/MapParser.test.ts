@@ -282,6 +282,80 @@ function buildMapWithTriggers(): ArrayBuffer {
 }
 
 // ---------------------------------------------------------------------------
+// Build a map with waypoint object metadata + WaypointsList links
+// ---------------------------------------------------------------------------
+
+function buildMapWithWaypoints(): ArrayBuffer {
+  const chunks: ChunkDef[] = [
+    { name: 'HeightMapData', id: 1 },
+    { name: 'ObjectsList', id: 2 },
+    { name: 'Object', id: 3 },
+    { name: 'WaypointsList', id: 4 },
+    { name: 'waypointID', id: 100 },
+    { name: 'waypointName', id: 101 },
+    { name: 'waypointPathBiDirectional', id: 102 },
+  ];
+
+  const hmDataLen = 4;
+  const hmPayload = 4 + 4 + 4 + 4 + hmDataLen;
+
+  const templateName = '*Waypoints/Waypoint';
+  const waypointName = 'TrainStopStart01';
+  const dictPayload =
+    2 + // pairCount
+    (4 + 4) + // waypointID int
+    (4 + 2 + waypointName.length) + // waypointName ascii
+    (4 + 1); // waypointPathBiDirectional bool
+  const objPayload = 4 + 4 + 4 + 4 + 4 + 2 + templateName.length + dictPayload;
+  const objListPayload = CHUNK_HEADER_SIZE + objPayload;
+
+  const waypointLinksPayload = 4 + 8; // count + one pair
+
+  const totalSize =
+    tocSize(chunks) +
+    CHUNK_HEADER_SIZE + hmPayload +
+    CHUNK_HEADER_SIZE + objListPayload +
+    CHUNK_HEADER_SIZE + waypointLinksPayload;
+
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+  let off = writeTOC(view, chunks);
+
+  off = writeChunkHeader(view, off, 1, 3, hmPayload);
+  off = writeInt32(view, off, 2);
+  off = writeInt32(view, off, 2);
+  off = writeInt32(view, off, 0);
+  off = writeInt32(view, off, hmDataLen);
+  for (let i = 0; i < hmDataLen; i++) {
+    off = writeUint8(view, off, 64);
+  }
+
+  off = writeChunkHeader(view, off, 2, 1, objListPayload);
+  off = writeChunkHeader(view, off, 3, 3, objPayload);
+  off = writeFloat32(view, off, 120.0);
+  off = writeFloat32(view, off, 330.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeInt32(view, off, 0);
+  off = writePrefixedAscii(view, off, templateName);
+
+  off = writeUint16(view, off, 3); // pairCount
+  off = writeInt32(view, off, (100 << 8) | 1); // waypointID int
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, (101 << 8) | 3); // waypointName ascii
+  off = writePrefixedAscii(view, off, waypointName);
+  off = writeInt32(view, off, (102 << 8) | 0); // waypointPathBiDirectional bool
+  off = writeUint8(view, off, 1);
+
+  off = writeChunkHeader(view, off, 4, 1, waypointLinksPayload);
+  off = writeInt32(view, off, 1);
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, 12);
+
+  return buffer;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -596,6 +670,25 @@ describe('WaypointExtractor', () => {
     expect(trig.points[1]).toEqual({ x: 40, y: 50, z: 60 });
     expect(trig.points[2]).toEqual({ x: 70, y: 80, z: 90 });
   });
+
+  it('should extract waypoint links (WaypointsList v1)', () => {
+    const buffer = buildMapWithWaypoints();
+    const reader = new DataChunkReader(buffer);
+    reader.readTableOfContents();
+
+    const hmChunk = reader.readChunkHeader();
+    reader.seek(hmChunk.dataOffset + hmChunk.dataSize);
+
+    const objectsChunk = reader.readChunkHeader();
+    reader.seek(objectsChunk.dataOffset + objectsChunk.dataSize);
+
+    const waypointsChunk = reader.readChunkHeader();
+    const links = WaypointExtractor.extractWaypointLinks(reader);
+
+    expect(waypointsChunk.version).toBe(1);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toEqual({ waypoint1: 11, waypoint2: 12 });
+  });
 });
 
 describe('MapParser', () => {
@@ -613,6 +706,8 @@ describe('MapParser', () => {
     expect(parsed.blendTileCount).toBe(0);
     expect(parsed.cliffStateData).toBeNull();
     expect(parsed.cliffStateStride).toBe(0);
+    expect(parsed.waypoints.nodes).toHaveLength(0);
+    expect(parsed.waypoints.links).toHaveLength(0);
   });
 
   it('should parse a map with objects', () => {
@@ -628,6 +723,8 @@ describe('MapParser', () => {
     expect(obj.position.x).toBeCloseTo(100.0);
     expect(obj.position.y).toBeCloseTo(200.0);
     expect(obj.angle).toBeCloseTo(45.0);
+    expect(parsed.waypoints.nodes).toHaveLength(0);
+    expect(parsed.waypoints.links).toHaveLength(0);
   });
 
   it('should parse a map with triggers', () => {
@@ -637,6 +734,27 @@ describe('MapParser', () => {
     expect(parsed.triggers).toHaveLength(1);
     expect(parsed.triggers[0]!.name).toBe('SpawnZone');
     expect(parsed.triggers[0]!.points).toHaveLength(3);
+    expect(parsed.waypoints.nodes).toHaveLength(0);
+    expect(parsed.waypoints.links).toHaveLength(0);
+  });
+
+  it('should parse waypoint nodes and links', () => {
+    const buffer = buildMapWithWaypoints();
+    const parsed = MapParser.parse(buffer);
+
+    expect(parsed.waypoints.nodes).toHaveLength(1);
+    expect(parsed.waypoints.links).toHaveLength(1);
+    expect(parsed.waypoints.links[0]).toEqual({ waypoint1: 11, waypoint2: 12 });
+    expect(parsed.objects).toHaveLength(1);
+    expect(parsed.objects[0]!.propertiesByName.get('waypointID')).toBe(11);
+    expect(parsed.objects[0]!.propertiesByName.get('waypointName')).toBe('TrainStopStart01');
+    expect(parsed.objects[0]!.propertiesByName.get('waypointPathBiDirectional')).toBe(true);
+
+    const node = parsed.waypoints.nodes[0]!;
+    expect(node.id).toBe(11);
+    expect(node.name).toBe('TrainStopStart01');
+    expect(node.position).toEqual({ x: 120, y: 330, z: 0 });
+    expect(node.biDirectional).toBe(true);
   });
 
   it('should throw if HeightMapData chunk is missing', () => {

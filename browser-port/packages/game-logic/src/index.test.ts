@@ -5920,6 +5920,107 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(producedCounts).toEqual([0, 0, 1, 1]);
   });
 
+  it('rejects queueUnitProduction when command-set buttons do not expose the requested template', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [8, 0, 0],
+            ExitDelay: 0,
+          }),
+        ], {
+          CommandSet: 'CommandSet_WarFactory',
+        }),
+        makeObjectDef('AllowedUnit', 'America', ['VEHICLE'], [], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+        makeObjectDef('BlockedUnit', 'America', ['VEHICLE'], [], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_AllowedUnit', {
+          Command: 'UNIT_BUILD',
+          Object: 'AllowedUnit',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_WarFactory', {
+          1: 'Command_AllowedUnit',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('WarFactory', 12, 12)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BlockedUnit' });
+    logic.update(1 / 30);
+
+    expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+    expect(logic.getEntityIdsByTemplate('BlockedUnit')).toEqual([]);
+    expect(logic.getSideCredits('America')).toBe(500);
+  });
+
+  it('rejects queueUnitProduction when the producer is SCRIPT_DISABLED', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [8, 0, 0],
+            ExitDelay: 0,
+          }),
+        ], {
+          CommandSet: 'CommandSet_WarFactory',
+        }),
+        makeObjectDef('AllowedUnit', 'America', ['VEHICLE'], [], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_AllowedUnit', {
+          Command: 'UNIT_BUILD',
+          Object: 'AllowedUnit',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_WarFactory', {
+          1: 'Command_AllowedUnit',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('WarFactory', 12, 12)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+
+    const internalProducer = (
+      logic as unknown as {
+        spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+      }
+    ).spawnedEntities.get(1);
+    expect(internalProducer).toBeDefined();
+    internalProducer!.objectStatusFlags.add('SCRIPT_DISABLED');
+
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'AllowedUnit' });
+    logic.update(1 / 30);
+
+    expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+    expect(logic.getEntityIdsByTemplate('AllowedUnit')).toEqual([]);
+    expect(logic.getSideCredits('America')).toBe(500);
+  });
+
   it('refunds all queued unit production when a producer dies before completion', () => {
     const timeline = runProducerDeathUnitRefundTimeline();
     expect(timeline.credits).toEqual([500, 500, 500]);
@@ -5967,6 +6068,51 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     expect(logic.getSideCredits('America')).toBe(300);
     expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([2]);
+  });
+
+  it('rejects constructBuilding when dozer command-set buttons do not expose the template', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          CommandSet: 'CommandSet_Dozer',
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+        }),
+        makeObjectDef('Barracks', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructBarracks', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'Barracks',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_Dozer', {
+          1: 'Command_ConstructBarracks',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('Dozer', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [20, 0, 20],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(500);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([]);
   });
 
   it('runs sell command teardown and refunds structure value after sell timer completes', () => {
@@ -6099,6 +6245,47 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getEntityIdsByTemplateAndSide('EnemyVehicle', 'America')).toEqual([2]);
   });
 
+  it('rejects invalid enterObject hijack actions at command issue time', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+          makeBlock('LocomotorSet', 'SET_NORMAL FastLocomotor', {}),
+        ]),
+        makeObjectDef('FriendlyVehicle', 'America', ['VEHICLE'], []),
+      ],
+      locomotors: [
+        makeLocomotorDef('FastLocomotor', 120),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Hijacker', 8, 8), makeMapObject('FriendlyVehicle', 30, 8)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+
+    for (let frame = 0; frame < 20; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const hijacker = logic.getEntityState(1);
+    const target = logic.getEntityState(2);
+    expect(hijacker).not.toBeNull();
+    expect(target).not.toBeNull();
+    expect(hijacker!.x).toBeCloseTo(8, 1);
+    expect(target!.statusFlags).not.toContain('HIJACKED');
+    expect(logic.getEntityIdsByTemplateAndSide('FriendlyVehicle', 'America')).toEqual([2]);
+  });
+
   it('starts HackInternet command loops and deposits periodic side credits', () => {
     const bundle = makeBundle({
       objects: [
@@ -6125,6 +6312,317 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideCredits('China')).toBe(75);
   });
 
+  it('allows HackInternet on non-mobile objects', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InternetCenter', 'China', ['STRUCTURE'], [
+          makeBlock('Behavior', 'HackInternetAIUpdate ModuleTag_Hack', {
+            UnpackTime: 0,
+            CashUpdateDelay: 0,
+            RegularCashAmount: 30,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('InternetCenter', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 0 });
+    logic.submitCommand({ type: 'hackInternet', entityId: 1 });
+
+    for (let frame = 0; frame < 4; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getSideCredits('China')).toBe(90);
+  });
+
+  it('defers commands during HackInternet pack-up and executes them after PackTime', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InternetHacker', 'China', ['INFANTRY'], [
+          makeBlock('Behavior', 'HackInternetAIUpdate ModuleTag_Hack', {
+            UnpackTime: 0,
+            PackTime: 1000,
+            CashUpdateDelay: 0,
+            RegularCashAmount: 25,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL HackerLocomotor', {}),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('HackerLocomotor', 60),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('InternetHacker', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 0 });
+    logic.submitCommand({ type: 'hackInternet', entityId: 1 });
+
+    for (let frame = 0; frame < 4; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.getSideCredits('China')).toBe(75);
+
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 120, targetZ: 8 });
+    for (let frame = 0; frame < 20; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const duringPack = logic.getEntityState(1);
+    expect(duringPack).not.toBeNull();
+    expect(duringPack!.x).toBeCloseTo(8, 1);
+    expect(logic.getSideCredits('China')).toBe(75);
+
+    for (let frame = 0; frame < 25; frame += 1) {
+      logic.update(1 / 30);
+    }
+    const afterPack = logic.getEntityState(1);
+    expect(afterPack).not.toBeNull();
+    expect(afterPack!.x).toBeGreaterThan(10);
+    expect(logic.getSideCredits('China')).toBe(75);
+  });
+
+  it('executes railed transport paths from waypoint prefixes outside index command internals', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('RailedTruck', 'China', ['VEHICLE'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL RailedLocomotor', {}),
+          makeBlock('Behavior', 'RailedTransportAIUpdate ModuleTag_Railed', {
+            PathPrefixName: 'TrainRoute',
+          }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('RailedLocomotor', 60),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const map = makeMap([makeMapObject('RailedTruck', 88, 10)], 256, 64);
+    map.waypoints = {
+      nodes: [
+        { id: 11, name: 'TrainRouteStart01', position: { x: 30, y: 10, z: 0 }, biDirectional: false },
+        { id: 12, name: 'TrainRouteMid01', position: { x: 60, y: 10, z: 0 }, biDirectional: false },
+        { id: 13, name: 'TrainRouteEnd01', position: { x: 90, y: 10, z: 0 }, biDirectional: false },
+        { id: 21, name: 'TrainRouteStart02', position: { x: 150, y: 10, z: 0 }, biDirectional: false },
+        { id: 22, name: 'TrainRouteEnd02', position: { x: 170, y: 10, z: 0 }, biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 11, waypoint2: 12 },
+        { waypoint1: 12, waypoint2: 13 },
+        { waypoint1: 21, waypoint2: 22 },
+      ],
+    };
+
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(256, 64));
+    logic.update(1 / 30);
+
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 230, targetZ: 10 });
+    for (let frame = 0; frame < 120; frame += 1) {
+      logic.update(1 / 30);
+    }
+    const afterIgnoredMove = logic.getEntityState(1);
+    expect(afterIgnoredMove).not.toBeNull();
+    expect(afterIgnoredMove!.x).toBeLessThan(120);
+
+    logic.submitCommand({ type: 'executeRailedTransport', entityId: 1 });
+    for (let frame = 0; frame < 220; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const afterFirstTransit = logic.getEntityState(1);
+    expect(afterFirstTransit).not.toBeNull();
+    expect(afterFirstTransit!.x).toBeGreaterThan(165);
+
+    logic.submitCommand({ type: 'executeRailedTransport', entityId: 1 });
+    for (let frame = 0; frame < 260; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const afterSecondTransit = logic.getEntityState(1);
+    expect(afterSecondTransit).not.toBeNull();
+    expect(afterSecondTransit!.x).toBeLessThanOrEqual(95);
+  });
+
+  it('blocks evacuate while a railed transport is in transit', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('RailedCarrier', 'China', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL RailedLocomotor', {}),
+          makeBlock('Behavior', 'RailedTransportAIUpdate ModuleTag_Railed', {
+            PathPrefixName: 'TransitRoute',
+          }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [0, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+        ]),
+        makeObjectDef('RailedPassenger', 'China', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL PassengerLocomotor', {}),
+        ], {
+          BuildCost: 0,
+          BuildTime: 0.1,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('RailedLocomotor', 60),
+        makeLocomotorDef('PassengerLocomotor', 30),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const map = makeMap([makeMapObject('RailedCarrier', 140, 10)], 256, 64);
+    map.waypoints = {
+      nodes: [
+        { id: 1, name: 'TransitRouteStart01', position: { x: 20, y: 10, z: 0 }, biDirectional: false },
+        { id: 2, name: 'TransitRouteEnd01', position: { x: 140, y: 10, z: 0 }, biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 1, waypoint2: 2 },
+      ],
+    };
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(256, 64));
+
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'RailedPassenger' });
+    for (let frame = 0; frame < 6; frame += 1) {
+      logic.update(1 / 30);
+    }
+    const passengerId = logic.getEntityIdsByTemplate('RailedPassenger')[0];
+    expect(passengerId).toBeDefined();
+
+    logic.submitCommand({ type: 'executeRailedTransport', entityId: 1 });
+    for (let frame = 0; frame < 15; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const passengerBeforeEvac = logic.getEntityState(passengerId!);
+    const carrierDuringTransit = logic.getEntityState(1);
+    expect(passengerBeforeEvac).not.toBeNull();
+    expect(carrierDuringTransit).not.toBeNull();
+
+    logic.submitCommand({ type: 'evacuate', entityId: 1 });
+    for (let frame = 0; frame < 5; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const passengerAfterEvac = logic.getEntityState(passengerId!);
+    const carrierAfterEvac = logic.getEntityState(1);
+    expect(passengerAfterEvac).not.toBeNull();
+    expect(carrierAfterEvac).not.toBeNull();
+    expect(passengerAfterEvac!.x).toBeGreaterThan(130);
+    expect(Math.abs(passengerAfterEvac!.x - passengerBeforeEvac!.x)).toBeLessThan(1);
+    expect(carrierAfterEvac!.x).toBeLessThan(passengerAfterEvac!.x - 10);
+  });
+
+  it('ignores combatDrop when source transport has no passengers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EmptyTransport', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TransportLoco', {}),
+        ]),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], []),
+      ],
+      locomotors: [
+        makeLocomotorDef('TransportLoco', 90),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('EmptyTransport', 8, 8), makeMapObject('EnemyTarget', 120, 8)], 128, 64),
+      makeRegistry(bundle),
+      makeHeightmap(128, 64),
+    );
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: 2,
+      targetPosition: null,
+    });
+
+    for (let frame = 0; frame < 30; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const transport = logic.getEntityState(1);
+    expect(transport).not.toBeNull();
+    expect(transport!.x).toBeCloseTo(8, 1);
+  });
+
+  it('ignores combatDrop when contained passengers are not CAN_RAPPEL', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CombatTransport', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 1,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [0, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TransportLoco', {}),
+        ]),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], []),
+        makeObjectDef('DropInfantry', 'America', ['INFANTRY'], [], {
+          BuildCost: 0,
+          BuildTime: 0.1,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TransportLoco', 90),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CombatTransport', 8, 8), makeMapObject('EnemyTarget', 120, 8)], 128, 64),
+      makeRegistry(bundle),
+      makeHeightmap(128, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'DropInfantry' });
+    for (let frame = 0; frame < 6; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: 2,
+      targetPosition: null,
+    });
+    for (let frame = 0; frame < 30; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const transport = logic.getEntityState(1);
+    expect(transport).not.toBeNull();
+    expect(transport!.x).toBeCloseTo(8, 1);
+  });
+
   it('routes combatDrop commands to passenger evacuate + target attack intents', () => {
     const bundle = makeBundle({
       objects: [
@@ -6144,7 +6642,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
         makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
         ]),
-        makeObjectDef('DropInfantry', 'America', ['INFANTRY'], [
+        makeObjectDef('DropInfantry', 'America', ['INFANTRY', 'CAN_RAPPEL'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'DropRifle'] }),
         ], {

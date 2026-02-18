@@ -60,6 +60,16 @@ function uint8ArrayToBase64(data: Uint8Array): string {
   return Buffer.from(data).toString('base64');
 }
 
+function stringifyMapObjectProperty(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv);
 
@@ -85,6 +95,8 @@ async function main(): Promise<void> {
     console.log(`  Border size: ${parsed.heightmap.borderSize}`);
     console.log(`  Objects: ${parsed.objects.length}`);
     console.log(`  Triggers: ${parsed.triggers.length}`);
+    console.log(`  Waypoint nodes: ${parsed.waypoints.nodes.length}`);
+    console.log(`  Waypoint links: ${parsed.waypoints.links.length}`);
     console.log(`  Blend tiles: ${parsed.blendTileCount}`);
     console.log(`  Texture classes: ${parsed.textureClasses.length}`);
     if (parsed.textureClasses.length > 0) {
@@ -116,7 +128,11 @@ async function main(): Promise<void> {
       angle: obj.angle,
       templateName: obj.templateName,
       flags: obj.flags,
-      properties: Object.fromEntries(obj.properties),
+      properties: Object.fromEntries(
+        Array.from(obj.propertiesByName.entries()).map(([key, value]) => (
+          [key, stringifyMapObjectProperty(value)]
+        )),
+      ),
     })),
     triggers: parsed.triggers.map((trig) => ({
       name: trig.name,
@@ -125,6 +141,21 @@ async function main(): Promise<void> {
       isRiver: trig.isRiver,
       points: trig.points,
     })),
+    waypoints: {
+      nodes: parsed.waypoints.nodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        position: node.position,
+        pathLabel1: node.pathLabel1,
+        pathLabel2: node.pathLabel2,
+        pathLabel3: node.pathLabel3,
+        biDirectional: node.biDirectional,
+      })),
+      links: parsed.waypoints.links.map((link) => ({
+        waypoint1: link.waypoint1,
+        waypoint2: link.waypoint2,
+      })),
+    },
     textureClasses: parsed.textureClasses,
     blendTileCount: parsed.blendTileCount,
     cliffStateData: parsed.cliffStateData ? uint8ArrayToBase64(parsed.cliffStateData) : undefined,

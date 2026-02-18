@@ -12,7 +12,7 @@ import type { HeightmapData } from './HeightmapExtractor.js';
 import { MapObjectExtractor } from './MapObjectExtractor.js';
 import type { MapObject } from './MapObjectExtractor.js';
 import { WaypointExtractor } from './WaypointExtractor.js';
-import type { PolygonTrigger } from './WaypointExtractor.js';
+import type { PolygonTrigger, WaypointLink, WaypointNode } from './WaypointExtractor.js';
 import { BlendTileExtractor } from './BlendTileExtractor.js';
 
 /** Complete parsed representation of a .map file. */
@@ -23,6 +23,11 @@ export interface ParsedMap {
   objects: MapObject[];
   /** Polygon trigger regions. */
   triggers: PolygonTrigger[];
+  /** Waypoint nodes and links. */
+  waypoints: {
+    nodes: WaypointNode[];
+    links: WaypointLink[];
+  };
   /** Total number of blend tiles. */
   blendTileCount: number;
   /** Texture class names used by the terrain. */
@@ -39,6 +44,7 @@ const CHUNK_BLEND_TILE = 'BlendTileData';
 const CHUNK_OBJECTS_LIST = 'ObjectsList';
 const CHUNK_OBJECT = 'Object';
 const CHUNK_POLYGON_TRIGGERS = 'PolygonTriggers';
+const CHUNK_WAYPOINTS_LIST = 'WaypointsList';
 
 export class MapParser {
   /**
@@ -60,6 +66,7 @@ export class MapParser {
     let heightmap: HeightmapData | undefined;
     const objects: MapObject[] = [];
     const triggers: PolygonTrigger[] = [];
+    const waypointLinks: WaypointLink[] = [];
     let blendTileCount = 0;
     const textureClasses: string[] = [];
     let cliffStateData: Uint8Array | null = null;
@@ -111,6 +118,12 @@ export class MapParser {
           break;
         }
 
+        case CHUNK_WAYPOINTS_LIST: {
+          const links = WaypointExtractor.extractWaypointLinks(reader);
+          waypointLinks.push(...links);
+          break;
+        }
+
         default:
           // Skip unknown chunks
           break;
@@ -123,11 +136,16 @@ export class MapParser {
     if (!heightmap) {
       throw new Error('Map file missing required HeightMapData chunk');
     }
+    const waypointNodes = WaypointExtractor.extractWaypointNodes(objects, idToName);
 
     return {
       heightmap,
       objects,
       triggers,
+      waypoints: {
+        nodes: waypointNodes,
+        links: waypointLinks,
+      },
       blendTileCount,
       textureClasses,
       cliffStateData,
@@ -154,7 +172,7 @@ export class MapParser {
       const childEnd = childChunk.dataOffset + childChunk.dataSize;
 
       if (childName === CHUNK_OBJECT) {
-        const obj = MapObjectExtractor.extract(reader, childChunk.version);
+        const obj = MapObjectExtractor.extract(reader, childChunk.version, idToName);
         objects.push(obj);
       }
 
@@ -163,4 +181,4 @@ export class MapParser {
   }
 }
 
-export type { HeightmapData, MapObject, PolygonTrigger, ChunkTableEntry };
+export type { HeightmapData, MapObject, PolygonTrigger, WaypointNode, WaypointLink, ChunkTableEntry };

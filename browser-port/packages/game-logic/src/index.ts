@@ -73,6 +73,17 @@ import {
   shouldPathfindObstacle as shouldPathfindObstacleImpl,
 } from './render-profile-helpers.js';
 import {
+  createRailedTransportRuntimeState as createRailedTransportRuntimeStateImpl,
+  createRailedTransportWaypointIndex as createRailedTransportWaypointIndexImpl,
+  executeRailedTransportCommand as executeRailedTransportCommandImpl,
+  extractRailedTransportProfile as extractRailedTransportProfileImpl,
+  type RailedTransportProfile,
+  type RailedTransportRuntimeState,
+  type RailedTransportWaypointData,
+  type RailedTransportWaypointIndex,
+  updateRailedTransportEntity as updateRailedTransportEntityImpl,
+} from './railed-transport.js';
+import {
   clamp,
   coerceStringArray,
   nominalHeightForCategory,
@@ -568,7 +579,9 @@ interface SellingEntityState {
 
 interface HackInternetProfile {
   unpackTimeFrames: number;
+  packTimeFrames: number;
   cashUpdateDelayFrames: number;
+  cashUpdateDelayFastFrames: number;
   regularCashAmount: number;
   veteranCashAmount: number;
   eliteCashAmount: number;
@@ -579,6 +592,11 @@ interface HackInternetRuntimeState {
   cashUpdateDelayFrames: number;
   cashAmountPerCycle: number;
   nextCashFrame: number;
+}
+
+interface HackInternetPendingCommandState {
+  command: GameLogicCommand;
+  executeFrame: number;
 }
 
 interface OverchargeBehaviorProfile {
@@ -755,10 +773,13 @@ export class GameLogicSubsystem implements Subsystem {
   }>();
   private readonly sellingEntities = new Map<number, SellingEntityState>();
   private readonly hackInternetStateByEntityId = new Map<number, HackInternetRuntimeState>();
+  private readonly hackInternetPendingCommandByEntityId = new Map<number, HackInternetPendingCommandState>();
   private readonly overchargeStateByEntityId = new Map<number, OverchargeRuntimeState>();
   private readonly disabledHackedStatusByEntityId = new Map<number, number>();
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
+  private readonly railedTransportStateByEntityId = new Map<number, RailedTransportRuntimeState>();
+  private railedTransportWaypointIndex: RailedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
   private localPlayerSciencePurchasePoints = 0;
   private localPlayerIndex = 0;
 
@@ -794,6 +815,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.clearSpawnedObjects();
     this.mapHeightmap = heightmap;
     this.iniDataRegistry = iniDataRegistry;
+    this.railedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(
+      this.resolveRailedTransportWaypointData(mapData),
+    );
 
     this.placementSummary = {
       totalObjects: mapData.objects.length,
@@ -831,6 +855,26 @@ export class GameLogicSubsystem implements Subsystem {
     this.navigationGrid = this.buildNavigationGrid(mapData, heightmap);
 
     return this.placementSummary;
+  }
+
+  private resolveRailedTransportWaypointData(mapData: MapDataJSON): RailedTransportWaypointData | null {
+    if (!mapData.waypoints) {
+      return null;
+    }
+
+    return {
+      nodes: mapData.waypoints.nodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        x: node.position.x,
+        z: node.position.y,
+        biDirectional: node.biDirectional ?? false,
+      })),
+      links: mapData.waypoints.links.map((link) => ({
+        waypoint1: link.waypoint1,
+        waypoint2: link.waypoint2,
+      })),
+    };
   }
 
   getPlacementSummary(): MapObjectPlacementSummary {
@@ -981,9 +1025,11 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProduction();
     this.updateCombat();
     this.updateEntityMovement(dt);
+    this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
+    this.updatePendingHackInternetCommands();
     this.updateOvercharge();
     this.updateSellingEntities();
     this.updateRenderStates();
@@ -1182,6 +1228,42 @@ export class GameLogicSubsystem implements Subsystem {
       return observedSide;
     }
     return null;
+  }
+
+  private resolveEntityOwnerSide(entity: MapEntity): string | null {
+    const directSide = this.normalizeSide(entity.side);
+    if (directSide) {
+      return directSide;
+    }
+
+    const ownerToken = this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined);
+    if (!ownerToken) {
+      return null;
+    }
+
+    let resolvedSide: string | null = null;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.normalizeControllingPlayerToken(candidate.controllingPlayerToken ?? undefined) !== ownerToken) {
+        continue;
+      }
+
+      const candidateSide = this.normalizeSide(candidate.side);
+      if (!candidateSide) {
+        continue;
+      }
+      if (resolvedSide === null) {
+        resolvedSide = candidateSide;
+        continue;
+      }
+      if (resolvedSide !== candidateSide) {
+        return null;
+      }
+    }
+
+    return resolvedSide;
   }
 
   getLocalPlayerDisabledScienceNames(): string[] {
@@ -3431,6 +3513,10 @@ export class GameLogicSubsystem implements Subsystem {
     };
   }
 
+  private extractRailedTransportProfile(objectDef: ObjectDef | undefined): RailedTransportProfile | null {
+    return extractRailedTransportProfileImpl(objectDef);
+  }
+
   private extractHackInternetProfile(objectDef: ObjectDef | undefined): HackInternetProfile | null {
     if (!objectDef) {
       return null;
@@ -3445,10 +3531,14 @@ export class GameLogicSubsystem implements Subsystem {
         const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
         if (moduleType === 'HACKINTERNETAIUPDATE') {
           const unpackTimeMs = readNumericField(block.fields, ['UnpackTime']) ?? 0;
+          const packTimeMs = readNumericField(block.fields, ['PackTime']) ?? 0;
           const cashUpdateDelayMs = readNumericField(block.fields, ['CashUpdateDelay']) ?? 0;
+          const cashUpdateDelayFastMs = readNumericField(block.fields, ['CashUpdateDelayFast']) ?? cashUpdateDelayMs;
           profile = {
             unpackTimeFrames: this.msToLogicFrames(unpackTimeMs),
+            packTimeFrames: this.msToLogicFrames(packTimeMs),
             cashUpdateDelayFrames: this.msToLogicFrames(cashUpdateDelayMs),
+            cashUpdateDelayFastFrames: this.msToLogicFrames(cashUpdateDelayFastMs),
             regularCashAmount: Math.max(0, Math.trunc(readNumericField(block.fields, ['RegularCashAmount']) ?? 0)),
             veteranCashAmount: Math.max(0, Math.trunc(readNumericField(block.fields, ['VeteranCashAmount']) ?? 0)),
             eliteCashAmount: Math.max(0, Math.trunc(readNumericField(block.fields, ['EliteCashAmount']) ?? 0)),
@@ -4587,9 +4677,6 @@ export class GameLogicSubsystem implements Subsystem {
       return this.normalizeControllingPlayerToken(value);
     }
 
-    // TODO(C&C source parity): map-converter currently serializes map object property
-    // keys as raw NameKey ids. Decode NameKey ids to well-known names and read
-    // TheKey_originalOwner from numeric-key dictionary entries.
     return null;
   }
 
@@ -4957,6 +5044,14 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private applyCommand(command: GameLogicCommand): void {
+    if (this.deferCommandWhileHackInternetPacking(command)) {
+      return;
+    }
+
+    if (this.shouldIgnoreRailedTransportPlayerCommand(command)) {
+      return;
+    }
+
     switch (command.type) {
       case 'clearSelection': {
         this.selectedEntityIds = [];
@@ -5178,6 +5273,97 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private deferCommandWhileHackInternetPacking(command: GameLogicCommand): boolean {
+    const hasEntityId = 'entityId' in command && typeof command.entityId === 'number';
+    if (!hasEntityId) {
+      return false;
+    }
+
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const pendingState = this.hackInternetPendingCommandByEntityId.get(entity.id);
+    if (pendingState) {
+      pendingState.command = command;
+      return true;
+    }
+
+    if (command.type === 'hackInternet') {
+      return false;
+    }
+
+    if (!this.hackInternetStateByEntityId.has(entity.id)) {
+      return false;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    const profile = this.extractHackInternetProfile(objectDef ?? undefined);
+    if (!profile) {
+      return false;
+    }
+
+    this.hackInternetStateByEntityId.delete(entity.id);
+    const packDelayFrames = this.resolveHackInternetPackTimeFrames(entity, profile);
+    if (packDelayFrames <= 0) {
+      return false;
+    }
+
+    this.stopEntity(entity.id);
+    this.clearAttackTarget(entity.id);
+    this.hackInternetPendingCommandByEntityId.set(entity.id, {
+      command,
+      executeFrame: this.frameCounter + packDelayFrames,
+    });
+    return true;
+  }
+
+  private shouldIgnoreRailedTransportPlayerCommand(command: GameLogicCommand): boolean {
+    const hasEntityId = 'entityId' in command && typeof command.entityId === 'number';
+    if (!hasEntityId) {
+      return false;
+    }
+
+    const blockedCommandType = this.isRailedTransportPlayerBlockedCommandType(command.type);
+    if (!blockedCommandType) {
+      return false;
+    }
+
+    return this.isRailedTransportEntity(command.entityId);
+  }
+
+  private isRailedTransportPlayerBlockedCommandType(commandType: GameLogicCommand['type']): boolean {
+    switch (commandType) {
+      case 'moveTo':
+      case 'attackMoveTo':
+      case 'guardPosition':
+      case 'guardObject':
+      case 'attackEntity':
+      case 'fireWeapon':
+      case 'switchWeapon':
+      case 'stop':
+      case 'enterObject':
+      case 'combatDrop':
+      case 'hackInternet':
+      case 'toggleOvercharge':
+      case 'setRallyPoint':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private isRailedTransportEntity(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    return this.extractRailedTransportProfile(objectDef ?? undefined) !== null;
+  }
+
   private routeIssueSpecialPowerCommand(command: IssueSpecialPowerCommand): void {
     const normalizeShortcutSpecialPowerName = this.normalizeShortcutSpecialPowerName.bind(this);
     routeIssueSpecialPowerCommandImpl(command, {
@@ -5289,9 +5475,30 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private cancelEntityCommandPathActions(entityId: number): void {
+    this.cancelRailedTransportTransit(entityId);
     this.hackInternetStateByEntityId.delete(entityId);
+    this.hackInternetPendingCommandByEntityId.delete(entityId);
     this.pendingEnterObjectActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
+  }
+
+  private cancelRailedTransportTransit(entityId: number): void {
+    const state = this.railedTransportStateByEntityId.get(entityId);
+    if (!state) {
+      return;
+    }
+    state.inTransit = false;
+    state.transitWaypointIds = [];
+    state.transitWaypointIndex = 0;
+  }
+
+  private resolveRailedTransportRuntimeState(entityId: number): RailedTransportRuntimeState {
+    let state = this.railedTransportStateByEntityId.get(entityId);
+    if (!state) {
+      state = createRailedTransportRuntimeStateImpl();
+      this.railedTransportStateByEntityId.set(entityId, state);
+    }
+    return state;
   }
 
   private handleExitContainerCommand(entityId: number): void {
@@ -5329,6 +5536,15 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    const objectDef = this.resolveObjectDefByTemplateName(container.templateName);
+    const railedProfile = this.extractRailedTransportProfile(objectDef ?? undefined);
+    if (railedProfile) {
+      const railedState = this.resolveRailedTransportRuntimeState(container.id);
+      if (railedState.inTransit) {
+        return;
+      }
+    }
+
     this.cancelEntityCommandPathActions(container.id);
     this.evacuateContainedEntities(container, container.x, container.z, null);
   }
@@ -5340,15 +5556,20 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
-    if (!objectDef || !this.hasBehaviorModuleType(objectDef, 'RAILEDTRANSPORTAIUPDATE')) {
+    const profile = this.extractRailedTransportProfile(objectDef ?? undefined);
+    if (!profile) {
       return;
     }
 
-    // Source parity subset: AICMD_EXECUTE_RAILED_TRANSPORT clears active command
-    // state before RailedTransportAIUpdate drives waypoint transit behavior.
-    this.cancelEntityCommandPathActions(entity.id);
-    this.clearAttackTarget(entity.id);
-    this.stopEntity(entity.id);
+    executeRailedTransportCommandImpl(entity, profile, {
+      waypointIndex: this.railedTransportWaypointIndex,
+      resolveRuntimeState: this.resolveRailedTransportRuntimeState.bind(this),
+      cancelEntityCommandPathActions: this.cancelEntityCommandPathActions.bind(this),
+      clearAttackTarget: this.clearAttackTarget.bind(this),
+      stopEntity: this.stopEntity.bind(this),
+      issueMoveTo: this.issueMoveTo.bind(this),
+      isValidEntity: (candidate) => !candidate.destroyed && candidate.canMove,
+    });
   }
 
   private handleBeaconDeleteCommand(command: BeaconDeleteCommand): void {
@@ -5369,7 +5590,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private handleHackInternetCommand(command: HackInternetCommand): void {
     const entity = this.spawnedEntities.get(command.entityId);
-    if (!entity || entity.destroyed || !entity.canMove) {
+    if (!entity || entity.destroyed) {
       return;
     }
 
@@ -5389,7 +5610,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.clearAttackTarget(entity.id);
     this.stopEntity(entity.id);
 
-    const cashUpdateDelayFrames = Math.max(0, profile.cashUpdateDelayFrames);
+    const cashUpdateDelayFrames = this.resolveHackInternetCashUpdateDelayFrames(entity, profile);
     const cashAmountPerCycle = profile.regularCashAmount > 0
       ? profile.regularCashAmount
       : SOURCE_HACK_FALLBACK_CASH_AMOUNT;
@@ -5399,6 +5620,20 @@ export class GameLogicSubsystem implements Subsystem {
       cashAmountPerCycle,
       nextCashFrame: this.frameCounter + initialDelayFrames,
     });
+  }
+
+  private resolveHackInternetPackTimeFrames(entity: MapEntity, profile: HackInternetProfile): number {
+    if (this.isEntityContained(entity)) {
+      return 0;
+    }
+    return Math.max(0, profile.packTimeFrames);
+  }
+
+  private resolveHackInternetCashUpdateDelayFrames(entity: MapEntity, profile: HackInternetProfile): number {
+    const delayFrames = this.isEntityContained(entity)
+      ? profile.cashUpdateDelayFastFrames
+      : profile.cashUpdateDelayFrames;
+    return Math.max(0, delayFrames);
   }
 
   private handleToggleOverchargeCommand(command: ToggleOverchargeCommand): void {
@@ -5429,6 +5664,9 @@ export class GameLogicSubsystem implements Subsystem {
   private handleCombatDropCommand(command: CombatDropCommand): void {
     const source = this.spawnedEntities.get(command.entityId);
     if (!source || source.destroyed) {
+      return;
+    }
+    if (this.countContainedRappellers(source.id) <= 0) {
       return;
     }
 
@@ -5520,6 +5758,10 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    if (!this.canQueueEnterObjectAction(source, target, command.action)) {
+      return;
+    }
+
     // Source parity subset: MSG_ENTER routes through AIGroup::groupEnter into
     // aiEnter target-action state. We track pending enter intent and resolve a
     // minimal action subset on contact.
@@ -5530,6 +5772,42 @@ export class GameLogicSubsystem implements Subsystem {
       targetObjectId: target.id,
       action: command.action,
     });
+  }
+
+  private canQueueEnterObjectAction(
+    source: MapEntity,
+    target: MapEntity,
+    action: EnterObjectCommand['action'],
+  ): boolean {
+    if (source.id === target.id) {
+      return false;
+    }
+    if (!source.canMove) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'SOLD')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'DISABLED_SUBDUED')) {
+      return false;
+    }
+
+    switch (action) {
+      case 'hijackVehicle':
+        return this.canExecuteHijackVehicleEnterAction(source, target);
+      case 'convertToCarBomb':
+        return this.canExecuteConvertToCarBombEnterAction(source, target);
+      case 'sabotageBuilding':
+        return this.resolveSabotageBuildingProfile(source, target) !== null;
+      default:
+        return false;
+    }
   }
 
   private handleConstructBuildingCommand(command: ConstructBuildingCommand): void {
@@ -5560,6 +5838,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!this.canSideBuildUnitTemplate(side, objectDef)) {
       return;
     }
+    if (!this.canEntityIssueBuildCommandForTemplate(constructor, objectDef.name, ['DOZER_CONSTRUCT', 'UNIT_BUILD'])) {
+      return;
+    }
 
     const placementPositions = this.resolveConstructPlacementPositions(command, objectDef);
     if (placementPositions.length === 0) {
@@ -5567,8 +5848,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity subset: BuildAssistant::buildObjectNow/LineNow placement flow
-    // is routed here; additional BuildAssistant legality/path checks are not yet
-    // represented in this simulation layer.
+    // is routed here; full clear/move obstacle handling remains in the source engine.
     const buildCost = this.resolveObjectBuildCost(objectDef, side);
     const maxSimultaneousOfType = this.resolveMaxSimultaneousOfType(objectDef);
     for (const [x, y, z] of placementPositions) {
@@ -6043,6 +6323,27 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
+  private updateRailedTransport(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+
+      const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+      const profile = this.extractRailedTransportProfile(objectDef ?? undefined);
+      if (!profile) {
+        continue;
+      }
+
+      updateRailedTransportEntityImpl(entity, profile, {
+        waypointIndex: this.railedTransportWaypointIndex,
+        resolveRuntimeState: this.resolveRailedTransportRuntimeState.bind(this),
+        issueMoveTo: this.issueMoveTo.bind(this),
+        isValidEntity: (candidate) => !candidate.destroyed && candidate.canMove,
+      });
+    }
+  }
+
   private updatePendingCombatDropActions(): void {
     for (const [sourceId, pending] of this.pendingCombatDropActions.entries()) {
       const source = this.spawnedEntities.get(sourceId);
@@ -6082,6 +6383,23 @@ export class GameLogicSubsystem implements Subsystem {
       this.depositSideCredits(entity.side, hackState.cashAmountPerCycle);
       const cycleDelay = Math.max(1, hackState.cashUpdateDelayFrames);
       hackState.nextCashFrame = this.frameCounter + cycleDelay;
+    }
+  }
+
+  private updatePendingHackInternetCommands(): void {
+    for (const [entityId, pending] of this.hackInternetPendingCommandByEntityId.entries()) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        this.hackInternetPendingCommandByEntityId.delete(entityId);
+        continue;
+      }
+
+      if (this.frameCounter < pending.executeFrame) {
+        continue;
+      }
+
+      this.hackInternetPendingCommandByEntityId.delete(entityId);
+      this.applyCommand(pending.command);
     }
   }
 
@@ -6350,6 +6668,10 @@ export class GameLogicSubsystem implements Subsystem {
     return combined > 0 ? combined : MAP_XY_FACTOR;
   }
 
+  private isEntityContained(entity: MapEntity): boolean {
+    return entity.parkingSpaceProducerId !== null || entity.helixCarrierId !== null;
+  }
+
   private collectContainedEntityIds(containerId: number): number[] {
     const entityIds = new Set<number>();
     const container = this.spawnedEntities.get(containerId);
@@ -6369,6 +6691,20 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return Array.from(entityIds.values()).sort((left, right) => left - right);
+  }
+
+  private countContainedRappellers(containerId: number): number {
+    let count = 0;
+    for (const passengerId of this.collectContainedEntityIds(containerId)) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        continue;
+      }
+      if (this.resolveEntityKindOfSet(passenger).has('CAN_RAPPEL')) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   private releaseEntityFromContainer(entity: MapEntity): void {
@@ -6450,13 +6786,18 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const producerSide = this.normalizeSide(producer.side);
+    const producerSide = this.resolveEntityOwnerSide(producer);
     if (!producerSide) {
-      // TODO(C&C source parity): map producer ownership to full Player data instead of side-string buckets.
+      return false;
+    }
+    if (this.isEntityScriptFactoryDisabled(producer)) {
       return false;
     }
 
     if (!this.canSideBuildUnitTemplate(producerSide, unitDef)) {
+      return false;
+    }
+    if (!this.canEntityIssueBuildCommandForTemplate(producer, unitDef.name, ['UNIT_BUILD', 'DOZER_CONSTRUCT'])) {
       return false;
     }
 
@@ -6477,9 +6818,8 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // TODO(C&C source parity): add remaining BuildAssistant checks beyond parking capacity/door reservation.
-
-    // TODO(C&C source parity): include ThingTemplate::calcCostToBuild modifiers (handicap, faction production cost changes).
+    // Source parity subset: build-cost modifiers from COSTMODIFIERUPGRADE are applied,
+    // while full player handicap/faction cost tables are still pending ownership porting.
     const buildCost = this.resolveObjectBuildCost(unitDef, producerSide);
     if (buildCost > this.getSideCredits(producerSide)) {
       return false;
@@ -6507,11 +6847,96 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (!this.reserveParkingDoorForQueuedUnit(producer, unitDef, productionId)) {
       this.removeProductionEntry(producer, productionId);
-      this.depositSideCredits(producer.side, buildCost);
+      this.depositSideCredits(producerSide, buildCost);
       return false;
     }
 
     return true;
+  }
+
+  private isEntityScriptFactoryDisabled(entity: MapEntity): boolean {
+    return this.entityHasObjectStatus(entity, 'SCRIPT_DISABLED')
+      || this.entityHasObjectStatus(entity, 'SCRIPT_UNPOWERED');
+  }
+
+  private canEntityIssueBuildCommandForTemplate(
+    producer: MapEntity,
+    templateName: string,
+    allowedCommandTypes: readonly string[],
+  ): boolean {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    // Source parity: BuildAssistant::isPossibleToMakeUnit scans the producer command set
+    // for matching UNIT_BUILD/DOZER_CONSTRUCT buttons. Keep permissive fallback while
+    // command-set data is absent in narrow tests.
+    if (registry.commandSets.size === 0 || registry.commandButtons.size === 0) {
+      return true;
+    }
+
+    const producerObjectDef = findObjectDefByName(registry, producer.templateName);
+    if (!producerObjectDef) {
+      return false;
+    }
+    const commandSetName = this.resolveEntityCommandSetName(producer, producerObjectDef);
+    if (!commandSetName) {
+      return false;
+    }
+    const commandSetDef = findCommandSetDefByName(registry, commandSetName);
+    if (!commandSetDef) {
+      return false;
+    }
+
+    const normalizedAllowedTypes = new Set<string>();
+    for (const commandType of allowedCommandTypes) {
+      normalizedAllowedTypes.add(this.normalizeCommandTypeNameForBuildCheck(commandType));
+    }
+
+    for (let buttonSlot = 1; buttonSlot <= 12; buttonSlot += 1) {
+      const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      if (!commandButtonName) {
+        continue;
+      }
+
+      const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+      if (!commandButtonDef) {
+        continue;
+      }
+
+      const buttonCommandType = this.normalizeCommandTypeNameForBuildCheck(
+        commandButtonDef.commandTypeName
+        ?? readStringField(commandButtonDef.fields, ['Command'])
+        ?? '',
+      );
+      if (!normalizedAllowedTypes.has(buttonCommandType)) {
+        continue;
+      }
+
+      const buttonTemplateName = readStringField(commandButtonDef.fields, ['Object'])
+        ?? readStringField(commandButtonDef.fields, ['ThingTemplate']);
+      if (!buttonTemplateName) {
+        continue;
+      }
+
+      if (this.areEquivalentTemplateNames(buttonTemplateName, templateName)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private normalizeCommandTypeNameForBuildCheck(commandTypeName: string): string {
+    const normalized = commandTypeName.trim().toUpperCase();
+    if (!normalized) {
+      return '';
+    }
+    if (normalized.startsWith('GUI_COMMAND_')) {
+      return normalized.slice('GUI_COMMAND_'.length);
+    }
+    return normalized;
   }
 
   private hasAvailableParkingSpaceFor(producer: MapEntity, unitDef: ObjectDef): boolean {
@@ -6610,14 +7035,17 @@ export class GameLogicSubsystem implements Subsystem {
 
     const [removed] = producer.productionQueue.splice(index, 1);
     if (removed) {
+      const producerSide = this.resolveEntityOwnerSide(producer);
       if (removed.type === 'UNIT') {
         this.releaseParkingDoorReservationForProduction(producer, removed.productionId);
       }
-      if (removed.type === 'UPGRADE' && removed.upgradeType === 'PLAYER') {
-        this.setSideUpgradeInProduction(producer.side ?? '', removed.upgradeName, false);
+      if (producerSide && removed.type === 'UPGRADE' && removed.upgradeType === 'PLAYER') {
+        this.setSideUpgradeInProduction(producerSide, removed.upgradeName, false);
       }
       const refunded = removed.buildCost;
-      this.depositSideCredits(producer.side, refunded);
+      if (producerSide) {
+        this.depositSideCredits(producerSide, refunded);
+      }
     }
     return true;
   }
@@ -6649,9 +7077,8 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const producerSide = this.normalizeSide(producer.side);
+    const producerSide = this.resolveEntityOwnerSide(producer);
     if (!producerSide) {
-      // TODO(C&C source parity): map producer ownership to full Player data instead of side-string buckets.
       return false;
     }
 
@@ -6848,10 +7275,13 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    if (removed.upgradeType === 'PLAYER') {
-      this.setSideUpgradeInProduction(producer.side ?? '', removed.upgradeName, false);
+    const producerSide = this.resolveEntityOwnerSide(producer);
+    if (producerSide && removed.upgradeType === 'PLAYER') {
+      this.setSideUpgradeInProduction(producerSide, removed.upgradeName, false);
     }
-    this.depositSideCredits(producer.side, removed.buildCost);
+    if (producerSide) {
+      this.depositSideCredits(producerSide, removed.buildCost);
+    }
     return true;
   }
 
@@ -7068,10 +7498,15 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private completeUpgradeProduction(producer: MapEntity, production: UpgradeProductionQueueEntry): void {
+    const producerSide = this.resolveEntityOwnerSide(producer);
     if (production.upgradeType === 'PLAYER') {
-      this.setSideUpgradeInProduction(producer.side ?? '', production.upgradeName, false);
-      this.setSideUpgradeCompleted(producer.side ?? '', production.upgradeName, true);
-      this.applyCompletedPlayerUpgrade(producer.side ?? '', production.upgradeName);
+      if (!producerSide) {
+        this.removeProductionEntry(producer, production.productionId);
+        return;
+      }
+      this.setSideUpgradeInProduction(producerSide, production.upgradeName, false);
+      this.setSideUpgradeCompleted(producerSide, production.upgradeName, true);
+      this.applyCompletedPlayerUpgrade(producerSide, production.upgradeName);
     } else {
       this.applyUpgradeToEntity(producer.id, production.upgradeName);
     }
@@ -8638,6 +9073,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.cancelEntityCommandPathActions(entityId);
+    this.railedTransportStateByEntityId.delete(entityId);
     this.disableOverchargeForEntity(entity);
     this.sellingEntities.delete(entityId);
     this.disabledHackedStatusByEntityId.delete(entityId);
@@ -8685,19 +9121,22 @@ export class GameLogicSubsystem implements Subsystem {
     // which iterates queue entries through cancel paths to restore player money/state.
     const productionLimit = 100;
     for (let i = 0; i < productionLimit && producer.productionQueue.length > 0; i += 1) {
+      const producerSide = this.resolveEntityOwnerSide(producer);
       const production = producer.productionQueue[0];
       if (!production) {
         break;
       }
 
-      if (production.type === 'UPGRADE' && production.upgradeType === 'PLAYER') {
-        this.setSideUpgradeInProduction(producer.side ?? '', production.upgradeName, false);
+      if (producerSide && production.type === 'UPGRADE' && production.upgradeType === 'PLAYER') {
+        this.setSideUpgradeInProduction(producerSide, production.upgradeName, false);
       }
       if (production.type === 'UNIT') {
         this.releaseParkingDoorReservationForProduction(producer, production.productionId);
       }
 
-      this.depositSideCredits(producer.side, production.buildCost);
+      if (producerSide) {
+        this.depositSideCredits(producerSide, production.buildCost);
+      }
       producer.productionQueue.shift();
     }
   }
@@ -8918,8 +9357,11 @@ export class GameLogicSubsystem implements Subsystem {
     this.disabledHackedStatusByEntityId.clear();
     this.sellingEntities.clear();
     this.hackInternetStateByEntityId.clear();
+    this.hackInternetPendingCommandByEntityId.clear();
     this.pendingEnterObjectActions.clear();
     this.pendingCombatDropActions.clear();
+    this.railedTransportStateByEntityId.clear();
+    this.railedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
     this.navigationGrid = null;
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();

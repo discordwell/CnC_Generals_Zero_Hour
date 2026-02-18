@@ -48,6 +48,8 @@ export interface MapObject {
   templateName: string;
   /** Key-value property dictionary (v2+). */
   properties: Map<number, unknown>;
+  /** Property dictionary with keys resolved through map TOC names. */
+  propertiesByName: Map<string, unknown>;
 }
 
 export class MapObjectExtractor {
@@ -55,7 +57,11 @@ export class MapObjectExtractor {
    * Extract a single object from an Object chunk.
    * The reader must be positioned at the start of the chunk's data payload.
    */
-  static extract(reader: DataChunkReader, version: number): MapObject {
+  static extract(
+    reader: DataChunkReader,
+    version: number,
+    idToName?: ReadonlyMap<number, string>,
+  ): MapObject {
     const posX = reader.readFloat32();
     const posY = reader.readFloat32();
 
@@ -72,6 +78,10 @@ export class MapObjectExtractor {
     if (version >= 2) {
       properties = reader.readDict();
     }
+    const propertiesByName = new Map<string, unknown>();
+    for (const [key, value] of properties.entries()) {
+      propertiesByName.set(idToName?.get(key) ?? String(key), value);
+    }
 
     return {
       position: { x: posX, y: posY, z: posZ },
@@ -79,6 +89,7 @@ export class MapObjectExtractor {
       flags,
       templateName,
       properties,
+      propertiesByName,
     };
   }
 }

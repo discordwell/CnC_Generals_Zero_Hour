@@ -15,6 +15,7 @@
  */
 
 import type { DataChunkReader } from './DataChunkReader.js';
+import type { MapObject } from './MapObjectExtractor.js';
 
 /** A polygon trigger region from the map. */
 export interface PolygonTrigger {
@@ -28,6 +29,23 @@ export interface PolygonTrigger {
   isRiver: boolean;
   /** Array of polygon vertices. */
   points: Array<{ x: number; y: number; z: number }>;
+}
+
+/** A waypoint node extracted from map object dict fields. */
+export interface WaypointNode {
+  id: number;
+  name: string;
+  position: { x: number; y: number; z: number };
+  pathLabel1?: string;
+  pathLabel2?: string;
+  pathLabel3?: string;
+  biDirectional: boolean;
+}
+
+/** A directed waypoint link from the WaypointsList chunk. */
+export interface WaypointLink {
+  waypoint1: number;
+  waypoint2: number;
 }
 
 export class WaypointExtractor {
@@ -69,5 +87,153 @@ export class WaypointExtractor {
     }
 
     return triggers;
+  }
+
+  /**
+   * Extract waypoint links from the WaypointsList chunk.
+   *
+   * WaypointsList v1:
+   *   int32  numWaypointLinks
+   *   for each link:
+   *     int32 waypoint1
+   *     int32 waypoint2
+   */
+  static extractWaypointLinks(reader: DataChunkReader): WaypointLink[] {
+    const linkCount = reader.readInt32();
+    const links: WaypointLink[] = [];
+    for (let i = 0; i < linkCount; i++) {
+      links.push({
+        waypoint1: reader.readInt32(),
+        waypoint2: reader.readInt32(),
+      });
+    }
+    return links;
+  }
+
+  /**
+   * Extract waypoint nodes from map objects by decoding dict key IDs through TOC names.
+   */
+  static extractWaypointNodes(
+    objects: readonly MapObject[],
+    idToName: ReadonlyMap<number, string>,
+  ): WaypointNode[] {
+    const nodes: WaypointNode[] = [];
+    for (const obj of objects) {
+      const id = WaypointExtractor.readNumericProperty(obj, idToName, 'waypointID');
+      const name = WaypointExtractor.readStringProperty(obj, idToName, 'waypointName');
+      if (id === null || !name) {
+        continue;
+      }
+
+      const pathLabel1 = WaypointExtractor.readLooseStringProperty(obj, idToName, 'waypointPathLabel1');
+      const pathLabel2 = WaypointExtractor.readLooseStringProperty(obj, idToName, 'waypointPathLabel2');
+      const pathLabel3 = WaypointExtractor.readLooseStringProperty(obj, idToName, 'waypointPathLabel3');
+      const biDirectional = WaypointExtractor.readBooleanProperty(obj, idToName, 'waypointPathBiDirectional') ?? false;
+
+      nodes.push({
+        id,
+        name,
+        position: { ...obj.position },
+        pathLabel1: pathLabel1 || undefined,
+        pathLabel2: pathLabel2 || undefined,
+        pathLabel3: pathLabel3 || undefined,
+        biDirectional,
+      });
+    }
+
+    nodes.sort((left, right) => left.id - right.id);
+    return nodes;
+  }
+
+  private static readProperty(
+    obj: MapObject,
+    idToName: ReadonlyMap<number, string>,
+    propertyName: string,
+  ): unknown {
+    const normalizedPropertyName = propertyName.trim().toLowerCase();
+    for (const [key, value] of obj.properties) {
+      const resolvedName = idToName.get(key);
+      if (!resolvedName) {
+        continue;
+      }
+      if (resolvedName.trim().toLowerCase() === normalizedPropertyName) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  private static readNumericProperty(
+    obj: MapObject,
+    idToName: ReadonlyMap<number, string>,
+    propertyName: string,
+  ): number | null {
+    const value = WaypointExtractor.readProperty(obj, idToName, propertyName);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.trunc(value);
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return Math.trunc(parsed);
+      }
+    }
+    return null;
+  }
+
+  private static readStringProperty(
+    obj: MapObject,
+    idToName: ReadonlyMap<number, string>,
+    propertyName: string,
+  ): string | null {
+    const value = WaypointExtractor.readProperty(obj, idToName, propertyName);
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private static readLooseStringProperty(
+    obj: MapObject,
+    idToName: ReadonlyMap<number, string>,
+    propertyName: string,
+  ): string | null {
+    const value = WaypointExtractor.readProperty(obj, idToName, propertyName);
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(Math.trunc(value));
+    }
+    if (typeof value === 'boolean') {
+      return value ? 'true' : 'false';
+    }
+    return null;
+  }
+
+  private static readBooleanProperty(
+    obj: MapObject,
+    idToName: ReadonlyMap<number, string>,
+    propertyName: string,
+  ): boolean | null {
+    const value = WaypointExtractor.readProperty(obj, idToName, propertyName);
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      return value !== 0;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true' || normalized === 'yes' || normalized === '1') {
+        return true;
+      }
+      if (normalized === 'false' || normalized === 'no' || normalized === '0') {
+        return false;
+      }
+    }
+    return null;
   }
 }
