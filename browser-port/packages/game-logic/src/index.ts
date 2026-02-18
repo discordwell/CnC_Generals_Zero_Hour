@@ -50,6 +50,19 @@ import {
   resolveBuildableStatus as resolveBuildableStatusImpl,
 } from './production-prerequisites.js';
 import {
+  resolveQueueProductionNaturalRallyPoint as resolveQueueProductionNaturalRallyPointImpl,
+  resolveQueueSpawnLocation as resolveQueueSpawnLocationImpl,
+  tickQueueExitGate as tickQueueExitGateImpl,
+} from './production-spawn.js';
+import {
+  areEquivalentTemplateNames as areEquivalentTemplateNamesImpl,
+  doesTemplateMatchMaxSimultaneousType as doesTemplateMatchMaxSimultaneousTypeImpl,
+  isStructureObjectDef as isStructureObjectDefImpl,
+  resolveMaxSimultaneousLinkKey as resolveMaxSimultaneousLinkKeyImpl,
+  resolveMaxSimultaneousOfType as resolveMaxSimultaneousOfTypeImpl,
+  resolveProductionQuantity as resolveProductionQuantityImpl,
+} from './production-templates.js';
+import {
   findArmorDefByName,
   findCommandButtonDefByName,
   findCommandSetDefByName,
@@ -5754,58 +5767,25 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveMaxSimultaneousOfType(objectDef: ObjectDef): number {
-    const maxKeyword = readStringField(objectDef.fields, ['MaxSimultaneousOfType'])?.trim().toUpperCase();
-    if (maxKeyword === 'DETERMINEDBYSUPERWEAPONRESTRICTION') {
-      // TODO(C&C source parity): wire GameInfo superweapon restrictions into max-simultaneous evaluation.
-      return 0;
-    }
-
-    const maxRaw = readNumericField(objectDef.fields, ['MaxSimultaneousOfType']) ?? 0;
-    if (!Number.isFinite(maxRaw)) {
-      return 0;
-    }
-    return Math.max(0, Math.trunc(maxRaw));
+    return resolveMaxSimultaneousOfTypeImpl(objectDef);
   }
 
   private resolveMaxSimultaneousLinkKey(objectDef: ObjectDef): string | null {
-    const rawLinkKey = readStringField(objectDef.fields, ['MaxSimultaneousLinkKey'])?.trim().toUpperCase() ?? '';
-    if (!rawLinkKey || rawLinkKey === 'NONE') {
-      return null;
-    }
-    return rawLinkKey;
+    return resolveMaxSimultaneousLinkKeyImpl(objectDef);
   }
 
   private isStructureObjectDef(objectDef: ObjectDef): boolean {
-    return this.normalizeKindOf(objectDef.kindOf).has('STRUCTURE');
+    return isStructureObjectDefImpl(objectDef);
   }
 
   private doesTemplateMatchMaxSimultaneousType(targetObjectDef: ObjectDef, candidateTemplateName: string): boolean {
-    const normalizedTargetName = targetObjectDef.name.trim().toUpperCase();
-    if (!normalizedTargetName) {
-      return false;
-    }
-
-    if (this.areEquivalentTemplateNames(candidateTemplateName, normalizedTargetName)) {
-      return true;
-    }
-
-    const targetLinkKey = this.resolveMaxSimultaneousLinkKey(targetObjectDef);
-    if (!targetLinkKey) {
-      return false;
-    }
-
     const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-
-    const candidateDef = findObjectDefByName(registry, candidateTemplateName);
-    if (!candidateDef) {
-      return false;
-    }
-
-    const candidateLinkKey = this.resolveMaxSimultaneousLinkKey(candidateDef);
-    return candidateLinkKey !== null && candidateLinkKey === targetLinkKey;
+    return doesTemplateMatchMaxSimultaneousTypeImpl(
+      targetObjectDef,
+      candidateTemplateName,
+      (leftTemplateName, rightTemplateName) => this.areEquivalentTemplateNames(leftTemplateName, rightTemplateName),
+      (templateName) => (registry ? findObjectDefByName(registry, templateName) : undefined),
+    );
   }
 
   private countActiveEntitiesForMaxSimultaneousForSide(side: string, targetObjectDef: ObjectDef): number {
@@ -5858,73 +5838,14 @@ export class GameLogicSubsystem implements Subsystem {
     return count;
   }
 
-  private extractBuildVariationNames(objectDef: ObjectDef | undefined): Set<string> {
-    const names = new Set<string>();
-    if (!objectDef) {
-      return names;
-    }
-
-    for (const tokens of this.extractIniValueTokens(objectDef.fields['BuildVariations'])) {
-      for (const token of tokens) {
-        const normalized = token.trim().toUpperCase();
-        if (!normalized || normalized === 'NONE') {
-          continue;
-        }
-        names.add(normalized);
-      }
-    }
-
-    return names;
-  }
-
-  private areEquivalentObjectTemplates(left: ObjectDef | undefined, right: ObjectDef | undefined): boolean {
-    if (!left || !right) {
-      return false;
-    }
-
-    const leftName = left.name.trim().toUpperCase();
-    const rightName = right.name.trim().toUpperCase();
-    if (!leftName || !rightName) {
-      return false;
-    }
-    if (leftName === rightName) {
-      return true;
-    }
-
-    // Source parity: ThingTemplate::isEquivalentTo() compares direct equality, final overrides,
-    // reskin ancestry, and BuildVariations both directions. Registry data currently exposes
-    // BuildVariations reliably, but not final-override/reskin links.
-    const leftVariations = this.extractBuildVariationNames(left);
-    if (leftVariations.has(rightName)) {
-      return true;
-    }
-    const rightVariations = this.extractBuildVariationNames(right);
-    if (rightVariations.has(leftName)) {
-      return true;
-    }
-
-    // TODO(C&C source parity): include final-override and reskin ancestry equivalence checks once represented in ini-data registry.
-    return false;
-  }
-
   private areEquivalentTemplateNames(leftTemplateName: string, rightTemplateName: string): boolean {
-    const normalizedLeft = leftTemplateName.trim().toUpperCase();
-    const normalizedRight = rightTemplateName.trim().toUpperCase();
-    if (!normalizedLeft || !normalizedRight) {
-      return false;
-    }
-    if (normalizedLeft === normalizedRight) {
-      return true;
-    }
-
     const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-
-    const leftDef = findObjectDefByName(registry, normalizedLeft);
-    const rightDef = findObjectDefByName(registry, normalizedRight);
-    return this.areEquivalentObjectTemplates(leftDef, rightDef);
+    return areEquivalentTemplateNamesImpl(
+      leftTemplateName,
+      rightTemplateName,
+      (templateName) => (registry ? findObjectDefByName(registry, templateName) : undefined),
+      (value) => this.extractIniValueTokens(value),
+    );
   }
 
   private countActiveEntitiesOfTemplateForSide(side: string, templateName: string): number {
@@ -5952,19 +5873,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveProductionQuantity(producer: MapEntity, templateName: string): number {
-    const productionProfile = producer.productionProfile;
-    if (!productionProfile) {
-      return 1;
-    }
-
-    for (const modifier of productionProfile.quantityModifiers) {
-      if (!this.areEquivalentTemplateNames(modifier.templateName, templateName)) {
-        continue;
-      }
-      return Math.max(1, modifier.quantity);
-    }
-
-    return 1;
+    return resolveProductionQuantityImpl(
+      producer.productionProfile?.quantityModifiers,
+      templateName,
+      (leftTemplateName, rightTemplateName) => this.areEquivalentTemplateNames(leftTemplateName, rightTemplateName),
+    );
   }
 
   private updateProduction(): void {
@@ -6000,21 +5913,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updateQueueExitGate(producer: MapEntity): void {
-    if (!producer.queueProductionExitProfile) {
-      return;
-    }
-
-    const isFreeToExit = producer.queueProductionExitBurstRemaining > 0
-      || producer.queueProductionExitDelayFramesRemaining === 0;
-    if (isFreeToExit) {
-      producer.queueProductionExitDelayFramesRemaining = 0;
-      return;
-    }
-
-    producer.queueProductionExitDelayFramesRemaining = Math.max(
-      0,
-      producer.queueProductionExitDelayFramesRemaining - 1,
-    );
+    tickQueueExitGateImpl(producer);
   }
 
   private completeUnitProduction(producer: MapEntity, production: UnitProductionQueueEntry): void {
@@ -6241,60 +6140,19 @@ export class GameLogicSubsystem implements Subsystem {
     z: number;
     heightOffset: number;
   } | null {
-    const exitProfile = producer.queueProductionExitProfile;
-    if (!exitProfile) {
-      return null;
-    }
-
-    const yaw = producer.rotationY;
-    const cos = Math.cos(yaw);
-    const sin = Math.sin(yaw);
-    const local = exitProfile.unitCreatePoint;
-    const x = producer.x + (local.x * cos - local.y * sin);
-    const z = producer.z + (local.x * sin + local.y * cos);
-    const terrainHeight = this.mapHeightmap ? this.mapHeightmap.getInterpolatedHeight(x, z) : 0;
-    const producerBaseY = producer.y - producer.baseHeight;
-    let worldY = producerBaseY + local.z;
-    const creationInAir = Math.abs(worldY - terrainHeight) > 0.0001;
-    if (creationInAir && !exitProfile.allowAirborneCreation) {
-      worldY = terrainHeight;
-    }
-
-    return {
-      x,
-      z,
-      heightOffset: worldY - terrainHeight,
-    };
+    return resolveQueueSpawnLocationImpl(producer, this.mapHeightmap);
   }
 
   private applyQueueProductionNaturalRallyPoint(producer: MapEntity, producedUnit: MapEntity): void {
-    if (producer.rallyPoint && producedUnit.canMove) {
-      this.issueMoveTo(producedUnit.id, producer.rallyPoint.x, producer.rallyPoint.z);
+    const rallyPoint = resolveQueueProductionNaturalRallyPointImpl(
+      producer,
+      producedUnit.canMove,
+      MAP_XY_FACTOR,
+    );
+    if (!rallyPoint) {
       return;
     }
-
-    const exitProfile = producer.queueProductionExitProfile;
-    if (!exitProfile || !exitProfile.naturalRallyPoint || !producedUnit.canMove) {
-      return;
-    }
-
-    const rallyPoint = { ...exitProfile.naturalRallyPoint };
-    if (exitProfile.moduleType === 'QUEUE') {
-      const magnitude = Math.hypot(rallyPoint.x, rallyPoint.y, rallyPoint.z);
-      if (magnitude > 0) {
-        const offsetScale = (2 * MAP_XY_FACTOR) / magnitude;
-        rallyPoint.x += rallyPoint.x * offsetScale;
-        rallyPoint.y += rallyPoint.y * offsetScale;
-        rallyPoint.z += rallyPoint.z * offsetScale;
-      }
-    }
-
-    const yaw = producer.rotationY;
-    const cos = Math.cos(yaw);
-    const sin = Math.sin(yaw);
-    const rallyX = producer.x + (rallyPoint.x * cos - rallyPoint.y * sin);
-    const rallyZ = producer.z + (rallyPoint.x * sin + rallyPoint.y * cos);
-    this.issueMoveTo(producedUnit.id, rallyX, rallyZ);
+    this.issueMoveTo(producedUnit.id, rallyPoint.x, rallyPoint.z);
   }
 
   private withdrawSideCredits(side: string | undefined, amount: number): number {
