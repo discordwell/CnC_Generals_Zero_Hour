@@ -45,6 +45,11 @@ import {
   setEntityIgnoringStealthStatus as setEntityIgnoringStealthStatusImpl,
 } from './combat-helpers.js';
 import {
+  findContinueAttackVictim as findContinueAttackVictimImpl,
+  resolveProjectileIncidentalVictimForPointImpact as resolveProjectileIncidentalVictimForPointImpactImpl,
+  resolveProjectilePointCollisionRadius as resolveProjectilePointCollisionRadiusImpl,
+} from './combat-damage-resolution.js';
+import {
   clamp,
   coerceStringArray,
   nominalHeightForCategory,
@@ -9101,67 +9106,26 @@ export class GameLogicSubsystem implements Subsystem {
     originalVictimPosition: VectorXZ,
     continueRange: number,
   ): MapEntity | null {
-    const continueRangeSqr = continueRange * continueRange;
-    const victimPlayerToken = destroyedVictim.controllingPlayerToken;
-    if (!victimPlayerToken) {
-      // TODO(C&C source parity): ContinueAttack uses PartitionFilterSamePlayer with
-      // victim->getControllingPlayer(). Do not reacquire when map ownership data is not
-      // available yet (e.g. unresolved NameKey-keyed originalOwner conversion).
-      return null;
-    }
-    let bestCandidate: MapEntity | null = null;
-    let bestDistanceSqr = Number.POSITIVE_INFINITY;
-
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed || !candidate.canTakeDamage) {
-        continue;
-      }
-      if (candidate.id === attacker.id || candidate.id === destroyedVictim.id) {
-        continue;
-      }
-      if (!this.canAttackerTargetEntity(attacker, candidate, attacker.attackCommandSource)) {
-        continue;
-      }
-      if (candidate.controllingPlayerToken !== victimPlayerToken) {
-        continue;
-      }
-
-      const dx = candidate.x - originalVictimPosition.x;
-      const dz = candidate.z - originalVictimPosition.z;
-      const distanceSqr = (dx * dx) + (dz * dz);
-      if (distanceSqr > continueRangeSqr) {
-        continue;
-      }
-
-      if (
-        !bestCandidate
-        || distanceSqr < bestDistanceSqr
-        || (distanceSqr === bestDistanceSqr && candidate.id < bestCandidate.id)
-      ) {
-        bestCandidate = candidate;
-        bestDistanceSqr = distanceSqr;
-      }
-    }
-
-    return bestCandidate;
+    // TODO(C&C source parity): ContinueAttack uses PartitionFilterSamePlayer with
+    // victim->getControllingPlayer(). Do not reacquire when map ownership data is not
+    // available yet (e.g. unresolved NameKey-keyed originalOwner conversion).
+    return findContinueAttackVictimImpl(
+      attacker.id,
+      destroyedVictim.id,
+      destroyedVictim.controllingPlayerToken,
+      originalVictimPosition,
+      continueRange,
+      this.spawnedEntities.values(),
+      (candidate) => this.canAttackerTargetEntity(attacker, candidate, attacker.attackCommandSource),
+    );
   }
 
   private resolveProjectilePointCollisionRadius(entity: MapEntity): number {
-    if (entity.obstacleGeometry) {
-      return Math.max(0, Math.max(entity.obstacleGeometry.majorRadius, entity.obstacleGeometry.minorRadius));
-    }
-    if (entity.obstacleFootprint > 0) {
-      return entity.obstacleFootprint * (MAP_XY_FACTOR * 0.5);
-    }
-    if (entity.pathDiameter > 0) {
-      return Math.max(MAP_XY_FACTOR * 0.5, entity.pathDiameter * (MAP_XY_FACTOR * 0.5));
-    }
-
     // Source parity subset: without full per-projectile collision volumes, approximate point-hit
     // overlap by at least half a cell for small movers.
     // TODO(C&C source parity): replace with spawned projectile entities and precise
     // shouldProjectileCollideWith()/geometry intersection checks.
-    return MAP_XY_FACTOR * 0.5;
+    return resolveProjectilePointCollisionRadiusImpl(entity, MAP_XY_FACTOR);
   }
 
   private resolveProjectileIncidentalVictimForPointImpact(
@@ -9171,33 +9135,14 @@ export class GameLogicSubsystem implements Subsystem {
     impactX: number,
     impactZ: number,
   ): MapEntity | null {
-    const candidates: MapEntity[] = [];
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed || !candidate.canTakeDamage) {
-        continue;
-      }
-      if (intendedVictimId !== null && candidate.id === intendedVictimId) {
-        continue;
-      }
-      candidates.push(candidate);
-    }
-    candidates.sort((left, right) => left.id - right.id);
-
-    for (const candidate of candidates) {
-      const collisionRadius = this.resolveProjectilePointCollisionRadius(candidate);
-      const dx = candidate.x - impactX;
-      const dz = candidate.z - impactZ;
-      const distanceSqr = dx * dx + dz * dz;
-      if (distanceSqr > collisionRadius * collisionRadius) {
-        continue;
-      }
-      if (!this.shouldProjectileCollideWithEntity(projectileLauncher, weapon, candidate, intendedVictimId)) {
-        continue;
-      }
-      return candidate;
-    }
-
-    return null;
+    return resolveProjectileIncidentalVictimForPointImpactImpl(
+      this.spawnedEntities.values(),
+      intendedVictimId,
+      impactX,
+      impactZ,
+      (candidate) => this.resolveProjectilePointCollisionRadius(candidate),
+      (candidate) => this.shouldProjectileCollideWithEntity(projectileLauncher, weapon, candidate, intendedVictimId),
+    );
   }
 
   private shouldProjectileCollideWithEntity(
