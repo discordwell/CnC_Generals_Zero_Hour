@@ -58,6 +58,13 @@ import {
   resolveUpgradeType,
 } from './registry-lookups.js';
 import {
+  routeIssueSpecialPowerCommand as routeIssueSpecialPowerCommandImpl,
+  resolveSharedShortcutSpecialPowerReadyFrame as resolveSharedShortcutSpecialPowerReadyFrameImpl,
+  resolveShortcutSpecialPowerSourceEntityReadyFrameBySource as
+    resolveShortcutSpecialPowerSourceEntityReadyFrameBySourceImpl,
+  setSpecialPowerReadyFrame as setSpecialPowerReadyFrameImpl,
+} from './special-power-routing.js';
+import {
   type EntityRelationship,
   type GameLogicCommand,
   type GameLogicConfig,
@@ -79,13 +86,6 @@ const TEST_CRUSH_OR_SQUISH = 2;
 const RELATIONSHIP_ENEMIES = 0;
 const RELATIONSHIP_NEUTRAL = 1;
 const RELATIONSHIP_ALLIES = 2;
-const COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
-const COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
-const COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT = 0x00000004;
-const COMMAND_OPTION_NEED_TARGET_POS = 0x00000020;
-const COMMAND_OPTION_NEED_OBJECT_TARGET = COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT
-  | COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT
-  | COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT;
 type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTRAL | typeof RELATIONSHIP_ALLIES;
 type SidePlayerType = 'HUMAN' | 'COMPUTER';
 type AttackCommandSource = 'PLAYER' | 'AI';
@@ -5297,150 +5297,37 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private routeIssueSpecialPowerCommand(command: IssueSpecialPowerCommand): void {
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return;
-    }
-
-    const normalizedSpecialPowerName = command.specialPowerName.trim().toUpperCase();
-    if (!normalizedSpecialPowerName) {
-      return;
-    }
-
-    // Source parity: this only guards known/unknown special powers by INI definition lookup.
-    // The actual execution path is intentionally TODO until module owners are fully wired.
-    const specialPowerDef = registry.getSpecialPower(normalizedSpecialPowerName);
-    if (!specialPowerDef) {
-      return;
-    }
-
-    const reloadFrames = this.msToLogicFrames(readNumericField(specialPowerDef.fields, ['ReloadTime']) ?? 0);
-    const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
-
-    const sourceEntityId = this.resolveIssueSpecialPowerSourceEntityId(command, normalizedSpecialPowerName);
-    if (sourceEntityId === null) {
-      return;
-    }
-
-    const sourceEntity = this.spawnedEntities.get(sourceEntityId);
-    if (!sourceEntity || sourceEntity.destroyed) {
-      return;
-    }
-
-    // Source parity: shared special powers gate globally by power name; non-shared powers
-    // gate per source entity via its tracked shortcut-ready frame.
-    const canExecute = isSharedSynced
-      ? this.frameCounter >= this.resolveSharedShortcutSpecialPowerReadyFrame(normalizedSpecialPowerName)
-      : this.frameCounter >= this.resolveShortcutSpecialPowerSourceEntityReadyFrameBySource(
-        normalizedSpecialPowerName,
-        sourceEntityId,
-      );
-    if (!canExecute) {
-      return;
-    }
-
-    const readyFrame = this.frameCounter + reloadFrames;
-
-    const commandOption = Number.isFinite(command.commandOption) ? command.commandOption | 0 : 0;
-    const needsObjectTarget = (commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
-    const needsTargetPosition = (commandOption & COMMAND_OPTION_NEED_TARGET_POS) !== 0;
-
-    if (needsObjectTarget) {
-      if (!Number.isFinite(command.targetEntityId)) {
-        return;
-      }
-
-      const targetEntity = this.spawnedEntities.get(Math.trunc(command.targetEntityId));
-      if (!targetEntity || targetEntity.destroyed) {
-        return;
-      }
-
-      if (!this.isSpecialPowerObjectRelationshipAllowed(commandOption, this.getTeamRelationship(sourceEntity, targetEntity))) {
-        return;
-      }
-
-      this.onIssueSpecialPowerTargetObject(
-        sourceEntity.id,
-        normalizedSpecialPowerName,
-        targetEntity.id,
-        commandOption,
-        command.commandButtonId,
-        specialPowerDef,
-      );
-
-      this.setSpecialPowerReadyFrame(normalizedSpecialPowerName, sourceEntityId, isSharedSynced, readyFrame);
-      return;
-    }
-
-    if (needsTargetPosition) {
-      if (!Number.isFinite(command.targetX) || !Number.isFinite(command.targetZ)) {
-        return;
-      }
-
-      const targetX = command.targetX as number;
-      const targetZ = command.targetZ as number;
-      this.onIssueSpecialPowerTargetPosition(
-        sourceEntity.id,
-        normalizedSpecialPowerName,
-        targetX,
-        targetZ,
-        commandOption,
-        command.commandButtonId,
-        specialPowerDef,
-      );
-
-      this.setSpecialPowerReadyFrame(normalizedSpecialPowerName, sourceEntityId, isSharedSynced, readyFrame);
-      return;
-    }
-
-      this.onIssueSpecialPowerNoTarget(
-        sourceEntity.id,
-        normalizedSpecialPowerName,
-        commandOption,
-        command.commandButtonId,
-        specialPowerDef,
-      );
-
-      this.setSpecialPowerReadyFrame(normalizedSpecialPowerName, sourceEntityId, isSharedSynced, readyFrame);
-  }
-
-  private resolveSharedShortcutSpecialPowerReadyFrame(specialPowerName: string): number {
-    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
-    if (!normalizedSpecialPowerName) {
-      return this.frameCounter;
-    }
-
-    const sharedReadyFrame = this.sharedShortcutSpecialPowerReadyFrames.get(normalizedSpecialPowerName);
-    if (!Number.isFinite(sharedReadyFrame)) {
-      // Source parity: shared special powers are player-global and start at frame 0 (ready immediately)
-      // unless explicitly started by prior usage.
-      return this.frameCounter;
-    }
-
-    return Math.max(0, Math.trunc(sharedReadyFrame));
-  }
-
-  private resolveShortcutSpecialPowerSourceEntityReadyFrameBySource(
-    specialPowerName: string,
-    sourceEntityId: number,
-  ): number {
-    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
-    if (!normalizedSpecialPowerName || !Number.isFinite(sourceEntityId)) {
-      return this.frameCounter;
-    }
-
-    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
-    const sourcesForPower = this.shortcutSpecialPowerSourceByName.get(normalizedSpecialPowerName);
-    if (!sourcesForPower) {
-      return this.frameCounter;
-    }
-
-    const readyFrame = sourcesForPower.get(normalizedSourceEntityId);
-    if (!Number.isFinite(readyFrame)) {
-      return this.frameCounter;
-    }
-
-    return Math.max(0, Math.trunc(readyFrame));
+    const normalizeShortcutSpecialPowerName = this.normalizeShortcutSpecialPowerName.bind(this);
+    routeIssueSpecialPowerCommandImpl(command, {
+      iniDataRegistry: this.iniDataRegistry,
+      frameCounter: this.frameCounter,
+      selectedEntityId: this.selectedEntityId,
+      spawnedEntities: this.spawnedEntities,
+      msToLogicFrames: this.msToLogicFrames.bind(this),
+      resolveShortcutSpecialPowerSourceEntityId: this.resolveShortcutSpecialPowerSourceEntityId.bind(this),
+      resolveSharedReadyFrame: (specialPowerName) => (
+        resolveSharedShortcutSpecialPowerReadyFrameImpl(
+          specialPowerName,
+          this.frameCounter,
+          this.sharedShortcutSpecialPowerReadyFrames,
+          normalizeShortcutSpecialPowerName,
+        )
+      ),
+      resolveSourceReadyFrameBySource: (specialPowerName, sourceEntityId) => (
+        resolveShortcutSpecialPowerSourceEntityReadyFrameBySourceImpl(
+          specialPowerName,
+          sourceEntityId,
+          this.frameCounter,
+          this.shortcutSpecialPowerSourceByName,
+          normalizeShortcutSpecialPowerName,
+        )
+      ),
+      setReadyFrame: this.setSpecialPowerReadyFrame.bind(this),
+      getTeamRelationship: this.getTeamRelationship.bind(this),
+      onIssueSpecialPowerNoTarget: this.onIssueSpecialPowerNoTarget.bind(this),
+      onIssueSpecialPowerTargetPosition: this.onIssueSpecialPowerTargetPosition.bind(this),
+      onIssueSpecialPowerTargetObject: this.onIssueSpecialPowerTargetObject.bind(this),
+    });
   }
 
   private setSpecialPowerReadyFrame(
@@ -5449,90 +5336,17 @@ export class GameLogicSubsystem implements Subsystem {
     isShared: boolean,
     readyFrame: number,
   ): void {
-    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
-    if (!normalizedSpecialPowerName) {
-      return;
-    }
-
-    if (!Number.isFinite(readyFrame)) {
-      return;
-    }
-
-    const normalizedReadyFrame = Math.max(this.frameCounter, Math.trunc(readyFrame));
-    if (isShared) {
-      this.sharedShortcutSpecialPowerReadyFrames.set(normalizedSpecialPowerName, normalizedReadyFrame);
-      return;
-    }
-
-    this.trackShortcutSpecialPowerSourceEntity(normalizedSpecialPowerName, sourceEntityId, normalizedReadyFrame);
-  }
-
-  private resolveIssueSpecialPowerSourceEntityId(
-    command: IssueSpecialPowerCommand,
-    normalizedSpecialPowerName: string,
-  ): number | null {
-    if (Number.isFinite(command.sourceEntityId)) {
-      const explicitSourceEntityId = Math.trunc(command.sourceEntityId as number);
-      const explicitSourceEntity = this.spawnedEntities.get(explicitSourceEntityId);
-      if (explicitSourceEntity && !explicitSourceEntity.destroyed) {
-        return explicitSourceEntityId;
-      }
-    }
-
-    if (command.issuingEntityIds.length > 0) {
-      for (const rawEntityId of command.issuingEntityIds) {
-        if (!Number.isFinite(rawEntityId)) {
-          continue;
-        }
-        const candidateId = Math.trunc(rawEntityId);
-        const candidateEntity = this.spawnedEntities.get(candidateId);
-        if (candidateEntity && !candidateEntity.destroyed) {
-          return candidateId;
-        }
-      }
-    }
-
-    const shortcutSourceEntityId = this.resolveShortcutSpecialPowerSourceEntityId(normalizedSpecialPowerName);
-    if (shortcutSourceEntityId !== null) {
-      const shortcutSourceEntity = this.spawnedEntities.get(shortcutSourceEntityId);
-      if (shortcutSourceEntity && !shortcutSourceEntity.destroyed) {
-        return shortcutSourceEntityId;
-      }
-    }
-
-    const selectedEntity = this.selectedEntityId !== null
-      ? this.spawnedEntities.get(this.selectedEntityId)
-      : null;
-    if (selectedEntity && !selectedEntity.destroyed) {
-      return selectedEntity.id;
-    }
-
-    return null;
-  }
-
-  private isSpecialPowerObjectRelationshipAllowed(
-    commandOption: number,
-    relationship: number,
-  ): boolean {
-    const requiresEnemy = (commandOption & COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT) !== 0;
-    const requiresNeutral = (commandOption & COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT) !== 0;
-    const requiresAlly = (commandOption & COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT) !== 0;
-
-    if (!requiresEnemy && !requiresNeutral && !requiresAlly) {
-      return true;
-    }
-
-    if (requiresEnemy && relationship === RELATIONSHIP_ENEMIES) {
-      return true;
-    }
-    if (requiresNeutral && relationship === RELATIONSHIP_NEUTRAL) {
-      return true;
-    }
-    if (requiresAlly && relationship === RELATIONSHIP_ALLIES) {
-      return true;
-    }
-
-    return false;
+    const normalizeShortcutSpecialPowerName = this.normalizeShortcutSpecialPowerName.bind(this);
+    setSpecialPowerReadyFrameImpl(
+      specialPowerName,
+      sourceEntityId,
+      isShared,
+      readyFrame,
+      this.frameCounter,
+      this.sharedShortcutSpecialPowerReadyFrames,
+      normalizeShortcutSpecialPowerName,
+      this.trackShortcutSpecialPowerSourceEntity.bind(this),
+    );
   }
 
   protected onIssueSpecialPowerNoTarget(
