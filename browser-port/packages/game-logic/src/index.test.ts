@@ -6,6 +6,7 @@ import {
   type ArmorDef,
   type CommandButtonDef,
   type CommandSetDef,
+  type FactionDef,
   IniDataRegistry,
   type IniDataBundle,
   type LocomotorDef,
@@ -112,6 +113,7 @@ function makeBundle(params: {
   commandSets?: CommandSetDef[];
   sciences?: ScienceDef[];
   locomotors?: LocomotorDef[];
+  factions?: FactionDef[];
 }): IniDataBundle {
   const weapons = params.weapons ?? [];
   const armors = params.armors ?? [];
@@ -120,6 +122,7 @@ function makeBundle(params: {
   const commandSets = params.commandSets ?? [];
   const sciences = params.sciences ?? [];
   const locomotors = params.locomotors ?? [];
+  const factions = params.factions ?? [];
   return {
     objects: params.objects,
     weapons,
@@ -128,7 +131,7 @@ function makeBundle(params: {
     commandButtons,
     commandSets,
     sciences,
-    factions: [],
+    factions,
     locomotors,
     ai: {
       attackUsesLineOfSight: true,
@@ -5989,10 +5992,87 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideCredits('America')).toBe(300);
   });
 
+  it('toggles overcharge state, drains health, and auto-disables below threshold', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OverchargePlant', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'OverchargeBehavior ModuleTag_Overcharge', {
+            HealthPercentToDrainPerSecond: '50%',
+            NotAllowedWhenHealthBelowPercent: '50%',
+          }),
+        ], {
+          EnergyBonus: 10,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('OverchargePlant', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'toggleOvercharge', entityId: 1 });
+    logic.update(1 / 30);
+    expect(logic.getSidePowerState('America').powerBonus).toBe(10);
+
+    for (let frame = 0; frame < 40; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(1)?.health ?? 0).toBeLessThan(50);
+    expect(logic.getSidePowerState('America').powerBonus).toBe(0);
+
+    logic.submitCommand({ type: 'toggleOvercharge', entityId: 1 });
+    logic.update(1 / 30);
+    expect(logic.getSidePowerState('America').powerBonus).toBe(0);
+  });
+
+  it('places and deletes owned beacons through command paths', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaBeacon', 'America', ['STRUCTURE', 'BEACON'], []),
+      ],
+      factions: [
+        {
+          name: 'FactionAmerica',
+          side: 'America',
+          fields: {
+            BeaconName: 'AmericaBeacon',
+          },
+        },
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.setPlayerSide(0, 'America');
+
+    logic.submitCommand({
+      type: 'placeBeacon',
+      targetPosition: [20, 0, 20],
+    });
+    logic.update(1 / 30);
+
+    const beaconId = logic.getEntityIdsByTemplateAndSide('AmericaBeacon', 'America')[0];
+    expect(beaconId).toBeDefined();
+    expect(logic.getEntityState(beaconId!)).not.toBeNull();
+
+    logic.submitCommand({
+      type: 'beaconDelete',
+      entityId: beaconId!,
+    });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(beaconId!)).toBeNull();
+  });
+
   it('resolves enterObject hijack actions by transferring target ownership and consuming source unit', () => {
     const bundle = makeBundle({
       objects: [
-        makeObjectDef('Hijacker', 'America', ['INFANTRY'], []),
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+        ]),
         makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], []),
       ],
     });
@@ -6004,6 +6084,8 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       makeRegistry(bundle),
       makeHeightmap(64, 64),
     );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
     logic.submitCommand({
       type: 'enterObject',
       entityId: 1,

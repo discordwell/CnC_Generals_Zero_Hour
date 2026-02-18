@@ -145,23 +145,27 @@ import {
   removeRadarUpgradeFromSide as removeRadarUpgradeFromSideImpl,
 } from './upgrade-modules.js';
 import {
+  type BeaconDeleteCommand,
   type CancelDozerConstructionCommand,
   type CombatDropCommand,
   type ConstructBuildingCommand,
   type EnterObjectCommand,
   type EntityRelationship,
+  type ExecuteRailedTransportCommand,
   type GameLogicCommand,
   type GameLogicConfig,
   type HackInternetCommand,
   type IssueSpecialPowerCommand,
   type LocalScienceAvailability,
   type MapObjectPlacementSummary,
+  type PlaceBeaconCommand,
   type RenderAnimationState,
   type RenderAnimationStateClipCandidates,
   type RenderableEntityState,
   type RenderableObjectCategory,
   type SellCommand,
   type SelectedEntityInfo,
+  type ToggleOverchargeCommand,
 } from './types.js';
 
 export * from './types.js';
@@ -215,6 +219,7 @@ const SOURCE_FRAMES_TO_ALLOW_SCAFFOLD = LOGIC_FRAME_RATE * 1.5;
 const SOURCE_TOTAL_FRAMES_TO_SELL_OBJECT = LOGIC_FRAME_RATE * 3;
 const SOURCE_DEFAULT_SELL_PERCENTAGE = 1.0;
 const SOURCE_HACK_FALLBACK_CASH_AMOUNT = 1;
+const SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER = 3;
 
 const NAV_CLEAR = 0;
 const NAV_WATER = 1;
@@ -576,6 +581,23 @@ interface HackInternetRuntimeState {
   nextCashFrame: number;
 }
 
+interface OverchargeBehaviorProfile {
+  healthPercentToDrainPerSecond: number;
+  notAllowedWhenHealthBelowPercent: number;
+}
+
+interface OverchargeRuntimeState extends OverchargeBehaviorProfile {
+}
+
+interface SabotageBuildingProfile {
+  moduleType: string;
+  disableHackedDurationFrames: number;
+  disableContainedHackers: boolean;
+  stealsCashAmount: number;
+  destroysTarget: boolean;
+  powerSabotageDurationFrames: number;
+}
+
 interface PendingEnterObjectActionState {
   targetObjectId: number;
   action: EnterObjectCommand['action'];
@@ -733,6 +755,8 @@ export class GameLogicSubsystem implements Subsystem {
   }>();
   private readonly sellingEntities = new Map<number, SellingEntityState>();
   private readonly hackInternetStateByEntityId = new Map<number, HackInternetRuntimeState>();
+  private readonly overchargeStateByEntityId = new Map<number, OverchargeRuntimeState>();
+  private readonly disabledHackedStatusByEntityId = new Map<number, number>();
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
   private localPlayerSciencePurchasePoints = 0;
@@ -953,12 +977,14 @@ export class GameLogicSubsystem implements Subsystem {
     this.animationTime += dt;
     this.frameCounter++;
     this.flushCommands();
+    this.updateDisabledHackedStatuses();
     this.updateProduction();
     this.updateCombat();
     this.updateEntityMovement(dt);
     this.updatePendingEnterObjectActions();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
+    this.updateOvercharge();
     this.updateSellingEntities();
     this.updateRenderStates();
     this.updateWeaponIdleAutoReload();
@@ -1986,6 +2012,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.controllingPlayerToken = this.normalizeControllingPlayerToken(normalizedNewSide);
     this.transferCostModifierUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
     this.transferPowerPlantUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
+    this.transferOverchargeBetweenSides(entity, normalizedOldSide, normalizedNewSide);
     this.transferRadarUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
   }
 
@@ -3443,6 +3470,43 @@ export class GameLogicSubsystem implements Subsystem {
     return profile;
   }
 
+  private extractOverchargeBehaviorProfile(objectDef: ObjectDef | null | undefined): OverchargeBehaviorProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: OverchargeBehaviorProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'OVERCHARGEBEHAVIOR') {
+          const drainPercent = this.parsePercent(this.readIniFieldValue(block.fields, 'HealthPercentToDrainPerSecond')) ?? 0;
+          const minHealthPercent = this.parsePercent(
+            this.readIniFieldValue(block.fields, 'NotAllowedWhenHealthBelowPercent'),
+          ) ?? 0;
+          profile = {
+            healthPercentToDrainPerSecond: Math.max(0, drainPercent),
+            notAllowedWhenHealthBelowPercent: clamp(minHealthPercent, 0, 1),
+          };
+          return;
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
   private extractUpgradeModules(objectDef: ObjectDef | undefined): UpgradeModuleProfile[] {
     if (!objectDef) {
       return [];
@@ -3595,6 +3659,26 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private transferOverchargeBetweenSides(entity: MapEntity, oldSide: string, newSide: string): void {
+    if (!this.overchargeStateByEntityId.has(entity.id)) {
+      return;
+    }
+
+    const normalizedOldSide = this.normalizeSide(oldSide);
+    const normalizedNewSide = this.normalizeSide(newSide);
+    if (!normalizedOldSide || !normalizedNewSide || normalizedOldSide === normalizedNewSide) {
+      return;
+    }
+
+    const oldSidePowerState = this.getSidePowerStateMap(normalizedOldSide);
+    if (removePowerPlantUpgradeFromSideImpl(oldSidePowerState, entity.energyBonus)) {
+      this.sidePowerBonus.delete(normalizedOldSide);
+    }
+
+    const newSidePowerState = this.getSidePowerStateMap(normalizedNewSide);
+    applyPowerPlantUpgradeToSideImpl(newSidePowerState, entity.energyBonus);
+  }
+
   private transferRadarUpgradesBetweenSides(entity: MapEntity, oldSide: string, newSide: string): void {
     const normalizedOldSide = this.normalizeSide(oldSide);
     const normalizedNewSide = this.normalizeSide(newSide);
@@ -3698,6 +3782,40 @@ export class GameLogicSubsystem implements Subsystem {
     if (removePowerPlantUpgradeFromSideImpl(sideState, entity.energyBonus)) {
       this.sidePowerBonus.delete(normalizedSide);
     }
+  }
+
+  private enableOverchargeForEntity(entity: MapEntity, profile: OverchargeBehaviorProfile): void {
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    if (this.overchargeStateByEntityId.has(entity.id)) {
+      return;
+    }
+
+    const sideState = this.getSidePowerStateMap(normalizedSide);
+    applyPowerPlantUpgradeToSideImpl(sideState, entity.energyBonus);
+    this.overchargeStateByEntityId.set(entity.id, {
+      healthPercentToDrainPerSecond: Math.max(0, profile.healthPercentToDrainPerSecond),
+      notAllowedWhenHealthBelowPercent: clamp(profile.notAllowedWhenHealthBelowPercent, 0, 1),
+    });
+  }
+
+  private disableOverchargeForEntity(entity: MapEntity): void {
+    if (!this.overchargeStateByEntityId.has(entity.id)) {
+      return;
+    }
+
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (normalizedSide) {
+      const sideState = this.getSidePowerStateMap(normalizedSide);
+      if (removePowerPlantUpgradeFromSideImpl(sideState, entity.energyBonus)) {
+        this.sidePowerBonus.delete(normalizedSide);
+      }
+    }
+
+    this.overchargeStateByEntityId.delete(entity.id);
   }
 
   private applyRadarUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
@@ -4817,10 +4935,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (this.mapHeightmap) {
-      const maxWorldX = Math.max(0, this.mapHeightmap.worldWidth - 0.0001);
-      const maxWorldZ = Math.max(0, this.mapHeightmap.worldDepth - 0.0001);
-      const clampedX = clamp(hitPoint.x, 0, maxWorldX);
-      const clampedZ = clamp(hitPoint.z, 0, maxWorldZ);
+      const [clampedX, clampedZ] = this.clampWorldPositionToMapBounds(hitPoint.x, hitPoint.z);
       return {
         x: clampedX,
         z: clampedZ,
@@ -5029,23 +5144,22 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'executeRailedTransport':
-        // TODO(source parity): wire MSG_EXECUTE_RAILED_TRANSPORT behavior.
+        this.handleExecuteRailedTransportCommand(command);
         return;
       case 'beaconDelete':
-        // TODO(source parity): Source GUI_COMMAND_BEACON_DELETE path currently no message in current code path.
+        this.handleBeaconDeleteCommand(command);
         return;
       case 'hackInternet':
         this.handleHackInternetCommand(command);
         return;
       case 'toggleOvercharge':
-        // TODO(source parity): wire MSG_TOGGLE_OVERCHARGE / power plant overcharge behavior.
+        this.handleToggleOverchargeCommand(command);
         return;
       case 'combatDrop':
         this.handleCombatDropCommand(command);
         return;
       case 'placeBeacon':
-        // TODO(source parity): Source path is GameMessage::MSG_PLACE_BEACON via GUICommandTranslator.
-        // Requires terrain/world placement validation and single-instance beacon limits.
+        this.handlePlaceBeaconCommand(command);
         return;
       case 'enterObject':
         this.handleEnterObjectCommand(command);
@@ -5219,6 +5333,40 @@ export class GameLogicSubsystem implements Subsystem {
     this.evacuateContainedEntities(container, container.x, container.z, null);
   }
 
+  private handleExecuteRailedTransportCommand(command: ExecuteRailedTransportCommand): void {
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    if (!objectDef || !this.hasBehaviorModuleType(objectDef, 'RAILEDTRANSPORTAIUPDATE')) {
+      return;
+    }
+
+    // Source parity subset: AICMD_EXECUTE_RAILED_TRANSPORT clears active command
+    // state before RailedTransportAIUpdate drives waypoint transit behavior.
+    this.cancelEntityCommandPathActions(entity.id);
+    this.clearAttackTarget(entity.id);
+    this.stopEntity(entity.id);
+  }
+
+  private handleBeaconDeleteCommand(command: BeaconDeleteCommand): void {
+    const beacon = this.spawnedEntities.get(command.entityId);
+    if (!beacon || beacon.destroyed || !this.isBeaconEntity(beacon)) {
+      return;
+    }
+
+    const localSide = this.resolveLocalPlayerSide();
+    const beaconSide = this.normalizeSide(beacon.side);
+    if (!localSide || !beaconSide || beaconSide !== localSide) {
+      // Source parity: non-owner delete requests are client-visibility only.
+      return;
+    }
+
+    this.markEntityDestroyed(beacon.id, -1);
+  }
+
   private handleHackInternetCommand(command: HackInternetCommand): void {
     const entity = this.spawnedEntities.get(command.entityId);
     if (!entity || entity.destroyed || !entity.canMove) {
@@ -5251,6 +5399,31 @@ export class GameLogicSubsystem implements Subsystem {
       cashAmountPerCycle,
       nextCashFrame: this.frameCounter + initialDelayFrames,
     });
+  }
+
+  private handleToggleOverchargeCommand(command: ToggleOverchargeCommand): void {
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed) {
+      return;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    const profile = this.extractOverchargeBehaviorProfile(objectDef);
+    if (!profile) {
+      return;
+    }
+
+    if (this.overchargeStateByEntityId.has(entity.id)) {
+      this.disableOverchargeForEntity(entity);
+      return;
+    }
+
+    const minimumAllowedHealth = entity.maxHealth * profile.notAllowedWhenHealthBelowPercent;
+    if (minimumAllowedHealth > 0 && entity.health < minimumAllowedHealth) {
+      return;
+    }
+
+    this.enableOverchargeForEntity(entity, profile);
   }
 
   private handleCombatDropCommand(command: CombatDropCommand): void {
@@ -5287,6 +5460,57 @@ export class GameLogicSubsystem implements Subsystem {
       targetX,
       targetZ,
     });
+  }
+
+  private handlePlaceBeaconCommand(command: PlaceBeaconCommand): void {
+    const localSide = this.resolveLocalPlayerSide();
+    if (!localSide) {
+      return;
+    }
+
+    const beaconTemplateName = this.resolveBeaconTemplateNameForSide(localSide);
+    if (!beaconTemplateName) {
+      return;
+    }
+
+    if (
+      this.countActiveEntitiesOfTemplateForSide(localSide, beaconTemplateName)
+      >= SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER
+    ) {
+      return;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return;
+    }
+    const beaconObjectDef = findObjectDefByName(registry, beaconTemplateName);
+    if (!beaconObjectDef) {
+      return;
+    }
+
+    const [x, z] = this.clampWorldPositionToMapBounds(command.targetPosition[0], command.targetPosition[2]);
+    const terrainY = this.resolveGroundHeight(x, z);
+
+    const mapObject: MapObjectJSON = {
+      templateName: beaconObjectDef.name,
+      angle: 0,
+      flags: 0,
+      position: {
+        x,
+        y: z,
+        z: 0,
+      },
+      properties: {},
+    };
+    const created = this.createMapEntity(mapObject, beaconObjectDef, registry, this.mapHeightmap);
+    created.side = localSide;
+    created.controllingPlayerToken = this.normalizeControllingPlayerToken(localSide);
+    created.x = x;
+    created.z = z;
+    created.y = terrainY + created.baseHeight;
+    this.updatePathfindPosCell(created);
+    this.spawnedEntities.set(created.id, created);
   }
 
   private handleEnterObjectCommand(command: EnterObjectCommand): void {
@@ -5343,7 +5567,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity subset: BuildAssistant::buildObjectNow/LineNow placement flow
-    // is routed here, while full BuildAssistant legality/path checks remain TODO.
+    // is routed here; additional BuildAssistant legality/path checks are not yet
+    // represented in this simulation layer.
     const buildCost = this.resolveObjectBuildCost(objectDef, side);
     const maxSimultaneousOfType = this.resolveMaxSimultaneousOfType(objectDef);
     for (const [x, y, z] of placementPositions) {
@@ -5423,6 +5648,12 @@ export class GameLogicSubsystem implements Subsystem {
     entity.objectStatusFlags.add('UNSELECTABLE');
     this.removeEntityFromSelection(entity.id);
 
+    // Source parity subset: BuildAssistant::sellObject invokes contain->onSelling().
+    // Open/Garrison contain variants map to passenger evacuation on sell start.
+    if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+      this.evacuateContainedEntities(entity, entity.x, entity.z, null);
+    }
+
     if (entity.parkingPlaceProfile) {
       const parkedEntityIds = Array.from(entity.parkingPlaceProfile.occupiedSpaceEntityIds.values());
       for (const parkedEntityId of parkedEntityIds) {
@@ -5430,8 +5661,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // TODO(C&C source parity): contain->onSelling() passenger behavior is module-specific
-    // and should be routed through full contain module ownership once ported.
     this.sellingEntities.set(entity.id, {
       sellFrame: this.frameCounter,
       constructionPercent: 99.9,
@@ -5466,35 +5695,352 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     action: EnterObjectCommand['action'],
   ): void {
+    if (source.destroyed || target.destroyed) {
+      return;
+    }
+
+    if (action === 'hijackVehicle') {
+      this.resolveHijackVehicleEnterAction(source, target);
+      return;
+    }
+
+    if (action === 'convertToCarBomb') {
+      this.resolveConvertToCarBombEnterAction(source, target);
+      return;
+    }
+
+    if (action === 'sabotageBuilding') {
+      this.resolveSabotageBuildingEnterAction(source, target);
+    }
+  }
+
+  private resolveHijackVehicleEnterAction(source: MapEntity, target: MapEntity): void {
+    if (!this.canExecuteHijackVehicleEnterAction(source, target)) {
+      return;
+    }
+
+    const sourceSide = this.normalizeSide(source.side);
+    if (!sourceSide) {
+      return;
+    }
+
+    this.captureEntity(target.id, sourceSide);
+    target.objectStatusFlags.add('HIJACKED');
+    target.weaponSetFlagsMask |= WEAPON_SET_FLAG_VEHICLE_HIJACK;
+    this.refreshEntityCombatProfiles(target);
+    this.markEntityDestroyed(source.id, target.id);
+  }
+
+  private canExecuteHijackVehicleEnterAction(source: MapEntity, target: MapEntity): boolean {
+    if (target.category !== 'vehicle') {
+      return false;
+    }
+    if (this.getTeamRelationship(source, target) !== RELATIONSHIP_ENEMIES) {
+      return false;
+    }
+
+    const sourceObjectDef = this.resolveObjectDefByTemplateName(source.templateName);
+    if (!sourceObjectDef || !this.hasBehaviorModuleType(sourceObjectDef, 'CONVERTTOHIJACKEDVEHICLECRATECOLLIDE')) {
+      return false;
+    }
+
+    const targetKindOf = this.resolveEntityKindOfSet(target);
+    if (targetKindOf.has('IMMUNE_TO_CAPTURE')) {
+      return false;
+    }
+    if (targetKindOf.has('AIRCRAFT') || targetKindOf.has('BOAT') || targetKindOf.has('DRONE')) {
+      return false;
+    }
+    if (targetKindOf.has('TRANSPORT') && this.collectContainedEntityIds(target.id).length > 0) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'HIJACKED')) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private resolveConvertToCarBombEnterAction(source: MapEntity, target: MapEntity): void {
+    if (!this.canExecuteConvertToCarBombEnterAction(source, target)) {
+      return;
+    }
+
+    const sourceSide = this.normalizeSide(source.side);
+    if (!sourceSide) {
+      return;
+    }
+
+    this.captureEntity(target.id, sourceSide);
+    target.objectStatusFlags.add('CARBOMB');
+    target.weaponSetFlagsMask |= WEAPON_SET_FLAG_CARBOMB;
+    this.refreshEntityCombatProfiles(target);
+    this.markEntityDestroyed(source.id, target.id);
+  }
+
+  private canExecuteConvertToCarBombEnterAction(source: MapEntity, target: MapEntity): boolean {
+    if (target.category !== 'vehicle') {
+      return false;
+    }
     if (this.getTeamRelationship(source, target) === RELATIONSHIP_ALLIES) {
+      return false;
+    }
+
+    const sourceObjectDef = this.resolveObjectDefByTemplateName(source.templateName);
+    if (!sourceObjectDef || !this.hasBehaviorModuleType(sourceObjectDef, 'CONVERTTOCARBOMBCRATECOLLIDE')) {
+      return false;
+    }
+
+    const targetKindOf = this.resolveEntityKindOfSet(target);
+    if (targetKindOf.has('AIRCRAFT') || targetKindOf.has('BOAT')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'CARBOMB')) {
+      return false;
+    }
+    if ((target.weaponSetFlagsMask & WEAPON_SET_FLAG_CARBOMB) !== 0) {
+      return false;
+    }
+    if (!this.hasCarBombWeaponSet(target)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private hasCarBombWeaponSet(target: MapEntity): boolean {
+    const carbombSet = this.selectBestSetByConditions(target.weaponTemplateSets, WEAPON_SET_FLAG_CARBOMB);
+    if (!carbombSet) {
+      return false;
+    }
+    if ((carbombSet.conditionsMask & WEAPON_SET_FLAG_CARBOMB) === 0) {
+      return false;
+    }
+    return carbombSet.weaponNamesBySlot.some((weaponName) => weaponName !== null);
+  }
+
+  private resolveSabotageBuildingEnterAction(source: MapEntity, target: MapEntity): void {
+    if (target.category !== 'building') {
+      return;
+    }
+    if (this.getTeamRelationship(source, target) !== RELATIONSHIP_ENEMIES) {
       return;
     }
 
-    if (action === 'hijackVehicle' || action === 'convertToCarBomb') {
-      if (target.category !== 'vehicle') {
-        return;
+    const sabotageProfile = this.resolveSabotageBuildingProfile(source, target);
+    if (!sabotageProfile) {
+      return;
+    }
+
+    if (sabotageProfile.disableHackedDurationFrames > 0) {
+      const disableUntilFrame = this.frameCounter + sabotageProfile.disableHackedDurationFrames;
+      this.setDisabledHackedStatusUntil(target, disableUntilFrame);
+      if (sabotageProfile.disableContainedHackers) {
+        for (const passengerId of this.collectContainedEntityIds(target.id)) {
+          const passenger = this.spawnedEntities.get(passengerId);
+          if (!passenger || passenger.destroyed) {
+            continue;
+          }
+          this.setDisabledHackedStatusUntil(passenger, disableUntilFrame);
+        }
       }
+    }
+
+    if (sabotageProfile.stealsCashAmount > 0) {
       const sourceSide = this.normalizeSide(source.side);
-      if (!sourceSide) {
+      const targetSide = this.normalizeSide(target.side);
+      if (sourceSide && targetSide) {
+        const withdrawn = this.withdrawSideCredits(targetSide, sabotageProfile.stealsCashAmount);
+        if (withdrawn > 0) {
+          this.depositSideCredits(sourceSide, withdrawn);
+        }
+      }
+    }
+
+    if (sabotageProfile.destroysTarget) {
+      this.markEntityDestroyed(target.id, source.id);
+    }
+
+    if (sabotageProfile.powerSabotageDurationFrames > 0) {
+      // Source parity: SabotagePowerPlantCrateCollide drives side-level brownout state.
+      // That player-energy outage timer is not represented in this simulation yet.
+    }
+
+    this.markEntityDestroyed(source.id, target.id);
+  }
+
+  private setDisabledHackedStatusUntil(entity: MapEntity, disableUntilFrame: number): void {
+    if (!Number.isFinite(disableUntilFrame)) {
+      return;
+    }
+    const resolvedDisableUntilFrame = Math.max(this.frameCounter + 1, Math.trunc(disableUntilFrame));
+    entity.objectStatusFlags.add('DISABLED_HACKED');
+    const previousDisableUntil = this.disabledHackedStatusByEntityId.get(entity.id) ?? 0;
+    if (resolvedDisableUntilFrame > previousDisableUntil) {
+      this.disabledHackedStatusByEntityId.set(entity.id, resolvedDisableUntilFrame);
+    }
+  }
+
+  private resolveSabotageBuildingProfile(source: MapEntity, target: MapEntity): SabotageBuildingProfile | null {
+    const sourceObjectDef = this.resolveObjectDefByTemplateName(source.templateName);
+    if (!sourceObjectDef) {
+      return null;
+    }
+    const targetKindOf = this.resolveEntityKindOfSet(target);
+
+    let profile: SabotageBuildingProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
         return;
       }
 
-      this.captureEntity(target.id, sourceSide);
-      if (action === 'convertToCarBomb') {
-        target.objectStatusFlags.add('CARBOMB');
-        // TODO(C&C source parity): convert-to-carbomb should route through full
-        // model-condition/special-power ownership instead of status token only.
-      }
-      this.markEntityDestroyed(source.id, target.id);
-      return;
-    }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        const sabotageDurationFrames = this.msToLogicFrames(readNumericField(block.fields, ['SabotageDuration']) ?? 0);
+        const sabotagePowerDurationFrames = this.msToLogicFrames(
+          readNumericField(block.fields, ['SabotagePowerDuration']) ?? 0,
+        );
+        const stealCashAmount = Math.max(0, Math.trunc(readNumericField(block.fields, ['StealCashAmount']) ?? 0));
 
-    if (action === 'sabotageBuilding' && target.category === 'building') {
-      target.objectStatusFlags.add('DISABLED_HACKED');
-      this.stopEntity(source.id);
-      // TODO(C&C source parity): sabotage duration/recovery should come from the
-      // owning special-power update module instead of persistent status.
+        if (
+          moduleType === 'SABOTAGEMILITARYFACTORYCRATECOLLIDE'
+          && this.matchesAnyKindOf(targetKindOf, ['FS_BARRACKS', 'FS_WARFACTORY', 'FS_AIRFIELD'])
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: sabotageDurationFrames,
+            disableContainedHackers: false,
+            stealsCashAmount: 0,
+            destroysTarget: false,
+            powerSabotageDurationFrames: 0,
+          };
+          return;
+        }
+
+        if (
+          moduleType === 'SABOTAGEINTERNETCENTERCRATECOLLIDE'
+          && targetKindOf.has('FS_INTERNET_CENTER')
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: sabotageDurationFrames,
+            disableContainedHackers: true,
+            stealsCashAmount: 0,
+            destroysTarget: false,
+            powerSabotageDurationFrames: 0,
+          };
+          return;
+        }
+
+        if (
+          moduleType === 'SABOTAGESUPPLYCENTERCRATECOLLIDE'
+          && targetKindOf.has('FS_SUPPLY_CENTER')
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: 0,
+            disableContainedHackers: false,
+            stealsCashAmount: stealCashAmount,
+            destroysTarget: false,
+            powerSabotageDurationFrames: 0,
+          };
+          return;
+        }
+
+        if (
+          moduleType === 'SABOTAGESUPPLYDROPZONECRATECOLLIDE'
+          && targetKindOf.has('FS_SUPPLY_DROPZONE')
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: 0,
+            disableContainedHackers: false,
+            stealsCashAmount: stealCashAmount,
+            destroysTarget: false,
+            powerSabotageDurationFrames: 0,
+          };
+          return;
+        }
+
+        if (
+          moduleType === 'SABOTAGEFAKEBUILDINGCRATECOLLIDE'
+          && targetKindOf.has('FS_FAKE')
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: 0,
+            disableContainedHackers: false,
+            stealsCashAmount: 0,
+            destroysTarget: true,
+            powerSabotageDurationFrames: 0,
+          };
+          return;
+        }
+
+        if (
+          moduleType === 'SABOTAGEPOWERPLANTCRATECOLLIDE'
+          && targetKindOf.has('FS_POWER')
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: 0,
+            disableContainedHackers: false,
+            stealsCashAmount: 0,
+            destroysTarget: false,
+            powerSabotageDurationFrames: sabotagePowerDurationFrames,
+          };
+          return;
+        }
+
+        if (
+          moduleType === 'SABOTAGECOMMANDCENTERCRATECOLLIDE'
+          && targetKindOf.has('COMMANDCENTER')
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: 0,
+            disableContainedHackers: false,
+            stealsCashAmount: 0,
+            destroysTarget: false,
+            powerSabotageDurationFrames: 0,
+          };
+          return;
+        }
+
+        if (
+          moduleType === 'SABOTAGESUPERWEAPONCRATECOLLIDE'
+          && targetKindOf.has('FS_SUPERWEAPON')
+        ) {
+          profile = {
+            moduleType,
+            disableHackedDurationFrames: 0,
+            disableContainedHackers: false,
+            stealsCashAmount: 0,
+            destroysTarget: false,
+            powerSabotageDurationFrames: 0,
+          };
+          return;
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of sourceObjectDef.blocks) {
+      visitBlock(block);
     }
+    return profile;
+  }
+
+  private matchesAnyKindOf(kindOf: ReadonlySet<string>, candidateKinds: readonly string[]): boolean {
+    for (const candidateKind of candidateKinds) {
+      if (kindOf.has(candidateKind)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private updatePendingCombatDropActions(): void {
@@ -5536,6 +6082,49 @@ export class GameLogicSubsystem implements Subsystem {
       this.depositSideCredits(entity.side, hackState.cashAmountPerCycle);
       const cycleDelay = Math.max(1, hackState.cashUpdateDelayFrames);
       hackState.nextCashFrame = this.frameCounter + cycleDelay;
+    }
+  }
+
+  private updateOvercharge(): void {
+    for (const [entityId, overchargeState] of this.overchargeStateByEntityId.entries()) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        this.overchargeStateByEntityId.delete(entityId);
+        continue;
+      }
+
+      const damageAmount = (entity.maxHealth * overchargeState.healthPercentToDrainPerSecond) / LOGIC_FRAME_RATE;
+      if (damageAmount > 0 && entity.canTakeDamage && entity.health > 0) {
+        this.applyWeaponDamageAmount(entity.id, entity, damageAmount, 'PENALTY');
+      }
+
+      const refreshed = this.spawnedEntities.get(entityId);
+      if (!refreshed || refreshed.destroyed) {
+        this.overchargeStateByEntityId.delete(entityId);
+        continue;
+      }
+
+      const minimumAllowedHealth = refreshed.maxHealth * overchargeState.notAllowedWhenHealthBelowPercent;
+      if (minimumAllowedHealth > 0 && refreshed.health < minimumAllowedHealth) {
+        this.disableOverchargeForEntity(refreshed);
+      }
+    }
+  }
+
+  private updateDisabledHackedStatuses(): void {
+    for (const [entityId, disableUntilFrame] of this.disabledHackedStatusByEntityId.entries()) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        this.disabledHackedStatusByEntityId.delete(entityId);
+        continue;
+      }
+
+      if (this.frameCounter < disableUntilFrame) {
+        continue;
+      }
+
+      entity.objectStatusFlags.delete('DISABLED_HACKED');
+      this.disabledHackedStatusByEntityId.delete(entityId);
     }
   }
 
@@ -5664,6 +6253,66 @@ export class GameLogicSubsystem implements Subsystem {
     return findObjectDefByName(registry, templateName) ?? null;
   }
 
+  private hasBehaviorModuleType(objectDef: ObjectDef, moduleTypeName: string): boolean {
+    const normalizedModuleType = moduleTypeName.trim().toUpperCase();
+    if (!normalizedModuleType) {
+      return false;
+    }
+
+    let found = false;
+    const visitBlock = (block: IniBlock): void => {
+      if (found) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === normalizedModuleType) {
+          found = true;
+          return;
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+    return found;
+  }
+
+  private resolveBeaconTemplateNameForSide(side: string): string | null {
+    const normalizedSide = this.normalizeSide(side);
+    const registry = this.iniDataRegistry;
+    if (!normalizedSide || !registry) {
+      return null;
+    }
+
+    const matchingFactions = Array.from(registry.factions.values())
+      .filter((faction) => this.normalizeSide(faction.side ?? '') === normalizedSide)
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const faction of matchingFactions) {
+      const beaconTemplateName = readStringField(faction.fields, ['BeaconName']);
+      if (beaconTemplateName && beaconTemplateName.toUpperCase() !== 'NONE') {
+        return beaconTemplateName;
+      }
+    }
+
+    return null;
+  }
+
+  private isBeaconEntity(entity: MapEntity): boolean {
+    const entitySide = this.normalizeSide(entity.side);
+    if (entitySide) {
+      const beaconTemplateName = this.resolveBeaconTemplateNameForSide(entitySide);
+      if (beaconTemplateName && this.areEquivalentTemplateNames(entity.templateName, beaconTemplateName)) {
+        return true;
+      }
+    }
+    return this.resolveEntityKindOfSet(entity).has('BEACON');
+  }
+
   private resolveGroundHeight(worldX: number, worldZ: number): number {
     if (!this.mapHeightmap) {
       return 0;
@@ -5679,6 +6328,19 @@ export class GameLogicSubsystem implements Subsystem {
       return (entity.pathDiameter * MAP_XY_FACTOR) / 2;
     }
     return MAP_XY_FACTOR / 2;
+  }
+
+  private clampWorldPositionToMapBounds(worldX: number, worldZ: number): [number, number] {
+    if (!this.mapHeightmap) {
+      return [worldX, worldZ];
+    }
+
+    const maxWorldX = Math.max(0, this.mapHeightmap.worldWidth - 0.0001);
+    const maxWorldZ = Math.max(0, this.mapHeightmap.worldDepth - 0.0001);
+    return [
+      clamp(worldX, 0, maxWorldX),
+      clamp(worldZ, 0, maxWorldZ),
+    ];
   }
 
   private resolveEntityInteractionDistance(source: MapEntity, target: MapEntity): number {
@@ -7976,7 +8638,9 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.cancelEntityCommandPathActions(entityId);
+    this.disableOverchargeForEntity(entity);
     this.sellingEntities.delete(entityId);
+    this.disabledHackedStatusByEntityId.delete(entityId);
     for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
       if (pendingAction.targetObjectId === entityId) {
         this.pendingEnterObjectActions.delete(sourceId);
@@ -8244,6 +8908,14 @@ export class GameLogicSubsystem implements Subsystem {
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
     this.pendingWeaponDamageEvents.length = 0;
+    for (const [entityId] of this.overchargeStateByEntityId) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (entity && !entity.destroyed) {
+        this.disableOverchargeForEntity(entity);
+      }
+    }
+    this.overchargeStateByEntityId.clear();
+    this.disabledHackedStatusByEntityId.clear();
     this.sellingEntities.clear();
     this.hackInternetStateByEntityId.clear();
     this.pendingEnterObjectActions.clear();
