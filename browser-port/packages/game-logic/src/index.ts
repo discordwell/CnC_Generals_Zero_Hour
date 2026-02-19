@@ -217,6 +217,7 @@ import {
   type GameLogicCommand,
   type GameLogicConfig,
   type GarrisonBuildingCommand,
+  type EnterTransportCommand,
   type HackInternetCommand,
   type RepairBuildingCommand,
   type IssueSpecialPowerCommand,
@@ -651,6 +652,8 @@ interface ContainProfile {
   portableStructureTemplateNames?: string[];
   /** Maximum number of garrisoned units. 0 = not garrisonable. */
   garrisonCapacity: number;
+  /** Source parity: ContainMax — maximum number of transport passengers. 0 = unlimited. */
+  transportCapacity: number;
 }
 
 /**
@@ -883,6 +886,8 @@ interface MapEntity {
   parkingSpaceProducerId: number | null;
   helixCarrierId: number | null;
   garrisonContainerId: number | null;
+  /** Source parity: m_containedBy for TransportContain/OverlordContain (Humvee, Chinook, etc.). */
+  transportContainerId: number | null;
   helixPortableRiderId: number | null;
   /** Source parity: SlavedUpdate — ID of the spawner/slaver that owns this slave. */
   slaverEntityId: number | null;
@@ -1095,6 +1100,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly disabledEmpStatusByEntityId = new Map<number, number>();
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
   private readonly pendingGarrisonActions = new Map<number, number>();
+  /** Source parity: TransportContain — passenger ID → transport ID for deferred enter. */
+  private readonly pendingTransportActions = new Map<number, number>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
   /** Source parity: BuildAssistant repair — dozer ID → target building ID. */
   private readonly pendingRepairActions = new Map<number, number>();
@@ -1465,6 +1472,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
     this.updatePendingGarrisonActions();
+    this.updatePendingTransportActions();
     this.updatePendingRepairActions();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
@@ -3013,6 +3021,7 @@ export class GameLogicSubsystem implements Subsystem {
       parkingSpaceProducerId: null,
       helixCarrierId: null,
       garrisonContainerId: null,
+      transportContainerId: null,
       helixPortableRiderId: null,
       slaverEntityId: null,
       spawnBehaviorState: this.extractSpawnBehaviorState(objectDef),
@@ -4232,6 +4241,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
+          transportCapacity: containMax,
         };
       } else if (moduleType === 'TRANSPORTCONTAIN') {
         profile = {
@@ -4239,6 +4249,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
+          transportCapacity: containMax,
         };
       } else if (moduleType === 'OVERLORDCONTAIN') {
         profile = {
@@ -4246,6 +4257,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
+          transportCapacity: containMax,
         };
       } else if (moduleType === 'HELIXCONTAIN') {
         // HELIXCONTAIN is a Zero Hour-specific container module name used by data INIs;
@@ -4256,6 +4268,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFireDefault: passengersAllowedToFire,
           portableStructureTemplateNames: payloadTemplateNames,
           garrisonCapacity: 0,
+          transportCapacity: containMax,
         };
       } else if (moduleType === 'GARRISONCONTAIN') {
         // GarrisonContain is OpenContain-derived in source but always returns TRUE from
@@ -4265,6 +4278,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire: true,
           passengersAllowedToFireDefault: true,
           garrisonCapacity: containMax > 0 ? containMax : 10,
+          transportCapacity: 0,
         };
       }
 
@@ -5837,6 +5851,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (carrier?.helixPortableRiderId === entity.id) return false;
       return true;
     }
+    if (entity.transportContainerId !== null) {
+      // Source parity: TransportContain/OverlordContain are enclosing by default.
+      // OPEN containers are not (passengers visible and attackable, e.g., Battle Bus).
+      const transport = this.spawnedEntities.get(entity.transportContainerId);
+      if (transport) return this.isEnclosingContainer(transport);
+    }
     return false;
   }
 
@@ -6685,6 +6705,9 @@ export class GameLogicSubsystem implements Subsystem {
       case 'repairBuilding':
         this.handleRepairBuildingCommand(command);
         return;
+      case 'enterTransport':
+        this.handleEnterTransportCommand(command);
+        return;
       default:
         return;
     }
@@ -6767,6 +6790,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'setRallyPoint':
       case 'garrisonBuilding':
       case 'repairBuilding':
+      case 'enterTransport':
         return true;
       default:
         return false;
@@ -7064,6 +7088,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingEnterObjectActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
     this.pendingGarrisonActions.delete(entityId);
+    this.pendingTransportActions.delete(entityId);
     this.pendingRepairActions.delete(entityId);
   }
 
@@ -7092,7 +7117,10 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const containerId = entity.parkingSpaceProducerId ?? entity.helixCarrierId;
+    const containerId = entity.parkingSpaceProducerId
+      ?? entity.helixCarrierId
+      ?? entity.garrisonContainerId
+      ?? entity.transportContainerId;
     if (containerId === null) {
       return;
     }
@@ -8030,6 +8058,124 @@ export class GameLogicSubsystem implements Subsystem {
       infantry.canMove = false;
       infantry.moving = false;
       this.pendingGarrisonActions.delete(infantryId);
+    }
+  }
+
+  /**
+   * Source parity: OpenContain::addToContain / TransportContain::addToContain —
+   * enter a transport-style container (Humvee, Chinook, Battle Bus, Overlord rider slots).
+   */
+  private handleEnterTransportCommand(command: EnterTransportCommand): void {
+    const passenger = this.spawnedEntities.get(command.entityId);
+    const transport = this.spawnedEntities.get(command.targetTransportId);
+    if (!passenger || !transport || passenger.destroyed || transport.destroyed) {
+      return;
+    }
+
+    // Source parity: OpenContain::addToContain — cannot enter if already contained.
+    if (this.isEntityContained(passenger)) return;
+
+    // Source parity: TransportContain::isValidContainerFor — same-side check.
+    if (this.normalizeSide(passenger.side) !== this.normalizeSide(transport.side)) return;
+
+    // Validate: target must have a transport-style contain profile.
+    const containProfile = transport.containProfile;
+    if (!containProfile) return;
+    if (containProfile.moduleType !== 'TRANSPORT'
+      && containProfile.moduleType !== 'OVERLORD'
+      && containProfile.moduleType !== 'HELIX'
+      && containProfile.moduleType !== 'OPEN') return;
+
+    // Source parity: TransportContain type checks — only infantry for TRANSPORT,
+    // infantry + portable structures for OVERLORD/HELIX.
+    const kindOf = this.resolveEntityKindOfSet(passenger);
+    if (containProfile.moduleType === 'TRANSPORT') {
+      if (!kindOf.has('INFANTRY') && !kindOf.has('VEHICLE')) return;
+    } else if (containProfile.moduleType === 'OVERLORD' || containProfile.moduleType === 'HELIX') {
+      if (!kindOf.has('INFANTRY') && !kindOf.has('PORTABLE_STRUCTURE')) return;
+    }
+
+    // Check capacity.
+    if (containProfile.transportCapacity > 0) {
+      const currentOccupants = this.collectContainedEntityIds(transport.id).length;
+      if (currentOccupants >= containProfile.transportCapacity) return;
+    }
+
+    // Move passenger to transport if not close enough.
+    const interactionDistance = this.resolveEntityInteractionDistance(passenger, transport);
+    const distance = Math.hypot(transport.x - passenger.x, transport.z - passenger.z);
+    if (distance > interactionDistance) {
+      this.issueMoveTo(passenger.id, transport.x, transport.z);
+      this.pendingTransportActions.set(passenger.id, transport.id);
+      return;
+    }
+
+    this.enterTransport(passenger, transport);
+  }
+
+  private enterTransport(passenger: MapEntity, transport: MapEntity): void {
+    this.cancelEntityCommandPathActions(passenger.id);
+    this.clearAttackTarget(passenger.id);
+    passenger.transportContainerId = transport.id;
+    passenger.x = transport.x;
+    passenger.z = transport.z;
+    passenger.y = transport.y;
+    passenger.moving = false;
+    // Source parity: Object::onContainedBy — set UNSELECTABLE and MASKED for enclosed containers.
+    passenger.objectStatusFlags.add('UNSELECTABLE');
+    if (this.isEnclosingContainer(transport)) {
+      passenger.objectStatusFlags.add('MASKED');
+    }
+    this.removeEntityFromSelection(passenger.id);
+    this.pendingTransportActions.delete(passenger.id);
+  }
+
+  /**
+   * Source parity: Contain::isEnclosingContainerFor — TRANSPORT and OVERLORD are enclosed
+   * (passengers hidden), OPEN containers are not.
+   */
+  private isEnclosingContainer(container: MapEntity): boolean {
+    const profile = container.containProfile;
+    if (!profile) return false;
+    return profile.moduleType === 'TRANSPORT'
+      || profile.moduleType === 'OVERLORD'
+      || profile.moduleType === 'HELIX';
+  }
+
+  private updatePendingTransportActions(): void {
+    for (const [passengerId, transportId] of this.pendingTransportActions.entries()) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      const transport = this.spawnedEntities.get(transportId);
+      if (!passenger || !transport || passenger.destroyed || transport.destroyed) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+
+      if (this.isEntityContained(passenger)) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+
+      const interactionDistance = this.resolveEntityInteractionDistance(passenger, transport);
+      const distance = Math.hypot(transport.x - passenger.x, transport.z - passenger.z);
+      if (distance > interactionDistance) continue;
+
+      // Close enough — check capacity again and enter.
+      const containProfile = transport.containProfile;
+      if (!containProfile) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+
+      if (containProfile.transportCapacity > 0) {
+        const currentOccupants = this.collectContainedEntityIds(transport.id).length;
+        if (currentOccupants >= containProfile.transportCapacity) {
+          this.pendingTransportActions.delete(passengerId);
+          continue;
+        }
+      }
+
+      this.enterTransport(passenger, transport);
     }
   }
 
@@ -9478,7 +9624,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private isEntityContained(entity: MapEntity): boolean {
-    return entity.parkingSpaceProducerId !== null || entity.helixCarrierId !== null || entity.garrisonContainerId !== null;
+    return entity.parkingSpaceProducerId !== null
+      || entity.helixCarrierId !== null
+      || entity.garrisonContainerId !== null
+      || entity.transportContainerId !== null;
   }
 
   private collectContainedEntityIds(containerId: number): number[] {
@@ -9498,6 +9647,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.parkingSpaceProducerId === containerId
         || entity.helixCarrierId === containerId
         || entity.garrisonContainerId === containerId
+        || entity.transportContainerId === containerId
       ) {
         entityIds.add(entity.id);
       }
@@ -9541,6 +9691,14 @@ export class GameLogicSubsystem implements Subsystem {
       entity.garrisonContainerId = null;
       entity.canMove = true;
     }
+
+    if (entity.transportContainerId !== null) {
+      entity.transportContainerId = null;
+    }
+
+    // Source parity: Object::onRemovedFrom — clear MASKED and UNSELECTABLE on release.
+    entity.objectStatusFlags.delete('MASKED');
+    entity.objectStatusFlags.delete('UNSELECTABLE');
   }
 
   private evacuateContainedEntities(
@@ -11939,20 +12097,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveProjectileLauncherContainer(projectileLauncher: MapEntity): MapEntity | null {
-    const containerId = projectileLauncher.parkingSpaceProducerId;
-    if (containerId === null) {
-      return null;
-    }
-
-    const container = this.spawnedEntities.get(containerId);
-    if (!container || container.destroyed) {
-      return null;
-    }
-
-    // Source parity subset: map getContainedBy() to parking producer containment.
-    // TODO(C&C source parity): extend to full transport/building containment once
-    // generic contain/transport behavior state exists in the simulation.
-    return container;
+    // Source parity: Object::getContainedBy() — single containment pointer.
+    // In our model containment is split across multiple ID fields; delegate to the
+    // unified resolver.
+    return this.resolveEntityContainingObject(projectileLauncher);
   }
 
   private resolveEntityKindOfSet(entity: MapEntity): Set<string> {
@@ -11987,9 +12135,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveEntityContainingObject(entity: MapEntity): MapEntity | null {
-    // Source parity subset: map getContainedBy()/contain module checks onto the
-    // currently represented production/parking container relation.
-    return this.resolveProjectileLauncherContainer(entity);
+    // Source parity: Object::getContainedBy() — single m_containedBy pointer.
+    // In our model, containment is tracked across multiple ID fields for different
+    // container types. At most one will be non-null at any time (mutual exclusion).
+    const containerId = entity.parkingSpaceProducerId
+      ?? entity.helixCarrierId
+      ?? entity.garrisonContainerId
+      ?? entity.transportContainerId;
+
+    if (containerId === null) {
+      return null;
+    }
+
+    const container = this.spawnedEntities.get(containerId);
+    if (!container || container.destroyed) {
+      return null;
+    }
+
+    return container;
   }
 
   private isPassengerAllowedToFireFromContainingObject(
@@ -12357,14 +12520,19 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingGarrisonActions.delete(sourceId);
       }
     }
+    for (const [sourceId, targetTransportId] of this.pendingTransportActions.entries()) {
+      if (targetTransportId === entityId) {
+        this.pendingTransportActions.delete(sourceId);
+      }
+    }
     for (const pendingAction of this.pendingCombatDropActions.values()) {
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
       }
     }
 
-    // Source parity: GarrisonContain::onDie — release garrisoned infantry on building death.
-    // Passengers are ejected (and can be killed by separate damage if desired).
+    // Source parity: Contain::onDie — release contained entities on container death.
+    // Garrison, transport, helix, and overlord passengers are ejected at the container position.
     if (entity.containProfile) {
       const passengerIds = this.collectContainedEntityIds(entityId);
       for (const passengerId of passengerIds) {
@@ -12792,6 +12960,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.garrisonContainerId !== null) {
         entity.garrisonContainerId = null;
       }
+      if (entity.transportContainerId !== null) {
+        entity.transportContainerId = null;
+      }
       this.spawnedEntities.delete(entityId);
       this.removeEntityFromSelection(entityId);
     }
@@ -12953,6 +13124,21 @@ export class GameLogicSubsystem implements Subsystem {
       entity.rotationY = Math.atan2(dz, dx) + Math.PI / 2;
       this.updatePathfindPosCell(entity);
     }
+
+    // Source parity: contained entities move with their container.
+    // Sync passenger positions to their container's current position.
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const containerId = entity.transportContainerId
+        ?? entity.helixCarrierId
+        ?? entity.garrisonContainerId;
+      if (containerId === null) continue;
+      const container = this.spawnedEntities.get(containerId);
+      if (!container || container.destroyed) continue;
+      entity.x = container.x;
+      entity.z = container.z;
+      entity.y = container.y;
+    }
   }
 
   private clearEntitySelectionState(): void {
@@ -13042,6 +13228,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingEnterObjectActions.clear();
     this.pendingCombatDropActions.clear();
     this.pendingGarrisonActions.clear();
+    this.pendingTransportActions.clear();
     this.pendingRepairActions.clear();
     this.supplyWarehouseStates.clear();
     this.supplyTruckStates.clear();

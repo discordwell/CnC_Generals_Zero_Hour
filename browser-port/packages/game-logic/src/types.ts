@@ -383,6 +383,12 @@ export interface RepairBuildingCommand {
   targetBuildingId: number;
 }
 
+export interface EnterTransportCommand {
+  type: 'enterTransport';
+  entityId: number;
+  targetTransportId: number;
+}
+
 export type GameLogicCommand =
   | SelectByIdCommand
   | SelectEntitySetCommand
@@ -426,6 +432,7 @@ export type GameLogicCommand =
   | CancelDozerConstructionCommand
   | GarrisonBuildingCommand
   | RepairBuildingCommand
+  | EnterTransportCommand
   | SwitchWeaponCommand;
 
 export interface SelectedEntityInfo {
