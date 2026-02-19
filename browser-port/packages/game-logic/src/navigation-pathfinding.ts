@@ -76,6 +76,7 @@ export interface NavigationEntityLike {
   locomotorDownhillOnly?: boolean;
   attackNeedsLineOfSight: boolean;
   isImmobile: boolean;
+  noCollisions: boolean;
 }
 
 export interface NavigationPathfindingContext<TEntity extends NavigationEntityLike> {
@@ -937,6 +938,10 @@ function buildMovementOccupancyGrid<TEntity extends NavigationEntityLike>(
 
   for (const entity of context.spawnedEntities.values()) {
     if (!entity.blocksPath && entity.pathDiameter <= 0 && entity.obstacleFootprint <= 0) {
+      continue;
+    }
+    // Source parity: NO_COLLISIONS status disables pathfinding obstacle presence.
+    if (entity.noCollisions) {
       continue;
     }
 

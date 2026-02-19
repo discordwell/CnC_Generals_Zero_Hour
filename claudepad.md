@@ -1,5 +1,14 @@
 # Session Summaries
 
+## 2026-02-19T05:30Z — OCL Pipeline + EVA Announcer + Code Review Fixes
+- Completed EVA announcer event system (#47): buffer, cooldowns, 11 event types wired
+- Fixed `powerStatesBySide` → `sidePowerBonus` (wrong field name from prior session)
+- Wired updateEva() into main update loop
+- Added EVA triggers: LOW_POWER, INSUFFICIENT_FUNDS, BUILDING_LOST, UNIT_LOST, BASE_UNDER_ATTACK, CONSTRUCTION_COMPLETE, UNIT_READY, UPGRADE_COMPLETE, SUPERWEAPON_READY/DETECTED/LAUNCHED
+- Code review fixes: Math.random()→gameRandom for determinism, Offset as 3-component Coord3D, block type guard on extractDeathOCLNames
+- Commits: 81437bf (OCL+EVA), fcfeed5 (review fixes)
+- All 1009 tests pass, clean declaration build
+
 ## 2026-02-14T15:00Z — Stage 2 Asset Pipeline Implementation
 - Merged `claude/plan-generals-browser-game-czKRy` into main (fast-forward)
 - Fixed TS build errors: matrix4.ts noUncheckedIndexedAccess (added @ts-nocheck), engine/index.ts isolatedModules export type

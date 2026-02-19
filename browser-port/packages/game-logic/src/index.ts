@@ -779,6 +779,8 @@ interface MapEntity {
   isUnmanned: boolean;
   attackNeedsLineOfSight: boolean;
   isImmobile: boolean;
+  noCollisions: boolean;
+  isIndestructible: boolean;
   canTakeDamage: boolean;
   maxHealth: number;
   health: number;
@@ -2880,6 +2882,8 @@ export class GameLogicSubsystem implements Subsystem {
       isUnmanned: combatProfile.isUnmanned,
       attackNeedsLineOfSight,
       isImmobile,
+      noCollisions: false,
+      isIndestructible: false,
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
       locomotorSets: locomotorSetProfiles,
       completedUpgrades: new Set<string>(),
@@ -5158,8 +5162,11 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // TODO(C&C source parity): map ObjectStatus bits to their full simulation side-effects
-    // (disabled/under-construction/targetability/pathing) instead of tracking names only.
+    // Always sync derived fields when status-affecting modules are evaluated, even if
+    // all flags were already in the desired state, to keep cached booleans consistent.
+    if (module.statusToSet.size > 0 || module.statusToClear.size > 0) {
+      this.syncDerivedStatusFields(entity);
+    }
     return changed || module.statusToSet.size > 0 || module.statusToClear.size > 0;
   }
 
@@ -5226,6 +5233,8 @@ export class GameLogicSubsystem implements Subsystem {
       }
       this.applyStatusBitsUpgrade(entity, module);
     }
+    // Always sync derived fields after bulk status mutations even if no reapply loop ran.
+    this.syncDerivedStatusFields(entity);
   }
 
   private isObjectDisabledForUpgradeSideEffects(entity: MapEntity): boolean {
@@ -5308,6 +5317,14 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return entity.objectStatusFlags.has(normalizedStatusName);
+  }
+
+  /**
+   * Source parity: sync cached boolean fields derived from ObjectStatus flags.
+   * Called whenever objectStatusFlags change so pathfinding/targeting stay consistent.
+   */
+  private syncDerivedStatusFields(entity: MapEntity): void {
+    entity.noCollisions = entity.objectStatusFlags.has('NO_COLLISIONS');
   }
 
   private canEntityAttackFromStatus(entity: MapEntity): boolean {
@@ -6059,7 +6076,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'select': {
         const picked = this.spawnedEntities.get(command.entityId);
-        if (!picked) return;
+        if (!picked || picked.destroyed) return;
+        // Source parity: Object::isSelectable — UNSELECTABLE or MASKED status prevents player selection.
+        if (this.entityHasObjectStatus(picked, 'UNSELECTABLE') || this.entityHasObjectStatus(picked, 'MASKED')) return;
         this.selectedEntityIds = [command.entityId];
         this.selectedEntityId = command.entityId;
         this.updateSelectionHighlight();
@@ -7457,6 +7476,7 @@ export class GameLogicSubsystem implements Subsystem {
       || this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')
       || this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
       || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
+      || this.entityHasObjectStatus(entity, 'DISABLED_HELD')
       || this.entityHasObjectStatus(entity, 'SCRIPT_DISABLED')
       || this.entityHasObjectStatus(entity, 'SCRIPT_UNPOWERED')
     );
@@ -10166,6 +10186,10 @@ export class GameLogicSubsystem implements Subsystem {
   ): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.canMove) return;
+    // Source parity: Object::isMobile — KINDOF_IMMOBILE or DISABLED_HELD blocks movement.
+    if (entity.isImmobile || this.entityHasObjectStatus(entity, 'DISABLED_HELD')) {
+      return;
+    }
 
     this.updatePathfindPosCell(entity);
     const path = this.findPath(entity.x, entity.z, targetX, targetZ, entity, attackDistance);
@@ -11616,6 +11640,10 @@ export class GameLogicSubsystem implements Subsystem {
     if (!target.canTakeDamage || target.destroyed || !Number.isFinite(amount) || amount <= 0) {
       return;
     }
+    // Source parity: ActiveBody::attemptDamage — indestructible bodies ignore all damage.
+    if (target.isIndestructible) {
+      return;
+    }
 
     const adjustedDamage = this.adjustDamageByArmorSet(target, amount, damageType);
     if (adjustedDamage <= 0) {
@@ -12366,6 +12394,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
       const entity = this.spawnedEntities.get(candidateId);
       if (!entity || entity.destroyed) {
+        continue;
+      }
+      // Source parity: Object::isSelectable — UNSELECTABLE or MASKED status prevents player selection.
+      if (this.entityHasObjectStatus(entity, 'UNSELECTABLE') || this.entityHasObjectStatus(entity, 'MASKED')) {
         continue;
       }
       if (seen.has(candidateId)) {
