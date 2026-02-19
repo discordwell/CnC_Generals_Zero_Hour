@@ -4215,8 +4215,8 @@ export class GameLogicSubsystem implements Subsystem {
           };
         }
       }
-      if (block.children) {
-        for (const child of block.children) visitBlock(child);
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
       }
     };
     if (objectDef.blocks) {
@@ -4245,8 +4245,8 @@ export class GameLogicSubsystem implements Subsystem {
           };
         }
       }
-      if (block.children) {
-        for (const child of block.children) visitBlock(child);
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
       }
     };
     if (objectDef.blocks) {
@@ -8328,10 +8328,6 @@ export class GameLogicSubsystem implements Subsystem {
     currentFrame: number;
     isReady: boolean;
   }> {
-    const SUPERWEAPON_POWER_PATTERNS = [
-      'SUPERWEAPON', 'PARTICLE_CANNON', 'SCUD_STORM', 'NUCLEAR_MISSILE',
-      'NUKE', 'PARTICLECANNON', 'SCUDSTORM',
-    ];
     const results: Array<{
       side: string;
       entityId: number;
