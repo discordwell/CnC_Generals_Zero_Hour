@@ -8092,4 +8092,81 @@ describe('mine detonation', () => {
     const impactEvents = events.filter(e => e.type === 'WEAPON_IMPACT');
     expect(impactEvents.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('sympathetically detonates when mine is shot by external weapon', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    // Mine with 3 charges and an attacker that can shoot the mine.
+    const mineDef = makeObjectDef('TestMine', 'China', ['MINE', 'IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+      makeBlock('Behavior', 'MinefieldBehavior ModuleTag_Minefield', {
+        DetonationWeapon: 'MineDetonationWeapon',
+        NumVirtualMines: 3,
+      }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+    });
+
+    const attackerDef = makeObjectDef('MineShooter', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'ShooterGun'] }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 3,
+      GeometryMinorRadius: 3,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [mineDef, attackerDef],
+      weapons: [
+        makeWeaponDef('ShooterGun', {
+          AttackRange: 200,
+          PrimaryDamage: 150,
+          DelayBetweenShots: 100,
+        }),
+        makeWeaponDef('MineDetonationWeapon', {
+          PrimaryDamage: 40,
+          PrimaryDamageRadius: 10,
+          DamageType: 'EXPLOSION',
+        }),
+      ],
+    }));
+
+    // Place mine at (10,10) and attacker FAR away (50,10) — outside mine geometry.
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('MineShooter', 50, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Command attacker to shoot the mine.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Mine should exist before attack.
+    const mineBefore = logic.getEntityState(1);
+    expect(mineBefore).not.toBeNull();
+    expect(mineBefore!.alive).toBe(true);
+
+    // Run enough frames for the attacker to fire and deal 150 damage to a 300hp mine.
+    // That should reduce health to 150/300 = 50%, expecting ceil(3*0.5) = 2 mines.
+    // Since mine had 3 charges, it needs to detonate 1 charge sympathetically.
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After 150 damage to a 300hp 3-charge mine, at least 1 sympathetic detonation
+    // should have occurred. Check if visual events include detonation impacts.
+    const events = logic.drainVisualEvents();
+    const mineDetonations = events.filter(e =>
+      e.type === 'WEAPON_IMPACT' && e.sourceEntityId === 1,
+    );
+    // Should have at least one sympathetic detonation from the mine.
+    expect(mineDetonations.length).toBeGreaterThanOrEqual(1);
+  });
 });

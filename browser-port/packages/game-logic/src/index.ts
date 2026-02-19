@@ -9968,6 +9968,58 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: MinefieldBehavior::onDamage (MinefieldBehavior.cpp line 453).
+   * Recalculates virtual mines from health ratio. When mines > expected, detonate
+   * sympathetically. When mines < expected (healing), increase mine count.
+   */
+  private mineOnDamage(mine: MapEntity, sourceEntityId: number | null, damageType: string): void {
+    const prof = mine.minefieldProfile!;
+    if (prof.numVirtualMines <= 0) return;
+
+    // Source parity: loop until virtual mines match health-proportional expected count.
+    for (let iterations = 0; iterations < prof.numVirtualMines + 1; iterations++) {
+      const ratio = mine.health / mine.maxHealth;
+      const virtualMinesExpectedF = prof.numVirtualMines * ratio;
+      // Source parity: healing rounds down, damage rounds up.
+      const virtualMinesExpected = Math.min(
+        prof.numVirtualMines,
+        damageType === 'HEALING'
+          ? Math.floor(virtualMinesExpectedF)
+          : Math.ceil(virtualMinesExpectedF),
+      );
+
+      if (mine.mineVirtualMinesRemaining < virtualMinesExpected) {
+        // Healing: increase virtual mine count.
+        mine.mineVirtualMinesRemaining = virtualMinesExpected;
+      } else if (mine.mineVirtualMinesRemaining > virtualMinesExpected) {
+        if (mine.mineDraining
+            && sourceEntityId !== null && sourceEntityId === mine.id
+            && damageType === 'UNRESISTABLE') {
+          // Source parity: self-drain just removes a mine without detonation.
+          mine.mineVirtualMinesRemaining--;
+        } else {
+          // Sympathetic detonation at the mine's own position.
+          this.detonateMineOnce(mine, mine.x, mine.z);
+        }
+      } else {
+        break;
+      }
+
+      if (mine.destroyed) break;
+    }
+
+    // Source parity: MASKED/regen health floor after recalculation.
+    if (mine.mineVirtualMinesRemaining <= 0) {
+      if (mine.mineRegenerates && mine.health < 0.1) {
+        mine.health = 0.1;
+      }
+      mine.objectStatusFlags.add('MASKED');
+    } else {
+      mine.objectStatusFlags.delete('MASKED');
+    }
+  }
+
+  /**
    * Fire a temporary weapon at a world position (source parity: createAndFireTempWeapon).
    * Used by mine detonation to fire the DetonationWeapon.
    */
@@ -14208,7 +14260,13 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyFireDamageToEntity(target, adjustedDamage);
     }
 
-    if (target.health <= 0) {
+    // Source parity: MinefieldBehavior::onDamage — recalculate virtual mines from health ratio.
+    // Shooting a mine from outside causes sympathetic detonations.
+    if (target.minefieldProfile && !target.mineIgnoreDamage) {
+      this.mineOnDamage(target, sourceEntityId, normalizedDamageType);
+    }
+
+    if (target.health <= 0 && !target.destroyed) {
       this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
   }
