@@ -432,6 +432,87 @@ const SOURCE_DAMAGE_TYPE_NAMES: readonly string[] = [
 ];
 const SOURCE_DAMAGE_TYPE_NAME_SET = new Set<string>(SOURCE_DAMAGE_TYPE_NAMES);
 
+// ---------------------------------------------------------------------------
+// Source parity: BezierSegment — cubic Bezier evaluation and arc length
+// approximation for DumbProjectileBehavior flight paths.
+// ---------------------------------------------------------------------------
+
+/** Evaluate a cubic Bezier curve at parameter t (0..1). */
+function evaluateCubicBezier(t: number, p0: number, p1: number, p2: number, p3: number): number {
+  const oneMinusT = 1 - t;
+  const oneMinusT2 = oneMinusT * oneMinusT;
+  const t2 = t * t;
+  return (
+    oneMinusT2 * oneMinusT * p0 +
+    3 * oneMinusT2 * t * p1 +
+    3 * oneMinusT * t2 * p2 +
+    t2 * t * p3
+  );
+}
+
+/**
+ * Source parity: BezierSegment::getApproximateLength() — recursive subdivision
+ * arc length approximation. Compares chord length vs control polygon length;
+ * subdivides at midpoint when the difference exceeds tolerance.
+ */
+function approximateCubicBezierArcLength3D(
+  p0x: number, p0y: number, p0z: number,
+  p1x: number, p1y: number, p1z: number,
+  p2x: number, p2y: number, p2z: number,
+  p3x: number, p3y: number, p3z: number,
+  tolerance: number,
+  depth: number,
+): number {
+  const chordLength = Math.hypot(p3x - p0x, p3y - p0y, p3z - p0z);
+  const polyLength =
+    Math.hypot(p1x - p0x, p1y - p0y, p1z - p0z) +
+    Math.hypot(p2x - p1x, p2y - p1y, p2z - p1z) +
+    Math.hypot(p3x - p2x, p3y - p2y, p3z - p2z);
+
+  if (depth > 10 || (polyLength - chordLength) <= tolerance) {
+    return (chordLength + polyLength) / 2;
+  }
+
+  // de Casteljau subdivision at t=0.5
+  const m01x = (p0x + p1x) * 0.5, m01y = (p0y + p1y) * 0.5, m01z = (p0z + p1z) * 0.5;
+  const m12x = (p1x + p2x) * 0.5, m12y = (p1y + p2y) * 0.5, m12z = (p1z + p2z) * 0.5;
+  const m23x = (p2x + p3x) * 0.5, m23y = (p2y + p3y) * 0.5, m23z = (p2z + p3z) * 0.5;
+  const m012x = (m01x + m12x) * 0.5, m012y = (m01y + m12y) * 0.5, m012z = (m01z + m12z) * 0.5;
+  const m123x = (m12x + m23x) * 0.5, m123y = (m12y + m23y) * 0.5, m123z = (m12z + m23z) * 0.5;
+  const mx = (m012x + m123x) * 0.5, my = (m012y + m123y) * 0.5, mz = (m012z + m123z) * 0.5;
+
+  return (
+    approximateCubicBezierArcLength3D(p0x, p0y, p0z, m01x, m01y, m01z, m012x, m012y, m012z, mx, my, mz, tolerance, depth + 1) +
+    approximateCubicBezierArcLength3D(mx, my, mz, m123x, m123y, m123z, m23x, m23y, m23z, p3x, p3y, p3z, tolerance, depth + 1)
+  );
+}
+
+/**
+ * Source parity: PartitionManager::estimateTerrainExtremesAlongLine() — sample
+ * terrain height at N points along a line segment to find the highest point.
+ */
+function estimateHighestTerrainAlongLine(
+  heightmap: HeightmapGrid,
+  startX: number, startZ: number,
+  endX: number, endZ: number,
+  numSamples: number,
+): number {
+  let maxHeight = heightmap.getInterpolatedHeight(startX, startZ);
+  maxHeight = Math.max(maxHeight, heightmap.getInterpolatedHeight(endX, endZ));
+  for (let i = 1; i < numSamples - 1; i++) {
+    const t = i / (numSamples - 1);
+    const x = startX + (endX - startX) * t;
+    const z = startZ + (endZ - startZ) * t;
+    maxHeight = Math.max(maxHeight, heightmap.getInterpolatedHeight(x, z));
+  }
+  return maxHeight;
+}
+
+/** Number of samples used for terrain height estimation along projectile paths. */
+const BEZIER_TERRAIN_SAMPLE_COUNT = 10;
+/** Tolerance for Bezier arc length approximation. */
+const BEZIER_ARC_LENGTH_TOLERANCE = 1.0;
+
 interface LocomotorSetProfile {
   surfaceMask: number;
   downhillOnly: boolean;
@@ -503,6 +584,14 @@ interface AttackWeaponProfile {
   continuousFireFastRateOfFire: number;
   /** Source parity: LaserName — non-null if this weapon spawns a laser beam. */
   laserName: string | null;
+  /**
+   * Source parity: DumbProjectileBehavior Bezier arc parameters.
+   * Parsed from the projectile object template's DumbProjectileBehavior module.
+   */
+  projectileArcFirstHeight: number;
+  projectileArcSecondHeight: number;
+  projectileArcFirstPercentIndent: number;
+  projectileArcSecondPercentIndent: number;
 }
 
 interface WeaponTemplateSetProfile {
@@ -773,6 +862,19 @@ interface PendingWeaponDamageEvent {
   projectileVisualId: number;
   /** Cached visual type classification. */
   cachedVisualType: import('./types.js').ProjectileVisualType;
+  /** Target Y height for Bezier arc endpoint. */
+  impactY: number;
+  /**
+   * Source parity: DumbProjectileBehavior cubic Bezier arc control point Y heights.
+   * P0=(sourceX,sourceY,sourceZ), P3=(impactX,impactY,impactZ).
+   * P1 and P2 are placed along the line at firstPercentIndent/secondPercentIndent.
+   */
+  bezierP1Y: number;
+  bezierP2Y: number;
+  bezierFirstPercentIndent: number;
+  bezierSecondPercentIndent: number;
+  /** Whether this projectile uses a Bezier arc (has DumbProjectileBehavior data). */
+  hasBezierArc: boolean;
 }
 
 interface SellingEntityState {
@@ -2107,16 +2209,36 @@ export class GameLogicSubsystem implements Subsystem {
       const elapsed = this.frameCounter - event.launchFrame;
       const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
 
-      // Linear interpolation for x/z.
-      const x = event.sourceX + (event.impactX - event.sourceX) * progress;
-      const z = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+      let x: number, y: number, z: number;
 
-      // Parabolic arc for y: peak at midpoint.
-      const baseY = event.sourceY;
-      const arcHeight = Math.max(5, Math.hypot(event.impactX - event.sourceX, event.impactZ - event.sourceZ) * 0.15);
-      const arcY = baseY + arcHeight * 4 * progress * (1 - progress);
-      const terrainY = heightmap ? heightmap.getInterpolatedHeight(x, z) : 0;
-      const y = Math.max(terrainY + 1, arcY);
+      if (event.hasBezierArc) {
+        // Source parity: DumbProjectileBehavior cubic Bezier flight path evaluation.
+        // P0 = (sourceX, sourceY, sourceZ), P3 = (impactX, impactY, impactZ).
+        // P1 and P2 placed along the 3D line at firstPercentIndent/secondPercentIndent.
+        const p0x = event.sourceX, p0y = event.sourceY, p0z = event.sourceZ;
+        const p3x = event.impactX, p3y = event.impactY, p3z = event.impactZ;
+        const dx = p3x - p0x, dy = p3y - p0y, dz = p3z - p0z;
+        const dist = Math.hypot(dx, dy, dz);
+        const nx = dist > 0 ? dx / dist : 0;
+        const nz = dist > 0 ? dz / dist : 0;
+        const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
+        const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
+        const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
+        const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
+
+        x = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
+        y = evaluateCubicBezier(progress, p0y, event.bezierP1Y, event.bezierP2Y, p3y);
+        z = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+      } else {
+        // Fallback: linear XZ + parabolic Y arc for projectiles without Bezier data.
+        x = event.sourceX + (event.impactX - event.sourceX) * progress;
+        z = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+        const baseY = event.sourceY;
+        const arcHeight = Math.max(5, Math.hypot(event.impactX - event.sourceX, event.impactZ - event.sourceZ) * 0.15);
+        const arcY = baseY + arcHeight * 4 * progress * (1 - progress);
+        const terrainY = heightmap ? heightmap.getInterpolatedHeight(x, z) : 0;
+        y = Math.max(terrainY + 1, arcY);
+      }
 
       // Heading from source to target.
       const heading = Math.atan2(event.impactX - event.sourceX, event.impactZ - event.sourceZ);
@@ -3672,6 +3794,12 @@ export class GameLogicSubsystem implements Subsystem {
     const laserNameRaw = readStringField(weaponDef.fields, ['LaserName'])?.trim() ?? '';
     const laserName = laserNameRaw && laserNameRaw.toUpperCase() !== 'NONE' ? laserNameRaw : null;
 
+    // Source parity: DumbProjectileBehavior arc parameters — parsed from the projectile
+    // object template referenced by ProjectileObject on this weapon.
+    const bezierArc = projectileObjectName
+      ? this.extractDumbProjectileArcParams(projectileObjectName)
+      : null;
+
     if (attackRange <= 0 || primaryDamage <= 0) {
       return null;
     }
@@ -3713,7 +3841,65 @@ export class GameLogicSubsystem implements Subsystem {
       continuousFireMeanRateOfFire,
       continuousFireFastRateOfFire,
       laserName,
+      projectileArcFirstHeight: bezierArc?.firstHeight ?? 0,
+      projectileArcSecondHeight: bezierArc?.secondHeight ?? 0,
+      projectileArcFirstPercentIndent: bezierArc?.firstPercentIndent ?? 0,
+      projectileArcSecondPercentIndent: bezierArc?.secondPercentIndent ?? 0,
     };
+  }
+
+  /**
+   * Source parity: DumbProjectileBehaviorModuleData — extract Bezier arc parameters
+   * from the projectile object template's DumbProjectileBehavior module.
+   */
+  private extractDumbProjectileArcParams(projectileObjectName: string): {
+    firstHeight: number;
+    secondHeight: number;
+    firstPercentIndent: number;
+    secondPercentIndent: number;
+  } | null {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return null;
+    }
+    const projectileDef = findObjectDefByName(registry, projectileObjectName);
+    if (!projectileDef) {
+      return null;
+    }
+
+    let firstHeight = 0;
+    let secondHeight = 0;
+    let firstPercentIndent = 0;
+    let secondPercentIndent = 0;
+    let found = false;
+
+    const visitBlock = (block: IniBlock): void => {
+      if (found) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DUMBPROJECTILEBEHAVIOR') {
+          found = true;
+          firstHeight = readNumericField(block.fields, ['FirstHeight']) ?? 0;
+          secondHeight = readNumericField(block.fields, ['SecondHeight']) ?? 0;
+          // Source parity: INI::parsePercentToReal stores percent as 0..1 fraction.
+          // The browser INI parser already divides percent-suffixed values by 100.
+          firstPercentIndent = readNumericField(block.fields, ['FirstPercentIndent']) ?? 0;
+          secondPercentIndent = readNumericField(block.fields, ['SecondPercentIndent']) ?? 0;
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of projectileDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (!found) {
+      return null;
+    }
+    return { firstHeight, secondHeight, firstPercentIndent, secondPercentIndent };
   }
 
   /**
@@ -11966,22 +12152,78 @@ export class GameLogicSubsystem implements Subsystem {
       // distance / getWeaponSpeed().
     }
 
+    const impactX = weapon.damageDealtAtSelfPosition ? sourceX : aimX;
+    const impactZ = weapon.damageDealtAtSelfPosition ? sourceZ : aimZ;
+    const heightmap = this.mapHeightmap;
+    const impactY = heightmap ? heightmap.getInterpolatedHeight(impactX, impactZ) : 0;
+
+    // Source parity: DumbProjectileBehavior::calcFlightPath() — compute cubic Bezier
+    // arc control points and use arc length for travel time when arc params are present.
+    let hasBezierArc = false;
+    let bezierP1Y = 0;
+    let bezierP2Y = 0;
+    let bezierFirstPercentIndent = 0;
+    let bezierSecondPercentIndent = 0;
+
+    if (
+      delivery === 'PROJECTILE' &&
+      (weapon.projectileArcFirstHeight !== 0 || weapon.projectileArcSecondHeight !== 0 ||
+       weapon.projectileArcFirstPercentIndent !== 0 || weapon.projectileArcSecondPercentIndent !== 0)
+    ) {
+      hasBezierArc = true;
+      bezierFirstPercentIndent = weapon.projectileArcFirstPercentIndent;
+      bezierSecondPercentIndent = weapon.projectileArcSecondPercentIndent;
+
+      // Source parity: highestInterveningTerrain = max(terrain along line, P0.z, P3.z)
+      let highestTerrain = Math.max(attacker.y, impactY);
+      if (heightmap) {
+        const terrainMax = estimateHighestTerrainAlongLine(
+          heightmap, sourceX, sourceZ, impactX, impactZ, BEZIER_TERRAIN_SAMPLE_COUNT,
+        );
+        highestTerrain = Math.max(highestTerrain, terrainMax);
+      }
+      bezierP1Y = highestTerrain + weapon.projectileArcFirstHeight;
+      bezierP2Y = highestTerrain + weapon.projectileArcSecondHeight;
+    }
+
     const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
-    const travelFrames = sourceToAimDistance / travelSpeed;
     let delayFrames: number;
     if (delivery === 'LASER') {
       // Source parity: laser damage is always instant — returns TheGameLogic->getFrame().
       delayFrames = 0;
     } else if (delivery === 'PROJECTILE') {
+      let flightDistance: number;
+      if (hasBezierArc) {
+        // Source parity: flightDistance = BezierSegment::getApproximateLength()
+        const p0x = sourceX, p0y = attacker.y, p0z = sourceZ;
+        const p3x = impactX, p3y = impactY, p3z = impactZ;
+        const dx = p3x - p0x, dy = p3y - p0y, dz = p3z - p0z;
+        const dist = Math.hypot(dx, dy, dz);
+        const nx = dist > 0 ? dx / dist : 0;
+        const nz = dist > 0 ? dz / dist : 0;
+        const p1x = p0x + nx * dist * bezierFirstPercentIndent;
+        const p1z = p0z + nz * dist * bezierFirstPercentIndent;
+        const p2x = p0x + nx * dist * bezierSecondPercentIndent;
+        const p2z = p0z + nz * dist * bezierSecondPercentIndent;
+        flightDistance = approximateCubicBezierArcLength3D(
+          p0x, p0y, p0z,
+          p1x, bezierP1Y, p1z,
+          p2x, bezierP2Y, p2z,
+          p3x, p3y, p3z,
+          BEZIER_ARC_LENGTH_TOLERANCE, 0,
+        );
+      } else {
+        flightDistance = sourceToAimDistance;
+      }
+      const travelFrames = flightDistance / travelSpeed;
       delayFrames = Math.max(1, Number.isFinite(travelFrames) && travelFrames >= 1
         ? Math.ceil(travelFrames) : 1);
     } else {
+      const travelFrames = sourceToAimDistance / travelSpeed;
       delayFrames = Number.isFinite(travelFrames) && travelFrames >= 1
         ? Math.ceil(travelFrames) : 0;
     }
 
-    const impactX = weapon.damageDealtAtSelfPosition ? sourceX : aimX;
-    const impactZ = weapon.damageDealtAtSelfPosition ? sourceZ : aimZ;
     const event: PendingWeaponDamageEvent = {
       sourceEntityId: attacker.id,
       primaryVictimEntityId,
@@ -11996,6 +12238,12 @@ export class GameLogicSubsystem implements Subsystem {
       sourceZ,
       projectileVisualId: this.nextProjectileVisualId++,
       cachedVisualType: this.classifyWeaponVisualType(weapon),
+      impactY,
+      bezierP1Y,
+      bezierP2Y,
+      bezierFirstPercentIndent,
+      bezierSecondPercentIndent,
+      hasBezierArc,
     };
 
     // Emit muzzle flash visual event.
@@ -12151,8 +12399,7 @@ export class GameLogicSubsystem implements Subsystem {
   private resolveScaledProjectileTravelSpeed(weapon: AttackWeaponProfile, sourceToAimDistance: number): number {
     // Source parity subset: DumbProjectileBehavior::projectileFireAtObjectOrPosition()
     // scales launch speed from minimum-range to unmodified-attack-range distance.
-    // TODO(C&C source parity): mirror full dumb-projectile bezier-path distance (calcFlightPath)
-    // and per-projectile update/collision timing instead of straight-line travel delay.
+    // Bezier arc length is used for actual flight distance in queueWeaponDamageEvent.
     return resolveScaledProjectileTravelSpeedImpl(
       weapon,
       sourceToAimDistance,
