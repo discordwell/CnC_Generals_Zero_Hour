@@ -1286,6 +1286,26 @@ interface MapEntity {
   /** Flammable module profile (null = not flammable). */
   flammableProfile: FlammableProfile | null;
 
+  // ── Source parity: MinefieldBehavior — mine collision detonation ──
+  /** Mine module profile (null = not a mine). */
+  minefieldProfile: MinefieldProfile | null;
+  /** Virtual mines remaining (charges). */
+  mineVirtualMinesRemaining: number;
+  /** Immune entities (mine-clearing units). */
+  mineImmunes: MineImmuneEntry[];
+  /** Detonator tracking for repeat detonation move threshold. */
+  mineDetonators: MineDetonatorEntry[];
+  /** Frames remaining for scoot animation (0 = inactive). */
+  mineScootFramesLeft: number;
+  /** Source parity: m_draining — health drain after creator dies. */
+  mineDraining: boolean;
+  /** Source parity: m_regenerates — can change after creator dies. */
+  mineRegenerates: boolean;
+  /** Source parity: m_nextDeathCheckFrame — next frame to check if creator is dead. */
+  mineNextDeathCheckFrame: number;
+  /** Source parity: m_ignoreDamage — suppress onDamage during self-damage. */
+  mineIgnoreDamage: boolean;
+
   // ── Source parity: EjectPilotDie — pilot eject on death ──
   /** Template name of pilot unit to eject on death. Null = no eject. */
   ejectPilotTemplateName: string | null;
@@ -1336,6 +1356,51 @@ interface FlammableProfile {
   aflameDamageDelayFrames: number;
   /** Damage per fire tick. */
   aflameDamageAmount: number;
+}
+
+/**
+ * Source parity: MinefieldBehavior module parsed from INI.
+ * Mines detonate on collision with enemy objects.
+ */
+interface MinefieldProfile {
+  /** Weapon fired at detonation point. */
+  detonationWeaponName: string | null;
+  /** Relationship bitmask: who triggers the mine. Default: ENEMIES | NEUTRAL. */
+  detonatedByMask: number;
+  /** Number of virtual mines (charges) before the mine object is destroyed. */
+  numVirtualMines: number;
+  /** Whether mines regenerate after detonation (health-proportional). */
+  regenerates: boolean;
+  /** Workers (infantry+dozer) don't detonate mines by default. */
+  workersDetonate: boolean;
+  /** Minimum distance a repeat detonator must move before triggering again. */
+  repeatDetonateMoveThresh: number;
+  /** Whether regen stops when the creator building dies. */
+  stopsRegenAfterCreatorDies: boolean;
+  /** Health drain percent per second after creator dies (0 = no drain). */
+  degenPercentPerSecondAfterCreatorDies: number;
+  /** Scoot animation time in frames (0 = instant placement). */
+  scootFromStartingPointTimeFrames: number;
+}
+
+// Relationship bitmask constants for MinefieldBehavior DetonatedBy.
+const MINE_DETONATED_BY_ALLIES = 1 << 0;
+const MINE_DETONATED_BY_ENEMIES = 1 << 1;
+const MINE_DETONATED_BY_NEUTRAL = 1 << 2;
+const MINE_DEFAULT_DETONATED_BY = MINE_DETONATED_BY_ENEMIES | MINE_DETONATED_BY_NEUTRAL;
+
+/** Maximum immune entries per mine (matches C++ MAX_IMMUNITY = 3). */
+const MINE_MAX_IMMUNITY = 3;
+
+interface MineImmuneEntry {
+  entityId: number;
+  collideFrame: number;
+}
+
+interface MineDetonatorEntry {
+  entityId: number;
+  x: number;
+  z: number;
 }
 
 /** Source parity: PoisonedBehavior default INI values. */
@@ -1506,6 +1571,7 @@ export class GameLogicSubsystem implements Subsystem {
       const mapEntity = this.createMapEntity(mapObject, objectDef, iniDataRegistry, heightmap);
       this.spawnedEntities.set(mapEntity.id, mapEntity);
       this.registerEntityEnergy(mapEntity);
+      this.initializeMinefieldState(mapEntity);
 
       // Initialize supply warehouse state from profile if applicable.
       if (mapEntity.supplyWarehouseProfile) {
@@ -1812,6 +1878,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePoisonedEntities();
     this.updateFlammableEntities();
     this.updateHealing();
+    this.updateMineBehavior();
+    this.updateMineCollisions();
     this.updateFogOfWar();
     this.updateSupplyChain();
     this.updateSkirmishAI();
@@ -3266,7 +3334,10 @@ export class GameLogicSubsystem implements Subsystem {
     const attackNeedsLineOfSight = normalizedKindOf.has('ATTACK_NEEDS_LINE_OF_SIGHT');
     const isImmobile = normalizedKindOf.has('IMMOBILE');
     const blocksPath = this.shouldPathfindObstacle(objectDef);
-    const obstacleGeometry = blocksPath ? this.resolveObstacleGeometry(objectDef) : null;
+    // Source parity: mines don't block pathfinding but still need collision geometry
+    // for MinefieldBehavior::onCollide. Resolve geometry whenever blocksPath OR MINE.
+    const needsGeometry = blocksPath || normalizedKindOf.has('MINE');
+    const obstacleGeometry = needsGeometry ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
     const { pathDiameter, pathfindCenterInCell } = this.resolvePathRadiusAndCenter(category, objectDef, obstacleGeometry);
     const [worldX, worldY, worldZ] = this.objectToWorldPosition(mapObject, heightmap);
@@ -3436,6 +3507,16 @@ export class GameLogicSubsystem implements Subsystem {
       flameDamageNextFrame: 0,
       flameLastDamageReceivedFrame: 0,
       flammableProfile: this.extractFlammableProfile(objectDef),
+      // Mine behavior
+      minefieldProfile: this.extractMinefieldProfile(objectDef),
+      mineVirtualMinesRemaining: 0,
+      mineImmunes: [],
+      mineDetonators: [],
+      mineScootFramesLeft: 0,
+      mineDraining: false,
+      mineRegenerates: false,
+      mineNextDeathCheckFrame: 0,
+      mineIgnoreDamage: false,
       // Pilot eject
       ejectPilotTemplateName: this.extractEjectPilotTemplateName(objectDef),
       ejectPilotMinVeterancy: 1,
@@ -5179,6 +5260,50 @@ export class GameLogicSubsystem implements Subsystem {
             aflameDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['AflameDuration']) ?? 3000),
             aflameDamageDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['AflameDamageDelay']) ?? 500),
             aflameDamageAmount: readNumericField(block.fields, ['AflameDamageAmount']) ?? DEFAULT_AFLAME_DAMAGE_AMOUNT,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: MinefieldBehavior module — extract mine configuration from INI.
+   */
+  private extractMinefieldProfile(objectDef: ObjectDef | undefined): MinefieldProfile | null {
+    if (!objectDef) return null;
+    let profile: MinefieldProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'MINEFIELDBEHAVIOR') {
+          // Parse DetonatedBy relationship mask.
+          let detonatedByMask = MINE_DEFAULT_DETONATED_BY;
+          const detonatedByStr = readStringField(block.fields, ['DetonatedBy'])?.toUpperCase();
+          if (detonatedByStr) {
+            detonatedByMask = 0;
+            if (detonatedByStr.includes('ALLIES')) detonatedByMask |= MINE_DETONATED_BY_ALLIES;
+            if (detonatedByStr.includes('ENEMIES')) detonatedByMask |= MINE_DETONATED_BY_ENEMIES;
+            if (detonatedByStr.includes('NEUTRAL')) detonatedByMask |= MINE_DETONATED_BY_NEUTRAL;
+          }
+
+          profile = {
+            detonationWeaponName: readStringField(block.fields, ['DetonationWeapon']) ?? null,
+            detonatedByMask,
+            numVirtualMines: readNumericField(block.fields, ['NumVirtualMines']) ?? 1,
+            regenerates: readBooleanField(block.fields, ['Regenerates']) ?? false,
+            workersDetonate: readBooleanField(block.fields, ['WorkersDetonate']) ?? false,
+            repeatDetonateMoveThresh: readNumericField(block.fields, ['RepeatDetonateMoveThresh']) ?? 1.0,
+            stopsRegenAfterCreatorDies: readBooleanField(block.fields, ['StopsRegenAfterCreatorDies']) ?? true,
+            degenPercentPerSecondAfterCreatorDies: readNumericField(block.fields, ['DegenPercentPerSecondAfterCreatorDies']) ?? 0,
+            scootFromStartingPointTimeFrames: this.msToLogicFrames(readNumericField(block.fields, ['ScootFromStartingPointTime']) ?? 0),
           };
         }
       }
@@ -7905,6 +8030,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePathfindPosCell(created);
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
+    this.initializeMinefieldState(created);
   }
 
   private handleEnterObjectCommand(command: EnterObjectCommand): void {
@@ -9618,6 +9744,263 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  // ── Source parity: MinefieldBehavior — mine collision system ──────────────
+
+  /**
+   * Initialize mine runtime state from profile. Called once after entity creation.
+   * Source parity: MinefieldBehavior constructor (MinefieldBehavior.cpp line 107).
+   */
+  private initializeMinefieldState(entity: MapEntity): void {
+    const prof = entity.minefieldProfile;
+    if (!prof) return;
+    entity.mineVirtualMinesRemaining = prof.numVirtualMines;
+    entity.mineRegenerates = prof.regenerates;
+    entity.mineImmunes = [];
+    entity.mineDetonators = [];
+    entity.mineScootFramesLeft = 0;
+    entity.mineDraining = false;
+    entity.mineNextDeathCheckFrame = 0;
+    entity.mineIgnoreDamage = false;
+    // Source parity: mines are not auto-acquirable (OBJECT_STATUS_NO_ATTACK_FROM_AI).
+    entity.objectStatusFlags.add('NO_ATTACK_FROM_AI');
+  }
+
+  /**
+   * Source parity: PartitionManager collision detection for mines.
+   * Iterates mine entities and checks for geometry overlap with other entities.
+   * Called once per frame from the main update loop.
+   */
+  private updateMineCollisions(): void {
+    for (const mine of this.spawnedEntities.values()) {
+      if (!mine.minefieldProfile || mine.destroyed) continue;
+      if (mine.mineVirtualMinesRemaining <= 0) continue;
+      if (mine.mineScootFramesLeft > 0) continue;
+
+      const mineGeom = mine.obstacleGeometry;
+      if (!mineGeom) continue;
+
+      // Check all entities for geometry overlap with this mine.
+      for (const other of this.spawnedEntities.values()) {
+        if (other.id === mine.id || other.destroyed) continue;
+        if (other.kindOf.has('NO_COLLIDE')) continue;
+        if (other.noCollisions) continue;
+        // Mines are immobile — only check mobile entities colliding into us.
+        if (!other.moving && other.isImmobile) continue;
+
+        // Quick 2D bounding circle rejection.
+        const otherRadius = other.obstacleGeometry ? Math.max(other.obstacleGeometry.majorRadius, other.obstacleGeometry.minorRadius) : 0;
+        const mineRadius = Math.max(mineGeom.majorRadius, mineGeom.minorRadius);
+        const dx = other.x - mine.x;
+        const dz = other.z - mine.z;
+        const combinedRadius = mineRadius + otherRadius;
+        if (dx * dx + dz * dz > combinedRadius * combinedRadius) continue;
+
+        // Geometry overlap confirmed — dispatch collision.
+        this.handleMineCollision(mine, other);
+
+        // Mine may have been destroyed by detonation.
+        if (mine.destroyed || mine.mineVirtualMinesRemaining <= 0) break;
+      }
+    }
+  }
+
+  /**
+   * Source parity: MinefieldBehavior::onCollide (MinefieldBehavior.cpp line 345).
+   */
+  private handleMineCollision(mine: MapEntity, other: MapEntity): void {
+    const prof = mine.minefieldProfile!;
+    if (mine.mineVirtualMinesRemaining <= 0) return;
+
+    // Check immunity list (must always update collideTime first).
+    for (const immune of mine.mineImmunes) {
+      if (immune.entityId === other.id) {
+        immune.collideFrame = this.currentFrame;
+        return;
+      }
+    }
+
+    // Workers (infantry+dozer) don't detonate by default.
+    if (!prof.workersDetonate) {
+      if (other.kindOf.has('INFANTRY') && other.kindOf.has('DOZER')) {
+        return;
+      }
+    }
+
+    // Relationship check: does this entity detonate us?
+    const relationship = this.getEntityRelationship(mine.id, other.id);
+    let requiredBit = 0;
+    if (relationship === 'allies') requiredBit = MINE_DETONATED_BY_ALLIES;
+    else if (relationship === 'enemies') requiredBit = MINE_DETONATED_BY_ENEMIES;
+    else requiredBit = MINE_DETONATED_BY_NEUTRAL;
+    if ((prof.detonatedByMask & requiredBit) === 0) return;
+
+    // Mine-clearing immunity: units attacking with WEAPON_ANTI_MINE get immunity.
+    if (this.isEntityClearingMines(other)) {
+      // Grant immunity in a free slot.
+      let granted = false;
+      for (const immune of mine.mineImmunes) {
+        if (immune.entityId === other.id) {
+          immune.collideFrame = this.currentFrame;
+          granted = true;
+          break;
+        }
+      }
+      if (!granted && mine.mineImmunes.length < MINE_MAX_IMMUNITY) {
+        mine.mineImmunes.push({ entityId: other.id, collideFrame: this.currentFrame });
+      } else if (!granted) {
+        // Replace oldest slot.
+        for (const immune of mine.mineImmunes) {
+          if (immune.entityId === 0) {
+            immune.entityId = other.id;
+            immune.collideFrame = this.currentFrame;
+            granted = true;
+            break;
+          }
+        }
+      }
+      return;
+    }
+
+    // Repeat detonation threshold: same object must move before re-triggering.
+    const threshSq = prof.repeatDetonateMoveThresh * prof.repeatDetonateMoveThresh;
+    let found = false;
+    for (const det of mine.mineDetonators) {
+      if (det.entityId === other.id) {
+        found = true;
+        const distSq = (other.x - det.x) * (other.x - det.x) + (other.z - det.z) * (other.z - det.z);
+        if (distSq <= threshSq) {
+          return; // Too close to last detonation point.
+        }
+        // Far enough — update position and detonate.
+        det.x = other.x;
+        det.z = other.z;
+        break;
+      }
+    }
+    if (!found) {
+      mine.mineDetonators.push({ entityId: other.id, x: other.x, z: other.z });
+    }
+
+    // Clip detonation point to mine footprint (simplified: use mine center for circular).
+    this.detonateMineOnce(mine, other.x, other.z);
+  }
+
+  /**
+   * Source parity: MinefieldBehavior::detonateOnce (MinefieldBehavior.cpp line 275).
+   * Fires the detonation weapon, decrements virtual mines, destroys if exhausted.
+   */
+  private detonateMineOnce(mine: MapEntity, detX: number, detZ: number): void {
+    const prof = mine.minefieldProfile!;
+
+    // Fire detonation weapon at the detonation point.
+    if (prof.detonationWeaponName) {
+      const weaponDef = this.iniDataRegistry?.getWeapon(prof.detonationWeaponName);
+      if (weaponDef) {
+        this.fireTemporaryWeaponAtPosition(mine, weaponDef, detX, detZ);
+      }
+    }
+
+    if (mine.mineVirtualMinesRemaining > 0) {
+      mine.mineVirtualMinesRemaining--;
+    }
+
+    if (!mine.mineRegenerates && mine.mineVirtualMinesRemaining <= 0) {
+      // Mine exhausted — destroy.
+      this.markEntityDestroyed(mine.id, mine.id);
+    } else {
+      // Adjust health proportional to remaining mines.
+      const percent = mine.mineVirtualMinesRemaining / prof.numVirtualMines;
+      const desired = Math.max(0.1, percent * mine.maxHealth);
+      const healthToRemove = mine.health - desired;
+      if (healthToRemove > 0) {
+        mine.mineIgnoreDamage = true;
+        this.applyWeaponDamageAmount(mine.id, mine, healthToRemove, 'UNRESISTABLE');
+        mine.mineIgnoreDamage = false;
+      }
+    }
+
+    // Source parity: MASKED status when all charges spent (for regenerating mines).
+    if (mine.mineVirtualMinesRemaining <= 0) {
+      mine.objectStatusFlags.add('MASKED');
+    } else {
+      mine.objectStatusFlags.delete('MASKED');
+    }
+  }
+
+  /**
+   * Source parity: MinefieldBehavior::update immunity expiry and creator death drain.
+   * Called per mine per frame from updateMineCollisions.
+   */
+  private updateMineBehavior(): void {
+    for (const mine of this.spawnedEntities.values()) {
+      if (!mine.minefieldProfile || mine.destroyed) continue;
+      const prof = mine.minefieldProfile;
+
+      // Expire immunity entries (C++: 2 frames after last collision).
+      mine.mineImmunes = mine.mineImmunes.filter(immune => {
+        const entity = this.spawnedEntities.get(immune.entityId);
+        if (!entity || entity.destroyed) return false;
+        return this.currentFrame <= immune.collideFrame + 2;
+      });
+
+      // Creator death check and health drain.
+      if (mine.mineRegenerates && prof.stopsRegenAfterCreatorDies && this.currentFrame >= mine.mineNextDeathCheckFrame) {
+        mine.mineNextDeathCheckFrame = this.currentFrame + LOGIC_FRAME_RATE; // Check every second.
+        // TODO: Track producerId for creator death detection. For now, skip.
+      }
+
+      if (mine.mineDraining && prof.degenPercentPerSecondAfterCreatorDies > 0) {
+        const drainAmount = (mine.maxHealth * prof.degenPercentPerSecondAfterCreatorDies) / LOGIC_FRAME_RATE;
+        this.applyWeaponDamageAmount(mine.id, mine, drainAmount, 'UNRESISTABLE');
+      }
+    }
+  }
+
+  /**
+   * Source parity: Check if an entity is actively clearing mines.
+   * AIUpdate.cpp line 3144: attacking with a WEAPON_ANTI_MINE weapon.
+   */
+  private isEntityClearingMines(entity: MapEntity): boolean {
+    if (!this.entityHasObjectStatus(entity, 'IS_ATTACKING')) return false;
+    const weapon = entity.attackWeapon;
+    if (!weapon) return false;
+    return (weapon.antiMask & WEAPON_ANTI_MINE) !== 0;
+  }
+
+  /**
+   * Fire a temporary weapon at a world position (source parity: createAndFireTempWeapon).
+   * Used by mine detonation to fire the DetonationWeapon.
+   */
+  private fireTemporaryWeaponAtPosition(source: MapEntity, weaponDef: WeaponDef, targetX: number, targetZ: number): void {
+    // Build a temporary weapon profile to queue damage events.
+    const primaryDamage = readNumericField(weaponDef.fields, ['PrimaryDamage']) ?? 0;
+    const primaryDamageRadius = readNumericField(weaponDef.fields, ['PrimaryDamageRadius', 'AttackRange']) ?? 0;
+    const damageType = readStringField(weaponDef.fields, ['DamageType'])?.toUpperCase() ?? 'EXPLOSION';
+
+    // Apply area damage centered at the detonation point.
+    if (primaryDamage > 0 && primaryDamageRadius > 0) {
+      for (const target of this.spawnedEntities.values()) {
+        if (target.destroyed || target.id === source.id) continue;
+        const tdx = target.x - targetX;
+        const tdz = target.z - targetZ;
+        const dist = Math.sqrt(tdx * tdx + tdz * tdz);
+        if (dist > primaryDamageRadius) continue;
+        this.applyWeaponDamageAmount(source.id, target, primaryDamage, damageType);
+      }
+    }
+
+    // Emit visual event for the detonation.
+    this.visualEventBuffer.push({
+      type: 'WEAPON_IMPACT',
+      x: targetX,
+      y: source.y,
+      z: targetZ,
+      radius: primaryDamageRadius,
+      sourceEntityId: source.id,
+      projectileType: 'ARTILLERY',
+    });
+  }
+
   private updateFogOfWar(): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
@@ -10082,6 +10465,7 @@ export class GameLogicSubsystem implements Subsystem {
     created.controllingPlayerToken = constructor.controllingPlayerToken;
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
+    this.initializeMinefieldState(created);
 
     // Source parity: Eva CONSTRUCTION_COMPLETE fires when dozer finishes placing a structure.
     if (created.side) {
@@ -11191,6 +11575,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     this.spawnedEntities.set(entity.id, entity);
     this.registerEntityEnergy(entity);
+    this.initializeMinefieldState(entity);
     // Snap to terrain.
     if (this.mapHeightmap) {
       entity.y = this.mapHeightmap.getInterpolatedHeight(worldX, worldZ) ?? 0;
@@ -11232,6 +11617,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
+    this.initializeMinefieldState(created);
     this.applyQueueProductionNaturalRallyPoint(producer, created);
 
     // Source parity: Eva UNIT_READY fires when a unit exits the production queue.

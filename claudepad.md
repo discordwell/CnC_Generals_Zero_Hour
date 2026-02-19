@@ -1,5 +1,17 @@
 # Session Summaries
 
+## 2026-02-20T07:12Z — Fog of War targeting/render + Mine collision detonation system
+- Task #70: Fog-of-war targeting gate in canAttackerTargetEntity(), resolveEntityShroudStatusForLocalPlayer(), shroudStatus on RenderableEntityState — committed d6c87a1
+- Task #71: Collision-based mine detonation system with full C++ MinefieldBehavior parity:
+  - MinefieldProfile INI parsing (DetonationWeapon, DetonatedBy, NumVirtualMines, etc.)
+  - Geometry-based collision detection (2D bounding circle overlap)
+  - handleMineCollision with immunity list, worker rejection, relationship mask, mine-clearing immunity
+  - detonateMineOnce with weapon firing, charge tracking, MASKED status
+  - fireTemporaryWeaponAtPosition for area damage
+  - Fixed: mine entities now get obstacleGeometry even though they don't block path (MINE kindOf)
+  - 7 new tests: detonation, ally immunity, DetonatedBy override, multi-charge, out-of-range, worker immunity, visual events
+- All 1016 tests pass, clean build
+
 ## 2026-02-19T15:15Z — ObjectStatus + WeaponSet + maxShotsToFire + Weapon State Preservation
 - Task #48: Wired ObjectStatus side-effects — INDESTRUCTIBLE (body field), IMMOBILE (kindOf), DISABLED_HELD, UNSELECTABLE, MASKED (selection+targeting), NO_COLLISIONS (pathfinding), NO_ATTACK_FROM_AI
 - Task #49: Weapon anti-mask system — parsed 8 anti-mask flags from INI, totalWeaponAntiMask per entity, resolveTargetAntiMask from kindOf, container enclosure check (garrison/helix), helix portable rider exempt

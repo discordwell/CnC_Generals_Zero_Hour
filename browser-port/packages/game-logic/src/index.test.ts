@@ -7855,3 +7855,241 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(attackingCount).toBeGreaterThan(0);
   });
 });
+
+// ── MinefieldBehavior collision-based detonation ──
+
+describe('mine detonation', () => {
+  function makeMineSetup(opts: {
+    detonatedBy?: string;
+    numVirtualMines?: number;
+    workersDetonate?: boolean;
+    enemyKindOf?: string[];
+    enemyGeomRadius?: number;
+    mineGeomRadius?: number;
+    mineHealth?: number;
+    weaponDamage?: number;
+    weaponRadius?: number;
+  } = {}) {
+    const mineDef = makeObjectDef('TestMine', 'America', ['MINE', 'IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+        MaxHealth: opts.mineHealth ?? 100,
+        InitialHealth: opts.mineHealth ?? 100,
+      }),
+      makeBlock('Behavior', 'MinefieldBehavior ModuleTag_Minefield', {
+        DetonationWeapon: 'MineDetonationWeapon',
+        NumVirtualMines: opts.numVirtualMines ?? 1,
+        ...(opts.detonatedBy ? { DetonatedBy: opts.detonatedBy } : {}),
+        ...(opts.workersDetonate !== undefined ? { WorkersDetonate: opts.workersDetonate } : {}),
+      }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: opts.mineGeomRadius ?? 5,
+      GeometryMinorRadius: opts.mineGeomRadius ?? 5,
+    });
+
+    const enemyDef = makeObjectDef(
+      'EnemyVehicle',
+      'China',
+      opts.enemyKindOf ?? ['VEHICLE'],
+      [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ],
+      {
+        Geometry: 'CYLINDER',
+        GeometryMajorRadius: opts.enemyGeomRadius ?? 3,
+        GeometryMinorRadius: opts.enemyGeomRadius ?? 3,
+      },
+    );
+
+    const registry = makeRegistry(makeBundle({
+      objects: [mineDef, enemyDef],
+      weapons: [
+        makeWeaponDef('MineDetonationWeapon', {
+          PrimaryDamage: opts.weaponDamage ?? 50,
+          PrimaryDamageRadius: opts.weaponRadius ?? 10,
+          DamageType: 'EXPLOSION',
+        }),
+      ],
+    }));
+
+    return { registry };
+  }
+
+  it('detonates mine when enemy overlaps mine geometry radius', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const { registry } = makeMineSetup();
+
+    // Place mine at (10,10) and enemy at (12,10) — within combined radius (5+3=8).
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('EnemyVehicle', 12, 10),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+
+    // Mine should exist before update.
+    const mineBefore = logic.getEntityState(1);
+    expect(mineBefore).not.toBeNull();
+    expect(mineBefore!.alive).toBe(true);
+
+    // Run 1 frame — collision should detonate and destroy the 1-charge mine.
+    logic.update(1 / 30);
+
+    // Mine with 1 virtual mine is destroyed and cleaned up (returns null).
+    const mineAfter = logic.getEntityState(1);
+    expect(mineAfter).toBeNull();
+
+    // Enemy should have taken detonation damage (50 damage, from 200 → 150).
+    const enemyAfter = logic.getEntityState(2);
+    expect(enemyAfter).not.toBeNull();
+    expect(enemyAfter!.health).toBeLessThan(200);
+  });
+
+  it('does not detonate mine for allies (default detonatedBy = ENEMIES+NEUTRAL)', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const { registry } = makeMineSetup();
+
+    // Place mine and an allied vehicle overlapping.
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('EnemyVehicle', 12, 10),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    // Set China as allies of America (2 = ALLIES) — mine should NOT detonate.
+    logic.setTeamRelationship('America', 'China', 2);
+    logic.setTeamRelationship('China', 'America', 2);
+
+    logic.update(1 / 30);
+
+    // Mine should still be alive — not detonated by ally.
+    const mineAfter = logic.getEntityState(1);
+    expect(mineAfter).not.toBeNull();
+    expect(mineAfter!.alive).toBe(true);
+
+    // Allied vehicle should be at full health.
+    const allyAfter = logic.getEntityState(2);
+    expect(allyAfter).not.toBeNull();
+    expect(allyAfter!.health).toBe(200);
+  });
+
+  it('detonates mine for allies when DetonatedBy includes ALLIES', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const { registry } = makeMineSetup({ detonatedBy: 'ALLIES ENEMIES NEUTRAL' });
+
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('EnemyVehicle', 12, 10),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 2); // allies
+    logic.setTeamRelationship('China', 'America', 2);
+
+    logic.update(1 / 30);
+
+    // Mine with 1 charge detonated for ally — destroyed and cleaned up.
+    const mineAfter = logic.getEntityState(1);
+    expect(mineAfter).toBeNull();
+  });
+
+  it('decrements virtual mine charges without destroying multi-charge mine', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const { registry } = makeMineSetup({ numVirtualMines: 3, mineHealth: 300 });
+
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('EnemyVehicle', 12, 10),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+
+    logic.update(1 / 30);
+
+    // Mine should still be alive with 2 charges remaining (health reduced proportionally).
+    const mineAfter = logic.getEntityState(1);
+    expect(mineAfter).not.toBeNull();
+    expect(mineAfter!.alive).toBe(true);
+    // Health reduced: 2/3 * 300 = 200.
+    expect(mineAfter!.health).toBeLessThan(300);
+  });
+
+  it('does not detonate when entities are outside combined radius', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const { registry } = makeMineSetup();
+
+    // Place mine at (10,10) and enemy at (30,10) — distance 20 > combined radius (5+3=8).
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('EnemyVehicle', 30, 10),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+
+    logic.update(1 / 30);
+
+    // Mine should be alive — no collision.
+    const mineAfter = logic.getEntityState(1);
+    expect(mineAfter).not.toBeNull();
+    expect(mineAfter!.alive).toBe(true);
+
+    // Enemy should be at full health.
+    const enemyAfter = logic.getEntityState(2);
+    expect(enemyAfter).not.toBeNull();
+    expect(enemyAfter!.health).toBe(200);
+  });
+
+  it('does not detonate for worker units (infantry+dozer) when workersDetonate is false', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const { registry } = makeMineSetup({
+      workersDetonate: false,
+      enemyKindOf: ['INFANTRY', 'DOZER'],
+    });
+
+    // Place mine and infantry/dozer worker overlapping.
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('EnemyVehicle', 12, 10),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+
+    logic.update(1 / 30);
+
+    // Mine should NOT detonate for worker (infantry+dozer).
+    const mineAfter = logic.getEntityState(1);
+    expect(mineAfter).not.toBeNull();
+    expect(mineAfter!.alive).toBe(true);
+  });
+
+  it('emits WEAPON_IMPACT visual event on mine detonation', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const { registry } = makeMineSetup();
+
+    const map = makeMap([
+      makeMapObject('TestMine', 10, 10),
+      makeMapObject('EnemyVehicle', 12, 10),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+
+    logic.update(1 / 30);
+
+    // Should have emitted visual events including a WEAPON_IMPACT for the detonation.
+    const events = logic.drainVisualEvents();
+    const impactEvents = events.filter(e => e.type === 'WEAPON_IMPACT');
+    expect(impactEvents.length).toBeGreaterThanOrEqual(1);
+  });
+});
