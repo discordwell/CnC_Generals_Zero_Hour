@@ -5632,23 +5632,17 @@ export class GameLogicSubsystem implements Subsystem {
       }
       return false;
     })();
-    const weaponChanged = previousWeapon?.name !== nextWeapon?.name
-      || previousWeapon?.clipSize !== nextWeapon?.clipSize
-      || previousWeapon?.clipReloadFrames !== nextWeapon?.clipReloadFrames
-      || previousWeapon?.autoReloadWhenIdleFrames !== nextWeapon?.autoReloadWhenIdleFrames
-      || previousWeapon?.preAttackDelayFrames !== nextWeapon?.preAttackDelayFrames
-      || previousWeapon?.preAttackType !== nextWeapon?.preAttackType
-      || previousWeapon?.projectileObjectName !== nextWeapon?.projectileObjectName
-      || previousWeapon?.scatterTargetScalar !== nextWeapon?.scatterTargetScalar
-      || previousWeapon?.minWeaponSpeed !== nextWeapon?.minWeaponSpeed
-      || previousWeapon?.scaleWeaponSpeed !== nextWeapon?.scaleWeaponSpeed
-      || previousWeapon?.continueAttackRange !== nextWeapon?.continueAttackRange
-      || previousWeapon?.unmodifiedAttackRange !== nextWeapon?.unmodifiedAttackRange
-      || scatterTargetPatternChanged;
-    if (weaponChanged) {
+    // Source parity: WeaponSet::updateWeaponSet — when a set change keeps the same
+    // weapon template in a slot, preserve runtime state (clip ammo, reload timers,
+    // consecutive shots). Only fully reset timing when the template name changes
+    // (i.e., a truly different weapon is now selected).
+    const weaponTemplateChanged = previousWeapon?.name !== nextWeapon?.name;
+    if (weaponTemplateChanged) {
       this.resetEntityWeaponTimingState(entity);
-      // TODO(C&C source parity): preserve per-slot runtime weapon state when sets change,
-      // instead of resetting timing/clip state on profile refresh.
+    } else if (scatterTargetPatternChanged && nextWeapon) {
+      // Same weapon template but scatter offsets changed (e.g., upgrade modified scatter) —
+      // rebuild scatter targets without resetting clip/reload state.
+      this.rebuildEntityScatterTargets(entity);
     }
   }
 
