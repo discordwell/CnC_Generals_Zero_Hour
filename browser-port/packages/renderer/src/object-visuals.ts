@@ -22,6 +22,10 @@ export interface RenderableEntityState {
   z: number;
   rotationY: number;
   animationState: RenderableAnimationState;
+  health?: number;
+  maxHealth?: number;
+  isSelected?: boolean;
+  side?: string;
 }
 
 export interface LoadedModelAsset {
@@ -39,6 +43,9 @@ interface VisualAssetState {
   actions: Map<RenderableAnimationState, THREE.AnimationAction>;
   activeState: RenderableAnimationState | null;
   requestedAnimationState: RenderableAnimationState;
+  healthBarGroup: THREE.Group | null;
+  healthBarFill: THREE.Mesh | null;
+  selectionRing: THREE.Mesh | null;
 }
 
 export interface ObjectVisualManagerConfig {
@@ -106,6 +113,8 @@ export class ObjectVisualManager {
 
       this.syncVisualTransform(visual, state);
       this.syncVisualAsset(visual, state);
+      this.syncHealthBar(visual, state);
+      this.syncSelectionRing(visual, state);
       this.applyAnimationState(visual, state.animationState);
       if (visual.mixer) {
         visual.mixer.update(dt);
@@ -179,6 +188,9 @@ export class ObjectVisualManager {
       actions: new Map(),
       activeState: null,
       requestedAnimationState: 'IDLE',
+      healthBarGroup: null,
+      healthBarFill: null,
+      selectionRing: null,
     };
   }
 
@@ -281,6 +293,10 @@ export class ObjectVisualManager {
             }
           }
 
+          clone.traverse((child) => {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          });
           currentVisual.currentModel = clone;
           currentVisual.mixer = mixer;
           currentVisual.actions = actions;
@@ -390,6 +406,9 @@ export class ObjectVisualManager {
 
   private removeVisual(entityId: number, visual: VisualAssetState): void {
     this.removeModel(visual);
+    visual.healthBarGroup = null;
+    visual.healthBarFill = null;
+    visual.selectionRing = null;
     this.scene.remove(visual.root);
     visual.root.clear();
     visual.activeState = null;
@@ -570,6 +589,146 @@ export class ObjectVisualManager {
       return null;
     }
     return trimmed;
+  }
+
+  // ==========================================================================
+  // Health bars and selection rings
+  // ==========================================================================
+
+  private static readonly HEALTH_BAR_WIDTH = 2.0;
+  private static readonly HEALTH_BAR_HEIGHT = 0.15;
+  private static readonly HEALTH_BAR_Y_OFFSET = 2.5;
+  private static readonly SELECTION_RING_RADIUS = 1.2;
+  private static readonly SELECTION_RING_SEGMENTS = 48;
+
+  private static healthBarBgGeometry: THREE.PlaneGeometry | null = null;
+  private static healthBarFillGeometry: THREE.PlaneGeometry | null = null;
+  private static selectionRingGeometry: THREE.RingGeometry | null = null;
+
+  private static getHealthBarBgGeometry(): THREE.PlaneGeometry {
+    if (!ObjectVisualManager.healthBarBgGeometry) {
+      ObjectVisualManager.healthBarBgGeometry = new THREE.PlaneGeometry(
+        ObjectVisualManager.HEALTH_BAR_WIDTH,
+        ObjectVisualManager.HEALTH_BAR_HEIGHT,
+      );
+    }
+    return ObjectVisualManager.healthBarBgGeometry;
+  }
+
+  private static getHealthBarFillGeometry(): THREE.PlaneGeometry {
+    if (!ObjectVisualManager.healthBarFillGeometry) {
+      ObjectVisualManager.healthBarFillGeometry = new THREE.PlaneGeometry(1, 1);
+    }
+    return ObjectVisualManager.healthBarFillGeometry;
+  }
+
+  private static getSelectionRingGeometry(): THREE.RingGeometry {
+    if (!ObjectVisualManager.selectionRingGeometry) {
+      ObjectVisualManager.selectionRingGeometry = new THREE.RingGeometry(
+        ObjectVisualManager.SELECTION_RING_RADIUS - 0.06,
+        ObjectVisualManager.SELECTION_RING_RADIUS,
+        ObjectVisualManager.SELECTION_RING_SEGMENTS,
+      );
+    }
+    return ObjectVisualManager.selectionRingGeometry;
+  }
+
+  private static healthColorForRatio(ratio: number): number {
+    if (ratio > 0.5) return 0x00cc00; // green
+    if (ratio > 0.25) return 0xcccc00; // yellow
+    return 0xcc0000; // red
+  }
+
+  private syncHealthBar(visual: VisualAssetState, state: RenderableEntityState): void {
+    const maxHealth = state.maxHealth ?? 0;
+    const health = state.health ?? 0;
+    const showBar = maxHealth > 0 && health > 0 && health < maxHealth;
+
+    if (!showBar) {
+      if (visual.healthBarGroup) {
+        visual.healthBarGroup.visible = false;
+      }
+      return;
+    }
+
+    if (!visual.healthBarGroup) {
+      const group = new THREE.Group();
+      group.name = 'health-bar';
+
+      // Background (dark)
+      const bgMaterial = new THREE.MeshBasicMaterial({
+        color: 0x111111,
+        transparent: true,
+        opacity: 0.7,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const bgMesh = new THREE.Mesh(ObjectVisualManager.getHealthBarBgGeometry(), bgMaterial);
+      bgMesh.renderOrder = 999;
+      group.add(bgMesh);
+
+      // Fill (colored)
+      const fillMaterial = new THREE.MeshBasicMaterial({
+        color: 0x00cc00,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const fillMesh = new THREE.Mesh(ObjectVisualManager.getHealthBarFillGeometry(), fillMaterial);
+      fillMesh.renderOrder = 1000;
+      group.add(fillMesh);
+
+      visual.healthBarGroup = group;
+      visual.healthBarFill = fillMesh;
+      visual.root.add(group);
+    }
+
+    const ratio = Math.max(0, Math.min(1, health / maxHealth));
+    const barWidth = ObjectVisualManager.HEALTH_BAR_WIDTH;
+    const barHeight = ObjectVisualManager.HEALTH_BAR_HEIGHT;
+    const fillWidth = barWidth * ratio;
+
+    visual.healthBarGroup.visible = true;
+    visual.healthBarGroup.position.set(0, ObjectVisualManager.HEALTH_BAR_Y_OFFSET, 0);
+
+    // Billboard: cancel parent rotation so bar always faces camera.
+    visual.healthBarGroup.rotation.y = -state.rotationY;
+
+    if (visual.healthBarFill) {
+      visual.healthBarFill.scale.set(fillWidth, barHeight, 1);
+      visual.healthBarFill.position.set((fillWidth - barWidth) / 2, 0, 0.001);
+      const mat = visual.healthBarFill.material as THREE.MeshBasicMaterial;
+      mat.color.setHex(ObjectVisualManager.healthColorForRatio(ratio));
+    }
+  }
+
+  private syncSelectionRing(visual: VisualAssetState, state: RenderableEntityState): void {
+    const isSelected = state.isSelected ?? false;
+
+    if (!isSelected) {
+      if (visual.selectionRing) {
+        visual.selectionRing.visible = false;
+      }
+      return;
+    }
+
+    if (!visual.selectionRing) {
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 0.6,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(ObjectVisualManager.getSelectionRingGeometry(), material);
+      ring.renderOrder = 998;
+      ring.rotation.x = -Math.PI / 2; // Lay flat on the ground plane.
+      ring.position.y = 0.05; // Slight offset above ground to avoid z-fighting.
+      ring.name = 'selection-ring';
+      visual.selectionRing = ring;
+      visual.root.add(ring);
+    }
+
+    visual.selectionRing.visible = true;
   }
 
   private disposeObject3D(object3D: THREE.Object3D): void {

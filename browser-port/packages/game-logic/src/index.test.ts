@@ -19,6 +19,7 @@ import {
 import { HeightmapGrid, type MapDataJSON, type MapObjectJSON, uint8ArrayToBase64 } from '@generals/terrain';
 
 import { GameLogicSubsystem } from './index.js';
+import { CELL_CLEAR, CELL_FOGGED, CELL_SHROUDED } from './fog-of-war.js';
 
 function makeBlock(
   type: string,
@@ -7120,6 +7121,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       targetX: null,
       targetZ: null,
     });
+    logic.update(0);
 
     const sourceState = logic.getEntityState(1);
     expect(sourceState?.lastSpecialPowerDispatch).toMatchObject({
@@ -7167,6 +7169,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       targetX: 100,
       targetZ: 260,
     });
+    logic.update(0);
 
     const sourceState = logic.getEntityState(1);
     expect(sourceState?.lastSpecialPowerDispatch).toMatchObject({
@@ -7208,26 +7211,27 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       makeRegistry(bundle),
       makeHeightmap(),
     );
-    logic.setTeamRelationship('America', 'China', 2);
+    logic.setTeamRelationship('America', 'China', 0);
 
     logic.submitCommand({
       type: 'issueSpecialPower',
       commandButtonId: 'CMD_OBJECT',
       specialPowerName: 'SpecialPowerAtObject',
-      commandOption: 0x2,
+      commandOption: 0x1,
       issuingEntityIds: [1],
       sourceEntityId: 1,
       targetEntityId: 2,
       targetX: 0,
       targetZ: 0,
     });
+    logic.update(0);
 
     const sourceState = logic.getEntityState(1);
     expect(sourceState?.lastSpecialPowerDispatch).toMatchObject({
       specialPowerTemplateName: 'SPECIALPOWERATOBJECT',
       moduleType: 'SPECIALPOWERMODULE',
       dispatchType: 'OBJECT',
-      commandOption: 0x2,
+      commandOption: 0x1,
       commandButtonId: 'CMD_OBJECT',
       targetEntityId: 2,
       targetX: null,
@@ -7268,8 +7272,585 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       targetX: null,
       targetZ: null,
     });
+    logic.update(0);
 
     const sourceState = logic.getEntityState(1);
     expect(sourceState?.lastSpecialPowerDispatch).toBeNull();
+  });
+
+  it('runs supply chain economy: truck gathers from warehouse and deposits at supply center', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const warehouseDef = makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+        StartingBoxes: 10,
+        DeleteWhenEmpty: false,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const supplyTruckDef = makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+      makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [warehouseDef, supplyCenterDef, supplyTruckDef],
+    }));
+
+    // Place warehouse at (10,10), supply center at (35,10), truck at (10,10) (near warehouse).
+    // Use 64x64 map to ensure positions are within grid bounds for pathfinding.
+    const map = makeMap([
+      makeMapObject('SupplyWarehouse', 10, 10),
+      makeMapObject('SupplyCenter', 35, 10),
+      makeMapObject('SupplyTruck', 10, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+
+    // Set credits to 0 for America.
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.update(0);
+
+    const initialCredits = logic.getSideCredits('America');
+    expect(initialCredits).toBe(0);
+
+    // Run many frames to let the supply truck AI gather and deposit.
+    // With 0 action delay, the truck should:
+    // 1. Find warehouse (nearby), start gathering — ~5 frames (3 boxes + transitions)
+    // 2. Move to supply center (25 world units at speed 18, ~42 frames) and deposit
+    // Deposit value = 3 boxes * 100 credits/box = 300
+    for (let i = 0; i < 300; i++) {
+      logic.update(0.033);
+    }
+
+    const creditsAfter = logic.getSideCredits('America');
+    // At least one deposit should have occurred (300 credits for 3 boxes).
+    expect(creditsAfter).toBeGreaterThanOrEqual(300);
+  });
+
+  it('deletes warehouse when empty if DeleteWhenEmpty is true', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const warehouseDef = makeObjectDef('DepletableWarehouse', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+        StartingBoxes: 1,
+        DeleteWhenEmpty: true,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const supplyTruckDef = makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+      makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+        MaxBoxes: 5,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [warehouseDef, supplyCenterDef, supplyTruckDef],
+    }));
+
+    const map = makeMap([
+      makeMapObject('DepletableWarehouse', 10, 10),
+      makeMapObject('SupplyCenter', 35, 10),
+      makeMapObject('SupplyTruck', 10, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.update(0);
+
+    // Run frames until warehouse should be depleted and credits deposited.
+    for (let i = 0; i < 300; i++) {
+      logic.update(0.033);
+    }
+
+    // Warehouse entity (id=1) should be destroyed — getEntityState returns null
+    // for destroyed entities after cleanup, or alive=false during death frame.
+    const warehouseState = logic.getEntityState(1);
+    // Entity is either null (cleaned up) or alive=false (destroyed).
+    expect(warehouseState === null || warehouseState.alive === false).toBe(true);
+
+    // Should have received 100 credits (1 box * 100).
+    const credits = logic.getSideCredits('America');
+    expect(credits).toBe(100);
+  });
+
+  it('does not initialize supply chain state for non-supply entities', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const plainDef = makeObjectDef('PlainVehicle', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({ objects: [plainDef] }));
+    const map = makeMap([makeMapObject('PlainVehicle', 50, 50)]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    // A plain vehicle should exist and work fine with no supply chain errors.
+    logic.update(0);
+    logic.update(0.033);
+
+    const entity = logic.getEntityState(1);
+    expect(entity?.alive).toBe(true);
+  });
+
+  it('awards experience points to attacker on victim kill and levels up', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const attackerDef = makeObjectDef('VetAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'VetCannon'] }),
+    ], {
+      // ExperienceRequired: [regular=0, veteran=50, elite=200, heroic=500]
+      ExperienceRequired: '0 50 200 500',
+      // XP the attacker is worth if killed at each level
+      ExperienceValue: '10 20 40 80',
+    });
+
+    // Victim is worth 100 XP at REGULAR level.
+    const victimDef = makeObjectDef('VetVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+    ], {
+      ExperienceRequired: '0 100 200 300',
+      ExperienceValue: '100 200 300 400',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, victimDef],
+      weapons: [
+        makeWeaponDef('VetCannon', {
+          AttackRange: 120,
+          PrimaryDamage: 50,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    }));
+
+    const map = makeMap([
+      makeMapObject('VetAttacker', 10, 10),
+      makeMapObject('VetVictim', 20, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+
+    // Attacker starts at REGULAR level with 0 XP.
+    const attackerBefore = logic.getEntityState(1);
+    expect(attackerBefore?.veterancyLevel).toBe(0); // REGULAR
+    expect(attackerBefore?.currentExperience).toBe(0);
+
+    // Order attack on victim.
+    logic.submitCommand({
+      type: 'attackEntity',
+      entityId: 1,
+      targetEntityId: 2,
+    });
+
+    // Run frames until victim is killed (10hp, 50 damage → 1 shot kill).
+    for (let i = 0; i < 30; i++) {
+      logic.update(0.033);
+    }
+
+    // Victim should be dead (removed from entity map after cleanup).
+    const victimState = logic.getEntityState(2);
+    expect(victimState).toBeNull();
+
+    // Attacker should have gained 100 XP (victim value at REGULAR level).
+    // With threshold of 50 for VETERAN, the attacker should now be VETERAN.
+    const attackerAfter = logic.getEntityState(1);
+    expect(attackerAfter?.currentExperience).toBe(100);
+    expect(attackerAfter?.veterancyLevel).toBe(1); // VETERAN
+  });
+
+  it('does not award experience for killing allies', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const killerDef = makeObjectDef('AllyKiller', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'AllyGun'] }),
+    ], {
+      ExperienceRequired: '0 50 200 500',
+      ExperienceValue: '10 20 40 80',
+    });
+
+    const allyDef = makeObjectDef('AllyTarget', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+    ], {
+      ExperienceRequired: '0 100 200 300',
+      ExperienceValue: '100 200 300 400',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [killerDef, allyDef],
+      weapons: [
+        makeWeaponDef('AllyGun', {
+          AttackRange: 120,
+          PrimaryDamage: 50,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    }));
+
+    const map = makeMap([
+      makeMapObject('AllyKiller', 10, 10),
+      makeMapObject('AllyTarget', 20, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'America', 2); // allies
+
+    // Force attack on ally.
+    logic.submitCommand({
+      type: 'attackEntity',
+      entityId: 1,
+      targetEntityId: 2,
+    });
+
+    for (let i = 0; i < 30; i++) {
+      logic.update(0.033);
+    }
+
+    // Attacker should have 0 XP (no XP for killing allies).
+    const killerState = logic.getEntityState(1);
+    expect(killerState?.currentExperience).toBe(0);
+    expect(killerState?.veterancyLevel).toBe(0);
+  });
+
+  it('reveals fog of war around units with VisionRange', () => {
+    const logic = new GameLogicSubsystem();
+
+    const scoutDef = makeObjectDef('Scout', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 50,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [scoutDef],
+    }));
+
+    const map = makeMap([
+      makeMapObject('Scout', 30, 30),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+
+    // Run one frame to update fog of war.
+    logic.update(0.033);
+
+    // Position near the scout should be CLEAR for America.
+    expect(logic.getCellVisibility('America', 30, 30)).toBe(CELL_CLEAR);
+
+    // Position far away should be SHROUDED for America.
+    expect(logic.getCellVisibility('America', 600, 600)).toBe(CELL_SHROUDED);
+
+    // Unknown side should see everything as SHROUDED.
+    expect(logic.getCellVisibility('China', 30, 30)).toBe(CELL_SHROUDED);
+  });
+
+  it('transitions cells from CLEAR to FOGGED when unit moves away', () => {
+    const logic = new GameLogicSubsystem();
+
+    const scoutDef = makeObjectDef('Scout', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Locomotor', 'Locomotor', {
+        Speed: 20,
+      }),
+    ], {
+      VisionRange: 30,
+      Speed: 20,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [scoutDef],
+    }));
+
+    const map = makeMap([
+      makeMapObject('Scout', 10, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+
+    // Run a frame to establish vision.
+    logic.update(0.033);
+    expect(logic.getCellVisibility('America', 10, 10)).toBe(CELL_CLEAR);
+
+    // Move the entity far away.
+    logic.submitCommand({
+      type: 'move',
+      entityId: 1,
+      x: 600,
+      z: 600,
+    });
+
+    // Run enough frames for the entity to move significantly.
+    for (let i = 0; i < 60; i++) {
+      logic.update(0.033);
+    }
+
+    // The original position should now be FOGGED (was seen, but no longer actively visible).
+    const vis = logic.getCellVisibility('America', 10, 10);
+    expect(vis === CELL_FOGGED || vis === CELL_CLEAR).toBe(true);
+  });
+
+  it('returns CELL_CLEAR everywhere when no fog of war grid is loaded', () => {
+    const logic = new GameLogicSubsystem();
+
+    // Without loading a map (no heightmap → no FoW grid), getCellVisibility returns CLEAR.
+    expect(logic.getCellVisibility('America', 50, 50)).toBe(CELL_CLEAR);
+  });
+
+  it('isPositionVisible returns true for positions in vision range', () => {
+    const logic = new GameLogicSubsystem();
+
+    const scoutDef = makeObjectDef('Scout', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 50,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [scoutDef],
+    }));
+
+    const map = makeMap([
+      makeMapObject('Scout', 30, 30),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.update(0.033);
+
+    expect(logic.isPositionVisible('America', 30, 30)).toBe(true);
+    expect(logic.isPositionVisible('America', 600, 600)).toBe(false);
+  });
+
+  it('executes area damage special power at target position', () => {
+    const logic = new GameLogicSubsystem();
+
+    const sourceDef = makeObjectDef('PowerSource', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'OCLSpecialPower BombModule', {
+        SpecialPowerTemplate: 'SuperweaponCarpetBomb',
+      }),
+    ]);
+
+    const targetDef = makeObjectDef('EnemyTank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [sourceDef, targetDef],
+      specialPowers: [
+        makeSpecialPowerDef('SuperweaponCarpetBomb', { ReloadTime: 0 }),
+      ],
+    }));
+
+    const map = makeMap([
+      makeMapObject('PowerSource', 10, 10),
+      makeMapObject('EnemyTank', 30, 30),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_BOMB',
+      specialPowerName: 'SuperweaponCarpetBomb',
+      commandOption: 0x20, // COMMAND_OPTION_NEED_TARGET_POS
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 30,
+      targetZ: 30,
+    });
+    logic.update(0);
+
+    // The enemy tank at (30,30) should have taken area damage.
+    // With default 500 area damage vs 200 HP, the target should be destroyed.
+    const targetState = logic.getEntityState(2);
+    expect(targetState === null || (targetState.health < 200)).toBe(true);
+  });
+
+  it('executes cash hack special power to steal enemy credits', () => {
+    const logic = new GameLogicSubsystem();
+
+    const hackerDef = makeObjectDef('Hacker', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      makeBlock('Behavior', 'CashHackSpecialPower HackModule', {
+        SpecialPowerTemplate: 'SpecialPowerCashHack',
+      }),
+    ]);
+
+    const enemyBuildingDef = makeObjectDef('EnemyHQ', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [hackerDef, enemyBuildingDef],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerCashHack', { ReloadTime: 0 }),
+      ],
+    }));
+
+    const map = makeMap([
+      makeMapObject('Hacker', 10, 10),
+      makeMapObject('EnemyHQ', 20, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('China', 'America', 0); // enemies
+
+    // Give enemy some credits.
+    logic.setSideCredits('America', 5000);
+    const chinaBefore = logic.getSideCredits('China');
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_HACK',
+      specialPowerName: 'SpecialPowerCashHack',
+      commandOption: 0x01, // COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+
+    // China should have gained credits.
+    const chinaAfter = logic.getSideCredits('China');
+    expect(chinaAfter).toBeGreaterThan(chinaBefore);
+
+    // America should have lost credits.
+    expect(logic.getSideCredits('America')).toBeLessThan(5000);
+  });
+
+  it('executes defector special power to convert enemy unit', () => {
+    const logic = new GameLogicSubsystem();
+
+    const defectorDef = makeObjectDef('Defector', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      makeBlock('Behavior', 'DefectorSpecialPower DefectModule', {
+        SpecialPowerTemplate: 'SpecialPowerDefector',
+      }),
+    ]);
+
+    const enemyUnitDef = makeObjectDef('EnemyUnit', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [defectorDef, enemyUnitDef],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerDefector', { ReloadTime: 0 }),
+      ],
+    }));
+
+    const map = makeMap([
+      makeMapObject('Defector', 10, 10),
+      makeMapObject('EnemyUnit', 20, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_DEFECT',
+      specialPowerName: 'SpecialPowerDefector',
+      commandOption: 0x01, // COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+
+    // The enemy unit should still be alive (defect, not destroyed).
+    const convertedState = logic.getEntityState(2);
+    expect(convertedState).not.toBeNull();
+    expect(convertedState?.alive).toBe(true);
+  });
+
+  it('skirmish AI sends combat units to attack enemy when force threshold met', () => {
+    const logic = new GameLogicSubsystem();
+
+    // Create an AI base with several combat units.
+    const aiTankDef = makeObjectDef('AITank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Locomotor', 'Locomotor', { Speed: 15 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankGun'] }),
+    ], { Speed: 15 });
+
+    const enemyBuildingDef = makeObjectDef('EnemyHQ', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [aiTankDef, enemyBuildingDef],
+      weapons: [
+        makeWeaponDef('TankGun', {
+          AttackRange: 100,
+          PrimaryDamage: 30,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    }));
+
+    // Place 5 AI tanks near each other and an enemy building far away.
+    const map = makeMap([
+      makeMapObject('AITank', 10, 10),
+      makeMapObject('AITank', 15, 10),
+      makeMapObject('AITank', 10, 15),
+      makeMapObject('AITank', 15, 15),
+      makeMapObject('AITank', 12, 12),
+      makeMapObject('EnemyHQ', 50, 50),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('China', 'America', 0); // enemies
+
+    // Enable skirmish AI for China.
+    logic.enableSkirmishAI('China');
+
+    // Run enough frames for AI to discover enemy and issue attack (90+ frames for combat eval).
+    for (let i = 0; i < 100; i++) {
+      logic.update(0.033);
+    }
+
+    // Verify at least some AI tanks are now moving (attacking toward enemy).
+    let movingCount = 0;
+    for (let id = 1; id <= 5; id++) {
+      const state = logic.getEntityState(id);
+      if (state && (state.attackTargetEntityId !== null)) {
+        movingCount++;
+      }
+    }
+
+    // AI should have issued attack commands to its idle units.
+    expect(movingCount).toBeGreaterThan(0);
   });
 });

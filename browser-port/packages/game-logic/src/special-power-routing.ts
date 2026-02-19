@@ -229,7 +229,9 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
 
   // Source parity: this only guards known/unknown special powers by INI definition lookup.
   // The actual execution path is intentionally TODO until module owners are fully wired.
-  const specialPowerDef = registry.getSpecialPower(normalizedSpecialPowerName);
+  // Try normalized name first, then original name (registry may store with original casing).
+  const specialPowerDef = registry.getSpecialPower(normalizedSpecialPowerName)
+    ?? registry.getSpecialPower(command.specialPowerName.trim());
   if (!specialPowerDef) {
     return;
   }

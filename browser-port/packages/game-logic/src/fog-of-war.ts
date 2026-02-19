@@ -1,0 +1,244 @@
+/**
+ * Fog of War & Shroud system.
+ *
+ * Source parity:
+ *   Generals/Code/GameEngine/Source/GameLogic/Object/Object.cpp — look(), unlook(), shroud(), unshroud()
+ *   Generals/Code/GameEngine/Source/GameLogic/Partition/PartitionManager.cpp — doShroudReveal, doShroudCover
+ *   Generals/Code/GameEngine/Include/Common/GameCommon.h — ObjectShroudStatus, CellShroudStatus
+ *
+ * Implementation: A 2D grid where each cell tracks a per-player "looker count".
+ * When a unit with vision is present, it increments all cells within its sight radius.
+ * A cell is CLEAR if lookerCount > 0, FOGGED if it was ever seen before, else SHROUDED.
+ */
+
+// ──── Cell visibility state ────────────────────────────────────────────────
+export const CELL_SHROUDED = 0;
+export const CELL_FOGGED = 1;
+export const CELL_CLEAR = 2;
+export type CellVisibility = typeof CELL_SHROUDED | typeof CELL_FOGGED | typeof CELL_CLEAR;
+
+// ──── Object shroud status (per entity, from player perspective) ───────────
+export const OBJECTSHROUD_CLEAR = 0;
+export const OBJECTSHROUD_FOGGED = 1;
+export const OBJECTSHROUD_SHROUDED = 2;
+
+// ──── Maximum supported players ────────────────────────────────────────────
+export const MAX_FOW_PLAYERS = 8;
+
+// ──── Fog of War grid ──────────────────────────────────────────────────────
+export class FogOfWarGrid {
+  readonly cellsWide: number;
+  readonly cellsDeep: number;
+  readonly cellSize: number;
+
+  /** Per-player looker count per cell. lookerCounts[player][cellIndex] */
+  private readonly lookerCounts: Int16Array[];
+  /** Per-player "ever seen" flag per cell. */
+  private readonly everSeen: Uint8Array[];
+
+  constructor(worldWidth: number, worldDepth: number, cellSize: number) {
+    this.cellSize = Math.max(1, cellSize);
+    this.cellsWide = Math.max(1, Math.ceil(worldWidth / this.cellSize));
+    this.cellsDeep = Math.max(1, Math.ceil(worldDepth / this.cellSize));
+
+    const totalCells = this.cellsWide * this.cellsDeep;
+    this.lookerCounts = [];
+    this.everSeen = [];
+    for (let p = 0; p < MAX_FOW_PLAYERS; p++) {
+      this.lookerCounts.push(new Int16Array(totalCells));
+      this.everSeen.push(new Uint8Array(totalCells));
+    }
+  }
+
+  private cellIndex(cx: number, cz: number): number {
+    return cz * this.cellsWide + cx;
+  }
+
+  private worldToCell(wx: number, wz: number): [number, number] {
+    const cx = Math.max(0, Math.min(this.cellsWide - 1, Math.floor(wx / this.cellSize)));
+    const cz = Math.max(0, Math.min(this.cellsDeep - 1, Math.floor(wz / this.cellSize)));
+    return [cx, cz];
+  }
+
+  /**
+   * Reveal shroud in a circle for a player (increments looker count).
+   * Source parity: PartitionManager::doShroudReveal
+   */
+  addLooker(playerIndex: number, worldX: number, worldZ: number, radius: number): void {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS || radius <= 0) {
+      return;
+    }
+
+    const [cx, cz] = this.worldToCell(worldX, worldZ);
+    const cellRadius = Math.ceil(radius / this.cellSize);
+    const lookers = this.lookerCounts[playerIndex];
+    const seen = this.everSeen[playerIndex];
+    if (!lookers || !seen) return;
+    const radiusSq = cellRadius * cellRadius;
+
+    for (let dz = -cellRadius; dz <= cellRadius; dz++) {
+      const gz = cz + dz;
+      if (gz < 0 || gz >= this.cellsDeep) {
+        continue;
+      }
+      for (let dx = -cellRadius; dx <= cellRadius; dx++) {
+        const gx = cx + dx;
+        if (gx < 0 || gx >= this.cellsWide) {
+          continue;
+        }
+        if (dx * dx + dz * dz <= radiusSq) {
+          const idx = this.cellIndex(gx, gz);
+          lookers[idx] = (lookers[idx] ?? 0) + 1;
+          seen[idx] = 1;
+        }
+      }
+    }
+  }
+
+  /**
+   * Remove a looker (decrements looker count). Call when a unit moves or dies.
+   * Source parity: PartitionManager::queueUndoShroudReveal
+   */
+  removeLooker(playerIndex: number, worldX: number, worldZ: number, radius: number): void {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS || radius <= 0) {
+      return;
+    }
+
+    const [cx, cz] = this.worldToCell(worldX, worldZ);
+    const cellRadius = Math.ceil(radius / this.cellSize);
+    const lookers = this.lookerCounts[playerIndex];
+    if (!lookers) return;
+    const radiusSq = cellRadius * cellRadius;
+
+    for (let dz = -cellRadius; dz <= cellRadius; dz++) {
+      const gz = cz + dz;
+      if (gz < 0 || gz >= this.cellsDeep) {
+        continue;
+      }
+      for (let dx = -cellRadius; dx <= cellRadius; dx++) {
+        const gx = cx + dx;
+        if (gx < 0 || gx >= this.cellsWide) {
+          continue;
+        }
+        if (dx * dx + dz * dz <= radiusSq) {
+          const idx = this.cellIndex(gx, gz);
+          lookers[idx] = Math.max(0, (lookers[idx] ?? 0) - 1);
+        }
+      }
+    }
+  }
+
+  /**
+   * Get visibility of a cell for a specific player.
+   */
+  getCellVisibility(playerIndex: number, worldX: number, worldZ: number): CellVisibility {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS) {
+      return CELL_SHROUDED;
+    }
+
+    const [cx, cz] = this.worldToCell(worldX, worldZ);
+    const idx = this.cellIndex(cx, cz);
+
+    if ((this.lookerCounts[playerIndex]?.[idx] ?? 0) > 0) {
+      return CELL_CLEAR;
+    }
+    if (this.everSeen[playerIndex]?.[idx]) {
+      return CELL_FOGGED;
+    }
+    return CELL_SHROUDED;
+  }
+
+  /**
+   * Get visibility of an entity position for a specific player.
+   */
+  getObjectVisibility(playerIndex: number, worldX: number, worldZ: number): number {
+    return this.getCellVisibility(playerIndex, worldX, worldZ);
+  }
+
+  /**
+   * Check if a position is visible (CLEAR) for a player.
+   */
+  isVisible(playerIndex: number, worldX: number, worldZ: number): boolean {
+    return this.getCellVisibility(playerIndex, worldX, worldZ) === CELL_CLEAR;
+  }
+
+  /**
+   * Check if a position has ever been revealed for a player.
+   */
+  isExplored(playerIndex: number, worldX: number, worldZ: number): boolean {
+    return this.getCellVisibility(playerIndex, worldX, worldZ) !== CELL_SHROUDED;
+  }
+
+  /**
+   * Reset all fog of war state.
+   */
+  reset(): void {
+    for (let p = 0; p < MAX_FOW_PLAYERS; p++) {
+      this.lookerCounts[p]!.fill(0);
+      this.everSeen[p]!.fill(0);
+    }
+  }
+}
+
+// ──── Per-entity vision tracking state ─────────────────────────────────────
+export interface EntityVisionState {
+  lastLookX: number;
+  lastLookZ: number;
+  lastLookRadius: number;
+  isLooking: boolean;
+}
+
+export function createEntityVisionState(): EntityVisionState {
+  return {
+    lastLookX: 0,
+    lastLookZ: 0,
+    lastLookRadius: 0,
+    isLooking: false,
+  };
+}
+
+/**
+ * Update entity's vision contribution to the fog of war grid.
+ * Handles the look/unlook cycle when entities move.
+ */
+export function updateEntityVision(
+  grid: FogOfWarGrid,
+  visionState: EntityVisionState,
+  playerIndex: number,
+  worldX: number,
+  worldZ: number,
+  visionRange: number,
+  isAlive: boolean,
+): void {
+  // If entity is dead or has no vision, remove previous look.
+  if (!isAlive || visionRange <= 0) {
+    if (visionState.isLooking) {
+      grid.removeLooker(playerIndex, visionState.lastLookX, visionState.lastLookZ, visionState.lastLookRadius);
+      visionState.isLooking = false;
+    }
+    return;
+  }
+
+  // If entity has moved, remove old looker and add new one.
+  if (visionState.isLooking) {
+    // Only update if position changed significantly.
+    const dx = worldX - visionState.lastLookX;
+    const dz = worldZ - visionState.lastLookZ;
+    const movedDistSq = dx * dx + dz * dz;
+    const cellSizeSq = grid.cellSize * grid.cellSize;
+
+    if (movedDistSq < cellSizeSq * 0.25) {
+      // Haven't moved a significant amount — skip update for performance.
+      return;
+    }
+
+    grid.removeLooker(playerIndex, visionState.lastLookX, visionState.lastLookZ, visionState.lastLookRadius);
+  }
+
+  // Add new looker at current position.
+  grid.addLooker(playerIndex, worldX, worldZ, visionRange);
+  visionState.lastLookX = worldX;
+  visionState.lastLookZ = worldZ;
+  visionState.lastLookRadius = visionRange;
+  visionState.isLooking = true;
+}

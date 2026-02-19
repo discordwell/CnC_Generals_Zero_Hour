@@ -1,0 +1,474 @@
+/**
+ * Basic skirmish AI opponent.
+ *
+ * Source parity:
+ *   Generals/Code/GameEngine/Source/GameLogic/AI/AIPlayer.cpp
+ *   Generals/Code/GameEngine/Include/GameLogic/AI/AIPlayer.h
+ *   Generals/Code/GameEngine/Source/GameLogic/AI/AISkirmishPlayer.cpp
+ *
+ * Implementation: A frame-driven decision loop that evaluates economy, production,
+ * and combat at staggered intervals. Issues commands through the same command API
+ * used by human players.
+ */
+
+import type { GameLogicCommand } from './types.js';
+
+// ──── Evaluation intervals (in logic frames, ~15 FPS) ────────────────────────
+const ECONOMY_EVAL_INTERVAL = 30;  // ~2 seconds
+const PRODUCTION_EVAL_INTERVAL = 45; // ~3 seconds
+const COMBAT_EVAL_INTERVAL = 90;   // ~6 seconds
+// Structure evaluation interval reserved for future build-order AI: 60 frames (~4s)
+
+// ──── Resource thresholds (source parity: AIData.ini) ────────────────────────
+const RESOURCES_POOR_THRESHOLD = 500;
+const RESOURCES_WEALTHY_THRESHOLD = 3000;
+const MIN_ATTACK_FORCE = 4;
+const DESIRED_HARVESTERS = 2;
+
+// ──── Entity abstraction ─────────────────────────────────────────────────────
+
+export interface AIEntity {
+  id: number;
+  templateName: string;
+  side?: string;
+  x: number;
+  z: number;
+  destroyed: boolean;
+  health: number;
+  maxHealth: number;
+  kindOf: ReadonlySet<string>;
+  moving: boolean;
+  attackTargetEntityId: number | null;
+  canMove: boolean;
+}
+
+// ──── AI context (provided by GameLogicSubsystem) ────────────────────────────
+
+export interface SkirmishAIContext<TEntity extends AIEntity> {
+  readonly frameCounter: number;
+  readonly spawnedEntities: ReadonlyMap<number, TEntity>;
+
+  /** Get credits for a side. */
+  getSideCredits(side: string): number;
+
+  /** Submit a command. */
+  submitCommand(command: GameLogicCommand): void;
+
+  /** Get team relationship between sides: 0=enemies, 1=neutral, 2=allies. */
+  getRelationship(sideA: string, sideB: string): number;
+
+  /** Normalize a side string. */
+  normalizeSide(side: string | undefined): string;
+
+  /** Check if an entity has a production queue capability. */
+  hasProductionQueue(entity: TEntity): boolean;
+
+  /** Check if an entity is currently producing. */
+  isProducing(entity: TEntity): boolean;
+
+  /** Get producible unit template names for a factory entity. */
+  getProducibleUnits(entity: TEntity): string[];
+}
+
+// ──── Per-AI state ──────────────────────────────────────────────────────────
+
+export interface SkirmishAIState {
+  side: string;
+  enabled: boolean;
+  lastEconomyFrame: number;
+  lastProductionFrame: number;
+  lastCombatFrame: number;
+  lastStructureFrame: number;
+  /** Rally point for new units. */
+  rallyX: number;
+  rallyZ: number;
+  /** Known enemy base position (first discovered enemy structure). */
+  enemyBaseX: number;
+  enemyBaseZ: number;
+  enemyBaseKnown: boolean;
+  /** Track attack waves sent. */
+  attackWavesSent: number;
+}
+
+export function createSkirmishAIState(side: string): SkirmishAIState {
+  return {
+    side,
+    enabled: true,
+    lastEconomyFrame: 0,
+    lastProductionFrame: 0,
+    lastCombatFrame: 0,
+    lastStructureFrame: 0,
+    rallyX: 0,
+    rallyZ: 0,
+    enemyBaseX: 0,
+    enemyBaseZ: 0,
+    enemyBaseKnown: false,
+    attackWavesSent: 0,
+  };
+}
+
+// ──── Helper: collect entities by side and criteria ──────────────────────────
+
+function collectEntitiesBySide<TEntity extends AIEntity>(
+  entities: ReadonlyMap<number, TEntity>,
+  side: string,
+  normalizeSide: (s: string | undefined) => string,
+  filter?: (entity: TEntity) => boolean,
+): TEntity[] {
+  const result: TEntity[] = [];
+  const normalizedSide = normalizeSide(side);
+
+  for (const entity of entities.values()) {
+    if (entity.destroyed) {
+      continue;
+    }
+    if (normalizeSide(entity.side) !== normalizedSide) {
+      continue;
+    }
+    if (filter && !filter(entity)) {
+      continue;
+    }
+    result.push(entity);
+  }
+
+  return result;
+}
+
+function hasKindOf(entity: AIEntity, kind: string): boolean {
+  return entity.kindOf.has(kind);
+}
+
+function distSquared(ax: number, az: number, bx: number, bz: number): number {
+  const dx = ax - bx;
+  const dz = az - bz;
+  return dx * dx + dz * dz;
+}
+
+// ──── Main AI update ────────────────────────────────────────────────────────
+
+export function updateSkirmishAI<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  if (!state.enabled) {
+    return;
+  }
+
+  const frame = context.frameCounter;
+
+  // Initialize rally point near our base.
+  if (state.rallyX === 0 && state.rallyZ === 0) {
+    initializeBasePosition(state, context);
+  }
+
+  // Discover enemy base position.
+  if (!state.enemyBaseKnown) {
+    discoverEnemyBase(state, context);
+  }
+
+  // Staggered evaluation loops.
+  if (frame - state.lastEconomyFrame >= ECONOMY_EVAL_INTERVAL) {
+    evaluateEconomy(state, context);
+    state.lastEconomyFrame = frame;
+  }
+
+  if (frame - state.lastProductionFrame >= PRODUCTION_EVAL_INTERVAL) {
+    evaluateProduction(state, context);
+    state.lastProductionFrame = frame;
+  }
+
+  if (frame - state.lastCombatFrame >= COMBAT_EVAL_INTERVAL) {
+    evaluateCombat(state, context);
+    state.lastCombatFrame = frame;
+  }
+}
+
+// ──── Initialize base position ──────────────────────────────────────────────
+
+function initializeBasePosition<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  // Find our structures to set rally point near base.
+  const structures = collectEntitiesBySide(
+    context.spawnedEntities,
+    state.side,
+    context.normalizeSide,
+    (e) => hasKindOf(e, 'STRUCTURE'),
+  );
+
+  if (structures.length > 0) {
+    // Average position of structures = base center.
+    let sumX = 0;
+    let sumZ = 0;
+    for (const s of structures) {
+      sumX += s.x;
+      sumZ += s.z;
+    }
+    state.rallyX = sumX / structures.length;
+    state.rallyZ = sumZ / structures.length;
+  } else {
+    // Use any owned unit position as fallback.
+    const units = collectEntitiesBySide(
+      context.spawnedEntities,
+      state.side,
+      context.normalizeSide,
+    );
+    const firstUnit = units[0];
+    if (firstUnit) {
+      state.rallyX = firstUnit.x;
+      state.rallyZ = firstUnit.z;
+    }
+  }
+}
+
+// ──── Discover enemy base ───────────────────────────────────────────────────
+
+function discoverEnemyBase<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  const normalizedSide = context.normalizeSide(state.side);
+
+  for (const entity of context.spawnedEntities.values()) {
+    if (entity.destroyed) {
+      continue;
+    }
+
+    const entitySide = context.normalizeSide(entity.side);
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) {
+      continue;
+    }
+
+    // Found an enemy entity — use first enemy structure as base, or any enemy unit.
+    if (hasKindOf(entity, 'STRUCTURE')) {
+      state.enemyBaseX = entity.x;
+      state.enemyBaseZ = entity.z;
+      state.enemyBaseKnown = true;
+      return;
+    }
+
+    // Fallback: use first enemy unit found.
+    if (!state.enemyBaseKnown) {
+      state.enemyBaseX = entity.x;
+      state.enemyBaseZ = entity.z;
+      state.enemyBaseKnown = true;
+    }
+  }
+}
+
+// ──── Economy evaluation ────────────────────────────────────────────────────
+
+function evaluateEconomy<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  // Count our harvesters (supply trucks).
+  const harvesters = collectEntitiesBySide(
+    context.spawnedEntities,
+    state.side,
+    context.normalizeSide,
+    (e) => hasKindOf(e, 'HARVESTER') || e.templateName.toUpperCase().includes('SUPPLY'),
+  );
+
+  if (harvesters.length < DESIRED_HARVESTERS) {
+    // Find a factory that can produce harvesters.
+    const factories = collectEntitiesBySide(
+      context.spawnedEntities,
+      state.side,
+      context.normalizeSide,
+      (e) => context.hasProductionQueue(e) && !context.isProducing(e),
+    );
+
+    for (const factory of factories) {
+      const producible = context.getProducibleUnits(factory);
+      const harvesterTemplate = producible.find(
+        name => name.toUpperCase().includes('SUPPLY') || name.toUpperCase().includes('WORKER'),
+      );
+
+      if (harvesterTemplate) {
+        context.submitCommand({
+          type: 'queueUnitProduction',
+          entityId: factory.id,
+          unitTemplateName: harvesterTemplate,
+        });
+        break;
+      }
+    }
+  }
+}
+
+// ──── Production evaluation ─────────────────────────────────────────────────
+
+function evaluateProduction<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  const credits = context.getSideCredits(state.side);
+  if (credits < RESOURCES_POOR_THRESHOLD) {
+    return; // Save money.
+  }
+
+  // Count our combat units (non-structure, non-harvester units that can move).
+  const combatUnits = collectEntitiesBySide(
+    context.spawnedEntities,
+    state.side,
+    context.normalizeSide,
+    (e) =>
+      e.canMove
+      && !hasKindOf(e, 'STRUCTURE')
+      && !hasKindOf(e, 'HARVESTER')
+      && !e.templateName.toUpperCase().includes('SUPPLY')
+      && !e.templateName.toUpperCase().includes('DOZER')
+      && !e.templateName.toUpperCase().includes('WORKER'),
+  );
+
+  // Find idle factories (not currently producing).
+  const factories = collectEntitiesBySide(
+    context.spawnedEntities,
+    state.side,
+    context.normalizeSide,
+    (e) => context.hasProductionQueue(e) && !context.isProducing(e),
+  );
+
+  if (factories.length === 0) {
+    return;
+  }
+
+  // Source parity: AI builds more aggressively when wealthy.
+  const desiredUnits = credits >= RESOURCES_WEALTHY_THRESHOLD ? 12 : 8;
+
+  if (combatUnits.length >= desiredUnits) {
+    return; // Have enough.
+  }
+
+  // Queue units at idle factories.
+  for (const factory of factories) {
+    if (credits < RESOURCES_POOR_THRESHOLD) {
+      break;
+    }
+
+    const producible = context.getProducibleUnits(factory);
+    // Filter out harvesters/workers.
+    const combatTemplates = producible.filter(
+      name =>
+        !name.toUpperCase().includes('SUPPLY')
+        && !name.toUpperCase().includes('WORKER')
+        && !name.toUpperCase().includes('DOZER'),
+    );
+
+    if (combatTemplates.length === 0) {
+      continue;
+    }
+
+    // Simple round-robin selection based on frame counter.
+    const templateIndex = context.frameCounter % combatTemplates.length;
+    const selectedTemplate = combatTemplates[templateIndex]!;
+
+    context.submitCommand({
+      type: 'queueUnitProduction',
+      entityId: factory.id,
+      unitTemplateName: selectedTemplate,
+    });
+  }
+}
+
+// ──── Combat evaluation ─────────────────────────────────────────────────────
+
+function evaluateCombat<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  if (!state.enemyBaseKnown) {
+    return;
+  }
+
+  // Collect idle combat units (not already attacking or moving).
+  const idleCombat = collectEntitiesBySide(
+    context.spawnedEntities,
+    state.side,
+    context.normalizeSide,
+    (e) =>
+      e.canMove
+      && !hasKindOf(e, 'STRUCTURE')
+      && !hasKindOf(e, 'HARVESTER')
+      && !e.templateName.toUpperCase().includes('SUPPLY')
+      && !e.templateName.toUpperCase().includes('DOZER')
+      && !e.templateName.toUpperCase().includes('WORKER')
+      && e.attackTargetEntityId === null
+      && !e.moving,
+  );
+
+  // Only attack with minimum force.
+  if (idleCombat.length < MIN_ATTACK_FORCE) {
+    return;
+  }
+
+  // Find nearest enemy structure/unit to attack.
+  const target = findPriorityTarget(state, context);
+  if (!target) {
+    return;
+  }
+
+  // Order all idle combat units to attack-move to enemy.
+  for (const unit of idleCombat) {
+    context.submitCommand({
+      type: 'attackEntity',
+      entityId: unit.id,
+      targetEntityId: target.id,
+      commandSource: 'AI',
+    });
+  }
+
+  state.attackWavesSent++;
+}
+
+// ──── Find priority attack target ───────────────────────────────────────────
+
+function findPriorityTarget<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): TEntity | null {
+  const normalizedSide = context.normalizeSide(state.side);
+  let bestTarget: TEntity | null = null;
+  let bestScore = -Infinity;
+
+  for (const entity of context.spawnedEntities.values()) {
+    if (entity.destroyed) {
+      continue;
+    }
+
+    const entitySide = context.normalizeSide(entity.side);
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) {
+      continue;
+    }
+
+    // Prioritize: structures > vehicles > infantry.
+    // Closer targets preferred.
+    let score = 0;
+    if (hasKindOf(entity, 'STRUCTURE')) {
+      score += 100;
+    } else if (hasKindOf(entity, 'VEHICLE')) {
+      score += 50;
+    } else {
+      score += 25;
+    }
+
+    // Proximity bonus.
+    const dist = Math.sqrt(distSquared(state.rallyX, state.rallyZ, entity.x, entity.z));
+    score -= dist * 0.1;
+
+    // Low health bonus.
+    if (entity.maxHealth > 0) {
+      const healthRatio = entity.health / entity.maxHealth;
+      score += (1 - healthRatio) * 30;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestTarget = entity;
+    }
+  }
+
+  return bestTarget;
+}

@@ -1,9 +1,13 @@
 /**
  * C&C Generals: Zero Hour — Browser Port
  *
- * Application entry point. Wires subsystems: InputManager, RTSCamera,
- * TerrainVisual, WaterVisual. Loads either a converted map JSON
- * (via ?map=path.json URL param) or a procedural demo terrain.
+ * Application entry point. Two-phase initialization:
+ *   Phase 1 (preInit): Renderer, scene, assets, INI data, audio setup
+ *   Phase 2 (startGame): Map load, game logic, game loop
+ *
+ * Between phases the game shell (main menu / skirmish setup) is shown.
+ * If a ?map= URL parameter is present, the shell is skipped for backward
+ * compatibility with direct-load workflows.
  */
 
 import * as THREE from 'three';
@@ -49,6 +53,7 @@ import {
   loadOptionPreferencesFromStorage,
 } from './option-preferences.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
+import { GameShell, type SkirmishSettings } from './game-shell.js';
 
 // ============================================================================
 // Loading screen
@@ -61,6 +66,19 @@ const loadingScreen = document.getElementById('loading-screen') as HTMLDivElemen
 function setLoadingProgress(percent: number, status: string): void {
   loadingBar.style.width = `${percent}%`;
   loadingStatus.textContent = status;
+}
+
+function showLoadingScreen(): void {
+  loadingScreen.style.display = 'flex';
+  loadingScreen.style.opacity = '1';
+}
+
+async function hideLoadingScreen(): Promise<void> {
+  setLoadingProgress(100, 'Ready!');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  loadingScreen.style.opacity = '0';
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  loadingScreen.style.display = 'none';
 }
 
 function escapeRegExp(value: string): string {
@@ -222,10 +240,32 @@ function registerIniAudioEvents(
 }
 
 // ============================================================================
-// Engine initialization
+// Pre-initialization context (shared between menu and game)
 // ============================================================================
 
-async function init(): Promise<void> {
+interface PreInitContext {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  canvas: HTMLCanvasElement;
+  subsystems: SubsystemRegistry;
+  assets: AssetManager;
+  inputManager: InputManager;
+  rtsCamera: RTSCamera;
+  terrainVisual: TerrainVisual;
+  waterVisual: WaterVisual;
+  audioManager: AudioManager;
+  networkManager: ReturnType<typeof initializeNetworkClient>;
+  uiRuntime: UiRuntime;
+  iniDataRegistry: IniDataRegistry;
+  iniDataInfo: string;
+}
+
+// ============================================================================
+// Phase 1: Pre-initialization (assets, renderer, INI data, audio)
+// ============================================================================
+
+async function preInit(): Promise<PreInitContext> {
   initializeAudioContext();
   const networkManager = initializeNetworkClient({ forceSinglePlayer: true });
   initializeUiOverlay();
@@ -239,6 +279,8 @@ async function init(): Promise<void> {
     powerPreference: 'high-performance',
   });
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setClearColor(0x1a1a2e);
 
@@ -262,7 +304,17 @@ async function init(): Promise<void> {
   const sunLight = new THREE.DirectionalLight(0xfff4e0, 1.3);
   sunLight.position.set(200, 400, 200);
   sunLight.castShadow = true;
+  sunLight.shadow.mapSize.width = 2048;
+  sunLight.shadow.mapSize.height = 2048;
+  sunLight.shadow.camera.near = 10;
+  sunLight.shadow.camera.far = 1000;
+  sunLight.shadow.camera.left = -300;
+  sunLight.shadow.camera.right = 300;
+  sunLight.shadow.camera.top = 300;
+  sunLight.shadow.camera.bottom = -300;
+  sunLight.shadow.bias = -0.001;
   scene.add(sunLight);
+  scene.add(sunLight.target);
 
   // Hemisphere light for natural sky/ground coloring
   const hemiLight = new THREE.HemisphereLight(0x88aacc, 0x445533, 0.4);
@@ -337,7 +389,6 @@ async function init(): Promise<void> {
     );
   }
 
-  const iniDataStats = iniDataRegistry.getStats();
   let browserStorage: Storage | null = null;
   if (typeof window !== 'undefined') {
     try {
@@ -356,10 +407,6 @@ async function init(): Promise<void> {
   const audioSettings = iniDataRegistry.getAudioSettings();
   if (audioSettings) {
     if (audioSettings.sampleCount2D !== undefined || audioSettings.sampleCount3D !== undefined) {
-      // Source behavior from AudioSettings / MilesAudioManager::initSamplePools:
-      // sample pool capacities come from INI-configured counts.
-      // TODO: Source parity gap. GameLOD/user-preference presets can override these
-      // counts at runtime; that override path is not yet ported.
       audioManager.setSampleCounts(
         audioSettings.sampleCount2D ?? Number.NaN,
         audioSettings.sampleCount3D ?? Number.NaN,
@@ -370,20 +417,14 @@ async function init(): Promise<void> {
     }
 
     if (audioSettings.streamCount !== undefined) {
-      // Source behavior from AudioSettings::StreamCount:
-      // streaming voices share a finite stream pool.
       audioManager.setStreamCount(audioSettings.streamCount);
       iniDataInfo += ` | Audio stream pool=${audioSettings.streamCount}`;
     }
     if (audioSettings.minSampleVolume !== undefined) {
-      // Source behavior from AudioSettings::MinSampleVolume:
-      // low-volume samples are culled globally before playback.
       audioManager.setGlobalMinVolume(audioSettings.minSampleVolume);
       iniDataInfo += ` | Audio min sample volume=${audioSettings.minSampleVolume}`;
     }
     if (audioSettings.globalMinRange !== undefined || audioSettings.globalMaxRange !== undefined) {
-      // Source behavior from MilesAudioManager::playSample3D/getEffectiveVolume:
-      // ST_GLOBAL events use AudioSettings global range bounds.
       audioManager.setGlobalRanges(
         audioSettings.globalMinRange,
         audioSettings.globalMaxRange,
@@ -425,8 +466,6 @@ async function init(): Promise<void> {
     if (audioOptionPreferences.preferred3DProvider || audioOptionPreferences.speakerType) {
       audioManager.setPreferredProvider(audioOptionPreferences.preferred3DProvider ?? null);
       audioManager.setPreferredSpeaker(audioOptionPreferences.speakerType ?? null);
-      // TODO: Source parity gap. Browser backend currently stores preferred
-      // provider/speaker metadata but cannot route to Miles device selection.
       iniDataInfo +=
         ` | Audio prefs provider=${audioOptionPreferences.preferred3DProvider ?? 'default'}` +
         ` speaker=${audioOptionPreferences.speakerType ?? 'default'}`;
@@ -435,22 +474,58 @@ async function init(): Promise<void> {
     if (resolvedSfxVolumes.usedRelative2DVolume && audioSettings.relative2DVolume !== undefined) {
       iniDataInfo += ` | Audio Relative2DVolume=${audioSettings.relative2DVolume}`;
     }
-    if (resolvedSfxVolumes.unresolvedRelative2DVolume) {
-      // TODO: Source parity gap. Relative2DVolume fallback depends on source
-      // AudioSettings defaults for both SFX channels. INI bundles missing those
-      // defaults cannot resolve preferred SFX volumes exactly.
-    }
   }
   const registeredAudioEvents = registerIniAudioEvents(iniDataRegistry, audioManager);
   iniDataInfo += ` | Audio events: ${registeredAudioEvents}`;
   setLoadingProgress(48, 'Game data ready');
+
+  return {
+    renderer,
+    scene,
+    camera,
+    canvas,
+    subsystems,
+    assets,
+    inputManager,
+    rtsCamera,
+    terrainVisual,
+    waterVisual,
+    audioManager,
+    networkManager,
+    uiRuntime,
+    iniDataRegistry,
+    iniDataInfo,
+  };
+}
+
+// ============================================================================
+// Phase 2: Start game (map load, game logic, game loop)
+// ============================================================================
+
+async function startGame(
+  ctx: PreInitContext,
+  mapPath: string | null,
+  skirmishSettings: SkirmishSettings | null,
+): Promise<void> {
+  const {
+    renderer, scene, camera, subsystems, assets, inputManager, rtsCamera,
+    terrainVisual, waterVisual, audioManager, networkManager, uiRuntime,
+    iniDataRegistry, iniDataInfo,
+  } = ctx;
+
+  showLoadingScreen();
+  setLoadingProgress(50, 'Loading terrain...');
+
+  const iniDataStats = iniDataRegistry.getStats();
+  const dataSuffix = ` | INI: ${iniDataStats.objects} objects, ${iniDataStats.weapons} weapons, ${iniDataStats.audioEvents} audio`;
+  console.log(`Game data status: ${iniDataInfo}`);
 
   // Game logic + object visuals
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
   const objectVisualManager = new ObjectVisualManager(scene, assets);
   const gameLogic = new GameLogicSubsystem(scene, {
     attackUsesLineOfSight,
-    pickObjectByInput: (input, camera) => objectVisualManager.pickObjectByInput(input, camera),
+    pickObjectByInput: (input, cam) => objectVisualManager.pickObjectByInput(input, cam),
   });
   const maybeSetDeterministicGameLogicCrcSectionWriters = (
     networkManager as unknown as {
@@ -479,27 +554,28 @@ async function init(): Promise<void> {
   );
   syncPlayerSidesFromNetwork(networkManager, gameLogic);
 
-  setLoadingProgress(50, 'Loading terrain...');
-  const dataSuffix = ` | INI: ${iniDataStats.objects} objects, ${iniDataStats.weapons} weapons, ${iniDataStats.audioEvents} audio`;
-  console.log(`Game data status: ${iniDataInfo}`);
+  // ========================================================================
+  // Apply skirmish settings (player side, AI, credits)
+  // ========================================================================
+
+  if (skirmishSettings) {
+    // Set local player side
+    gameLogic.setPlayerSide(0, skirmishSettings.playerSide);
+
+    // Set AI player side and enable AI
+    if (skirmishSettings.aiEnabled) {
+      gameLogic.setPlayerSide(1, skirmishSettings.aiSide);
+    }
+  }
 
   // ========================================================================
   // Load terrain (map JSON or procedural demo)
   // ========================================================================
 
-  const urlParams = new URLSearchParams(window.location.search);
-  const mapPathParam = urlParams.get('map');
-  const mapPath = normalizeRuntimeAssetPath(mapPathParam);
   let mapData: MapDataJSON;
-
   let loadedFromJSON = false;
 
-  if (mapPathParam !== null) {
-    if (!mapPath) {
-      throw new Error(
-        `Requested map path "${mapPathParam}" is invalid after runtime normalization`,
-      );
-    }
+  if (mapPath) {
     try {
       const handle = await assets.loadJSON<MapDataJSON>(mapPath, (loaded, total) => {
         const pct = total > 0 ? Math.round(50 + (loaded / total) * 20) : 60;
@@ -543,6 +619,28 @@ async function init(): Promise<void> {
   setLoadingProgress(70, 'Configuring camera...');
 
   // ========================================================================
+  // Apply post-load skirmish settings (credits, AI)
+  // ========================================================================
+
+  if (skirmishSettings) {
+    // Set starting credits
+    gameLogic.submitCommand({
+      type: 'setSideCredits',
+      side: skirmishSettings.playerSide,
+      amount: skirmishSettings.startingCredits,
+    });
+
+    if (skirmishSettings.aiEnabled) {
+      gameLogic.submitCommand({
+        type: 'setSideCredits',
+        side: skirmishSettings.aiSide,
+        amount: skirmishSettings.startingCredits,
+      });
+      gameLogic.enableSkirmishAI(skirmishSettings.aiSide);
+    }
+  }
+
+  // ========================================================================
   // Camera setup
   // ========================================================================
 
@@ -558,10 +656,262 @@ async function init(): Promise<void> {
   setLoadingProgress(90, 'Starting game loop...');
 
   // ========================================================================
+  // Fog of war overlay
+  // ========================================================================
+
+  let fogOverlayMesh: THREE.Mesh | null = null;
+  let fogTexture: THREE.DataTexture | null = null;
+  let fogTextureWidth = 0;
+  let fogTextureHeight = 0;
+  const FOG_UPDATE_INTERVAL = 5; // Update every N frames for performance.
+  let fogUpdateCounter = 0;
+
+  // Lazy-create fog overlay on first visibility data.
+  const createFogOverlay = (cellsWide: number, cellsDeep: number): void => {
+    fogTextureWidth = cellsWide;
+    fogTextureHeight = cellsDeep;
+    const texData = new Uint8Array(cellsWide * cellsDeep * 4);
+    // Initialize fully black (shrouded).
+    for (let i = 0; i < cellsWide * cellsDeep; i++) {
+      texData[i * 4] = 0;
+      texData[i * 4 + 1] = 0;
+      texData[i * 4 + 2] = 0;
+      texData[i * 4 + 3] = 255;
+    }
+    fogTexture = new THREE.DataTexture(texData, cellsWide, cellsDeep);
+    fogTexture.magFilter = THREE.LinearFilter;
+    fogTexture.minFilter = THREE.LinearFilter;
+    fogTexture.needsUpdate = true;
+
+    const fogGeometry = new THREE.PlaneGeometry(heightmap.worldWidth, heightmap.worldDepth);
+    const fogMaterial = new THREE.MeshBasicMaterial({
+      map: fogTexture,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    fogOverlayMesh = new THREE.Mesh(fogGeometry, fogMaterial);
+    fogOverlayMesh.rotation.x = -Math.PI / 2;
+    fogOverlayMesh.position.set(heightmap.worldWidth / 2, 0.5, heightmap.worldDepth / 2);
+    fogOverlayMesh.renderOrder = 500;
+    fogOverlayMesh.name = 'fog-of-war-overlay';
+    scene.add(fogOverlayMesh);
+  };
+
+  const updateFogOverlay = (): void => {
+    const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
+    if (!localSide) return;
+
+    const fogData = gameLogic.getFogOfWarTextureData(localSide);
+    if (!fogData) return;
+
+    if (!fogOverlayMesh) {
+      createFogOverlay(fogData.cellsWide, fogData.cellsDeep);
+    }
+
+    if (!fogTexture) return;
+
+    const texData = fogTexture.image.data as Uint8Array;
+    for (let i = 0; i < fogData.data.length; i++) {
+      const vis = fogData.data[i]!;
+      // 0=SHROUDED → black opaque, 1=FOGGED → dark semi-transparent, 2=CLEAR → fully transparent
+      if (vis === 0) {
+        texData[i * 4] = 0;
+        texData[i * 4 + 1] = 0;
+        texData[i * 4 + 2] = 0;
+        texData[i * 4 + 3] = 230;
+      } else if (vis === 1) {
+        texData[i * 4] = 0;
+        texData[i * 4 + 1] = 0;
+        texData[i * 4 + 2] = 0;
+        texData[i * 4 + 3] = 140;
+      } else {
+        texData[i * 4] = 0;
+        texData[i * 4 + 1] = 0;
+        texData[i * 4 + 2] = 0;
+        texData[i * 4 + 3] = 0;
+      }
+    }
+    fogTexture.needsUpdate = true;
+  };
+
+  // ========================================================================
   // Debug info & keyboard shortcuts
   // ========================================================================
 
   const debugInfo = document.getElementById('debug-info') as HTMLDivElement;
+  const creditsHud = document.getElementById('credits-hud') as HTMLDivElement;
+  creditsHud.style.display = 'block';
+
+  // End-game overlay
+  const endGameOverlay = document.createElement('div');
+  endGameOverlay.id = 'endgame-overlay';
+  Object.assign(endGameOverlay.style, {
+    position: 'absolute',
+    top: '0',
+    left: '0',
+    width: '100%',
+    height: '100%',
+    display: 'none',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(0, 0, 0, 0.75)',
+    zIndex: '900',
+    pointerEvents: 'auto',
+  });
+  endGameOverlay.innerHTML = `
+    <div id="endgame-title" style="
+      font-size: 3rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      margin-bottom: 1rem;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+    "></div>
+    <div id="endgame-subtitle" style="
+      font-size: 1.1rem;
+      color: #8a8070;
+      margin-bottom: 2rem;
+    "></div>
+    <button id="endgame-menu-btn" style="
+      padding: 10px 32px;
+      font-size: 1rem;
+      font-weight: 600;
+      background: linear-gradient(180deg, #c9a84c 0%, #a08030 100%);
+      color: #1a1a2e;
+      border: none;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    ">Return to Menu</button>
+  `;
+  document.getElementById('game-container')!.appendChild(endGameOverlay);
+
+  document.getElementById('endgame-menu-btn')!.addEventListener('click', () => {
+    window.location.reload();
+  });
+
+  let gameEnded = false;
+
+  // ========================================================================
+  // Minimap
+  // ========================================================================
+
+  const MINIMAP_SIZE = 200;
+  const minimapCanvas = document.createElement('canvas');
+  minimapCanvas.id = 'minimap-canvas';
+  minimapCanvas.width = MINIMAP_SIZE;
+  minimapCanvas.height = MINIMAP_SIZE;
+  Object.assign(minimapCanvas.style, {
+    position: 'absolute',
+    bottom: '8px',
+    left: '8px',
+    width: `${MINIMAP_SIZE}px`,
+    height: `${MINIMAP_SIZE}px`,
+    border: '2px solid rgba(201, 168, 76, 0.5)',
+    background: '#111',
+    zIndex: '100',
+    cursor: 'pointer',
+    pointerEvents: 'auto',
+  });
+  document.getElementById('game-container')!.appendChild(minimapCanvas);
+  const minimapCtx = minimapCanvas.getContext('2d')!;
+
+  // Pre-render terrain base image once.
+  const minimapTerrainCanvas = document.createElement('canvas');
+  minimapTerrainCanvas.width = MINIMAP_SIZE;
+  minimapTerrainCanvas.height = MINIMAP_SIZE;
+  const minimapTerrainCtx = minimapTerrainCanvas.getContext('2d')!;
+  const terrainImgData = minimapTerrainCtx.createImageData(MINIMAP_SIZE, MINIMAP_SIZE);
+  for (let py = 0; py < MINIMAP_SIZE; py++) {
+    for (let px = 0; px < MINIMAP_SIZE; px++) {
+      const worldX = (px / MINIMAP_SIZE) * heightmap.worldWidth;
+      const worldZ = (py / MINIMAP_SIZE) * heightmap.worldDepth;
+      const h = heightmap.getInterpolatedHeight(worldX, worldZ);
+      // Map height to green-brown terrain color.
+      const t = Math.max(0, Math.min(1, h / 30));
+      const r = Math.round(40 + t * 80);
+      const g = Math.round(60 + t * 100);
+      const b = Math.round(30 + t * 40);
+      const idx = (py * MINIMAP_SIZE + px) * 4;
+      terrainImgData.data[idx] = r;
+      terrainImgData.data[idx + 1] = g;
+      terrainImgData.data[idx + 2] = b;
+      terrainImgData.data[idx + 3] = 255;
+    }
+  }
+  minimapTerrainCtx.putImageData(terrainImgData, 0, 0);
+
+  // Click on minimap to move camera.
+  minimapCanvas.addEventListener('mousedown', (e) => {
+    const rect = minimapCanvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width;
+    const my = (e.clientY - rect.top) / rect.height;
+    const worldX = mx * heightmap.worldWidth;
+    const worldZ = my * heightmap.worldDepth;
+    rtsCamera.lookAt(worldX, worldZ);
+  });
+
+  let minimapDragging = false;
+  minimapCanvas.addEventListener('mousedown', () => { minimapDragging = true; });
+  window.addEventListener('mouseup', () => { minimapDragging = false; });
+  minimapCanvas.addEventListener('mousemove', (e) => {
+    if (!minimapDragging) return;
+    const rect = minimapCanvas.getBoundingClientRect();
+    const mx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const my = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    rtsCamera.lookAt(mx * heightmap.worldWidth, my * heightmap.worldDepth);
+  });
+
+  const updateMinimap = (): void => {
+    // Draw pre-rendered terrain.
+    minimapCtx.drawImage(minimapTerrainCanvas, 0, 0);
+
+    // Draw entity dots.
+    const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
+    const renderStates = gameLogic.getRenderableEntityStates();
+    for (const entity of renderStates) {
+      const px = (entity.x / heightmap.worldWidth) * MINIMAP_SIZE;
+      const py = (entity.z / heightmap.worldDepth) * MINIMAP_SIZE;
+      const normalizedEntitySide = entity.side?.toUpperCase() ?? '';
+      const normalizedLocalSide = localSide?.toUpperCase() ?? '';
+      const isAlly = normalizedEntitySide === normalizedLocalSide;
+      minimapCtx.fillStyle = isAlly ? '#00cc00' : '#cc3333';
+      minimapCtx.fillRect(px - 1, py - 1, 3, 3);
+    }
+
+    // Draw camera viewport frustum.
+    const camState = rtsCamera.getState();
+    const viewHalfW = camState.zoom * 0.8;
+    const viewHalfH = camState.zoom * 0.5;
+    const cos = Math.cos(camState.angle);
+    const sin = Math.sin(camState.angle);
+
+    // Corners of the camera view in world space.
+    const corners = [
+      [-viewHalfW, -viewHalfH],
+      [viewHalfW, -viewHalfH],
+      [viewHalfW, viewHalfH],
+      [-viewHalfW, viewHalfH],
+    ];
+
+    minimapCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    minimapCtx.lineWidth = 1;
+    minimapCtx.beginPath();
+    for (let i = 0; i < corners.length; i++) {
+      const [lx, lz] = corners[i]!;
+      const wx = camState.targetX + lx * cos - lz * sin;
+      const wz = camState.targetZ + lx * sin + lz * cos;
+      const px = (wx / heightmap.worldWidth) * MINIMAP_SIZE;
+      const py = (wz / heightmap.worldDepth) * MINIMAP_SIZE;
+      if (i === 0) minimapCtx.moveTo(px, py);
+      else minimapCtx.lineTo(px, py);
+    }
+    minimapCtx.closePath();
+    minimapCtx.stroke();
+  };
+
   let frameCount = 0;
   let lastFpsUpdate = performance.now();
   let displayFps = 0;
@@ -617,12 +967,366 @@ async function init(): Promise<void> {
       return;
     }
 
-    const resolvedSlot = resolveControlBarSlotFromKey(e.key);
-    if (resolvedSlot !== null) {
-      e.preventDefault();
-      activateControlBarSlot(resolvedSlot - 1);
+    // Only activate control bar slots via number keys when Ctrl is NOT held
+    // (Ctrl+1-9 is reserved for control group assignment).
+    // Skip plain digit keys 1-9 as they recall control groups.
+    if (!e.ctrlKey && !e.metaKey) {
+      const resolvedSlot = resolveControlBarSlotFromKey(e.key);
+      if (resolvedSlot !== null && !/^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        activateControlBarSlot(resolvedSlot - 1);
+      }
     }
   });
+
+  // ========================================================================
+  // Production queue UI panel
+  // ========================================================================
+
+  const productionPanel = document.createElement('div');
+  productionPanel.id = 'production-panel';
+  Object.assign(productionPanel.style, {
+    position: 'absolute',
+    bottom: '8px',
+    right: '8px',
+    width: '220px',
+    background: 'rgba(12, 16, 28, 0.85)',
+    border: '1px solid rgba(201, 168, 76, 0.4)',
+    color: '#e0d8c0',
+    fontFamily: "'Segoe UI', Arial, sans-serif",
+    fontSize: '12px',
+    padding: '8px',
+    zIndex: '100',
+    display: 'none',
+    pointerEvents: 'auto',
+  });
+  document.getElementById('game-container')!.appendChild(productionPanel);
+
+  const updateProductionPanel = (): void => {
+    const selectedIds = gameLogic.getLocalPlayerSelectionIds();
+    if (selectedIds.length !== 1) {
+      productionPanel.style.display = 'none';
+      return;
+    }
+
+    const entityId = selectedIds[0]!;
+    const prodState = gameLogic.getProductionState(entityId);
+    if (!prodState || prodState.queue.length === 0) {
+      productionPanel.style.display = 'none';
+      return;
+    }
+
+    productionPanel.style.display = 'block';
+    productionPanel.textContent = '';
+
+    const header = document.createElement('div');
+    Object.assign(header.style, { color: '#c9a84c', fontWeight: '600', marginBottom: '6px' });
+    header.textContent = 'Production Queue';
+    productionPanel.appendChild(header);
+
+    for (const entry of prodState.queue) {
+      const name = entry.type === 'UNIT' ? entry.templateName : entry.upgradeName;
+      const pct = Math.round(entry.percentComplete);
+      const barColor = pct >= 100 ? '#00cc00' : '#c9a84c';
+
+      const row = document.createElement('div');
+      row.style.marginBottom = '4px';
+
+      const labelRow = document.createElement('div');
+      Object.assign(labelRow.style, { display: 'flex', justifyContent: 'space-between' });
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = name;
+      const pctSpan = document.createElement('span');
+      pctSpan.textContent = `${pct}%`;
+      labelRow.appendChild(nameSpan);
+      labelRow.appendChild(pctSpan);
+
+      const barBg = document.createElement('div');
+      Object.assign(barBg.style, { height: '4px', background: '#222', borderRadius: '2px', overflow: 'hidden' });
+      const barFill = document.createElement('div');
+      Object.assign(barFill.style, { width: `${pct}%`, height: '100%', background: barColor });
+      barBg.appendChild(barFill);
+
+      row.appendChild(labelRow);
+      row.appendChild(barBg);
+      productionPanel.appendChild(row);
+    }
+  };
+
+  // ========================================================================
+  // Move order feedback indicators
+  // ========================================================================
+
+  interface MoveIndicator {
+    mesh: THREE.Mesh;
+    startTime: number;
+  }
+
+  const MOVE_INDICATOR_DURATION_MS = 600;
+  const moveIndicators: MoveIndicator[] = [];
+  const moveIndicatorGeometry = new THREE.RingGeometry(0.8, 1.2, 24);
+  const moveIndicatorMaterialGreen = new THREE.MeshBasicMaterial({
+    color: 0x00ff00,
+    transparent: true,
+    opacity: 0.8,
+    depthTest: false,
+    side: THREE.DoubleSide,
+  });
+  const moveIndicatorMaterialRed = new THREE.MeshBasicMaterial({
+    color: 0xff3333,
+    transparent: true,
+    opacity: 0.8,
+    depthTest: false,
+    side: THREE.DoubleSide,
+  });
+
+  const spawnMoveIndicator = (worldX: number, worldZ: number, isAttack: boolean): void => {
+    const y = heightmap.getInterpolatedHeight(worldX, worldZ) + 0.1;
+    const material = (isAttack ? moveIndicatorMaterialRed : moveIndicatorMaterialGreen).clone();
+    const mesh = new THREE.Mesh(moveIndicatorGeometry, material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(worldX, y, worldZ);
+    mesh.renderOrder = 800;
+    scene.add(mesh);
+    moveIndicators.push({ mesh, startTime: performance.now() });
+  };
+
+  const updateMoveIndicators = (): void => {
+    const now = performance.now();
+    for (let i = moveIndicators.length - 1; i >= 0; i--) {
+      const indicator = moveIndicators[i]!;
+      const elapsed = now - indicator.startTime;
+      const t = elapsed / MOVE_INDICATOR_DURATION_MS;
+      if (t >= 1) {
+        scene.remove(indicator.mesh);
+        (indicator.mesh.material as THREE.MeshBasicMaterial).dispose();
+        moveIndicators.splice(i, 1);
+        continue;
+      }
+      const scale = 1 + t * 1.5;
+      indicator.mesh.scale.set(scale, scale, 1);
+      (indicator.mesh.material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - t);
+    }
+  };
+
+  // ========================================================================
+  // Rally point visualization
+  // ========================================================================
+
+  const rallyLineGeometry = new THREE.BufferGeometry();
+  const rallyLineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
+  const rallyLine = new THREE.Line(rallyLineGeometry, rallyLineMaterial);
+  rallyLine.name = 'rally-line';
+  rallyLine.visible = false;
+  rallyLine.renderOrder = 700;
+  scene.add(rallyLine);
+
+  // Rally flag marker (small cone at target).
+  const rallyMarkerGeometry = new THREE.ConeGeometry(0.3, 1.5, 6);
+  const rallyMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+  const rallyMarker = new THREE.Mesh(rallyMarkerGeometry, rallyMarkerMaterial);
+  rallyMarker.name = 'rally-marker';
+  rallyMarker.visible = false;
+  rallyMarker.renderOrder = 700;
+  scene.add(rallyMarker);
+
+  const updateRallyPointVisual = (): void => {
+    const selectedIds = gameLogic.getLocalPlayerSelectionIds();
+    if (selectedIds.length !== 1) {
+      rallyLine.visible = false;
+      rallyMarker.visible = false;
+      return;
+    }
+
+    const entityState = gameLogic.getEntityState(selectedIds[0]!);
+    if (!entityState || !entityState.rallyPoint) {
+      rallyLine.visible = false;
+      rallyMarker.visible = false;
+      return;
+    }
+
+    const rp = entityState.rallyPoint;
+    const startY = entityState.y + 1;
+    const endY = heightmap.getInterpolatedHeight(rp.x, rp.z) + 0.5;
+
+    let posAttr = rallyLineGeometry.getAttribute('position') as THREE.BufferAttribute | null;
+    if (!posAttr) {
+      posAttr = new THREE.BufferAttribute(new Float32Array(6), 3);
+      rallyLineGeometry.setAttribute('position', posAttr);
+    }
+    const arr = posAttr.array as Float32Array;
+    arr[0] = entityState.x; arr[1] = startY; arr[2] = entityState.z;
+    arr[3] = rp.x; arr[4] = endY; arr[5] = rp.z;
+    posAttr.needsUpdate = true;
+    rallyLineGeometry.computeBoundingSphere();
+    rallyLine.visible = true;
+
+    rallyMarker.position.set(rp.x, endY + 0.75, rp.z);
+    rallyMarker.visible = true;
+  };
+
+  // ========================================================================
+  // Control groups (Ctrl+1-9 to save, 1-9 to recall, double-tap to center)
+  // ========================================================================
+
+  const controlGroups = new Map<number, number[]>();
+  const lastGroupTapTime = new Map<number, number>();
+  const DOUBLE_TAP_MS = 400;
+
+  window.addEventListener('keydown', (e) => {
+    const digit = parseInt(e.key, 10);
+    if (isNaN(digit) || digit < 1 || digit > 9) return;
+
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+N: save current selection to group N.
+      e.preventDefault();
+      const selectedIds = gameLogic.getLocalPlayerSelectionIds();
+      if (selectedIds.length > 0) {
+        controlGroups.set(digit, [...selectedIds]);
+      }
+    } else if (!e.altKey && !e.shiftKey) {
+      // N: recall group N.
+      const group = controlGroups.get(digit);
+      if (!group || group.length === 0) return;
+      e.preventDefault();
+
+      // Filter out destroyed entities.
+      const aliveIds = group.filter((id) => {
+        const state = gameLogic.getEntityState(id);
+        return state !== null;
+      });
+      if (aliveIds.length === 0) {
+        controlGroups.delete(digit);
+        return;
+      }
+      controlGroups.set(digit, aliveIds);
+      gameLogic.submitCommand({ type: 'selectEntities', entityIds: aliveIds });
+
+      // Double-tap: center camera on group.
+      const now = performance.now();
+      const lastTap = lastGroupTapTime.get(digit) ?? 0;
+      lastGroupTapTime.set(digit, now);
+      if (now - lastTap < DOUBLE_TAP_MS) {
+        let sumX = 0;
+        let sumZ = 0;
+        let count = 0;
+        for (const id of aliveIds) {
+          const entityState = gameLogic.getEntityState(id);
+          if (entityState) {
+            sumX += entityState.x;
+            sumZ += entityState.z;
+            count++;
+          }
+        }
+        if (count > 0) {
+          rtsCamera.lookAt(sumX / count, sumZ / count);
+        }
+      }
+    }
+  });
+
+  // ========================================================================
+  // Building placement ghost
+  // ========================================================================
+
+  const buildingGhostMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ff00,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const buildingGhostGeometry = new THREE.BoxGeometry(4, 2, 4);
+  const buildingGhostMesh = new THREE.Mesh(buildingGhostGeometry, buildingGhostMaterial);
+  buildingGhostMesh.name = 'building-ghost';
+  buildingGhostMesh.visible = false;
+  buildingGhostMesh.renderOrder = 600;
+  scene.add(buildingGhostMesh);
+
+  let lastPlacementButtonId: string | null = null;
+
+  const updateBuildingGhost = (inputState: InputState): void => {
+    const pending = uiRuntime.getPendingControlBarCommand();
+    const isPlacementMode = pending !== null
+      && pending.commandType === GUICommandType.GUI_COMMAND_DOZER_CONSTRUCT
+      && pending.targetKind === 'position';
+
+    if (!isPlacementMode) {
+      buildingGhostMesh.visible = false;
+      lastPlacementButtonId = null;
+      return;
+    }
+
+    // Resolve cursor world position.
+    const worldTarget = gameLogic.resolveMoveTargetFromInput(inputState, camera);
+    if (!worldTarget) {
+      buildingGhostMesh.visible = false;
+      return;
+    }
+
+    const y = heightmap.getInterpolatedHeight(worldTarget.x, worldTarget.z);
+    buildingGhostMesh.position.set(worldTarget.x, y + 1, worldTarget.z);
+    buildingGhostMesh.visible = true;
+  };
+
+  // ========================================================================
+  // Drag-select (multi-unit selection)
+  // ========================================================================
+
+  const DRAG_SELECT_THRESHOLD = 8; // pixels before a drag is considered a box-select
+  const selectionBox = document.createElement('div');
+  selectionBox.id = 'selection-box';
+  Object.assign(selectionBox.style, {
+    position: 'absolute',
+    border: '1px solid rgba(0, 255, 0, 0.8)',
+    background: 'rgba(0, 255, 0, 0.1)',
+    pointerEvents: 'none',
+    display: 'none',
+    zIndex: '200',
+  });
+  document.getElementById('game-container')!.appendChild(selectionBox);
+
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let isDragSelecting = false;
+  let wasLeftMouseDown = false;
+
+  const _projVec = new THREE.Vector3();
+  const projectToScreen = (worldX: number, worldY: number, worldZ: number): { sx: number; sy: number } => {
+    _projVec.set(worldX, worldY, worldZ);
+    _projVec.project(camera);
+    return {
+      sx: (_projVec.x * 0.5 + 0.5) * window.innerWidth,
+      sy: (-_projVec.y * 0.5 + 0.5) * window.innerHeight,
+    };
+  };
+
+  const performDragSelect = (x0: number, y0: number, x1: number, y1: number): void => {
+    const minX = Math.min(x0, x1);
+    const maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1);
+    const maxY = Math.max(y0, y1);
+
+    const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
+    const states = gameLogic.getRenderableEntityStates();
+    const selectedIds: number[] = [];
+
+    for (const entity of states) {
+      // Only select own mobile units (not buildings, not enemies).
+      if (entity.side?.toUpperCase() !== localSide?.toUpperCase()) continue;
+      if (entity.animationState === 'DIE') continue;
+      if (entity.category === 'building') continue;
+
+      const screen = projectToScreen(entity.x, entity.y, entity.z);
+      if (screen.sx >= minX && screen.sx <= maxX && screen.sy >= minY && screen.sy <= maxY) {
+        selectedIds.push(entity.id);
+      }
+    }
+
+    if (selectedIds.length > 0) {
+      gameLogic.submitCommand({ type: 'selectEntities', entityIds: selectedIds });
+    }
+  };
 
   // ========================================================================
   // Game loop
@@ -743,6 +1447,60 @@ async function init(): Promise<void> {
         }
       }
 
+      // Drag-select logic: track left mouse drag for box selection.
+      if (inputState.leftMouseDown && !wasLeftMouseDown) {
+        // Mouse just pressed — record start position.
+        dragStartX = inputState.mouseX;
+        dragStartY = inputState.mouseY;
+        isDragSelecting = false;
+      }
+
+      if (inputState.leftMouseDown) {
+        const dx = inputState.mouseX - dragStartX;
+        const dy = inputState.mouseY - dragStartY;
+        if (Math.abs(dx) > DRAG_SELECT_THRESHOLD || Math.abs(dy) > DRAG_SELECT_THRESHOLD) {
+          isDragSelecting = true;
+        }
+        if (isDragSelecting) {
+          const left = Math.min(dragStartX, inputState.mouseX);
+          const top = Math.min(dragStartY, inputState.mouseY);
+          const width = Math.abs(dx);
+          const height = Math.abs(dy);
+          selectionBox.style.display = 'block';
+          selectionBox.style.left = `${left}px`;
+          selectionBox.style.top = `${top}px`;
+          selectionBox.style.width = `${width}px`;
+          selectionBox.style.height = `${height}px`;
+        }
+      }
+
+      if (!inputState.leftMouseDown && wasLeftMouseDown) {
+        // Mouse just released.
+        if (isDragSelecting) {
+          performDragSelect(dragStartX, dragStartY, inputState.mouseX, inputState.mouseY);
+          isDragSelecting = false;
+        }
+        selectionBox.style.display = 'none';
+      }
+
+      wasLeftMouseDown = inputState.leftMouseDown;
+
+      // Suppress normal click selection during drag-select.
+      if (isDragSelecting) {
+        inputStateForGameLogic = { ...inputStateForGameLogic, leftMouseClick: false };
+      }
+
+      updateBuildingGhost(inputState);
+
+      // Spawn move indicator on right-click command.
+      if (inputStateForGameLogic.rightMouseClick && gameLogic.getLocalPlayerSelectionIds().length > 0) {
+        const target = gameLogic.resolveMoveTargetFromInput(inputStateForGameLogic, camera);
+        if (target) {
+          const isAttackMode = inputState.keysDown.has('a');
+          spawnMoveIndicator(target.x, target.z, isAttackMode);
+        }
+      }
+
       gameLogic.handlePointerInput(inputStateForGameLogic, camera);
       dispatchIssuedControlBarCommands(
         uiRuntime.consumeIssuedCommands(),
@@ -759,11 +1517,29 @@ async function init(): Promise<void> {
       // Update all subsystems (InputManager resets accumulators,
       // RTSCamera processes input, WaterVisual animates UVs)
       subsystems.updateAll(dt);
+
+      // Move sun light to follow camera target for consistent shadows.
+      const camState = rtsCamera.getState();
+      sunLight.position.set(camState.targetX + 200, 400, camState.targetZ + 200);
+      sunLight.target.position.set(camState.targetX, 0, camState.targetZ);
+      sunLight.target.updateMatrixWorld();
+
       objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
+
+      // Update fog of war overlay at reduced frequency.
+      fogUpdateCounter++;
+      if (fogUpdateCounter >= FOG_UPDATE_INTERVAL) {
+        fogUpdateCounter = 0;
+        updateFogOverlay();
+      }
     },
 
     onRender(_alpha: number) {
       renderer.render(scene, camera);
+      updateMinimap();
+      updateProductionPanel();
+      updateRallyPointVisual();
+      updateMoveIndicators();
 
       // FPS counter
       frameCount++;
@@ -864,6 +1640,35 @@ async function init(): Promise<void> {
           : selectedEntities[0]?.templateName ?? '',
       });
       uiRuntime.setControlBarButtons(controlBarButtons);
+
+      // Update credits HUD
+      const localPlayerId = networkManager.getLocalPlayerID();
+      const localPlayerSide = gameLogic.getPlayerSide(localPlayerId);
+      if (localPlayerSide) {
+        const credits = gameLogic.getSideCredits(localPlayerSide);
+        creditsHud.textContent = `$${credits.toLocaleString()}`;
+      }
+
+      // Check for game end
+      if (!gameEnded) {
+        const endState = gameLogic.getGameEndState();
+        if (endState) {
+          gameEnded = true;
+          const titleEl = document.getElementById('endgame-title')!;
+          const subtitleEl = document.getElementById('endgame-subtitle')!;
+          if (endState.status === 'VICTORY') {
+            titleEl.textContent = 'Victory';
+            titleEl.style.color = '#c9a84c';
+            subtitleEl.textContent = 'All enemy forces have been eliminated.';
+          } else {
+            titleEl.textContent = 'Defeat';
+            titleEl.style.color = '#cc3333';
+            subtitleEl.textContent = 'Your forces have been destroyed.';
+          }
+          endGameOverlay.style.display = 'flex';
+        }
+      }
+
       const unresolvedVisualIds = objectVisualManager.getUnresolvedEntityIds();
       const unresolvedVisualStatus = unresolvedVisualIds.length > 0
         ? ` | Unresolved visuals: ${unresolvedVisualIds.length} (${unresolvedVisualIds.join(', ')})`
@@ -893,12 +1698,7 @@ async function init(): Promise<void> {
   window.addEventListener('beforeunload', disposeGame);
 
   // Hide loading screen
-  setLoadingProgress(100, 'Ready!');
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  loadingScreen.style.opacity = '0';
-  setTimeout(() => {
-    loadingScreen.style.display = 'none';
-  }, 500);
+  await hideLoadingScreen();
 
   console.log(
     '%c C&C Generals: Zero Hour — Browser Edition ',
@@ -908,6 +1708,50 @@ async function init(): Promise<void> {
   console.log(`Terrain: ${heightmap.width}x${heightmap.height} (${mapPath ?? 'procedural demo'})`);
   console.log(`Placed ${objectPlacement.spawnedObjects}/${objectPlacement.totalObjects} objects from map data.`);
   console.log('Controls: LMB=select, RMB=move/confirm target, 1-12=ControlBar slot, WASD=scroll, Q/E=rotate, Wheel=zoom, Middle-drag=pan, F1=wireframe');
+}
+
+// ============================================================================
+// Application entry point
+// ============================================================================
+
+async function init(): Promise<void> {
+  // Phase 1: Pre-initialize (renderer, assets, INI data, audio)
+  const ctx = await preInit();
+
+  // Check for direct map load via URL parameter (backward compat)
+  const urlParams = new URLSearchParams(window.location.search);
+  const mapPathParam = urlParams.get('map');
+  const directMapPath = normalizeRuntimeAssetPath(mapPathParam);
+
+  if (mapPathParam !== null) {
+    // Direct load — skip menu
+    if (!directMapPath) {
+      throw new Error(
+        `Requested map path "${mapPathParam}" is invalid after runtime normalization`,
+      );
+    }
+    await startGame(ctx, directMapPath, null);
+    return;
+  }
+
+  // Phase 1.5: Show game shell (main menu → skirmish setup)
+  await hideLoadingScreen();
+
+  const gameContainer = document.getElementById('game-container') as HTMLDivElement;
+  const shell = new GameShell(gameContainer, {
+    onStartGame: async (settings: SkirmishSettings) => {
+      shell.hide();
+      await startGame(ctx, settings.mapPath, settings);
+    },
+  });
+
+  // Populate available maps from manifest
+  const manifest = ctx.assets.getManifest();
+  if (manifest) {
+    shell.setAvailableMaps(manifest.getOutputPaths());
+  }
+
+  shell.show();
 }
 
 init().catch((err) => {

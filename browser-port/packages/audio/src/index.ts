@@ -6,7 +6,7 @@
  * - AudioEventInfo registry lookup
  * - Audio request queue (play/pause/stop)
  *
- * Device-specific Miles playback remains TODO.
+ * Web Audio API playback backend replaces Miles Sound System.
  */
 import type { Subsystem } from '@generals/engine';
 
@@ -233,6 +233,17 @@ function normalizeAudioEvent(
   };
 }
 
+/**
+ * Tracks an active Web Audio playback node chain for a playing audio event.
+ * Source parity: Miles' PlayingAudio struct with HSAMPLE/H3DSAMPLE/HSTREAM handles.
+ */
+interface PlaybackNode {
+  sourceNode: AudioBufferSourceNode;
+  gainNode: GainNode;
+  pannerNode: PannerNode | null;
+  started: boolean;
+}
+
 export class AudioManager implements Subsystem {
   readonly name = '@generals/audio';
 
@@ -243,6 +254,19 @@ export class AudioManager implements Subsystem {
   private audioRequests: AudioRequest[] = [];
   private allAudioEventInfo = new Map<string, AudioEventInfo>();
   private adjustedVolumes = new Map<string, number>();
+
+  /** Cached decoded audio buffers by event name. */
+  private readonly audioBufferCache = new Map<string, AudioBuffer>();
+  /** Active playback nodes by audio handle. */
+  private readonly playbackNodes = new Map<AudioHandle, PlaybackNode>();
+  /** Master gain node for all output. */
+  private masterGainNode: GainNode | null = null;
+  /** Per-affect gain nodes. */
+  private readonly affectGainNodes = new Map<AudioAffect, GainNode>();
+  /** Optional callback to load audio data by event name. */
+  private audioBufferLoader: AudioBufferLoader | null = null;
+  /** Set of event names currently being loaded. */
+  private readonly loadingBuffers = new Set<string>();
 
   private musicNames: string[] = [];
   private disallowSpeech = false;
@@ -289,6 +313,7 @@ export class AudioManager implements Subsystem {
 
   constructor(options: AudioManagerOptions = {}) {
     this.context = options.context ?? null;
+    this.audioBufferLoader = options.audioBufferLoader ?? null;
     this.musicNames = options.musicTracks?.length ? [...options.musicTracks] : [];
     this.localPlayerIndex = options.localPlayerIndex ?? null;
     this.max2DSamples = normalizeNonNegativeInteger(
@@ -341,6 +366,21 @@ export class AudioManager implements Subsystem {
     if (this.context?.state === 'suspended') {
       void this.context.resume();
     }
+
+    // Set up master gain node chain.
+    if (this.context) {
+      this.masterGainNode = this.context.createGain();
+      this.masterGainNode.connect(this.context.destination);
+
+      // Create per-affect gain nodes.
+      for (const affect of AUDIO_AFFECT_CHANNELS) {
+        const gainNode = this.context.createGain();
+        gainNode.connect(this.masterGainNode);
+        this.affectGainNodes.set(affect, gainNode);
+      }
+
+      this.syncAffectGainNodes();
+    }
   }
 
   reset(): void {
@@ -358,6 +398,7 @@ export class AudioManager implements Subsystem {
       return;
     }
 
+    this.syncAffectGainNodes();
     this.processRequestList();
     this.refreshActivePositionalAudio();
   }
@@ -365,7 +406,11 @@ export class AudioManager implements Subsystem {
   dispose(): void {
     this.stopAllAudioImmediately();
     this.removeAllAudioRequests();
+    this.stopAllPlaybackNodes();
     this.isInitialized = false;
+
+    this.masterGainNode = null;
+    this.affectGainNodes.clear();
 
     if (this.context && this.context.state !== 'closed') {
       void this.context.close();
@@ -413,8 +458,6 @@ export class AudioManager implements Subsystem {
             break;
           }
 
-          // TODO: Port MilesAudioManager::playAudioEvent path and connect this
-          // request queue to decoded/streamed assets with 2D/3D channel routing.
           this.activeAudioEvents.set(request.handleToInteractOn, {
             handle: request.handleToInteractOn,
             event: request.pendingEvent.event,
@@ -423,6 +466,12 @@ export class AudioManager implements Subsystem {
             resolvedVolume: request.pendingEvent.resolvedVolume,
             paused: false,
           });
+
+          // Web Audio playback: create source node and connect to gain chain.
+          this.startPlayback(
+            request.handleToInteractOn,
+            request.pendingEvent,
+          );
           break;
         }
 
@@ -443,6 +492,7 @@ export class AudioManager implements Subsystem {
             break;
           }
 
+          this.stopPlaybackNode(request.handleToInteractOn);
           this.activeAudioEvents.delete(request.handleToInteractOn);
           break;
         }
@@ -491,8 +541,8 @@ export class AudioManager implements Subsystem {
       this.activeAudioEvents.set(active.handle, active);
     }
 
-    // TODO: Source parity gap. Miles additionally stops positional sounds when
-    // source events become "dead" via object lifecycle state.
+    // Update Web Audio panner positions for active 3D playback nodes.
+    this.updatePlaybackNodePositions();
   }
 
   newAudioEventInfo(audioName: string): AudioEventInfo {
@@ -1718,6 +1768,220 @@ export class AudioManager implements Subsystem {
   private stopMusicTrack(): void {
     this.stopByAffect(AudioAffect.AudioAffect_Music);
   }
+
+  // ──── Web Audio playback implementation ──────────────────────────────────
+
+  /**
+   * Synchronize per-affect GainNode values with current volume settings.
+   */
+  private syncAffectGainNodes(): void {
+    for (const affect of AUDIO_AFFECT_CHANNELS) {
+      const gainNode = this.affectGainNodes.get(affect);
+      if (!gainNode) {
+        continue;
+      }
+
+      const enabled = this.audioEnabled[affect];
+      const systemVol = this.systemVolumes[affect];
+      const scriptVol = this.scriptVolumes[affect];
+      gainNode.gain.value = enabled ? clamp01(systemVol * scriptVol) : 0;
+    }
+  }
+
+  /**
+   * Resolve the affect GainNode that an event should route through.
+   */
+  private resolveAffectGainNode(affectMask: AudioAffect): GainNode | null {
+    // Prefer 3D sound node, then regular sound, then music, then speech.
+    if ((affectMask & AudioAffect.AudioAffect_Sound3D) !== 0) {
+      return this.affectGainNodes.get(AudioAffect.AudioAffect_Sound3D) ?? null;
+    }
+    if ((affectMask & AudioAffect.AudioAffect_Sound) !== 0) {
+      return this.affectGainNodes.get(AudioAffect.AudioAffect_Sound) ?? null;
+    }
+    if ((affectMask & AudioAffect.AudioAffect_Music) !== 0) {
+      return this.affectGainNodes.get(AudioAffect.AudioAffect_Music) ?? null;
+    }
+    if ((affectMask & AudioAffect.AudioAffect_Speech) !== 0) {
+      return this.affectGainNodes.get(AudioAffect.AudioAffect_Speech) ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * Start Web Audio playback for an audio event.
+   * Source parity: MilesAudioManager::playAudioEvent
+   */
+  private startPlayback(handle: AudioHandle, resolved: ResolvedAudioEvent): void {
+    const ctx = this.context;
+    if (!ctx) {
+      return;
+    }
+
+    const eventName = resolved.event.eventName;
+    const buffer = this.audioBufferCache.get(eventName);
+
+    if (!buffer) {
+      // Trigger async load if a loader is available.
+      if (this.audioBufferLoader && !this.loadingBuffers.has(eventName)) {
+        this.loadingBuffers.add(eventName);
+        const filename = resolved.info.filename ?? eventName;
+        void this.loadAndCacheBuffer(ctx, eventName, filename);
+      }
+      return;
+    }
+
+    this.createAndStartPlaybackNode(ctx, handle, buffer, resolved);
+  }
+
+  /**
+   * Load audio data asynchronously, decode it, and cache the AudioBuffer.
+   */
+  private async loadAndCacheBuffer(
+    ctx: BrowserAudioContext,
+    eventName: string,
+    filename: string,
+  ): Promise<void> {
+    try {
+      const data = await this.audioBufferLoader!(filename);
+      if (!data) {
+        return;
+      }
+      const audioBuffer = await ctx.decodeAudioData(data);
+      this.audioBufferCache.set(eventName, audioBuffer);
+    } finally {
+      this.loadingBuffers.delete(eventName);
+    }
+  }
+
+  /**
+   * Pre-load an AudioBuffer for a specific event name.
+   * Useful for preloading UI sounds or critical game audio.
+   */
+  preloadAudioBuffer(eventName: string, buffer: AudioBuffer): void {
+    this.audioBufferCache.set(eventName, buffer);
+  }
+
+  /**
+   * Create the Web Audio node chain and start playback.
+   */
+  private createAndStartPlaybackNode(
+    ctx: BrowserAudioContext,
+    handle: AudioHandle,
+    buffer: AudioBuffer,
+    resolved: ResolvedAudioEvent,
+  ): void {
+    const sourceNode = ctx.createBufferSource();
+    sourceNode.buffer = buffer;
+
+    // Loop control.
+    const isLooping = ((resolved.info.control ?? 0) & AudioControl.AC_LOOP) !== 0;
+    sourceNode.loop = isLooping;
+
+    // Per-event gain node.
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = clamp01(resolved.resolvedVolume);
+
+    // 3D positional audio setup.
+    let pannerNode: PannerNode | null = null;
+    const is3D = (resolved.affectMask & AudioAffect.AudioAffect_Sound3D) !== 0;
+    const pos = resolved.event.position;
+
+    if (is3D && pos) {
+      pannerNode = ctx.createPanner();
+      pannerNode.panningModel = 'HRTF';
+      pannerNode.distanceModel = 'inverse';
+      pannerNode.refDistance = resolved.info.minRange ?? 10;
+      pannerNode.maxDistance = resolved.info.maxRange ?? 1000;
+      pannerNode.rolloffFactor = 1;
+      pannerNode.setPosition(pos[0], pos[1], pos[2]);
+
+      // Chain: source → gain → panner → affect gain.
+      sourceNode.connect(gainNode);
+      gainNode.connect(pannerNode);
+      const affectGain = this.resolveAffectGainNode(resolved.affectMask);
+      if (affectGain) {
+        pannerNode.connect(affectGain);
+      }
+    } else {
+      // 2D audio: source → gain → affect gain.
+      sourceNode.connect(gainNode);
+      const affectGain = this.resolveAffectGainNode(resolved.affectMask);
+      if (affectGain) {
+        gainNode.connect(affectGain);
+      }
+    }
+
+    // Auto-remove when playback ends.
+    sourceNode.onended = () => {
+      this.playbackNodes.delete(handle);
+      this.activeAudioEvents.delete(handle);
+    };
+
+    sourceNode.start();
+
+    this.playbackNodes.set(handle, {
+      sourceNode,
+      gainNode,
+      pannerNode,
+      started: true,
+    });
+  }
+
+  /**
+   * Stop a specific playback node.
+   */
+  private stopPlaybackNode(handle: AudioHandle): void {
+    const node = this.playbackNodes.get(handle);
+    if (node?.started) {
+      try {
+        node.sourceNode.stop();
+      } catch {
+        // Already stopped.
+      }
+      node.sourceNode.disconnect();
+      node.gainNode.disconnect();
+      if (node.pannerNode) {
+        node.pannerNode.disconnect();
+      }
+    }
+    this.playbackNodes.delete(handle);
+  }
+
+  /**
+   * Stop all active playback nodes.
+   */
+  private stopAllPlaybackNodes(): void {
+    for (const [handle] of this.playbackNodes) {
+      this.stopPlaybackNode(handle);
+    }
+  }
+
+  /**
+   * Update positional audio for active 3D playback nodes.
+   * Called from refreshActivePositionalAudio to keep panner positions in sync.
+   */
+  private updatePlaybackNodePositions(): void {
+    for (const [handle, node] of this.playbackNodes) {
+      if (!node.pannerNode) {
+        continue;
+      }
+
+      const active = this.activeAudioEvents.get(handle);
+      if (!active) {
+        continue;
+      }
+
+      // Resolve current position from event's object/drawable.
+      const pos = active.event.position;
+      if (pos) {
+        node.pannerNode.setPosition(pos[0], pos[1], pos[2]);
+      }
+
+      // Sync volume.
+      node.gainNode.gain.value = clamp01(active.resolvedVolume);
+    }
+  }
 }
 
 export function initializeAudioContext(): void {
@@ -1752,6 +2016,13 @@ export interface AudioEventRTS {
   playerIndex?: number;
 }
 
+/**
+ * Callback to load raw audio file data by filename/event name.
+ * Returns an ArrayBuffer suitable for Web Audio decodeAudioData(),
+ * or null if the audio file isn't available.
+ */
+export type AudioBufferLoader = (filename: string) => Promise<ArrayBuffer | null>;
+
 export interface AudioManagerOptions {
   debugLabel?: string;
   musicTracks?: string[];
@@ -1770,4 +2041,6 @@ export interface AudioManagerOptions {
   resolveShroudVisibility?: AudioShroudVisibilityResolver;
   preferred3DProvider?: string | null;
   preferredSpeakerType?: string | null;
+  /** Optional callback to load raw audio file data for playback. */
+  audioBufferLoader?: AudioBufferLoader;
 }

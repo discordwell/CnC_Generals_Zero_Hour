@@ -28,6 +28,19 @@ export interface RenderableEntityState {
   z: number;
   rotationY: number;
   animationState: RenderAnimationState;
+  health: number;
+  maxHealth: number;
+  isSelected: boolean;
+  side?: string;
+}
+
+export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';
+
+export interface GameEndState {
+  status: GameEndStatus;
+  endFrame: number;
+  victorSides: string[];
+  defeatedSides: string[];
 }
 
 export interface SelectByIdCommand {

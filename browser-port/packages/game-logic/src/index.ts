@@ -146,6 +146,57 @@ import {
   setSpecialPowerReadyFrame as setSpecialPowerReadyFrameImpl,
 } from './special-power-routing.js';
 import {
+  DEFAULT_SUPPLY_BOX_VALUE,
+  initializeWarehouseState as initializeWarehouseStateImpl,
+  updateSupplyTruck as updateSupplyTruckImpl,
+  type SupplyChainContext,
+  type SupplyTruckProfile,
+  type SupplyTruckState,
+  type SupplyWarehouseProfile,
+  type SupplyWarehouseState,
+} from './supply-chain.js';
+import {
+  addExperiencePoints as addExperiencePointsImpl,
+  applyHealthBonusForLevelChange as applyHealthBonusForLevelChangeImpl,
+  createExperienceState as createExperienceStateImpl,
+  DEFAULT_VETERANCY_CONFIG,
+  getExperienceValue as getExperienceValueImpl,
+  resolveArmorSetFlagsForLevel as resolveArmorSetFlagsForLevelImpl,
+  type ExperienceProfile,
+  type ExperienceState,
+  type VeterancyLevel,
+} from './experience.js';
+import {
+  CELL_CLEAR,
+  CELL_SHROUDED,
+  createEntityVisionState as createEntityVisionStateImpl,
+  FogOfWarGrid,
+  updateEntityVision as updateEntityVisionImpl,
+  type CellVisibility,
+  type EntityVisionState,
+} from './fog-of-war.js';
+import {
+  executeAreaDamage as executeAreaDamageImpl,
+  executeCashHack as executeCashHackImpl,
+  executeDefector as executeDefectorImpl,
+  executeSpyVision as executeSpyVisionImpl,
+  executeAreaHeal as executeAreaHealImpl,
+  resolveEffectCategory as resolveEffectCategoryImpl,
+  DEFAULT_AREA_DAMAGE_RADIUS,
+  DEFAULT_AREA_DAMAGE_AMOUNT,
+  DEFAULT_CASH_HACK_AMOUNT,
+  DEFAULT_SPY_VISION_RADIUS,
+  DEFAULT_AREA_HEAL_AMOUNT,
+  DEFAULT_AREA_HEAL_RADIUS,
+  type SpecialPowerEffectContext,
+} from './special-power-effects.js';
+import {
+  createSkirmishAIState as createSkirmishAIStateImpl,
+  updateSkirmishAI as updateSkirmishAIImpl,
+  type SkirmishAIContext,
+  type SkirmishAIState,
+} from './skirmish-ai.js';
+import {
   applyCostModifierUpgradeToSide as applyCostModifierUpgradeToSideImpl,
   applyKindOfProductionCostModifiers as applyKindOfProductionCostModifiersImpl,
   applyPowerPlantUpgradeToSide as applyPowerPlantUpgradeToSideImpl,
@@ -649,6 +700,7 @@ interface MapEntity {
   id: number;
   templateName: string;
   category: ObjectCategory;
+  kindOf: Set<string>;
   side?: string;
   controllingPlayerToken: string | null;
   resolved: boolean;
@@ -739,6 +791,13 @@ interface MapEntity {
   moveTarget: VectorXZ | null;
   pathfindGoalCell: { x: number; z: number } | null;
   pathfindPosCell: { x: number; z: number } | null;
+  supplyWarehouseProfile: SupplyWarehouseProfile | null;
+  supplyTruckProfile: SupplyTruckProfile | null;
+  isSupplyCenter: boolean;
+  experienceProfile: ExperienceProfile | null;
+  experienceState: ExperienceState;
+  visionRange: number;
+  visionState: EntityVisionState;
   destroyed: boolean;
 }
 
@@ -799,6 +858,12 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly disabledHackedStatusByEntityId = new Map<number, number>();
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
+  private readonly supplyWarehouseStates = new Map<number, SupplyWarehouseState>();
+  private readonly supplyTruckStates = new Map<number, SupplyTruckState>();
+  private fogOfWarGrid: FogOfWarGrid | null = null;
+  private readonly sidePlayerIndex = new Map<string, number>();
+  private nextPlayerIndex = 0;
+  private readonly skirmishAIStates = new Map<string, SkirmishAIState>();
   private readonly railedTransportStateByEntityId = new Map<number, RailedTransportRuntimeState>();
   private railedTransportWaypointIndex: RailedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
   private localPlayerSciencePurchasePoints = 0;
@@ -814,6 +879,9 @@ export class GameLogicSubsystem implements Subsystem {
     resolvedObjects: 0,
     unresolvedObjects: 0,
   };
+
+  private readonly defeatedSides = new Set<string>();
+  private gameEndFrame: number | null = null;
 
   constructor(_scene: THREE.Scene, config?: Partial<GameLogicConfig>) {
     void _scene;
@@ -865,6 +933,14 @@ export class GameLogicSubsystem implements Subsystem {
       const mapEntity = this.createMapEntity(mapObject, objectDef, iniDataRegistry, heightmap);
       this.spawnedEntities.set(mapEntity.id, mapEntity);
 
+      // Initialize supply warehouse state from profile if applicable.
+      if (mapEntity.supplyWarehouseProfile) {
+        this.supplyWarehouseStates.set(
+          mapEntity.id,
+          initializeWarehouseStateImpl(mapEntity.supplyWarehouseProfile),
+        );
+      }
+
       this.placementSummary.spawnedObjects++;
       if (resolved) {
         this.placementSummary.resolvedObjects++;
@@ -874,6 +950,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.navigationGrid = this.buildNavigationGrid(mapData, heightmap);
+
+    // Initialize fog of war grid based on map dimensions.
+    if (heightmap) {
+      this.fogOfWarGrid = new FogOfWarGrid(heightmap.worldWidth, heightmap.worldDepth, MAP_XY_FACTOR);
+    }
 
     return this.placementSummary;
   }
@@ -927,6 +1008,10 @@ export class GameLogicSubsystem implements Subsystem {
       z: entity.z,
       rotationY: entity.rotationY,
       animationState: entity.animationState,
+      health: entity.health,
+      maxHealth: entity.maxHealth,
+      isSelected: entity.selected,
+      side: entity.side,
     };
   }
 
@@ -986,52 +1071,59 @@ export class GameLogicSubsystem implements Subsystem {
         this.submitCommand({ type: 'select', entityId: pickedEntityId });
       }
     }
-    if (input.rightMouseClick && this.selectedEntityId !== null) {
-      const selectedEntity = this.spawnedEntities.get(this.selectedEntityId);
+    if (input.rightMouseClick && this.selectedEntityIds.length > 0) {
       const pickedEntityId = this.pickObjectByInput(input, camera);
-      if (
-        selectedEntity
-        && selectedEntity.attackWeapon
-        && pickedEntityId !== null
-        && pickedEntityId !== this.selectedEntityId
-      ) {
-        const targetEntity = this.spawnedEntities.get(pickedEntityId);
+      const moveTarget = this.getMoveTargetFromMouse(input, camera);
+
+      // Issue commands to all selected entities.
+      for (const selEntityId of this.selectedEntityIds) {
+        const selEntity = this.spawnedEntities.get(selEntityId);
+        if (!selEntity || selEntity.destroyed || !selEntity.canMove) continue;
+
+        // Try attack if we clicked on an enemy.
         if (
-          targetEntity
-          && !targetEntity.destroyed
-          && this.getTeamRelationship(selectedEntity, targetEntity) === RELATIONSHIP_ENEMIES
+          selEntity.attackWeapon
+          && pickedEntityId !== null
+          && pickedEntityId !== selEntityId
         ) {
-          this.submitCommand({
-            type: 'attackEntity',
-            entityId: this.selectedEntityId,
-            targetEntityId: pickedEntityId,
-          });
-          this.isAttackMoveToMode = false;
-          return;
+          const targetEntity = this.spawnedEntities.get(pickedEntityId);
+          if (
+            targetEntity
+            && !targetEntity.destroyed
+            && this.getTeamRelationship(selEntity, targetEntity) === RELATIONSHIP_ENEMIES
+          ) {
+            this.submitCommand({
+              type: 'attackEntity',
+              entityId: selEntityId,
+              targetEntityId: pickedEntityId,
+            });
+            continue;
+          }
+        }
+
+        // Otherwise move / attack-move.
+        if (moveTarget !== null) {
+          const attackDistance = this.resolveAttackMoveDistance(selEntity);
+          if (this.isAttackMoveToMode) {
+            this.submitCommand({
+              type: 'attackMoveTo',
+              entityId: selEntityId,
+              targetX: moveTarget.x,
+              targetZ: moveTarget.z,
+              attackDistance,
+            });
+          } else {
+            this.submitCommand({
+              type: 'moveTo',
+              entityId: selEntityId,
+              targetX: moveTarget.x,
+              targetZ: moveTarget.z,
+            });
+          }
         }
       }
 
-      const moveTarget = this.getMoveTargetFromMouse(input, camera);
-      if (moveTarget !== null) {
-        const attackDistance = this.resolveAttackMoveDistance(selectedEntity);
-        if (this.isAttackMoveToMode) {
-          this.submitCommand({
-            type: 'attackMoveTo',
-            entityId: this.selectedEntityId,
-            targetX: moveTarget.x,
-            targetZ: moveTarget.z,
-            attackDistance,
-          });
-          this.isAttackMoveToMode = false;
-        } else {
-          this.submitCommand({
-            type: 'moveTo',
-            entityId: this.selectedEntityId,
-            targetX: moveTarget.x,
-            targetZ: moveTarget.z,
-          });
-        }
-      }
+      this.isAttackMoveToMode = false;
     }
   }
 
@@ -1052,12 +1144,16 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
     this.updateOvercharge();
+    this.updateFogOfWar();
+    this.updateSupplyChain();
+    this.updateSkirmishAI();
     this.updateSellingEntities();
     this.updateRenderStates();
     this.updateWeaponIdleAutoReload();
     this.updatePendingWeaponDamage();
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
+    this.checkVictoryConditions();
   }
 
   submitCommand(command: GameLogicCommand): void {
@@ -1472,6 +1568,9 @@ export class GameLogicSubsystem implements Subsystem {
     y: number;
     animationState: RenderAnimationState;
     z: number;
+    veterancyLevel: number;
+    currentExperience: number;
+    rallyPoint: { x: number; z: number } | null;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -1508,6 +1607,9 @@ export class GameLogicSubsystem implements Subsystem {
       y: entity.y,
       animationState: entity.animationState,
       z: entity.z,
+      veterancyLevel: entity.experienceState.currentLevel,
+      currentExperience: entity.experienceState.currentExperience,
+      rallyPoint: entity.rallyPoint ? { x: entity.rallyPoint.x, z: entity.rallyPoint.z } : null,
     };
   }
 
@@ -1540,6 +1642,45 @@ export class GameLogicSubsystem implements Subsystem {
 
   getLocalPlayerSelectionIds(): readonly number[] {
     return [...this.selectedEntityIds];
+  }
+
+  /**
+   * Source parity: VictoryConditions.cpp — hasSinglePlayerBeenDefeated / hasAchievedVictory.
+   * Returns the game end state for the local player (player index 0).
+   */
+  getGameEndState(): import('./types.js').GameEndState | null {
+    if (this.gameEndFrame === null) {
+      return null;
+    }
+
+    const localSide = this.resolveLocalPlayerSide();
+    if (!localSide) {
+      return null;
+    }
+
+    const status = this.defeatedSides.has(localSide) ? 'DEFEAT' as const : 'VICTORY' as const;
+    const victorSides: string[] = [];
+    const defeatedSides = Array.from(this.defeatedSides);
+
+    for (const [, side] of this.playerSideByIndex) {
+      if (!this.defeatedSides.has(side) && !victorSides.includes(side)) {
+        victorSides.push(side);
+      }
+    }
+
+    return {
+      status,
+      endFrame: this.gameEndFrame,
+      victorSides,
+      defeatedSides,
+    };
+  }
+
+  /**
+   * Check if a side has been defeated (no buildings and no combat units remaining).
+   */
+  isSideDefeated(side: string): boolean {
+    return this.defeatedSides.has(this.normalizeSide(side));
   }
 
   getSelectedEntityInfos(entityIds: readonly number[]): SelectedEntityInfo[] {
@@ -2257,6 +2398,10 @@ export class GameLogicSubsystem implements Subsystem {
     const queueProductionExitProfile = this.extractQueueProductionExitProfile(objectDef);
     const parkingPlaceProfile = this.extractParkingPlaceProfile(objectDef);
     const containProfile = this.extractContainProfile(objectDef);
+    const supplyWarehouseProfile = this.extractSupplyWarehouseProfile(objectDef);
+    const supplyTruckProfile = this.extractSupplyTruckProfile(objectDef);
+    const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
+    const experienceProfile = this.extractExperienceProfile(objectDef);
     const jetAISneakyProfile = this.extractJetAISneakyProfile(objectDef);
     const weaponTemplateSets = this.extractWeaponTemplateSets(objectDef);
     const armorTemplateSets = this.extractArmorTemplateSets(objectDef);
@@ -2302,6 +2447,7 @@ export class GameLogicSubsystem implements Subsystem {
       id: objectId,
       templateName: mapObject.templateName,
       category,
+      kindOf: normalizedKindOf,
       side: objectDef?.side,
       controllingPlayerToken,
       resolved: isResolved,
@@ -2392,6 +2538,13 @@ export class GameLogicSubsystem implements Subsystem {
       moveTarget: null,
       pathfindGoalCell: null,
       pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
+      supplyWarehouseProfile,
+      supplyTruckProfile,
+      isSupplyCenter,
+      experienceProfile,
+      experienceState: createExperienceStateImpl(),
+      visionRange: readNumericField(objectDef?.fields ?? {}, ['VisionRange', 'ShroudClearingRange']) ?? 0,
+      visionState: createEntityVisionStateImpl(),
       destroyed: false,
     };
   }
@@ -3545,6 +3698,151 @@ export class GameLogicSubsystem implements Subsystem {
     return {
       sneakyOffsetWhenAttacking,
       attackersMissPersistFrames,
+    };
+  }
+
+  /**
+   * Source parity: SupplyWarehouseDockUpdate.h — starting boxes + deleteWhenEmpty flag.
+   */
+  private extractSupplyWarehouseProfile(objectDef: ObjectDef | undefined): SupplyWarehouseProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: SupplyWarehouseProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SUPPLYWAREHOUSEDOCKUPDATE') {
+          profile = {
+            startingBoxes: Math.max(0, Math.trunc(readNumericField(block.fields, ['StartingBoxes']) ?? 1)),
+            deleteWhenEmpty: readBooleanField(block.fields, ['DeleteWhenEmpty']) === true,
+          };
+          return;
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Source parity: SupplyTruckAIUpdate.h — max boxes, action delays, scan distance.
+   */
+  private extractSupplyTruckProfile(objectDef: ObjectDef | undefined): SupplyTruckProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: SupplyTruckProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SUPPLYTRUCKAIUPDATE') {
+          const maxBoxes = Math.max(1, Math.trunc(readNumericField(block.fields, ['MaxBoxes']) ?? 3));
+          const supplyCenterActionDelayMs = readNumericField(block.fields, ['SupplyCenterActionDelay']) ?? 0;
+          const supplyWarehouseActionDelayMs = readNumericField(block.fields, ['SupplyWarehouseActionDelay']) ?? 0;
+          const scanDistance = readNumericField(block.fields, ['SupplyWarehouseScanDistance']) ?? 200;
+          profile = {
+            maxBoxes,
+            supplyCenterActionDelayFrames: this.msToLogicFrames(supplyCenterActionDelayMs),
+            supplyWarehouseActionDelayFrames: this.msToLogicFrames(supplyWarehouseActionDelayMs),
+            supplyWarehouseScanDistance: Math.max(0, scanDistance),
+          };
+          return;
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Detect if an entity definition includes a SupplyCenterDockUpdate behavior module.
+   */
+  private detectIsSupplyCenter(objectDef: ObjectDef | undefined): boolean {
+    if (!objectDef) {
+      return false;
+    }
+
+    let found = false;
+    const visitBlock = (block: IniBlock): void => {
+      if (found) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SUPPLYCENTERDOCKUPDATE') {
+          found = true;
+          return;
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return found;
+  }
+
+  /**
+   * Source parity: ThingTemplate — ExperienceRequired, ExperienceValue fields.
+   * These are space-separated 4-element lists: [REGULAR] [VETERAN] [ELITE] [HEROIC].
+   */
+  private extractExperienceProfile(objectDef: ObjectDef | undefined): ExperienceProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    const expRequiredRaw = readNumericListField(objectDef.fields, ['ExperienceRequired']);
+    const expValueRaw = readNumericListField(objectDef.fields, ['ExperienceValue']);
+
+    if (!expRequiredRaw && !expValueRaw) {
+      return null;
+    }
+
+    const expRequired: [number, number, number, number] = [0, 0, 0, 0];
+    const expValue: [number, number, number, number] = [0, 0, 0, 0];
+
+    if (expRequiredRaw) {
+      for (let i = 0; i < 4 && i < expRequiredRaw.length; i++) {
+        expRequired[i] = Math.max(0, Math.trunc(expRequiredRaw[i] ?? 0));
+      }
+    }
+
+    if (expValueRaw) {
+      for (let i = 0; i < 4 && i < expValueRaw.length; i++) {
+        expValue[i] = Math.max(0, Math.trunc(expValueRaw[i] ?? 0));
+      }
+    }
+
+    return {
+      experienceRequired: expRequired,
+      experienceValue: expValue,
     };
   }
 
@@ -5522,7 +5820,6 @@ export class GameLogicSubsystem implements Subsystem {
   ): void {
     const module = this.resolveSpecialPowerModuleProfile(sourceEntityId, specialPowerName);
     if (!module) {
-      // TODO(source parity): resolve special power ownership for aliases/alternate modules.
       return;
     }
 
@@ -5536,6 +5833,27 @@ export class GameLogicSubsystem implements Subsystem {
       null,
       null,
     );
+
+    // Execute no-target effects (spy vision centered on source, cash bounty, etc.).
+    const source = this.spawnedEntities.get(sourceEntityId);
+    if (!source || source.destroyed) {
+      return;
+    }
+
+    const effectCategory = resolveEffectCategoryImpl(module.moduleType);
+    const effectContext = this.createSpecialPowerEffectContext();
+
+    switch (effectCategory) {
+      case 'SPY_VISION':
+        // Reveal around source entity position.
+        executeSpyVisionImpl({
+          sourceSide: source.side ?? '',
+          targetX: source.x,
+          targetZ: source.z,
+          revealRadius: DEFAULT_SPY_VISION_RADIUS,
+        }, effectContext);
+        break;
+    }
   }
 
   protected onIssueSpecialPowerTargetPosition(
@@ -5549,7 +5867,6 @@ export class GameLogicSubsystem implements Subsystem {
   ): void {
     const module = this.resolveSpecialPowerModuleProfile(sourceEntityId, specialPowerName);
     if (!module) {
-      // TODO(source parity): resolve special power ownership for aliases/alternate modules.
       return;
     }
 
@@ -5563,6 +5880,48 @@ export class GameLogicSubsystem implements Subsystem {
       targetX,
       targetZ,
     );
+
+    // Execute position-targeted effects.
+    const source = this.spawnedEntities.get(sourceEntityId);
+    if (!source || source.destroyed) {
+      return;
+    }
+
+    const effectCategory = resolveEffectCategoryImpl(module.moduleType);
+    const effectContext = this.createSpecialPowerEffectContext();
+    const sourceSide = source.side ?? '';
+
+    switch (effectCategory) {
+      case 'AREA_DAMAGE':
+        executeAreaDamageImpl({
+          sourceEntityId,
+          sourceSide,
+          targetX,
+          targetZ,
+          radius: DEFAULT_AREA_DAMAGE_RADIUS,
+          damage: DEFAULT_AREA_DAMAGE_AMOUNT,
+          damageType: 'EXPLOSION',
+        }, effectContext);
+        break;
+      case 'SPY_VISION':
+        executeSpyVisionImpl({
+          sourceSide,
+          targetX,
+          targetZ,
+          revealRadius: DEFAULT_SPY_VISION_RADIUS,
+        }, effectContext);
+        break;
+      case 'AREA_HEAL':
+        executeAreaHealImpl({
+          sourceSide,
+          targetX,
+          targetZ,
+          radius: DEFAULT_AREA_HEAL_RADIUS,
+          healAmount: DEFAULT_AREA_HEAL_AMOUNT,
+          kindOfFilter: [],
+        }, effectContext);
+        break;
+    }
   }
 
   protected onIssueSpecialPowerTargetObject(
@@ -5575,7 +5934,6 @@ export class GameLogicSubsystem implements Subsystem {
   ): void {
     const module = this.resolveSpecialPowerModuleProfile(sourceEntityId, specialPowerName);
     if (!module) {
-      // TODO(source parity): resolve special power ownership for aliases/alternate modules.
       return;
     }
 
@@ -5589,6 +5947,34 @@ export class GameLogicSubsystem implements Subsystem {
       null,
       null,
     );
+
+    // Execute object-targeted effects.
+    const source = this.spawnedEntities.get(sourceEntityId);
+    if (!source || source.destroyed) {
+      return;
+    }
+
+    const effectCategory = resolveEffectCategoryImpl(module.moduleType);
+    const effectContext = this.createSpecialPowerEffectContext();
+    const sourceSide = source.side ?? '';
+
+    switch (effectCategory) {
+      case 'CASH_HACK':
+        executeCashHackImpl({
+          sourceEntityId,
+          sourceSide,
+          targetEntityId,
+          amountToSteal: DEFAULT_CASH_HACK_AMOUNT,
+        }, effectContext);
+        break;
+      case 'DEFECTOR':
+        executeDefectorImpl({
+          sourceEntityId,
+          sourceSide,
+          targetEntityId,
+        }, effectContext);
+        break;
+    }
   }
 
   private resolveSpecialPowerModuleProfile(
@@ -7027,6 +7413,250 @@ export class GameLogicSubsystem implements Subsystem {
 
       entity.objectStatusFlags.delete('DISABLED_HACKED');
       this.disabledHackedStatusByEntityId.delete(entityId);
+    }
+  }
+
+  /**
+   * Source parity: Object::look() / Object::unlook()
+   * Updates each entity's vision contribution to the fog of war grid.
+   */
+  private updateFogOfWar(): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      const playerIdx = this.resolvePlayerIndexForSide(entity.side);
+      if (playerIdx < 0) {
+        continue;
+      }
+
+      updateEntityVisionImpl(
+        grid,
+        entity.visionState,
+        playerIdx,
+        entity.x,
+        entity.z,
+        entity.visionRange,
+        !entity.destroyed,
+      );
+    }
+  }
+
+  /**
+   * Resolve or allocate a player index for a side string.
+   * Used by fog of war to track per-player visibility.
+   */
+  private resolvePlayerIndexForSide(side: string | undefined): number {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return -1;
+    }
+
+    let idx = this.sidePlayerIndex.get(normalizedSide);
+    if (idx !== undefined) {
+      return idx;
+    }
+
+    idx = this.nextPlayerIndex++;
+    this.sidePlayerIndex.set(normalizedSide, idx);
+    return idx;
+  }
+
+  /**
+   * Get the visibility of a world position for a specific side.
+   */
+  getCellVisibility(side: string, worldX: number, worldZ: number): CellVisibility {
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return CELL_CLEAR; // No fog of war without a grid.
+    }
+
+    const playerIdx = this.sidePlayerIndex.get(this.normalizeSide(side));
+    if (playerIdx === undefined) {
+      return CELL_SHROUDED;
+    }
+
+    return grid.getCellVisibility(playerIdx, worldX, worldZ);
+  }
+
+  /**
+   * Check if a position is visible (CLEAR) for a side.
+   */
+  isPositionVisible(side: string, worldX: number, worldZ: number): boolean {
+    return this.getCellVisibility(side, worldX, worldZ) === CELL_CLEAR;
+  }
+
+  /**
+   * Get the fog of war grid dimensions and raw visibility data for a side.
+   * Returns null if no fog grid is active.
+   * Data is a Uint8Array where each byte is: 0=SHROUDED, 1=FOGGED, 2=CLEAR.
+   * Row-major order: index = row * cellsWide + col.
+   */
+  getFogOfWarTextureData(side: string): {
+    cellsWide: number;
+    cellsDeep: number;
+    cellSize: number;
+    data: Uint8Array;
+  } | null {
+    const grid = this.fogOfWarGrid;
+    if (!grid) return null;
+
+    const playerIdx = this.sidePlayerIndex.get(this.normalizeSide(side));
+    if (playerIdx === undefined) return null;
+
+    const cellsWide = grid.cellsWide;
+    const cellsDeep = grid.cellsDeep;
+    const data = new Uint8Array(cellsWide * cellsDeep);
+    const cellSize = grid.cellSize;
+
+    for (let row = 0; row < cellsDeep; row++) {
+      for (let col = 0; col < cellsWide; col++) {
+        const worldX = (col + 0.5) * cellSize;
+        const worldZ = (row + 0.5) * cellSize;
+        data[row * cellsWide + col] = grid.getCellVisibility(playerIdx, worldX, worldZ);
+      }
+    }
+
+    return { cellsWide, cellsDeep, cellSize, data };
+  }
+
+  /**
+   * Create the context object for special power effect execution.
+   */
+  private createSpecialPowerEffectContext(): SpecialPowerEffectContext<MapEntity> {
+    return {
+      spawnedEntities: this.spawnedEntities,
+      applyDamage: (sourceEntityId, target, amount, damageType) => {
+        this.applyWeaponDamageAmount(sourceEntityId, target, amount, damageType);
+      },
+      healEntity: (target, amount) => {
+        if (target.destroyed || amount <= 0) {
+          return;
+        }
+        target.health = Math.min(target.maxHealth, target.health + amount);
+      },
+      depositCredits: (side, amount) => {
+        depositSideCreditsImpl(this.sideCredits, this.normalizeSide(side), amount);
+      },
+      withdrawCredits: (side, amount) => {
+        return withdrawSideCreditsImpl(this.sideCredits, this.normalizeSide(side), amount);
+      },
+      changeEntitySide: (entityId, newSide) => {
+        this.captureEntity(entityId, newSide);
+      },
+      destroyEntity: (entityId, attackerId) => {
+        this.markEntityDestroyed(entityId, attackerId);
+      },
+      getRelationship: (sideA, sideB) => {
+        return this.getTeamRelationshipBySides(sideA, sideB);
+      },
+      revealFogOfWar: (side, worldX, worldZ, radius) => {
+        const grid = this.fogOfWarGrid;
+        if (!grid) {
+          return;
+        }
+        const playerIdx = this.resolvePlayerIndexForSide(side);
+        if (playerIdx < 0) {
+          return;
+        }
+        grid.addLooker(playerIdx, worldX, worldZ, radius);
+      },
+      normalizeSide: (side) => this.normalizeSide(side),
+    };
+  }
+
+  /**
+   * Source parity: SupplyTruckAIUpdate / SupplyWarehouseDockUpdate / SupplyCenterDockUpdate
+   * Runs the supply truck AI state machine for all trucks each frame.
+   */
+  private updateSupplyChain(): void {
+    const supplyChainContext: SupplyChainContext<MapEntity> = {
+      frameCounter: this.frameCounter,
+      spawnedEntities: this.spawnedEntities,
+      supplyBoxValue: DEFAULT_SUPPLY_BOX_VALUE,
+      getWarehouseProfile: (entity: MapEntity) => entity.supplyWarehouseProfile,
+      getTruckProfile: (entity: MapEntity) => entity.supplyTruckProfile,
+      isSupplyCenter: (entity: MapEntity) => entity.isSupplyCenter,
+      getWarehouseState: (entityId: number) => this.supplyWarehouseStates.get(entityId),
+      setWarehouseState: (entityId: number, state: SupplyWarehouseState) => {
+        this.supplyWarehouseStates.set(entityId, state);
+      },
+      getTruckState: (entityId: number) => this.supplyTruckStates.get(entityId),
+      setTruckState: (entityId: number, state: SupplyTruckState) => {
+        this.supplyTruckStates.set(entityId, state);
+      },
+      depositCredits: (side: string, amount: number) => {
+        this.depositSideCredits(side, amount);
+      },
+      moveEntityTo: (entityId: number, targetX: number, targetZ: number) => {
+        this.submitCommand({ type: 'moveTo', entityId, targetX, targetZ });
+      },
+      destroyEntity: (entityId: number) => {
+        this.markEntityDestroyed(entityId, -1);
+      },
+      normalizeSide: (side: string | undefined) => this.normalizeSide(side),
+    };
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (entity.supplyTruckProfile) {
+        updateSupplyTruckImpl(entity, entity.supplyTruckProfile, supplyChainContext);
+      }
+    }
+  }
+
+  /**
+   * Enable skirmish AI for a side.
+   * Source parity: AIPlayer is created when map starts with AI players.
+   */
+  enableSkirmishAI(side: string): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide || this.skirmishAIStates.has(normalizedSide)) {
+      return;
+    }
+
+    const aiState = createSkirmishAIStateImpl(normalizedSide);
+    this.skirmishAIStates.set(normalizedSide, aiState);
+  }
+
+  /**
+   * Disable skirmish AI for a side.
+   */
+  disableSkirmishAI(side: string): void {
+    this.skirmishAIStates.delete(this.normalizeSide(side));
+  }
+
+  private updateSkirmishAI(): void {
+    if (this.skirmishAIStates.size === 0) {
+      return;
+    }
+
+    const aiContext: SkirmishAIContext<MapEntity> = {
+      frameCounter: this.frameCounter,
+      spawnedEntities: this.spawnedEntities,
+      getSideCredits: (side: string) => this.getSideCredits(side),
+      submitCommand: (command) => this.submitCommand(command),
+      getRelationship: (sideA: string, sideB: string) =>
+        this.getTeamRelationshipBySides(sideA, sideB),
+      normalizeSide: (side) => this.normalizeSide(side),
+      hasProductionQueue: (entity: MapEntity) => entity.productionProfile !== null,
+      isProducing: (entity: MapEntity) => entity.productionQueue.length > 0,
+      getProducibleUnits: (entity: MapEntity) => {
+        // Return template names this entity can produce based on its production profile.
+        // For now, derive from INI data or return empty.
+        if (!entity.productionProfile) {
+          return [];
+        }
+        return entity.productionProfile.quantityModifiers.map(qm => qm.templateName);
+      },
+    };
+
+    for (const aiState of this.skirmishAIStates.values()) {
+      updateSkirmishAIImpl(aiState, aiContext);
     }
   }
 
@@ -9661,15 +10291,19 @@ export class GameLogicSubsystem implements Subsystem {
     return adjustDamageByArmorSetImpl(target, amount, damageType);
   }
 
-  private markEntityDestroyed(entityId: number, _attackerId: number): void {
-    void _attackerId;
+  private markEntityDestroyed(entityId: number, attackerId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || entity.destroyed) {
       return;
     }
 
+    // Source parity: award XP to killer on victim death.
+    this.awardExperienceOnKill(entityId, attackerId);
+
     this.cancelEntityCommandPathActions(entityId);
     this.railedTransportStateByEntityId.delete(entityId);
+    this.supplyWarehouseStates.delete(entityId);
+    this.supplyTruckStates.delete(entityId);
     this.disableOverchargeForEntity(entity);
     this.sellingEntities.delete(entityId);
     this.disabledHackedStatusByEntityId.delete(entityId);
@@ -9706,6 +10340,76 @@ export class GameLogicSubsystem implements Subsystem {
       expireFrame: this.frameCounter + 1,
     });
     this.onObjectDestroyed(entityId);
+  }
+
+  /**
+   * Source parity: ExperienceTracker::addExperiencePoints on killer,
+   * using victim's ExperienceValue for their current level.
+   * ActiveBody::onVeterancyLevelChanged applies health and armor bonuses.
+   */
+  private awardExperienceOnKill(victimId: number, attackerId: number): void {
+    if (attackerId < 0) {
+      return;
+    }
+
+    const victim = this.spawnedEntities.get(victimId);
+    const attacker = this.spawnedEntities.get(attackerId);
+    if (!victim || !attacker || attacker.destroyed) {
+      return;
+    }
+
+    const victimProfile = victim.experienceProfile;
+    if (!victimProfile) {
+      return;
+    }
+
+    const attackerProfile = attacker.experienceProfile;
+    if (!attackerProfile) {
+      return;
+    }
+
+    // Source parity: no XP for killing allies.
+    const victimSide = this.normalizeSide(victim.side);
+    const attackerSide = this.normalizeSide(attacker.side);
+    if (victimSide && attackerSide && victimSide === attackerSide) {
+      return;
+    }
+
+    const xpGain = getExperienceValueImpl(victimProfile, victim.experienceState.currentLevel);
+    if (xpGain <= 0) {
+      return;
+    }
+
+    const result = addExperiencePointsImpl(
+      attacker.experienceState,
+      attackerProfile,
+      xpGain,
+      true,
+    );
+
+    if (result.didLevelUp) {
+      this.onEntityLevelUp(attacker, result.oldLevel, result.newLevel);
+    }
+  }
+
+  private onEntityLevelUp(entity: MapEntity, oldLevel: VeterancyLevel, newLevel: VeterancyLevel): void {
+    // Source parity: apply health bonus (ActiveBody.cpp:1126-1134).
+    const config = DEFAULT_VETERANCY_CONFIG;
+    const { newHealth, newMaxHealth } = applyHealthBonusForLevelChangeImpl(
+      oldLevel,
+      newLevel,
+      entity.health,
+      entity.maxHealth,
+      config,
+    );
+    entity.maxHealth = newMaxHealth;
+    entity.health = newHealth;
+
+    // Source parity: update armor set flags for veterancy level (ActiveBody.cpp:1139-1159).
+    const vetArmorFlags = resolveArmorSetFlagsForLevelImpl(newLevel);
+    // Clear all veterancy armor flags then set the new one.
+    entity.armorSetFlagsMask &= ~0x07; // Clear VETERAN | ELITE | HERO bits.
+    entity.armorSetFlagsMask |= vetArmorFlags;
   }
 
   private cancelAndRefundAllProductionOnDeath(producer: MapEntity): void {
@@ -9790,6 +10494,72 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.frameCounter > pending.expireFrame) {
         this.pendingDyingRenderableStates.delete(entityId);
       }
+    }
+  }
+
+  /**
+   * Source parity: VictoryConditions.cpp — hasSinglePlayerBeenDefeated.
+   * Default skirmish mode: a side is defeated when it has no buildings AND no
+   * combat units remaining (excludes projectiles, mines, inert objects).
+   */
+  private checkVictoryConditions(): void {
+    if (this.gameEndFrame !== null) {
+      return; // Game already ended.
+    }
+
+    // Collect all active sides from playerSideByIndex.
+    const activeSides = new Set<string>();
+    for (const [, side] of this.playerSideByIndex) {
+      if (!this.defeatedSides.has(side)) {
+        activeSides.add(side);
+      }
+    }
+
+    if (activeSides.size < 2) {
+      return; // Need at least 2 sides for victory conditions.
+    }
+
+    // Check each active side.
+    for (const side of activeSides) {
+      let hasBuildings = false;
+      let hasUnits = false;
+
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed) continue;
+        const entitySide = this.normalizeSide(entity.side);
+        if (entitySide !== side) continue;
+
+        // Exclude projectiles, mines, and inert objects (source parity: Team.cpp).
+        if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('MINE') || entity.kindOf.has('INERT')) {
+          continue;
+        }
+
+        if (entity.kindOf.has('STRUCTURE')) {
+          hasBuildings = true;
+        } else {
+          hasUnits = true;
+        }
+
+        if (hasBuildings && hasUnits) break;
+      }
+
+      // Source parity: Both VICTORY_NOUNITS and VICTORY_NOBUILDINGS are set by default.
+      // A side is defeated when it has no buildings AND no units.
+      if (!hasBuildings && !hasUnits) {
+        this.defeatedSides.add(side);
+      }
+    }
+
+    // Check if only one alliance remains.
+    const remainingSides: string[] = [];
+    for (const [, side] of this.playerSideByIndex) {
+      if (!this.defeatedSides.has(side) && !remainingSides.includes(side)) {
+        remainingSides.push(side);
+      }
+    }
+
+    if (remainingSides.length <= 1 && this.defeatedSides.size > 0) {
+      this.gameEndFrame = this.frameCounter;
     }
   }
 
@@ -9956,8 +10726,14 @@ export class GameLogicSubsystem implements Subsystem {
     this.hackInternetPendingCommandByEntityId.clear();
     this.pendingEnterObjectActions.clear();
     this.pendingCombatDropActions.clear();
+    this.supplyWarehouseStates.clear();
+    this.supplyTruckStates.clear();
     this.railedTransportStateByEntityId.clear();
     this.railedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
+    this.fogOfWarGrid = null;
+    this.sidePlayerIndex.clear();
+    this.nextPlayerIndex = 0;
+    this.skirmishAIStates.clear();
     this.navigationGrid = null;
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
@@ -9966,5 +10742,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.clear();
     this.selectedEntityIds = [];
     this.selectedEntityId = null;
+    this.defeatedSides.clear();
+    this.gameEndFrame = null;
   }
 }
