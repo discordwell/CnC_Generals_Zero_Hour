@@ -40,6 +40,21 @@ function writePrefixedAscii(view: DataView, off: number, s: string): number {
   return writeAscii(view, off, s);
 }
 
+function writeIntDictEntry(view: DataView, off: number, key: number, value: number): number {
+  off = writeInt32(view, off, (key << 8) | 1);
+  return writeInt32(view, off, value);
+}
+
+function writeBoolDictEntry(view: DataView, off: number, key: number, value: boolean): number {
+  off = writeInt32(view, off, (key << 8) | 0);
+  return writeUint8(view, off, value ? 1 : 0);
+}
+
+function writeAsciiDictEntry(view: DataView, off: number, key: number, value: string): number {
+  off = writeInt32(view, off, (key << 8) | 3);
+  return writePrefixedAscii(view, off, value);
+}
+
 interface ChunkDef { name: string; id: number; }
 function tocSize(chunks: ChunkDef[]): number {
   let size = 8;
@@ -180,6 +195,131 @@ function buildGoldenMap(): ArrayBuffer {
   return buffer.slice(0, off);
 }
 
+function buildGoldenWaypointGraphMap(): ArrayBuffer {
+  const chunks: ChunkDef[] = [
+    { name: 'HeightMapData', id: 1 },
+    { name: 'ObjectsList', id: 2 },
+    { name: 'Object', id: 3 },
+    { name: 'WaypointsList', id: 4 },
+    { name: 'waypointID', id: 100 },
+    { name: 'waypointName', id: 101 },
+    { name: 'waypointPathBiDirectional', id: 102 },
+    { name: 'waypointPathLabel1', id: 103 },
+    { name: 'waypointPathLabel2', id: 104 },
+    { name: 'waypointPathLabel3', id: 105 },
+  ];
+
+  const hmW = 6;
+  const hmH = 2;
+  const hmDataLen = hmW * hmH;
+  const hmPayload = 4 + 4 + 4 + 4 + hmDataLen;
+  const templateName = '*Waypoints/Waypoint';
+  const waypointName1 = 'TrainRouteStart01';
+  const waypointName2 = 'TrainRouteMid01';
+  const waypointName3 = 'TrainRouteEnd01';
+
+  const objPayload1 =
+    4 + 4 + 4 + 4 + 4 + 2 + templateName.length +
+    2 +
+    (4 + 4) +
+    (4 + 2 + waypointName1.length) +
+    (4 + 1) +
+    (4 + 2 + 8);
+  const objPayload2 =
+    4 + 4 + 4 + 4 + 4 + 2 + templateName.length +
+    2 +
+    (4 + 4) +
+    (4 + 2 + waypointName2.length) +
+    (4 + 1) +
+    (4 + 2 + 9);
+  const objPayload3 =
+    4 + 4 + 4 + 4 + 4 + 2 + templateName.length +
+    2 +
+    (4 + 4) +
+    (4 + 2 + waypointName3.length) +
+    (4 + 1) +
+    (4 + 2 + 10);
+
+  const objListPayload = CHUNK_HEADER_SIZE + objPayload1 + CHUNK_HEADER_SIZE + objPayload2 + CHUNK_HEADER_SIZE + objPayload3;
+  const waypointLinksPayload = 4 + 6 * 8;
+  const totalSize =
+    tocSize(chunks) +
+    CHUNK_HEADER_SIZE + hmPayload +
+    CHUNK_HEADER_SIZE + objListPayload +
+    CHUNK_HEADER_SIZE + waypointLinksPayload +
+    64;
+
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+  let off = writeTOC(view, chunks);
+
+  off = writeChunkHeader(view, off, 1, 3, hmPayload);
+  off = writeInt32(view, off, hmW);
+  off = writeInt32(view, off, hmH);
+  off = writeInt32(view, off, 0);
+  off = writeInt32(view, off, hmDataLen);
+  for (let i = 0; i < hmDataLen; i++) {
+    off = writeUint8(view, off, 96);
+  }
+
+  off = writeChunkHeader(view, off, 2, 1, objListPayload);
+  off = writeChunkHeader(view, off, 3, 3, objPayload1);
+  off = writeFloat32(view, off, 60.0);
+  off = writeFloat32(view, off, 100.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeInt32(view, off, 0);
+  off = writePrefixedAscii(view, off, templateName);
+  off = writeUint16(view, off, 4);
+  off = writeIntDictEntry(view, off, 100, 11);
+  off = writeAsciiDictEntry(view, off, 101, waypointName1);
+  off = writeBoolDictEntry(view, off, 102, true);
+  off = writeAsciiDictEntry(view, off, 103, 'RailMain');
+
+  off = writeChunkHeader(view, off, 3, 3, objPayload2);
+  off = writeFloat32(view, off, 160.0);
+  off = writeFloat32(view, off, 220.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeFloat32(view, off, 15.0);
+  off = writeInt32(view, off, 0);
+  off = writePrefixedAscii(view, off, templateName);
+  off = writeUint16(view, off, 4);
+  off = writeIntDictEntry(view, off, 100, 12);
+  off = writeAsciiDictEntry(view, off, 101, waypointName2);
+  off = writeBoolDictEntry(view, off, 102, false);
+  off = writeAsciiDictEntry(view, off, 104, 'LocalEdge');
+
+  off = writeChunkHeader(view, off, 3, 3, objPayload3);
+  off = writeFloat32(view, off, 260.0);
+  off = writeFloat32(view, off, 320.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeFloat32(view, off, 90.0);
+  off = writeInt32(view, off, 0);
+  off = writePrefixedAscii(view, off, templateName);
+  off = writeUint16(view, off, 4);
+  off = writeIntDictEntry(view, off, 100, 13);
+  off = writeAsciiDictEntry(view, off, 101, waypointName3);
+  off = writeBoolDictEntry(view, off, 102, true);
+  off = writeAsciiDictEntry(view, off, 105, 'ReturnPath');
+
+  off = writeChunkHeader(view, off, 4, 1, waypointLinksPayload);
+  off = writeInt32(view, off, 6);
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, 12);
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, 12);
+  off = writeInt32(view, off, 12);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 99);
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 12);
+
+  return buffer.slice(0, off);
+}
+
 // ---------------------------------------------------------------------------
 // Golden tests
 // ---------------------------------------------------------------------------
@@ -282,5 +422,24 @@ describe('MAP golden fixtures', () => {
     }));
 
     expect(trigSummary).toMatchSnapshot('map-triggers');
+  });
+
+  it('path-heavy waypoint graph snapshot', () => {
+    const buffer = buildGoldenWaypointGraphMap();
+    const parsed = MapParser.parse(buffer);
+
+    const waypointSummary = {
+      nodes: parsed.waypoints.nodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        pathLabel1: node.pathLabel1,
+        pathLabel2: node.pathLabel2,
+        pathLabel3: node.pathLabel3,
+        biDirectional: node.biDirectional,
+      })),
+      links: parsed.waypoints.links,
+    };
+
+    expect(waypointSummary).toMatchSnapshot('map-waypoint-graph');
   });
 });

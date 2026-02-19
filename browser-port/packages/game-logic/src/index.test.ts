@@ -12,6 +12,7 @@ import {
   type LocomotorDef,
   type ObjectDef,
   type ScienceDef,
+  type SpecialPowerDef,
   type UpgradeDef,
   type WeaponDef,
 } from '@generals/ini-data';
@@ -104,6 +105,14 @@ function makeScienceDef(name: string, fields: Record<string, unknown>): ScienceD
   };
 }
 
+function makeSpecialPowerDef(name: string, fields: Record<string, unknown>): SpecialPowerDef {
+  return {
+    name,
+    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
+    blocks: [],
+  };
+}
+
 function makeBundle(params: {
   objects: ObjectDef[];
   weapons?: WeaponDef[];
@@ -112,6 +121,7 @@ function makeBundle(params: {
   commandButtons?: CommandButtonDef[];
   commandSets?: CommandSetDef[];
   sciences?: ScienceDef[];
+  specialPowers?: SpecialPowerDef[];
   locomotors?: LocomotorDef[];
   factions?: FactionDef[];
 }): IniDataBundle {
@@ -121,6 +131,7 @@ function makeBundle(params: {
   const commandButtons = params.commandButtons ?? [];
   const commandSets = params.commandSets ?? [];
   const sciences = params.sciences ?? [];
+  const specialPowers = params.specialPowers ?? [];
   const locomotors = params.locomotors ?? [];
   const factions = params.factions ?? [];
   return {
@@ -131,6 +142,7 @@ function makeBundle(params: {
     commandButtons,
     commandSets,
     sciences,
+    specialPowers,
     factions,
     locomotors,
     ai: {
@@ -149,6 +161,7 @@ function makeBundle(params: {
         + weapons.length
         + armors.length
         + upgrades.length
+        + specialPowers.length
         + commandButtons.length
         + commandSets.length
         + sciences.length
@@ -6115,6 +6128,199 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([]);
   });
 
+  it('clears removable blockers when constructing over them', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('Shrubbery', 'America', ['SHRUBBERY'], [], {
+          GeometryMajorRadius: 4,
+          GeometryMinorRadius: 4,
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Dozer', 8, 8), makeMapObject('Shrubbery', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [20, 0, 20],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    expect(logic.getEntityIdsByTemplate('Shrubbery')).toEqual([]);
+    expect(logic.getSideCredits('America')).toBe(300);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([3]);
+  });
+
+  it('moves allied mobile blockers instead of failing construction on overlap', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('AllyCarrier', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          BuildCost: 0,
+          GeometryMajorRadius: 4,
+          GeometryMinorRadius: 4,
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Dozer', 8, 8), makeMapObject('AllyCarrier', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [20, 0, 20],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    const ally = (
+      logic as unknown as {
+        spawnedEntities: Map<number, { destroyed: boolean; moving: boolean }>;
+      }
+    ).spawnedEntities.get(2);
+    expect(ally).toBeDefined();
+    expect(ally!.destroyed).toBe(false);
+    expect(ally!.moving).toBe(true);
+    expect(logic.getSideCredits('America')).toBe(300);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([3]);
+  });
+
+  it('fails construction when blocked by enemy or immobile objects', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('EnemyBunker', 'China', ['STRUCTURE', 'IMMOBILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          BuildCost: 0,
+          GeometryMajorRadius: 4,
+          GeometryMinorRadius: 4,
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Dozer', 8, 8), makeMapObject('EnemyBunker', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [20, 0, 20],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(500);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([]);
+  });
+
+  it('continues line-building after blocked first tile', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('EnemyBunker', 'China', ['STRUCTURE', 'IMMOBILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          BuildCost: 0,
+          GeometryMajorRadius: 1,
+          GeometryMinorRadius: 1,
+        }),
+        makeObjectDef('LineWall', 'America', ['STRUCTURE', 'LINEBUILD'], [], {
+          BuildCost: 50,
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Dozer', 8, 8), makeMapObject('EnemyBunker', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'LineWall',
+      targetPosition: [20, 0, 20],
+      angle: 0,
+      lineEndPosition: [40, 0, 20],
+    });
+
+    logic.update(1 / 30);
+
+    const wallIds = logic.getEntityIdsByTemplateAndSide('LineWall', 'America');
+    expect(wallIds).toHaveLength(1);
+    const firstWall = (
+      logic as unknown as {
+        spawnedEntities: Map<number, { x: number }>;
+      }
+    ).spawnedEntities.get(wallIds[0]!);
+    expect(firstWall?.x).toBeGreaterThan(20);
+    expect(logic.getSideCredits('America')).toBe(450);
+  });
+
   it('runs sell command teardown and refunds structure value after sell timer completes', () => {
     const bundle = makeBundle({
       objects: [
@@ -6136,6 +6342,195 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     expect(logic.getEntityState(1)).toBeNull();
     expect(logic.getSideCredits('America')).toBe(300);
+  });
+
+  it('uses configured sell percentage when fallbacking RefundValue', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [], {
+          BuildCost: 300,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { sellPercentage: 0.5 });
+    logic.loadMapObjects(makeMap([makeMapObject('CommandCenter', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.submitCommand({ type: 'sell', entityId: 1 });
+
+    for (let frame = 0; frame < 190; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getSideCredits('America')).toBe(150);
+  });
+
+  it('prefers RefundValue over sell percentage when computing sell refunds', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [], {
+          BuildCost: 300,
+          RefundValue: 275,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { sellPercentage: 0.1 });
+    logic.loadMapObjects(makeMap([makeMapObject('CommandCenter', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.submitCommand({ type: 'sell', entityId: 1 });
+
+    for (let frame = 0; frame < 190; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getSideCredits('America')).toBe(275);
+  });
+
+  it('skips PowerPlantUpgrade side effects while the source object is disabled', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Behavior', 'PowerPlantUpgrade ModuleTag_Power', {
+            TriggeredBy: 'Upgrade_Power',
+          }),
+        ], {
+          EnergyBonus: 12,
+        }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Power', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 0,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('PowerPlant', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    const logicWithPrivateAccess = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const building = logicWithPrivateAccess.spawnedEntities.get(1);
+    expect(building).toBeDefined();
+    building!.objectStatusFlags.add('DISABLED_HACKED');
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Power' });
+    logic.update(1 / 30);
+
+    expect(logic.getSidePowerState('America').powerBonus).toBe(0);
+  });
+
+  it('skips RadarUpgrade side effects while the source object is disabled', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('RadarPlant', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'RadarUpgrade ModuleTag_Radar', {
+            TriggeredBy: 'Upgrade_Radar',
+            DisableProof: true,
+          }),
+        ]),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Radar', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 0,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('RadarPlant', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    const logicWithPrivateAccess = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const building = logicWithPrivateAccess.spawnedEntities.get(1);
+    expect(building).toBeDefined();
+    building!.objectStatusFlags.add('DISABLED_HACKED');
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Radar' });
+    logic.update(1 / 30);
+
+    expect(logic.getSideRadarState('America')).toEqual({
+      radarCount: 0,
+      disableProofRadarCount: 0,
+    });
+  });
+
+  it('keeps disabled capture source upgrade side effects on the original side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UpgradeHub', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'PowerPlantUpgrade ModuleTag_Power', {
+            TriggeredBy: 'Upgrade_Power',
+          }),
+          makeBlock('Behavior', 'RadarUpgrade ModuleTag_Radar', {
+            TriggeredBy: 'Upgrade_Radar',
+            DisableProof: true,
+          }),
+        ], {
+          EnergyBonus: 10,
+        }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_Power', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 0,
+        }),
+        makeUpgradeDef('Upgrade_Radar', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 0,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('UpgradeHub', 8, 8)], 64, 64), makeRegistry(bundle), makeHeightmap(64, 64));
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Power' });
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Radar' });
+    logic.update(1 / 30);
+    expect(logic.getSidePowerState('America').powerBonus).toBe(10);
+    expect(logic.getSideRadarState('America')).toEqual({
+      radarCount: 1,
+      disableProofRadarCount: 1,
+    });
+
+    const logicWithPrivateAccess = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const building = logicWithPrivateAccess.spawnedEntities.get(1);
+    expect(building).toBeDefined();
+    building!.objectStatusFlags.add('DISABLED_HACKED');
+
+    logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'China' });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityIdsByTemplateAndSide('UpgradeHub', 'China')).toEqual([1]);
+    expect(logic.getSidePowerState('America').powerBonus).toBe(10);
+    expect(logic.getSideRadarState('America')).toEqual({
+      radarCount: 1,
+      disableProofRadarCount: 1,
+    });
+    expect(logic.getSidePowerState('China').powerBonus).toBe(0);
+    expect(logic.getSideRadarState('China')).toEqual({
+      radarCount: 0,
+      disableProofRadarCount: 0,
+    });
   });
 
   it('toggles overcharge state, drains health, and auto-disables below threshold', () => {
@@ -6690,5 +7085,191 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     const passengerState = logic.getEntityState(passengerId!);
     expect(passengerState).not.toBeNull();
     expect(passengerState?.attackTargetEntityId).toBe(2);
+  });
+
+  it('records no-target special power dispatch on source entity module', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceNoTarget', {
+            SpecialPowerTemplate: 'SpecialPowerNoTarget',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerNoTarget', { ReloadTime: 0 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_NO_TARGET',
+      specialPowerName: 'SpecialPowerNoTarget',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    const sourceState = logic.getEntityState(1);
+    expect(sourceState?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SPECIALPOWERNOTARGET',
+      moduleType: 'SPECIALPOWERMODULE',
+      dispatchType: 'NO_TARGET',
+      commandOption: 0,
+      commandButtonId: 'CMD_NO_TARGET',
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+  });
+
+  it('records position-target special power dispatch on source entity module', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourcePos', {
+            SpecialPowerTemplate: 'SpecialPowerAtPos',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerAtPos', { ReloadTime: 0 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_POSITION',
+      specialPowerName: 'SpecialPowerAtPos',
+      commandOption: 0x20,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 100,
+      targetZ: 260,
+    });
+
+    const sourceState = logic.getEntityState(1);
+    expect(sourceState?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SPECIALPOWERATPOS',
+      moduleType: 'SPECIALPOWERMODULE',
+      dispatchType: 'POSITION',
+      commandOption: 0x20,
+      commandButtonId: 'CMD_POSITION',
+      targetEntityId: null,
+      targetX: 100,
+      targetZ: 260,
+    });
+  });
+
+  it('records object-target special power dispatch on source entity module', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceObject', {
+            SpecialPowerTemplate: 'SpecialPowerAtObject',
+          }),
+        ]),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerAtObject', { ReloadTime: 0 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10), makeMapObject('EnemyTarget', 24, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 2);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_OBJECT',
+      specialPowerName: 'SpecialPowerAtObject',
+      commandOption: 0x2,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: 0,
+      targetZ: 0,
+    });
+
+    const sourceState = logic.getEntityState(1);
+    expect(sourceState?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SPECIALPOWERATOBJECT',
+      moduleType: 'SPECIALPOWERMODULE',
+      dispatchType: 'OBJECT',
+      commandOption: 0x2,
+      commandButtonId: 'CMD_OBJECT',
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+  });
+
+  it('ignores special power dispatch when source entity is missing matching module', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceObject', {
+            SpecialPowerTemplate: 'SpecialPowerKnown',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerMissing', { ReloadTime: 0 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_MISSING',
+      specialPowerName: 'SpecialPowerMissing',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    const sourceState = logic.getEntityState(1);
+    expect(sourceState?.lastSpecialPowerDispatch).toBeNull();
   });
 });

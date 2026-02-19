@@ -70,13 +70,21 @@ export interface WaypointNodeJSON {
   id: number;
   name: string;
   position: MapPoint;
+  /** Route label used by map logic for path-based rail/transit selection. */
   pathLabel1?: string;
+  /** Route label used by map logic for path-based rail/transit selection. */
   pathLabel2?: string;
+  /** Route label used by map logic for path-based rail/transit selection. */
   pathLabel3?: string;
+  /** Whether this waypoint adds reverse edges to its outgoing links. */
   biDirectional?: boolean;
 }
 
-/** A directed waypoint link extracted from the WaypointsList chunk. */
+/**
+ * A directed waypoint link exported by map-converter.
+ * Links are source-valid (nodes must exist), self-loops are removed, and
+ * reverse links are emitted for bidirectional source waypoints.
+ */
 export interface WaypointLinkJSON {
   waypoint1: number;
   waypoint2: number;
@@ -85,6 +93,7 @@ export interface WaypointLinkJSON {
 /** Complete waypoint payload from map data. */
 export interface WaypointDataJSON {
   nodes: WaypointNodeJSON[];
+  /** Source-normalized, directed links after validity and directionality processing. */
   links: WaypointLinkJSON[];
 }
 

@@ -48,6 +48,9 @@ export interface WaypointLink {
   waypoint2: number;
 }
 
+/** Normalized directed waypoint link with explicit source and destination node IDs. */
+export interface ValidatedWaypointLink extends WaypointLink {}
+
 export class WaypointExtractor {
   /**
    * Extract all polygon triggers from a PolygonTriggers chunk.
@@ -108,6 +111,54 @@ export class WaypointExtractor {
       });
     }
     return links;
+  }
+
+  /**
+   * Validate waypoint links against available nodes and materialize source-driven
+   * directionality exactly as the source game logic does:
+   * - discard links whose endpoints are missing or self-loops
+   * - skip duplicate links while preserving source chunk order
+   * - add reverse links when the source waypoint is bi-directional
+   */
+  static normalizeWaypointLinks(
+    links: Iterable<WaypointLink>,
+    nodesById: ReadonlyMap<number, WaypointNode>,
+  ): ValidatedWaypointLink[] {
+    const normalized: ValidatedWaypointLink[] = [];
+    const seen = new Set<string>();
+
+    const addIfMissing = (waypoint1: number, waypoint2: number): void => {
+      const key = `${waypoint1}->${waypoint2}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      normalized.push({ waypoint1, waypoint2 });
+    };
+
+    for (const link of links) {
+      const sourceId = Math.trunc(link.waypoint1);
+      const targetId = Math.trunc(link.waypoint2);
+
+      if (sourceId === targetId) {
+        continue;
+      }
+
+      const sourceNode = nodesById.get(sourceId);
+      const targetNode = nodesById.get(targetId);
+
+      if (!sourceNode || !targetNode) {
+        continue;
+      }
+
+      addIfMissing(sourceId, targetId);
+
+      if (sourceNode.biDirectional) {
+        addIfMissing(targetId, sourceId);
+      }
+    }
+
+    return normalized;
   }
 
   /**

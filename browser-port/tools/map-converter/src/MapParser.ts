@@ -137,6 +137,13 @@ export class MapParser {
       throw new Error('Map file missing required HeightMapData chunk');
     }
     const waypointNodes = WaypointExtractor.extractWaypointNodes(objects, idToName);
+    const waypointNodeMap = new Map<number, WaypointNode>(
+      waypointNodes.map((node): [number, WaypointNode] => [node.id, node]),
+    );
+    const waypointLinksNormalized = WaypointExtractor.normalizeWaypointLinks(
+      waypointLinks,
+      waypointNodeMap,
+    );
 
     return {
       heightmap,
@@ -144,7 +151,7 @@ export class MapParser {
       triggers,
       waypoints: {
         nodes: waypointNodes,
-        links: waypointLinks,
+        links: waypointLinksNormalized,
       },
       blendTileCount,
       textureClasses,

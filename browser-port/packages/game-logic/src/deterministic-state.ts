@@ -125,6 +125,7 @@ interface GameLogicConfigLike {
   attackUsesLineOfSight: boolean;
   defaultMoveSpeed: number;
   terrainSnapSpeed: number;
+  sellPercentage: number;
 }
 
 export interface DeterministicGameLogicCrcContext {
@@ -365,6 +366,7 @@ function writeDeterministicAiCrc(
   crc.addUnsignedByte(context.gameLogic.config.attackUsesLineOfSight ? 1 : 0);
   addFloat32Crc(context, crc, context.gameLogic.config.defaultMoveSpeed);
   addFloat32Crc(context, crc, context.gameLogic.config.terrainSnapSpeed);
+  addFloat32Crc(context, crc, context.gameLogic.config.sellPercentage);
 
   crc.addUnsignedInt(context.gameLogic.commandQueue.length >>> 0);
   for (const command of context.gameLogic.commandQueue) {

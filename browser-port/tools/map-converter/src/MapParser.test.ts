@@ -55,6 +55,21 @@ function writePrefixedAscii(view: DataView, offset: number, str: string): number
   return offset;
 }
 
+function writeIntDictEntry(view: DataView, offset: number, key: number, value: number): number {
+  offset = writeInt32(view, offset, (key << 8) | 1);
+  return writeInt32(view, offset, value);
+}
+
+function writeBoolDictEntry(view: DataView, offset: number, key: number, value: boolean): number {
+  offset = writeInt32(view, offset, (key << 8) | 0);
+  return writeUint8(view, offset, value ? 1 : 0);
+}
+
+function writeAsciiDictEntry(view: DataView, offset: number, key: number, value: string): number {
+  offset = writeInt32(view, offset, (key << 8) | 3);
+  return writePrefixedAscii(view, offset, value);
+}
+
 /** Chunk type descriptor for building TOCs. */
 interface ChunkDef {
   name: string;
@@ -315,7 +330,8 @@ function buildMapWithWaypoints(): ArrayBuffer {
     tocSize(chunks) +
     CHUNK_HEADER_SIZE + hmPayload +
     CHUNK_HEADER_SIZE + objListPayload +
-    CHUNK_HEADER_SIZE + waypointLinksPayload;
+    CHUNK_HEADER_SIZE + waypointLinksPayload +
+    64;
 
   const buffer = new ArrayBuffer(totalSize);
   const view = new DataView(buffer);
@@ -352,7 +368,133 @@ function buildMapWithWaypoints(): ArrayBuffer {
   off = writeInt32(view, off, 11);
   off = writeInt32(view, off, 12);
 
-  return buffer;
+  return buffer.slice(0, off);
+}
+
+function buildMapWithWaypointGraph(): ArrayBuffer {
+  const chunks: ChunkDef[] = [
+    { name: 'HeightMapData', id: 1 },
+    { name: 'ObjectsList', id: 2 },
+    { name: 'Object', id: 3 },
+    { name: 'WaypointsList', id: 4 },
+    { name: 'waypointID', id: 100 },
+    { name: 'waypointName', id: 101 },
+    { name: 'waypointPathBiDirectional', id: 102 },
+    { name: 'waypointPathLabel1', id: 103 },
+    { name: 'waypointPathLabel2', id: 104 },
+    { name: 'waypointPathLabel3', id: 105 },
+  ];
+
+  const hmDataLen = 4;
+  const hmPayload = 4 + 4 + 4 + 4 + hmDataLen;
+
+  const templateName = '*Waypoints/Waypoint';
+  const waypointName1 = 'TrainRouteStart01';
+  const waypointName2 = 'TrainRouteMid01';
+  const waypointName3 = 'TrainRouteEnd01';
+  const objPayload1 =
+    4 + 4 + 4 + 4 + 4 + 2 + templateName.length +
+    2 +
+    (4 + 4) +
+    (4 + 2 + waypointName1.length) +
+    (4 + 1) +
+    (4 + 2 + 8);
+  const objPayload2 =
+    4 + 4 + 4 + 4 + 4 + 2 + templateName.length +
+    2 +
+    (4 + 4) +
+    (4 + 2 + waypointName2.length) +
+    (4 + 1) +
+    (4 + 2 + 9);
+  const objPayload3 =
+    4 + 4 + 4 + 4 + 4 + 2 + templateName.length +
+    2 +
+    (4 + 4) +
+    (4 + 2 + waypointName3.length) +
+    (4 + 1) +
+    (4 + 2 + 10);
+
+  const objListPayload = CHUNK_HEADER_SIZE + objPayload1 + CHUNK_HEADER_SIZE + objPayload2 + CHUNK_HEADER_SIZE + objPayload3;
+
+  const waypointLinksPayload = 4 + 6 * 8; // count + 6 pairs
+
+  const totalSize =
+    tocSize(chunks) +
+    CHUNK_HEADER_SIZE + hmPayload +
+    CHUNK_HEADER_SIZE + objListPayload +
+    CHUNK_HEADER_SIZE + waypointLinksPayload +
+    64;
+
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+  let off = writeTOC(view, chunks);
+
+  off = writeChunkHeader(view, off, 1, 3, hmPayload);
+  off = writeInt32(view, off, 2);
+  off = writeInt32(view, off, 2);
+  off = writeInt32(view, off, 0);
+  off = writeInt32(view, off, hmDataLen);
+  for (let i = 0; i < hmDataLen; i++) {
+    off = writeUint8(view, off, 64);
+  }
+
+  off = writeChunkHeader(view, off, 2, 1, objListPayload);
+
+  off = writeChunkHeader(view, off, 3, 3, objPayload1);
+  off = writeFloat32(view, off, 120.0);
+  off = writeFloat32(view, off, 330.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeInt32(view, off, 0);
+  off = writePrefixedAscii(view, off, templateName);
+  off = writeUint16(view, off, 4);
+  off = writeIntDictEntry(view, off, 100, 11);
+  off = writeAsciiDictEntry(view, off, 101, waypointName1);
+  off = writeBoolDictEntry(view, off, 102, true);
+  off = writeAsciiDictEntry(view, off, 103, 'RailMain');
+
+  off = writeChunkHeader(view, off, 3, 3, objPayload2);
+  off = writeFloat32(view, off, 220.0);
+  off = writeFloat32(view, off, 430.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeInt32(view, off, 0);
+  off = writePrefixedAscii(view, off, templateName);
+  off = writeUint16(view, off, 4);
+  off = writeIntDictEntry(view, off, 100, 12);
+  off = writeAsciiDictEntry(view, off, 101, waypointName2);
+  off = writeBoolDictEntry(view, off, 102, false);
+  off = writeAsciiDictEntry(view, off, 104, 'LocalEdge');
+
+  off = writeChunkHeader(view, off, 3, 3, objPayload3);
+  off = writeFloat32(view, off, 320.0);
+  off = writeFloat32(view, off, 530.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeFloat32(view, off, 0.0);
+  off = writeInt32(view, off, 0);
+  off = writePrefixedAscii(view, off, templateName);
+  off = writeUint16(view, off, 4);
+  off = writeIntDictEntry(view, off, 100, 13);
+  off = writeAsciiDictEntry(view, off, 101, waypointName3);
+  off = writeBoolDictEntry(view, off, 102, true);
+  off = writeAsciiDictEntry(view, off, 105, 'ReturnPath');
+
+  off = writeChunkHeader(view, off, 4, 1, waypointLinksPayload);
+  off = writeInt32(view, off, 6);
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, 12);
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, 12);
+  off = writeInt32(view, off, 12);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 99);
+  off = writeInt32(view, off, 11);
+  off = writeInt32(view, off, 13);
+  off = writeInt32(view, off, 12);
+
+  return buffer.slice(0, off);
 }
 
 // ---------------------------------------------------------------------------
@@ -689,6 +831,36 @@ describe('WaypointExtractor', () => {
     expect(links).toHaveLength(1);
     expect(links[0]).toEqual({ waypoint1: 11, waypoint2: 12 });
   });
+
+  it('should normalize waypoint links with node validity and directionality', () => {
+    const nodesById = new Map<
+      number,
+      { id: number; name: string; position: { x: number; y: number; z: number }; biDirectional: boolean }
+    >([
+      [11, { id: 11, name: 'A', position: { x: 0, y: 0, z: 0 }, biDirectional: true }],
+      [12, { id: 12, name: 'B', position: { x: 1, y: 1, z: 1 }, biDirectional: false }],
+      [13, { id: 13, name: 'C', position: { x: 2, y: 2, z: 2 }, biDirectional: true }],
+    ]);
+
+    const links = [
+      { waypoint1: 11, waypoint2: 12 },
+      { waypoint1: 11, waypoint2: 12 },
+      { waypoint1: 12, waypoint2: 12 },
+      { waypoint1: 99, waypoint2: 11 },
+      { waypoint1: 12, waypoint2: 13 },
+      { waypoint1: 13, waypoint2: 11 },
+    ];
+
+    const normalized = WaypointExtractor.normalizeWaypointLinks(links, nodesById);
+
+    expect(normalized).toEqual([
+      { waypoint1: 11, waypoint2: 12 },
+      { waypoint1: 12, waypoint2: 11 },
+      { waypoint1: 12, waypoint2: 13 },
+      { waypoint1: 13, waypoint2: 11 },
+      { waypoint1: 11, waypoint2: 13 },
+    ]);
+  });
 });
 
 describe('MapParser', () => {
@@ -739,22 +911,48 @@ describe('MapParser', () => {
   });
 
   it('should parse waypoint nodes and links', () => {
+    const buffer = buildMapWithWaypointGraph();
+    const parsed = MapParser.parse(buffer);
+
+    expect(parsed.waypoints.nodes).toHaveLength(3);
+    expect(parsed.waypoints.links).toHaveLength(4);
+    expect(parsed.waypoints.links).toEqual([
+      { waypoint1: 11, waypoint2: 12 },
+      { waypoint1: 12, waypoint2: 11 },
+      { waypoint1: 12, waypoint2: 13 },
+      { waypoint1: 13, waypoint2: 12 },
+    ]);
+    expect(parsed.objects).toHaveLength(3);
+    expect(parsed.objects[0]!.propertiesByName.get('waypointPathBiDirectional')).toBe(true);
+    expect(parsed.objects[0]!.propertiesByName.get('waypointID')).toBe(11);
+    expect(parsed.objects[0]!.propertiesByName.get('waypointName')).toBe('TrainRouteStart01');
+    expect(parsed.objects[1]!.propertiesByName.get('waypointPathBiDirectional')).toBe(false);
+    expect(parsed.objects[1]!.propertiesByName.get('waypointName')).toBe('TrainRouteMid01');
+    expect(parsed.objects[2]!.propertiesByName.get('waypointPathBiDirectional')).toBe(true);
+    expect(parsed.objects[2]!.propertiesByName.get('waypointName')).toBe('TrainRouteEnd01');
+
+    const startNode = parsed.waypoints.nodes.find((node) => node.id === 11)!;
+    const midNode = parsed.waypoints.nodes.find((node) => node.id === 12)!;
+    const endNode = parsed.waypoints.nodes.find((node) => node.id === 13)!;
+
+    expect(startNode.name).toBe('TrainRouteStart01');
+    expect(startNode.pathLabel1).toBe('RailMain');
+    expect(startNode.biDirectional).toBe(true);
+    expect(midNode.pathLabel2).toBe('LocalEdge');
+    expect(midNode.biDirectional).toBe(false);
+    expect(endNode.pathLabel3).toBe('ReturnPath');
+    expect(endNode.biDirectional).toBe(true);
+
+    const reversed = parsed.waypoints.links.find((link) => link.waypoint1 === 12 && link.waypoint2 === 11);
+    expect(reversed).toBeDefined();
+  });
+
+  it('should drop waypoint links with invalid endpoints or self-loops', () => {
     const buffer = buildMapWithWaypoints();
     const parsed = MapParser.parse(buffer);
 
     expect(parsed.waypoints.nodes).toHaveLength(1);
-    expect(parsed.waypoints.links).toHaveLength(1);
-    expect(parsed.waypoints.links[0]).toEqual({ waypoint1: 11, waypoint2: 12 });
-    expect(parsed.objects).toHaveLength(1);
-    expect(parsed.objects[0]!.propertiesByName.get('waypointID')).toBe(11);
-    expect(parsed.objects[0]!.propertiesByName.get('waypointName')).toBe('TrainStopStart01');
-    expect(parsed.objects[0]!.propertiesByName.get('waypointPathBiDirectional')).toBe(true);
-
-    const node = parsed.waypoints.nodes[0]!;
-    expect(node.id).toBe(11);
-    expect(node.name).toBe('TrainStopStart01');
-    expect(node.position).toEqual({ x: 120, y: 330, z: 0 });
-    expect(node.biDirectional).toBe(true);
+    expect(parsed.waypoints.links).toHaveLength(0);
   });
 
   it('should throw if HeightMapData chunk is missing', () => {

@@ -443,6 +443,24 @@ interface ArmorTemplateSetProfile {
   armorName: string | null;
 }
 
+interface SpecialPowerModuleProfile {
+  specialPowerTemplateName: string;
+  moduleType: string;
+  updateModuleStartsAttack: boolean;
+  startsPaused: boolean;
+}
+
+interface SpecialPowerDispatchProfile {
+  specialPowerTemplateName: string;
+  moduleType: string;
+  dispatchType: 'NO_TARGET' | 'POSITION' | 'OBJECT';
+  commandOption: number;
+  commandButtonId: string;
+  targetEntityId: number | null;
+  targetX: number | null;
+  targetZ: number | null;
+}
+
 interface UpgradeModuleProfile {
   id: string;
   moduleType:
@@ -706,6 +724,8 @@ interface MapEntity {
   activeLocomotorSet: string;
   locomotorSurfaceMask: number;
   locomotorDownhillOnly: boolean;
+  specialPowerModules: Map<string, SpecialPowerModuleProfile>;
+  lastSpecialPowerDispatch: SpecialPowerDispatchProfile | null;
   pathDiameter: number;
   pathfindCenterInCell: boolean;
   blocksPath: boolean;
@@ -727,6 +747,7 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
   defaultMoveSpeed: 18,
   terrainSnapSpeed: 6,
   attackUsesLineOfSight: true,
+  sellPercentage: SOURCE_DEFAULT_SELL_PERCENTAGE,
 };
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
@@ -1440,6 +1461,7 @@ export class GameLogicSubsystem implements Subsystem {
     renderAnimationStateClips?: RenderAnimationStateClipCandidates;
     health: number;
     maxHealth: number;
+    lastSpecialPowerDispatch: SpecialPowerDispatchProfile | null;
     canTakeDamage: boolean;
     attackTargetEntityId: number | null;
     alive: boolean;
@@ -1466,6 +1488,16 @@ export class GameLogicSubsystem implements Subsystem {
       renderAnimationStateClips: entity.renderAnimationStateClips,
       health: entity.health,
       maxHealth: entity.maxHealth,
+      lastSpecialPowerDispatch: entity.lastSpecialPowerDispatch ? {
+        specialPowerTemplateName: entity.lastSpecialPowerDispatch.specialPowerTemplateName,
+        moduleType: entity.lastSpecialPowerDispatch.moduleType,
+        dispatchType: entity.lastSpecialPowerDispatch.dispatchType,
+        commandOption: entity.lastSpecialPowerDispatch.commandOption,
+        commandButtonId: entity.lastSpecialPowerDispatch.commandButtonId,
+        targetEntityId: entity.lastSpecialPowerDispatch.targetEntityId,
+        targetX: entity.lastSpecialPowerDispatch.targetX,
+        targetZ: entity.lastSpecialPowerDispatch.targetZ,
+      } : null,
       canTakeDamage: entity.canTakeDamage,
       attackTargetEntityId: entity.attackTargetEntityId,
       alive: !entity.destroyed,
@@ -2229,6 +2261,7 @@ export class GameLogicSubsystem implements Subsystem {
     const weaponTemplateSets = this.extractWeaponTemplateSets(objectDef);
     const armorTemplateSets = this.extractArmorTemplateSets(objectDef);
     const attackWeapon = this.resolveAttackWeaponProfile(objectDef, iniDataRegistry);
+    const specialPowerModules = this.extractSpecialPowerModules(objectDef);
     const bodyStats = this.resolveBodyStats(objectDef);
     const energyBonus = readNumericField(objectDef?.fields ?? {}, ['EnergyBonus']) ?? 0;
     const largestWeaponRange = this.resolveLargestWeaponRange(objectDef, iniDataRegistry);
@@ -2302,6 +2335,8 @@ export class GameLogicSubsystem implements Subsystem {
       objectStatusFlags: new Set<string>(),
       commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,
+      specialPowerModules,
+      lastSpecialPowerDispatch: null,
       activeLocomotorSet: LOCOMOTORSET_NORMAL,
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
@@ -3605,6 +3640,41 @@ export class GameLogicSubsystem implements Subsystem {
     return this.extractUpgradeModulesFromBlocks(objectDef.blocks);
   }
 
+  private extractSpecialPowerModules(objectDef: ObjectDef | undefined): Map<string, SpecialPowerModuleProfile> {
+    const specialPowerModules = new Map<string, SpecialPowerModuleProfile>();
+    if (!objectDef) {
+      return specialPowerModules;
+    }
+
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        const specialPowerTemplate = readStringField(block.fields, ['SpecialPowerTemplate']);
+        if (specialPowerTemplate) {
+          const normalizedSpecialPowerTemplate = specialPowerTemplate.trim().toUpperCase();
+          if (normalizedSpecialPowerTemplate && normalizedSpecialPowerTemplate !== 'NONE') {
+            specialPowerModules.set(normalizedSpecialPowerTemplate, {
+              specialPowerTemplateName: normalizedSpecialPowerTemplate,
+              moduleType,
+              updateModuleStartsAttack: readBooleanField(block.fields, ['UpdateModuleStartsAttack']) === true,
+              startsPaused: readBooleanField(block.fields, ['StartsPaused']) === true,
+            });
+          }
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return specialPowerModules;
+  }
+
   private extractUpgradeModulesFromBlocks(
     blocks: IniBlock[] = [],
     sourceUpgradeName: string | null = null,
@@ -3734,6 +3804,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!oldSide || !newSide || oldSide === newSide) {
       return;
     }
+    if (this.isObjectDisabledForUpgradeSideEffects(entity)) {
+      return;
+    }
 
     // Source parity: Object::onCapture invokes power-plant upgrade modules to move
     // production bonus ownership from old owner to new owner while upgrade remains active.
@@ -3786,6 +3859,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!oldSide || !newSide || oldSide === newSide) {
       return;
     }
+    if (this.isObjectDisabledForUpgradeSideEffects(entity)) {
+      return;
+    }
 
     // Source parity: Object::onCapture invokes radar-upgrade modules to transfer
     // radar ownership while preserving disable-proof counts.
@@ -3830,7 +3906,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!side) {
       return false;
     }
-    // TODO(source parity): skip add/remove when object is disabled (Player::isDisabled checks).
+    if (this.isObjectDisabledForUpgradeSideEffects(entity)) {
+      return false;
+    }
     this.applyPowerPlantUpgradeToSide(side, module, entity);
     return true;
   }
@@ -3851,6 +3929,9 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private removePowerPlantUpgradeFromEntity(entity: MapEntity, _module: UpgradeModuleProfile): void {
+    if (this.isObjectDisabledForUpgradeSideEffects(entity)) {
+      return;
+    }
     const side = this.normalizeSide(entity.side);
     if (!side) {
       return;
@@ -3913,7 +3994,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!side) {
       return false;
     }
-    // TODO(source parity): skip add/remove when object is disabled (onDisabled checks).
+    if (this.isObjectDisabledForUpgradeSideEffects(entity)) {
+      return false;
+    }
     this.applyRadarUpgradeToSide(side, module);
     return true;
   }
@@ -3929,6 +4012,9 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private removeRadarUpgradeFromEntity(entity: MapEntity, module: UpgradeModuleProfile): void {
+    if (this.isObjectDisabledForUpgradeSideEffects(entity)) {
+      return;
+    }
     const side = this.normalizeSide(entity.side);
     if (!side) {
       return;
@@ -4245,6 +4331,16 @@ export class GameLogicSubsystem implements Subsystem {
       }
       this.applyStatusBitsUpgrade(entity, module);
     }
+  }
+
+  private isObjectDisabledForUpgradeSideEffects(entity: MapEntity): boolean {
+    // Source parity: upgrade modules with side effects are suppressed while the object
+    // is disabled, matching Player::isDisabled()/Object::isDisabled behavior.
+    return (
+      this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
+    );
   }
 
   private processUpgradeModuleRemovals(entity: MapEntity, module: UpgradeModuleProfile): void {
@@ -5424,14 +5520,22 @@ export class GameLogicSubsystem implements Subsystem {
     commandButtonId: string,
     _specialPowerDef: SpecialPowerDef,
   ): void {
-    void sourceEntityId;
-    void specialPowerName;
-    void commandOption;
-    void commandButtonId;
-    // Source parity: route to SpecialPower module/module owners (see:
-    // GeneralsMD/Code/GameClient/GUI/ControlBar/ControlBarCommand.cpp around issueSpecialPowerCommand)
-    // GeneralsMD/Code/GameClient/GUI/ControlBar/ControlBarCommandProcessing.cpp
-    // For non-implemented execution paths, keep explicit TODO per source-compat policy.
+    const module = this.resolveSpecialPowerModuleProfile(sourceEntityId, specialPowerName);
+    if (!module) {
+      // TODO(source parity): resolve special power ownership for aliases/alternate modules.
+      return;
+    }
+
+    this.recordSpecialPowerDispatch(
+      sourceEntityId,
+      module,
+      'NO_TARGET',
+      commandOption,
+      commandButtonId,
+      null,
+      null,
+      null,
+    );
   }
 
   protected onIssueSpecialPowerTargetPosition(
@@ -5443,16 +5547,22 @@ export class GameLogicSubsystem implements Subsystem {
     commandButtonId: string,
     _specialPowerDef: SpecialPowerDef,
   ): void {
-    void sourceEntityId;
-    void specialPowerName;
-    void targetX;
-    void targetZ;
-    void commandOption;
-    void commandButtonId;
-    // Source parity: route to owner module update path.
-    // Source candidates in GeneralsMD:
-    // - SpecialPowerCommand with target-position path in ControlBarCommand::isValid/issue handling.
-    // - SpecialPowerModule / SpecialPowerUpdate implementations (e.g. SpectreGunshipDeploymentUpdate.cpp).
+    const module = this.resolveSpecialPowerModuleProfile(sourceEntityId, specialPowerName);
+    if (!module) {
+      // TODO(source parity): resolve special power ownership for aliases/alternate modules.
+      return;
+    }
+
+    this.recordSpecialPowerDispatch(
+      sourceEntityId,
+      module,
+      'POSITION',
+      commandOption,
+      commandButtonId,
+      null,
+      targetX,
+      targetZ,
+    );
   }
 
   protected onIssueSpecialPowerTargetObject(
@@ -5463,15 +5573,66 @@ export class GameLogicSubsystem implements Subsystem {
     commandButtonId: string,
     _specialPowerDef: SpecialPowerDef,
   ): void {
-    void sourceEntityId;
-    void specialPowerName;
-    void targetEntityId;
-    void commandOption;
-    void commandButtonId;
-    // Source parity: route to SpecialPower module owner for object-target execution.
-    // TODO(source parity): replace this with full module dispatch from SpecialPowerTemplate lookup.
-    // See GeneralsMD/Code/GameLogic/Object/SpecialPower/* for execution modules and
-    // ControlBarCommand.cpp for object-target dispatch semantics.
+    const module = this.resolveSpecialPowerModuleProfile(sourceEntityId, specialPowerName);
+    if (!module) {
+      // TODO(source parity): resolve special power ownership for aliases/alternate modules.
+      return;
+    }
+
+    this.recordSpecialPowerDispatch(
+      sourceEntityId,
+      module,
+      'OBJECT',
+      commandOption,
+      commandButtonId,
+      targetEntityId,
+      null,
+      null,
+    );
+  }
+
+  private resolveSpecialPowerModuleProfile(
+    sourceEntityId: number,
+    specialPowerName: string,
+  ): SpecialPowerModuleProfile | null {
+    const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+    if (!sourceEntity) {
+      return null;
+    }
+
+    const normalizedSpecialPowerName = specialPowerName.trim().toUpperCase();
+    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
+      return null;
+    }
+
+    return sourceEntity.specialPowerModules.get(normalizedSpecialPowerName) ?? null;
+  }
+
+  private recordSpecialPowerDispatch(
+    sourceEntityId: number,
+    module: SpecialPowerModuleProfile,
+    dispatchType: SpecialPowerDispatchProfile['dispatchType'],
+    commandOption: number,
+    commandButtonId: string,
+    targetEntityId: number | null,
+    targetX: number | null,
+    targetZ: number | null,
+  ): void {
+    const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+    if (!sourceEntity) {
+      return;
+    }
+
+    sourceEntity.lastSpecialPowerDispatch = {
+      specialPowerTemplateName: module.specialPowerTemplateName,
+      moduleType: module.moduleType,
+      dispatchType,
+      commandOption,
+      commandButtonId,
+      targetEntityId,
+      targetX,
+      targetZ,
+    };
   }
 
   private cancelEntityCommandPathActions(entityId: number): void {
@@ -5847,11 +6008,43 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    // Source parity subset: BuildAssistant::buildObjectNow/LineNow placement flow
-    // is routed here; full clear/move obstacle handling remains in the source engine.
     const buildCost = this.resolveObjectBuildCost(objectDef, side);
     const maxSimultaneousOfType = this.resolveMaxSimultaneousOfType(objectDef);
+    const isLineBuildTemplate = this.isLineBuildTemplate(objectDef);
     for (const [x, y, z] of placementPositions) {
+      this.clearRemovableForConstruction(
+        objectDef,
+        x,
+        z,
+        command.angle,
+        constructor.id,
+      );
+      if (
+        !this.moveObjectsForConstruction(
+          objectDef,
+          x,
+          z,
+          command.angle,
+          side,
+          constructor.id,
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        !this.isConstructLocationClear(
+          objectDef,
+          x,
+          z,
+          command.angle,
+          side,
+          constructor.id,
+        )
+      ) {
+        continue;
+      }
+
       if (maxSimultaneousOfType > 0) {
         const existingCount = this.countActiveEntitiesForMaxSimultaneousForSide(side, objectDef);
         if (existingCount >= maxSimultaneousOfType) {
@@ -5876,12 +6069,403 @@ export class GameLogicSubsystem implements Subsystem {
         command.angle,
       );
       if (!created) {
-        if (buildCost > 0) {
-          this.depositSideCredits(side, buildCost);
+        if (isLineBuildTemplate) {
+          continue;
         }
         break;
       }
     }
+  }
+
+  private clearRemovableForConstruction(
+    objectDef: ObjectDef,
+    worldX: number,
+    worldZ: number,
+    angle: number,
+    ignoredEntityId: number,
+  ): void {
+    const buildGeometry = this.resolveConstructCollisionGeometry(objectDef);
+    if (!buildGeometry) {
+      return;
+    }
+
+    for (const blocker of this.spawnedEntities.values()) {
+      if (blocker.id === ignoredEntityId || blocker.destroyed) {
+        continue;
+      }
+
+      if (
+        !this.doesConstructionGeometryOverlap(
+          { x: worldX, z: worldZ },
+          angle,
+          buildGeometry,
+          blocker,
+          this.resolveConstructCollisionGeometryForEntity(blocker),
+        )
+      ) {
+        continue;
+      }
+
+      if (this.isRemovableForConstruction(blocker) && !this.isAlwaysSelectableForConstruction(blocker)) {
+        this.markEntityDestroyed(blocker.id, -1);
+      }
+    }
+  }
+
+  private moveObjectsForConstruction(
+    objectDef: ObjectDef,
+    worldX: number,
+    worldZ: number,
+    angle: number,
+    owningSide: string,
+    ignoredEntityId: number,
+  ): boolean {
+    const buildGeometry = this.resolveConstructCollisionGeometry(objectDef);
+    if (!buildGeometry) {
+      return true;
+    }
+
+    let anyUnmovables = false;
+    const clearanceRadius = Math.hypot(buildGeometry.majorRadius, buildGeometry.minorRadius) * 1.4;
+    for (const blocker of this.spawnedEntities.values()) {
+      if (blocker.id === ignoredEntityId || blocker.destroyed) {
+        continue;
+      }
+
+      if (
+        !this.doesConstructionGeometryOverlap(
+          { x: worldX, z: worldZ },
+          angle,
+          buildGeometry,
+          blocker,
+          this.resolveConstructCollisionGeometryForEntity(blocker),
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        this.isRemovableForConstruction(blocker)
+        || this.isMineForConstruction(blocker)
+        || this.isInertForConstruction(blocker)
+      ) {
+        continue;
+      }
+      if (this.isAlwaysSelectableForConstruction(blocker)) {
+        continue;
+      }
+
+      const relationship = this.getConstructingRelationship(owningSide, blocker.side);
+      if (relationship === RELATIONSHIP_ENEMIES || this.isDisabledForConstruction(blocker) || blocker.canMove === false) {
+        anyUnmovables = true;
+        continue;
+      }
+
+      const variedRadius = (0.5 + this.gameRandom.nextFloat()) * clearanceRadius;
+      const direction = (this.gameRandom.nextFloat() * Math.PI * 2) - Math.PI;
+      const destinationX = worldX + Math.cos(direction) * variedRadius;
+      const destinationZ = worldZ + Math.sin(direction) * variedRadius;
+      this.issueMoveTo(blocker.id, destinationX, destinationZ, NO_ATTACK_DISTANCE, true);
+      if (!blocker.canMove) {
+        anyUnmovables = true;
+      }
+    }
+
+    return !anyUnmovables;
+  }
+
+  private isConstructLocationClear(
+    objectDef: ObjectDef,
+    worldX: number,
+    worldZ: number,
+    angle: number,
+    owningSide: string,
+    ignoredEntityId: number,
+  ): boolean {
+    const buildGeometry = this.resolveConstructCollisionGeometry(objectDef);
+    if (!buildGeometry) {
+      return true;
+    }
+
+    for (const blocker of this.spawnedEntities.values()) {
+      if (blocker.id === ignoredEntityId || blocker.destroyed) {
+        continue;
+      }
+
+      if (
+        !this.doesConstructionGeometryOverlap(
+          { x: worldX, z: worldZ },
+          angle,
+          buildGeometry,
+          blocker,
+          this.resolveConstructCollisionGeometryForEntity(blocker),
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        this.isRemovableForConstruction(blocker)
+        || this.isMineForConstruction(blocker)
+        || this.isInertForConstruction(blocker)
+      ) {
+        continue;
+      }
+
+      const relationship = this.getConstructingRelationship(owningSide, blocker.side);
+      if (
+        relationship === RELATIONSHIP_ENEMIES
+        || this.isImmobileForConstruction(blocker)
+        || this.isDisabledForConstruction(blocker)
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private resolveConstructCollisionGeometry(objectDef: ObjectDef | undefined): ObstacleGeometry | null {
+    const geometry = this.resolveObstacleGeometry(objectDef);
+    if (!geometry) {
+      return null;
+    }
+
+    if (geometry.shape === 'box') {
+      return geometry;
+    }
+
+    const radius = geometry.majorRadius;
+    if (!Number.isFinite(radius) || radius <= 0) {
+      return null;
+    }
+    return {
+      shape: 'circle',
+      majorRadius: radius,
+      minorRadius: radius,
+    };
+  }
+
+  private resolveConstructCollisionGeometryForEntity(entity: MapEntity): ObstacleGeometry | null {
+    if (entity.obstacleGeometry) {
+      return entity.obstacleGeometry;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    return this.resolveConstructCollisionGeometry(objectDef ?? undefined);
+  }
+
+  private doesConstructionGeometryOverlap(
+    leftPosition: { x: number; z: number },
+    leftAngle: number,
+    leftGeometry: ObstacleGeometry,
+    rightEntity: MapEntity,
+    rightGeometry: ObstacleGeometry | null,
+  ): boolean {
+    if (!rightGeometry) {
+      return false;
+    }
+
+    if (leftGeometry.shape === 'circle' && rightGeometry.shape === 'circle') {
+      return this.doesCircleGeometryOverlap(
+        leftPosition,
+        leftGeometry.majorRadius,
+        { x: rightEntity.x, z: rightEntity.z },
+        rightGeometry.majorRadius,
+      );
+    }
+
+    if (leftGeometry.shape === 'box' && rightGeometry.shape === 'box') {
+      return this.doesBoxGeometryOverlap(
+        leftPosition,
+        leftAngle,
+        leftGeometry,
+        { x: rightEntity.x, z: rightEntity.z },
+        rightEntity.rotationY,
+        rightGeometry,
+      );
+    }
+
+    if (leftGeometry.shape === 'circle') {
+      return this.doesCircleBoxGeometryOverlap(
+        leftPosition,
+        leftGeometry.majorRadius,
+        {
+          x: rightEntity.x,
+          z: rightEntity.z,
+          angle: rightEntity.rotationY,
+          geometry: rightGeometry,
+        },
+      );
+    }
+
+    return this.doesCircleBoxGeometryOverlap(
+      { x: rightEntity.x, z: rightEntity.z },
+      rightGeometry.majorRadius,
+      {
+        x: leftPosition.x,
+        z: leftPosition.z,
+        angle: leftAngle,
+        geometry: leftGeometry,
+      },
+    );
+  }
+
+  private doesCircleGeometryOverlap(
+    firstPosition: { x: number; z: number },
+    firstRadius: number,
+    secondPosition: { x: number; z: number },
+    secondRadius: number,
+  ): boolean {
+    const distanceX = firstPosition.x - secondPosition.x;
+    const distanceZ = firstPosition.z - secondPosition.z;
+    const minDistance = firstRadius + secondRadius;
+    return (distanceX * distanceX + distanceZ * distanceZ) <= (minDistance * minDistance);
+  }
+
+  private doesCircleBoxGeometryOverlap(
+    circlePosition: { x: number; z: number },
+    circleRadius: number,
+    box: {
+      x: number;
+      z: number;
+      angle: number;
+      geometry: ObstacleGeometry;
+    },
+  ): boolean {
+    if (box.geometry.majorRadius <= 0 || box.geometry.minorRadius <= 0) {
+      return false;
+    }
+
+    const cos = Math.cos(-box.angle);
+    const sin = Math.sin(-box.angle);
+    const dx = circlePosition.x - box.x;
+    const dz = circlePosition.z - box.z;
+    const localX = (dx * cos) + (dz * sin);
+    const localZ = (-dx * sin) + (dz * cos);
+    const clampedX = clamp(localX, -box.geometry.majorRadius, box.geometry.majorRadius);
+    const clampedZ = clamp(localZ, -box.geometry.minorRadius, box.geometry.minorRadius);
+    const distanceX = localX - clampedX;
+    const distanceZ = localZ - clampedZ;
+    return (distanceX * distanceX + distanceZ * distanceZ) <= (circleRadius * circleRadius);
+  }
+
+  private doesBoxGeometryOverlap(
+    leftPosition: { x: number; z: number },
+    leftAngle: number,
+    leftGeometry: ObstacleGeometry,
+    rightPosition: { x: number; z: number },
+    rightAngle: number,
+    rightGeometry: ObstacleGeometry,
+  ): boolean {
+    if (leftGeometry.majorRadius <= 0 || leftGeometry.minorRadius <= 0
+      || rightGeometry.majorRadius <= 0 || rightGeometry.minorRadius <= 0) {
+      return false;
+    }
+
+    const deltaX = rightPosition.x - leftPosition.x;
+    const deltaZ = rightPosition.z - leftPosition.z;
+
+    const leftXAxisX = Math.cos(leftAngle);
+    const leftXAxisZ = Math.sin(leftAngle);
+    const leftZAxisX = -leftXAxisZ;
+    const leftZAxisZ = leftXAxisX;
+    const rightXAxisX = Math.cos(rightAngle);
+    const rightXAxisZ = Math.sin(rightAngle);
+    const rightZAxisX = -rightXAxisZ;
+    const rightZAxisZ = rightXAxisX;
+
+    const projectionAxes = [
+      { x: leftXAxisX, z: leftXAxisZ },
+      { x: leftZAxisX, z: leftZAxisZ },
+      { x: rightXAxisX, z: rightXAxisZ },
+      { x: rightZAxisX, z: rightZAxisZ },
+    ];
+
+    for (const axis of projectionAxes) {
+      const leftRadius = this.projectBoxRadiusOntoAxis(leftGeometry, axis, leftXAxisX, leftXAxisZ, leftZAxisX, leftZAxisZ);
+      const rightRadius = this.projectBoxRadiusOntoAxis(
+        rightGeometry,
+        axis,
+        rightXAxisX,
+        rightXAxisZ,
+        rightZAxisX,
+        rightZAxisZ,
+      );
+      const distanceToAxis = Math.abs((deltaX * axis.x) + (deltaZ * axis.z));
+      if (distanceToAxis > leftRadius + rightRadius) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private projectBoxRadiusOntoAxis(
+    geometry: ObstacleGeometry,
+    axis: { x: number; z: number },
+    axisX: number,
+    axisZ: number,
+    zAxisX: number,
+    zAxisZ: number,
+  ): number {
+    return (geometry.majorRadius * Math.abs((axis.x * axisX) + (axis.z * axisZ)))
+      + (geometry.minorRadius * Math.abs((axis.x * zAxisX) + (axis.z * zAxisZ)));
+  }
+
+  private isRemovableForConstruction(entity: MapEntity): boolean {
+    if (entity.destroyed) {
+      return false;
+    }
+
+    const kindOf = this.resolveEntityKindOfSet(entity);
+    if (kindOf.has('INERT')) {
+      return false;
+    }
+    if (kindOf.has('SHRUBBERY') || kindOf.has('CLEARED_BY_BUILD')) {
+      return true;
+    }
+    return entity.health <= 0;
+  }
+
+  private isMineForConstruction(entity: MapEntity): boolean {
+    return this.resolveEntityKindOfSet(entity).has('MINE');
+  }
+
+  private isInertForConstruction(entity: MapEntity): boolean {
+    return this.resolveEntityKindOfSet(entity).has('INERT');
+  }
+
+  private isAlwaysSelectableForConstruction(entity: MapEntity): boolean {
+    return this.resolveEntityKindOfSet(entity).has('ALWAYS_SELECTABLE');
+  }
+
+  private isImmobileForConstruction(entity: MapEntity): boolean {
+    return this.resolveEntityKindOfSet(entity).has('IMMOBILE');
+  }
+
+  private isDisabledForConstruction(entity: MapEntity): boolean {
+    return (
+      this.entityHasObjectStatus(entity, 'DISABLED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
+      || this.entityHasObjectStatus(entity, 'SCRIPT_DISABLED')
+      || this.entityHasObjectStatus(entity, 'SCRIPT_UNPOWERED')
+    );
+  }
+
+  private isLineBuildTemplate(objectDef: ObjectDef): boolean {
+    return this.normalizeKindOf(objectDef.kindOf).has('LINEBUILD');
+  }
+
+  private getConstructingRelationship(owningSide: string, otherSide: string | undefined): number {
+    const source = this.normalizeSide(owningSide);
+    const target = this.normalizeSide(otherSide ?? '');
+    if (!source || !target) {
+      return RELATIONSHIP_NEUTRAL;
+    }
+    return this.getTeamRelationshipBySides(source, target);
   }
 
   private handleCancelDozerConstructionCommand(command: CancelDozerConstructionCommand): void {
@@ -6478,10 +7062,9 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity subset: BuildAssistant::update() uses GlobalData::m_sellPercentage.
-    // The transitional runtime currently mirrors source default (1.0) until
-    // global-data ownership is ported into game-logic.
     const cost = this.resolveObjectBuildCost(objectDef, entity.side ?? '');
-    return Math.max(0, Math.trunc(cost * SOURCE_DEFAULT_SELL_PERCENTAGE));
+    const sellPercentage = this.config.sellPercentage;
+    return Math.max(0, Math.trunc(cost * (sellPercentage >= 0 ? sellPercentage : SOURCE_DEFAULT_SELL_PERCENTAGE)));
   }
 
   private resolveConstructPlacementPositions(
@@ -7697,6 +8280,7 @@ export class GameLogicSubsystem implements Subsystem {
     targetX: number,
     targetZ: number,
     attackDistance = NO_ATTACK_DISTANCE,
+    allowNoPathMove = false,
   ): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.canMove) return;
@@ -7704,6 +8288,18 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePathfindPosCell(entity);
     const path = this.findPath(entity.x, entity.z, targetX, targetZ, entity, attackDistance);
     if (path.length === 0) {
+      if (allowNoPathMove) {
+        entity.moving = true;
+        entity.movePath = [{ x: targetX, z: targetZ }];
+        entity.pathIndex = 0;
+        entity.moveTarget = { x: targetX, z: targetZ };
+        entity.pathfindGoalCell = {
+          x: Math.floor(targetX / PATHFIND_CELL_SIZE),
+          z: Math.floor(targetZ / PATHFIND_CELL_SIZE),
+        };
+        return;
+      }
+
       entity.moving = false;
       entity.moveTarget = null;
       entity.movePath = [];

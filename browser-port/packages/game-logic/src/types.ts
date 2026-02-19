@@ -367,4 +367,9 @@ export interface GameLogicConfig {
    * ATTACK_NEEDS_LINE_OF_SIGHT.
    */
   attackUsesLineOfSight: boolean;
+  /**
+   * Fraction of the fallback build cost refunded when sellValue is not set.
+   * Mirrors TheGlobalData::m_sellPercentage from source.
+   */
+  sellPercentage: number;
 }

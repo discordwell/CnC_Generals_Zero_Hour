@@ -35,6 +35,55 @@ exports[`MAP golden fixtures > object properties snapshot correctly > map-object
 ]
 `;
 
+exports[`MAP golden fixtures > path-heavy waypoint graph snapshot > map-waypoint-graph 1`] = `
+{
+  "links": [
+    {
+      "waypoint1": 11,
+      "waypoint2": 12,
+    },
+    {
+      "waypoint1": 12,
+      "waypoint2": 11,
+    },
+    {
+      "waypoint1": 12,
+      "waypoint2": 13,
+    },
+    {
+      "waypoint1": 13,
+      "waypoint2": 12,
+    },
+  ],
+  "nodes": [
+    {
+      "biDirectional": true,
+      "id": 11,
+      "name": "TrainRouteStart01",
+      "pathLabel1": "RailMain",
+      "pathLabel2": undefined,
+      "pathLabel3": undefined,
+    },
+    {
+      "biDirectional": false,
+      "id": 12,
+      "name": "TrainRouteMid01",
+      "pathLabel1": undefined,
+      "pathLabel2": "LocalEdge",
+      "pathLabel3": undefined,
+    },
+    {
+      "biDirectional": true,
+      "id": 13,
+      "name": "TrainRouteEnd01",
+      "pathLabel1": undefined,
+      "pathLabel2": undefined,
+      "pathLabel3": "ReturnPath",
+    },
+  ],
+}
+`;
+
 exports[`MAP golden fixtures > trigger polygon vertices snapshot correctly > map-triggers 1`] = `
 [
   {
