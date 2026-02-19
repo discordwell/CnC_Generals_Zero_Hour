@@ -1326,6 +1326,8 @@ interface MapEntity {
   mineNextDeathCheckFrame: number;
   /** Source parity: m_ignoreDamage — suppress onDamage during self-damage. */
   mineIgnoreDamage: boolean;
+  /** Source parity: m_producerID — entity that created this mine (for creator death detection). */
+  mineCreatorId: number;
 
   // ── Source parity: EjectPilotDie — pilot eject on death ──
   /** Template name of pilot unit to eject on death. Null = no eject. */
@@ -3565,6 +3567,7 @@ export class GameLogicSubsystem implements Subsystem {
       mineRegenerates: false,
       mineNextDeathCheckFrame: 0,
       mineIgnoreDamage: false,
+      mineCreatorId: 0,
       // Pilot eject
       ejectPilotTemplateName: this.extractEjectPilotTemplateName(objectDef),
       ejectPilotMinVeterancy: 1,
@@ -5947,6 +5950,10 @@ export class GameLogicSubsystem implements Subsystem {
     module: UpgradeModuleProfile,
     upgradeMask?: ReadonlySet<string>,
   ): boolean {
+    // Source parity: upgrades are blocked while UNDER_CONSTRUCTION (Object.cpp line 2436).
+    if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+      return false;
+    }
     const maskToCheck = upgradeMask ?? this.buildEntityUpgradeMask(entity);
     return this.wouldUpgradeModuleWithMask(entity, module, maskToCheck, true);
   }
@@ -10183,10 +10190,17 @@ export class GameLogicSubsystem implements Subsystem {
         return this.currentFrame <= immune.collideFrame + 2;
       });
 
-      // Creator death check and health drain.
+      // Source parity: MinefieldBehavior creator death check.
+      // When the creator dies and stopsRegenAfterCreatorDies is set, stop regen and start draining.
       if (mine.mineRegenerates && prof.stopsRegenAfterCreatorDies && this.currentFrame >= mine.mineNextDeathCheckFrame) {
         mine.mineNextDeathCheckFrame = this.currentFrame + LOGIC_FRAME_RATE; // Check every second.
-        // TODO: Track producerId for creator death detection. For now, skip.
+        if (mine.mineCreatorId > 0) {
+          const creator = this.spawnedEntities.get(mine.mineCreatorId);
+          if (!creator || creator.destroyed) {
+            mine.mineRegenerates = false;
+            mine.mineDraining = true;
+          }
+        }
       }
 
       if (mine.mineDraining && prof.degenPercentPerSecondAfterCreatorDies > 0) {
@@ -10545,13 +10559,20 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      // Source parity: buildings under construction use bounding radius instead of
+      // full vision range (Object.cpp line 5156). Use 0 for simplicity until geometry
+      // bounding radius is wired into vision.
+      const effectiveVisionRange = entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
+        ? 0
+        : entity.visionRange;
+
       updateEntityVisionImpl(
         grid,
         entity.visionState,
         playerIdx,
         entity.x,
         entity.z,
-        entity.visionRange,
+        effectiveVisionRange,
         !entity.destroyed,
       );
     }
@@ -15093,8 +15114,14 @@ export class GameLogicSubsystem implements Subsystem {
         sourceEntity.side,
       );
 
-      if (spawned && inheritsVet) {
-        spawned.experienceState.currentLevel = sourceEntity.experienceState.currentLevel;
+      if (spawned) {
+        if (inheritsVet) {
+          spawned.experienceState.currentLevel = sourceEntity.experienceState.currentLevel;
+        }
+        // Source parity: track creator for mine lifecycle (MinefieldBehavior producer tracking).
+        if (spawned.minefieldProfile) {
+          spawned.mineCreatorId = sourceEntity.id;
+        }
       }
     }
   }
