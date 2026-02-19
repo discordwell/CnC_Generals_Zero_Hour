@@ -155,6 +155,14 @@ export class RTSCamera implements Subsystem {
     this.applyToCamera();
   }
 
+  /**
+   * Smoothly pan the camera to a world position (interpolates via desired state).
+   */
+  panTo(worldX: number, worldZ: number): void {
+    this.desiredTargetX = worldX;
+    this.desiredTargetZ = worldZ;
+  }
+
   reset(): void {
     this.desiredTargetX = 0;
     this.desiredTargetZ = 0;

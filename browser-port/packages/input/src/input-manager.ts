@@ -16,6 +16,7 @@ export class InputManager implements Subsystem {
 
   // Keyboard
   private readonly _keysDown = new Set<string>();
+  private readonly _keysPressed = new Set<string>();
 
   // Mouse
   private _mouseX = 0;
@@ -57,9 +58,13 @@ export class InputManager implements Subsystem {
     this._onKeyDown = (e) => {
       // Don't capture keys when typing in inputs
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
-      this._keysDown.add(e.key.toLowerCase());
+      const key = e.key.toLowerCase();
+      if (!this._keysDown.has(key)) {
+        this._keysPressed.add(key);
+      }
+      this._keysDown.add(key);
       // Prevent default for game keys to avoid browser shortcuts
-      if (['w', 'a', 's', 'd', 'q', 'e', ' ', 'f1'].includes(e.key.toLowerCase())) {
+      if (['w', 'a', 's', 'd', 'q', 'e', ' ', 'f1', 'delete', 'escape'].includes(key)) {
         e.preventDefault();
       }
     };
@@ -153,6 +158,7 @@ export class InputManager implements Subsystem {
     this.updateCanvasMousePosition();
     return {
       keysDown: this._keysDown,
+      keysPressed: this._keysPressed,
       mouseX: this._mouseX,
       mouseY: this._mouseY,
       viewportWidth: this._viewportWidth,
@@ -178,10 +184,12 @@ export class InputManager implements Subsystem {
     this._middleDragDy = 0;
     this._leftMouseClick = false;
     this._rightMouseClick = false;
+    this._keysPressed.clear();
   }
 
   reset(): void {
     this._keysDown.clear();
+    this._keysPressed.clear();
     this._wheelDelta = 0;
     this._middleMouseDown = false;
     this._leftMouseDown = false;

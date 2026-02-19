@@ -33,6 +33,8 @@ export interface RenderableEntityState {
   isSelected: boolean;
   side?: string;
   veterancyLevel: number;
+  isStealthed: boolean;
+  isDetected: boolean;
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';
@@ -335,6 +337,12 @@ export interface CancelDozerConstructionCommand {
   entityId: number;
 }
 
+export interface GarrisonBuildingCommand {
+  type: 'garrisonBuilding';
+  entityId: number;
+  targetBuildingId: number;
+}
+
 export type GameLogicCommand =
   | SelectByIdCommand
   | SelectEntitySetCommand
@@ -376,6 +384,7 @@ export type GameLogicCommand =
   | EnterObjectCommand
   | ConstructBuildingCommand
   | CancelDozerConstructionCommand
+  | GarrisonBuildingCommand
   | SwitchWeaponCommand;
 
 export interface SelectedEntityInfo {

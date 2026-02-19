@@ -821,29 +821,55 @@ async function startGame(
   const creditsHud = document.getElementById('credits-hud') as HTMLDivElement;
   creditsHud.style.display = 'block';
 
-  // Entity info panel (bottom-center, shows selected unit details).
-  const entityInfoPanel = document.createElement('div');
-  entityInfoPanel.id = 'entity-info-panel';
-  Object.assign(entityInfoPanel.style, {
-    position: 'absolute',
-    bottom: '10px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    background: 'rgba(12, 16, 28, 0.85)',
-    border: '1px solid rgba(201, 168, 76, 0.4)',
-    borderRadius: '4px',
-    padding: '8px 14px',
-    color: '#e0d8c0',
-    fontFamily: "'Segoe UI', Arial, sans-serif",
-    fontSize: '13px',
-    lineHeight: '1.5',
-    zIndex: '50',
-    display: 'none',
-    minWidth: '220px',
-    maxWidth: '350px',
-    pointerEvents: 'none',
-  });
-  document.getElementById('ui-overlay')!.appendChild(entityInfoPanel);
+  // Power HUD indicator (below credits) — reuse existing element on restart.
+  let powerHud = document.getElementById('power-hud') as HTMLDivElement | null;
+  if (!powerHud) {
+    powerHud = document.createElement('div');
+    powerHud.id = 'power-hud';
+    Object.assign(powerHud.style, {
+      position: 'absolute',
+      top: '40px',
+      right: '10px',
+      color: '#66cc66',
+      fontFamily: "'Segoe UI', Arial, sans-serif",
+      fontSize: '13px',
+      fontWeight: '600',
+      textShadow: '0 0 4px rgba(0,0,0,0.8)',
+      zIndex: '100',
+      pointerEvents: 'none',
+    });
+    document.getElementById('ui-overlay')!.appendChild(powerHud);
+  }
+
+  // Entity info panel (bottom-center, shows selected unit details) — reuse on restart.
+  let entityInfoPanel = document.getElementById('entity-info-panel') as HTMLDivElement | null;
+  if (!entityInfoPanel) {
+    entityInfoPanel = document.createElement('div');
+    entityInfoPanel.id = 'entity-info-panel';
+    Object.assign(entityInfoPanel.style, {
+      position: 'absolute',
+      bottom: '10px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: 'rgba(12, 16, 28, 0.85)',
+      border: '1px solid rgba(201, 168, 76, 0.4)',
+      borderRadius: '4px',
+      padding: '8px 14px',
+      color: '#e0d8c0',
+      fontFamily: "'Segoe UI', Arial, sans-serif",
+      fontSize: '13px',
+      lineHeight: '1.5',
+      zIndex: '50',
+      display: 'none',
+      minWidth: '220px',
+      maxWidth: '350px',
+      pointerEvents: 'none',
+    });
+    document.getElementById('ui-overlay')!.appendChild(entityInfoPanel);
+  } else {
+    entityInfoPanel.innerHTML = '';
+    entityInfoPanel.style.display = 'none';
+  }
 
   const entityInfoName = document.createElement('div');
   Object.assign(entityInfoName.style, {
@@ -2032,6 +2058,58 @@ async function startGame(
         networkManager.getLocalPlayerID(),
       );
 
+      // ----------------------------------------------------------------
+      // Keyboard shortcuts (one-shot key presses)
+      // ----------------------------------------------------------------
+
+      // Space — center camera on selected unit(s).
+      if (inputState.keysPressed.has(' ')) {
+        const selIds = gameLogic.getLocalPlayerSelectionIds();
+        if (selIds.length > 0) {
+          let cx = 0;
+          let cz = 0;
+          let count = 0;
+          for (const id of selIds) {
+            const pos = gameLogic.getEntityWorldPosition(id);
+            if (pos) {
+              cx += pos[0];
+              cz += pos[2];
+              count++;
+            }
+          }
+          if (count > 0) {
+            rtsCamera.panTo(cx / count, cz / count);
+          }
+        }
+      }
+
+      // S — stop all selected units (only on one-shot press with active selection).
+      if (inputState.keysPressed.has('s')) {
+        const selIds = gameLogic.getLocalPlayerSelectionIds();
+        if (selIds.length > 0) {
+          for (const id of selIds) {
+            gameLogic.submitCommand({ type: 'stop', entityId: id });
+          }
+        }
+      }
+
+      // Delete — sell selected building.
+      if (inputState.keysPressed.has('delete')) {
+        const selIds = gameLogic.getLocalPlayerSelectionIds();
+        for (const id of selIds) {
+          gameLogic.submitCommand({ type: 'sell', entityId: id });
+        }
+      }
+
+      // Escape — cancel pending control bar target or clear selection.
+      if (inputState.keysPressed.has('escape')) {
+        if (uiRuntime.getPendingControlBarCommand()) {
+          uiRuntime.cancelPendingControlBarCommand();
+        } else {
+          gameLogic.submitCommand({ type: 'clearSelection' });
+        }
+      }
+
       // Feed input to camera
       rtsCamera.setInputState(inputState);
 
@@ -2175,6 +2253,18 @@ async function startGame(
       if (localPlayerSide) {
         const credits = gameLogic.getSideCredits(localPlayerSide);
         creditsHud.textContent = `$${credits.toLocaleString()}`;
+
+        // Update power HUD
+        const powerState = gameLogic.getSidePowerState(localPlayerSide);
+        const totalProd = powerState.energyProduction + powerState.powerBonus;
+        const surplus = totalProd - powerState.energyConsumption;
+        if (totalProd > 0 || powerState.energyConsumption > 0) {
+          powerHud.style.display = 'block';
+          powerHud.textContent = `\u26A1 ${totalProd}/${powerState.energyConsumption}`;
+          powerHud.style.color = surplus >= 0 ? '#66cc66' : '#ff4444';
+        } else {
+          powerHud.style.display = 'none';
+        }
       }
 
       // Check for game end

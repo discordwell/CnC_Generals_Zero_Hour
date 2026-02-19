@@ -50,6 +50,8 @@ export const DEFAULT_CAMERA_CONFIG: Readonly<CameraConfig> = {
 export interface InputState {
   /** Currently held keys (lowercased key values). */
   readonly keysDown: ReadonlySet<string>;
+  /** Keys first pressed this frame (lowercased key values). One-shot per press. */
+  readonly keysPressed: ReadonlySet<string>;
   /** Mouse position in viewport pixels. */
   readonly mouseX: number;
   readonly mouseY: number;

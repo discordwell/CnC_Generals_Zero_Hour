@@ -216,6 +216,7 @@ import {
   type ExecuteRailedTransportCommand,
   type GameLogicCommand,
   type GameLogicConfig,
+  type GarrisonBuildingCommand,
   type HackInternetCommand,
   type IssueSpecialPowerCommand,
   type LocalScienceAvailability,
@@ -561,6 +562,10 @@ interface SideRadarState {
 
 interface SidePowerState {
   powerBonus: number;
+  /** Total energy production from all alive buildings (positive energyBonus values). */
+  energyProduction: number;
+  /** Total energy consumption from all alive buildings (absolute of negative energyBonus values). */
+  energyConsumption: number;
 }
 
 interface ProductionProfile {
@@ -599,6 +604,8 @@ interface ContainProfile {
   passengersAllowedToFire: boolean;
   passengersAllowedToFireDefault: boolean;
   portableStructureTemplateNames?: string[];
+  /** Maximum number of garrisoned units. 0 = not garrisonable. */
+  garrisonCapacity: number;
 }
 
 interface JetAISneakyProfile {
@@ -773,6 +780,7 @@ interface MapEntity {
   queueProductionExitBurstRemaining: number;
   parkingSpaceProducerId: number | null;
   helixCarrierId: number | null;
+  garrisonContainerId: number | null;
   helixPortableRiderId: number | null;
   largestWeaponRange: number;
   locomotorSets: Map<string, LocomotorSetProfile>;
@@ -808,6 +816,10 @@ interface MapEntity {
   experienceState: ExperienceState;
   visionRange: number;
   visionState: EntityVisionState;
+  /** Frames remaining before CAN_STEALTH entity re-enters stealth. 0 = ready to stealth. */
+  stealthDelayRemaining: number;
+  /** Frame at which DETECTED expires. 0 = not detected. */
+  detectedUntilFrame: number;
   destroyed: boolean;
 }
 
@@ -869,6 +881,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly overchargeStateByEntityId = new Map<number, OverchargeRuntimeState>();
   private readonly disabledHackedStatusByEntityId = new Map<number, number>();
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
+  private readonly pendingGarrisonActions = new Map<number, number>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
   private readonly supplyWarehouseStates = new Map<number, SupplyWarehouseState>();
   private readonly supplyTruckStates = new Map<number, SupplyTruckState>();
@@ -944,6 +957,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       const mapEntity = this.createMapEntity(mapObject, objectDef, iniDataRegistry, heightmap);
       this.spawnedEntities.set(mapEntity.id, mapEntity);
+      this.registerEntityEnergy(mapEntity);
 
       // Initialize supply warehouse state from profile if applicable.
       if (mapEntity.supplyWarehouseProfile) {
@@ -1025,6 +1039,8 @@ export class GameLogicSubsystem implements Subsystem {
       isSelected: entity.selected,
       side: entity.side,
       veterancyLevel: entity.experienceState.currentLevel,
+      isStealthed: entity.objectStatusFlags.has('STEALTHED'),
+      isDetected: entity.objectStatusFlags.has('DETECTED'),
     };
   }
 
@@ -1088,16 +1104,53 @@ export class GameLogicSubsystem implements Subsystem {
       const pickedEntityId = this.pickObjectByInput(input, camera);
       const moveTarget = this.getMoveTargetFromMouse(input, camera);
 
-      // Issue commands to all selected entities.
+      // Compute group centroid for formation offsets.
+      const movableEntities: MapEntity[] = [];
+      let centerX = 0;
+      let centerZ = 0;
       for (const selEntityId of this.selectedEntityIds) {
         const selEntity = this.spawnedEntities.get(selEntityId);
         if (!selEntity || selEntity.destroyed || !selEntity.canMove) continue;
+        movableEntities.push(selEntity);
+        centerX += selEntity.x;
+        centerZ += selEntity.z;
+      }
+      const groupSize = movableEntities.length;
+      if (groupSize > 0) {
+        centerX /= groupSize;
+        centerZ /= groupSize;
+      }
+      const useFormation = groupSize > 1;
+
+      // Issue commands to all selected entities.
+      for (const selEntity of movableEntities) {
+        // Try garrison if infantry right-clicks on a garrisonable building.
+        if (
+          pickedEntityId !== null
+          && pickedEntityId !== selEntity.id
+          && selEntity.category === 'infantry'
+        ) {
+          const targetEntity = this.spawnedEntities.get(pickedEntityId);
+          if (
+            targetEntity
+            && !targetEntity.destroyed
+            && targetEntity.containProfile?.moduleType === 'GARRISON'
+            && this.getTeamRelationship(selEntity, targetEntity) !== RELATIONSHIP_ENEMIES
+          ) {
+            this.submitCommand({
+              type: 'garrisonBuilding',
+              entityId: selEntity.id,
+              targetBuildingId: pickedEntityId,
+            });
+            continue;
+          }
+        }
 
         // Try attack if we clicked on an enemy.
         if (
           selEntity.attackWeapon
           && pickedEntityId !== null
-          && pickedEntityId !== selEntityId
+          && pickedEntityId !== selEntity.id
         ) {
           const targetEntity = this.spawnedEntities.get(pickedEntityId);
           if (
@@ -1107,30 +1160,48 @@ export class GameLogicSubsystem implements Subsystem {
           ) {
             this.submitCommand({
               type: 'attackEntity',
-              entityId: selEntityId,
+              entityId: selEntity.id,
               targetEntityId: pickedEntityId,
             });
             continue;
           }
         }
 
-        // Otherwise move / attack-move.
+        // Otherwise move / attack-move with formation offsets.
         if (moveTarget !== null) {
+          let destX = moveTarget.x;
+          let destZ = moveTarget.z;
+
+          if (useFormation) {
+            // Compute relative offset from group center, clamped per C++ source.
+            let offX = selEntity.x - centerX;
+            let offZ = selEntity.z - centerZ;
+            const offLen = Math.sqrt(offX * offX + offZ * offZ);
+            const maxSpread = 30; // ~6x typical unit bounding radius (5)
+            if (offLen > maxSpread) {
+              const scale = maxSpread / offLen;
+              offX *= scale;
+              offZ *= scale;
+            }
+            destX += offX;
+            destZ += offZ;
+          }
+
           const attackDistance = this.resolveAttackMoveDistance(selEntity);
           if (this.isAttackMoveToMode) {
             this.submitCommand({
               type: 'attackMoveTo',
-              entityId: selEntityId,
-              targetX: moveTarget.x,
-              targetZ: moveTarget.z,
+              entityId: selEntity.id,
+              targetX: destX,
+              targetZ: destZ,
               attackDistance,
             });
           } else {
             this.submitCommand({
               type: 'moveTo',
-              entityId: selEntityId,
-              targetX: moveTarget.x,
-              targetZ: moveTarget.z,
+              entityId: selEntity.id,
+              targetX: destX,
+              targetZ: destZ,
             });
           }
         }
@@ -1153,10 +1224,13 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateEntityMovement(dt);
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
+    this.updatePendingGarrisonActions();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
     this.updateOvercharge();
+    this.updateStealth();
+    this.updateDetection();
     this.updateFogOfWar();
     this.updateSupplyChain();
     this.updateSkirmishAI();
@@ -1910,10 +1984,24 @@ export class GameLogicSubsystem implements Subsystem {
   getSidePowerState(side: string): SidePowerState {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
-      return { powerBonus: 0 };
+      return { powerBonus: 0, energyProduction: 0, energyConsumption: 0 };
     }
     const state = this.getSidePowerStateMap(normalizedSide);
-    return { powerBonus: state.powerBonus };
+    return {
+      powerBonus: state.powerBonus,
+      energyProduction: state.energyProduction,
+      energyConsumption: state.energyConsumption,
+    };
+  }
+
+  /**
+   * Returns true if the side has sufficient power (production >= consumption).
+   * Source parity: Energy::hasSufficientPower().
+   */
+  hasSufficientPower(side: string): boolean {
+    const state = this.getSidePowerState(side);
+    const totalProduction = state.energyProduction + state.powerBonus;
+    return totalProduction >= state.energyConsumption;
   }
 
   getSideRadarState(side: string): SideRadarState {
@@ -2076,7 +2164,7 @@ export class GameLogicSubsystem implements Subsystem {
       return existing;
     }
 
-    const created: SidePowerState = { powerBonus: 0 };
+    const created: SidePowerState = { powerBonus: 0, energyProduction: 0, energyConsumption: 0 };
     this.sidePowerBonus.set(normalizedSide, created);
     return created;
   }
@@ -2333,8 +2421,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const normalizedOldSide = this.normalizeSide(entity.side ?? '');
+    // Transfer base energy between sides on capture.
+    this.unregisterEntityEnergy(entity);
     entity.side = normalizedNewSide;
     entity.controllingPlayerToken = this.normalizeControllingPlayerToken(normalizedNewSide);
+    this.registerEntityEnergy(entity);
     this.transferCostModifierUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
     this.transferPowerPlantUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
     this.transferOverchargeBetweenSides(entity, normalizedOldSide, normalizedNewSide);
@@ -2593,6 +2684,7 @@ export class GameLogicSubsystem implements Subsystem {
       queueProductionExitBurstRemaining: queueProductionExitProfile?.initialBurst ?? 0,
       parkingSpaceProducerId: null,
       helixCarrierId: null,
+      garrisonContainerId: null,
       helixPortableRiderId: null,
       pathDiameter,
       pathfindCenterInCell,
@@ -2615,6 +2707,8 @@ export class GameLogicSubsystem implements Subsystem {
       experienceState: createExperienceStateImpl(),
       visionRange: readNumericField(objectDef?.fields ?? {}, ['VisionRange', 'ShroudClearingRange']) ?? 0,
       visionState: createEntityVisionStateImpl(),
+      stealthDelayRemaining: 0,
+      detectedUntilFrame: 0,
       destroyed: false,
     };
   }
@@ -3676,6 +3770,7 @@ export class GameLogicSubsystem implements Subsystem {
       const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
       const passengersAllowedRaw = readBooleanField(block.fields, ['PassengersAllowedToFire']);
       const passengersAllowedToFire = passengersAllowedRaw === true;
+      const containMax = readNumericField(block.fields, ['ContainMax']) ?? 0;
       const payloadTemplateNames = readStringList(block.fields, ['PayloadTemplateName']).map((templateName) =>
         templateName.toUpperCase(),
       );
@@ -3685,18 +3780,21 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'OPEN',
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
+          garrisonCapacity: 0,
         };
       } else if (moduleType === 'TRANSPORTCONTAIN') {
         profile = {
           moduleType: 'TRANSPORT',
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
+          garrisonCapacity: 0,
         };
       } else if (moduleType === 'OVERLORDCONTAIN') {
         profile = {
           moduleType: 'OVERLORD',
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
+          garrisonCapacity: 0,
         };
       } else if (moduleType === 'HELIXCONTAIN') {
         // HELIXCONTAIN is a Zero Hour-specific container module name used by data INIs;
@@ -3706,14 +3804,16 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           portableStructureTemplateNames: payloadTemplateNames,
+          garrisonCapacity: 0,
         };
       } else if (moduleType === 'GARRISONCONTAIN') {
         // GarrisonContain is OpenContain-derived in source but always returns TRUE from
         // isPassengerAllowedToFire(), so we track it explicitly for behavior parity.
         profile = {
           moduleType: 'GARRISON',
-          passengersAllowedToFire,
-          passengersAllowedToFireDefault: passengersAllowedToFire,
+          passengersAllowedToFire: true,
+          passengersAllowedToFireDefault: true,
+          garrisonCapacity: containMax > 0 ? containMax : 10,
         };
       }
 
@@ -4355,6 +4455,35 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.overchargeStateByEntityId.delete(entity.id);
+  }
+
+  /**
+   * Register an entity's energyBonus with its side's power tracking.
+   * Positive = production, negative = consumption.
+   */
+  private registerEntityEnergy(entity: MapEntity): void {
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (!normalizedSide || entity.energyBonus === 0) return;
+    const state = this.getSidePowerStateMap(normalizedSide);
+    if (entity.energyBonus > 0) {
+      state.energyProduction += entity.energyBonus;
+    } else {
+      state.energyConsumption += -entity.energyBonus;
+    }
+  }
+
+  /**
+   * Unregister an entity's energyBonus from its side's power tracking.
+   */
+  private unregisterEntityEnergy(entity: MapEntity): void {
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (!normalizedSide || entity.energyBonus === 0) return;
+    const state = this.getSidePowerStateMap(normalizedSide);
+    if (entity.energyBonus > 0) {
+      state.energyProduction = Math.max(0, state.energyProduction - entity.energyBonus);
+    } else {
+      state.energyConsumption = Math.max(0, state.energyConsumption + entity.energyBonus);
+    }
   }
 
   private applyRadarUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
@@ -5732,6 +5861,9 @@ export class GameLogicSubsystem implements Subsystem {
       case 'sell':
         this.handleSellCommand(command);
         return;
+      case 'garrisonBuilding':
+        this.handleGarrisonBuildingCommand(command);
+        return;
       default:
         return;
     }
@@ -5812,6 +5944,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'hackInternet':
       case 'toggleOvercharge':
       case 'setRallyPoint':
+      case 'garrisonBuilding':
         return true;
       default:
         return false;
@@ -6097,6 +6230,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.hackInternetPendingCommandByEntityId.delete(entityId);
     this.pendingEnterObjectActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
+    this.pendingGarrisonActions.delete(entityId);
   }
 
   private cancelRailedTransportTransit(entityId: number): void {
@@ -6366,6 +6500,7 @@ export class GameLogicSubsystem implements Subsystem {
     created.y = terrainY + created.baseHeight;
     this.updatePathfindPosCell(created);
     this.spawnedEntities.set(created.id, created);
+    this.registerEntityEnergy(created);
   }
 
   private handleEnterObjectCommand(command: EnterObjectCommand): void {
@@ -6987,6 +7122,81 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
+  private handleGarrisonBuildingCommand(command: GarrisonBuildingCommand): void {
+    const infantry = this.spawnedEntities.get(command.entityId);
+    const building = this.spawnedEntities.get(command.targetBuildingId);
+    if (!infantry || !building || infantry.destroyed || building.destroyed) {
+      return;
+    }
+
+    // Validate: source must be infantry, target must be garrisonable.
+    if (infantry.category !== 'infantry') return;
+    const containProfile = building.containProfile;
+    if (!containProfile || containProfile.moduleType !== 'GARRISON') return;
+    if (containProfile.garrisonCapacity <= 0) return;
+
+    // Check capacity.
+    const currentOccupants = this.collectContainedEntityIds(building.id).length;
+    if (currentOccupants >= containProfile.garrisonCapacity) return;
+
+    // Move infantry to building if not close enough.
+    const distance = Math.hypot(building.x - infantry.x, building.z - infantry.z);
+    if (distance > 15) {
+      this.issueMoveTo(infantry.id, building.x, building.z);
+      // Re-issue garrison when close enough via pending action.
+      this.pendingGarrisonActions.set(infantry.id, building.id);
+      return;
+    }
+
+    // Enter garrison.
+    this.cancelEntityCommandPathActions(infantry.id);
+    this.clearAttackTarget(infantry.id);
+    infantry.garrisonContainerId = building.id;
+    infantry.x = building.x;
+    infantry.z = building.z;
+    infantry.y = building.y;
+    infantry.canMove = false;
+    infantry.moving = false;
+    this.pendingGarrisonActions.delete(infantry.id);
+  }
+
+  private updatePendingGarrisonActions(): void {
+    for (const [infantryId, buildingId] of this.pendingGarrisonActions.entries()) {
+      const infantry = this.spawnedEntities.get(infantryId);
+      const building = this.spawnedEntities.get(buildingId);
+      if (!infantry || !building || infantry.destroyed || building.destroyed) {
+        this.pendingGarrisonActions.delete(infantryId);
+        continue;
+      }
+
+      const distance = Math.hypot(building.x - infantry.x, building.z - infantry.z);
+      if (distance > 15) continue;
+
+      // Close enough — enter garrison.
+      const containProfile = building.containProfile;
+      if (!containProfile || containProfile.moduleType !== 'GARRISON') {
+        this.pendingGarrisonActions.delete(infantryId);
+        continue;
+      }
+
+      const currentOccupants = this.collectContainedEntityIds(building.id).length;
+      if (currentOccupants >= containProfile.garrisonCapacity) {
+        this.pendingGarrisonActions.delete(infantryId);
+        continue;
+      }
+
+      this.cancelEntityCommandPathActions(infantry.id);
+      this.clearAttackTarget(infantry.id);
+      infantry.garrisonContainerId = building.id;
+      infantry.x = building.x;
+      infantry.z = building.z;
+      infantry.y = building.y;
+      infantry.canMove = false;
+      infantry.moving = false;
+      this.pendingGarrisonActions.delete(infantryId);
+    }
+  }
+
   private updatePendingEnterObjectActions(): void {
     for (const [sourceId, pending] of this.pendingEnterObjectActions.entries()) {
       const source = this.spawnedEntities.get(sourceId);
@@ -7490,6 +7700,80 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: Object::look() / Object::unlook()
    * Updates each entity's vision contribution to the fog of war grid.
    */
+  /**
+   * Source parity: StealthUpdate — auto-stealth entities with CAN_STEALTH,
+   * break stealth on attack/move, count down stealth delay.
+   */
+  private updateStealth(): void {
+    const STEALTH_DELAY_FRAMES = 60; // ~2s at 30fps
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+
+      // Clear expired detection.
+      if (entity.detectedUntilFrame > 0 && this.frameCounter >= entity.detectedUntilFrame) {
+        entity.objectStatusFlags.delete('DETECTED');
+        entity.detectedUntilFrame = 0;
+      }
+
+      if (!entity.objectStatusFlags.has('CAN_STEALTH')) continue;
+
+      // Break stealth while attacking or moving.
+      const isAttacking = entity.attackTargetEntityId !== null;
+      const isMoving = entity.moving;
+
+      if (isAttacking || isMoving) {
+        if (entity.objectStatusFlags.has('STEALTHED')) {
+          entity.objectStatusFlags.delete('STEALTHED');
+        }
+        entity.stealthDelayRemaining = STEALTH_DELAY_FRAMES;
+        continue;
+      }
+
+      // Count down stealth delay.
+      if (entity.stealthDelayRemaining > 0) {
+        entity.stealthDelayRemaining--;
+        continue;
+      }
+
+      // Enter stealth.
+      if (!entity.objectStatusFlags.has('STEALTHED')) {
+        entity.objectStatusFlags.add('STEALTHED');
+      }
+    }
+  }
+
+  /**
+   * Source parity: StealthDetectorUpdate — detector units reveal stealthed enemies.
+   */
+  private updateDetection(): void {
+    const DETECTION_DURATION_FRAMES = 30; // ~1s at 30fps — long enough to avoid flicker
+
+    for (const detector of this.spawnedEntities.values()) {
+      if (detector.destroyed) continue;
+      if (!detector.kindOf.has('DETECTOR')) continue;
+
+      const detectionRange = detector.visionRange > 0 ? detector.visionRange : 150;
+      const detRangeSq = detectionRange * detectionRange;
+
+      for (const target of this.spawnedEntities.values()) {
+        if (target.destroyed || target === detector) continue;
+        if (!target.objectStatusFlags.has('STEALTHED')) continue;
+
+        // Only detect enemies.
+        if (this.getTeamRelationship(detector, target) !== RELATIONSHIP_ENEMIES) continue;
+
+        const dx = target.x - detector.x;
+        const dz = target.z - detector.z;
+        if (dx * dx + dz * dz <= detRangeSq) {
+          target.objectStatusFlags.add('DETECTED');
+          // Refresh detection timer while target stays in range (prevents flicker).
+          target.detectedUntilFrame = this.frameCounter + DETECTION_DURATION_FRAMES;
+        }
+      }
+    }
+  }
+
   private updateFogOfWar(): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
@@ -7872,6 +8156,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     created.controllingPlayerToken = constructor.controllingPlayerToken;
     this.spawnedEntities.set(created.id, created);
+    this.registerEntityEnergy(created);
     return created;
   }
 
@@ -7981,7 +8266,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private isEntityContained(entity: MapEntity): boolean {
-    return entity.parkingSpaceProducerId !== null || entity.helixCarrierId !== null;
+    return entity.parkingSpaceProducerId !== null || entity.helixCarrierId !== null || entity.garrisonContainerId !== null;
   }
 
   private collectContainedEntityIds(containerId: number): number[] {
@@ -7997,7 +8282,11 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed) {
         continue;
       }
-      if (entity.parkingSpaceProducerId === containerId || entity.helixCarrierId === containerId) {
+      if (
+        entity.parkingSpaceProducerId === containerId
+        || entity.helixCarrierId === containerId
+        || entity.garrisonContainerId === containerId
+      ) {
         entityIds.add(entity.id);
       }
     }
@@ -8034,6 +8323,11 @@ export class GameLogicSubsystem implements Subsystem {
         helixCarrier.helixPortableRiderId = null;
       }
       entity.helixCarrierId = null;
+    }
+
+    if (entity.garrisonContainerId !== null) {
+      entity.garrisonContainerId = null;
+      entity.canMove = true;
     }
   }
 
@@ -8738,7 +9032,20 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      production.framesUnderConstruction += 1;
+      // Source parity: ThingTemplate::calcTimeToBuild — low power slows production.
+      let productionRate = 1;
+      const producerSide = this.normalizeSide(producer.side);
+      if (producerSide) {
+        const powerState = this.getSidePowerStateMap(producerSide);
+        const totalProd = powerState.energyProduction + powerState.powerBonus;
+        if (powerState.energyConsumption > 0 && totalProd < powerState.energyConsumption) {
+          const energyPercent = totalProd / powerState.energyConsumption;
+          const energyShort = Math.min(1, 1 - energyPercent);
+          // m_LowEnergyPenaltyModifier = 0.4 from GlobalData
+          productionRate = Math.max(0.2, 1 - energyShort * 0.4);
+        }
+      }
+      production.framesUnderConstruction += productionRate;
       if (production.totalProductionFrames <= 0) {
         production.percentComplete = 100;
       } else {
@@ -8929,6 +9236,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.spawnedEntities.set(created.id, created);
+    this.registerEntityEnergy(created);
     this.applyQueueProductionNaturalRallyPoint(producer, created);
 
     return created;
@@ -10458,6 +10766,9 @@ export class GameLogicSubsystem implements Subsystem {
       projectileType: 'BULLET',
     });
 
+    // Unregister energy contribution before destruction.
+    this.unregisterEntityEnergy(entity);
+
     // Source parity: award XP to killer on victim death.
     this.awardExperienceOnKill(entityId, attackerId);
 
@@ -10473,9 +10784,26 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingEnterObjectActions.delete(sourceId);
       }
     }
+    for (const [sourceId, targetBuildingId] of this.pendingGarrisonActions.entries()) {
+      if (targetBuildingId === entityId) {
+        this.pendingGarrisonActions.delete(sourceId);
+      }
+    }
     for (const pendingAction of this.pendingCombatDropActions.values()) {
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
+      }
+    }
+
+    // Source parity: GarrisonContain::onDie — release garrisoned infantry on building death.
+    // Passengers are ejected (and can be killed by separate damage if desired).
+    if (entity.containProfile) {
+      const passengerIds = this.collectContainedEntityIds(entityId);
+      for (const passengerId of passengerIds) {
+        const passenger = this.spawnedEntities.get(passengerId);
+        if (passenger && !passenger.destroyed) {
+          this.releaseEntityFromContainer(passenger);
+        }
       }
     }
 
@@ -10644,6 +10972,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (entity.helixPortableRiderId !== null) {
         entity.helixPortableRiderId = null;
+      }
+      if (entity.garrisonContainerId !== null) {
+        entity.garrisonContainerId = null;
       }
       this.spawnedEntities.delete(entityId);
       this.removeEntityFromSelection(entityId);
@@ -10889,6 +11220,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.hackInternetPendingCommandByEntityId.clear();
     this.pendingEnterObjectActions.clear();
     this.pendingCombatDropActions.clear();
+    this.pendingGarrisonActions.clear();
     this.supplyWarehouseStates.clear();
     this.supplyTruckStates.clear();
     this.railedTransportStateByEntityId.clear();

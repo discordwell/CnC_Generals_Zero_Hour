@@ -27,6 +27,8 @@ export interface RenderableEntityState {
   isSelected?: boolean;
   side?: string;
   veterancyLevel?: number;
+  isStealthed?: boolean;
+  isDetected?: boolean;
 }
 
 export interface LoadedModelAsset {
@@ -49,6 +51,10 @@ interface VisualAssetState {
   selectionRing: THREE.Mesh | null;
   veterancyBadge: THREE.Group | null;
   currentVeterancyLevel: number;
+  /** Cloned materials for stealth opacity mutation (avoids mutating shared GLTF materials). */
+  stealthMaterialClones: WeakMap<THREE.Mesh, THREE.Material | THREE.Material[]>;
+  /** Previous stealth opacity to skip redundant traversals. */
+  lastStealthOpacity: number;
 }
 
 export interface ObjectVisualManagerConfig {
@@ -119,6 +125,7 @@ export class ObjectVisualManager {
       this.syncHealthBar(visual, state);
       this.syncSelectionRing(visual, state);
       this.syncVeterancyBadge(visual, state);
+      this.syncStealthOpacity(visual, state);
       this.applyAnimationState(visual, state.animationState);
       if (visual.mixer) {
         visual.mixer.update(dt);
@@ -197,6 +204,8 @@ export class ObjectVisualManager {
       selectionRing: null,
       veterancyBadge: null,
       currentVeterancyLevel: 0,
+      stealthMaterialClones: new WeakMap(),
+      lastStealthOpacity: 1.0,
     };
   }
 
@@ -819,6 +828,55 @@ export class ObjectVisualManager {
     if (visual.veterancyBadge) {
       visual.veterancyBadge.rotation.y = -visual.root.rotation.y;
     }
+  }
+
+  /**
+   * Apply stealth opacity: stealthed = semi-transparent, detected = pulsing.
+   */
+  private syncStealthOpacity(visual: VisualAssetState, state: RenderableEntityState): void {
+    const isStealthed = state.isStealthed === true;
+    const isDetected = state.isDetected === true;
+    let targetOpacity = 1.0;
+    if (isStealthed && !isDetected) {
+      targetOpacity = 0.35;
+    } else if (isStealthed && isDetected) {
+      // Pulse between 0.4 and 0.8.
+      targetOpacity = 0.6 + 0.2 * Math.sin(performance.now() * 0.006);
+    }
+
+    // Skip traversal when opacity hasn't changed (within tolerance for pulsing).
+    if (Math.abs(targetOpacity - visual.lastStealthOpacity) < 0.01) return;
+    visual.lastStealthOpacity = targetOpacity;
+
+    visual.root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.material) return;
+
+      // Handle material arrays (multi-material meshes).
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+
+      // Clone materials on first stealth mutation to avoid mutating shared GLTF cache.
+      if (!visual.stealthMaterialClones.has(mesh)) {
+        if (Array.isArray(mesh.material)) {
+          mesh.material = mesh.material.map((m) => m.clone());
+        } else {
+          mesh.material = mesh.material.clone();
+        }
+        visual.stealthMaterialClones.set(mesh, mesh.material);
+      }
+
+      const clonedMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const mat of clonedMaterials) {
+        if ('opacity' in mat) {
+          const wantTransparent = targetOpacity < 1.0;
+          if (mat.transparent !== wantTransparent) {
+            mat.transparent = wantTransparent;
+            mat.needsUpdate = true;
+          }
+          mat.opacity = targetOpacity;
+        }
+      }
+    });
   }
 
   private disposeObject3D(object3D: THREE.Object3D): void {
