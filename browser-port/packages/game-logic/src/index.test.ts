@@ -7805,8 +7805,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankGun'] }),
     ], { Speed: 15 });
 
+    // High HP so the building survives long enough for the test to observe attack state.
     const enemyBuildingDef = makeObjectDef('EnemyHQ', 'America', ['STRUCTURE'], [
-      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50000, InitialHealth: 50000 }),
     ]);
 
     const registry = makeRegistry(makeBundle({
@@ -7841,16 +7842,16 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       logic.update(0.033);
     }
 
-    // Verify at least some AI tanks are now moving (attacking toward enemy).
-    let movingCount = 0;
+    // Verify at least some AI tanks are attacking the enemy building.
+    let attackingCount = 0;
     for (let id = 1; id <= 5; id++) {
       const state = logic.getEntityState(id);
-      if (state && (state.attackTargetEntityId !== null)) {
-        movingCount++;
+      if (state && state.attackTargetEntityId !== null) {
+        attackingCount++;
       }
     }
 
     // AI should have issued attack commands to its idle units.
-    expect(movingCount).toBeGreaterThan(0);
+    expect(attackingCount).toBeGreaterThan(0);
   });
 });

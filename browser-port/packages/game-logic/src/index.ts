@@ -868,6 +868,39 @@ interface MapEntity {
   /** Sole healing benefactor anti-stacking. */
   soleHealingBenefactorId: number | null;
   soleHealingBenefactorExpirationFrame: number;
+
+  // ── Source parity: PoisonedBehavior — per-entity poison DoT state ──
+  /** Damage amount per poison tick (0 = not poisoned). */
+  poisonDamageAmount: number;
+  /** Frame at which next poison tick fires. */
+  poisonNextDamageFrame: number;
+  /** Frame at which poison effect expires. */
+  poisonExpireFrame: number;
+  /** Frames between poison damage ticks (from INI PoisonDamageInterval). */
+  poisonDamageIntervalFrames: number;
+  /** Total poison duration frames (from INI PoisonDuration). */
+  poisonDurationFrames: number;
+
+  // ── Source parity: FlammableUpdate — per-entity fire DoT state ──
+  /** Flammability status: 'NORMAL' | 'AFLAME' | 'BURNED'. */
+  flameStatus: 'NORMAL' | 'AFLAME' | 'BURNED';
+  /** Accumulated flame damage toward ignition threshold. */
+  flameDamageAccumulated: number;
+  /** Frame at which aflame state ends. */
+  flameEndFrame: number;
+  /** Frame at which next fire damage tick fires. */
+  flameDamageNextFrame: number;
+  /** Last frame flame damage was received. */
+  flameLastDamageReceivedFrame: number;
+  /** Flammable module profile (null = not flammable). */
+  flammableProfile: FlammableProfile | null;
+
+  // ── Source parity: EjectPilotDie — pilot eject on death ──
+  /** Template name of pilot unit to eject on death. Null = no eject. */
+  ejectPilotTemplateName: string | null;
+  /** Minimum veterancy level to eject (default 1 = VETERAN). */
+  ejectPilotMinVeterancy: number;
+
   destroyed: boolean;
 }
 
@@ -893,6 +926,30 @@ interface PropagandaTowerProfile {
   upgradedHealPercentPerSecond: number;
   upgradeRequired: string | null;
 }
+
+/**
+ * Source parity: FlammableUpdate module parsed from INI.
+ */
+interface FlammableProfile {
+  /** Cumulative damage threshold to ignite. */
+  flameDamageLimit: number;
+  /** Frames before threshold resets after no fire damage. */
+  flameDamageExpirationDelayFrames: number;
+  /** Duration in frames that entity stays AFLAME. */
+  aflameDurationFrames: number;
+  /** Frames between fire damage ticks while AFLAME (0 = no periodic damage). */
+  aflameDamageDelayFrames: number;
+  /** Damage per fire tick. */
+  aflameDamageAmount: number;
+}
+
+/** Source parity: PoisonedBehavior default INI values. */
+const DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES = 10; // ~0.33s at 30fps
+const DEFAULT_POISON_DURATION_FRAMES = 90; // ~3s at 30fps
+
+/** Source parity: FlammableUpdate default INI values. */
+const DEFAULT_FLAME_DAMAGE_LIMIT = 20.0;
+const DEFAULT_AFLAME_DAMAGE_AMOUNT = 5;
 
 /** Global base regen config from GlobalData.ini. */
 const BASE_REGEN_HEALTH_PERCENT_PER_SECOND = 0.02; // 2% per second default
@@ -1335,6 +1392,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateOvercharge();
     this.updateStealth();
     this.updateDetection();
+    this.updatePoisonedEntities();
+    this.updateFlammableEntities();
     this.updateHealing();
     this.updateFogOfWar();
     this.updateSupplyChain();
@@ -2887,6 +2946,22 @@ export class GameLogicSubsystem implements Subsystem {
       propagandaTowerTrackedIds: [],
       soleHealingBenefactorId: null,
       soleHealingBenefactorExpirationFrame: 0,
+      // Poison DoT state
+      poisonDamageAmount: 0,
+      poisonNextDamageFrame: 0,
+      poisonExpireFrame: 0,
+      poisonDamageIntervalFrames: DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES,
+      poisonDurationFrames: DEFAULT_POISON_DURATION_FRAMES,
+      // Fire DoT state
+      flameStatus: 'NORMAL' as const,
+      flameDamageAccumulated: 0,
+      flameEndFrame: 0,
+      flameDamageNextFrame: 0,
+      flameLastDamageReceivedFrame: 0,
+      flammableProfile: this.extractFlammableProfile(objectDef),
+      // Pilot eject
+      ejectPilotTemplateName: this.extractEjectPilotTemplateName(objectDef),
+      ejectPilotMinVeterancy: 1,
       destroyed: false,
     };
   }
@@ -4253,6 +4328,69 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profile;
+  }
+
+  /**
+   * Source parity: FlammableUpdate module — extract flammability profile from INI.
+   */
+  private extractFlammableProfile(objectDef: ObjectDef | undefined): FlammableProfile | null {
+    if (!objectDef) return null;
+    let profile: FlammableProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FLAMMABLEUPDATE') {
+          profile = {
+            flameDamageLimit: readNumericField(block.fields, ['FlameDamageLimit']) ?? DEFAULT_FLAME_DAMAGE_LIMIT,
+            flameDamageExpirationDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['FlameDamageExpiration']) ?? 2000),
+            aflameDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['AflameDuration']) ?? 3000),
+            aflameDamageDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['AflameDamageDelay']) ?? 500),
+            aflameDamageAmount: readNumericField(block.fields, ['AflameDamageAmount']) ?? DEFAULT_AFLAME_DAMAGE_AMOUNT,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: EjectPilotDie module — extract pilot template name from INI.
+   * Searches for EjectPilotDie or HelicopterSlowDeathBehavior with OCLEjectPilot.
+   */
+  private extractEjectPilotTemplateName(objectDef: ObjectDef | undefined): string | null {
+    if (!objectDef) return null;
+    let pilotName: string | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (pilotName !== null) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'DIE') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'EJECTPILOTDIE' || moduleType === 'HELICOPTERSLOWDEATHBEHAVIOR') {
+          // Look for OCLEjectPilot or CreationList fields that reference an OCL containing the pilot
+          const oclName = readStringField(block.fields, ['GroundCreationList', 'AirCreationList', 'OCLEjectPilot']);
+          if (oclName) {
+            // Resolve the OCL to find the pilot unit template name.
+            // For now, use a convention-based approach:
+            // Most EjectPilot OCLs create an infantry pilot unit like 'AmericaPilot' or 'ChinaPilot'.
+            pilotName = oclName;
+          }
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return pilotName;
   }
 
   private extractRailedTransportProfile(objectDef: ObjectDef | undefined): RailedTransportProfile | null {
@@ -8127,6 +8265,97 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: PoisonedBehavior — tick poison DoT on all poisoned entities.
+   * Each poison tick applies UNRESISTABLE damage so it can't be re-poisoned recursively.
+   */
+  private updatePoisonedEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.poisonDamageAmount <= 0) continue;
+
+      // Check if poison has expired
+      if (this.frameCounter >= entity.poisonExpireFrame) {
+        entity.poisonDamageAmount = 0;
+        entity.objectStatusFlags.delete('POISONED');
+        continue;
+      }
+
+      // Apply poison damage tick
+      if (this.frameCounter >= entity.poisonNextDamageFrame) {
+        this.applyWeaponDamageAmount(null, entity, entity.poisonDamageAmount, 'UNRESISTABLE');
+        entity.poisonNextDamageFrame = this.frameCounter + entity.poisonDamageIntervalFrames;
+      }
+    }
+  }
+
+  /**
+   * Source parity: FlammableUpdate — tick fire DoT on all aflame entities.
+   * Entities accumulate fire damage; once threshold exceeded, they ignite.
+   * While AFLAME, periodic fire damage is applied. After duration, transitions to BURNED.
+   */
+  private updateFlammableEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.flameStatus === 'NORMAL' || entity.flameStatus === 'BURNED') continue;
+
+      // Entity is AFLAME — check if it's time to stop burning
+      if (this.frameCounter >= entity.flameEndFrame) {
+        entity.flameStatus = 'BURNED';
+        entity.objectStatusFlags.delete('AFLAME');
+        entity.objectStatusFlags.add('BURNED');
+        continue;
+      }
+
+      // Apply periodic fire damage
+      const prof = entity.flammableProfile;
+      if (prof && prof.aflameDamageDelayFrames > 0 && this.frameCounter >= entity.flameDamageNextFrame) {
+        this.applyWeaponDamageAmount(entity.id, entity, prof.aflameDamageAmount, 'FLAME');
+        entity.flameDamageNextFrame = this.frameCounter + prof.aflameDamageDelayFrames;
+      }
+    }
+  }
+
+  /**
+   * Source parity: FlammableUpdate.onDamage — accumulate fire damage and try to ignite.
+   */
+  private applyFireDamageToEntity(entity: MapEntity, actualDamage: number): void {
+    const prof = entity.flammableProfile;
+    if (!prof) return;
+    if (entity.flameStatus !== 'NORMAL') return; // Can't reignite burned or already aflame
+
+    // Reset accumulation if no fire damage in a while
+    if (this.frameCounter - entity.flameLastDamageReceivedFrame > prof.flameDamageExpirationDelayFrames) {
+      entity.flameDamageAccumulated = 0;
+    }
+    entity.flameLastDamageReceivedFrame = this.frameCounter;
+    entity.flameDamageAccumulated += actualDamage;
+
+    // Check ignition threshold
+    if (entity.flameDamageAccumulated >= prof.flameDamageLimit) {
+      entity.flameStatus = 'AFLAME';
+      entity.objectStatusFlags.add('AFLAME');
+      entity.flameEndFrame = this.frameCounter + prof.aflameDurationFrames;
+      entity.flameDamageNextFrame = prof.aflameDamageDelayFrames > 0
+        ? this.frameCounter + prof.aflameDamageDelayFrames
+        : Infinity;
+      entity.flameDamageAccumulated = 0;
+    }
+  }
+
+  /**
+   * Source parity: PoisonedBehavior.onDamage — start or refresh poison DoT.
+   */
+  private applyPoisonToEntity(entity: MapEntity, actualDamage: number): void {
+    if (actualDamage <= 0) return;
+    entity.poisonDamageAmount = actualDamage;
+    entity.poisonExpireFrame = this.frameCounter + entity.poisonDurationFrames;
+    // Only reset next-damage timer if not already ticking
+    if (entity.poisonNextDamageFrame <= this.frameCounter) {
+      entity.poisonNextDamageFrame = this.frameCounter + entity.poisonDamageIntervalFrames;
+    }
+    entity.objectStatusFlags.add('POISONED');
+  }
+
+  /**
    * Source parity: AutoHealBehavior, BaseRegenerateUpdate, PropagandaTowerBehavior.
    * Runs all healing systems in a single pass.
    */
@@ -8555,6 +8784,10 @@ export class GameLogicSubsystem implements Subsystem {
       },
       isDozerBusy: (entity: MapEntity) => {
         return entity.moving || entity.productionQueue.length > 0;
+      },
+      getSidePowerBalance: (side: string) => {
+        const ps = this.getSidePowerState(side);
+        return ps.energyProduction - ps.energyConsumption + ps.powerBonus;
       },
     };
 
@@ -9723,6 +9956,46 @@ export class GameLogicSubsystem implements Subsystem {
     );
   }
 
+  /**
+   * Spawn a new entity from a template name at the given world position.
+   * Used by pilot eject and OCL pipeline.
+   */
+  private spawnEntityFromTemplate(
+    templateName: string,
+    worldX: number,
+    worldZ: number,
+    rotationY: number,
+    side?: string,
+  ): MapEntity | null {
+    const registry = this.iniDataRegistry;
+    if (!registry) return null;
+    const objectDef = findObjectDefByName(registry, templateName);
+    if (!objectDef) return null;
+
+    const mapObject: MapObjectJSON = {
+      templateName: objectDef.name,
+      angle: THREE.MathUtils.radToDeg(rotationY),
+      flags: 0,
+      position: { x: worldX, y: worldZ, z: 0 },
+      properties: {},
+    };
+    const entity = this.createMapEntity(mapObject, objectDef, registry, this.mapHeightmap);
+    if (side !== undefined) {
+      entity.side = side;
+    }
+    // Inherit controlling player from side.
+    if (side) {
+      entity.controllingPlayerToken = this.normalizeControllingPlayerToken(side);
+    }
+    this.spawnedEntities.set(entity.id, entity);
+    this.registerEntityEnergy(entity);
+    // Snap to terrain.
+    if (this.mapHeightmap) {
+      entity.y = this.mapHeightmap.getInterpolatedHeight(worldX, worldZ) ?? 0;
+    }
+    return entity;
+  }
+
   private spawnProducedUnit(producer: MapEntity, unitDef: ObjectDef, productionId: number): MapEntity | null {
     const registry = this.iniDataRegistry;
     if (!registry) {
@@ -10810,7 +11083,45 @@ export class GameLogicSubsystem implements Subsystem {
         x: (target as { mesh?: { position?: { x?: number } } }).mesh?.position?.x ?? target.x,
         z: (target as { mesh?: { position?: { z?: number } } }).mesh?.position?.z ?? target.z,
       }),
+      isAttackLineOfSightBlocked: (attackerX, attackerZ, targetX, targetZ) =>
+        this.isTerrainLineOfSightBlocked(attackerX, attackerZ, targetX, targetZ),
     });
+  }
+
+  /**
+   * Source parity: Weapon.cpp LOS check — trace a ray between two world positions
+   * and check if terrain blocks line of sight. Uses heightmap sampling along the ray.
+   */
+  private isTerrainLineOfSightBlocked(
+    fromX: number,
+    fromZ: number,
+    toX: number,
+    toZ: number,
+  ): boolean {
+    const hm = this.mapHeightmap;
+    if (!hm) return false;
+
+    const fromHeight = hm.getInterpolatedHeight(fromX, fromZ) + 1.5; // unit eye height
+    const toHeight = hm.getInterpolatedHeight(toX, toZ) + 1.5;
+
+    const dx = toX - fromX;
+    const dz = toZ - fromZ;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < 1) return false;
+
+    // Sample terrain height along the ray at ~2 world-unit intervals
+    const steps = Math.min(Math.ceil(dist / 2), 100);
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const sampleX = fromX + dx * t;
+      const sampleZ = fromZ + dz * t;
+      const terrainHeight = hm.getInterpolatedHeight(sampleX, sampleZ);
+      const rayHeight = fromHeight + (toHeight - fromHeight) * t;
+      if (terrainHeight > rayHeight) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private queueWeaponDamageEvent(attacker: MapEntity, target: MapEntity, weapon: AttackWeaponProfile): void {
@@ -11276,6 +11587,16 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyEmpDisable(target, EMP_DISABLE_DURATION_FRAMES);
     }
 
+    // Source parity: PoisonedBehavior.onDamage — POISON damage starts/refreshes poison DoT.
+    if (normalizedDamageType === 'POISON') {
+      this.applyPoisonToEntity(target, adjustedDamage);
+    }
+
+    // Source parity: FlammableUpdate.onDamage — FLAME/PARTICLE_BEAM accumulates toward ignition.
+    if (normalizedDamageType === 'FLAME' || normalizedDamageType === 'PARTICLE_BEAM') {
+      this.applyFireDamageToEntity(target, adjustedDamage);
+    }
+
     if (target.health <= 0) {
       this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
@@ -11290,7 +11611,6 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed) {
       return;
     }
-
     // Emit entity destroyed visual event.
     this.visualEventBuffer.push({
       type: 'ENTITY_DESTROYED',
@@ -11307,6 +11627,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: award XP to killer on victim death.
     this.awardExperienceOnKill(entityId, attackerId);
+
+    // Source parity: EjectPilotDie — eject pilot unit for VETERAN+ vehicles on death.
+    this.tryEjectPilotOnDeath(entity);
 
     this.cancelEntityCommandPathActions(entityId);
     this.railedTransportStateByEntityId.delete(entityId);
@@ -11366,6 +11689,58 @@ export class GameLogicSubsystem implements Subsystem {
       expireFrame: this.frameCounter + 1,
     });
     this.onObjectDestroyed(entityId);
+  }
+
+  /**
+   * Source parity: EjectPilotDie — eject a pilot unit when VETERAN+ vehicle is destroyed.
+   * Only vehicle/air categories with the ejectPilotTemplateName set will eject.
+   * The pilot inherits the vehicle's veterancy level.
+   */
+  private tryEjectPilotOnDeath(entity: MapEntity): void {
+    if (!entity.ejectPilotTemplateName) return;
+    if (entity.category !== 'vehicle' && entity.category !== 'air') return;
+
+    // Source parity: Only VETERAN or higher eject a pilot.
+    const vetLevel = entity.experienceState.currentLevel;
+    if (vetLevel < entity.ejectPilotMinVeterancy) return;
+
+    // Try to resolve the pilot unit template. The ejectPilotTemplateName
+    // may be an OCL name rather than a direct unit template. Try to find
+    // a matching infantry template first, falling back to a side-specific pilot.
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+
+    // Convention: look for the OCL name as an object template first.
+    // If not found, try side-prefixed variants (e.g., AmericaPilot, ChinaPilot).
+    let pilotTemplateName = entity.ejectPilotTemplateName;
+    let pilotDef = findObjectDefByName(registry, pilotTemplateName);
+    if (!pilotDef && entity.side) {
+      // Try conventional pilot name: <Side>Pilot (e.g., AmericaPilot)
+      const sidePilot = entity.side + 'Pilot';
+      pilotDef = findObjectDefByName(registry, sidePilot);
+      if (pilotDef) pilotTemplateName = sidePilot;
+    }
+    if (!pilotDef) {
+      // Try generic Pilot template
+      pilotDef = findObjectDefByName(registry, 'Pilot');
+      if (pilotDef) pilotTemplateName = 'Pilot';
+    }
+    if (!pilotDef) return;
+
+    // Spawn the pilot at the vehicle's position.
+    const pilotEntity = this.spawnEntityFromTemplate(
+      pilotTemplateName,
+      entity.x,
+      entity.z,
+      entity.rotationY,
+      entity.side,
+    );
+    if (!pilotEntity) return;
+
+    // Inherit veterancy.
+    if (pilotEntity.experienceProfile) {
+      pilotEntity.experienceState.currentLevel = vetLevel;
+    }
   }
 
   /**

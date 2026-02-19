@@ -1,5 +1,5 @@
 /**
- * Basic skirmish AI opponent.
+ * Skirmish AI opponent.
  *
  * Source parity:
  *   Generals/Code/GameEngine/Source/GameLogic/AI/AIPlayer.cpp
@@ -20,6 +20,7 @@ const COMBAT_EVAL_INTERVAL = 90;   // ~6 seconds
 const STRUCTURE_EVAL_INTERVAL = 60; // ~4 seconds
 const DEFENSE_EVAL_INTERVAL = 20;  // ~1.3 seconds
 const SCOUT_EVAL_INTERVAL = 150;   // ~10 seconds
+const POWER_EVAL_INTERVAL = 45;    // ~3 seconds
 
 // ──── Resource thresholds (source parity: AIData.ini) ────────────────────────
 const RESOURCES_POOR_THRESHOLD = 500;
@@ -84,6 +85,9 @@ export interface SkirmishAIContext<TEntity extends AIEntity> {
 
   /** Check if a dozer is currently constructing. */
   isDozerBusy(entity: TEntity): boolean;
+
+  /** Get power balance (produced minus consumed) for a side. Returns null if unavailable. */
+  getSidePowerBalance?(side: string): number | null;
 }
 
 // ──── Per-AI state ──────────────────────────────────────────────────────────
@@ -97,6 +101,7 @@ export interface SkirmishAIState {
   lastStructureFrame: number;
   lastDefenseFrame: number;
   lastScoutFrame: number;
+  lastPowerFrame: number;
   /** Rally point for new units. */
   rallyX: number;
   rallyZ: number;
@@ -115,6 +120,12 @@ export interface SkirmishAIState {
   scoutWaypointIndex: number;
   /** Last known base threat frame (for defense response). */
   lastBaseThreatFrame: number;
+  /** Track which structure keywords we've built (for rebuild on destruction). */
+  builtStructureKeywords: Set<string>;
+  /** Track enemy army composition for counter-production. */
+  lastEnemyVehicleRatio: number;
+  /** Track last production template index for variety. */
+  productionRotationIndex: number;
 }
 
 export function createSkirmishAIState(side: string): SkirmishAIState {
@@ -127,6 +138,7 @@ export function createSkirmishAIState(side: string): SkirmishAIState {
     lastStructureFrame: 0,
     lastDefenseFrame: 0,
     lastScoutFrame: 0,
+    lastPowerFrame: 0,
     rallyX: 0,
     rallyZ: 0,
     enemyBaseX: 0,
@@ -138,6 +150,9 @@ export function createSkirmishAIState(side: string): SkirmishAIState {
     scoutWaypoints: [],
     scoutWaypointIndex: 0,
     lastBaseThreatFrame: 0,
+    builtStructureKeywords: new Set(),
+    lastEnemyVehicleRatio: 0.5,
+    productionRotationIndex: 0,
   };
 }
 
@@ -178,6 +193,18 @@ function distSquared(ax: number, az: number, bx: number, bz: number): number {
   return dx * dx + dz * dz;
 }
 
+function isNonCombatUnit(entity: AIEntity): boolean {
+  const upper = entity.templateName.toUpperCase();
+  return hasKindOf(entity, 'HARVESTER')
+    || upper.includes('SUPPLY')
+    || upper.includes('DOZER')
+    || upper.includes('WORKER');
+}
+
+function isCombatUnit(entity: AIEntity): boolean {
+  return entity.canMove && !hasKindOf(entity, 'STRUCTURE') && !isNonCombatUnit(entity);
+}
+
 // ──── Main AI update ────────────────────────────────────────────────────────
 
 export function updateSkirmishAI<TEntity extends AIEntity>(
@@ -204,6 +231,11 @@ export function updateSkirmishAI<TEntity extends AIEntity>(
   if (frame - state.lastDefenseFrame >= DEFENSE_EVAL_INTERVAL) {
     evaluateDefense(state, context);
     state.lastDefenseFrame = frame;
+  }
+
+  if (frame - state.lastPowerFrame >= POWER_EVAL_INTERVAL) {
+    evaluatePower(state, context);
+    state.lastPowerFrame = frame;
   }
 
   if (frame - state.lastEconomyFrame >= ECONOMY_EVAL_INTERVAL) {
@@ -306,6 +338,48 @@ function discoverEnemyBase<TEntity extends AIEntity>(
   }
 }
 
+// ──── Power management ──────────────────────────────────────────────────────
+
+function evaluatePower<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  // If power balance API is available, check for low power and build power plants.
+  if (!context.getSidePowerBalance) return;
+  const powerBalance = context.getSidePowerBalance(state.side);
+  if (powerBalance === null || powerBalance >= 0) return;
+
+  // Low power — find an idle dozer and build a power plant.
+  const credits = context.getSideCredits(state.side);
+  if (credits < 300) return;
+
+  const dozers = context.getDozers(state.side);
+  const idleDozer = dozers.find((d) => !context.isDozerBusy(d));
+  if (!idleDozer) return;
+
+  const buildable = context.getBuildableStructures(idleDozer);
+  const powerTemplate = buildable.find((name) => {
+    const upper = name.toUpperCase();
+    return upper.includes('POWERPLANT') || upper.includes('REACTOR') || upper.includes('COLDFU');
+  });
+  if (!powerTemplate) return;
+
+  const offsetAngle = state.buildOrderPhase * 0.7;
+  const offsetDist = 15 + state.buildOrderPhase * 5;
+  const placeX = state.rallyX + Math.cos(offsetAngle) * offsetDist;
+  const placeZ = state.rallyZ + Math.sin(offsetAngle) * offsetDist;
+
+  context.submitCommand({
+    type: 'constructBuilding',
+    entityId: idleDozer.id,
+    templateName: powerTemplate,
+    targetPosition: [placeX, 0, placeZ],
+    angle: 0,
+    lineEndPosition: null,
+  });
+  state.buildOrderPhase = (state.buildOrderPhase + 1) % 20;
+}
+
 // ──── Economy evaluation ────────────────────────────────────────────────────
 
 function evaluateEconomy<TEntity extends AIEntity>(
@@ -345,6 +419,38 @@ function evaluateEconomy<TEntity extends AIEntity>(
       }
     }
   }
+
+  // Analyze enemy composition for counter-production.
+  updateEnemyCompositionAnalysis(state, context);
+}
+
+// ──── Enemy composition analysis ─────────────────────────────────────────────
+
+function updateEnemyCompositionAnalysis<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  const normalizedSide = context.normalizeSide(state.side);
+  let enemyVehicles = 0;
+  let enemyInfantry = 0;
+
+  for (const entity of context.spawnedEntities.values()) {
+    if (entity.destroyed || !entity.canMove) continue;
+    const entitySide = context.normalizeSide(entity.side);
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) continue;
+    if (hasKindOf(entity, 'STRUCTURE') || isNonCombatUnit(entity)) continue;
+
+    if (hasKindOf(entity, 'VEHICLE') || hasKindOf(entity, 'AIRCRAFT')) {
+      enemyVehicles++;
+    } else {
+      enemyInfantry++;
+    }
+  }
+
+  const total = enemyVehicles + enemyInfantry;
+  if (total > 0) {
+    state.lastEnemyVehicleRatio = enemyVehicles / total;
+  }
 }
 
 // ──── Production evaluation ─────────────────────────────────────────────────
@@ -363,13 +469,7 @@ function evaluateProduction<TEntity extends AIEntity>(
     context.spawnedEntities,
     state.side,
     context.normalizeSide,
-    (e) =>
-      e.canMove
-      && !hasKindOf(e, 'STRUCTURE')
-      && !hasKindOf(e, 'HARVESTER')
-      && !e.templateName.toUpperCase().includes('SUPPLY')
-      && !e.templateName.toUpperCase().includes('DOZER')
-      && !e.templateName.toUpperCase().includes('WORKER'),
+    (e) => isCombatUnit(e),
   );
 
   // Find idle factories (not currently producing).
@@ -400,19 +500,15 @@ function evaluateProduction<TEntity extends AIEntity>(
     const producible = context.getProducibleUnits(factory);
     // Filter out harvesters/workers.
     const combatTemplates = producible.filter(
-      name =>
-        !name.toUpperCase().includes('SUPPLY')
-        && !name.toUpperCase().includes('WORKER')
-        && !name.toUpperCase().includes('DOZER'),
+      name => !isNonCombatByTemplateName(name),
     );
 
     if (combatTemplates.length === 0) {
       continue;
     }
 
-    // Simple round-robin selection based on frame counter.
-    const templateIndex = context.frameCounter % combatTemplates.length;
-    const selectedTemplate = combatTemplates[templateIndex]!;
+    // Select unit based on enemy composition + rotation for variety.
+    const selectedTemplate = selectCounterUnit(state, combatTemplates);
 
     context.submitCommand({
       type: 'queueUnitProduction',
@@ -420,6 +516,52 @@ function evaluateProduction<TEntity extends AIEntity>(
       unitTemplateName: selectedTemplate,
     });
   }
+}
+
+function isNonCombatByTemplateName(name: string): boolean {
+  const upper = name.toUpperCase();
+  return upper.includes('SUPPLY') || upper.includes('WORKER') || upper.includes('DOZER');
+}
+
+/**
+ * Select a unit template with bias toward counter-units based on enemy composition.
+ * If enemy has many vehicles, prefer anti-vehicle (missile/rpg/tank) units.
+ * If enemy has many infantry, prefer anti-infantry (MG, flame, vehicles) units.
+ */
+function selectCounterUnit(state: SkirmishAIState, templates: string[]): string {
+  // Categorize templates into anti-vehicle and anti-infantry hints.
+  const antiVehicle: string[] = [];
+  const antiInfantry: string[] = [];
+  const general: string[] = [];
+
+  for (const name of templates) {
+    const upper = name.toUpperCase();
+    if (upper.includes('MISSILE') || upper.includes('RPG') || upper.includes('TANK')
+        || upper.includes('HUMVEE') || upper.includes('CRUSADER') || upper.includes('OVERLORD')
+        || upper.includes('BATTLEMASTER') || upper.includes('MARAUDER') || upper.includes('SCORPION')) {
+      antiVehicle.push(name);
+    } else if (upper.includes('RANGER') || upper.includes('MINIGUN')
+        || upper.includes('FLASHBANG') || upper.includes('DRAGON')
+        || upper.includes('GATLING') || upper.includes('QUAD')) {
+      antiInfantry.push(name);
+    } else {
+      general.push(name);
+    }
+  }
+
+  // Choose category based on enemy composition.
+  let pool: string[];
+  if (state.lastEnemyVehicleRatio > 0.6 && antiVehicle.length > 0) {
+    pool = antiVehicle;
+  } else if (state.lastEnemyVehicleRatio < 0.3 && antiInfantry.length > 0) {
+    pool = antiInfantry;
+  } else {
+    pool = templates; // Balanced — use all.
+  }
+
+  // Rotate through pool for variety.
+  state.productionRotationIndex++;
+  return pool[state.productionRotationIndex % pool.length]!;
 }
 
 // ──── Combat evaluation ─────────────────────────────────────────────────────
@@ -437,15 +579,7 @@ function evaluateCombat<TEntity extends AIEntity>(
     context.spawnedEntities,
     state.side,
     context.normalizeSide,
-    (e) =>
-      e.canMove
-      && !hasKindOf(e, 'STRUCTURE')
-      && !hasKindOf(e, 'HARVESTER')
-      && !e.templateName.toUpperCase().includes('SUPPLY')
-      && !e.templateName.toUpperCase().includes('DOZER')
-      && !e.templateName.toUpperCase().includes('WORKER')
-      && e.attackTargetEntityId === null
-      && !e.moving,
+    (e) => isCombatUnit(e) && e.attackTargetEntityId === null && !e.moving,
   );
 
   // Only attack with minimum force.
@@ -453,73 +587,101 @@ function evaluateCombat<TEntity extends AIEntity>(
     return;
   }
 
-  // Find nearest enemy structure/unit to attack.
-  const target = findPriorityTarget(state, context);
-  if (!target) {
+  // Find multiple targets for distributed attacks.
+  const targets = findMultipleTargets(state, context, 3);
+  if (targets.length === 0) {
     return;
   }
 
-  // Order all idle combat units to attack-move to enemy.
-  for (const unit of idleCombat) {
+  // Distribute units across targets. Focus fire: most units on primary target.
+  const primaryTarget = targets[0]!;
+  const unitsPerTarget = Math.max(1, Math.floor(idleCombat.length / targets.length));
+
+  let unitIndex = 0;
+  for (let t = 0; t < targets.length; t++) {
+    const target = targets[t]!;
+    // Primary target gets remaining units; secondary targets get even split.
+    const unitsForThisTarget = t === 0
+      ? idleCombat.length - unitsPerTarget * (targets.length - 1)
+      : unitsPerTarget;
+
+    for (let u = 0; u < unitsForThisTarget && unitIndex < idleCombat.length; u++) {
+      const unit = idleCombat[unitIndex]!;
+      context.submitCommand({
+        type: 'attackEntity',
+        entityId: unit.id,
+        targetEntityId: target.id,
+        commandSource: 'AI',
+      });
+      unitIndex++;
+    }
+  }
+
+  // Also issue attack-move toward enemy base for any remaining idle units.
+  for (let i = unitIndex; i < idleCombat.length; i++) {
     context.submitCommand({
-      type: 'attackEntity',
-      entityId: unit.id,
-      targetEntityId: target.id,
-      commandSource: 'AI',
+      type: 'attackMoveTo',
+      entityId: idleCombat[i]!.id,
+      targetX: primaryTarget.x,
+      targetZ: primaryTarget.z,
+      attackDistance: 30,
     });
   }
 
   state.attackWavesSent++;
 }
 
-// ──── Find priority attack target ───────────────────────────────────────────
+// ──── Find multiple priority attack targets ────────────────────────────────
 
-function findPriorityTarget<TEntity extends AIEntity>(
+function findMultipleTargets<TEntity extends AIEntity>(
   state: SkirmishAIState,
   context: SkirmishAIContext<TEntity>,
-): TEntity | null {
+  maxTargets: number,
+): TEntity[] {
   const normalizedSide = context.normalizeSide(state.side);
-  let bestTarget: TEntity | null = null;
-  let bestScore = -Infinity;
+  const scored: Array<{ entity: TEntity; score: number }> = [];
 
   for (const entity of context.spawnedEntities.values()) {
-    if (entity.destroyed) {
-      continue;
-    }
-
+    if (entity.destroyed) continue;
     const entitySide = context.normalizeSide(entity.side);
-    if (context.getRelationship(normalizedSide, entitySide) !== 0) {
-      continue;
-    }
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) continue;
 
-    // Prioritize: structures > vehicles > infantry.
-    // Closer targets preferred.
     let score = 0;
+
+    // Priority scoring: production > defense > economy > other structures > units
+    const upper = entity.templateName.toUpperCase();
     if (hasKindOf(entity, 'STRUCTURE')) {
-      score += 100;
-    } else if (hasKindOf(entity, 'VEHICLE')) {
+      if (upper.includes('WARFACTORY') || upper.includes('ARMSFACTORY') || upper.includes('BARRACKS')) {
+        score += 150; // Production buildings are high priority
+      } else if (upper.includes('POWER') || upper.includes('REACTOR')) {
+        score += 120; // Power is critical
+      } else if (upper.includes('SUPPLY') || upper.includes('COMMAND')) {
+        score += 110; // Economy
+      } else {
+        score += 80;
+      }
+    } else if (hasKindOf(entity, 'VEHICLE') || hasKindOf(entity, 'AIRCRAFT')) {
       score += 50;
     } else {
       score += 25;
     }
 
-    // Proximity bonus.
+    // Proximity bonus (prefer closer targets).
     const dist = Math.sqrt(distSquared(state.rallyX, state.rallyZ, entity.x, entity.z));
     score -= dist * 0.1;
 
-    // Low health bonus.
+    // Low health bonus (finish off weak targets).
     if (entity.maxHealth > 0) {
       const healthRatio = entity.health / entity.maxHealth;
-      score += (1 - healthRatio) * 30;
+      score += (1 - healthRatio) * 40;
     }
 
-    if (score > bestScore) {
-      bestScore = score;
-      bestTarget = entity;
-    }
+    scored.push({ entity, score });
   }
 
-  return bestTarget;
+  // Sort by score descending and take top N.
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, maxTargets).map(s => s.entity);
 }
 
 // ──── Structure build-order evaluation ────────────────────────────────────────
@@ -533,6 +695,8 @@ const BUILD_ORDER_KEYWORDS = [
   'SUPPLYC',
   'AIRFIELD', 'STRATCENTER', 'COMMANDCENTER',
   'RADAR',
+  // Defense structures (built later).
+  'PATRIOT', 'GATTLINGCANNON', 'BUNKER', 'STINGERMISSILE', 'TUNNELNETWORK',
 ];
 
 function evaluateStructures<TEntity extends AIEntity>(
@@ -569,7 +733,16 @@ function evaluateStructures<TEntity extends AIEntity>(
         break;
       }
     }
-    if (alreadyHave) continue;
+    if (alreadyHave) {
+      state.builtStructureKeywords.add(keyword);
+      continue;
+    }
+
+    // If we previously built this and it's gone, rebuild it (if we have credits).
+    const isRebuild = state.builtStructureKeywords.has(keyword);
+    if (!isRebuild && keyword === 'PATRIOT' && credits < 800) {
+      continue; // Don't build defenses until we can afford them.
+    }
 
     // Find a buildable template matching the keyword.
     const template = buildable.find(
@@ -592,7 +765,35 @@ function evaluateStructures<TEntity extends AIEntity>(
       lineEndPosition: null,
     });
     state.buildOrderPhase = (state.buildOrderPhase + 1) % 20;
+    state.builtStructureKeywords.add(keyword);
     return;
+  }
+
+  // If we've built everything in the order, try to build a second power plant
+  // or additional defense when wealthy.
+  if (credits >= RESOURCES_WEALTHY_THRESHOLD) {
+    const defenseTemplate = buildable.find((name) => {
+      const upper = name.toUpperCase();
+      return upper.includes('PATRIOT') || upper.includes('GATTLING')
+        || upper.includes('BUNKER') || upper.includes('STINGER')
+        || upper.includes('TUNNELNETWORK');
+    });
+    if (defenseTemplate) {
+      const offsetAngle = state.buildOrderPhase * 0.7;
+      const offsetDist = 10 + state.buildOrderPhase * 4;
+      const placeX = state.rallyX + Math.cos(offsetAngle) * offsetDist;
+      const placeZ = state.rallyZ + Math.sin(offsetAngle) * offsetDist;
+
+      context.submitCommand({
+        type: 'constructBuilding',
+        entityId: idleDozer.id,
+        templateName: defenseTemplate,
+        targetPosition: [placeX, 0, placeZ],
+        angle: 0,
+        lineEndPosition: null,
+      });
+      state.buildOrderPhase = (state.buildOrderPhase + 1) % 20;
+    }
   }
 }
 
@@ -606,6 +807,9 @@ function evaluateDefense<TEntity extends AIEntity>(
 
   // Check for enemy units near our base.
   let baseThreat = false;
+  let nearestThreatEntity: TEntity | null = null;
+  let nearestThreatDistSq = Infinity;
+
   for (const entity of context.spawnedEntities.values()) {
     if (entity.destroyed) continue;
     const entitySide = context.normalizeSide(entity.side);
@@ -614,33 +818,29 @@ function evaluateDefense<TEntity extends AIEntity>(
     const distSqToBase = distSquared(state.rallyX, state.rallyZ, entity.x, entity.z);
     if (distSqToBase < DEFENSE_RADIUS * DEFENSE_RADIUS) {
       baseThreat = true;
-      break;
+      if (distSqToBase < nearestThreatDistSq) {
+        nearestThreatDistSq = distSqToBase;
+        nearestThreatEntity = entity;
+      }
     }
   }
 
-  if (baseThreat) {
+  if (baseThreat && nearestThreatEntity) {
     state.lastBaseThreatFrame = context.frameCounter;
 
-    // Rally idle combat units back to defend base.
+    // Rally idle combat units to attack the specific threat.
     const combatUnits = collectEntitiesBySide(
       context.spawnedEntities, state.side, context.normalizeSide,
-      (e) => e.canMove
-        && !hasKindOf(e, 'STRUCTURE')
-        && !hasKindOf(e, 'HARVESTER')
-        && !e.templateName.toUpperCase().includes('SUPPLY')
-        && !e.templateName.toUpperCase().includes('DOZER')
-        && !e.templateName.toUpperCase().includes('WORKER')
-        && e.attackTargetEntityId === null
-        && !e.moving,
+      (e) => isCombatUnit(e) && e.attackTargetEntityId === null && !e.moving,
     );
 
     for (const unit of combatUnits) {
+      // Direct attack on the nearest threat instead of generic attack-move.
       context.submitCommand({
-        type: 'attackMoveTo',
+        type: 'attackEntity',
         entityId: unit.id,
-        targetX: state.rallyX,
-        targetZ: state.rallyZ,
-        attackDistance: 30,
+        targetEntityId: nearestThreatEntity.id,
+        commandSource: 'AI',
       });
     }
   }
@@ -704,14 +904,7 @@ function evaluateScout<TEntity extends AIEntity>(
   if (state.scoutEntityId < 0) {
     const candidates = collectEntitiesBySide(
       context.spawnedEntities, state.side, context.normalizeSide,
-      (e) => e.canMove
-        && !hasKindOf(e, 'STRUCTURE')
-        && !hasKindOf(e, 'HARVESTER')
-        && !e.templateName.toUpperCase().includes('SUPPLY')
-        && !e.templateName.toUpperCase().includes('DOZER')
-        && !e.templateName.toUpperCase().includes('WORKER')
-        && e.attackTargetEntityId === null
-        && !e.moving,
+      (e) => isCombatUnit(e) && e.attackTargetEntityId === null && !e.moving,
     );
 
     if (candidates.length > 0) {

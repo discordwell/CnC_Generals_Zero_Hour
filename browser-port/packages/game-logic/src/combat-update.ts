@@ -32,6 +32,8 @@ interface CombatUpdateEntityLike {
   attackAmmoInClip: number;
   attackReloadFinishFrame: number;
   attackForceReloadFrame: number;
+  attackNeedsLineOfSight: boolean;
+  category: string;
 }
 
 interface CombatUpdateConstants {
@@ -68,6 +70,8 @@ interface CombatUpdateContext<TEntity extends CombatUpdateEntityLike> {
   recordConsecutiveAttackShot(attacker: TEntity, targetEntityId: number): void;
   resolveWeaponDelayFrames(weapon: CombatUpdateWeaponLike): number;
   resolveTargetAnchorPosition(target: TEntity): VectorXZLike;
+  /** Check if terrain blocks line of sight from attacker to target. */
+  isAttackLineOfSightBlocked(attackerX: number, attackerZ: number, targetX: number, targetZ: number): boolean;
 }
 
 function clearImmediateCombatState<TEntity extends CombatUpdateEntityLike>(
@@ -162,6 +166,19 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
       }
       attacker.preAttackFinishFrame = 0;
       continue;
+    }
+
+    // Source parity: Weapon::canFireWeapon() — LOS check.
+    // If attacker needs line of sight and terrain blocks it, move closer.
+    if (attacker.attackNeedsLineOfSight && attacker.category !== 'air') {
+      if (context.isAttackLineOfSightBlocked(attacker.x, attacker.z, target.x, target.z)) {
+        context.setEntityAimingWeaponStatus(attacker, false);
+        if (attacker.canMove) {
+          context.issueMoveTo(attacker.id, target.x, target.z, attackRange * 0.5);
+        }
+        attacker.preAttackFinishFrame = 0;
+        continue;
+      }
     }
 
     if (attacker.moving) {
