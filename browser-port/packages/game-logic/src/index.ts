@@ -11821,6 +11821,8 @@ export class GameLogicSubsystem implements Subsystem {
     const oclNames: string[] = [];
     const moduleBlocks = objectDef.blocks ?? [];
     for (const block of moduleBlocks) {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'DIE' && blockType !== 'BEHAVIOR') continue;
       const moduleType = block.name.split(/\s+/)[0] ?? '';
       const upperModuleType = moduleType.toUpperCase();
       // CreateObjectDie, SlowDeathBehavior, DestroyDie
@@ -11885,27 +11887,27 @@ export class GameLogicSubsystem implements Subsystem {
     const countRaw = readStringField(nugget.fields, ['Count', 'ObjectCount']);
     const count = Math.max(1, countRaw ? (parseInt(countRaw, 10) || 1) : 1);
 
-    // Parse Offset.
+    // Parse Offset as Coord3D (X Y Z in source).
     const offsetRaw = readStringField(nugget.fields, ['Offset']);
     let offsetX = 0;
+    let offsetY = 0;
     let offsetZ = 0;
     if (offsetRaw) {
       const parts = offsetRaw.trim().split(/\s+/);
-      if (parts.length >= 2) {
-        offsetX = parseFloat(parts[0]!) || 0;
-        offsetZ = parseFloat(parts[1]!) || 0;
-      }
+      if (parts.length >= 1) offsetX = parseFloat(parts[0]!) || 0;
+      if (parts.length >= 2) offsetY = parseFloat(parts[1]!) || 0;
+      if (parts.length >= 3) offsetZ = parseFloat(parts[2]!) || 0;
     }
 
     // Parse InheritsVeterancy.
     const inheritsVet = readStringField(nugget.fields, ['InheritsVeterancy'])?.toUpperCase() === 'YES';
 
     for (let i = 0; i < count; i++) {
-      // Pick a random object from the list.
-      const templateName = objectNames[Math.floor(Math.random() * objectNames.length)]!;
+      // Pick a random object from the list (deterministic via gameRandom).
+      const templateName = objectNames[this.gameRandom.nextRange(0, objectNames.length - 1)]!;
 
       // Apply offset with some scatter for multiple spawns.
-      const scatter = count > 1 ? (Math.random() - 0.5) * 4 : 0;
+      const scatter = count > 1 ? (this.gameRandom.nextFloat() - 0.5) * 4 : 0;
       const spawnX = sourceEntity.x + offsetX + scatter;
       const spawnZ = sourceEntity.z + offsetZ + scatter;
 
@@ -11913,7 +11915,7 @@ export class GameLogicSubsystem implements Subsystem {
         templateName,
         spawnX,
         spawnZ,
-        sourceEntity.rotationY + (Math.random() - 0.5) * 0.3,
+        sourceEntity.rotationY + (this.gameRandom.nextFloat() - 0.5) * 0.3,
         sourceEntity.side,
       );
 
