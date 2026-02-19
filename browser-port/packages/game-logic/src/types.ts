@@ -35,6 +35,8 @@ export interface RenderableEntityState {
   veterancyLevel: number;
   isStealthed: boolean;
   isDetected: boolean;
+  /** Source parity: ObjectShroudStatus — visibility from the local player's perspective. */
+  shroudStatus: 'CLEAR' | 'FOGGED' | 'SHROUDED';
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';

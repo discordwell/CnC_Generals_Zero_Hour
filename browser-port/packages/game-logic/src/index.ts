@@ -166,6 +166,7 @@ import {
 } from './experience.js';
 import {
   CELL_CLEAR,
+  CELL_FOGGED,
   CELL_SHROUDED,
   createEntityVisionState as createEntityVisionStateImpl,
   FogOfWarGrid,
@@ -1588,6 +1589,7 @@ export class GameLogicSubsystem implements Subsystem {
       veterancyLevel: entity.experienceState.currentLevel,
       isStealthed: entity.objectStatusFlags.has('STEALTHED'),
       isDetected: entity.objectStatusFlags.has('DETECTED'),
+      shroudStatus: this.resolveEntityShroudStatusForLocalPlayer(entity),
     };
   }
 
@@ -6283,6 +6285,17 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
+    // Source parity: AIUpdate.cpp line 4633 — fog of war affects human-player
+    // auto-targeting (UNFOGGED flag). Computer AI players can target through fog.
+    // Gate requires a fog grid and that the attacker has vision capability.
+    if (commandSource === 'AI' && this.fogOfWarGrid && attacker.visionRange > 0) {
+      const attackerSide = this.normalizeSide(attacker.side);
+      if (attackerSide && this.getSidePlayerType(attackerSide) === 'HUMAN'
+          && !this.isPositionVisible(attackerSide, target.x, target.z)) {
+        return false;
+      }
+    }
+
     // Source parity: WeaponSet.cpp line 673 — weapon anti-mask vs target anti-mask.
     // If no weapon on the attacker can engage this target type, reject.
     if (attacker.totalWeaponAntiMask !== 0) {
@@ -9671,6 +9684,37 @@ export class GameLogicSubsystem implements Subsystem {
    */
   isPositionVisible(side: string, worldX: number, worldZ: number): boolean {
     return this.getCellVisibility(side, worldX, worldZ) === CELL_CLEAR;
+  }
+
+  /**
+   * Source parity: ObjectShroudStatus — resolve entity visibility from local player's perspective.
+   * Own-side entities are always CLEAR. Enemies/neutrals use the fog of war grid.
+   * Source: Object.cpp getShroudedStatus, PartitionManager.cpp lines 1659-1690.
+   */
+  private resolveEntityShroudStatusForLocalPlayer(entity: MapEntity): 'CLEAR' | 'FOGGED' | 'SHROUDED' {
+    const localSide = this.playerSideByIndex.get(this.localPlayerIndex);
+    if (!localSide) return 'CLEAR';
+    // Source parity: KINDOF_ALWAYS_VISIBLE bypasses all shroud (Object.cpp line 1804).
+    if (entity.kindOf.has('ALWAYS_VISIBLE')) return 'CLEAR';
+    // Own entities always visible.
+    const entitySide = this.normalizeSide(entity.side);
+    if (entitySide && entitySide === localSide) return 'CLEAR';
+    // Allied entities always visible (source parity: allied shroud is shared).
+    if (entitySide && this.getTeamRelationshipBySides(localSide, entitySide) === RELATIONSHIP_ALLIES) {
+      return 'CLEAR';
+    }
+    const vis = this.getCellVisibility(localSide, entity.x, entity.z);
+    if (vis === CELL_CLEAR) return 'CLEAR';
+    if (vis === CELL_FOGGED) {
+      // Source parity: PartitionManager.cpp lines 1659-1676 — mobile enemies and
+      // mines vanish in fog. Only immobile structures previously seen show as ghosts.
+      const isImmobile = entity.kindOf.has('IMMOBILE');
+      if (!isImmobile || entity.kindOf.has('MINE')) {
+        return 'SHROUDED';
+      }
+      return 'FOGGED';
+    }
+    return 'SHROUDED';
   }
 
   /**
