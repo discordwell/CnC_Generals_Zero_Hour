@@ -86,8 +86,8 @@ export interface SkirmishAIContext<TEntity extends AIEntity> {
   /** Check if a dozer is currently constructing. */
   isDozerBusy(entity: TEntity): boolean;
 
-  /** Get power balance (produced minus consumed) for a side. Returns null if unavailable. */
-  getSidePowerBalance?(side: string): number | null;
+  /** Get power balance (produced minus consumed) for a side. */
+  getSidePowerBalance?(side: string): number;
 }
 
 // ──── Per-AI state ──────────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ function evaluatePower<TEntity extends AIEntity>(
   // If power balance API is available, check for low power and build power plants.
   if (!context.getSidePowerBalance) return;
   const powerBalance = context.getSidePowerBalance(state.side);
-  if (powerBalance === null || powerBalance >= 0) return;
+  if (powerBalance >= 0) return;
 
   // Low power — find an idle dozer and build a power plant.
   const credits = context.getSideCredits(state.side);
@@ -602,7 +602,7 @@ function evaluateCombat<TEntity extends AIEntity>(
     const target = targets[t]!;
     // Primary target gets remaining units; secondary targets get even split.
     const unitsForThisTarget = t === 0
-      ? idleCombat.length - unitsPerTarget * (targets.length - 1)
+      ? Math.max(1, idleCombat.length - unitsPerTarget * (targets.length - 1))
       : unitsPerTarget;
 
     for (let u = 0; u < unitsForThisTarget && unitIndex < idleCombat.length; u++) {
@@ -699,6 +699,10 @@ const BUILD_ORDER_KEYWORDS = [
   'PATRIOT', 'GATTLINGCANNON', 'BUNKER', 'STINGERMISSILE', 'TUNNELNETWORK',
 ];
 
+const DEFENSE_KEYWORDS = new Set([
+  'PATRIOT', 'GATTLINGCANNON', 'BUNKER', 'STINGERMISSILE', 'TUNNELNETWORK',
+]);
+
 function evaluateStructures<TEntity extends AIEntity>(
   state: SkirmishAIState,
   context: SkirmishAIContext<TEntity>,
@@ -740,7 +744,7 @@ function evaluateStructures<TEntity extends AIEntity>(
 
     // If we previously built this and it's gone, rebuild it (if we have credits).
     const isRebuild = state.builtStructureKeywords.has(keyword);
-    if (!isRebuild && keyword === 'PATRIOT' && credits < 800) {
+    if (!isRebuild && DEFENSE_KEYWORDS.has(keyword) && credits < 800) {
       continue; // Don't build defenses until we can afford them.
     }
 

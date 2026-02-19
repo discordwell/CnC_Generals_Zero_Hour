@@ -8308,7 +8308,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Apply periodic fire damage
       const prof = entity.flammableProfile;
       if (prof && prof.aflameDamageDelayFrames > 0 && this.frameCounter >= entity.flameDamageNextFrame) {
-        this.applyWeaponDamageAmount(entity.id, entity, prof.aflameDamageAmount, 'FLAME');
+        this.applyWeaponDamageAmount(null, entity, prof.aflameDamageAmount, 'FLAME');
         entity.flameDamageNextFrame = this.frameCounter + prof.aflameDamageDelayFrames;
       }
     }
