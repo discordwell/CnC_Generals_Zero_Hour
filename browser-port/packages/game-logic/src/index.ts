@@ -41,10 +41,6 @@ import {
   resolveScaledProjectileTravelSpeed as resolveScaledProjectileTravelSpeedImpl,
   resolveWeaponDelayFrames as resolveWeaponDelayFramesImpl,
   resolveWeaponPreAttackDelayFrames as resolveWeaponPreAttackDelayFramesImpl,
-  setEntityAimingWeaponStatus as setEntityAimingWeaponStatusImpl,
-  setEntityAttackStatus as setEntityAttackStatusImpl,
-  setEntityFiringWeaponStatus as setEntityFiringWeaponStatusImpl,
-  setEntityIgnoringStealthStatus as setEntityIgnoringStealthStatusImpl,
   updateWeaponIdleAutoReload as updateWeaponIdleAutoReloadImpl,
 } from './combat-helpers.js';
 import { isPassengerAllowedToFireFromContainingObject as isPassengerAllowedToFireFromContainingObjectImpl } from './combat-containment.js';
@@ -712,6 +708,16 @@ interface SpawnBehaviorState {
   initialBurstApplied: boolean;
 }
 
+/**
+ * Source parity: AI attack state machine sub-states.
+ * Maps to AIAttackState sub-machine (AIStates.cpp):
+ *   IDLE → no attack in progress
+ *   APPROACHING → AIAttackApproachTargetState / AIAttackPursueTargetState
+ *   AIMING → AIAttackAimAtTargetState
+ *   FIRING → AIAttackFireWeaponState
+ */
+type AttackSubState = 'IDLE' | 'APPROACHING' | 'AIMING' | 'FIRING';
+
 interface UnitProductionQueueEntry {
   type: 'UNIT';
   templateName: string;
@@ -858,6 +864,8 @@ interface MapEntity {
   attackTargetPosition: VectorXZ | null;
   attackOriginalVictimPosition: VectorXZ | null;
   attackCommandSource: AttackCommandSource;
+  /** Source parity: AI attack state machine sub-state. */
+  attackSubState: AttackSubState;
   nextAttackFrame: number;
   attackAmmoInClip: number;
   attackReloadFinishFrame: number;
@@ -2998,6 +3006,7 @@ export class GameLogicSubsystem implements Subsystem {
       attackTargetPosition: null,
       attackOriginalVictimPosition: null,
       attackCommandSource: 'AI',
+      attackSubState: 'IDLE',
       nextAttackFrame: 0,
       attackAmmoInClip: initialClipAmmo,
       attackReloadFinishFrame: 0,
@@ -10944,7 +10953,8 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
-    this.setEntityIgnoringStealthStatus(entity, false);
+    // Source parity: AIAttackState::onExit() — clear all attack flags on target release.
+    this.setEntityAttackStatus(entity, false);
     entity.preAttackFinishFrame = 0;
     // Source parity: releaseWeaponLock on attack exit — temporary locks are cleared.
     this.releaseTemporaryWeaponLock(entity);
@@ -10960,7 +10970,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
     entity.maxShotsRemaining = 0;
-    this.setEntityIgnoringStealthStatus(entity, false);
+    this.setEntityAttackStatus(entity, false);
     entity.preAttackFinishFrame = 0;
     this.releaseTemporaryWeaponLock(entity);
   }
@@ -11950,34 +11960,76 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private setEntityAttackStatus(entity: MapEntity, isAttacking: boolean): void {
-    // TODO(C&C source parity): move IS_ATTACKING ownership from this combat-loop subset
-    // to full AI state-machine enter/exit transitions (AIAttackState onEnter/onExit).
-    setEntityAttackStatusImpl(entity, isAttacking);
+    // Source parity: AIAttackState::onEnter() sets IS_ATTACKING and IGNORING_STEALTH
+    // (if weapon has ContinueAttackRange > 0). onExit() clears all attack flags.
+    if (isAttacking) {
+      if (entity.attackSubState === 'IDLE') {
+        // AIAttackState::onEnter()
+        entity.attackSubState = 'APPROACHING';
+        entity.objectStatusFlags.add('IS_ATTACKING');
+        // IGNORING_STEALTH is set at attack entry by command handlers
+        // (issueAttackEntity/issueFireWeapon); redundantly ensure it here for
+        // auto-acquired targets that bypass those handlers.
+        if (entity.attackWeapon && entity.attackWeapon.continueAttackRange > 0) {
+          entity.objectStatusFlags.add('IGNORING_STEALTH');
+        }
+      }
+    } else {
+      if (entity.attackSubState !== 'IDLE') {
+        // AIAttackState::onExit() — clear all attack status flags.
+        entity.attackSubState = 'IDLE';
+        entity.objectStatusFlags.delete('IS_ATTACKING');
+        entity.objectStatusFlags.delete('IS_AIMING_WEAPON');
+        entity.objectStatusFlags.delete('IS_FIRING_WEAPON');
+        entity.objectStatusFlags.delete('IGNORING_STEALTH');
+      }
+    }
   }
 
   private setEntityAimingWeaponStatus(entity: MapEntity, isAiming: boolean): void {
-    // Source parity subset: AIAttackAimAtTargetState::onEnter() sets
-    // OBJECT_STATUS_IS_AIMING_WEAPON and onExit() clears it.
-    // TODO(C&C source parity): move this from combat-loop range checks to full
-    // attack state-machine transitions (pursue/approach/aim/fire).
-    setEntityAimingWeaponStatusImpl(entity, isAiming);
+    // Source parity: AIAttackAimAtTargetState::onEnter() sets IS_AIMING_WEAPON,
+    // onExit() clears it.
+    if (isAiming) {
+      if (entity.attackSubState !== 'IDLE') {
+        entity.attackSubState = 'AIMING';
+        entity.objectStatusFlags.add('IS_AIMING_WEAPON');
+      }
+    } else {
+      if (entity.attackSubState === 'AIMING') {
+        entity.attackSubState = 'APPROACHING';
+        entity.objectStatusFlags.delete('IS_AIMING_WEAPON');
+      }
+    }
   }
 
   private setEntityFiringWeaponStatus(entity: MapEntity, isFiring: boolean): void {
-    // Source parity subset: AIAttackFireWeaponState::onEnter() sets
-    // OBJECT_STATUS_IS_FIRING_WEAPON and onExit() clears it.
-    // TODO(C&C source parity): drive this from explicit fire-state enter/exit
-    // instead of one-frame fire pulses in updateCombat().
-    setEntityFiringWeaponStatusImpl(entity, isFiring);
+    // Source parity: AIAttackFireWeaponState::onEnter() sets IS_FIRING_WEAPON,
+    // onExit() clears IS_FIRING_WEAPON and IGNORING_STEALTH.
+    if (isFiring) {
+      if (entity.attackSubState !== 'IDLE') {
+        entity.attackSubState = 'FIRING';
+        entity.objectStatusFlags.add('IS_FIRING_WEAPON');
+      }
+    } else {
+      if (entity.attackSubState === 'FIRING') {
+        // AIAttackFireWeaponState::onExit() → AIAttackAimAtTargetState::onEnter()
+        entity.attackSubState = 'AIMING';
+        entity.objectStatusFlags.delete('IS_FIRING_WEAPON');
+        entity.objectStatusFlags.delete('IGNORING_STEALTH');
+        entity.objectStatusFlags.add('IS_AIMING_WEAPON');
+      }
+    }
   }
 
   private setEntityIgnoringStealthStatus(entity: MapEntity, isIgnoringStealth: boolean): void {
-    // Source parity subset: AIAttackState::onEnter() sets OBJECT_STATUS_IGNORING_STEALTH
-    // when current weapon has ContinueAttackRange > 0, and AIAttackFireWeaponState::update()
-    // clears it after each fired shot.
-    // TODO(C&C source parity): drive this from full attack-state enter/exit and command-source
-    // flow (including attack-position mine clearing and force-attack exceptions).
-    setEntityIgnoringStealthStatusImpl(entity, isIgnoringStealth);
+    // Source parity: IGNORING_STEALTH is set by attack-state onEnter() (ContinueAttackRange > 0)
+    // and cleared by fire-state onExit() and attack-state onExit().
+    // Direct flag manipulation for compatibility with combat-update call sites.
+    if (isIgnoringStealth) {
+      entity.objectStatusFlags.add('IGNORING_STEALTH');
+    } else {
+      entity.objectStatusFlags.delete('IGNORING_STEALTH');
+    }
   }
 
   private refreshEntitySneakyMissWindow(entity: MapEntity): void {
@@ -12560,6 +12612,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    entity.attackSubState = 'IDLE';
     this.pendingDyingRenderableStates.set(entityId, {
       state: this.makeRenderableEntityState(entity),
       expireFrame: this.frameCounter + 1,
