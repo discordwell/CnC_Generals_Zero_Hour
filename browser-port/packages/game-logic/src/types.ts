@@ -477,4 +477,10 @@ export interface GameLogicConfig {
    * Mirrors TheGlobalData::m_sellPercentage from source.
    */
   sellPercentage: number;
+  /**
+   * Source parity: GameInfo::m_superweaponRestriction — per-player limit
+   * for objects with MaxSimultaneousOfType = DeterminedBySuperweaponRestriction.
+   * 0 = no restriction (unlimited), typically 1 when enabled in game lobby.
+   */
+  superweaponRestriction: number;
 }

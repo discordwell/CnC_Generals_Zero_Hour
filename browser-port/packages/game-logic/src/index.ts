@@ -1066,6 +1066,7 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
   terrainSnapSpeed: 6,
   attackUsesLineOfSight: true,
   sellPercentage: SOURCE_DEFAULT_SELL_PERCENTAGE,
+  superweaponRestriction: 0,
 };
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
@@ -10364,7 +10365,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveMaxSimultaneousOfType(objectDef: ObjectDef): number {
-    return resolveMaxSimultaneousOfTypeImpl(objectDef);
+    return resolveMaxSimultaneousOfTypeImpl(objectDef, this.config.superweaponRestriction);
   }
 
   private isStructureObjectDef(objectDef: ObjectDef): boolean {

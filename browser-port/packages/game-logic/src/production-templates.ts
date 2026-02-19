@@ -25,11 +25,22 @@ function normalizeKindOf(kindOf: readonly string[] | undefined): Set<string> {
   return normalized;
 }
 
-export function resolveMaxSimultaneousOfType(objectDef: Pick<ObjectDef, 'fields'>): number {
+/**
+ * Source parity: ThingTemplate::getMaxSimultaneousOfType() — resolve the
+ * per-player build limit for this object type. When the INI keyword
+ * `DeterminedBySuperweaponRestriction` is used, the limit comes from
+ * GameLogic::getSuperweaponRestriction() (cached from GameInfo at game start).
+ * @param superweaponRestriction The session's superweapon restriction value (0 = unlimited).
+ */
+export function resolveMaxSimultaneousOfType(
+  objectDef: Pick<ObjectDef, 'fields'>,
+  superweaponRestriction: number,
+): number {
   const maxKeyword = readStringField(objectDef.fields, ['MaxSimultaneousOfType'])?.trim().toUpperCase();
   if (maxKeyword === 'DETERMINEDBYSUPERWEAPONRESTRICTION') {
-    // TODO(C&C source parity): wire GameInfo superweapon restrictions into max-simultaneous evaluation.
-    return 0;
+    // Source parity: TheGameLogic->getSuperweaponRestriction().
+    // 0 means no restriction (unlimited), non-zero is the cap.
+    return Math.max(0, Math.trunc(superweaponRestriction));
   }
 
   const maxRaw = readNumericField(objectDef.fields, ['MaxSimultaneousOfType']) ?? 0;
