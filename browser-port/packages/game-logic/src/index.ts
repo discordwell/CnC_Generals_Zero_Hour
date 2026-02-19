@@ -519,6 +519,26 @@ const BEZIER_ARC_LENGTH_TOLERANCE = 1.0;
  */
 const AUTO_TARGET_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE * 2;
 
+/**
+ * Source parity: TAiData guard parameters. Real values come from AIData.ini;
+ * these defaults match the typical Zero Hour configuration.
+ */
+const GUARD_ENEMY_SCAN_RATE_FRAMES = Math.trunc(LOGIC_FRAME_RATE / 2); // 15 frames = 0.5s
+const GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE; // 30 frames = 1s
+const GUARD_INNER_MODIFIER_HUMAN = 1.0;
+const GUARD_OUTER_MODIFIER_HUMAN = 1.5;
+const GUARD_INNER_MODIFIER_AI = 1.0;
+const GUARD_OUTER_MODIFIER_AI = 2.0;
+const GUARD_CHASE_UNIT_FRAMES = LOGIC_FRAME_RATE * 10; // 300 frames = 10s
+
+/**
+ * Source parity: AIGuardMachine state IDs.
+ * IDLE: sitting at guard point, periodically scanning for enemies.
+ * PURSUING: actively chasing/fighting an enemy within the outer range.
+ * RETURNING: walking back to the guard point after losing/killing target.
+ */
+type GuardState = 'NONE' | 'IDLE' | 'PURSUING' | 'RETURNING';
+
 interface LocomotorSetProfile {
   surfaceMask: number;
   downhillOnly: boolean;
@@ -1084,6 +1104,26 @@ interface MapEntity {
    */
   autoTargetScanNextFrame: number;
 
+  // ── Source parity: AIGuardMachine — guard position/object state ──
+  /** Current guard state machine phase. 'NONE' = not guarding. */
+  guardState: GuardState;
+  /** Guard point X (for GUARDTARGET_LOCATION) or last-known guarded object X. */
+  guardPositionX: number;
+  /** Guard point Z (for GUARDTARGET_LOCATION) or last-known guarded object Z. */
+  guardPositionZ: number;
+  /** Entity ID being guarded (for GUARDTARGET_OBJECT). 0 = guarding a position. */
+  guardObjectId: number;
+  /** Guard behavior variant (NORMAL / GUARD_WITHOUT_PURSUIT / GUARD_FLYING_UNITS_ONLY). */
+  guardMode: number;
+  /** Frame at which next guard-mode enemy scan is allowed. */
+  guardNextScanFrame: number;
+  /** Frame at which the outer-range chase expires (unit forced to return). */
+  guardChaseExpireFrame: number;
+  /** Inner guard range (vision * modifier). */
+  guardInnerRange: number;
+  /** Outer guard range (vision * modifier, pursuit limit). */
+  guardOuterRange: number;
+
   // ── Source parity: PoisonedBehavior — per-entity poison DoT state ──
   /** Damage amount per poison tick (0 = not poisoned). */
   poisonDamageAmount: number;
@@ -1608,6 +1648,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSpawnBehaviors();
     this.updateCombat();
     this.updateIdleAutoTargeting();
+    this.updateGuardBehavior();
     this.updateEntityMovement(dt);
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
@@ -3222,6 +3263,16 @@ export class GameLogicSubsystem implements Subsystem {
       soleHealingBenefactorId: null,
       soleHealingBenefactorExpirationFrame: 0,
       autoTargetScanNextFrame: this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES,
+      // Guard state
+      guardState: 'NONE' as GuardState,
+      guardPositionX: 0,
+      guardPositionZ: 0,
+      guardObjectId: 0,
+      guardMode: 0,
+      guardNextScanFrame: 0,
+      guardChaseExpireFrame: 0,
+      guardInnerRange: 0,
+      guardOuterRange: 0,
       // Poison DoT state
       poisonDamageAmount: 0,
       poisonNextDamageFrame: 0,
@@ -6805,11 +6856,12 @@ export class GameLogicSubsystem implements Subsystem {
       case 'guardPosition':
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
-        this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
+        this.initGuardPosition(command.entityId, command.targetX, command.targetZ, command.guardMode);
         return;
       case 'guardObject':
         this.cancelEntityCommandPathActions(command.entityId);
-        this.issueAttackEntity(command.entityId, command.targetEntityId, 'PLAYER');
+        this.clearAttackTarget(command.entityId);
+        this.initGuardObject(command.entityId, command.targetEntityId, command.guardMode);
         return;
       case 'setRallyPoint':
         this.setEntityRallyPoint(command.entityId, command.targetX, command.targetZ);
@@ -6847,11 +6899,11 @@ export class GameLogicSubsystem implements Subsystem {
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
-        // Source parity: explicit stop resets auto-target scan timer to prevent
-        // immediate re-engagement. Matches C++ AIIdleState re-entry delay.
         const stopEntity = this.spawnedEntities.get(command.entityId);
         if (stopEntity) {
+          // Source parity: explicit stop resets auto-target scan timer and clears guard state.
           stopEntity.autoTargetScanNextFrame = this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES;
+          stopEntity.guardState = 'NONE';
         }
         return;
       }
@@ -12092,6 +12144,11 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      // Guarding entities use their own scan logic in updateGuardBehavior().
+      if (entity.guardState !== 'NONE') {
+        continue;
+      }
+
       // Source parity: stealthed units do not auto-acquire targets (would break stealth).
       // C++ gates this on AutoAcquireEnemiesWhenIdle / AAS_Idle_Stealthed flag.
       if (entity.objectStatusFlags.has('STEALTHED')) {
@@ -12153,6 +12210,315 @@ export class GameLogicSubsystem implements Subsystem {
         this.issueAttackEntity(entity.id, bestTarget.id, 'AI');
       }
     }
+  }
+
+  // ── Source parity: AIGuardMachine — guard position/object behavior ──
+
+  /**
+   * Initialize guard-position mode for an entity. Moves it to the guard point
+   * and enters the RETURNING state (mirrors C++ AIGuardState::onEnter → setState(AI_GUARD_RETURN)).
+   */
+  private initGuardPosition(entityId: number, targetX: number, targetZ: number, guardMode: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return;
+    }
+
+    const isHuman = this.getSidePlayerType(entity.side) === 'HUMAN';
+    const innerMod = isHuman ? GUARD_INNER_MODIFIER_HUMAN : GUARD_INNER_MODIFIER_AI;
+    const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
+
+    entity.guardState = 'RETURNING';
+    entity.guardPositionX = targetX;
+    entity.guardPositionZ = targetZ;
+    entity.guardObjectId = 0;
+    entity.guardMode = guardMode;
+    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardChaseExpireFrame = 0;
+    entity.guardInnerRange = Math.max(0, entity.visionRange * innerMod);
+    entity.guardOuterRange = Math.max(0, entity.visionRange * outerMod);
+
+    // Move to the guard point.
+    this.issueMoveTo(entityId, targetX, targetZ);
+  }
+
+  /**
+   * Initialize guard-object mode for an entity. The entity follows and protects
+   * the target object, treating its position as a dynamic guard point.
+   */
+  private initGuardObject(entityId: number, targetObjectId: number, guardMode: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return;
+    }
+    const target = this.spawnedEntities.get(targetObjectId);
+    if (!target || target.destroyed) {
+      return;
+    }
+
+    const isHuman = this.getSidePlayerType(entity.side) === 'HUMAN';
+    const innerMod = isHuman ? GUARD_INNER_MODIFIER_HUMAN : GUARD_INNER_MODIFIER_AI;
+    const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
+
+    entity.guardState = 'RETURNING';
+    entity.guardPositionX = target.x;
+    entity.guardPositionZ = target.z;
+    entity.guardObjectId = targetObjectId;
+    entity.guardMode = guardMode;
+    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardChaseExpireFrame = 0;
+    entity.guardInnerRange = Math.max(0, entity.visionRange * innerMod);
+    entity.guardOuterRange = Math.max(0, entity.visionRange * outerMod);
+
+    // Move to the guarded object.
+    this.issueMoveTo(entityId, target.x, target.z);
+  }
+
+  /**
+   * Find the closest attackable enemy within the given range of a position.
+   * Source parity: AIGuardMachine::lookForInnerTarget().
+   */
+  private findGuardTarget(
+    entity: MapEntity,
+    centerX: number,
+    centerZ: number,
+    range: number,
+  ): MapEntity | null {
+    const rangeSqr = range * range;
+    let bestTarget: MapEntity | null = null;
+    let bestDistanceSqr = Number.POSITIVE_INFINITY;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || !candidate.canTakeDamage) {
+        continue;
+      }
+      if (candidate.id === entity.id) {
+        continue;
+      }
+      if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+      // Source parity: GUARDMODE_GUARD_FLYING_UNITS_ONLY — only target air units.
+      if (entity.guardMode === 2 && candidate.category !== 'air') {
+        continue;
+      }
+      if (
+        candidate.objectStatusFlags.has('STEALTHED') &&
+        !candidate.objectStatusFlags.has('DETECTED')
+      ) {
+        continue;
+      }
+      if (!this.canAttackerTargetEntity(entity, candidate, 'AI')) {
+        continue;
+      }
+      const dx = candidate.x - centerX;
+      const dz = candidate.z - centerZ;
+      const distanceSqr = dx * dx + dz * dz;
+      if (distanceSqr > rangeSqr) {
+        continue;
+      }
+      if (distanceSqr < bestDistanceSqr) {
+        bestTarget = candidate;
+        bestDistanceSqr = distanceSqr;
+      }
+    }
+
+    return bestTarget;
+  }
+
+  /**
+   * Resolve the current guard anchor position. For guard-object mode, this
+   * follows the guarded entity. For guard-position, returns the fixed point.
+   */
+  private resolveGuardAnchorPosition(entity: MapEntity): { x: number; z: number } | null {
+    if (entity.guardObjectId !== 0) {
+      const guarded = this.spawnedEntities.get(entity.guardObjectId);
+      if (!guarded || guarded.destroyed) {
+        // Guarded object is gone — drop guard state.
+        entity.guardState = 'NONE';
+        return null;
+      }
+      entity.guardPositionX = guarded.x;
+      entity.guardPositionZ = guarded.z;
+    }
+    return { x: entity.guardPositionX, z: entity.guardPositionZ };
+  }
+
+  /**
+   * Source parity: AIGuardMachine state updates — runs the guard state machine
+   * for each guarding entity. States: IDLE → PURSUING → RETURNING → IDLE.
+   */
+  private updateGuardBehavior(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.guardState === 'NONE') {
+        continue;
+      }
+
+      const anchor = this.resolveGuardAnchorPosition(entity);
+      if (!anchor) {
+        continue;
+      }
+
+      switch (entity.guardState) {
+        case 'IDLE':
+          this.updateGuardIdle(entity, anchor);
+          break;
+        case 'PURSUING':
+          this.updateGuardPursuing(entity, anchor);
+          break;
+        case 'RETURNING':
+          this.updateGuardReturning(entity, anchor);
+          break;
+      }
+    }
+  }
+
+  /**
+   * Guard IDLE state: entity is at the guard point. Periodically scan for enemies
+   * within the inner guard range. If an enemy is found, engage and transition to PURSUING.
+   * Source parity: AIGuardIdleState — scan rate is m_guardEnemyScanRate (0.5s).
+   */
+  private updateGuardIdle(entity: MapEntity, anchor: { x: number; z: number }): void {
+    // Source parity: if guarding an object that has moved, return to it.
+    if (entity.guardObjectId !== 0) {
+      const dx = entity.x - anchor.x;
+      const dz = entity.z - anchor.z;
+      const followThreshold = PATHFIND_CELL_SIZE * 4;
+      if (dx * dx + dz * dz > followThreshold * followThreshold) {
+        entity.guardState = 'RETURNING';
+        entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+        this.issueMoveTo(entity.id, anchor.x, anchor.z);
+        return;
+      }
+    }
+
+    // Throttle scanning.
+    if (this.frameCounter < entity.guardNextScanFrame) {
+      return;
+    }
+    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_SCAN_RATE_FRAMES;
+
+    // Source parity: stealthed guarders don't auto-acquire.
+    if (entity.objectStatusFlags.has('STEALTHED')) {
+      return;
+    }
+
+    if (!entity.attackWeapon) {
+      return;
+    }
+
+    const target = this.findGuardTarget(entity, anchor.x, anchor.z, entity.guardInnerRange);
+    if (target) {
+      // Source parity: GUARDMODE_GUARD_WITHOUT_PURSUIT — attack only within inner range, don't chase.
+      entity.guardState = 'PURSUING';
+      entity.guardChaseExpireFrame = this.frameCounter + GUARD_CHASE_UNIT_FRAMES;
+      this.issueAttackEntity(entity.id, target.id, 'AI');
+    }
+  }
+
+  /**
+   * Guard PURSUING state: entity is chasing an enemy. Monitor for:
+   * 1. Target dies/becomes invalid → RETURNING
+   * 2. Target escapes outer range → RETURNING
+   * 3. Chase timer expires → RETURNING
+   * 4. GUARDMODE_GUARD_WITHOUT_PURSUIT — immediately return after inner-range target lost
+   * Source parity: AIGuardOuterState.
+   */
+  private updateGuardPursuing(entity: MapEntity, anchor: { x: number; z: number }): void {
+    const targetId = entity.attackTargetEntityId;
+    const target = targetId !== null ? this.spawnedEntities.get(targetId) ?? null : null;
+
+    // Target gone — return to guard point.
+    if (!target || target.destroyed) {
+      this.transitionGuardToReturning(entity, anchor);
+      return;
+    }
+
+    // GUARD_WITHOUT_PURSUIT: no outer-range chase, return immediately if target escapes inner range.
+    if (entity.guardMode === 1) {
+      const dx = target.x - anchor.x;
+      const dz = target.z - anchor.z;
+      const innerRangeSqr = entity.guardInnerRange * entity.guardInnerRange;
+      if (dx * dx + dz * dz > innerRangeSqr) {
+        this.transitionGuardToReturning(entity, anchor);
+        return;
+      }
+      return;
+    }
+
+    // Source parity: AI_GUARD_INNER fights without a time limit inside inner range.
+    // AI_GUARD_OUTER starts a chase timer when the target is outside inner range.
+    const dx = target.x - anchor.x;
+    const dz = target.z - anchor.z;
+    const targetDistSqr = dx * dx + dz * dz;
+    const innerRangeSqr = entity.guardInnerRange * entity.guardInnerRange;
+    const outerRangeSqr = entity.guardOuterRange * entity.guardOuterRange;
+
+    if (targetDistSqr <= innerRangeSqr) {
+      // Target is in inner range — fight indefinitely, reset chase timer.
+      entity.guardChaseExpireFrame = this.frameCounter + GUARD_CHASE_UNIT_FRAMES;
+      return;
+    }
+
+    // Target is outside inner range — check outer range and chase timer.
+    if (targetDistSqr > outerRangeSqr) {
+      this.transitionGuardToReturning(entity, anchor);
+      return;
+    }
+
+    if (GUARD_CHASE_UNIT_FRAMES > 0 && this.frameCounter >= entity.guardChaseExpireFrame) {
+      this.transitionGuardToReturning(entity, anchor);
+      return;
+    }
+  }
+
+  /**
+   * Guard RETURNING state: entity is walking back to the guard point.
+   * Periodically scan for enemies along the way (source parity: m_guardEnemyReturnScanRate).
+   * Transition to IDLE once arrived.
+   */
+  private updateGuardReturning(entity: MapEntity, anchor: { x: number; z: number }): void {
+    // Check if we've arrived at the guard point.
+    if (!entity.moving) {
+      const dx = entity.x - anchor.x;
+      const dz = entity.z - anchor.z;
+      const arrivalThreshold = PATHFIND_CELL_SIZE * 2;
+      if (dx * dx + dz * dz <= arrivalThreshold * arrivalThreshold) {
+        entity.guardState = 'IDLE';
+        entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_SCAN_RATE_FRAMES;
+        return;
+      }
+      // Not moving but not at guard point — re-issue move.
+      this.issueMoveTo(entity.id, anchor.x, anchor.z);
+    }
+
+    // Source parity: scan for enemies during return at a slower rate.
+    if (this.frameCounter < entity.guardNextScanFrame) {
+      return;
+    }
+    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+
+    if (entity.objectStatusFlags.has('STEALTHED') || !entity.attackWeapon) {
+      return;
+    }
+
+    const target = this.findGuardTarget(entity, anchor.x, anchor.z, entity.guardInnerRange);
+    if (target) {
+      entity.guardState = 'PURSUING';
+      entity.guardChaseExpireFrame = this.frameCounter + GUARD_CHASE_UNIT_FRAMES;
+      this.issueAttackEntity(entity.id, target.id, 'AI');
+    }
+  }
+
+  /**
+   * Transition a guarding entity back to RETURNING state: clear its attack target,
+   * stop it, and issue a move back to the guard anchor position.
+   */
+  private transitionGuardToReturning(entity: MapEntity, anchor: { x: number; z: number }): void {
+    this.clearAttackTarget(entity.id);
+    entity.guardState = 'RETURNING';
+    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    this.issueMoveTo(entity.id, anchor.x, anchor.z);
   }
 
   /**
