@@ -342,6 +342,15 @@ const WEAPON_COLLIDE_SMALL_MISSILES = 0x0040;
 const WEAPON_COLLIDE_BALLISTIC_MISSILES = 0x0080;
 const WEAPON_COLLIDE_CONTROLLED_STRUCTURES = 0x0100;
 const WEAPON_COLLIDE_DEFAULT_MASK = WEAPON_COLLIDE_STRUCTURES;
+// Source parity: WeaponAntiMaskType — weapon targeting category bitmask.
+const WEAPON_ANTI_AIRBORNE_VEHICLE = 0x01;
+const WEAPON_ANTI_GROUND = 0x02;
+const WEAPON_ANTI_PROJECTILE = 0x04;
+const WEAPON_ANTI_SMALL_MISSILE = 0x08;
+const WEAPON_ANTI_MINE = 0x10;
+const WEAPON_ANTI_AIRBORNE_INFANTRY = 0x20;
+const WEAPON_ANTI_BALLISTIC_MISSILE = 0x40;
+const WEAPON_ANTI_PARACHUTE = 0x80;
 const HUGE_DAMAGE_AMOUNT = 1_000_000_000;
 const ARMOR_SET_FLAG_VETERAN = 1 << 0;
 const ARMOR_SET_FLAG_ELITE = 1 << 1;
@@ -484,6 +493,7 @@ interface AttackWeaponProfile {
   preAttackType: WeaponPrefireTypeName;
   minDelayFrames: number;
   maxDelayFrames: number;
+  antiMask: number;
 }
 
 interface WeaponTemplateSetProfile {
@@ -820,6 +830,7 @@ interface MapEntity {
   garrisonContainerId: number | null;
   helixPortableRiderId: number | null;
   largestWeaponRange: number;
+  totalWeaponAntiMask: number;
   locomotorSets: Map<string, LocomotorSetProfile>;
   completedUpgrades: Set<string>;
   locomotorUpgradeTriggers: Set<string>;
@@ -2820,6 +2831,9 @@ export class GameLogicSubsystem implements Subsystem {
     const bodyStats = this.resolveBodyStats(objectDef);
     const energyBonus = readNumericField(objectDef?.fields ?? {}, ['EnergyBonus']) ?? 0;
     const largestWeaponRange = this.resolveLargestWeaponRange(objectDef, iniDataRegistry);
+    const totalWeaponAntiMask = this.resolveTotalWeaponAntiMaskForSetSelection(
+      weaponTemplateSets, 0, iniDataRegistry,
+    );
     const armorDamageCoefficients = this.resolveArmorDamageCoefficientsForSetSelection(
       armorTemplateSets,
       0,
@@ -2943,6 +2957,7 @@ export class GameLogicSubsystem implements Subsystem {
       obstacleGeometry,
       obstacleFootprint,
       largestWeaponRange,
+      totalWeaponAntiMask,
       ignoredMovementObstacleId: null,
       movePath: [],
       pathIndex: 0,
@@ -3524,6 +3539,17 @@ export class GameLogicSubsystem implements Subsystem {
     const maxDelayMs = delayValues[1] ?? minDelayMs;
     const minDelayFrames = this.msToLogicFrames(minDelayMs);
     const maxDelayFrames = this.msToLogicFrames(maxDelayMs);
+    // Source parity: Weapon::m_antiMask — WeaponTemplate::clear() pre-seeds WEAPON_ANTI_GROUND
+    // before INI parsing, so all weapons can target ground by default unless explicitly cleared.
+    let antiMask = WEAPON_ANTI_GROUND;
+    if (readBooleanField(weaponDef.fields, ['AntiAirborneVehicle'])) antiMask |= WEAPON_ANTI_AIRBORNE_VEHICLE;
+    if (readBooleanField(weaponDef.fields, ['AntiGround']) === false) antiMask &= ~WEAPON_ANTI_GROUND;
+    if (readBooleanField(weaponDef.fields, ['AntiProjectile'])) antiMask |= WEAPON_ANTI_PROJECTILE;
+    if (readBooleanField(weaponDef.fields, ['AntiSmallMissile'])) antiMask |= WEAPON_ANTI_SMALL_MISSILE;
+    if (readBooleanField(weaponDef.fields, ['AntiMine'])) antiMask |= WEAPON_ANTI_MINE;
+    if (readBooleanField(weaponDef.fields, ['AntiAirborneInfantry'])) antiMask |= WEAPON_ANTI_AIRBORNE_INFANTRY;
+    if (readBooleanField(weaponDef.fields, ['AntiBallisticMissile'])) antiMask |= WEAPON_ANTI_BALLISTIC_MISSILE;
+    if (readBooleanField(weaponDef.fields, ['AntiParachute'])) antiMask |= WEAPON_ANTI_PARACHUTE;
 
     if (attackRange <= 0 || primaryDamage <= 0) {
       return null;
@@ -3559,6 +3585,7 @@ export class GameLogicSubsystem implements Subsystem {
       preAttackType,
       minDelayFrames: Math.max(0, Math.min(minDelayFrames, maxDelayFrames)),
       maxDelayFrames: Math.max(minDelayFrames, maxDelayFrames),
+      antiMask,
     };
   }
 
@@ -3648,6 +3675,54 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return largestWeaponRange;
+  }
+
+  /**
+   * Source parity: WeaponSet::m_totalAntiMask — bitwise OR of all weapon antiMasks in the
+   * selected weapon set. Used for fast rejection in getAbleToAttackSpecificObject.
+   */
+  private resolveTotalWeaponAntiMaskForSetSelection(
+    weaponTemplateSets: readonly WeaponTemplateSetProfile[],
+    weaponSetFlagsMask: number,
+    iniDataRegistry: IniDataRegistry,
+    forcedWeaponSlot: number | null = null,
+  ): number {
+    const selectedSet = this.selectBestSetByConditions(weaponTemplateSets, weaponSetFlagsMask);
+    if (!selectedSet) {
+      return 0;
+    }
+
+    const normalizedForcedWeaponSlot = this.normalizeWeaponSlot(forcedWeaponSlot);
+    if (normalizedForcedWeaponSlot !== null) {
+      const weaponName = selectedSet.weaponNamesBySlot[normalizedForcedWeaponSlot];
+      if (weaponName) {
+        const weapon = findWeaponDefByName(iniDataRegistry, weaponName);
+        if (weapon) {
+          const profile = this.resolveWeaponProfileFromDef(weapon);
+          if (profile) {
+            return profile.antiMask;
+          }
+        }
+      }
+      return 0;
+    }
+
+    let totalAntiMask = 0;
+    for (const weaponName of selectedSet.weaponNamesBySlot) {
+      if (!weaponName) {
+        continue;
+      }
+      const weapon = findWeaponDefByName(iniDataRegistry, weaponName);
+      if (!weapon) {
+        continue;
+      }
+      const profile = this.resolveWeaponProfileFromDef(weapon);
+      if (profile) {
+        totalAntiMask |= profile.antiMask;
+      }
+    }
+
+    return totalAntiMask;
   }
 
   private resolveArmorDamageCoefficientsForSetSelection(
@@ -5434,10 +5509,72 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // TODO(C&C source parity): mirror full WeaponSet::getAbleToAttackSpecificObject rules
-    // (force-attack/same-owner exceptions, disguised disguiser handling,
-    // full Object::isOffMap private-status parity, and fog/shroud constraints).
+    // Source parity: WeaponSet.cpp line 550 — cannot attack targets inside enclosing containers.
+    if (this.isEntityInEnclosingContainer(target)) {
+      return false;
+    }
+
+    // Source parity: WeaponSet.cpp line 673 — weapon anti-mask vs target anti-mask.
+    // If no weapon on the attacker can engage this target type, reject.
+    if (attacker.totalWeaponAntiMask !== 0) {
+      const targetAntiMask = this.resolveTargetAntiMask(target, targetKindOf);
+      if (targetAntiMask !== 0 && (attacker.totalWeaponAntiMask & targetAntiMask) === 0) {
+        return false;
+      }
+    }
+
     return true;
+  }
+
+  /**
+   * Source parity: WeaponSet.cpp getVictimAntiMask — compute which weapon anti-mask bits
+   * a target entity matches based on its kindOf flags and airborne status.
+   */
+  private resolveTargetAntiMask(target: MapEntity, targetKindOf: ReadonlySet<string>): number {
+    // Source parity: WeaponSet.cpp getVictimAntiMask — priority order matches C++ exactly.
+    if (targetKindOf.has('SMALL_MISSILE')) {
+      return WEAPON_ANTI_SMALL_MISSILE;
+    }
+    if (targetKindOf.has('BALLISTIC_MISSILE')) {
+      return WEAPON_ANTI_BALLISTIC_MISSILE;
+    }
+    if (targetKindOf.has('PROJECTILE')) {
+      return WEAPON_ANTI_PROJECTILE;
+    }
+    if (targetKindOf.has('MINE') || targetKindOf.has('DEMOTRAP')) {
+      return WEAPON_ANTI_MINE | WEAPON_ANTI_GROUND;
+    }
+    // Source parity: Object::isAirborneTarget checks OBJECT_STATUS_AIRBORNE_TARGET.
+    if (this.entityHasObjectStatus(target, 'AIRBORNE_TARGET') || target.category === 'air') {
+      if (targetKindOf.has('VEHICLE')) {
+        return WEAPON_ANTI_AIRBORNE_VEHICLE;
+      }
+      if (targetKindOf.has('INFANTRY')) {
+        return WEAPON_ANTI_AIRBORNE_INFANTRY;
+      }
+      if (targetKindOf.has('PARACHUTE')) {
+        return WEAPON_ANTI_PARACHUTE;
+      }
+      // Airborne but not a recognized sub-type — unattackable in practice.
+      return 0;
+    }
+    return WEAPON_ANTI_GROUND;
+  }
+
+  /**
+   * Source parity: Contain::isEnclosingContainerFor — garrisoned and transport-carried
+   * entities are shielded from direct attack.
+   */
+  private isEntityInEnclosingContainer(entity: MapEntity): boolean {
+    if (entity.garrisonContainerId !== null) return true;
+    if (entity.helixCarrierId !== null) {
+      // Source parity: HelixContain::isEnclosingContainerFor returns FALSE for the
+      // portable structure rider — it sits visibly on top and is attackable.
+      const carrier = this.spawnedEntities.get(entity.helixCarrierId);
+      if (carrier?.helixPortableRiderId === entity.id) return false;
+      return true;
+    }
+    return false;
   }
 
   private refreshEntityCombatProfiles(entity: MapEntity): void {
@@ -5454,6 +5591,12 @@ export class GameLogicSubsystem implements Subsystem {
       entity.forcedWeaponSlot,
     );
     entity.largestWeaponRange = this.resolveLargestWeaponRangeForSetSelection(
+      entity.weaponTemplateSets,
+      entity.weaponSetFlagsMask,
+      registry,
+      entity.forcedWeaponSlot,
+    );
+    entity.totalWeaponAntiMask = this.resolveTotalWeaponAntiMaskForSetSelection(
       entity.weaponTemplateSets,
       entity.weaponSetFlagsMask,
       registry,
