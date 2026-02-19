@@ -653,6 +653,19 @@ interface ContainProfile {
   garrisonCapacity: number;
 }
 
+/**
+ * Source parity: TurretAIData — parsed turret module profile controlling weapon slot availability.
+ * (GeneralsMD/Code/GameEngine/Include/GameLogic/TurretAI.h)
+ */
+interface TurretProfile {
+  /** Bitmask of weapon slots controlled by this turret (1 << slotIndex). */
+  controlledWeaponSlotsMask: number;
+  /** Whether this turret starts disabled (from INI InitiallyDisabled). */
+  initiallyDisabled: boolean;
+  /** Runtime enabled state. Toggled by deploy actions, mode changes, upgrades. */
+  enabled: boolean;
+}
+
 interface JetAISneakyProfile {
   sneakyOffsetWhenAttacking: number;
   attackersMissPersistFrames: number;
@@ -811,6 +824,8 @@ interface MapEntity {
   forcedWeaponSlot: number | null;
   weaponLockStatus: 'NOT_LOCKED' | 'LOCKED_TEMPORARILY' | 'LOCKED_PERMANENTLY';
   maxShotsRemaining: number;
+  /** Source parity: TurretAI modules controlling weapon slot availability. */
+  turretProfiles: TurretProfile[];
   attackScatterTargetsUnused: number[];
   preAttackFinishFrame: number;
   consecutiveShotsTargetEntityId: number | null;
@@ -2924,6 +2939,7 @@ export class GameLogicSubsystem implements Subsystem {
       forcedWeaponSlot: null,
       weaponLockStatus: 'NOT_LOCKED' as const,
       maxShotsRemaining: 0,
+      turretProfiles: this.extractTurretProfiles(objectDef),
       armorTemplateSets,
       armorSetFlagsMask: 0,
       armorDamageCoefficients,
@@ -3593,6 +3609,39 @@ export class GameLogicSubsystem implements Subsystem {
     };
   }
 
+  /**
+   * Source parity: TurretAI::isWeaponSlotOnTurret — find which turret (if any) controls
+   * the given weapon slot.
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/AI/TurretAI.cpp:516-518)
+   */
+  private findTurretForWeaponSlot(entity: MapEntity, slotIndex: number): TurretProfile | null {
+    const slotBit = 1 << slotIndex;
+    for (const turret of entity.turretProfiles) {
+      if ((turret.controlledWeaponSlotsMask & slotBit) !== 0) {
+        return turret;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Resolve the weapon names present in each slot of the currently active weapon set.
+   * Returns a 3-element array (PRIMARY, SECONDARY, TERTIARY) with weapon name or null.
+   */
+  private resolveActiveWeaponSetSlots(
+    entity: MapEntity,
+  ): [string | null, string | null, string | null] {
+    const selectedSet = this.selectBestSetByConditions(entity.weaponTemplateSets, entity.weaponSetFlagsMask);
+    if (!selectedSet) {
+      return [null, null, null];
+    }
+    return [
+      selectedSet.weaponNamesBySlot[0] ?? null,
+      selectedSet.weaponNamesBySlot[1] ?? null,
+      selectedSet.weaponNamesBySlot[2] ?? null,
+    ];
+  }
+
   private resolveAttackWeaponProfileForSetSelection(
     weaponTemplateSets: readonly WeaponTemplateSetProfile[],
     weaponSetFlagsMask: number,
@@ -4226,6 +4275,66 @@ export class GameLogicSubsystem implements Subsystem {
       sneakyOffsetWhenAttacking,
       attackersMissPersistFrames,
     };
+  }
+
+  /**
+   * Source parity: TurretAI — extract turret module profiles from INI.
+   * Each TurretAIUpdate module declares which weapon slots it controls and whether it
+   * starts disabled. Units like Nuke Cannons have InitiallyDisabled turrets that must
+   * be enabled by a deploy action before the weapon can fire.
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/AI/TurretAI.cpp:236-261)
+   */
+  private extractTurretProfiles(objectDef: ObjectDef | undefined): TurretProfile[] {
+    if (!objectDef) {
+      return [];
+    }
+
+    const profiles: TurretProfile[] = [];
+    const WEAPON_SLOT_NAMES: Record<string, number> = {
+      PRIMARY: 0,
+      SECONDARY: 1,
+      TERTIARY: 2,
+    };
+
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'TURRETAIUPDATE') {
+          const initiallyDisabled = readBooleanField(block.fields, ['InitiallyDisabled']) === true;
+
+          // Source parity: TurretAIData::m_turretWeaponSlots is a bitmask built from
+          // ControlledWeaponSlots INI field (space-separated slot names).
+          let controlledWeaponSlotsMask = 0;
+          const controlledSlotsRaw = readStringField(block.fields, ['ControlledWeaponSlots']);
+          if (controlledSlotsRaw) {
+            for (const slotToken of controlledSlotsRaw.split(/\s+/)) {
+              const slotIndex = WEAPON_SLOT_NAMES[slotToken.toUpperCase()];
+              if (slotIndex !== undefined) {
+                controlledWeaponSlotsMask |= (1 << slotIndex);
+              }
+            }
+          }
+
+          if (controlledWeaponSlotsMask !== 0) {
+            profiles.push({
+              controlledWeaponSlotsMask,
+              initiallyDisabled,
+              enabled: !initiallyDisabled,
+            });
+          }
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profiles;
   }
 
   /**
@@ -5452,9 +5561,35 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // TODO(C&C source parity): containment fire rules and
-    // turret-availability/AI module checks are intentionally deferred because they
-    // require fully modeling source AI + weapon module internals.
+    // Source parity: Object::isAbleToAttack() (Object.cpp:3237-3280) checks if all
+    // weapons are on disabled turrets. Only turreted weapons can be disabled.
+    // KINDOF_CAN_ATTACK objects skip this check (e.g., Nuke Cannon needs isAbleToAttack()
+    // true even with disabled turret so it can deploy).
+    if (entity.turretProfiles.length > 0 && !kindOf.has('CAN_ATTACK')) {
+      let anyWeapon = false;
+      let anyEnabled = false;
+      const weaponSlots = this.resolveActiveWeaponSetSlots(entity);
+      for (let slotIndex = 0; slotIndex < weaponSlots.length; slotIndex += 1) {
+        if (weaponSlots[slotIndex] === null) {
+          continue;
+        }
+        anyWeapon = true;
+        const turret = this.findTurretForWeaponSlot(entity, slotIndex);
+        if (!turret) {
+          // Non-turreted weapon — always considered enabled.
+          anyEnabled = true;
+          break;
+        }
+        if (turret.enabled) {
+          anyEnabled = true;
+          break;
+        }
+      }
+      if (anyWeapon && !anyEnabled) {
+        return false;
+      }
+    }
+
     return true;
   }
 
@@ -10557,6 +10692,19 @@ export class GameLogicSubsystem implements Subsystem {
       entity.weaponLockStatus = 'NOT_LOCKED';
       entity.forcedWeaponSlot = null;
       this.refreshEntityCombatProfiles(entity);
+    }
+  }
+
+  /**
+   * Source parity: TurretAI::setTurretEnabled — enable/disable a specific turret on an entity.
+   * Turret index corresponds to the order of TurretAIUpdate modules in the object definition.
+   * When disabled, weapons on that turret cannot fire (checked in canEntityAttackFromStatus).
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/AI/TurretAI.cpp:761)
+   */
+  private setEntityTurretEnabled(entity: MapEntity, turretIndex: number, enabled: boolean): void {
+    const turret = entity.turretProfiles[turretIndex];
+    if (turret) {
+      turret.enabled = enabled;
     }
   }
 

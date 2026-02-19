@@ -1,13 +1,19 @@
 # Session Summaries
 
+## 2026-02-19T15:15Z — ObjectStatus + WeaponSet + maxShotsToFire + Weapon State Preservation
+- Task #48: Wired ObjectStatus side-effects — INDESTRUCTIBLE (body field), IMMOBILE (kindOf), DISABLED_HELD, UNSELECTABLE, MASKED (selection+targeting), NO_COLLISIONS (pathfinding), NO_ATTACK_FROM_AI
+- Task #49: Weapon anti-mask system — parsed 8 anti-mask flags from INI, totalWeaponAntiMask per entity, resolveTargetAntiMask from kindOf, container enclosure check (garrison/helix), helix portable rider exempt
+- Task #50: maxShotsToFire shot counter + LOCKED_TEMPORARILY weapon lock in combat-update, clearMaxShotsAttackState callback
+- Task #51: Preserve weapon slot runtime state across set changes — only reset timing when template name changes
+- Code review fixes each task: INDESTRUCTIBLE as body field not status, entity.isImmobile not status bit, DEMOTRAP in mine branch, helix portable rider, anti-mask priority order, AntiGround pre-seeded default
+- Commits: 440e329, 3a7c40b, baeedc1, c3e7e68
+- All 1009 tests pass, clean build
+- Next: Tasks #52-55 created (containment fire rules, slaver linkage, transport containment, AI state machine)
+
 ## 2026-02-19T05:30Z — OCL Pipeline + EVA Announcer + Code Review Fixes
 - Completed EVA announcer event system (#47): buffer, cooldowns, 11 event types wired
-- Fixed `powerStatesBySide` → `sidePowerBonus` (wrong field name from prior session)
-- Wired updateEva() into main update loop
-- Added EVA triggers: LOW_POWER, INSUFFICIENT_FUNDS, BUILDING_LOST, UNIT_LOST, BASE_UNDER_ATTACK, CONSTRUCTION_COMPLETE, UNIT_READY, UPGRADE_COMPLETE, SUPERWEAPON_READY/DETECTED/LAUNCHED
-- Code review fixes: Math.random()→gameRandom for determinism, Offset as 3-component Coord3D, block type guard on extractDeathOCLNames
-- Commits: 81437bf (OCL+EVA), fcfeed5 (review fixes)
-- All 1009 tests pass, clean declaration build
+- Code review fixes: Math.random()→gameRandom, Offset as 3-component Coord3D, block type guard
+- Commits: 81437bf, fcfeed5 — All 1009 tests pass
 
 ## 2026-02-14T15:00Z — Stage 2 Asset Pipeline Implementation
 - Merged `claude/plan-generals-browser-game-czKRy` into main (fast-forward)
