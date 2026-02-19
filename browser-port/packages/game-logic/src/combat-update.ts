@@ -69,7 +69,7 @@ interface CombatUpdateContext<TEntity extends CombatUpdateEntityLike> {
   ): number;
   queueWeaponDamageEvent(attacker: TEntity, target: TEntity, weapon: CombatUpdateWeaponLike): void;
   recordConsecutiveAttackShot(attacker: TEntity, targetEntityId: number): void;
-  resolveWeaponDelayFrames(weapon: CombatUpdateWeaponLike): number;
+  resolveWeaponDelayFrames(attacker: TEntity, weapon: CombatUpdateWeaponLike): number;
   resolveTargetAnchorPosition(target: TEntity): VectorXZLike;
   /** Check if terrain blocks line of sight from attacker to target. */
   isAttackLineOfSightBlocked(attackerX: number, attackerZ: number, targetX: number, targetZ: number): boolean;
@@ -250,6 +250,6 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
       }
     }
 
-    attacker.nextAttackFrame = context.frameCounter + context.resolveWeaponDelayFrames(weapon);
+    attacker.nextAttackFrame = context.frameCounter + context.resolveWeaponDelayFrames(attacker, weapon);
   }
 }

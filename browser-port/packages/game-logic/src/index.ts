@@ -491,6 +491,18 @@ interface AttackWeaponProfile {
   minDelayFrames: number;
   maxDelayFrames: number;
   antiMask: number;
+  /** Source parity: ContinuousFireOne — consecutive shots needed for MEAN state. 0 = disabled. */
+  continuousFireOneShotsNeeded: number;
+  /** Source parity: ContinuousFireTwo — consecutive shots needed for FAST state. 0 = disabled. */
+  continuousFireTwoShotsNeeded: number;
+  /** Source parity: ContinuousFireCoast — coast frames after last possible shot before cooldown starts. */
+  continuousFireCoastFrames: number;
+  /** Source parity: per-weapon RATE_OF_FIRE bonus multiplier for CONTINUOUS_FIRE_MEAN condition. */
+  continuousFireMeanRateOfFire: number;
+  /** Source parity: per-weapon RATE_OF_FIRE bonus multiplier for CONTINUOUS_FIRE_FAST condition. */
+  continuousFireFastRateOfFire: number;
+  /** Source parity: LaserName — non-null if this weapon spawns a laser beam. */
+  laserName: string | null;
 }
 
 interface WeaponTemplateSetProfile {
@@ -749,7 +761,7 @@ interface PendingWeaponDamageEvent {
   impactX: number;
   impactZ: number;
   executeFrame: number;
-  delivery: 'DIRECT' | 'PROJECTILE';
+  delivery: 'DIRECT' | 'PROJECTILE' | 'LASER';
   weapon: AttackWeaponProfile;
   /** Frame when the projectile was launched. */
   launchFrame: number;
@@ -879,6 +891,10 @@ interface MapEntity {
   preAttackFinishFrame: number;
   consecutiveShotsTargetEntityId: number | null;
   consecutiveShotsAtTarget: number;
+  /** Source parity: FiringTracker continuous-fire tier — NONE, MEAN, or FAST. */
+  continuousFireState: 'NONE' | 'MEAN' | 'FAST';
+  /** Source parity: FiringTracker — frame when cooldown begins (0 = inactive). */
+  continuousFireCooldownFrame: number;
   sneakyOffsetWhenAttacking: number;
   attackersMissPersistFrames: number;
   attackersMissExpireFrame: number;
@@ -3015,6 +3031,8 @@ export class GameLogicSubsystem implements Subsystem {
       preAttackFinishFrame: 0,
       consecutiveShotsTargetEntityId: null,
       consecutiveShotsAtTarget: 0,
+      continuousFireState: 'NONE',
+      continuousFireCooldownFrame: 0,
       sneakyOffsetWhenAttacking: jetAISneakyProfile?.sneakyOffsetWhenAttacking ?? 0,
       attackersMissPersistFrames: jetAISneakyProfile?.attackersMissPersistFrames ?? 0,
       attackersMissExpireFrame: 0,
@@ -3634,6 +3652,25 @@ export class GameLogicSubsystem implements Subsystem {
     if (readBooleanField(weaponDef.fields, ['AntiBallisticMissile'])) antiMask |= WEAPON_ANTI_BALLISTIC_MISSILE;
     if (readBooleanField(weaponDef.fields, ['AntiParachute'])) antiMask |= WEAPON_ANTI_PARACHUTE;
 
+    // Source parity: FiringTracker continuous-fire INI properties on WeaponTemplate.
+    const continuousFireOneShotsNeeded = Math.max(0, Math.trunc(
+      readNumericField(weaponDef.fields, ['ContinuousFireOne']) ?? 0,
+    ));
+    const continuousFireTwoShotsNeeded = Math.max(0, Math.trunc(
+      readNumericField(weaponDef.fields, ['ContinuousFireTwo']) ?? 0,
+    ));
+    const continuousFireCoastFrames = this.msToLogicFrames(
+      readNumericField(weaponDef.fields, ['ContinuousFireCoast']) ?? 0,
+    );
+    // Source parity: per-weapon WeaponBonus lines — parse RATE_OF_FIRE multipliers
+    // for CONTINUOUS_FIRE_MEAN and CONTINUOUS_FIRE_FAST conditions.
+    const { continuousFireMeanRateOfFire, continuousFireFastRateOfFire } =
+      this.resolveWeaponContinuousFireBonuses(weaponDef);
+
+    // Source parity: Weapon::isLaser() — weapon is a laser if LaserName is non-empty.
+    const laserNameRaw = readStringField(weaponDef.fields, ['LaserName'])?.trim() ?? '';
+    const laserName = laserNameRaw && laserNameRaw.toUpperCase() !== 'NONE' ? laserNameRaw : null;
+
     if (attackRange <= 0 || primaryDamage <= 0) {
       return null;
     }
@@ -3669,7 +3706,43 @@ export class GameLogicSubsystem implements Subsystem {
       minDelayFrames: Math.max(0, Math.min(minDelayFrames, maxDelayFrames)),
       maxDelayFrames: Math.max(minDelayFrames, maxDelayFrames),
       antiMask,
+      continuousFireOneShotsNeeded,
+      continuousFireTwoShotsNeeded,
+      continuousFireCoastFrames,
+      continuousFireMeanRateOfFire,
+      continuousFireFastRateOfFire,
+      laserName,
     };
+  }
+
+  /**
+   * Source parity: WeaponTemplate::parseWeaponBonusSet — extract per-weapon RATE_OF_FIRE
+   * bonus multipliers for CONTINUOUS_FIRE_MEAN and CONTINUOUS_FIRE_FAST conditions.
+   * INI format: `WeaponBonus = CONDITION_NAME FIELD_NAME VALUE%`
+   */
+  private resolveWeaponContinuousFireBonuses(weaponDef: WeaponDef): {
+    continuousFireMeanRateOfFire: number;
+    continuousFireFastRateOfFire: number;
+  } {
+    let meanROF = 1.0;
+    let fastROF = 1.0;
+    for (const tokens of this.extractIniValueTokens(weaponDef.fields['WeaponBonus'])) {
+      if (tokens.length < 3) continue;
+      const condition = tokens[0]!.toUpperCase();
+      const field = tokens[1]!.toUpperCase();
+      const valueStr = tokens[2]!;
+      if (field !== 'RATE_OF_FIRE') continue;
+      const percentMatch = valueStr.match(/^(\d+(?:\.\d+)?)%?$/);
+      if (!percentMatch) continue;
+      const multiplier = parseFloat(percentMatch[1]!) / 100;
+      if (!Number.isFinite(multiplier) || multiplier <= 0) continue;
+      if (condition === 'CONTINUOUS_FIRE_MEAN') {
+        meanROF = multiplier;
+      } else if (condition === 'CONTINUOUS_FIRE_FAST') {
+        fastROF = multiplier;
+      }
+    }
+    return { continuousFireMeanRateOfFire: meanROF, continuousFireFastRateOfFire: fastROF };
   }
 
   /**
@@ -11765,7 +11838,7 @@ export class GameLogicSubsystem implements Subsystem {
         this.queueWeaponDamageEvent(attacker, target, weapon as AttackWeaponProfile),
       recordConsecutiveAttackShot: (attacker, targetEntityId) =>
         this.recordConsecutiveAttackShot(attacker, targetEntityId),
-      resolveWeaponDelayFrames: (weapon) => this.resolveWeaponDelayFrames(weapon as AttackWeaponProfile),
+      resolveWeaponDelayFrames: (attacker, weapon) => this.resolveWeaponDelayFramesWithBonus(attacker, weapon as AttackWeaponProfile),
       resolveTargetAnchorPosition: (target) => ({
         x: (target as { mesh?: { position?: { x?: number } } }).mesh?.position?.x ?? target.x,
         z: (target as { mesh?: { position?: { z?: number } } }).mesh?.position?.z ?? target.z,
@@ -11850,7 +11923,7 @@ export class GameLogicSubsystem implements Subsystem {
       // height when vertical terrain data is represented in combat impact resolution.
     }
 
-    let delivery: 'DIRECT' | 'PROJECTILE' = 'DIRECT';
+    let delivery: 'DIRECT' | 'PROJECTILE' | 'LASER' = 'DIRECT';
     let travelSpeed = weapon.weaponSpeed;
     if (weapon.projectileObjectName) {
       delivery = 'PROJECTILE';
@@ -11873,19 +11946,37 @@ export class GameLogicSubsystem implements Subsystem {
       }
       const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
       travelSpeed = this.resolveScaledProjectileTravelSpeed(weapon, sourceToAimDistance);
+    } else if (weapon.laserName) {
+      // Source parity: Weapon::fireWeaponTemplate() laser sub-branch.
+      // Laser damage is always instant. If scatter moved the aim point outside the
+      // weapon's damage radius, damageID becomes INVALID (ground shot / miss).
+      delivery = 'LASER';
+      const scatterDx = aimX - targetX;
+      const scatterDz = aimZ - targetZ;
+      const scatterDistSqr = scatterDx * scatterDx + scatterDz * scatterDz;
+      const primaryRadiusSqr = weapon.primaryDamageRadius * weapon.primaryDamageRadius;
+      const secondaryRadiusSqr = weapon.secondaryDamageRadius * weapon.secondaryDamageRadius;
+      if (scatterDistSqr > Math.max(primaryRadiusSqr, secondaryRadiusSqr) && scatterDistSqr > 0) {
+        // Scatter caused a miss — laser hits ground, no victim ID.
+        primaryVictimEntityId = null;
+      }
     } else {
-      // Source parity subset: Weapon::fireWeaponTemplate delays direct-damage resolution by
+      // Source parity: Weapon::fireWeaponTemplate delays direct-damage resolution by
       // distance / getWeaponSpeed().
-      // TODO(C&C source parity): mirror laser-handling behavior for non-projectile weapons.
     }
 
     const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
     const travelFrames = sourceToAimDistance / travelSpeed;
-    let delayFrames = Number.isFinite(travelFrames) && travelFrames >= 1
-      ? Math.ceil(travelFrames)
-      : 0;
-    if (delivery === 'PROJECTILE') {
-      delayFrames = Math.max(1, delayFrames);
+    let delayFrames: number;
+    if (delivery === 'LASER') {
+      // Source parity: laser damage is always instant — returns TheGameLogic->getFrame().
+      delayFrames = 0;
+    } else if (delivery === 'PROJECTILE') {
+      delayFrames = Math.max(1, Number.isFinite(travelFrames) && travelFrames >= 1
+        ? Math.ceil(travelFrames) : 1);
+    } else {
+      delayFrames = Number.isFinite(travelFrames) && travelFrames >= 1
+        ? Math.ceil(travelFrames) : 0;
     }
 
     const impactX = weapon.damageDealtAtSelfPosition ? sourceX : aimX;
@@ -11909,6 +12000,14 @@ export class GameLogicSubsystem implements Subsystem {
     // Emit muzzle flash visual event.
     this.emitWeaponFiredVisualEvent(attacker, weapon);
 
+    if (delivery === 'LASER') {
+      // Source parity: laser weapons always deal damage synchronously (instant hit).
+      // createLaser() is called for the visual beam; damage is applied immediately.
+      this.emitWeaponImpactVisualEvent(event);
+      applyWeaponDamageEventImpl(this.createCombatDamageEventContext(), event);
+      return;
+    }
+
     if (delivery === 'DIRECT' && delayFrames <= 0) {
       // Source parity subset: WeaponTemplate::fireWeaponTemplate() applies non-projectile
       // damage immediately when delayInFrames < 1.0f instead of queuing delayed damage.
@@ -11919,12 +12018,14 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.pendingWeaponDamageEvents.push(event);
 
-    // TODO(C&C source parity): port projectile-object launch/collision/countermeasure and
-    // laser/scatter handling from Weapon::fireWeaponTemplate() instead of routing both
-    // direct and projectile delivery through pending impact events.
+    // TODO(C&C source parity): port projectile-object launch/collision/countermeasure
+    // handling from Weapon::fireWeaponTemplate() instead of routing projectile delivery
+    // through pending impact events.
   }
 
   private classifyWeaponVisualType(weapon: AttackWeaponProfile): import('./types.js').ProjectileVisualType {
+    // Source parity: weapon with LaserName is definitively a laser.
+    if (weapon.laserName) return 'LASER';
     const name = weapon.name.toUpperCase();
     if (name.includes('MISSILE') || name.includes('ROCKET') || name.includes('PATRIOT')) return 'MISSILE';
     if (name.includes('ARTILLERY') || name.includes('CANNON') || name.includes('SHELL')
@@ -12411,8 +12512,34 @@ export class GameLogicSubsystem implements Subsystem {
     // forcing an immediate reload after sustained idle time.
     updateWeaponIdleAutoReloadImpl(this.spawnedEntities.values(), this.frameCounter);
 
-    // TODO(C&C source parity): port full FiringTracker behavior
-    // (continuous-fire speedup/cooldown states and looping fire-audio management).
+    // Source parity: FiringTracker::update() — continuous-fire cooldown ticking.
+    // When the cooldown frame elapses, cool down one step per LOGICFRAMES_PER_SECOND (30).
+    this.updateFiringTrackerCooldowns();
+  }
+
+  /** Source parity: FiringTracker::update() — cooldown ticking once per second. */
+  private updateFiringTrackerCooldowns(): void {
+    const LOGICFRAMES_PER_SECOND = 30;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.continuousFireCooldownFrame === 0) continue;
+      if (this.frameCounter <= entity.continuousFireCooldownFrame) continue;
+
+      // Coast window has elapsed — cool down one step.
+      if (
+        entity.continuousFireState !== 'NONE'
+        || entity.objectStatusFlags.has('CONTINUOUS_FIRE_SLOW')
+      ) {
+        this.continuousFireCoolDown(entity);
+        // Source parity: reschedule cooldown tick 1 second later for the SLOW → NONE step.
+        if (entity.objectStatusFlags.has('CONTINUOUS_FIRE_SLOW')) {
+          entity.continuousFireCooldownFrame = this.frameCounter + LOGICFRAMES_PER_SECOND;
+        }
+      } else {
+        // Fully cooled — stop ticking.
+        entity.continuousFireCooldownFrame = 0;
+      }
+    }
   }
 
   private computeAttackRetreatTarget(
@@ -12442,8 +12569,132 @@ export class GameLogicSubsystem implements Subsystem {
     return resolveWeaponPreAttackDelayFramesImpl(attacker, target.id, weapon);
   }
 
+  /**
+   * Source parity: FiringTracker::shotFired() — track consecutive shots, manage
+   * continuous-fire speedup/cooldown state machine (NONE → MEAN → FAST).
+   */
   private recordConsecutiveAttackShot(attacker: MapEntity, targetEntityId: number): void {
-    recordConsecutiveAttackShotImpl(attacker, targetEntityId);
+    const weapon = attacker.attackWeapon;
+    if (!weapon) {
+      recordConsecutiveAttackShotImpl(attacker, targetEntityId);
+      return;
+    }
+
+    // Source parity: consecutive-shot counting with coast window for target switching.
+    if (targetEntityId === attacker.consecutiveShotsTargetEntityId) {
+      attacker.consecutiveShotsAtTarget += 1;
+    } else if (this.frameCounter < attacker.continuousFireCooldownFrame) {
+      // Switching targets within the coast window preserves the shot count.
+      attacker.consecutiveShotsAtTarget += 1;
+      attacker.consecutiveShotsTargetEntityId = targetEntityId;
+    } else {
+      attacker.consecutiveShotsAtTarget = 1;
+      attacker.consecutiveShotsTargetEntityId = targetEntityId;
+    }
+
+    // Source parity: compute the "possible next shot frame" for coast-window calculation.
+    // In C++, this comes from Weapon::m_whenWeCanFireAgain set inside privateFireWeapon()
+    // which already includes the active bonus multiplier.
+    const possibleNextShotFrame = this.frameCounter + this.resolveWeaponDelayFramesWithBonus(attacker, weapon);
+
+    // Source parity: coast = time after next possible shot we stay in continuous-fire mode.
+    const coast = weapon.continuousFireCoastFrames;
+    if (coast > 0) {
+      attacker.continuousFireCooldownFrame = possibleNextShotFrame + coast;
+    } else {
+      attacker.continuousFireCooldownFrame = 0;
+    }
+
+    // Source parity: FiringTracker state machine — speedUp/coolDown based on shot count.
+    const shotsNeededOne = weapon.continuousFireOneShotsNeeded;
+    const shotsNeededTwo = weapon.continuousFireTwoShotsNeeded;
+    if (shotsNeededOne <= 0 && shotsNeededTwo <= 0) {
+      return; // No continuous-fire config on this weapon.
+    }
+
+    const shots = attacker.consecutiveShotsAtTarget;
+    const state = attacker.continuousFireState;
+
+    if (state === 'MEAN') {
+      if (shots < shotsNeededOne) {
+        this.continuousFireCoolDown(attacker);
+      } else if (shots > shotsNeededTwo) {
+        this.continuousFireSpeedUp(attacker);
+      }
+    } else if (state === 'FAST') {
+      if (shots < shotsNeededTwo) {
+        this.continuousFireCoolDown(attacker);
+      }
+    } else {
+      // NONE state — check if we should speed up.
+      if (shots > shotsNeededOne) {
+        this.continuousFireSpeedUp(attacker);
+      }
+    }
+  }
+
+  /**
+   * Source parity: FiringTracker::speedUp() — step up one continuous-fire tier.
+   * NONE → MEAN, MEAN → FAST (plays VoiceRapidFire). Flags are exclusive.
+   */
+  private continuousFireSpeedUp(entity: MapEntity): void {
+    if (entity.continuousFireState === 'FAST') {
+      return; // Already at max.
+    }
+    if (entity.continuousFireState === 'MEAN') {
+      entity.continuousFireState = 'FAST';
+      entity.objectStatusFlags.add('CONTINUOUS_FIRE_FAST');
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_MEAN');
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_SLOW');
+    } else {
+      // NONE → MEAN.
+      entity.continuousFireState = 'MEAN';
+      entity.objectStatusFlags.add('CONTINUOUS_FIRE_MEAN');
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_FAST');
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_SLOW');
+    }
+  }
+
+  /**
+   * Source parity: FiringTracker::coolDown() — drop to SLOW visual state (clears
+   * both bonus conditions), then on next tick drop to NONE. Resets shot count.
+   */
+  private continuousFireCoolDown(entity: MapEntity): void {
+    if (
+      entity.continuousFireState === 'FAST'
+      || entity.continuousFireState === 'MEAN'
+    ) {
+      // FAST or MEAN → SLOW visual (bonus removed, intermediate visual spin-down).
+      entity.continuousFireState = 'NONE';
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_FAST');
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_MEAN');
+      entity.objectStatusFlags.add('CONTINUOUS_FIRE_SLOW');
+      // Source parity: m_frameToStartCooldown is NOT zeroed here — update() ticks
+      // again in LOGICFRAMES_PER_SECOND to clear the SLOW visual state.
+    } else {
+      // Already at NONE (or SLOW) — clear visual spin-down.
+      entity.continuousFireState = 'NONE';
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_FAST');
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_MEAN');
+      entity.objectStatusFlags.delete('CONTINUOUS_FIRE_SLOW');
+      entity.continuousFireCooldownFrame = 0;
+    }
+    entity.consecutiveShotsAtTarget = 0;
+    entity.consecutiveShotsTargetEntityId = null;
+  }
+
+  /**
+   * Source parity: resolve the effective rate-of-fire multiplier for the attacker's
+   * current continuous-fire state from the weapon's per-weapon bonus config.
+   */
+  private resolveContinuousFireRateOfFireBonus(entity: MapEntity, weapon: AttackWeaponProfile): number {
+    if (entity.continuousFireState === 'FAST') {
+      return weapon.continuousFireFastRateOfFire;
+    }
+    if (entity.continuousFireState === 'MEAN') {
+      return weapon.continuousFireMeanRateOfFire;
+    }
+    return 1.0;
   }
 
   private resolveWeaponDelayFrames(weapon: AttackWeaponProfile): number {
@@ -12451,6 +12702,19 @@ export class GameLogicSubsystem implements Subsystem {
       weapon,
       (minDelay, maxDelay) => this.gameRandom.nextRange(minDelay, maxDelay),
     );
+  }
+
+  /**
+   * Source parity: WeaponTemplate::getDelayBetweenShots(bonus) — compute delay
+   * and divide by the active RATE_OF_FIRE bonus multiplier.
+   */
+  private resolveWeaponDelayFramesWithBonus(attacker: MapEntity, weapon: AttackWeaponProfile): number {
+    const baseDelay = this.resolveWeaponDelayFrames(weapon);
+    const rofBonus = this.resolveContinuousFireRateOfFireBonus(attacker, weapon);
+    if (rofBonus <= 0 || rofBonus === 1.0) {
+      return baseDelay;
+    }
+    return Math.max(0, Math.floor(baseDelay / rofBonus));
   }
 
   private applyWeaponDamageAmount(
@@ -12613,6 +12877,11 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
     entity.attackSubState = 'IDLE';
+    entity.continuousFireState = 'NONE';
+    entity.continuousFireCooldownFrame = 0;
+    entity.objectStatusFlags.delete('CONTINUOUS_FIRE_SLOW');
+    entity.objectStatusFlags.delete('CONTINUOUS_FIRE_MEAN');
+    entity.objectStatusFlags.delete('CONTINUOUS_FIRE_FAST');
     this.pendingDyingRenderableStates.set(entityId, {
       state: this.makeRenderableEntityState(entity),
       expireFrame: this.frameCounter + 1,

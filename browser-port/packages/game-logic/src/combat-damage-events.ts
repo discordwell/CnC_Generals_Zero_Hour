@@ -35,7 +35,7 @@ interface PendingWeaponDamageEventLike<TWeapon extends CombatDamageWeaponLike> {
   impactX: number;
   impactZ: number;
   executeFrame: number;
-  delivery: 'DIRECT' | 'PROJECTILE';
+  delivery: 'DIRECT' | 'PROJECTILE' | 'LASER';
   weapon: TWeapon;
 }
 
