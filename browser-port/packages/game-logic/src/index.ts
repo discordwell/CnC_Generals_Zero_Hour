@@ -1275,6 +1275,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly playerRelationshipOverrides = new Map<string, number>();
   private readonly sideCredits = new Map<string, number>();
   private readonly sidePlayerTypes = new Map<string, SidePlayerType>();
+  /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
+  private readonly sideCashBountyPercent = new Map<string, number>();
   private readonly sideUpgradesInProduction = new Map<string, Set<string>>();
   private readonly sideCompletedUpgrades = new Map<string, Set<string>>();
   private readonly sideKindOfProductionCostModifiers = new Map<string, KindOfProductionCostModifier[]>();
@@ -3066,6 +3068,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.iniDataRegistry = null;
     this.sideCredits.clear();
     this.sidePlayerTypes.clear();
+    this.sideCashBountyPercent.clear();
     this.sideUpgradesInProduction.clear();
     this.sideCompletedUpgrades.clear();
     this.sideKindOfProductionCostModifiers.clear();
@@ -7276,6 +7279,20 @@ export class GameLogicSubsystem implements Subsystem {
           revealRadius: source.visionRange > 0 ? source.visionRange : DEFAULT_SPY_VISION_RADIUS,
         }, effectContext);
         break;
+      case 'CASH_BOUNTY': {
+        // Source parity: CashBountyPower::onSpecialPowerCreation — sets the player's cash bounty
+        // percentage. When enemies are killed by this player's units, they receive a percentage
+        // of the victim's build cost as credits. Max-wins: only increases, never decreases.
+        const bountyPercent = module.cashBountyPercent > 0 ? module.cashBountyPercent : 0;
+        const side = this.normalizeSide(source.side);
+        if (side && bountyPercent > 0) {
+          const current = this.sideCashBountyPercent.get(side) ?? 0;
+          if (bountyPercent > current) {
+            this.sideCashBountyPercent.set(side, bountyPercent);
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -13574,6 +13591,10 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: award XP to killer on victim death.
     this.awardExperienceOnKill(entityId, attackerId);
 
+    // Source parity: Player::addCashBounty — if the killer's player has cash bounty active,
+    // award a percentage of the victim's build cost as credits.
+    this.awardCashBountyOnKill(entity, attackerId);
+
     // Source parity: EjectPilotDie — eject pilot unit for VETERAN+ vehicles on death.
     this.tryEjectPilotOnDeath(entity);
 
@@ -13951,6 +13972,51 @@ export class GameLogicSubsystem implements Subsystem {
       if (!victim.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
         this.addPlayerSkillPoints(attackerSide, xpGain);
       }
+    }
+  }
+
+  /**
+   * Source parity: Player::addCashBounty — award credits to the killer's side
+   * based on the victim's build cost multiplied by the side's cash bounty percentage.
+   */
+  private awardCashBountyOnKill(victim: MapEntity, attackerId: number): void {
+    if (attackerId < 0) {
+      return;
+    }
+    const attacker = this.spawnedEntities.get(attackerId);
+    if (!attacker || attacker.destroyed) {
+      return;
+    }
+    const attackerSide = this.normalizeSide(attacker.side);
+    if (!attackerSide) {
+      return;
+    }
+    // Source parity: no bounty for killing allies or own units.
+    const victimSide = this.normalizeSide(victim.side);
+    if (victimSide && victimSide === attackerSide) {
+      return;
+    }
+    // Source parity: no bounty for partially-built structures.
+    if (victim.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+      return;
+    }
+    const bountyPercent = this.sideCashBountyPercent.get(attackerSide) ?? 0;
+    if (bountyPercent <= 0) {
+      return;
+    }
+    // Resolve the victim's build cost from its template.
+    const objectDef = this.resolveObjectDefByTemplateName(victim.templateName);
+    if (!objectDef) {
+      return;
+    }
+    const buildCost = this.resolveObjectBuildCost(objectDef, victim.side ?? '');
+    if (buildCost <= 0) {
+      return;
+    }
+    // Source parity: REAL_TO_INT_CEIL rounding.
+    const bountyAmount = Math.ceil(buildCost * bountyPercent);
+    if (bountyAmount > 0) {
+      this.depositSideCredits(attackerSide, bountyAmount);
     }
   }
 
