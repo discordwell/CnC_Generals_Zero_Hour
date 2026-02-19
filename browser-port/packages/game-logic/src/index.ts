@@ -809,6 +809,8 @@ interface MapEntity {
   attackReloadFinishFrame: number;
   attackForceReloadFrame: number;
   forcedWeaponSlot: number | null;
+  weaponLockStatus: 'NOT_LOCKED' | 'LOCKED_TEMPORARILY' | 'LOCKED_PERMANENTLY';
+  maxShotsRemaining: number;
   attackScatterTargetsUnused: number[];
   preAttackFinishFrame: number;
   consecutiveShotsTargetEntityId: number | null;
@@ -2920,6 +2922,8 @@ export class GameLogicSubsystem implements Subsystem {
       weaponTemplateSets,
       weaponSetFlagsMask: 0,
       forcedWeaponSlot: null,
+      weaponLockStatus: 'NOT_LOCKED' as const,
+      maxShotsRemaining: 0,
       armorTemplateSets,
       armorSetFlagsMask: 0,
       armorDamageCoefficients,
@@ -10446,8 +10450,9 @@ export class GameLogicSubsystem implements Subsystem {
     attacker.attackTargetPosition = null;
     attacker.preAttackFinishFrame = 0;
 
-    // TODO(source parity): honor maxShotsToFire and temporary weapon lock behavior from
-    // MessageStream::MSG_DO_WEAPON* paths (LOCKED_TEMPORARILY + shot counters).
+    // Source parity: MSG_DO_WEAPON sets a temporary weapon lock and shot counter.
+    attacker.weaponLockStatus = 'LOCKED_TEMPORARILY';
+    attacker.maxShotsRemaining = maxShotsToFire > 0 ? maxShotsToFire : 0;
     if (maxShotsToFire <= 0) {
       return;
     }
@@ -10530,6 +10535,35 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackCommandSource = 'AI';
     this.setEntityIgnoringStealthStatus(entity, false);
     entity.preAttackFinishFrame = 0;
+    // Source parity: releaseWeaponLock on attack exit — temporary locks are cleared.
+    this.releaseTemporaryWeaponLock(entity);
+  }
+
+  /**
+   * Source parity: when maxShotsToFire is exhausted during combat-update, clear
+   * the attack state and release the temporary weapon lock.
+   */
+  private clearMaxShotsAttackState(entity: MapEntity): void {
+    entity.attackTargetEntityId = null;
+    entity.attackTargetPosition = null;
+    entity.attackOriginalVictimPosition = null;
+    entity.attackCommandSource = 'AI';
+    entity.maxShotsRemaining = 0;
+    this.setEntityIgnoringStealthStatus(entity, false);
+    entity.preAttackFinishFrame = 0;
+    this.releaseTemporaryWeaponLock(entity);
+  }
+
+  /**
+   * Source parity: WeaponSet::releaseWeaponLock — temporary locks are released on
+   * attack exit, new commands, or clip exhaustion. Permanent locks persist.
+   */
+  private releaseTemporaryWeaponLock(entity: MapEntity): void {
+    if (entity.weaponLockStatus === 'LOCKED_TEMPORARILY') {
+      entity.weaponLockStatus = 'NOT_LOCKED';
+      entity.forcedWeaponSlot = null;
+      this.refreshEntityCombatProfiles(entity);
+    }
   }
 
   private stopEntity(entityId: number): void {
@@ -11304,6 +11338,8 @@ export class GameLogicSubsystem implements Subsystem {
       }),
       isAttackLineOfSightBlocked: (attackerX, attackerZ, targetX, targetZ) =>
         this.isTerrainLineOfSightBlocked(attackerX, attackerZ, targetX, targetZ),
+      clearMaxShotsAttackState: (attacker) =>
+        this.clearMaxShotsAttackState(attacker),
     });
   }
 

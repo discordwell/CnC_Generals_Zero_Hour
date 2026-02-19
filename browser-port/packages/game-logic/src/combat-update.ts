@@ -33,6 +33,7 @@ interface CombatUpdateEntityLike {
   attackReloadFinishFrame: number;
   attackForceReloadFrame: number;
   attackNeedsLineOfSight: boolean;
+  maxShotsRemaining: number;
   category: string;
 }
 
@@ -72,6 +73,8 @@ interface CombatUpdateContext<TEntity extends CombatUpdateEntityLike> {
   resolveTargetAnchorPosition(target: TEntity): VectorXZLike;
   /** Check if terrain blocks line of sight from attacker to target. */
   isAttackLineOfSightBlocked(attackerX: number, attackerZ: number, targetX: number, targetZ: number): boolean;
+  /** Clear the attacker's combat state when maxShotsToFire limit is reached. */
+  clearMaxShotsAttackState(attacker: TEntity): void;
 }
 
 function clearImmediateCombatState<TEntity extends CombatUpdateEntityLike>(
@@ -222,6 +225,16 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
     context.setEntityIgnoringStealthStatus(attacker, false);
     attacker.preAttackFinishFrame = 0;
     context.recordConsecutiveAttackShot(attacker, target.id);
+
+    // Source parity: Weapon::fire decrements m_maxShotCount; when exhausted, attack ends.
+    if (attacker.maxShotsRemaining > 0) {
+      attacker.maxShotsRemaining--;
+      if (attacker.maxShotsRemaining <= 0) {
+        context.clearMaxShotsAttackState(attacker);
+        continue;
+      }
+    }
+
     if (weapon.autoReloadWhenIdleFrames > 0) {
       attacker.attackForceReloadFrame = context.frameCounter + weapon.autoReloadWhenIdleFrames;
     } else {
