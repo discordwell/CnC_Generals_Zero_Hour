@@ -513,6 +513,12 @@ const BEZIER_TERRAIN_SAMPLE_COUNT = 10;
 /** Tolerance for Bezier arc length approximation. */
 const BEZIER_ARC_LENGTH_TOLERANCE = 1.0;
 
+/**
+ * Source parity: AIUpdateModuleData::m_moodAttackCheckRate — default interval
+ * (in logic frames) between idle auto-target scans. C++ uses 2 seconds (60 frames).
+ */
+const AUTO_TARGET_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE * 2;
+
 interface LocomotorSetProfile {
   surfaceMask: number;
   downhillOnly: boolean;
@@ -1071,6 +1077,12 @@ interface MapEntity {
   /** Sole healing benefactor anti-stacking. */
   soleHealingBenefactorId: number | null;
   soleHealingBenefactorExpirationFrame: number;
+  /**
+   * Source parity: AIUpdateInterface::m_nextMoodCheckTime — frame at which
+   * idle auto-target scan is next allowed. Throttles enemy scans to avoid
+   * per-frame overhead. C++ default: every 2 seconds (60 logic frames).
+   */
+  autoTargetScanNextFrame: number;
 
   // ── Source parity: PoisonedBehavior — per-entity poison DoT state ──
   /** Damage amount per poison tick (0 = not poisoned). */
@@ -1595,6 +1607,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProduction();
     this.updateSpawnBehaviors();
     this.updateCombat();
+    this.updateIdleAutoTargeting();
     this.updateEntityMovement(dt);
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
@@ -3208,6 +3221,7 @@ export class GameLogicSubsystem implements Subsystem {
       propagandaTowerTrackedIds: [],
       soleHealingBenefactorId: null,
       soleHealingBenefactorExpirationFrame: 0,
+      autoTargetScanNextFrame: this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES,
       // Poison DoT state
       poisonDamageAmount: 0,
       poisonNextDamageFrame: 0,
@@ -6829,11 +6843,18 @@ export class GameLogicSubsystem implements Subsystem {
         this.refreshEntityCombatProfiles(entity);
         return;
       }
-      case 'stop':
+      case 'stop': {
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
+        // Source parity: explicit stop resets auto-target scan timer to prevent
+        // immediate re-engagement. Matches C++ AIIdleState re-entry delay.
+        const stopEntity = this.spawnedEntities.get(command.entityId);
+        if (stopEntity) {
+          stopEntity.autoTargetScanNextFrame = this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES;
+        }
         return;
+      }
       case 'bridgeDestroyed':
         this.onObjectDestroyed(command.entityId);
         return;
@@ -12035,6 +12056,103 @@ export class GameLogicSubsystem implements Subsystem {
       clearMaxShotsAttackState: (attacker) =>
         this.clearMaxShotsAttackState(attacker),
     });
+  }
+
+  /**
+   * Source parity: AIIdleState::update() / AIUpdateInterface::getNextMoodTarget() —
+   * idle units scan for nearby enemies and auto-engage. Throttled to every
+   * AUTO_TARGET_SCAN_RATE_FRAMES (2 seconds) per entity.
+   */
+  private updateIdleAutoTargeting(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+
+      // Only scan combat-capable entities with weapons.
+      if (!entity.attackWeapon) {
+        continue;
+      }
+
+      // Source parity: skip disabled entities (paralyzed, EMP, hacked, unmanned).
+      if (
+        this.entityHasObjectStatus(entity, 'DISABLED_PARALYZED') ||
+        this.entityHasObjectStatus(entity, 'DISABLED_EMP') ||
+        this.entityHasObjectStatus(entity, 'DISABLED_HACKED') ||
+        this.entityHasObjectStatus(entity, 'DISABLED_UNMANNED')
+      ) {
+        continue;
+      }
+
+      // Source parity: don't auto-acquire while already attacking or moving.
+      if (entity.attackTargetEntityId !== null || entity.attackTargetPosition !== null) {
+        continue;
+      }
+      if (entity.moving) {
+        continue;
+      }
+
+      // Source parity: stealthed units do not auto-acquire targets (would break stealth).
+      // C++ gates this on AutoAcquireEnemiesWhenIdle / AAS_Idle_Stealthed flag.
+      if (entity.objectStatusFlags.has('STEALTHED')) {
+        continue;
+      }
+
+      // Throttle scanning to once per AUTO_TARGET_SCAN_RATE_FRAMES.
+      if (this.frameCounter < entity.autoTargetScanNextFrame) {
+        continue;
+      }
+      entity.autoTargetScanNextFrame = this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES;
+
+      // Source parity: findClosestEnemy — C++ uses vision range for AI-controlled
+      // units and weapon range for human-controlled units.
+      const weapon = entity.attackWeapon;
+      const entitySidePlayerType = this.getSidePlayerType(entity.side);
+      const scanRange = entitySidePlayerType === 'HUMAN'
+        ? weapon.attackRange
+        : Math.max(weapon.attackRange, entity.visionRange);
+      const scanRangeSqr = scanRange * scanRange;
+
+      let bestTarget: MapEntity | null = null;
+      let bestDistanceSqr = Number.POSITIVE_INFINITY;
+
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate.destroyed || !candidate.canTakeDamage) {
+          continue;
+        }
+        if (candidate.id === entity.id) {
+          continue;
+        }
+        // Source parity: only auto-target enemies.
+        if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) {
+          continue;
+        }
+        // Source parity: stealthed units not auto-acquired unless detected.
+        if (
+          candidate.objectStatusFlags.has('STEALTHED') &&
+          !candidate.objectStatusFlags.has('DETECTED')
+        ) {
+          continue;
+        }
+        if (!this.canAttackerTargetEntity(entity, candidate, 'AI')) {
+          continue;
+        }
+        const dx = candidate.x - entity.x;
+        const dz = candidate.z - entity.z;
+        const distanceSqr = dx * dx + dz * dz;
+        if (distanceSqr > scanRangeSqr) {
+          continue;
+        }
+        if (distanceSqr < bestDistanceSqr) {
+          bestTarget = candidate;
+          bestDistanceSqr = distanceSqr;
+        }
+      }
+
+      if (bestTarget) {
+        this.issueAttackEntity(entity.id, bestTarget.id, 'AI');
+      }
+    }
   }
 
   /**
