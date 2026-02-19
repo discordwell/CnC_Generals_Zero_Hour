@@ -841,6 +841,48 @@ async function startGame(
     document.getElementById('ui-overlay')!.appendChild(powerHud);
   }
 
+  // Rank HUD indicator (below power HUD) — reuse on restart.
+  let rankHud = document.getElementById('rank-hud') as HTMLDivElement | null;
+  if (!rankHud) {
+    rankHud = document.createElement('div');
+    rankHud.id = 'rank-hud';
+    Object.assign(rankHud.style, {
+      position: 'absolute',
+      top: '58px',
+      right: '10px',
+      color: '#c9a84c',
+      fontFamily: "'Segoe UI', Arial, sans-serif",
+      fontSize: '12px',
+      fontWeight: '600',
+      textShadow: '0 0 4px rgba(0,0,0,0.8)',
+      zIndex: '100',
+      pointerEvents: 'none',
+    });
+    document.getElementById('ui-overlay')!.appendChild(rankHud);
+  }
+
+  // Superweapon countdown HUD (top-center) — reuse on restart.
+  let superweaponHud = document.getElementById('superweapon-hud') as HTMLDivElement | null;
+  if (!superweaponHud) {
+    superweaponHud = document.createElement('div');
+    superweaponHud.id = 'superweapon-hud';
+    Object.assign(superweaponHud.style, {
+      position: 'absolute',
+      top: '10px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      color: '#ff6644',
+      fontFamily: "'Segoe UI', Arial, sans-serif",
+      fontSize: '13px',
+      fontWeight: '700',
+      textShadow: '0 0 6px rgba(0,0,0,0.9)',
+      zIndex: '100',
+      pointerEvents: 'none',
+      display: 'none',
+    });
+    document.getElementById('ui-overlay')!.appendChild(superweaponHud);
+  }
+
   // Entity info panel (bottom-center, shows selected unit details) — reuse on restart.
   let entityInfoPanel = document.getElementById('entity-info-panel') as HTMLDivElement | null;
   if (!entityInfoPanel) {
@@ -1094,8 +1136,36 @@ async function startGame(
     // Draw pre-rendered terrain.
     minimapCtx.drawImage(minimapTerrainCanvas, 0, 0);
 
-    // Draw entity dots.
+    // Apply fog of war overlay on terrain.
     const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
+    const fogData = localSide ? gameLogic.getFogOfWarTextureData(localSide) : null;
+    if (fogData) {
+      const fogImgData = minimapCtx.getImageData(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+      for (let py = 0; py < MINIMAP_SIZE; py++) {
+        for (let px = 0; px < MINIMAP_SIZE; px++) {
+          // Map minimap pixel to fog grid cell.
+          const fogCol = Math.floor((px / MINIMAP_SIZE) * fogData.cellsWide);
+          const fogRow = Math.floor((py / MINIMAP_SIZE) * fogData.cellsDeep);
+          const visibility = fogData.data[fogRow * fogData.cellsWide + fogCol] ?? 0;
+          const idx = (py * MINIMAP_SIZE + px) * 4;
+          if (visibility === 0) {
+            // CELL_SHROUDED — darken completely.
+            fogImgData.data[idx] = Math.round(fogImgData.data[idx]! * 0.15);
+            fogImgData.data[idx + 1] = Math.round(fogImgData.data[idx + 1]! * 0.15);
+            fogImgData.data[idx + 2] = Math.round(fogImgData.data[idx + 2]! * 0.15);
+          } else if (visibility === 1) {
+            // CELL_FOGGED — dim (previously seen).
+            fogImgData.data[idx] = Math.round(fogImgData.data[idx]! * 0.5);
+            fogImgData.data[idx + 1] = Math.round(fogImgData.data[idx + 1]! * 0.5);
+            fogImgData.data[idx + 2] = Math.round(fogImgData.data[idx + 2]! * 0.5);
+          }
+          // CELL_CLEAR (2) — leave terrain colors as-is.
+        }
+      }
+      minimapCtx.putImageData(fogImgData, 0, 0);
+    }
+
+    // Draw entity dots (respect fog of war — hide enemy entities in non-visible cells).
     const renderStates = gameLogic.getRenderableEntityStates();
     for (const entity of renderStates) {
       const px = (entity.x / heightmap.worldWidth) * MINIMAP_SIZE;
@@ -1103,6 +1173,13 @@ async function startGame(
       const normalizedEntitySide = entity.side?.toUpperCase() ?? '';
       const normalizedLocalSide = localSide?.toUpperCase() ?? '';
       const isAlly = normalizedEntitySide === normalizedLocalSide;
+
+      // Non-ally entities are only visible in CELL_CLEAR fog cells.
+      if (!isAlly && localSide) {
+        const cellVis = gameLogic.getCellVisibility(localSide, entity.x, entity.z);
+        if (cellVis !== 2) continue; // Not CELL_CLEAR — skip.
+      }
+
       minimapCtx.fillStyle = isAlly ? '#00cc00' : '#cc3333';
       minimapCtx.fillRect(px - 1, py - 1, 3, 3);
     }
@@ -2265,6 +2342,39 @@ async function startGame(
         } else {
           powerHud.style.display = 'none';
         }
+
+        // Update rank HUD
+        const rankLevel = gameLogic.getLocalPlayerRankLevel();
+        const purchasePoints = gameLogic.getLocalPlayerSciencePurchasePoints();
+        const skillPoints = gameLogic.getLocalPlayerSkillPoints();
+        const nextThreshold = gameLogic.getLocalPlayerNextRankThreshold();
+        const rankStars = '\u2605'.repeat(Math.min(rankLevel, 5));
+        rankHud.style.display = 'block';
+        rankHud.textContent = `${rankStars} Rank ${rankLevel} | XP: ${skillPoints}/${nextThreshold} | GP: ${purchasePoints}`;
+      }
+
+      // Update superweapon countdown timers.
+      const countdowns = gameLogic.getSuperweaponCountdowns();
+      if (countdowns.length > 0) {
+        const normalizedLocal = localPlayerSide?.toUpperCase() ?? '';
+        const lines: string[] = [];
+        for (const cd of countdowns) {
+          const isPlayer = cd.side.toUpperCase() === normalizedLocal;
+          const prefix = isPlayer ? '\u2622' : '\u26A0'; // ☢ for player, ⚠ for enemy
+          if (cd.isReady) {
+            lines.push(`${prefix} ${cd.powerName}: READY`);
+          } else if (cd.readyFrame > 0) {
+            const remainingFrames = cd.readyFrame - cd.currentFrame;
+            const remainingSec = Math.max(0, Math.ceil(remainingFrames / 30));
+            const min = Math.floor(remainingSec / 60);
+            const sec = remainingSec % 60;
+            lines.push(`${prefix} ${cd.powerName}: ${min}:${sec.toString().padStart(2, '0')}`);
+          }
+        }
+        superweaponHud.textContent = lines.join(' | ');
+        superweaponHud.style.display = lines.length > 0 ? 'block' : 'none';
+      } else {
+        superweaponHud.style.display = 'none';
       }
 
       // Check for game end

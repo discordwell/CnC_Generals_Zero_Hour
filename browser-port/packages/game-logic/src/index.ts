@@ -218,6 +218,7 @@ import {
   type GameLogicConfig,
   type GarrisonBuildingCommand,
   type HackInternetCommand,
+  type RepairBuildingCommand,
   type IssueSpecialPowerCommand,
   type LocalScienceAvailability,
   type MapObjectPlacementSummary,
@@ -568,6 +569,40 @@ interface SidePowerState {
   energyConsumption: number;
 }
 
+/**
+ * Source parity: Player.h — rank level progression from kills.
+ * Rank thresholds and purchase point grants from Rank.ini.
+ */
+interface SideRankState {
+  /** Current rank level (1-based, starts at 1). */
+  rankLevel: number;
+  /** Cumulative skill points (from kills). */
+  skillPoints: number;
+  /** Unspent science purchase (General's) points. */
+  sciencePurchasePoints: number;
+}
+
+/**
+ * Source parity: Rank.ini — defines XP thresholds and purchase point grants per rank.
+ * Standard C&C Generals: Zero Hour rank values.
+ */
+interface RankInfoEntry {
+  skillPointsNeeded: number;
+  sciencePurchasePointsGranted: number;
+}
+
+/** Default Generals/ZH rank table (8 ranks). */
+const RANK_TABLE: readonly RankInfoEntry[] = [
+  { skillPointsNeeded: 0, sciencePurchasePointsGranted: 1 },     // Rank 1 (start)
+  { skillPointsNeeded: 200, sciencePurchasePointsGranted: 0 },   // Rank 2
+  { skillPointsNeeded: 500, sciencePurchasePointsGranted: 1 },   // Rank 3
+  { skillPointsNeeded: 800, sciencePurchasePointsGranted: 0 },   // Rank 4
+  { skillPointsNeeded: 1500, sciencePurchasePointsGranted: 1 },  // Rank 5
+  { skillPointsNeeded: 3000, sciencePurchasePointsGranted: 0 },  // Rank 6
+  { skillPointsNeeded: 5000, sciencePurchasePointsGranted: 0 },  // Rank 7
+  { skillPointsNeeded: 8000, sciencePurchasePointsGranted: 1 },  // Rank 8
+];
+
 interface ProductionProfile {
   maxQueueEntries: number;
   quantityModifiers: Array<{
@@ -820,8 +855,48 @@ interface MapEntity {
   stealthDelayRemaining: number;
   /** Frame at which DETECTED expires. 0 = not detected. */
   detectedUntilFrame: number;
+  /** Source parity: AutoHealBehavior — self-heal state. */
+  autoHealProfile: AutoHealProfile | null;
+  autoHealNextFrame: number;
+  autoHealDamageDelayUntilFrame: number;
+  /** Source parity: BaseRegenerateUpdate — structure regen after damage delay. */
+  baseRegenDelayUntilFrame: number;
+  /** Source parity: PropagandaTowerBehavior — radius heal/buff aura. */
+  propagandaTowerProfile: PropagandaTowerProfile | null;
+  propagandaTowerNextScanFrame: number;
+  propagandaTowerTrackedIds: number[];
+  /** Sole healing benefactor anti-stacking. */
+  soleHealingBenefactorId: number | null;
+  soleHealingBenefactorExpirationFrame: number;
   destroyed: boolean;
 }
+
+/**
+ * Source parity: AutoHealBehavior module parsed from INI.
+ */
+interface AutoHealProfile {
+  healingAmount: number;
+  healingDelayFrames: number;
+  startHealingDelayFrames: number;
+  radius: number;
+  affectsWholePlayer: boolean;
+  initiallyActive: boolean;
+}
+
+/**
+ * Source parity: PropagandaTowerBehavior module parsed from INI.
+ */
+interface PropagandaTowerProfile {
+  radius: number;
+  scanDelayFrames: number;
+  healPercentPerSecond: number;
+  upgradedHealPercentPerSecond: number;
+  upgradeRequired: string | null;
+}
+
+/** Global base regen config from GlobalData.ini. */
+const BASE_REGEN_HEALTH_PERCENT_PER_SECOND = 0.02; // 2% per second default
+const BASE_REGEN_DELAY_FRAMES = 60; // ~2s delay after damage before regen starts
 
 const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
   renderUnknownObjects: true,
@@ -864,6 +939,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSciences = new Map<string, Set<string>>();
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
+  private readonly sideRankState = new Map<string, SideRankState>();
   private readonly playerSideByIndex = new Map<number, string>();
   private readonly localPlayerScienceAvailability = new Map<string, LocalScienceAvailability>();
   private readonly shortcutSpecialPowerSourceByName = new Map<string, Map<number, number>>();
@@ -880,9 +956,12 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly hackInternetPendingCommandByEntityId = new Map<number, HackInternetPendingCommandState>();
   private readonly overchargeStateByEntityId = new Map<number, OverchargeRuntimeState>();
   private readonly disabledHackedStatusByEntityId = new Map<number, number>();
+  private readonly disabledEmpStatusByEntityId = new Map<number, number>();
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
   private readonly pendingGarrisonActions = new Map<number, number>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
+  /** Source parity: BuildAssistant repair — dozer ID → target building ID. */
+  private readonly pendingRepairActions = new Map<number, number>();
   private readonly supplyWarehouseStates = new Map<number, SupplyWarehouseState>();
   private readonly supplyTruckStates = new Map<number, SupplyTruckState>();
   private fogOfWarGrid: FogOfWarGrid | null = null;
@@ -891,7 +970,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly skirmishAIStates = new Map<string, SkirmishAIState>();
   private readonly railedTransportStateByEntityId = new Map<number, RailedTransportRuntimeState>();
   private railedTransportWaypointIndex: RailedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
-  private localPlayerSciencePurchasePoints = 0;
+  // localPlayerSciencePurchasePoints removed — now lives in sideRankState.
   private localPlayerIndex = 0;
 
   private isAttackMoveToMode = false;
@@ -1146,6 +1225,29 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
 
+        // Try repair if dozer right-clicks on a damaged friendly building.
+        if (
+          pickedEntityId !== null
+          && pickedEntityId !== selEntity.id
+          && selEntity.kindOf.has('DOZER')
+        ) {
+          const targetEntity = this.spawnedEntities.get(pickedEntityId);
+          if (
+            targetEntity
+            && !targetEntity.destroyed
+            && targetEntity.kindOf.has('STRUCTURE')
+            && targetEntity.health < targetEntity.maxHealth
+            && this.getTeamRelationship(selEntity, targetEntity) !== RELATIONSHIP_ENEMIES
+          ) {
+            this.submitCommand({
+              type: 'repairBuilding',
+              entityId: selEntity.id,
+              targetBuildingId: pickedEntityId,
+            });
+            continue;
+          }
+        }
+
         // Try attack if we clicked on an enemy.
         if (
           selEntity.attackWeapon
@@ -1219,18 +1321,21 @@ export class GameLogicSubsystem implements Subsystem {
     this.frameCounter++;
     this.flushCommands();
     this.updateDisabledHackedStatuses();
+    this.updateDisabledEmpStatuses();
     this.updateProduction();
     this.updateCombat();
     this.updateEntityMovement(dt);
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
     this.updatePendingGarrisonActions();
+    this.updatePendingRepairActions();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
     this.updateOvercharge();
     this.updateStealth();
     this.updateDetection();
+    this.updateHealing();
     this.updateFogOfWar();
     this.updateSupplyChain();
     this.updateSkirmishAI();
@@ -1403,7 +1508,27 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   getLocalPlayerSciencePurchasePoints(): number {
-    return this.localPlayerSciencePurchasePoints;
+    const side = this.resolveLocalPlayerSide();
+    if (!side) return 0;
+    return this.getSideRankStateMap(this.normalizeSide(side)!).sciencePurchasePoints;
+  }
+
+  getLocalPlayerRankLevel(): number {
+    const side = this.resolveLocalPlayerSide();
+    if (!side) return 1;
+    return this.getSideRankStateMap(this.normalizeSide(side)!).rankLevel;
+  }
+
+  getLocalPlayerSkillPoints(): number {
+    const side = this.resolveLocalPlayerSide();
+    if (!side) return 0;
+    return this.getSideRankStateMap(this.normalizeSide(side)!).skillPoints;
+  }
+
+  getLocalPlayerNextRankThreshold(): number {
+    const level = this.getLocalPlayerRankLevel();
+    if (level >= RANK_TABLE.length) return RANK_TABLE[RANK_TABLE.length - 1]?.skillPointsNeeded ?? 0;
+    return RANK_TABLE[level]?.skillPointsNeeded ?? 0;
   }
 
   private resolveLocalPlayerSide(): string | null {
@@ -2114,7 +2239,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const scienceCost = this.getSciencePurchaseCost(scienceDef);
-    if (scienceCost <= 0 || scienceCost > this.localPlayerSciencePurchasePoints) {
+    if (scienceCost <= 0 || scienceCost > this.getLocalPlayerSciencePurchasePoints()) {
       return 0;
     }
 
@@ -2181,6 +2306,50 @@ export class GameLogicSubsystem implements Subsystem {
     };
     this.sideRadarState.set(normalizedSide, created);
     return created;
+  }
+
+  private getSideRankStateMap(normalizedSide: string): SideRankState {
+    const existing = this.sideRankState.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+    // Source parity: Player::resetRank — start at rank 1, with rank 1's purchase points.
+    const created: SideRankState = {
+      rankLevel: 1,
+      skillPoints: 0,
+      sciencePurchasePoints: RANK_TABLE[0]?.sciencePurchasePointsGranted ?? 0,
+    };
+    this.sideRankState.set(normalizedSide, created);
+    return created;
+  }
+
+  /**
+   * Source parity: Player::addSkillPoints — award player-level skill points from kills.
+   * Returns true if a rank level-up occurred.
+   */
+  private addPlayerSkillPoints(side: string, delta: number): boolean {
+    if (delta <= 0) return false;
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) return false;
+
+    const rankState = this.getSideRankStateMap(normalizedSide);
+
+    // Cap at max rank threshold.
+    const maxRank = RANK_TABLE.length;
+    const pointCap = RANK_TABLE[maxRank - 1]?.skillPointsNeeded ?? Infinity;
+    rankState.skillPoints = Math.min(pointCap, rankState.skillPoints + delta);
+
+    // Check for level-ups.
+    let didLevelUp = false;
+    while (rankState.rankLevel < maxRank) {
+      const nextRank = RANK_TABLE[rankState.rankLevel]; // 0-indexed, current is (rankLevel-1), next is (rankLevel)
+      if (!nextRank || rankState.skillPoints < nextRank.skillPointsNeeded) break;
+      rankState.rankLevel++;
+      rankState.sciencePurchasePoints += nextRank.sciencePurchasePointsGranted;
+      didLevelUp = true;
+    }
+
+    return didLevelUp;
   }
 
   private hasSideScience(side: string, scienceName: string): boolean {
@@ -2517,9 +2686,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideKindOfProductionCostModifiers.clear();
     this.sideSciences.clear();
     this.localPlayerScienceAvailability.clear();
-    this.localPlayerSciencePurchasePoints = 0;
     this.sidePowerBonus.clear();
     this.sideRadarState.clear();
+    this.sideRankState.clear();
     this.frameCounter = 0;
     this.gameRandom.setSeed(1);
     this.isAttackMoveToMode = false;
@@ -2709,6 +2878,15 @@ export class GameLogicSubsystem implements Subsystem {
       visionState: createEntityVisionStateImpl(),
       stealthDelayRemaining: 0,
       detectedUntilFrame: 0,
+      autoHealProfile: this.extractAutoHealProfile(objectDef),
+      autoHealNextFrame: 0,
+      autoHealDamageDelayUntilFrame: 0,
+      baseRegenDelayUntilFrame: 0,
+      propagandaTowerProfile: this.extractPropagandaTowerProfile(objectDef),
+      propagandaTowerNextScanFrame: 0,
+      propagandaTowerTrackedIds: [],
+      soleHealingBenefactorId: null,
+      soleHealingBenefactorExpirationFrame: 0,
       destroyed: false,
     };
   }
@@ -4014,6 +4192,67 @@ export class GameLogicSubsystem implements Subsystem {
       experienceRequired: expRequired,
       experienceValue: expValue,
     };
+  }
+
+  /**
+   * Source parity: AutoHealBehavior — parse self-heal module from INI.
+   */
+  private extractAutoHealProfile(objectDef: ObjectDef | undefined): AutoHealProfile | null {
+    if (!objectDef) return null;
+    let profile: AutoHealProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'AUTOHEALBEHAVIOR') {
+          profile = {
+            healingAmount: readNumericField(block.fields, ['HealingAmount']) ?? 0,
+            healingDelayFrames: readNumericField(block.fields, ['HealingDelay']) ?? 900,
+            startHealingDelayFrames: readNumericField(block.fields, ['StartHealingDelay']) ?? 0,
+            radius: readNumericField(block.fields, ['Radius']) ?? 0,
+            affectsWholePlayer: readBooleanField(block.fields, ['AffectsWholePlayer']) ?? false,
+            initiallyActive: readBooleanField(block.fields, ['StartsActive']) ?? false,
+          };
+        }
+      }
+      if (block.children) {
+        for (const child of block.children) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: PropagandaTowerBehavior — parse aura heal module from INI.
+   */
+  private extractPropagandaTowerProfile(objectDef: ObjectDef | undefined): PropagandaTowerProfile | null {
+    if (!objectDef) return null;
+    let profile: PropagandaTowerProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'PROPAGANDATOWERBEHAVIOR') {
+          profile = {
+            radius: readNumericField(block.fields, ['Radius']) ?? 100,
+            scanDelayFrames: readNumericField(block.fields, ['DelayBetweenUpdates']) ?? 100,
+            healPercentPerSecond: readNumericField(block.fields, ['HealPercentEachSecond']) ?? 0.01,
+            upgradedHealPercentPerSecond: readNumericField(block.fields, ['UpgradedHealPercentEachSecond']) ?? 0.02,
+            upgradeRequired: readStringField(block.fields, ['UpgradeRequired']) ?? null,
+          };
+        }
+      }
+      if (block.children) {
+        for (const child of block.children) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
   }
 
   private extractRailedTransportProfile(objectDef: ObjectDef | undefined): RailedTransportProfile | null {
@@ -5815,10 +6054,11 @@ export class GameLogicSubsystem implements Subsystem {
         if (!this.addScienceToSide(localSide, normalizedScience)) {
           return;
         }
-        this.localPlayerSciencePurchasePoints = Math.max(
-          0,
-          this.localPlayerSciencePurchasePoints - scienceCost,
-        );
+        const normalizedLocalSide = this.normalizeSide(localSide);
+        if (normalizedLocalSide) {
+          const rankState = this.getSideRankStateMap(normalizedLocalSide);
+          rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
+        }
         return;
       }
       case 'issueSpecialPower':
@@ -5863,6 +6103,9 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       case 'garrisonBuilding':
         this.handleGarrisonBuildingCommand(command);
+        return;
+      case 'repairBuilding':
+        this.handleRepairBuildingCommand(command);
         return;
       default:
         return;
@@ -5945,6 +6188,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'toggleOvercharge':
       case 'setRallyPoint':
       case 'garrisonBuilding':
+      case 'repairBuilding':
         return true;
       default:
         return false;
@@ -6231,6 +6475,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingEnterObjectActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
     this.pendingGarrisonActions.delete(entityId);
+    this.pendingRepairActions.delete(entityId);
   }
 
   private cancelRailedTransportTransit(entityId: number): void {
@@ -7197,6 +7442,81 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: BuildAssistant::repairObject — dozer repairs a damaged friendly building.
+   */
+  private handleRepairBuildingCommand(command: RepairBuildingCommand): void {
+    const dozer = this.spawnedEntities.get(command.entityId);
+    const building = this.spawnedEntities.get(command.targetBuildingId);
+    if (!dozer || !building || dozer.destroyed || building.destroyed) return;
+    if (!dozer.kindOf.has('DOZER')) return;
+    if (!building.kindOf.has('STRUCTURE')) return;
+    if (building.health >= building.maxHealth) return;
+
+    // Must be same side.
+    const dozerSide = this.normalizeSide(dozer.side);
+    const buildingSide = this.normalizeSide(building.side);
+    if (dozerSide !== buildingSide) return;
+
+    // Move dozer to building if not close enough.
+    const distance = Math.hypot(building.x - dozer.x, building.z - dozer.z);
+    if (distance > 20) {
+      this.issueMoveTo(dozer.id, building.x, building.z);
+    }
+    this.pendingRepairActions.set(dozer.id, building.id);
+  }
+
+  /**
+   * Source parity: BuildAssistant repair update — dozers repair buildings over time.
+   * Repair rate: ~2% max HP per second, costs ~0.5% of building cost per second.
+   */
+  private updatePendingRepairActions(): void {
+    const REPAIR_RATE_PER_FRAME = 0.02 / 30; // 2% of maxHP per second at 30fps
+    const REPAIR_COST_RATE = 0.005 / 30; // 0.5% of build cost per second at 30fps
+
+    for (const [dozerId, buildingId] of this.pendingRepairActions.entries()) {
+      const dozer = this.spawnedEntities.get(dozerId);
+      const building = this.spawnedEntities.get(buildingId);
+      if (!dozer || !building || dozer.destroyed || building.destroyed) {
+        this.pendingRepairActions.delete(dozerId);
+        continue;
+      }
+
+      // Building fully repaired.
+      if (building.health >= building.maxHealth) {
+        this.pendingRepairActions.delete(dozerId);
+        continue;
+      }
+
+      // Must be close enough to repair.
+      const distance = Math.hypot(building.x - dozer.x, building.z - dozer.z);
+      if (distance > 20) continue; // Still moving
+
+      // Stop dozer movement while repairing.
+      if (dozer.moving) {
+        dozer.moving = false;
+        dozer.moveTarget = null;
+        dozer.movePath = [];
+      }
+
+      // Check player can afford repair.
+      const dozerSide = this.normalizeSide(dozer.side);
+      if (!dozerSide) {
+        this.pendingRepairActions.delete(dozerId);
+        continue;
+      }
+      const credits = this.sideCredits.get(dozerSide) ?? 0;
+      const buildCost = building.maxHealth; // Approximate — use maxHealth as fallback for build cost
+      const frameCost = REPAIR_COST_RATE * buildCost;
+      if (credits < frameCost) continue; // Can't afford this frame
+
+      // Deduct cost and apply repair.
+      this.sideCredits.set(dozerSide, credits - frameCost);
+      const healAmount = REPAIR_RATE_PER_FRAME * building.maxHealth;
+      building.health = Math.min(building.maxHealth, building.health + healAmount);
+    }
+  }
+
   private updatePendingEnterObjectActions(): void {
     for (const [sourceId, pending] of this.pendingEnterObjectActions.entries()) {
       const source = this.spawnedEntities.get(sourceId);
@@ -7697,6 +8017,38 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: EMPUpdate — timed DISABLED_EMP status expiry.
+   */
+  private updateDisabledEmpStatuses(): void {
+    for (const [entityId, disableUntilFrame] of this.disabledEmpStatusByEntityId.entries()) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        this.disabledEmpStatusByEntityId.delete(entityId);
+        continue;
+      }
+      if (this.frameCounter < disableUntilFrame) {
+        continue;
+      }
+      entity.objectStatusFlags.delete('DISABLED_EMP');
+      this.disabledEmpStatusByEntityId.delete(entityId);
+    }
+  }
+
+  /**
+   * Apply EMP disable effect to an entity for a duration.
+   * Source parity: EMPUpdate::onObjectCreated / EMPWeapon hit.
+   */
+  private applyEmpDisable(entity: MapEntity, durationFrames: number): void {
+    if (entity.destroyed) return;
+    entity.objectStatusFlags.add('DISABLED_EMP');
+    const resolvedDisableUntilFrame = this.frameCounter + durationFrames;
+    const previous = this.disabledEmpStatusByEntityId.get(entity.id) ?? 0;
+    if (resolvedDisableUntilFrame > previous) {
+      this.disabledEmpStatusByEntityId.set(entity.id, resolvedDisableUntilFrame);
+    }
+  }
+
+  /**
    * Source parity: Object::look() / Object::unlook()
    * Updates each entity's vision contribution to the fog of war grid.
    */
@@ -7774,6 +8126,128 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: AutoHealBehavior, BaseRegenerateUpdate, PropagandaTowerBehavior.
+   * Runs all healing systems in a single pass.
+   */
+  private updateHealing(): void {
+    const LOGICFRAMES_PER_SECOND = 30;
+    const BASE_REGEN_INTERVAL = 3; // BaseRegenerateUpdate heals every 3 frames
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.health >= entity.maxHealth && entity.health > 0) {
+        // Already at full health — skip self-heal and base-regen (but propaganda tower still runs)
+        if (!entity.propagandaTowerProfile) continue;
+      }
+
+      const isDisabled = entity.objectStatusFlags.has('DISABLED_EMP')
+        || entity.objectStatusFlags.has('DISABLED_HACKED')
+        || entity.objectStatusFlags.has('DISABLED_SUBDUED');
+
+      // ── AutoHealBehavior (self-heal) ──
+      if (entity.autoHealProfile && !isDisabled && entity.health < entity.maxHealth) {
+        const prof = entity.autoHealProfile;
+        if (prof.initiallyActive || entity.completedUpgrades.size > 0) {
+          // Check damage delay.
+          if (this.frameCounter >= entity.autoHealDamageDelayUntilFrame) {
+            if (this.frameCounter >= entity.autoHealNextFrame) {
+              if (prof.radius > 0) {
+                // Radius heal mode — heal nearby allies.
+                const radiusSq = prof.radius * prof.radius;
+                for (const target of this.spawnedEntities.values()) {
+                  if (target.destroyed || target === entity) continue;
+                  if (target.health >= target.maxHealth) continue;
+                  if (this.getTeamRelationship(entity, target) === RELATIONSHIP_ENEMIES) continue;
+                  const dx = target.x - entity.x;
+                  const dz = target.z - entity.z;
+                  if (dx * dx + dz * dz <= radiusSq) {
+                    this.attemptHealingFromSoleBenefactor(target, prof.healingAmount, entity.id, prof.healingDelayFrames);
+                  }
+                }
+              } else if (prof.affectsWholePlayer) {
+                // Whole-player mode — heal all entities on same side.
+                const side = this.normalizeSide(entity.side);
+                for (const target of this.spawnedEntities.values()) {
+                  if (target.destroyed || target.health >= target.maxHealth) continue;
+                  if (this.normalizeSide(target.side) !== side) continue;
+                  target.health = Math.min(target.maxHealth, target.health + prof.healingAmount);
+                }
+              } else {
+                // Self-heal mode.
+                entity.health = Math.min(entity.maxHealth, entity.health + prof.healingAmount);
+              }
+              entity.autoHealNextFrame = this.frameCounter + prof.healingDelayFrames;
+            }
+          }
+        }
+      }
+
+      // ── BaseRegenerateUpdate (structure regen) ──
+      if (entity.kindOf.has('STRUCTURE') && !isDisabled && entity.health < entity.maxHealth
+          && !entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
+          && !entity.objectStatusFlags.has('SOLD')
+          && BASE_REGEN_HEALTH_PERCENT_PER_SECOND > 0) {
+        if (this.frameCounter >= entity.baseRegenDelayUntilFrame) {
+          if (this.frameCounter % BASE_REGEN_INTERVAL === 0) {
+            const amount = BASE_REGEN_INTERVAL * entity.maxHealth * BASE_REGEN_HEALTH_PERCENT_PER_SECOND / LOGICFRAMES_PER_SECOND;
+            entity.health = Math.min(entity.maxHealth, entity.health + amount);
+          }
+        }
+      }
+
+      // ── PropagandaTowerBehavior (radius heal aura) ──
+      if (entity.propagandaTowerProfile && !isDisabled
+          && !entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
+          && !entity.objectStatusFlags.has('SOLD')) {
+        const prof = entity.propagandaTowerProfile;
+        const isUpgraded = prof.upgradeRequired !== null
+          && entity.completedUpgrades.has(prof.upgradeRequired.toUpperCase());
+        const healPct = isUpgraded ? prof.upgradedHealPercentPerSecond : prof.healPercentPerSecond;
+
+        // Rescan for units in range periodically.
+        if (this.frameCounter >= entity.propagandaTowerNextScanFrame) {
+          entity.propagandaTowerTrackedIds = [];
+          const radiusSq = prof.radius * prof.radius;
+          for (const target of this.spawnedEntities.values()) {
+            if (target.destroyed || target === entity) continue;
+            if (target.kindOf.has('STRUCTURE')) continue; // Only troops
+            if (this.getTeamRelationship(entity, target) === RELATIONSHIP_ENEMIES) continue;
+            const dx = target.x - entity.x;
+            const dz = target.z - entity.z;
+            if (dx * dx + dz * dz <= radiusSq) {
+              entity.propagandaTowerTrackedIds.push(target.id);
+            }
+          }
+          entity.propagandaTowerNextScanFrame = this.frameCounter + prof.scanDelayFrames;
+        }
+
+        // Heal tracked units each frame.
+        for (const targetId of entity.propagandaTowerTrackedIds) {
+          const target = this.spawnedEntities.get(targetId);
+          if (!target || target.destroyed || target.health >= target.maxHealth) continue;
+          const amount = healPct / LOGICFRAMES_PER_SECOND * target.maxHealth;
+          this.attemptHealingFromSoleBenefactor(target, amount, entity.id, prof.scanDelayFrames);
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: Object::attemptHealingFromSoleBenefactor — anti-stack healing.
+   * Only one benefactor can heal a unit at a time.
+   */
+  private attemptHealingFromSoleBenefactor(
+    target: MapEntity, amount: number, sourceId: number, duration: number,
+  ): void {
+    const now = this.frameCounter;
+    if (now >= target.soleHealingBenefactorExpirationFrame || target.soleHealingBenefactorId === sourceId) {
+      target.soleHealingBenefactorId = sourceId;
+      target.soleHealingBenefactorExpirationFrame = now + duration;
+      target.health = Math.min(target.maxHealth, target.health + amount);
+    }
+  }
+
   private updateFogOfWar(): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
@@ -7840,6 +8314,56 @@ export class GameLogicSubsystem implements Subsystem {
    */
   isPositionVisible(side: string, worldX: number, worldZ: number): boolean {
     return this.getCellVisibility(side, worldX, worldZ) === CELL_CLEAR;
+  }
+
+  /**
+   * Get superweapon countdown timers for all sides.
+   * Returns array of { side, entityId, powerName, readyFrame, currentFrame, isReady }.
+   */
+  getSuperweaponCountdowns(): Array<{
+    side: string;
+    entityId: number;
+    powerName: string;
+    readyFrame: number;
+    currentFrame: number;
+    isReady: boolean;
+  }> {
+    const SUPERWEAPON_POWER_PATTERNS = [
+      'SUPERWEAPON', 'PARTICLE_CANNON', 'SCUD_STORM', 'NUCLEAR_MISSILE',
+      'NUKE', 'PARTICLECANNON', 'SCUDSTORM',
+    ];
+    const results: Array<{
+      side: string;
+      entityId: number;
+      powerName: string;
+      readyFrame: number;
+      currentFrame: number;
+      isReady: boolean;
+    }> = [];
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (!entity.kindOf.has('FS_SUPERWEAPON')) continue;
+
+      for (const [, module] of entity.specialPowerModules) {
+        const powerName = module.specialPowerTemplateName;
+        // Look up shared ready frame.
+        const normalizedPower = powerName.toUpperCase().replace(/\s+/g, '');
+        const sharedFrame = this.sharedShortcutSpecialPowerReadyFrames.get(normalizedPower) ?? 0;
+        const readyFrame = sharedFrame > 0 ? sharedFrame : 0;
+
+        results.push({
+          side: entity.side ?? '',
+          entityId: entity.id,
+          powerName,
+          readyFrame,
+          currentFrame: this.frameCounter,
+          isReady: readyFrame > 0 && this.frameCounter >= readyFrame,
+        });
+      }
+    }
+
+    return results;
   }
 
   /**
@@ -10740,6 +11264,22 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     target.health = Math.max(0, target.health - adjustedDamage);
+
+    // Source parity: onDamage resets heal timers for AutoHeal and BaseRegen.
+    if (target.autoHealProfile && target.autoHealProfile.startHealingDelayFrames > 0) {
+      target.autoHealDamageDelayUntilFrame = this.frameCounter + target.autoHealProfile.startHealingDelayFrames;
+    }
+    if (target.kindOf.has('STRUCTURE')) {
+      target.baseRegenDelayUntilFrame = this.frameCounter + BASE_REGEN_DELAY_FRAMES;
+    }
+
+    // Source parity: EMPUpdate — EMP damage type disables target for ~5 seconds.
+    const normalizedDamageType = damageType.toUpperCase();
+    if (normalizedDamageType === 'EMP' || normalizedDamageType === 'MICROWAVE') {
+      const EMP_DISABLE_DURATION_FRAMES = 150; // ~5s at 30fps
+      this.applyEmpDisable(target, EMP_DISABLE_DURATION_FRAMES);
+    }
+
     if (target.health <= 0) {
       this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
@@ -10779,6 +11319,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.disableOverchargeForEntity(entity);
     this.sellingEntities.delete(entityId);
     this.disabledHackedStatusByEntityId.delete(entityId);
+    this.disabledEmpStatusByEntityId.delete(entityId);
     for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
       if (pendingAction.targetObjectId === entityId) {
         this.pendingEnterObjectActions.delete(sourceId);
@@ -10869,6 +11410,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    // Source parity: unit-level veterancy XP.
     const result = addExperiencePointsImpl(
       attacker.experienceState,
       attackerProfile,
@@ -10878,6 +11420,15 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (result.didLevelUp) {
       this.onEntityLevelUp(attacker, result.oldLevel, result.newLevel);
+    }
+
+    // Source parity: Player::addSkillPointsForKill — also award player-level rank points.
+    // SkillPointValue defaults to ExperienceValue when not set in INI (USE_EXP_VALUE_FOR_SKILL_VALUE sentinel).
+    if (attackerSide) {
+      // No skill points for killing units under construction.
+      if (!victim.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+        this.addPlayerSkillPoints(attackerSide, xpGain);
+      }
     }
   }
 
@@ -11215,12 +11766,14 @@ export class GameLogicSubsystem implements Subsystem {
     }
     this.overchargeStateByEntityId.clear();
     this.disabledHackedStatusByEntityId.clear();
+    this.disabledEmpStatusByEntityId.clear();
     this.sellingEntities.clear();
     this.hackInternetStateByEntityId.clear();
     this.hackInternetPendingCommandByEntityId.clear();
     this.pendingEnterObjectActions.clear();
     this.pendingCombatDropActions.clear();
     this.pendingGarrisonActions.clear();
+    this.pendingRepairActions.clear();
     this.supplyWarehouseStates.clear();
     this.supplyTruckStates.clear();
     this.railedTransportStateByEntityId.clear();

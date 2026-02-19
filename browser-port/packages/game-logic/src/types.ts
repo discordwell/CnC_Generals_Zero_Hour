@@ -343,6 +343,12 @@ export interface GarrisonBuildingCommand {
   targetBuildingId: number;
 }
 
+export interface RepairBuildingCommand {
+  type: 'repairBuilding';
+  entityId: number;
+  targetBuildingId: number;
+}
+
 export type GameLogicCommand =
   | SelectByIdCommand
   | SelectEntitySetCommand
@@ -385,6 +391,7 @@ export type GameLogicCommand =
   | ConstructBuildingCommand
   | CancelDozerConstructionCommand
   | GarrisonBuildingCommand
+  | RepairBuildingCommand
   | SwitchWeaponCommand;
 
 export interface SelectedEntityInfo {
