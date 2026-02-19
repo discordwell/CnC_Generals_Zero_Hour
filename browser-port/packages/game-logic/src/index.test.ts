@@ -8516,3 +8516,300 @@ describe('tunnel network', () => {
     expect(infantry!.statusFlags).not.toContain('DISABLED_HELD');
   });
 });
+
+// ── Construction Progress System ──────────────────────────────────────────────
+
+describe('construction progress', () => {
+  function makeConstructionSetup(buildTimeSeconds = 2) {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+          Speed: 30,
+        }),
+        makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          BuildCost: 500,
+          BuildTime: buildTimeSeconds,
+          EnergyBonus: 10,
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      locomotors: [makeLocomotorDef('DozerLocomotor', 30)],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('USADozer', 16, 16)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 2000 });
+    logic.update(1 / 30); // Process credits
+
+    return { logic, scene };
+  }
+
+  it('building starts under construction with 0% and health=1 when dozer places it', () => {
+    const { logic } = makeConstructionSetup(2);
+
+    // Issue construct command — dozer at (16,16) builds at (20,20).
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'USAPowerPlant',
+      targetPosition: [20, 0, 20],
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(1 / 30);
+
+    // Building should exist with UNDER_CONSTRUCTION.
+    const building = logic.getEntityState(2);
+    expect(building).not.toBeNull();
+    expect(building!.statusFlags).toContain('UNDER_CONSTRUCTION');
+    expect(building!.constructionPercent).toBeGreaterThanOrEqual(0);
+    expect(building!.constructionPercent).toBeLessThan(100);
+    expect(building!.health).toBeLessThan(building!.maxHealth);
+
+    // Credits should be deducted immediately.
+    expect(logic.getSideCredits('America')).toBe(1500);
+  });
+
+  it('building completes construction after BuildTime seconds of dozer proximity', () => {
+    const { logic } = makeConstructionSetup(1); // 1 second = 30 frames
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'USAPowerPlant',
+      targetPosition: [18, 0, 18], // Close to dozer at (16,16)
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    // Run for 31 frames (1 second + margin) — first frame places the building.
+    for (let i = 0; i < 31; i++) {
+      logic.update(1 / 30);
+    }
+
+    const building = logic.getEntityState(2);
+    expect(building).not.toBeNull();
+    expect(building!.statusFlags).not.toContain('UNDER_CONSTRUCTION');
+    expect(building!.constructionPercent).toBe(-1); // CONSTRUCTION_COMPLETE
+    expect(building!.health).toBe(building!.maxHealth);
+  });
+
+  it('building does not gain energy until construction completes', () => {
+    const { logic } = makeConstructionSetup(1);
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'USAPowerPlant',
+      targetPosition: [18, 0, 18],
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(1 / 30); // Place building
+
+    // During construction, energy should not be contributed.
+    const powerDuring = logic.getSidePowerState('America');
+    expect(powerDuring.energyProduction).toBe(0);
+
+    // Complete construction.
+    for (let i = 0; i < 31; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After completion, energy should be registered.
+    const powerAfter = logic.getSidePowerState('America');
+    expect(powerAfter.energyProduction).toBe(10);
+  });
+
+  it('building under construction cannot attack', () => {
+    const weaponBlock = makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'GatlingCannon'] });
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('USADefense', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          weaponBlock,
+        ], { BuildCost: 300, BuildTime: 2, GeometryMajorRadius: 10, GeometryMinorRadius: 10 }),
+        makeObjectDef('ChinaTank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [makeWeaponDef('GatlingCannon', {
+        AttackRange: 100, PrimaryDamage: 10, PrimaryDamageRadius: 0,
+        DamageType: 'ARMOR_PIERCING', DeathType: 'NORMAL', DelayBetweenShots: 100,
+      })],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('USADozer', 16, 16), makeMapObject('ChinaTank', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Build the defense structure.
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'USADefense',
+      targetPosition: [18, 0, 18],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    // Run a few frames — building is under construction.
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    const building = logic.getEntityState(3); // building is entity 3 (dozer=1, tank=2)
+    expect(building).not.toBeNull();
+    expect(building!.statusFlags).toContain('UNDER_CONSTRUCTION');
+
+    // Tank should NOT be under attack from the building under construction.
+    const tank = logic.getEntityState(2);
+    expect(tank).not.toBeNull();
+    expect(tank!.health).toBe(100); // Full health — not attacked.
+  });
+
+  it('dozer interrupted during construction leaves building partially built', () => {
+    const { logic } = makeConstructionSetup(2); // 2 seconds = 60 frames
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'USAPowerPlant',
+      targetPosition: [18, 0, 18],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    // Build for 15 frames (~25%).
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    const buildingMid = logic.getEntityState(2);
+    expect(buildingMid).not.toBeNull();
+    expect(buildingMid!.statusFlags).toContain('UNDER_CONSTRUCTION');
+    const midPercent = buildingMid!.constructionPercent;
+    expect(midPercent).toBeGreaterThan(0);
+    expect(midPercent).toBeLessThan(100);
+
+    // Interrupt: order dozer to move elsewhere.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 50, targetZ: 50 });
+    logic.update(1 / 30);
+
+    // Building should still be under construction at the same percent.
+    const buildingAfter = logic.getEntityState(2);
+    expect(buildingAfter).not.toBeNull();
+    expect(buildingAfter!.statusFlags).toContain('UNDER_CONSTRUCTION');
+    expect(buildingAfter!.constructionPercent).toBeCloseTo(midPercent, 0);
+  });
+
+  it('cancel construction refunds full cost and destroys building', () => {
+    const { logic } = makeConstructionSetup(2);
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'USAPowerPlant',
+      targetPosition: [18, 0, 18],
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(1 / 30);
+
+    expect(logic.getSideCredits('America')).toBe(1500); // Deducted 500.
+
+    // Cancel the construction.
+    logic.submitCommand({ type: 'cancelDozerConstruction', entityId: 2 });
+    logic.update(1 / 30);
+
+    // Full cost refunded.
+    expect(logic.getSideCredits('America')).toBe(2000);
+
+    // Building should be destroyed.
+    const building = logic.getEntityState(2);
+    expect(building).toBeNull();
+  });
+
+  it('another dozer can resume partially built construction', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], { BuildCost: 500, BuildTime: 2, GeometryMajorRadius: 10, GeometryMinorRadius: 10 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('USADozer', 14, 14), makeMapObject('USADozer', 30, 30)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 2000 });
+    logic.update(1 / 30);
+
+    // Dozer 1 starts building.
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'USAPowerPlant',
+      targetPosition: [16, 0, 16],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    // Build for 15 frames.
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Interrupt dozer 1.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 50, targetZ: 50 });
+    logic.update(1 / 30);
+
+    const buildingMid = logic.getEntityState(3);
+    expect(buildingMid).not.toBeNull();
+    expect(buildingMid!.statusFlags).toContain('UNDER_CONSTRUCTION');
+    const midPercent = buildingMid!.constructionPercent;
+
+    // Dozer 2 resumes construction (via repair command on partially built building).
+    logic.submitCommand({ type: 'repairBuilding', entityId: 2, targetBuildingId: 3 });
+
+    // Run enough frames for dozer 2 to reach the building and complete it.
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    const buildingFinal = logic.getEntityState(3);
+    expect(buildingFinal).not.toBeNull();
+    expect(buildingFinal!.statusFlags).not.toContain('UNDER_CONSTRUCTION');
+    expect(buildingFinal!.constructionPercent).toBe(-1);
+    expect(buildingFinal!.health).toBe(500);
+  });
+});

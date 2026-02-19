@@ -282,6 +282,8 @@ const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
 const SOURCE_FRAMES_TO_ALLOW_SCAFFOLD = LOGIC_FRAME_RATE * 1.5;
 const SOURCE_TOTAL_FRAMES_TO_SELL_OBJECT = LOGIC_FRAME_RATE * 3;
 const SOURCE_DEFAULT_SELL_PERCENTAGE = 1.0;
+/** Source parity: Object.h CONSTRUCTION_COMPLETE sentinel — indicates fully built. */
+const CONSTRUCTION_COMPLETE = -1;
 const SOURCE_HACK_FALLBACK_CASH_AMOUNT = 1;
 const SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER = 3;
 
@@ -1335,6 +1337,17 @@ interface MapEntity {
   /** OCL names to execute when entity is destroyed. */
   deathOCLNames: string[];
 
+  // ── Source parity: Object::m_constructionPercent — dozer construction progress ──
+  /**
+   * Construction progress: 0..100 during build, CONSTRUCTION_COMPLETE (-1) when done.
+   * Objects are born with -1 (complete) unless placed by a dozer.
+   */
+  constructionPercent: number;
+  /** ID of the dozer currently building this entity. 0 = no active builder. */
+  builderId: number;
+  /** Total frames to build from INI BuildTime. 0 = instant. */
+  buildTotalFrames: number;
+
   destroyed: boolean;
 }
 
@@ -1513,6 +1526,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
   /** Source parity: BuildAssistant repair — dozer ID → target building ID. */
   private readonly pendingRepairActions = new Map<number, number>();
+  /** Source parity: DozerAIUpdate — dozer ID → building ID being constructed. */
+  private readonly pendingConstructionActions = new Map<number, number>();
   private readonly supplyWarehouseStates = new Map<number, SupplyWarehouseState>();
   private readonly supplyTruckStates = new Map<number, SupplyTruckState>();
   private fogOfWarGrid: FogOfWarGrid | null = null;
@@ -1681,6 +1696,7 @@ export class GameLogicSubsystem implements Subsystem {
       isStealthed: entity.objectStatusFlags.has('STEALTHED'),
       isDetected: entity.objectStatusFlags.has('DETECTED'),
       shroudStatus: this.resolveEntityShroudStatusForLocalPlayer(entity),
+      constructionPercent: entity.constructionPercent,
     };
   }
 
@@ -1895,6 +1911,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingTransportActions();
     this.updatePendingTunnelActions();
     this.updatePendingRepairActions();
+    this.updatePendingConstructionActions();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
@@ -2355,6 +2372,7 @@ export class GameLogicSubsystem implements Subsystem {
     veterancyLevel: number;
     currentExperience: number;
     rallyPoint: { x: number; z: number } | null;
+    constructionPercent: number;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -2394,6 +2412,7 @@ export class GameLogicSubsystem implements Subsystem {
       veterancyLevel: entity.experienceState.currentLevel,
       currentExperience: entity.experienceState.currentExperience,
       rallyPoint: entity.rallyPoint ? { x: entity.rallyPoint.x, z: entity.rallyPoint.z } : null,
+      constructionPercent: entity.constructionPercent,
     };
   }
 
@@ -3551,6 +3570,10 @@ export class GameLogicSubsystem implements Subsystem {
       ejectPilotMinVeterancy: 1,
       // Death OCLs
       deathOCLNames: this.extractDeathOCLNames(objectDef),
+      // Construction state — born complete unless dozer-placed.
+      constructionPercent: CONSTRUCTION_COMPLETE,
+      builderId: 0,
+      buildTotalFrames: 0,
       destroyed: false,
     };
   }
@@ -5848,6 +5871,8 @@ export class GameLogicSubsystem implements Subsystem {
    * Positive = production, negative = consumption.
    */
   private registerEntityEnergy(entity: MapEntity): void {
+    // Source parity: buildings under construction do not contribute/consume power.
+    if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) return;
     const normalizedSide = this.normalizeSide(entity.side);
     if (!normalizedSide || entity.energyBonus === 0) return;
     const state = this.getSidePowerStateMap(normalizedSide);
@@ -7804,6 +7829,23 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
     this.pendingRepairActions.delete(entityId);
+    // Source parity: DozerAIUpdate::cancelTask — clear active construction assignment.
+    this.cancelDozerConstructionTask(entityId);
+  }
+
+  /**
+   * Source parity: DozerAIUpdate::internalCancelTask — clear dozer's active build task.
+   * Building stays partially built and can be resumed by another dozer.
+   */
+  private cancelDozerConstructionTask(dozerId: number): void {
+    const buildingId = this.pendingConstructionActions.get(dozerId);
+    if (buildingId !== undefined) {
+      this.pendingConstructionActions.delete(dozerId);
+      const building = this.spawnedEntities.get(buildingId);
+      if (building && !building.destroyed && building.builderId === dozerId) {
+        building.builderId = 0;
+      }
+    }
   }
 
   private cancelRailedTransportTransit(entityId: number): void {
@@ -8696,6 +8738,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (this.sellingEntities.has(entity.id)) {
       return;
     }
+    // Source parity: buildings under construction use cancelDozerConstruction, not sell.
+    // The InGameUI prevents the sell button from appearing for UNDER_CONSTRUCTION buildings.
+    if (this.entityHasObjectStatus(entity, 'UNDER_CONSTRUCTION')) {
+      return;
+    }
 
     // Source parity subset: BuildAssistant::sellObject starts a timed teardown
     // (construction-percent countdown) and refunds queue production immediately.
@@ -8951,12 +8998,24 @@ export class GameLogicSubsystem implements Subsystem {
     if (!dozer || !building || dozer.destroyed || building.destroyed) return;
     if (!dozer.kindOf.has('DOZER')) return;
     if (!building.kindOf.has('STRUCTURE')) return;
-    if (building.health >= building.maxHealth) return;
+    if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) return;
 
     // Must be same side.
     const dozerSide = this.normalizeSide(dozer.side);
     const buildingSide = this.normalizeSide(building.side);
     if (dozerSide !== buildingSide) return;
+
+    // Source parity: DozerAIUpdate::privateResumeConstruction — if the building is
+    // still under construction, resume building instead of repairing.
+    if (building.constructionPercent !== CONSTRUCTION_COMPLETE
+      && building.objectStatusFlags.has('UNDER_CONSTRUCTION')
+      && building.builderId === 0) {
+      // Another dozer can resume. Claim it.
+      building.builderId = dozer.id;
+      this.pendingConstructionActions.set(dozer.id, building.id);
+      this.issueMoveTo(dozer.id, building.x, building.z);
+      return;
+    }
 
     // Move dozer to building if not close enough.
     const distance = Math.hypot(building.x - dozer.x, building.z - dozer.z);
@@ -9014,6 +9073,92 @@ export class GameLogicSubsystem implements Subsystem {
       this.sideCredits.set(dozerSide, credits - frameCost);
       const healAmount = REPAIR_RATE_PER_FRAME * building.maxHealth;
       building.health = Math.min(building.maxHealth, building.health + healAmount);
+    }
+  }
+
+  /**
+   * Source parity: DozerAIUpdate::update — per-frame construction progress loop.
+   * Each frame while the dozer is close to the building: increment construction
+   * percent by 100/totalFrames, increment health by maxHealth/totalFrames.
+   * When percent >= 100: clear UNDER_CONSTRUCTION, emit CONSTRUCTION_COMPLETE.
+   */
+  private updatePendingConstructionActions(): void {
+    for (const [dozerId, buildingId] of this.pendingConstructionActions.entries()) {
+      const dozer = this.spawnedEntities.get(dozerId);
+      const building = this.spawnedEntities.get(buildingId);
+      if (!dozer || !building || dozer.destroyed || building.destroyed
+        || building.objectStatusFlags.has('SOLD')) {
+        this.pendingConstructionActions.delete(dozerId);
+        if (building && !building.destroyed) {
+          // Source parity: dozer dies → building stays partially built, builderId cleared.
+          building.builderId = 0;
+        }
+        continue;
+      }
+
+      // Already complete (e.g. instant build).
+      if (building.constructionPercent === CONSTRUCTION_COMPLETE) {
+        this.pendingConstructionActions.delete(dozerId);
+        continue;
+      }
+
+      // Source parity: builder exclusivity check — only the assigned builder may progress.
+      if (building.builderId !== dozerId) {
+        this.pendingConstructionActions.delete(dozerId);
+        continue;
+      }
+
+      // Must be close enough to build (within obstacle radius + margin).
+      const buildRadius = this.resolveEntityBoundingRadius(building) + 10;
+      const distance = Math.hypot(building.x - dozer.x, building.z - dozer.z);
+      if (distance > buildRadius) continue; // Still moving to site
+
+      // Stop dozer movement while constructing.
+      if (dozer.moving) {
+        dozer.moving = false;
+        dozer.moveTarget = null;
+        dozer.movePath = [];
+      }
+
+      // Source parity: percentProgressThisFrame = 100.0 / framesToBuild
+      const totalFrames = building.buildTotalFrames;
+      if (totalFrames <= 0) {
+        // Shouldn't happen — complete immediately.
+        this.completeConstruction(building);
+        this.pendingConstructionActions.delete(dozerId);
+        continue;
+      }
+
+      const percentPerFrame = 100.0 / totalFrames;
+      building.constructionPercent += percentPerFrame;
+
+      // Source parity: health += maxHealth / framesToBuild each frame.
+      const healthPerFrame = building.maxHealth / totalFrames;
+      building.health = Math.min(building.maxHealth, building.health + healthPerFrame);
+
+      // Check for completion.
+      if (building.constructionPercent >= 100.0) {
+        this.completeConstruction(building);
+        this.pendingConstructionActions.delete(dozerId);
+      }
+    }
+  }
+
+  /**
+   * Source parity: onBuildComplete — finalize construction state.
+   */
+  private completeConstruction(building: MapEntity): void {
+    building.constructionPercent = CONSTRUCTION_COMPLETE;
+    building.builderId = 0;
+    building.health = building.maxHealth;
+    building.objectStatusFlags.delete('UNDER_CONSTRUCTION');
+    building.objectStatusFlags.delete('RECONSTRUCTING');
+    // Source parity: power contribution begins when construction finishes.
+    this.registerEntityEnergy(building);
+
+    // Source parity: Eva CONSTRUCTION_COMPLETE fires on build completion.
+    if (building.side) {
+      this.emitEvaEvent('CONSTRUCTION_COMPLETE', building.side, 'own', building.id, building.templateName);
     }
   }
 
@@ -10850,13 +10995,30 @@ export class GameLogicSubsystem implements Subsystem {
       created.side = constructor.side;
     }
     created.controllingPlayerToken = constructor.controllingPlayerToken;
+
+    // Source parity: DozerAIUpdate::construct — start at 0% construction, health=1.
+    const buildTimeFrames = this.resolveObjectBuildTimeFrames(objectDef);
+    if (buildTimeFrames > 0) {
+      created.constructionPercent = 0;
+      created.buildTotalFrames = buildTimeFrames;
+      created.builderId = constructor.id;
+      created.health = 1;
+      created.objectStatusFlags.add('UNDER_CONSTRUCTION');
+      // Note: UNDER_CONSTRUCTION side effects are checked directly via objectStatusFlags.
+      // Register dozer construction task.
+      this.pendingConstructionActions.set(constructor.id, created.id);
+      // Move dozer to building site.
+      this.issueMoveTo(constructor.id, created.x, created.z);
+    }
+
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
     this.registerTunnelEntity(created);
 
-    // Source parity: Eva CONSTRUCTION_COMPLETE fires when dozer finishes placing a structure.
-    if (created.side) {
+    // Source parity: Eva CONSTRUCTION_COMPLETE fires when construction finishes,
+    // not when the building is first placed.
+    if (buildTimeFrames <= 0 && created.side) {
       this.emitEvaEvent('CONSTRUCTION_COMPLETE', created.side, 'own', created.id, objectDef.name);
     }
 
@@ -14028,6 +14190,14 @@ export class GameLogicSubsystem implements Subsystem {
     return this.resolveEntityContainingObject(projectileLauncher);
   }
 
+  private resolveEntityBoundingRadius(entity: MapEntity): number {
+    const geom = entity.obstacleGeometry;
+    if (geom && geom.majorRadius > 0) {
+      return Math.max(geom.majorRadius, geom.minorRadius);
+    }
+    return entity.nominalHeight / 2;
+  }
+
   private resolveEntityKindOfSet(entity: MapEntity): Set<string> {
     const kindOf = new Set<string>();
     switch (entity.category) {
@@ -14707,6 +14877,12 @@ export class GameLogicSubsystem implements Subsystem {
     for (const pendingAction of this.pendingCombatDropActions.values()) {
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
+      }
+    }
+    // Clear dozer construction tasks targeting this building.
+    for (const [dozerId, targetBuildingId] of this.pendingConstructionActions.entries()) {
+      if (targetBuildingId === entityId) {
+        this.pendingConstructionActions.delete(dozerId);
       }
     }
 
@@ -15502,6 +15678,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingTunnelActions.clear();
     this.tunnelTrackers.clear();
     this.pendingRepairActions.clear();
+    this.pendingConstructionActions.clear();
     this.supplyWarehouseStates.clear();
     this.supplyTruckStates.clear();
     this.railedTransportStateByEntityId.clear();

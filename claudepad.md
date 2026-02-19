@@ -1,5 +1,22 @@
 # Session Summaries
 
+## 2026-02-20T08:15Z — Construction Progress System + Tunnel Code Review Fixes
+- Task #73 code review fixes: immediate tunnel unregister on sell (double-sell race), non-movable scatter positioning — committed 141cd5b
+- Task #74: Construction Progress/Duration System with full C++ DozerAIUpdate parity:
+  - constructionPercent field (0..100 during build, -1 = CONSTRUCTION_COMPLETE)
+  - builderId field for builder exclusivity, buildTotalFrames from INI BuildTime
+  - UNDER_CONSTRUCTION status flag: blocks attack, energy, XP, cash bounty
+  - Per-frame progress: percent += 100/totalFrames, health += maxHealth/totalFrames
+  - Starting health = 1 HP, completes at maxHealth
+  - completeConstruction: clears flags, registers energy, emits EVA event
+  - Dozer interruption: building stays partially built, builderId cleared
+  - Resume construction: repair command on UNDER_CONSTRUCTION building resumes build
+  - Cancel construction: full cost refund, building destroyed
+  - pendingConstructionActions map with cleanup in cancelEntityCommandPathActions
+  - RenderableEntityState.constructionPercent for UI display
+  - 7 new tests: initial state, completion timing, energy delay, attack block, interruption, cancel/refund, resume
+- All 1033 tests pass, clean build
+
 ## 2026-02-20T08:00Z — Tunnel Network Transport System + Mine onDamage
 - Task #72: Mine onDamage sympathetic detonation handler — committed d503474
 - Task #73: Tunnel Network Transport System with full C++ TunnelTracker parity:

@@ -37,6 +37,8 @@ export interface RenderableEntityState {
   isDetected: boolean;
   /** Source parity: ObjectShroudStatus — visibility from the local player's perspective. */
   shroudStatus: 'CLEAR' | 'FOGGED' | 'SHROUDED';
+  /** Source parity: Object::m_constructionPercent — 0..100 during build, -1 when complete. */
+  constructionPercent: number;
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';
