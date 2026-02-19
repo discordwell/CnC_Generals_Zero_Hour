@@ -14,10 +14,12 @@ import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
   IniDataRegistry,
   type ArmorDef,
+  type GameDataConfig,
   type SpecialPowerDef,
   type ObjectDef,
   type ScienceDef,
   type UpgradeDef,
+  type WeaponBonusEntry,
   type WeaponDef,
 } from '@generals/ini-data';
 import {
@@ -354,6 +356,112 @@ const ARMOR_SET_FLAG_ELITE = 1 << 1;
 const ARMOR_SET_FLAG_HERO = 1 << 2;
 const ARMOR_SET_FLAG_PLAYER_UPGRADE = 1 << 3;
 const ARMOR_SET_FLAG_WEAK_VERSUS_BASEDEFENSES = 1 << 4;
+
+// Source parity: WeaponBonusConditionType — bitmask flags for active weapon bonus conditions.
+const WEAPON_BONUS_GARRISONED       = 1 << 0;
+const WEAPON_BONUS_HORDE            = 1 << 1;
+const WEAPON_BONUS_CONTINUOUS_FIRE_MEAN = 1 << 2;
+const WEAPON_BONUS_CONTINUOUS_FIRE_FAST = 1 << 3;
+const WEAPON_BONUS_NATIONALISM      = 1 << 4;
+const WEAPON_BONUS_PLAYER_UPGRADE   = 1 << 5;
+const WEAPON_BONUS_DRONE_SPOTTING   = 1 << 6;
+const WEAPON_BONUS_ENTHUSIASTIC     = 1 << 8;
+const WEAPON_BONUS_VETERAN          = 1 << 9;
+const WEAPON_BONUS_ELITE            = 1 << 10;
+const WEAPON_BONUS_HERO             = 1 << 11;
+const WEAPON_BONUS_BOMBARDMENT      = 1 << 12;
+const WEAPON_BONUS_HOLDTHELINE      = 1 << 13;
+const WEAPON_BONUS_SEARCHANDDESTROY = 1 << 14;
+const WEAPON_BONUS_SUBLIMINAL       = 1 << 15;
+const WEAPON_BONUS_FAERIE_FIRE      = 1 << 22;
+const WEAPON_BONUS_FANATICISM       = 1 << 23;
+const WEAPON_BONUS_FRENZY_ONE       = 1 << 24;
+const WEAPON_BONUS_FRENZY_TWO       = 1 << 25;
+const WEAPON_BONUS_FRENZY_THREE     = 1 << 26;
+
+const WEAPON_BONUS_CONDITION_BY_NAME = new Map<string, number>([
+  ['GARRISONED', WEAPON_BONUS_GARRISONED],
+  ['HORDE', WEAPON_BONUS_HORDE],
+  ['CONTINUOUS_FIRE_MEAN', WEAPON_BONUS_CONTINUOUS_FIRE_MEAN],
+  ['CONTINUOUS_FIRE_FAST', WEAPON_BONUS_CONTINUOUS_FIRE_FAST],
+  ['NATIONALISM', WEAPON_BONUS_NATIONALISM],
+  ['PLAYER_UPGRADE', WEAPON_BONUS_PLAYER_UPGRADE],
+  ['DRONE_SPOTTING', WEAPON_BONUS_DRONE_SPOTTING],
+  ['ENTHUSIASTIC', WEAPON_BONUS_ENTHUSIASTIC],
+  ['VETERAN', WEAPON_BONUS_VETERAN],
+  ['ELITE', WEAPON_BONUS_ELITE],
+  ['HERO', WEAPON_BONUS_HERO],
+  ['BATTLEPLAN_BOMBARDMENT', WEAPON_BONUS_BOMBARDMENT],
+  ['BATTLEPLAN_HOLDTHELINE', WEAPON_BONUS_HOLDTHELINE],
+  ['BATTLEPLAN_SEARCHANDDESTROY', WEAPON_BONUS_SEARCHANDDESTROY],
+  ['SUBLIMINAL', WEAPON_BONUS_SUBLIMINAL],
+  ['TARGET_FAERIE_FIRE', WEAPON_BONUS_FAERIE_FIRE],
+  ['FANATICISM', WEAPON_BONUS_FANATICISM],
+  ['FRENZY_ONE', WEAPON_BONUS_FRENZY_ONE],
+  ['FRENZY_TWO', WEAPON_BONUS_FRENZY_TWO],
+  ['FRENZY_THREE', WEAPON_BONUS_FRENZY_THREE],
+]);
+
+// Source parity: WeaponBonus::Field — bonus field types.
+const WEAPON_BONUS_FIELD_DAMAGE = 0;
+const WEAPON_BONUS_FIELD_RADIUS = 1;
+const WEAPON_BONUS_FIELD_RANGE = 2;
+const WEAPON_BONUS_FIELD_RATE_OF_FIRE = 3;
+const WEAPON_BONUS_FIELD_PRE_ATTACK = 4;
+const WEAPON_BONUS_FIELD_COUNT = 5;
+
+const WEAPON_BONUS_FIELD_BY_NAME = new Map<string, number>([
+  ['DAMAGE', WEAPON_BONUS_FIELD_DAMAGE],
+  ['RADIUS', WEAPON_BONUS_FIELD_RADIUS],
+  ['RANGE', WEAPON_BONUS_FIELD_RANGE],
+  ['RATE_OF_FIRE', WEAPON_BONUS_FIELD_RATE_OF_FIRE],
+  ['PRE_ATTACK', WEAPON_BONUS_FIELD_PRE_ATTACK],
+]);
+
+/**
+ * Source parity: WeaponBonusSet — lookup table mapping (conditionBit, fieldIndex) to multiplier.
+ * Each entry stores the multiplier for one condition+field combination.
+ * Global set comes from GameData.ini; per-weapon overrides come from weapon INI.
+ */
+interface WeaponBonusTable {
+  /** Sparse map: key = `${conditionBit}:${fieldIndex}`, value = multiplier. */
+  entries: Map<string, number>;
+}
+
+function buildWeaponBonusTable(bonusEntries: readonly WeaponBonusEntry[]): WeaponBonusTable {
+  const entries = new Map<string, number>();
+  for (const entry of bonusEntries) {
+    const conditionBit = WEAPON_BONUS_CONDITION_BY_NAME.get(entry.condition);
+    const fieldIndex = WEAPON_BONUS_FIELD_BY_NAME.get(entry.field);
+    if (conditionBit === undefined || fieldIndex === undefined) continue;
+    entries.set(`${conditionBit}:${fieldIndex}`, entry.multiplier);
+  }
+  return { entries };
+}
+
+/**
+ * Source parity: Weapon::computeBonus() + WeaponBonusSet::appendBonuses() — compute
+ * the effective weapon bonus multiplier for a given field by accumulating all active
+ * condition bonuses. Bonuses are ADDITIVE: result = 1.0 + sum(bonus - 1.0).
+ */
+function computeWeaponBonusField(
+  table: WeaponBonusTable,
+  conditionFlags: number,
+  fieldIndex: number,
+): number {
+  if (conditionFlags === 0) return 1.0;
+  let result = 1.0;
+  for (const [key, multiplier] of table.entries) {
+    const colonIdx = key.indexOf(':');
+    const bit = Number(key.slice(0, colonIdx));
+    const field = Number(key.slice(colonIdx + 1));
+    if (field !== fieldIndex) continue;
+    if ((conditionFlags & bit) === 0) continue;
+    // Source parity: WeaponBonus::appendBonuses — additive accumulation.
+    result += multiplier - 1.0;
+  }
+  return result;
+}
 
 const WEAPON_SET_FLAG_MASK_BY_NAME = new Map<string, number>([
   ['VETERAN', WEAPON_SET_FLAG_VETERAN],
@@ -1022,6 +1130,8 @@ interface MapEntity {
   attackWeapon: AttackWeaponProfile | null;
   weaponTemplateSets: WeaponTemplateSetProfile[];
   weaponSetFlagsMask: number;
+  /** Source parity: Object::m_weaponBonusCondition — bitmask of active weapon bonus conditions. */
+  weaponBonusConditionFlags: number;
   armorTemplateSets: ArmorTemplateSetProfile[];
   armorSetFlagsMask: number;
   armorDamageCoefficients: Map<string, number> | null;
@@ -1267,6 +1377,8 @@ export class GameLogicSubsystem implements Subsystem {
   private mapHeightmap: HeightmapGrid | null = null;
   private navigationGrid: NavigationGrid | null = null;
   private iniDataRegistry: IniDataRegistry | null = null;
+  /** Source parity: TheGlobalData->m_weaponBonusSet — global weapon bonus table from GameData.ini. */
+  private globalWeaponBonusTable: WeaponBonusTable = { entries: new Map() };
   private readonly commandQueue: GameLogicCommand[] = [];
   private frameCounter = 0;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
@@ -1357,6 +1469,13 @@ export class GameLogicSubsystem implements Subsystem {
     this.clearSpawnedObjects();
     this.mapHeightmap = heightmap;
     this.iniDataRegistry = iniDataRegistry;
+
+    // Source parity: TheGlobalData->m_weaponBonusSet — build from GameData.ini entries.
+    const gameDataConfig = iniDataRegistry.getGameData();
+    if (gameDataConfig) {
+      this.globalWeaponBonusTable = buildWeaponBonusTable(gameDataConfig.weaponBonusEntries);
+    }
+
     this.railedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(
       this.resolveRailedTransportWaypointData(mapData),
     );
@@ -3216,6 +3335,7 @@ export class GameLogicSubsystem implements Subsystem {
       attackWeapon,
       weaponTemplateSets,
       weaponSetFlagsMask: 0,
+      weaponBonusConditionFlags: 0,
       forcedWeaponSlot: null,
       weaponLockStatus: 'NOT_LOCKED' as const,
       maxShotsRemaining: 0,
@@ -5789,6 +5909,8 @@ export class GameLogicSubsystem implements Subsystem {
   // which maps to WEAPON_SET_FLAG_PLAYER_UPGRADE in this port's weapon-set selection.
   private applyWeaponBonusUpgrade(entity: MapEntity): boolean {
     entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_PLAYER_UPGRADE;
+    // Source parity: WeaponBonusUpgrade sets WEAPONBONUSCONDITION_PLAYER_UPGRADE.
+    entity.weaponBonusConditionFlags |= WEAPON_BONUS_PLAYER_UPGRADE;
     this.refreshEntityCombatProfiles(entity);
     return true;
   }
@@ -5865,12 +5987,14 @@ export class GameLogicSubsystem implements Subsystem {
     // Recompute weapon-set flags from all currently active modules so that removing
     // one WEAPONBONUSUPGRADE does not clear a remaining WEAPONSETUPGRADE source.
     entity.weaponSetFlagsMask &= ~WEAPON_SET_FLAG_PLAYER_UPGRADE;
+    entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_PLAYER_UPGRADE;
     for (const module of entity.upgradeModules) {
       if (!entity.executedUpgradeModules.has(module.id)) {
         continue;
       }
       if (module.moduleType === 'WEAPONSETUPGRADE' || module.moduleType === 'WEAPONBONUSUPGRADE') {
         entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_PLAYER_UPGRADE;
+        entity.weaponBonusConditionFlags |= WEAPON_BONUS_PLAYER_UPGRADE;
         break;
       }
     }
@@ -6258,6 +6382,17 @@ export class GameLogicSubsystem implements Subsystem {
       entity.armorSetFlagsMask,
       registry,
     );
+
+    // Source parity: apply RANGE bonus from global weapon bonus table to resolved weapon profile.
+    if (entity.attackWeapon) {
+      const rangeBonus = this.resolveWeaponRangeBonusMultiplier(entity);
+      if (rangeBonus !== 1.0) {
+        entity.attackWeapon = {
+          ...entity.attackWeapon,
+          attackRange: entity.attackWeapon.attackRange * rangeBonus,
+        };
+      }
+    }
 
     const nextWeapon = entity.attackWeapon;
     const scatterTargetPatternChanged = (() => {
@@ -10024,6 +10159,10 @@ export class GameLogicSubsystem implements Subsystem {
       || entity.transportContainerId !== null;
   }
 
+  private isEntityContainedInGarrison(entity: MapEntity): boolean {
+    return entity.garrisonContainerId !== null;
+  }
+
   private collectContainedEntityIds(containerId: number): number[] {
     const entityIds = new Set<number>();
     const container = this.spawnedEntities.get(containerId);
@@ -12760,6 +12899,19 @@ export class GameLogicSubsystem implements Subsystem {
         ? Math.ceil(travelFrames) : 0;
     }
 
+    // Source parity: Weapon::computeBonus() — apply damage and radius bonuses at fire time.
+    const damageBonus = this.resolveWeaponDamageBonusMultiplier(attacker);
+    const radiusBonus = this.resolveWeaponRadiusBonusMultiplier(attacker);
+    const bonusedWeapon: AttackWeaponProfile = (damageBonus !== 1.0 || radiusBonus !== 1.0)
+      ? {
+        ...weapon,
+        primaryDamage: weapon.primaryDamage * damageBonus,
+        secondaryDamage: weapon.secondaryDamage * damageBonus,
+        primaryDamageRadius: weapon.primaryDamageRadius * radiusBonus,
+        secondaryDamageRadius: weapon.secondaryDamageRadius * radiusBonus,
+      }
+      : weapon;
+
     const event: PendingWeaponDamageEvent = {
       sourceEntityId: attacker.id,
       primaryVictimEntityId,
@@ -12767,7 +12919,7 @@ export class GameLogicSubsystem implements Subsystem {
       impactZ,
       executeFrame: this.frameCounter + delayFrames,
       delivery,
-      weapon,
+      weapon: bonusedWeapon,
       launchFrame: this.frameCounter,
       sourceX,
       sourceY: attacker.y,
@@ -13350,7 +13502,12 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     weapon: AttackWeaponProfile,
   ): number {
-    return resolveWeaponPreAttackDelayFramesImpl(attacker, target.id, weapon);
+    const baseDelay = resolveWeaponPreAttackDelayFramesImpl(attacker, target.id, weapon);
+    if (baseDelay <= 0) return 0;
+    // Source parity: WeaponTemplate::getPreAttackDelay(bonus) *= PRE_ATTACK bonus.
+    const preAttackBonus = this.resolveWeaponPreAttackBonusMultiplier(attacker);
+    if (preAttackBonus === 1.0) return baseDelay;
+    return Math.max(0, Math.floor(baseDelay * preAttackBonus));
   }
 
   /**
@@ -13481,6 +13638,71 @@ export class GameLogicSubsystem implements Subsystem {
     return 1.0;
   }
 
+  /**
+   * Source parity: Weapon::computeBonus() — resolve the effective bonus condition flags
+   * for an entity, including veterancy, player upgrades, continuous-fire, and garrisoned state.
+   * Returns the full condition bitmask to use with computeWeaponBonusField().
+   */
+  private resolveEntityWeaponBonusConditionFlags(entity: MapEntity): number {
+    let flags = entity.weaponBonusConditionFlags;
+    // Continuous-fire conditions are set dynamically per frame.
+    if (entity.continuousFireState === 'MEAN') {
+      flags |= WEAPON_BONUS_CONTINUOUS_FIRE_MEAN;
+    } else if (entity.continuousFireState === 'FAST') {
+      flags |= WEAPON_BONUS_CONTINUOUS_FIRE_FAST;
+    }
+    // Garrisoned condition if entity is contained inside a garrison.
+    if (this.isEntityContainedInGarrison(entity)) {
+      flags |= WEAPON_BONUS_GARRISONED;
+    }
+    return flags;
+  }
+
+  /**
+   * Source parity: WeaponTemplate::getPrimaryDamage(bonus) — compute effective weapon damage
+   * multiplied by the active DAMAGE bonus from the global weapon bonus table.
+   */
+  private resolveWeaponDamageBonusMultiplier(entity: MapEntity): number {
+    const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
+    return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_DAMAGE);
+  }
+
+  /**
+   * Source parity: WeaponTemplate::getAttackRange(bonus) — compute effective attack range
+   * multiplied by the active RANGE bonus from the global weapon bonus table.
+   */
+  private resolveWeaponRangeBonusMultiplier(entity: MapEntity): number {
+    const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
+    return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_RANGE);
+  }
+
+  /**
+   * Source parity: WeaponTemplate::getDelayBetweenShots(bonus) — compute effective ROF bonus
+   * multiplied by the active RATE_OF_FIRE bonus from the global weapon bonus table.
+   */
+  private resolveWeaponRateOfFireBonusMultiplier(entity: MapEntity): number {
+    const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
+    return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_RATE_OF_FIRE);
+  }
+
+  /**
+   * Source parity: WeaponTemplate::getPreAttackDelay(bonus) — compute effective pre-attack
+   * delay multiplied by the active PRE_ATTACK bonus from the global weapon bonus table.
+   */
+  private resolveWeaponPreAttackBonusMultiplier(entity: MapEntity): number {
+    const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
+    return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_PRE_ATTACK);
+  }
+
+  /**
+   * Source parity: WeaponTemplate::getPrimaryDamageRadius(bonus) — compute effective damage
+   * radius multiplied by the active RADIUS bonus from the global weapon bonus table.
+   */
+  private resolveWeaponRadiusBonusMultiplier(entity: MapEntity): number {
+    const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
+    return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_RADIUS);
+  }
+
   private resolveWeaponDelayFrames(weapon: AttackWeaponProfile): number {
     return resolveWeaponDelayFramesImpl(
       weapon,
@@ -13494,11 +13716,16 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private resolveWeaponDelayFramesWithBonus(attacker: MapEntity, weapon: AttackWeaponProfile): number {
     const baseDelay = this.resolveWeaponDelayFrames(weapon);
-    const rofBonus = this.resolveContinuousFireRateOfFireBonus(attacker, weapon);
-    if (rofBonus <= 0 || rofBonus === 1.0) {
+    // Source parity: combine per-weapon continuous-fire bonus with global table ROF bonus.
+    const continuousFireBonus = this.resolveContinuousFireRateOfFireBonus(attacker, weapon);
+    const globalRofBonus = this.resolveWeaponRateOfFireBonusMultiplier(attacker);
+    // Additive accumulation: both bonuses contribute (globalRofBonus already includes 1.0 base).
+    const totalRofBonus = continuousFireBonus + (globalRofBonus - 1.0);
+    if (totalRofBonus <= 0 || totalRofBonus === 1.0) {
       return baseDelay;
     }
-    return Math.max(0, Math.floor(baseDelay / rofBonus));
+    // Source parity: REAL_TO_INT_FLOOR(delay / rofBonus).
+    return Math.max(0, Math.floor(baseDelay / totalRofBonus));
   }
 
   private applyWeaponDamageAmount(
@@ -14038,6 +14265,31 @@ export class GameLogicSubsystem implements Subsystem {
     // Clear all veterancy armor flags then set the new one.
     entity.armorSetFlagsMask &= ~0x07; // Clear VETERAN | ELITE | HERO bits.
     entity.armorSetFlagsMask |= vetArmorFlags;
+
+    // Source parity: Object::setVeterancyLevel — update weapon bonus condition flags.
+    // Veterancy levels are mutually exclusive: only one of VETERAN/ELITE/HERO is active.
+    const vetBonusMask = WEAPON_BONUS_VETERAN | WEAPON_BONUS_ELITE | WEAPON_BONUS_HERO;
+    entity.weaponBonusConditionFlags &= ~vetBonusMask;
+    if (newLevel === 'VETERAN') {
+      entity.weaponBonusConditionFlags |= WEAPON_BONUS_VETERAN;
+    } else if (newLevel === 'ELITE') {
+      entity.weaponBonusConditionFlags |= WEAPON_BONUS_ELITE;
+    } else if (newLevel === 'HEROIC') {
+      entity.weaponBonusConditionFlags |= WEAPON_BONUS_HERO;
+    }
+
+    // Source parity: Object::setVeterancyLevel → refreshWeaponSet() — update weapon set
+    // flags and recompute combat profiles (applies RANGE bonus from new veterancy level).
+    const vetWeaponMask = WEAPON_SET_FLAG_VETERAN | WEAPON_SET_FLAG_ELITE | WEAPON_SET_FLAG_HERO;
+    entity.weaponSetFlagsMask &= ~vetWeaponMask;
+    if (newLevel === 'VETERAN') {
+      entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_VETERAN;
+    } else if (newLevel === 'ELITE') {
+      entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_ELITE;
+    } else if (newLevel === 'HEROIC') {
+      entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_HERO;
+    }
+    this.refreshEntityCombatProfiles(entity);
   }
 
   private cancelAndRefundAllProductionOnDeath(producer: MapEntity): void {

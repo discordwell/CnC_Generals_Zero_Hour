@@ -146,6 +146,23 @@ export interface AiConfig {
   attackUsesLineOfSight?: boolean;
 }
 
+/**
+ * Source parity: WeaponBonusSet::parseWeaponBonusSet — a single entry from
+ * `WeaponBonus = CONDITION FIELD PERCENT%` in GameData.ini.
+ */
+export interface WeaponBonusEntry {
+  condition: string;
+  field: string;
+  multiplier: number;
+}
+
+/**
+ * Source parity: TheGlobalData — selected fields from the global GameData INI block.
+ */
+export interface GameDataConfig {
+  weaponBonusEntries: WeaponBonusEntry[];
+}
+
 export interface AudioSettingsConfig {
   sampleCount2D?: number;
   sampleCount3D?: number;
@@ -176,6 +193,7 @@ export interface IniDataBundle {
   commandSets?: CommandSetDef[];
   ai?: AiConfig;
   audioSettings?: AudioSettingsConfig;
+  gameData?: GameDataConfig;
   stats: RegistryStats;
   errors: RegistryError[];
   unsupportedBlockTypes: string[];
@@ -201,6 +219,7 @@ export class IniDataRegistry {
   readonly errors: RegistryError[] = [];
   private ai: AiConfig | undefined;
   private audioSettings: AudioSettingsConfig | undefined;
+  private gameData: GameDataConfig | undefined;
   private miscAudio: MiscAudioDef | undefined;
 
   private unsupportedBlockTypes = new Set<string>();
@@ -240,6 +259,7 @@ export class IniDataRegistry {
     this.unsupportedBlockTypes.clear();
     this.miscAudio = undefined;
     this.audioSettings = undefined;
+    this.gameData = undefined;
 
     for (const object of bundle.objects) {
       this.objects.set(object.name, {
@@ -345,6 +365,9 @@ export class IniDataRegistry {
     this.errors.push(...bundle.errors);
     this.ai = bundle.ai ? { ...bundle.ai } : undefined;
     this.audioSettings = bundle.audioSettings ? { ...bundle.audioSettings } : undefined;
+    this.gameData = bundle.gameData
+      ? { weaponBonusEntries: [...bundle.gameData.weaponBonusEntries] }
+      : undefined;
     for (const unsupported of bundle.unsupportedBlockTypes) {
       this.unsupportedBlockTypes.add(unsupported);
     }
@@ -406,6 +429,12 @@ export class IniDataRegistry {
 
   getAiConfig(): AiConfig | undefined {
     return this.ai ? { ...this.ai } : undefined;
+  }
+
+  getGameData(): GameDataConfig | undefined {
+    return this.gameData
+      ? { weaponBonusEntries: [...this.gameData.weaponBonusEntries] }
+      : undefined;
   }
 
   getAudioSettings(): AudioSettingsConfig | undefined {
@@ -493,6 +522,9 @@ export class IniDataRegistry {
       commandSets: [...this.commandSets.values()].sort((a, b) => a.name.localeCompare(b.name)),
       ai: this.ai ? { ...this.ai } : undefined,
       audioSettings: this.audioSettings ? { ...this.audioSettings } : undefined,
+      gameData: this.gameData
+        ? { weaponBonusEntries: [...this.gameData.weaponBonusEntries] }
+        : undefined,
       stats,
       errors: [...this.errors],
       unsupportedBlockTypes: this.getUnsupportedBlockTypes(),
@@ -660,6 +692,10 @@ export class IniDataRegistry {
         break;
       }
 
+      case 'GameData':
+        this.indexGameDataBlock(block);
+        break;
+
       // Known but not indexed block types — skip silently
       case 'DamageFX':
       case 'FXList':
@@ -668,7 +704,6 @@ export class IniDataRegistry {
       case 'MappedImage':
       case 'ParticleSystem':
       case 'Animation':
-      case 'GameData':
       case 'Terrain':
       case 'Road':
       case 'Bridge':
@@ -739,6 +774,38 @@ export class IniDataRegistry {
         });
         break;
     }
+  }
+
+  /**
+   * Source parity: GlobalData::parseGameDataDefinition — extract WeaponBonus entries
+   * from the GameData INI block. Format: `WeaponBonus = CONDITION FIELD PERCENT%`.
+   */
+  private indexGameDataBlock(block: IniBlock): void {
+    const weaponBonusValue = block.fields['WeaponBonus'];
+    if (!weaponBonusValue) {
+      return;
+    }
+
+    const entries: WeaponBonusEntry[] = this.gameData?.weaponBonusEntries
+      ? [...this.gameData.weaponBonusEntries]
+      : [];
+
+    const lines = Array.isArray(weaponBonusValue) ? weaponBonusValue : [weaponBonusValue];
+    for (const line of lines) {
+      const tokens = String(line).trim().split(/\s+/);
+      if (tokens.length < 3) continue;
+      const condition = tokens[0]!.toUpperCase();
+      const field = tokens[1]!.toUpperCase();
+      const rawPercent = tokens[2]!;
+      // Source parity: INI::scanPercentToReal — "125%" → 1.25 (no clamping).
+      const percentStr = rawPercent.endsWith('%') ? rawPercent.slice(0, -1) : rawPercent;
+      const multiplier = Number(percentStr) / 100;
+      if (Number.isFinite(multiplier)) {
+        entries.push({ condition, field, multiplier });
+      }
+    }
+
+    this.gameData = { weaponBonusEntries: entries };
   }
 
   private resolveObjectChain(name: string, visited: Set<string>): ObjectDef | undefined {

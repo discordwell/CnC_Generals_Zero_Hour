@@ -18,5 +18,7 @@ export type {
   RegistryStats,
   RegistryError,
   AudioSettingsConfig,
+  GameDataConfig,
+  WeaponBonusEntry,
   IniDataBundle,
 } from './registry.js';
