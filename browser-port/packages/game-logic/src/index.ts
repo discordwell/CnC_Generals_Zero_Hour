@@ -671,6 +671,44 @@ interface JetAISneakyProfile {
   attackersMissPersistFrames: number;
 }
 
+/**
+ * Source parity: SpawnBehaviorModuleData — spawner module parsed from INI.
+ * (GeneralsMD/Code/GameEngine/Include/GameLogic/Module/SpawnBehavior.h)
+ */
+interface SpawnBehaviorProfile {
+  /** How many slaves the spawner maintains. */
+  spawnNumber: number;
+  /** Frames to wait before replacing a dead slave. */
+  spawnReplaceDelayFrames: number;
+  /** Template name(s) of what to spawn. Multiple names for cycling. */
+  spawnTemplateNames: string[];
+  /** Only spawn once, then go dormant. */
+  oneShot: boolean;
+  /** Slaves die when spawner dies. */
+  spawnedRequireSpawner: boolean;
+  /** Spawner's health is the average of all slaves' health. */
+  aggregateHealth: boolean;
+  /** How many to create immediately, ignoring the replace delay. */
+  initialBurst: number;
+}
+
+/**
+ * Source parity: SpawnBehavior runtime state — tracks live slaves and replacement scheduling.
+ */
+interface SpawnBehaviorState {
+  profile: SpawnBehaviorProfile;
+  /** ObjectIDs of all currently alive slaves. */
+  slaveIds: number[];
+  /** Frames at which each pending replacement should occur. */
+  replacementFrames: number[];
+  /** Index into spawnTemplateNames for cycling. */
+  templateNameIndex: number;
+  /** True if one-shot spawner has already spawned. */
+  oneShotCompleted: boolean;
+  /** Source parity: m_initialBurstTimesInited — prevents burst logic from re-firing. */
+  initialBurstApplied: boolean;
+}
+
 interface UnitProductionQueueEntry {
   type: 'UNIT';
   templateName: string;
@@ -846,6 +884,10 @@ interface MapEntity {
   helixCarrierId: number | null;
   garrisonContainerId: number | null;
   helixPortableRiderId: number | null;
+  /** Source parity: SlavedUpdate — ID of the spawner/slaver that owns this slave. */
+  slaverEntityId: number | null;
+  /** Source parity: SpawnBehavior — spawner runtime state. Null if not a spawner. */
+  spawnBehaviorState: SpawnBehaviorState | null;
   largestWeaponRange: number;
   totalWeaponAntiMask: number;
   locomotorSets: Map<string, LocomotorSetProfile>;
@@ -1417,6 +1459,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateDisabledHackedStatuses();
     this.updateDisabledEmpStatuses();
     this.updateProduction();
+    this.updateSpawnBehaviors();
     this.updateCombat();
     this.updateEntityMovement(dt);
     this.updateRailedTransport();
@@ -2971,6 +3014,8 @@ export class GameLogicSubsystem implements Subsystem {
       helixCarrierId: null,
       garrisonContainerId: null,
       helixPortableRiderId: null,
+      slaverEntityId: null,
+      spawnBehaviorState: this.extractSpawnBehaviorState(objectDef),
       pathDiameter,
       pathfindCenterInCell,
       blocksPath,
@@ -4340,6 +4385,82 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: SupplyWarehouseDockUpdate.h — starting boxes + deleteWhenEmpty flag.
    */
+  /**
+   * Source parity: SpawnBehavior — parse spawn behavior module from INI and create
+   * initial runtime state. Returns null if the object has no SpawnBehavior module.
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/SpawnBehavior.cpp)
+   */
+  private extractSpawnBehaviorState(objectDef: ObjectDef | undefined): SpawnBehaviorState | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: SpawnBehaviorProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SPAWNBEHAVIOR') {
+          const spawnNumber = Math.max(0, Math.trunc(readNumericField(block.fields, ['SpawnNumber']) ?? 0));
+          const spawnReplaceDelayMs = readNumericField(block.fields, ['SpawnReplaceDelay']) ?? 0;
+          const spawnReplaceDelayFrames = this.msToLogicFrames(spawnReplaceDelayMs);
+          const templateNames: string[] = [];
+          const templateNameRaw = readStringField(block.fields, ['SpawnTemplateName']);
+          if (templateNameRaw) {
+            // SpawnTemplateName is parsed with INI_PARSE_APPEND in C++, meaning
+            // multiple entries accumulate. Our INI parser stores the last value,
+            // so we split on whitespace to handle potential multi-token values.
+            for (const token of templateNameRaw.split(/\s+/)) {
+              if (token) {
+                templateNames.push(token.toUpperCase());
+              }
+            }
+          }
+          const oneShot = readBooleanField(block.fields, ['OneShot']) === true;
+          const spawnedRequireSpawner = readBooleanField(block.fields, ['SpawnedRequireSpawner']) === true;
+          const aggregateHealth = readBooleanField(block.fields, ['AggregateHealth']) === true;
+          // Source parity: C++ defaults m_initialBurst to 0 when absent from INI.
+          const initialBurst = Math.max(0, Math.trunc(readNumericField(block.fields, ['InitialBurst']) ?? 0));
+
+          if (spawnNumber > 0 && templateNames.length > 0) {
+            profile = {
+              spawnNumber,
+              spawnReplaceDelayFrames,
+              spawnTemplateNames: templateNames,
+              oneShot,
+              spawnedRequireSpawner,
+              aggregateHealth,
+              initialBurst,
+            };
+          }
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (!profile) {
+      return null;
+    }
+
+    return {
+      profile,
+      slaveIds: [],
+      replacementFrames: [],
+      templateNameIndex: 0,
+      oneShotCompleted: false,
+      initialBurstApplied: false,
+    };
+  }
+
   private extractSupplyWarehouseProfile(objectDef: ObjectDef | undefined): SupplyWarehouseProfile | null {
     if (!objectDef) {
       return null;
@@ -5549,13 +5670,16 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     if (isPortableOrSpawnWeaponUnit && kindOf.has('INFANTRY')) {
-      // Source parity: GeneralsMD/Object.cpp checks SlavedUpdateInterface for spawned
-      // infantry and blocks attacks when the linked slaver is DISABLED_SUBDUED.
-      // TODO(C&C source parity): port generic slaver linkage outside of queue-produced
-      // spawn relationship once SpawnBehavior/MobMemberSlavedUpdate state is represented.
+      // Source parity: Object::isAbleToAttack() (Object.cpp:3212-3230) — spawned infantry
+      // checks SlavedUpdateInterface::getSlaverID() and blocks attacks when slaver is
+      // DISABLED_SUBDUED (e.g., Microwave Tank suppressing a Stinger Site also suppresses
+      // its stinger soldiers).
+      const slaverEntity = entity.slaverEntityId !== null
+        ? this.spawnedEntities.get(entity.slaverEntityId) ?? null
+        : containingEntity;
       if (
-        containingEntity
-        && this.entityHasObjectStatus(containingEntity, 'DISABLED_SUBDUED')
+        slaverEntity
+        && this.entityHasObjectStatus(slaverEntity, 'DISABLED_SUBDUED')
       ) {
         return false;
       }
@@ -11905,6 +12029,168 @@ export class GameLogicSubsystem implements Subsystem {
     return fenceWidth;
   }
 
+  /**
+   * Source parity: SpawnBehavior::update — create/replace slaves on schedule.
+   * Runs at LOGICFRAMES_PER_SECOND/2 rate in C++; we run every frame since the
+   * scheduled replacement times already encode the delay.
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/SpawnBehavior.cpp:322-400)
+   */
+  private updateSpawnBehaviors(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      const state = entity.spawnBehaviorState;
+      if (!state || (state.profile.oneShot && state.oneShotCompleted)) {
+        continue;
+      }
+
+      // Prune dead slaves from the tracking list.
+      state.slaveIds = state.slaveIds.filter((slaveId) => {
+        const slave = this.spawnedEntities.get(slaveId);
+        return slave !== undefined && !slave.destroyed;
+      });
+
+      // Process scheduled replacements.
+      while (
+        state.slaveIds.length < state.profile.spawnNumber
+        && state.replacementFrames.length > 0
+      ) {
+        const nextFrame = state.replacementFrames[0];
+        if (nextFrame !== undefined && this.frameCounter > nextFrame) {
+          state.replacementFrames.shift();
+          this.createSpawnSlave(entity, state);
+        } else {
+          break;
+        }
+      }
+
+      // Source parity: SpawnBehavior initializes m_replacementTimes once via
+      // m_initialBurstTimesInited guard. The burst creates slaves immediately up
+      // to initialBurst count, then schedules the rest with spawnReplaceDelay.
+      if (
+        !state.initialBurstApplied
+        && state.slaveIds.length < state.profile.spawnNumber
+        && state.replacementFrames.length === 0
+      ) {
+        state.initialBurstApplied = true;
+        const deficit = state.profile.spawnNumber - state.slaveIds.length;
+        for (let i = 0; i < deficit; i += 1) {
+          if (state.profile.initialBurst > 0 && state.slaveIds.length < state.profile.initialBurst) {
+            // Initial burst spawns immediately.
+            this.createSpawnSlave(entity, state);
+          } else {
+            // Source parity: C++ schedules at listIndex (0, 1, 2...) when
+            // m_initialBurst == 0, causing all spawns to fire on next update.
+            // We schedule at frame 0 (always in the past) for the same effect.
+            state.replacementFrames.push(0);
+          }
+        }
+        if (state.profile.oneShot) {
+          state.oneShotCompleted = true;
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: SpawnBehavior::createSpawn — spawn a slave unit and link it to the slaver.
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/SpawnBehavior.cpp:620-700)
+   */
+  private createSpawnSlave(slaver: MapEntity, state: SpawnBehaviorState): void {
+    if (state.slaveIds.length >= state.profile.spawnNumber) {
+      return;
+    }
+
+    const templateNames = state.profile.spawnTemplateNames;
+    if (templateNames.length === 0) {
+      return;
+    }
+    const templateName = templateNames[state.templateNameIndex % templateNames.length]!;
+    state.templateNameIndex = (state.templateNameIndex + 1) % templateNames.length;
+
+    const slave = this.spawnEntityFromTemplate(
+      templateName,
+      slaver.x,
+      slaver.z,
+      slaver.rotationY,
+      slaver.side,
+    );
+    if (!slave) {
+      return;
+    }
+
+    // Source parity: SlavedUpdate::onEnslave — link slave to slaver.
+    slave.slaverEntityId = slaver.id;
+    state.slaveIds.push(slave.id);
+  }
+
+  /**
+   * Source parity: SpawnBehavior::onDie — orphan or kill all slaves when the slaver dies.
+   * If spawnedRequireSpawner is true, all living slaves are immediately killed.
+   * Otherwise, slaves become orphaned (slaverEntityId = null).
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/SpawnBehavior.cpp:142-197)
+   */
+  private onSlaverDeath(slaver: MapEntity): void {
+    const state = slaver.spawnBehaviorState;
+    if (!state) {
+      return;
+    }
+
+    for (const slaveId of state.slaveIds) {
+      const slave = this.spawnedEntities.get(slaveId);
+      if (!slave || slave.destroyed) {
+        continue;
+      }
+      // Source parity: sdu->onSlaverDie() — clear slaver link.
+      slave.slaverEntityId = null;
+
+      if (state.profile.spawnedRequireSpawner) {
+        // Source parity: SpawnBehavior::onDie kills slaves when spawnedRequireSpawner.
+        this.applyWeaponDamageAmount(null, slave, slave.health, 'UNRESISTABLE');
+      }
+    }
+
+    state.slaveIds = [];
+    state.replacementFrames = [];
+  }
+
+  /**
+   * Source parity: SpawnBehavior::onSpawnDeath — notify slaver that a slave died,
+   * schedule replacement, and check aggregate health destruction.
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/SpawnBehavior.cpp:754-783)
+   */
+  private onSlaveDeath(slave: MapEntity): void {
+    const slaverId = slave.slaverEntityId;
+    if (slaverId === null) {
+      return;
+    }
+    const slaver = this.spawnedEntities.get(slaverId);
+    if (!slaver || slaver.destroyed) {
+      return;
+    }
+    const state = slaver.spawnBehaviorState;
+    if (!state) {
+      return;
+    }
+
+    // Remove from tracking.
+    const index = state.slaveIds.indexOf(slave.id);
+    if (index !== -1) {
+      state.slaveIds.splice(index, 1);
+    }
+
+    // Schedule replacement (unless one-shot).
+    if (!state.profile.oneShot || !state.oneShotCompleted) {
+      state.replacementFrames.push(this.frameCounter + state.profile.spawnReplaceDelayFrames);
+    }
+
+    // Source parity: aggregate health — spawner dies when all slaves are dead.
+    if (state.profile.aggregateHealth && state.slaveIds.length === 0) {
+      this.applyWeaponDamageAmount(null, slaver, slaver.health, 'UNRESISTABLE');
+    }
+  }
+
   private updateWeaponIdleAutoReload(): void {
     // Source parity subset: FiringTracker::update() calls Object::reloadAllAmmo(TRUE),
     // forcing an immediate reload after sustained idle time.
@@ -12047,6 +12333,11 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: CreateObjectDie / SlowDeathBehavior — execute death OCLs.
     this.executeDeathOCLs(entity);
+
+    // Source parity: SpawnBehavior::onDie — handle slaver death (orphan/kill slaves).
+    this.onSlaverDeath(entity);
+    // Source parity: Object::onDie → SpawnBehavior::onSpawnDeath — notify slaver of slave death.
+    this.onSlaveDeath(entity);
 
     this.cancelEntityCommandPathActions(entityId);
     this.railedTransportStateByEntityId.delete(entityId);
