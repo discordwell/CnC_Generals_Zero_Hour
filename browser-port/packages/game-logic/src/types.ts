@@ -80,6 +80,40 @@ export interface VisualEvent {
   projectileType: ProjectileVisualType;
 }
 
+/**
+ * Source parity: Eva.h — EVA announcer event types.
+ * These map to voice lines the UI/audio system should play.
+ */
+export type EvaEventType =
+  | 'LOW_POWER'
+  | 'INSUFFICIENT_FUNDS'
+  | 'BUILDING_LOST'
+  | 'UNIT_LOST'
+  | 'BASE_UNDER_ATTACK'
+  | 'ALLY_UNDER_ATTACK'
+  | 'UPGRADE_COMPLETE'
+  | 'GENERAL_LEVEL_UP'
+  | 'VEHICLE_STOLEN'
+  | 'BUILDING_STOLEN'
+  | 'SUPERWEAPON_DETECTED'
+  | 'SUPERWEAPON_LAUNCHED'
+  | 'SUPERWEAPON_READY'
+  | 'CONSTRUCTION_COMPLETE'
+  | 'UNIT_READY'
+  | 'BEACON_DETECTED';
+
+export interface EvaEvent {
+  type: EvaEventType;
+  /** Side this event applies to (e.g., which player's EVA speaks). */
+  side: string;
+  /** Relationship to local player: 'own' | 'ally' | 'enemy'. */
+  relationship: 'own' | 'ally' | 'enemy';
+  /** Optional entity ID associated with the event. */
+  entityId: number | null;
+  /** Optional extra info (e.g., upgrade name, superweapon type). */
+  detail: string | null;
+}
+
 export interface SelectByIdCommand {
   type: 'select';
   entityId: number;

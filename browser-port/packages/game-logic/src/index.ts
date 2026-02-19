@@ -901,6 +901,10 @@ interface MapEntity {
   /** Minimum veterancy level to eject (default 1 = VETERAN). */
   ejectPilotMinVeterancy: number;
 
+  // ── Source parity: CreateObjectDie / SlowDeathBehavior — OCL on death ──
+  /** OCL names to execute when entity is destroyed. */
+  deathOCLNames: string[];
+
   destroyed: boolean;
 }
 
@@ -1004,6 +1008,9 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sharedShortcutSpecialPowerReadyFrames = new Map<string, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
+  private readonly evaEventBuffer: import('./types.js').EvaEvent[] = [];
+  /** Cooldown tracker: EvaEventType → next frame this event can fire again. */
+  private readonly evaCooldowns = new Map<string, number>();
   private readonly pendingDyingRenderableStates = new Map<number, {
     state: RenderableEntityState;
     expireFrame: number;
@@ -1398,6 +1405,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateFogOfWar();
     this.updateSupplyChain();
     this.updateSkirmishAI();
+    this.updateEva();
     this.updateSellingEntities();
     this.updateRenderStates();
     this.updateWeaponIdleAutoReload();
@@ -1962,6 +1970,17 @@ export class GameLogicSubsystem implements Subsystem {
     if (this.visualEventBuffer.length === 0) return [];
     const events = this.visualEventBuffer.slice();
     this.visualEventBuffer.length = 0;
+    return events;
+  }
+
+  /**
+   * Drain the EVA announcer events buffer. Returns all events since the last drain.
+   * The caller should consume these for audio playback (voice lines).
+   */
+  drainEvaEvents(): import('./types.js').EvaEvent[] {
+    if (this.evaEventBuffer.length === 0) return [];
+    const events = this.evaEventBuffer.slice();
+    this.evaEventBuffer.length = 0;
     return events;
   }
 
@@ -2962,6 +2981,8 @@ export class GameLogicSubsystem implements Subsystem {
       // Pilot eject
       ejectPilotTemplateName: this.extractEjectPilotTemplateName(objectDef),
       ejectPilotMinVeterancy: 1,
+      // Death OCLs
+      deathOCLNames: this.extractDeathOCLNames(objectDef),
       destroyed: false,
     };
   }
@@ -6604,6 +6625,17 @@ export class GameLogicSubsystem implements Subsystem {
       targetX,
       targetZ,
     };
+
+    // Source parity: Eva SUPERWEAPON_LAUNCHED fires for FS_SUPERWEAPON entities.
+    if (sourceEntity.kindOf.has('FS_SUPERWEAPON') && sourceEntity.side) {
+      this.emitEvaEvent('SUPERWEAPON_LAUNCHED', sourceEntity.side, 'own', sourceEntityId, module.specialPowerTemplateName);
+      // Notify enemies about the launch.
+      for (const [side] of this.sidePowerBonus.entries()) {
+        if (side !== sourceEntity.side) {
+          this.emitEvaEvent('SUPERWEAPON_LAUNCHED', side, 'enemy', sourceEntityId, module.specialPowerTemplateName);
+        }
+      }
+    }
   }
 
   private cancelEntityCommandPathActions(entityId: number): void {
@@ -7032,6 +7064,7 @@ export class GameLogicSubsystem implements Subsystem {
           if (withdrawn > 0) {
             this.depositSideCredits(side, withdrawn);
           }
+          this.emitEvaEvent('INSUFFICIENT_FUNDS', side, 'own');
           break;
         }
       }
@@ -8910,6 +8943,12 @@ export class GameLogicSubsystem implements Subsystem {
     created.controllingPlayerToken = constructor.controllingPlayerToken;
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
+
+    // Source parity: Eva CONSTRUCTION_COMPLETE fires when dozer finishes placing a structure.
+    if (created.side) {
+      this.emitEvaEvent('CONSTRUCTION_COMPLETE', created.side, 'own', created.id, objectDef.name);
+    }
+
     return created;
   }
 
@@ -9181,6 +9220,7 @@ export class GameLogicSubsystem implements Subsystem {
     // while full player handicap/faction cost tables are still pending ownership porting.
     const buildCost = this.resolveObjectBuildCost(unitDef, producerSide);
     if (buildCost > this.getSideCredits(producerSide)) {
+      this.emitEvaEvent('INSUFFICIENT_FUNDS', producerSide, 'own');
       return false;
     }
     const withdrawn = this.withdrawSideCredits(producerSide, buildCost);
@@ -9488,6 +9528,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const buildCost = resolveUpgradeBuildCost(upgradeDef);
     if (!this.canAffordUpgrade(producerSide, buildCost)) {
+      this.emitEvaEvent('INSUFFICIENT_FUNDS', producerSide, 'own');
       return false;
     }
     const withdrawn = this.withdrawSideCredits(producerSide, buildCost);
@@ -9883,6 +9924,12 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyUpgradeToEntity(producer.id, production.upgradeName);
     }
 
+    // Source parity: Eva UPGRADE_COMPLETE fires when an upgrade finishes research.
+    const upgradeSide = producerSide ?? producer.side;
+    if (upgradeSide) {
+      this.emitEvaEvent('UPGRADE_COMPLETE', upgradeSide, 'own', producer.id, production.upgradeName);
+    }
+
     this.removeProductionEntry(producer, production.productionId);
   }
 
@@ -10031,6 +10078,11 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
     this.applyQueueProductionNaturalRallyPoint(producer, created);
+
+    // Source parity: Eva UNIT_READY fires when a unit exits the production queue.
+    if (created.side) {
+      this.emitEvaEvent('UNIT_READY', created.side, 'own', created.id, unitDef.name);
+    }
 
     return created;
   }
@@ -11578,6 +11630,10 @@ export class GameLogicSubsystem implements Subsystem {
     }
     if (target.kindOf.has('STRUCTURE')) {
       target.baseRegenDelayUntilFrame = this.frameCounter + BASE_REGEN_DELAY_FRAMES;
+      // Source parity: EVA — announce base under attack for important structures.
+      if (target.side && target.kindOf.has('MP_COUNT_FOR_VICTORY')) {
+        this.emitEvaEvent('BASE_UNDER_ATTACK', target.side, 'own', target.id);
+      }
     }
 
     // Source parity: EMPUpdate — EMP damage type disables target for ~5 seconds.
@@ -11622,6 +11678,15 @@ export class GameLogicSubsystem implements Subsystem {
       projectileType: 'BULLET',
     });
 
+    // Source parity: EVA — announce building/unit loss.
+    if (entity.side) {
+      if (entity.kindOf.has('STRUCTURE') && entity.kindOf.has('MP_COUNT_FOR_VICTORY')) {
+        this.emitEvaEvent('BUILDING_LOST', entity.side, 'own', entityId);
+      } else if (entity.category === 'infantry' || entity.category === 'vehicle') {
+        this.emitEvaEvent('UNIT_LOST', entity.side, 'own', entityId);
+      }
+    }
+
     // Unregister energy contribution before destruction.
     this.unregisterEntityEnergy(entity);
 
@@ -11630,6 +11695,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: EjectPilotDie — eject pilot unit for VETERAN+ vehicles on death.
     this.tryEjectPilotOnDeath(entity);
+
+    // Source parity: CreateObjectDie / SlowDeathBehavior — execute death OCLs.
+    this.executeDeathOCLs(entity);
 
     this.cancelEntityCommandPathActions(entityId);
     this.railedTransportStateByEntityId.delete(entityId);
@@ -11740,6 +11808,190 @@ export class GameLogicSubsystem implements Subsystem {
     // Inherit veterancy.
     if (pilotEntity.experienceProfile) {
       pilotEntity.experienceState.currentLevel = vetLevel;
+    }
+  }
+
+  /**
+   * Source parity: CreateObjectDie / SlowDeathBehavior — extract death OCL names from INI.
+   * Scans modules for CreationList, GroundCreationList, or OCL fields that reference
+   * ObjectCreationList definitions.
+   */
+  private extractDeathOCLNames(objectDef: ObjectDef | undefined): string[] {
+    if (!objectDef) return [];
+    const oclNames: string[] = [];
+    const moduleBlocks = objectDef.blocks ?? [];
+    for (const block of moduleBlocks) {
+      const moduleType = block.name.split(/\s+/)[0] ?? '';
+      const upperModuleType = moduleType.toUpperCase();
+      // CreateObjectDie, SlowDeathBehavior, DestroyDie
+      if (upperModuleType.includes('CREATEOBJECTDIE') || upperModuleType.includes('SLOWDEATH')) {
+        const oclName = readStringField(block.fields, [
+          'CreationList', 'GroundCreationList', 'AirCreationList',
+        ]);
+        if (oclName) {
+          oclNames.push(oclName.trim());
+        }
+        // SlowDeathBehavior can have OCL fields with phase names.
+        // e.g., "OCL INITIAL OCLDestroyDebris"
+        const oclFieldRaw = readStringField(block.fields, ['OCL']);
+        if (oclFieldRaw) {
+          // Parse "INITIAL OCLName" or just "OCLName"
+          const parts = oclFieldRaw.trim().split(/\s+/);
+          const oclPart = parts.length > 1 ? parts[parts.length - 1]! : parts[0]!;
+          if (oclPart && !oclNames.includes(oclPart)) {
+            oclNames.push(oclPart);
+          }
+        }
+      }
+    }
+    return oclNames;
+  }
+
+  /**
+   * Source parity: ObjectCreationList::create — execute an OCL by name.
+   * Resolves CreateObject nuggets and spawns entities.
+   */
+  private executeOCL(oclName: string, sourceEntity: MapEntity): void {
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+    const oclDef = registry.getObjectCreationList(oclName);
+    if (!oclDef) return;
+
+    for (const nugget of oclDef.blocks) {
+      // OCL nuggets use block.type for the nugget kind (e.g., 'CreateObject', 'CreateDebris').
+      // If type is empty, fall back to the first token of name.
+      const nuggetType = (nugget.type || nugget.name.split(/\s+/)[0] || '').toUpperCase();
+      if (nuggetType === 'CREATEOBJECT' || nuggetType === 'CREATEDEBRIS') {
+        this.executeCreateObjectNugget(nugget, sourceEntity);
+      }
+      // FireWeapon, DeliverPayload, Attack, ApplyRandomForce are omitted for now.
+    }
+  }
+
+  /**
+   * Source parity: GenericObjectCreationNugget::reallyCreate — spawn objects from an OCL nugget.
+   */
+  private executeCreateObjectNugget(nugget: IniBlock, sourceEntity: MapEntity): void {
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+
+    // Parse ObjectNames field (space-separated list of template names).
+    const objectNamesRaw = readStringField(nugget.fields, ['ObjectNames']);
+    if (!objectNamesRaw) return;
+    const objectNames = objectNamesRaw.trim().split(/\s+/).filter(Boolean);
+    if (objectNames.length === 0) return;
+
+    // Parse Count (default 1).
+    const countRaw = readStringField(nugget.fields, ['Count', 'ObjectCount']);
+    const count = Math.max(1, countRaw ? (parseInt(countRaw, 10) || 1) : 1);
+
+    // Parse Offset.
+    const offsetRaw = readStringField(nugget.fields, ['Offset']);
+    let offsetX = 0;
+    let offsetZ = 0;
+    if (offsetRaw) {
+      const parts = offsetRaw.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        offsetX = parseFloat(parts[0]!) || 0;
+        offsetZ = parseFloat(parts[1]!) || 0;
+      }
+    }
+
+    // Parse InheritsVeterancy.
+    const inheritsVet = readStringField(nugget.fields, ['InheritsVeterancy'])?.toUpperCase() === 'YES';
+
+    for (let i = 0; i < count; i++) {
+      // Pick a random object from the list.
+      const templateName = objectNames[Math.floor(Math.random() * objectNames.length)]!;
+
+      // Apply offset with some scatter for multiple spawns.
+      const scatter = count > 1 ? (Math.random() - 0.5) * 4 : 0;
+      const spawnX = sourceEntity.x + offsetX + scatter;
+      const spawnZ = sourceEntity.z + offsetZ + scatter;
+
+      const spawned = this.spawnEntityFromTemplate(
+        templateName,
+        spawnX,
+        spawnZ,
+        sourceEntity.rotationY + (Math.random() - 0.5) * 0.3,
+        sourceEntity.side,
+      );
+
+      if (spawned && inheritsVet) {
+        spawned.experienceState.currentLevel = sourceEntity.experienceState.currentLevel;
+      }
+    }
+  }
+
+  /**
+   * Source parity: Execute all death OCLs for an entity.
+   */
+  private executeDeathOCLs(entity: MapEntity): void {
+    for (const oclName of entity.deathOCLNames) {
+      this.executeOCL(oclName, entity);
+    }
+  }
+
+  // ── EVA Announcer system ──
+
+  /** Default cooldown frames per EVA event type (~10 seconds at 30fps). */
+  private static readonly EVA_DEFAULT_COOLDOWN = 300;
+  /** Shorter cooldown for high-priority events (~3 seconds). */
+  private static readonly EVA_SHORT_COOLDOWN = 90;
+
+  /**
+   * Source parity: Eva::setShouldPlay — emit an EVA event with cooldown suppression.
+   */
+  private emitEvaEvent(
+    type: import('./types.js').EvaEventType,
+    side: string,
+    relationship: 'own' | 'ally' | 'enemy',
+    entityId: number | null = null,
+    detail: string | null = null,
+  ): void {
+    const cooldownKey = `${type}:${side}:${relationship}`;
+    const nextAllowed = this.evaCooldowns.get(cooldownKey) ?? 0;
+    if (this.frameCounter < nextAllowed) return;
+
+    // Use shorter cooldown for urgent events.
+    const isUrgent = type === 'BASE_UNDER_ATTACK' || type === 'SUPERWEAPON_LAUNCHED';
+    const cooldown = isUrgent
+      ? GameLogicSubsystem.EVA_SHORT_COOLDOWN
+      : GameLogicSubsystem.EVA_DEFAULT_COOLDOWN;
+    this.evaCooldowns.set(cooldownKey, this.frameCounter + cooldown);
+
+    this.evaEventBuffer.push({ type, side, relationship, entityId, detail });
+  }
+
+  /**
+   * Source parity: Eva::update — check for low power and emit EVA events.
+   * Called once per frame from the main update loop.
+   */
+  private updateEva(): void {
+    // Check low power for each side.
+    for (const [side, powerState] of this.sidePowerBonus.entries()) {
+      const balance = powerState.energyProduction - powerState.energyConsumption + powerState.powerBonus;
+      if (balance < 0) {
+        this.emitEvaEvent('LOW_POWER', side, 'own');
+      }
+    }
+
+    // Source parity: Eva fires SUPERWEAPON_READY / SUPERWEAPON_DETECTED when
+    // a superweapon countdown reaches zero for the first time.
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.kindOf.has('FS_SUPERWEAPON')) continue;
+      for (const [, module] of entity.specialPowerModules) {
+        const normalizedPower = module.specialPowerTemplateName.toUpperCase().replace(/\s+/g, '');
+        const sharedFrame = this.sharedShortcutSpecialPowerReadyFrames.get(normalizedPower) ?? 0;
+        if (sharedFrame > 0 && this.frameCounter === sharedFrame && entity.side) {
+          this.emitEvaEvent('SUPERWEAPON_READY', entity.side, 'own', entity.id, module.specialPowerTemplateName);
+          for (const [side] of this.sidePowerBonus.entries()) {
+            if (side !== entity.side) {
+              this.emitEvaEvent('SUPERWEAPON_DETECTED', side, 'enemy', entity.id, module.specialPowerTemplateName);
+            }
+          }
+        }
+      }
     }
   }
 
