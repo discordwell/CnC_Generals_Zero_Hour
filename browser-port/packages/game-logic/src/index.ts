@@ -900,7 +900,7 @@ interface ParkingPlaceProfile {
   reservedProductionIds: Set<number>;
 }
 
-type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON';
+type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL';
 
 interface ContainProfile {
   moduleType: ContainModuleType;
@@ -911,6 +911,8 @@ interface ContainProfile {
   garrisonCapacity: number;
   /** Source parity: ContainMax — maximum number of transport passengers. 0 = unlimited. */
   transportCapacity: number;
+  /** Source parity: TunnelContainModuleData::m_framesForFullHeal — frames for 0→100% heal. 0 = no heal. */
+  timeForFullHealFrames: number;
 }
 
 /**
@@ -1040,6 +1042,19 @@ interface PendingWeaponDamageEvent {
 interface SellingEntityState {
   sellFrame: number;
   constructionPercent: number;
+}
+
+/**
+ * Source parity: TunnelTracker — per-player shared tunnel state.
+ * All tunnels belonging to a player share a single passenger list and capacity.
+ */
+interface TunnelTrackerState {
+  /** IDs of all tunnel buildings for this side. */
+  tunnelIds: Set<number>;
+  /** IDs of all passengers inside the tunnel network. */
+  passengerIds: Set<number>;
+  /** Frames for full heal (from the TunnelContain module data). */
+  timeForFullHealFrames: number;
 }
 
 interface HackInternetProfile {
@@ -1176,6 +1191,10 @@ interface MapEntity {
   garrisonContainerId: number | null;
   /** Source parity: m_containedBy for TransportContain/OverlordContain (Humvee, Chinook, etc.). */
   transportContainerId: number | null;
+  /** Source parity: TunnelContain — references the tunnel this entity currently resides in. */
+  tunnelContainerId: number | null;
+  /** Frame at which this entity entered the tunnel (for heal calculation). */
+  tunnelEnteredFrame: number;
   helixPortableRiderId: number | null;
   /** Source parity: SlavedUpdate — ID of the spawner/slaver that owns this slave. */
   slaverEntityId: number | null;
@@ -1422,6 +1441,7 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
   attackUsesLineOfSight: true,
   sellPercentage: SOURCE_DEFAULT_SELL_PERCENTAGE,
   superweaponRestriction: 0,
+  maxTunnelCapacity: 10,
 };
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
@@ -1486,6 +1506,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly pendingGarrisonActions = new Map<number, number>();
   /** Source parity: TransportContain — passenger ID → transport ID for deferred enter. */
   private readonly pendingTransportActions = new Map<number, number>();
+  /** Source parity: TunnelContain — passenger ID → tunnel entity ID for deferred enter. */
+  private readonly pendingTunnelActions = new Map<number, number>();
+  /** Source parity: TunnelTracker — per-side shared tunnel network state. */
+  private readonly tunnelTrackers = new Map<string, TunnelTrackerState>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
   /** Source parity: BuildAssistant repair — dozer ID → target building ID. */
   private readonly pendingRepairActions = new Map<number, number>();
@@ -1572,6 +1596,7 @@ export class GameLogicSubsystem implements Subsystem {
       this.spawnedEntities.set(mapEntity.id, mapEntity);
       this.registerEntityEnergy(mapEntity);
       this.initializeMinefieldState(mapEntity);
+      this.registerTunnelEntity(mapEntity);
 
       // Initialize supply warehouse state from profile if applicable.
       if (mapEntity.supplyWarehouseProfile) {
@@ -1868,6 +1893,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingEnterObjectActions();
     this.updatePendingGarrisonActions();
     this.updatePendingTransportActions();
+    this.updatePendingTunnelActions();
     this.updatePendingRepairActions();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
@@ -1880,6 +1906,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHealing();
     this.updateMineBehavior();
     this.updateMineCollisions();
+    this.updateTunnelHealing();
     this.updateFogOfWar();
     this.updateSupplyChain();
     this.updateSkirmishAI();
@@ -3447,6 +3474,8 @@ export class GameLogicSubsystem implements Subsystem {
       helixCarrierId: null,
       garrisonContainerId: null,
       transportContainerId: null,
+      tunnelContainerId: null,
+      tunnelEnteredFrame: 0,
       helixPortableRiderId: null,
       slaverEntityId: null,
       spawnBehaviorState: this.extractSpawnBehaviorState(objectDef),
@@ -4807,6 +4836,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
           transportCapacity: containMax,
+          timeForFullHealFrames: 0,
         };
       } else if (moduleType === 'TRANSPORTCONTAIN') {
         profile = {
@@ -4815,6 +4845,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
           transportCapacity: containMax,
+          timeForFullHealFrames: 0,
         };
       } else if (moduleType === 'OVERLORDCONTAIN') {
         profile = {
@@ -4823,6 +4854,7 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
           transportCapacity: containMax,
+          timeForFullHealFrames: 0,
         };
       } else if (moduleType === 'HELIXCONTAIN') {
         // HELIXCONTAIN is a Zero Hour-specific container module name used by data INIs;
@@ -4834,6 +4866,7 @@ export class GameLogicSubsystem implements Subsystem {
           portableStructureTemplateNames: payloadTemplateNames,
           garrisonCapacity: 0,
           transportCapacity: containMax,
+          timeForFullHealFrames: 0,
         };
       } else if (moduleType === 'GARRISONCONTAIN') {
         // GarrisonContain is OpenContain-derived in source but always returns TRUE from
@@ -4844,6 +4877,19 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFireDefault: true,
           garrisonCapacity: containMax > 0 ? containMax : 10,
           transportCapacity: 0,
+          timeForFullHealFrames: 0,
+        };
+      } else if (moduleType === 'TUNNELCONTAIN') {
+        // Source parity: TunnelContain — per-player shared tunnel network.
+        // Capacity is managed by TunnelTracker (global maxTunnelCapacity), not per-building.
+        const timeForFullHealMs = readNumericField(block.fields, ['TimeForFullHeal']) ?? 0;
+        profile = {
+          moduleType: 'TUNNEL',
+          passengersAllowedToFire: false,
+          passengersAllowedToFireDefault: false,
+          garrisonCapacity: 0,
+          transportCapacity: 0,
+          timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
         };
       }
 
@@ -6474,6 +6520,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private isEntityInEnclosingContainer(entity: MapEntity): boolean {
     if (entity.garrisonContainerId !== null) return true;
+    if (entity.tunnelContainerId !== null) return true;
     if (entity.helixCarrierId !== null) {
       // Source parity: HelixContain::isEnclosingContainerFor returns FALSE for the
       // portable structure rider — it sits visibly on top and is attackable.
@@ -7784,6 +7831,17 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    // Source parity: TunnelContain — use exitTunnel for proper scatter behavior.
+    if (entity.tunnelContainerId !== null) {
+      const tunnel = this.spawnedEntities.get(entity.tunnelContainerId);
+      if (tunnel && !tunnel.destroyed) {
+        this.exitTunnel(entity, tunnel);
+      } else {
+        this.releaseEntityFromContainer(entity);
+      }
+      return;
+    }
+
     const containerId = entity.parkingSpaceProducerId
       ?? entity.helixCarrierId
       ?? entity.garrisonContainerId
@@ -7813,6 +7871,19 @@ export class GameLogicSubsystem implements Subsystem {
   private handleEvacuateCommand(entityId: number): void {
     const container = this.spawnedEntities.get(entityId);
     if (!container || container.destroyed) {
+      return;
+    }
+
+    // Source parity: TunnelContain evacuate — exit all shared passengers from this tunnel.
+    if (container.containProfile?.moduleType === 'TUNNEL') {
+      const tracker = this.resolveTunnelTracker(container.side);
+      if (tracker) {
+        for (const passengerId of Array.from(tracker.passengerIds)) {
+          const passenger = this.spawnedEntities.get(passengerId);
+          if (!passenger || passenger.destroyed) continue;
+          this.exitTunnel(passenger, container);
+        }
+      }
       return;
     }
 
@@ -8031,6 +8102,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
+    this.registerTunnelEntity(created);
   }
 
   private handleEnterObjectCommand(command: EnterObjectCommand): void {
@@ -8637,7 +8709,10 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity subset: BuildAssistant::sellObject invokes contain->onSelling().
     // Open/Garrison contain variants map to passenger evacuation on sell start.
-    if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+    // Source parity: TunnelContain::onSelling — eject all if this is the last tunnel.
+    if (entity.containProfile?.moduleType === 'TUNNEL') {
+      this.handleTunnelSelling(entity);
+    } else if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
       this.evacuateContainedEntities(entity, entity.x, entity.z, null);
     }
 
@@ -8749,6 +8824,25 @@ export class GameLogicSubsystem implements Subsystem {
     // Validate: target must have a transport-style contain profile.
     const containProfile = transport.containProfile;
     if (!containProfile) return;
+
+    // Source parity: TunnelContain — route to tunnel-specific entry.
+    if (containProfile.moduleType === 'TUNNEL') {
+      const kindOf = this.resolveEntityKindOfSet(passenger);
+      if (kindOf.has('AIRCRAFT')) return;
+      const tracker = this.resolveTunnelTracker(transport.side);
+      if (!tracker || tracker.passengerIds.size >= this.config.maxTunnelCapacity) return;
+
+      const interactionDistance = this.resolveEntityInteractionDistance(passenger, transport);
+      const distance = Math.hypot(transport.x - passenger.x, transport.z - passenger.z);
+      if (distance > interactionDistance) {
+        this.issueMoveTo(passenger.id, transport.x, transport.z);
+        this.pendingTunnelActions.set(passenger.id, transport.id);
+        return;
+      }
+      this.enterTunnel(passenger, transport);
+      return;
+    }
+
     if (containProfile.moduleType !== 'TRANSPORT'
       && containProfile.moduleType !== 'OVERLORD'
       && containProfile.moduleType !== 'HELIX'
@@ -8807,7 +8901,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!profile) return false;
     return profile.moduleType === 'TRANSPORT'
       || profile.moduleType === 'OVERLORD'
-      || profile.moduleType === 'HELIX';
+      || profile.moduleType === 'HELIX'
+      || profile.moduleType === 'TUNNEL';
   }
 
   private updatePendingTransportActions(): void {
@@ -10053,6 +10148,246 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
+  // ── Tunnel Network System ──────────────────────────────────────────────────
+
+  /**
+   * Source parity: TunnelTracker — resolve or create per-side tunnel state.
+   */
+  private resolveTunnelTracker(side: string | undefined): TunnelTrackerState | null {
+    const normalized = this.normalizeSide(side);
+    if (!normalized) return null;
+    let tracker = this.tunnelTrackers.get(normalized);
+    if (!tracker) {
+      tracker = { tunnelIds: new Set(), passengerIds: new Set(), timeForFullHealFrames: 1 };
+      this.tunnelTrackers.set(normalized, tracker);
+    }
+    return tracker;
+  }
+
+  /**
+   * Register a tunnel-type building with the side's TunnelTracker.
+   * Called after entity creation at all spawn points.
+   */
+  private registerTunnelEntity(entity: MapEntity): void {
+    if (!entity.containProfile || entity.containProfile.moduleType !== 'TUNNEL') return;
+    const tracker = this.resolveTunnelTracker(entity.side);
+    if (!tracker) return;
+    tracker.tunnelIds.add(entity.id);
+    // Use the most recently registered tunnel's heal rate.
+    if (entity.containProfile.timeForFullHealFrames > 0) {
+      tracker.timeForFullHealFrames = entity.containProfile.timeForFullHealFrames;
+    }
+  }
+
+  /**
+   * Unregister a tunnel from the tracker. Returns the tracker for further handling.
+   */
+  private unregisterTunnelEntity(entity: MapEntity): TunnelTrackerState | null {
+    if (!entity.containProfile || entity.containProfile.moduleType !== 'TUNNEL') return null;
+    const tracker = this.resolveTunnelTracker(entity.side);
+    if (!tracker) return null;
+    tracker.tunnelIds.delete(entity.id);
+    return tracker;
+  }
+
+  /**
+   * Source parity: TunnelContain::onContaining — enter the shared tunnel network.
+   */
+  private enterTunnel(passenger: MapEntity, tunnel: MapEntity): void {
+    const tracker = this.resolveTunnelTracker(tunnel.side);
+    if (!tracker) return;
+
+    // Source parity: TunnelTracker::isValidContainerFor — no aircraft.
+    if (passenger.kindOf.has('AIRCRAFT')) return;
+
+    // Check shared capacity.
+    if (tracker.passengerIds.size >= this.config.maxTunnelCapacity) return;
+
+    // Cannot enter if already contained.
+    if (this.isEntityContained(passenger)) return;
+
+    this.cancelEntityCommandPathActions(passenger.id);
+    this.clearAttackTarget(passenger.id);
+
+    passenger.tunnelContainerId = tunnel.id;
+    passenger.tunnelEnteredFrame = this.frameCounter;
+    passenger.x = tunnel.x;
+    passenger.z = tunnel.z;
+    passenger.y = tunnel.y;
+    passenger.moving = false;
+
+    // Source parity: Object::onContainedBy + TunnelContain::onContaining — DISABLED_HELD, MASKED, UNSELECTABLE.
+    passenger.objectStatusFlags.add('DISABLED_HELD');
+    passenger.objectStatusFlags.add('MASKED');
+    passenger.objectStatusFlags.add('UNSELECTABLE');
+
+    tracker.passengerIds.add(passenger.id);
+    this.removeEntityFromSelection(passenger.id);
+    this.pendingTunnelActions.delete(passenger.id);
+  }
+
+  /**
+   * Source parity: TunnelContain::removeFromContain — exit the tunnel network.
+   * The passenger exits from the specified tunnel building.
+   */
+  private exitTunnel(passenger: MapEntity, exitTunnel: MapEntity): void {
+    const tracker = this.resolveTunnelTracker(exitTunnel.side);
+    if (tracker) {
+      tracker.passengerIds.delete(passenger.id);
+    }
+
+    passenger.tunnelContainerId = null;
+    passenger.tunnelEnteredFrame = 0;
+
+    // Source parity: TunnelContain::onRemoving — clear DISABLED_HELD.
+    passenger.objectStatusFlags.delete('DISABLED_HELD');
+    passenger.objectStatusFlags.delete('MASKED');
+    passenger.objectStatusFlags.delete('UNSELECTABLE');
+
+    // Source parity: TunnelContain::scatterToNearbyPosition — scatter around the exit tunnel.
+    const angle = this.gameRandom.nextFloat() * Math.PI * 2;
+    const geom = exitTunnel.obstacleGeometry;
+    const baseRadius = geom ? Math.max(geom.majorRadius, geom.minorRadius) : 10;
+    const minRadius = baseRadius;
+    const maxRadius = baseRadius * 1.5;
+    const dist = minRadius + this.gameRandom.nextFloat() * (maxRadius - minRadius);
+    const exitX = exitTunnel.x + Math.cos(angle) * dist;
+    const exitZ = exitTunnel.z + Math.sin(angle) * dist;
+
+    passenger.x = exitTunnel.x;
+    passenger.z = exitTunnel.z;
+    passenger.y = this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
+    passenger.rotationY = angle;
+    this.updatePathfindPosCell(passenger);
+
+    if (passenger.canMove) {
+      this.issueMoveTo(passenger.id, exitX, exitZ);
+    } else {
+      // Source parity: scatterToNearbyPosition — non-AI units are placed directly.
+      passenger.x = exitX;
+      passenger.z = exitZ;
+      passenger.y = this.resolveGroundHeight(exitX, exitZ) + passenger.baseHeight;
+      this.updatePathfindPosCell(passenger);
+    }
+  }
+
+  /**
+   * Source parity: TunnelTracker::onTunnelDestroyed — handle tunnel death.
+   * If last tunnel: cave-in kills all passengers. Otherwise: reassign passengers to another tunnel.
+   */
+  private handleTunnelDestroyed(entity: MapEntity): void {
+    const tracker = this.unregisterTunnelEntity(entity);
+    if (!tracker) return;
+
+    if (tracker.tunnelIds.size === 0) {
+      // Cave-in: last tunnel destroyed — kill all passengers.
+      for (const passengerId of Array.from(tracker.passengerIds)) {
+        const passenger = this.spawnedEntities.get(passengerId);
+        if (!passenger || passenger.destroyed) continue;
+        // Release from container first so markEntityDestroyed doesn't try to double-release.
+        passenger.tunnelContainerId = null;
+        passenger.objectStatusFlags.delete('DISABLED_HELD');
+        passenger.objectStatusFlags.delete('MASKED');
+        passenger.objectStatusFlags.delete('UNSELECTABLE');
+        this.markEntityDestroyed(passengerId, entity.id);
+      }
+      tracker.passengerIds.clear();
+    } else {
+      // Reassign passengers to a remaining tunnel.
+      const [validTunnelId] = tracker.tunnelIds;
+      if (validTunnelId !== undefined) {
+        for (const passengerId of tracker.passengerIds) {
+          const passenger = this.spawnedEntities.get(passengerId);
+          if (passenger && passenger.tunnelContainerId === entity.id) {
+            passenger.tunnelContainerId = validTunnelId;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: TunnelContain::onSelling — if last tunnel, eject passengers safely.
+   */
+  private handleTunnelSelling(entity: MapEntity): void {
+    if (!entity.containProfile || entity.containProfile.moduleType !== 'TUNNEL') return;
+    const tracker = this.resolveTunnelTracker(entity.side);
+    if (!tracker) return;
+
+    // Check if this is the last tunnel (count 1 means this is the only one left).
+    if (tracker.tunnelIds.size <= 1) {
+      // Eject all passengers safely before the tunnel is destroyed.
+      for (const passengerId of Array.from(tracker.passengerIds)) {
+        const passenger = this.spawnedEntities.get(passengerId);
+        if (!passenger || passenger.destroyed) continue;
+        this.exitTunnel(passenger, entity);
+      }
+    }
+
+    // Source parity: TunnelContain::onSelling — ALWAYS unregister after eject,
+    // even if not the last tunnel. Prevents double-sell cave-in race condition
+    // when two tunnels are sold in the same frame.
+    tracker.tunnelIds.delete(entity.id);
+  }
+
+  /**
+   * Source parity: TunnelContain::update → TunnelTracker::healObjects — heal passengers.
+   */
+  private updateTunnelHealing(): void {
+    for (const tracker of this.tunnelTrackers.values()) {
+      if (tracker.passengerIds.size === 0) continue;
+      const healFrames = tracker.timeForFullHealFrames;
+      if (healFrames <= 0) continue;
+
+      for (const passengerId of tracker.passengerIds) {
+        const passenger = this.spawnedEntities.get(passengerId);
+        if (!passenger || passenger.destroyed) continue;
+        if (passenger.health >= passenger.maxHealth) continue;
+
+        const framesInside = this.frameCounter - passenger.tunnelEnteredFrame;
+        if (framesInside >= healFrames) {
+          // Fully healed.
+          passenger.health = passenger.maxHealth;
+        } else {
+          // Linear heal: maxHealth / framesForFullHeal per frame.
+          const healPerFrame = passenger.maxHealth / healFrames;
+          passenger.health = Math.min(passenger.maxHealth, passenger.health + healPerFrame);
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: TunnelContain pending enter — units walking toward a tunnel.
+   */
+  private updatePendingTunnelActions(): void {
+    for (const [passengerId, tunnelId] of this.pendingTunnelActions.entries()) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      const tunnel = this.spawnedEntities.get(tunnelId);
+      if (!passenger || !tunnel || passenger.destroyed || tunnel.destroyed) {
+        this.pendingTunnelActions.delete(passengerId);
+        continue;
+      }
+      if (this.isEntityContained(passenger)) {
+        this.pendingTunnelActions.delete(passengerId);
+        continue;
+      }
+
+      const interactionDistance = this.resolveEntityInteractionDistance(passenger, tunnel);
+      const distance = Math.hypot(tunnel.x - passenger.x, tunnel.z - passenger.z);
+      if (distance > interactionDistance) continue;
+
+      // Check capacity again.
+      const tracker = this.resolveTunnelTracker(tunnel.side);
+      if (!tracker || tracker.passengerIds.size >= this.config.maxTunnelCapacity) {
+        this.pendingTunnelActions.delete(passengerId);
+        continue;
+      }
+
+      this.enterTunnel(passenger, tunnel);
+    }
+  }
+
   private updateFogOfWar(): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
@@ -10518,6 +10853,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
+    this.registerTunnelEntity(created);
 
     // Source parity: Eva CONSTRUCTION_COMPLETE fires when dozer finishes placing a structure.
     if (created.side) {
@@ -10636,7 +10972,8 @@ export class GameLogicSubsystem implements Subsystem {
     return entity.parkingSpaceProducerId !== null
       || entity.helixCarrierId !== null
       || entity.garrisonContainerId !== null
-      || entity.transportContainerId !== null;
+      || entity.transportContainerId !== null
+      || entity.tunnelContainerId !== null;
   }
 
   private isEntityContainedInGarrison(entity: MapEntity): boolean {
@@ -10661,6 +10998,7 @@ export class GameLogicSubsystem implements Subsystem {
         || entity.helixCarrierId === containerId
         || entity.garrisonContainerId === containerId
         || entity.transportContainerId === containerId
+        || entity.tunnelContainerId === containerId
       ) {
         entityIds.add(entity.id);
       }
@@ -10707,6 +11045,20 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (entity.transportContainerId !== null) {
       entity.transportContainerId = null;
+    }
+
+    if (entity.tunnelContainerId !== null) {
+      // Remove from the side's tunnel tracker passenger list.
+      const tunnel = this.spawnedEntities.get(entity.tunnelContainerId);
+      if (tunnel) {
+        const tracker = this.resolveTunnelTracker(tunnel.side);
+        if (tracker) {
+          tracker.passengerIds.delete(entity.id);
+        }
+      }
+      entity.tunnelContainerId = null;
+      entity.tunnelEnteredFrame = 0;
+      entity.objectStatusFlags.delete('DISABLED_HELD');
     }
 
     // Source parity: Object::onRemovedFrom — clear MASKED and UNSELECTABLE on release.
@@ -11628,6 +11980,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.set(entity.id, entity);
     this.registerEntityEnergy(entity);
     this.initializeMinefieldState(entity);
+    this.registerTunnelEntity(entity);
     // Snap to terrain.
     if (this.mapHeightmap) {
       entity.y = this.mapHeightmap.getInterpolatedHeight(worldX, worldZ) ?? 0;
@@ -11670,6 +12023,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.set(created.id, created);
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
+    this.registerTunnelEntity(created);
     this.applyQueueProductionNaturalRallyPoint(producer, created);
 
     // Source parity: Eva UNIT_READY fires when a unit exits the production queue.
@@ -13712,7 +14066,8 @@ export class GameLogicSubsystem implements Subsystem {
     const containerId = entity.parkingSpaceProducerId
       ?? entity.helixCarrierId
       ?? entity.garrisonContainerId
-      ?? entity.transportContainerId;
+      ?? entity.transportContainerId
+      ?? entity.tunnelContainerId;
 
     if (containerId === null) {
       return null;
@@ -14344,15 +14699,25 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingTransportActions.delete(sourceId);
       }
     }
+    for (const [sourceId, targetTunnelId] of this.pendingTunnelActions.entries()) {
+      if (targetTunnelId === entityId) {
+        this.pendingTunnelActions.delete(sourceId);
+      }
+    }
     for (const pendingAction of this.pendingCombatDropActions.values()) {
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
       }
     }
 
+    // Source parity: TunnelTracker::onTunnelDestroyed — cave-in if last tunnel.
+    if (entity.containProfile?.moduleType === 'TUNNEL') {
+      this.handleTunnelDestroyed(entity);
+    }
+
     // Source parity: Contain::onDie — release contained entities on container death.
     // Garrison, transport, helix, and overlord passengers are ejected at the container position.
-    if (entity.containProfile) {
+    if (entity.containProfile && entity.containProfile.moduleType !== 'TUNNEL') {
       const passengerIds = this.collectContainedEntityIds(entityId);
       for (const passengerId of passengerIds) {
         const passenger = this.spawnedEntities.get(passengerId);
@@ -14858,6 +15223,15 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.transportContainerId !== null) {
         entity.transportContainerId = null;
       }
+      if (entity.tunnelContainerId !== null) {
+        // Remove from tunnel tracker passenger list on final cleanup.
+        const tunnel = this.spawnedEntities.get(entity.tunnelContainerId);
+        if (tunnel) {
+          const tracker = this.resolveTunnelTracker(tunnel.side);
+          if (tracker) tracker.passengerIds.delete(entity.id);
+        }
+        entity.tunnelContainerId = null;
+      }
       this.spawnedEntities.delete(entityId);
       this.removeEntityFromSelection(entityId);
     }
@@ -15026,7 +15400,8 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed) continue;
       const containerId = entity.transportContainerId
         ?? entity.helixCarrierId
-        ?? entity.garrisonContainerId;
+        ?? entity.garrisonContainerId
+        ?? entity.tunnelContainerId;
       if (containerId === null) continue;
       const container = this.spawnedEntities.get(containerId);
       if (!container || container.destroyed) continue;
@@ -15124,6 +15499,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingCombatDropActions.clear();
     this.pendingGarrisonActions.clear();
     this.pendingTransportActions.clear();
+    this.pendingTunnelActions.clear();
+    this.tunnelTrackers.clear();
     this.pendingRepairActions.clear();
     this.supplyWarehouseStates.clear();
     this.supplyTruckStates.clear();

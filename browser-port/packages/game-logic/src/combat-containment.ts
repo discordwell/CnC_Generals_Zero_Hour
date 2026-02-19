@@ -1,5 +1,5 @@
 interface ContainProfileLike {
-  moduleType: 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON';
+  moduleType: 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL';
   passengersAllowedToFire: boolean;
   portableStructureTemplateNames?: readonly string[];
 }
@@ -88,6 +88,11 @@ export function isPassengerAllowedToFireFromContainingObject<TEntity extends Con
         return false;
       }
       return true;
+    }
+
+    // Source parity: TunnelContain — passengers cannot fire from tunnels.
+    if (containProfile.moduleType === 'TUNNEL') {
+      return false;
     }
 
     return true;

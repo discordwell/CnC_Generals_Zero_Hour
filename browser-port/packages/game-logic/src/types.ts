@@ -485,4 +485,9 @@ export interface GameLogicConfig {
    * 0 = no restriction (unlimited), typically 1 when enabled in game lobby.
    */
   superweaponRestriction: number;
+  /**
+   * Source parity: TheGlobalData::m_maxTunnelCapacity — per-player shared
+   * tunnel network passenger limit. 0 = tunnels disabled.
+   */
+  maxTunnelCapacity: number;
 }

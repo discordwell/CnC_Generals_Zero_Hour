@@ -8170,3 +8170,349 @@ describe('mine detonation', () => {
     expect(mineDetonations.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('tunnel network', () => {
+  function makeTunnelSetup(opts: {
+    maxTunnelCapacity?: number;
+    timeForFullHealMs?: number;
+    tunnelCount?: number;
+    infantryHealth?: number;
+    infantryMaxHealth?: number;
+  } = {}) {
+    const timeForFullHealMs = opts.timeForFullHealMs ?? 3000;
+    const tunnelDef = makeObjectDef('GLATunnelNetwork', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'TunnelContain ModuleTag_Tunnel', {
+        ...(timeForFullHealMs > 0 ? { TimeForFullHeal: timeForFullHealMs } : {}),
+      }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 15,
+      GeometryMinorRadius: 15,
+    });
+
+    const infantryDef = makeObjectDef('GLARebel', 'GLA', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+        MaxHealth: opts.infantryMaxHealth ?? 100,
+        InitialHealth: opts.infantryHealth ?? (opts.infantryMaxHealth ?? 100),
+      }),
+    ]);
+
+    const enemyTankDef = makeObjectDef('USATank', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankCannon'] }),
+    ]);
+
+    const tunnelCount = opts.tunnelCount ?? 1;
+    const tunnelObjects: MapObjectJSON[] = [];
+    for (let i = 0; i < tunnelCount; i++) {
+      tunnelObjects.push(makeMapObject('GLATunnelNetwork', 50 + i * 40, 50));
+    }
+
+    const registry = makeRegistry(makeBundle({
+      objects: [tunnelDef, infantryDef, enemyTankDef],
+      weapons: [
+        makeWeaponDef('TankCannon', { PrimaryDamage: 50, AttackRange: 100, DelayBetweenShots: 100, DamageType: 'ARMOR_PIERCING' }),
+      ],
+    }));
+
+    return { registry, tunnelObjects, tunnelDef, infantryDef };
+  }
+
+  it('infantry enters tunnel and gets DISABLED_HELD + MASKED + UNSELECTABLE', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+    const { registry, tunnelObjects } = makeTunnelSetup();
+
+    const map = makeMap([
+      ...tunnelObjects,
+      makeMapObject('GLARebel', 50, 50),  // Adjacent to tunnel
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    // Entity 1 = tunnel, entity 2 = infantry
+    const infantryBefore = logic.getEntityState(2);
+    expect(infantryBefore).not.toBeNull();
+    expect(infantryBefore!.statusFlags).not.toContain('DISABLED_HELD');
+
+    // Issue enter transport command to enter the tunnel.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    const infantryAfter = logic.getEntityState(2);
+    expect(infantryAfter).not.toBeNull();
+    expect(infantryAfter!.statusFlags).toContain('DISABLED_HELD');
+    expect(infantryAfter!.statusFlags).toContain('MASKED');
+    expect(infantryAfter!.statusFlags).toContain('UNSELECTABLE');
+  });
+
+  it('infantry exits tunnel and clears containment flags', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+    const { registry, tunnelObjects } = makeTunnelSetup();
+
+    const map = makeMap([
+      ...tunnelObjects,
+      makeMapObject('GLARebel', 50, 50),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    // Enter tunnel.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    // Verify inside.
+    expect(logic.getEntityState(2)!.statusFlags).toContain('DISABLED_HELD');
+
+    // Exit container.
+    logic.submitCommand({ type: 'exitContainer', entityId: 2 });
+    logic.update(1 / 30);
+
+    const infantryAfter = logic.getEntityState(2);
+    expect(infantryAfter).not.toBeNull();
+    expect(infantryAfter!.statusFlags).not.toContain('DISABLED_HELD');
+    expect(infantryAfter!.statusFlags).not.toContain('MASKED');
+    expect(infantryAfter!.statusFlags).not.toContain('UNSELECTABLE');
+  });
+
+  it('blocks aircraft from entering tunnel', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+
+    const tunnelDef = makeObjectDef('GLATunnelNetwork', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'TunnelContain ModuleTag_Tunnel', {}),
+    ]);
+    const aircraftDef = makeObjectDef('GLAHelicopter', 'GLA', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({ objects: [tunnelDef, aircraftDef] }));
+    const map = makeMap([
+      makeMapObject('GLATunnelNetwork', 50, 50),
+      makeMapObject('GLAHelicopter', 50, 50),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    // Aircraft should NOT be inside tunnel — no DISABLED_HELD.
+    const aircraft = logic.getEntityState(2);
+    expect(aircraft).not.toBeNull();
+    expect(aircraft!.statusFlags).not.toContain('DISABLED_HELD');
+  });
+
+  it('respects maxTunnelCapacity shared across tunnels', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 2 });
+    const { registry } = makeTunnelSetup({ tunnelCount: 2 });
+
+    const map = makeMap([
+      makeMapObject('GLATunnelNetwork', 50, 50),   // Tunnel 1
+      makeMapObject('GLATunnelNetwork', 90, 50),   // Tunnel 2
+      makeMapObject('GLARebel', 50, 50),  // Infantry 1
+      makeMapObject('GLARebel', 50, 50),  // Infantry 2
+      makeMapObject('GLARebel', 90, 50),  // Infantry 3
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    // Enter two infantry (fills capacity of 2).
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 4, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(3)!.statusFlags).toContain('DISABLED_HELD');
+    expect(logic.getEntityState(4)!.statusFlags).toContain('DISABLED_HELD');
+
+    // Third infantry tries to enter a DIFFERENT tunnel — should be rejected (shared capacity).
+    logic.submitCommand({ type: 'enterTransport', entityId: 5, targetTransportId: 2 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(5)!.statusFlags).not.toContain('DISABLED_HELD');
+  });
+
+  it('cave-in kills all passengers when last tunnel destroyed', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+    const { registry } = makeTunnelSetup();
+
+    const map = makeMap([
+      makeMapObject('GLATunnelNetwork', 50, 50),  // Single tunnel
+      makeMapObject('GLARebel', 50, 50),
+      makeMapObject('GLARebel', 50, 50),
+      makeMapObject('USATank', 55, 50),  // Enemy near tunnel
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('GLA', 'America', 0); // enemies
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    // Enter both infantry.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(2)!.statusFlags).toContain('DISABLED_HELD');
+    expect(logic.getEntityState(3)!.statusFlags).toContain('DISABLED_HELD');
+
+    // Enemy tank attacks the tunnel.
+    logic.submitCommand({ type: 'attackEntity', entityId: 4, targetEntityId: 1 });
+    // Run enough frames for the tank to destroy the 500hp tunnel (50 damage per shot).
+    for (let i = 0; i < 120; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Tunnel is destroyed.
+    const tunnel = logic.getEntityState(1);
+    expect(tunnel).toBeNull();
+
+    // Both passengers should be dead (cave-in).
+    expect(logic.getEntityState(2)).toBeNull();
+    expect(logic.getEntityState(3)).toBeNull();
+  });
+
+  it('reassigns passengers when non-last tunnel destroyed', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+    const { registry } = makeTunnelSetup({ tunnelCount: 2 });
+
+    const map = makeMap([
+      makeMapObject('GLATunnelNetwork', 50, 50),  // Tunnel 1
+      makeMapObject('GLATunnelNetwork', 90, 50),  // Tunnel 2
+      makeMapObject('GLARebel', 50, 50),           // Infantry near tunnel 1
+      makeMapObject('USATank', 55, 50),            // Enemy near tunnel 1
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    // Enter infantry into tunnel 1.
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(3)!.statusFlags).toContain('DISABLED_HELD');
+
+    // Enemy tank destroys tunnel 1 (non-last — tunnel 2 still exists).
+    logic.submitCommand({ type: 'attackEntity', entityId: 4, targetEntityId: 1 });
+    for (let i = 0; i < 120; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Tunnel 1 should be destroyed.
+    expect(logic.getEntityState(1)).toBeNull();
+
+    // Passenger should still be alive (reassigned to tunnel 2).
+    const infantry = logic.getEntityState(3);
+    expect(infantry).not.toBeNull();
+    expect(infantry!.statusFlags).toContain('DISABLED_HELD');
+  });
+
+  it('evacuate command exits all passengers from tunnel', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+    const { registry } = makeTunnelSetup();
+
+    const map = makeMap([
+      makeMapObject('GLATunnelNetwork', 50, 50),
+      makeMapObject('GLARebel', 50, 50),
+      makeMapObject('GLARebel', 50, 50),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    // Enter both.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(2)!.statusFlags).toContain('DISABLED_HELD');
+    expect(logic.getEntityState(3)!.statusFlags).toContain('DISABLED_HELD');
+
+    // Evacuate.
+    logic.submitCommand({ type: 'evacuate', entityId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(2)!.statusFlags).not.toContain('DISABLED_HELD');
+    expect(logic.getEntityState(3)!.statusFlags).not.toContain('DISABLED_HELD');
+  });
+
+  it('heals passengers inside tunnel over time', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+    // 3000ms = 90 frames for full heal
+    const { registry } = makeTunnelSetup({
+      timeForFullHealMs: 3000,
+      infantryHealth: 50,
+      infantryMaxHealth: 100,
+    });
+
+    const map = makeMap([
+      makeMapObject('GLATunnelNetwork', 50, 50),
+      makeMapObject('GLARebel', 50, 50),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    // Verify infantry starts at 50hp.
+    expect(logic.getEntityState(2)!.health).toBe(50);
+
+    // Enter tunnel.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    // Run 30 frames (~1 second) inside tunnel.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Should have healed: 30 frames * (100 / 90) per frame ≈ 33 hp healed.
+    // From 50 → should be ~83.
+    const afterPartial = logic.getEntityState(2);
+    expect(afterPartial).not.toBeNull();
+    expect(afterPartial!.health).toBeGreaterThan(70);
+    expect(afterPartial!.health).toBeLessThan(100);
+
+    // Run 60 more frames (total 90 = full heal time).
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    const afterFull = logic.getEntityState(2);
+    expect(afterFull).not.toBeNull();
+    expect(afterFull!.health).toBe(100);
+  });
+
+  it('selling last tunnel ejects passengers safely', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { maxTunnelCapacity: 10 });
+    const { registry } = makeTunnelSetup();
+
+    const map = makeMap([
+      makeMapObject('GLATunnelNetwork', 50, 50),
+      makeMapObject('GLARebel', 50, 50),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+
+    // Enter tunnel.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    expect(logic.getEntityState(2)!.statusFlags).toContain('DISABLED_HELD');
+
+    // Sell the tunnel.
+    logic.submitCommand({ type: 'sell', entityId: 1 });
+    logic.update(1 / 30);
+
+    // Passenger should be ejected (not killed).
+    const infantry = logic.getEntityState(2);
+    expect(infantry).not.toBeNull();
+    expect(infantry!.alive).toBe(true);
+    expect(infantry!.statusFlags).not.toContain('DISABLED_HELD');
+  });
+});
