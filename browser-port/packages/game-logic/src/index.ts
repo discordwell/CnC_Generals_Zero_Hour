@@ -635,6 +635,31 @@ interface SpecialPowerModuleProfile {
   moduleType: string;
   updateModuleStartsAttack: boolean;
   startsPaused: boolean;
+  /**
+   * Source parity: CashHackSpecialPowerModuleData::m_defaultAmountToSteal.
+   * INI field: MoneyAmount. Default 0.
+   */
+  cashHackMoneyAmount: number;
+  /**
+   * Source parity: CashBountyPowerModuleData::m_defaultBounty.
+   * INI field: Bounty (parsed as percent → real). Default 0.
+   */
+  cashBountyPercent: number;
+  /**
+   * Source parity: SpyVisionSpecialPowerModuleData::m_baseDurationInFrames.
+   * INI field: BaseDuration. Raw value in ms (C++ converts to frames). Default 0.
+   */
+  spyVisionBaseDurationMs: number;
+  /**
+   * Source parity: FireWeaponPowerModuleData::m_maxShotsToFire.
+   * INI field: MaxShotsToFire. Default 1.
+   */
+  fireWeaponMaxShots: number;
+  /**
+   * Source parity: CleanupAreaPowerModuleData::m_cleanupMoveRange.
+   * INI field: MaxMoveDistanceFromLocation. Default 0.
+   */
+  cleanupMoveRange: number;
 }
 
 interface SpecialPowerDispatchProfile {
@@ -5185,6 +5210,12 @@ export class GameLogicSubsystem implements Subsystem {
               moduleType,
               updateModuleStartsAttack: readBooleanField(block.fields, ['UpdateModuleStartsAttack']) === true,
               startsPaused: readBooleanField(block.fields, ['StartsPaused']) === true,
+              // Source parity: read module-specific INI parameters.
+              cashHackMoneyAmount: readNumericField(block.fields, ['MoneyAmount']) ?? 0,
+              cashBountyPercent: readNumericField(block.fields, ['Bounty']) ?? 0,
+              spyVisionBaseDurationMs: readNumericField(block.fields, ['BaseDuration']) ?? 0,
+              fireWeaponMaxShots: readNumericField(block.fields, ['MaxShotsToFire']) ?? 1,
+              cleanupMoveRange: readNumericField(block.fields, ['MaxMoveDistanceFromLocation']) ?? 0,
             });
           }
         }
@@ -7236,12 +7267,13 @@ export class GameLogicSubsystem implements Subsystem {
 
     switch (effectCategory) {
       case 'SPY_VISION':
-        // Reveal around source entity position.
+        // Simplified: C++ spy vision globally spies on all enemy unit vision for a duration.
+        // Until the full SpyVisionUpdate system is ported, approximate as area reveal.
         executeSpyVisionImpl({
           sourceSide: source.side ?? '',
           targetX: source.x,
           targetZ: source.z,
-          revealRadius: DEFAULT_SPY_VISION_RADIUS,
+          revealRadius: source.visionRange > 0 ? source.visionRange : DEFAULT_SPY_VISION_RADIUS,
         }, effectContext);
         break;
     }
@@ -7299,7 +7331,7 @@ export class GameLogicSubsystem implements Subsystem {
           sourceSide,
           targetX,
           targetZ,
-          revealRadius: DEFAULT_SPY_VISION_RADIUS,
+          revealRadius: source.visionRange > 0 ? source.visionRange : DEFAULT_SPY_VISION_RADIUS,
         }, effectContext);
         break;
       case 'AREA_HEAL':
@@ -7351,11 +7383,14 @@ export class GameLogicSubsystem implements Subsystem {
 
     switch (effectCategory) {
       case 'CASH_HACK':
+        // Source parity: CashHackSpecialPowerModuleData::m_defaultAmountToSteal from INI MoneyAmount.
         executeCashHackImpl({
           sourceEntityId,
           sourceSide,
           targetEntityId,
-          amountToSteal: DEFAULT_CASH_HACK_AMOUNT,
+          amountToSteal: module.cashHackMoneyAmount > 0
+            ? module.cashHackMoneyAmount
+            : DEFAULT_CASH_HACK_AMOUNT,
         }, effectContext);
         break;
       case 'DEFECTOR':
