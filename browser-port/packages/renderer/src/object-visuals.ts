@@ -26,6 +26,7 @@ export interface RenderableEntityState {
   maxHealth?: number;
   isSelected?: boolean;
   side?: string;
+  veterancyLevel?: number;
 }
 
 export interface LoadedModelAsset {
@@ -46,6 +47,8 @@ interface VisualAssetState {
   healthBarGroup: THREE.Group | null;
   healthBarFill: THREE.Mesh | null;
   selectionRing: THREE.Mesh | null;
+  veterancyBadge: THREE.Group | null;
+  currentVeterancyLevel: number;
 }
 
 export interface ObjectVisualManagerConfig {
@@ -115,6 +118,7 @@ export class ObjectVisualManager {
       this.syncVisualAsset(visual, state);
       this.syncHealthBar(visual, state);
       this.syncSelectionRing(visual, state);
+      this.syncVeterancyBadge(visual, state);
       this.applyAnimationState(visual, state.animationState);
       if (visual.mixer) {
         visual.mixer.update(dt);
@@ -191,6 +195,8 @@ export class ObjectVisualManager {
       healthBarGroup: null,
       healthBarFill: null,
       selectionRing: null,
+      veterancyBadge: null,
+      currentVeterancyLevel: 0,
     };
   }
 
@@ -409,6 +415,11 @@ export class ObjectVisualManager {
     visual.healthBarGroup = null;
     visual.healthBarFill = null;
     visual.selectionRing = null;
+    if (visual.veterancyBadge) {
+      this.disposeObject3D(visual.veterancyBadge);
+    }
+    visual.veterancyBadge = null;
+    visual.currentVeterancyLevel = 0;
     this.scene.remove(visual.root);
     visual.root.clear();
     visual.activeState = null;
@@ -729,6 +740,85 @@ export class ObjectVisualManager {
     }
 
     visual.selectionRing.visible = true;
+  }
+
+  // Shared geometry for veterancy chevrons.
+  private static veterancyChevronGeometry: THREE.BufferGeometry | null = null;
+  private static getVeterancyChevronGeometry(): THREE.BufferGeometry {
+    if (!ObjectVisualManager.veterancyChevronGeometry) {
+      // Small diamond/chevron shape.
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0.12);
+      shape.lineTo(0.08, 0);
+      shape.lineTo(0, -0.12);
+      shape.lineTo(-0.08, 0);
+      shape.closePath();
+      ObjectVisualManager.veterancyChevronGeometry = new THREE.ShapeGeometry(shape);
+    }
+    return ObjectVisualManager.veterancyChevronGeometry;
+  }
+
+  private static readonly VETERANCY_COLORS = [
+    0x000000, // level 0: none
+    0x44cc44, // level 1: Veteran (green)
+    0x4488ff, // level 2: Elite (blue)
+    0xffcc00, // level 3: Heroic (gold)
+  ];
+
+  private syncVeterancyBadge(visual: VisualAssetState, state: RenderableEntityState): void {
+    const level = state.veterancyLevel ?? 0;
+
+    if (level <= 0) {
+      if (visual.veterancyBadge) {
+        visual.veterancyBadge.visible = false;
+      }
+      return;
+    }
+
+    // Rebuild badge if level changed.
+    if (visual.currentVeterancyLevel !== level) {
+      if (visual.veterancyBadge) {
+        this.disposeObject3D(visual.veterancyBadge);
+        visual.root.remove(visual.veterancyBadge);
+        visual.veterancyBadge = null;
+      }
+      visual.currentVeterancyLevel = level;
+    }
+
+    if (!visual.veterancyBadge) {
+      const group = new THREE.Group();
+      group.name = 'veterancy-badge';
+      const chevronGeo = ObjectVisualManager.getVeterancyChevronGeometry();
+      const color = ObjectVisualManager.VETERANCY_COLORS[Math.min(level, 3)] ?? 0xffcc00;
+
+      // Place 1-3 chevrons based on level.
+      const count = Math.min(level, 3);
+      const spacing = 0.2;
+      const startX = -(count - 1) * spacing * 0.5;
+
+      for (let i = 0; i < count; i++) {
+        const material = new THREE.MeshBasicMaterial({
+          color,
+          side: THREE.DoubleSide,
+          depthTest: false,
+        });
+        const chevron = new THREE.Mesh(chevronGeo, material);
+        chevron.position.x = startX + i * spacing;
+        group.add(chevron);
+      }
+
+      group.position.y = 4.2; // Above the health bar.
+      group.renderOrder = 1001;
+      visual.veterancyBadge = group;
+      visual.root.add(group);
+    }
+
+    visual.veterancyBadge.visible = true;
+
+    // Billboard effect: face camera.
+    if (visual.veterancyBadge) {
+      visual.veterancyBadge.rotation.y = -visual.root.rotation.y;
+    }
   }
 
   private disposeObject3D(object3D: THREE.Object3D): void {

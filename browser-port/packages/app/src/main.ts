@@ -552,6 +552,84 @@ async function startGame(
   audioManager.setPlayerRelationshipResolver((owningPlayerIndex, localPlayerIndex) =>
     gameLogic.getPlayerRelationshipByIndex(owningPlayerIndex, localPlayerIndex),
   );
+
+  // Register synthesized combat audio events (placeholder until real audio assets).
+  const registerCombatAudio = (): void => {
+    const ctx = new AudioContext();
+    const sampleRate = ctx.sampleRate;
+
+    const synthesize = (
+      duration: number,
+      generator: (t: number, i: number) => number,
+    ): AudioBuffer => {
+      const length = Math.ceil(sampleRate * duration);
+      const buffer = ctx.createBuffer(1, length, sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) {
+        const t = i / sampleRate;
+        data[i] = generator(t, i) * Math.max(0, 1 - t / duration);
+      }
+      return buffer;
+    };
+
+    // Gunshot: white noise burst with fast decay.
+    const gunshot = synthesize(0.15, (t) => {
+      return (Math.random() * 2 - 1) * Math.exp(-t * 40);
+    });
+
+    // Missile launch: rising tone + noise.
+    const missileLaunch = synthesize(0.4, (t) => {
+      const freq = 200 + t * 800;
+      return (Math.sin(2 * Math.PI * freq * t) * 0.5 + (Math.random() * 2 - 1) * 0.3)
+        * Math.exp(-t * 3);
+    });
+
+    // Explosion: low rumble + noise burst.
+    const explosion = synthesize(0.6, (t) => {
+      const rumble = Math.sin(2 * Math.PI * 60 * t) * Math.exp(-t * 4);
+      const noise = (Math.random() * 2 - 1) * Math.exp(-t * 8);
+      return (rumble * 0.6 + noise * 0.4);
+    });
+
+    // Large explosion (building destruction).
+    const largeExplosion = synthesize(1.0, (t) => {
+      const rumble = Math.sin(2 * Math.PI * 40 * t) * Math.exp(-t * 2);
+      const crack = (Math.random() * 2 - 1) * Math.exp(-t * 5);
+      return (rumble * 0.7 + crack * 0.3);
+    });
+
+    // Artillery fire: sharp crack.
+    const artilleryFire = synthesize(0.25, (t) => {
+      const crack = (Math.random() * 2 - 1) * Math.exp(-t * 25);
+      const boom = Math.sin(2 * Math.PI * 80 * t) * Math.exp(-t * 10);
+      return crack * 0.5 + boom * 0.5;
+    });
+
+    const events: Array<{ name: string; buffer: AudioBuffer; volume: number }> = [
+      { name: 'CombatGunshot', buffer: gunshot, volume: 0.3 },
+      { name: 'CombatMissileLaunch', buffer: missileLaunch, volume: 0.4 },
+      { name: 'CombatExplosionSmall', buffer: explosion, volume: 0.5 },
+      { name: 'CombatExplosionLarge', buffer: largeExplosion, volume: 0.6 },
+      { name: 'CombatArtilleryFire', buffer: artilleryFire, volume: 0.4 },
+      { name: 'CombatEntityDestroyed', buffer: largeExplosion, volume: 0.7 },
+    ];
+
+    for (const { name, buffer, volume } of events) {
+      audioManager.addAudioEventInfo({
+        audioName: name,
+        soundType: 1, // AT_SoundEffect
+        type: 0x0002, // ST_WORLD
+        volume,
+        minVolume: 0,
+        minRange: 10,
+        maxRange: 300,
+      });
+      audioManager.preloadAudioBuffer(name, buffer);
+    }
+
+    ctx.close();
+  };
+  registerCombatAudio();
   syncPlayerSidesFromNetwork(networkManager, gameLogic);
 
   // ========================================================================
@@ -742,6 +820,128 @@ async function startGame(
   const debugInfo = document.getElementById('debug-info') as HTMLDivElement;
   const creditsHud = document.getElementById('credits-hud') as HTMLDivElement;
   creditsHud.style.display = 'block';
+
+  // Entity info panel (bottom-center, shows selected unit details).
+  const entityInfoPanel = document.createElement('div');
+  entityInfoPanel.id = 'entity-info-panel';
+  Object.assign(entityInfoPanel.style, {
+    position: 'absolute',
+    bottom: '10px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: 'rgba(12, 16, 28, 0.85)',
+    border: '1px solid rgba(201, 168, 76, 0.4)',
+    borderRadius: '4px',
+    padding: '8px 14px',
+    color: '#e0d8c0',
+    fontFamily: "'Segoe UI', Arial, sans-serif",
+    fontSize: '13px',
+    lineHeight: '1.5',
+    zIndex: '50',
+    display: 'none',
+    minWidth: '220px',
+    maxWidth: '350px',
+    pointerEvents: 'none',
+  });
+  document.getElementById('ui-overlay')!.appendChild(entityInfoPanel);
+
+  const entityInfoName = document.createElement('div');
+  Object.assign(entityInfoName.style, {
+    fontWeight: '700',
+    fontSize: '14px',
+    color: '#c9a84c',
+    marginBottom: '4px',
+  });
+  entityInfoPanel.appendChild(entityInfoName);
+
+  const entityInfoHealthRow = document.createElement('div');
+  entityInfoPanel.appendChild(entityInfoHealthRow);
+
+  const entityInfoHealthBar = document.createElement('div');
+  Object.assign(entityInfoHealthBar.style, {
+    width: '100%',
+    height: '6px',
+    background: '#333',
+    borderRadius: '3px',
+    overflow: 'hidden',
+    marginTop: '2px',
+    marginBottom: '4px',
+  });
+  entityInfoPanel.appendChild(entityInfoHealthBar);
+
+  const entityInfoHealthFill = document.createElement('div');
+  Object.assign(entityInfoHealthFill.style, {
+    height: '100%',
+    background: '#44cc44',
+    transition: 'width 0.15s, background 0.15s',
+  });
+  entityInfoHealthBar.appendChild(entityInfoHealthFill);
+
+  const entityInfoDetails = document.createElement('div');
+  Object.assign(entityInfoDetails.style, {
+    fontSize: '12px',
+    color: '#a09880',
+  });
+  entityInfoPanel.appendChild(entityInfoDetails);
+
+  const updateEntityInfoPanel = (): void => {
+    const selectedIds = gameLogic.getLocalPlayerSelectionIds();
+    if (selectedIds.length === 0) {
+      entityInfoPanel.style.display = 'none';
+      return;
+    }
+
+    // Show info for primary selection.
+    const primaryId = selectedIds[0]!;
+    const state = gameLogic.getEntityState(primaryId);
+    if (!state) {
+      entityInfoPanel.style.display = 'none';
+      return;
+    }
+
+    entityInfoPanel.style.display = 'block';
+
+    // Name.
+    const displayName = state.templateName.replace(/([A-Z])/g, ' $1').trim();
+    entityInfoName.textContent = selectedIds.length > 1
+      ? `${displayName} (+${selectedIds.length - 1} more)`
+      : displayName;
+
+    // Health.
+    const healthPct = state.maxHealth > 0 ? state.health / state.maxHealth : 0;
+    entityInfoHealthRow.textContent = `HP: ${Math.ceil(state.health)} / ${state.maxHealth}`;
+    entityInfoHealthFill.style.width = `${Math.round(healthPct * 100)}%`;
+    entityInfoHealthFill.style.background = healthPct > 0.6 ? '#44cc44'
+      : healthPct > 0.3 ? '#cccc44' : '#cc4444';
+
+    // Details.
+    const lines: string[] = [];
+    if (state.veterancyLevel > 0) {
+      const vetNames = ['', 'Veteran', 'Elite', 'Heroic'];
+      lines.push(`Rank: ${vetNames[state.veterancyLevel] ?? `Level ${state.veterancyLevel}`}`);
+    }
+
+    const selectionInfo = gameLogic.getSelectedEntityInfoById(primaryId);
+    if (selectionInfo) {
+      if (selectionInfo.side) {
+        lines.push(`Side: ${selectionInfo.side}`);
+      }
+      if (selectionInfo.appliedUpgradeNames.length > 0) {
+        lines.push(`Upgrades: ${selectionInfo.appliedUpgradeNames.join(', ')}`);
+      }
+      lines.push(`Category: ${selectionInfo.category}`);
+    }
+
+    if (state.attackTargetEntityId !== null) {
+      lines.push('Status: Attacking');
+    } else if (state.animationState === 'MOVE') {
+      lines.push('Status: Moving');
+    } else {
+      lines.push('Status: Idle');
+    }
+
+    entityInfoDetails.textContent = lines.join(' | ');
+  };
 
   // End-game overlay
   const endGameOverlay = document.createElement('div');
@@ -1166,6 +1366,327 @@ async function startGame(
   };
 
   // ========================================================================
+  // Particle effects system
+  // ========================================================================
+
+  interface Particle {
+    mesh: THREE.Mesh;
+    vx: number;
+    vy: number;
+    vz: number;
+    life: number;
+    maxLife: number;
+    startScale: number;
+  }
+
+  const activeParticles: Particle[] = [];
+  const PARTICLE_POOL_LIMIT = 200;
+
+  // Shared geometries and materials.
+  const particleSphereGeometry = new THREE.SphereGeometry(1, 6, 4);
+  const explosionMaterial = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true });
+  const smokeMaterial = new THREE.MeshBasicMaterial({ color: 0x444444, transparent: true });
+  const flashMaterial = new THREE.MeshBasicMaterial({ color: 0xffffaa, transparent: true });
+  const debrisMaterial = new THREE.MeshBasicMaterial({ color: 0x332211, transparent: true });
+
+  const spawnParticle = (
+    x: number, y: number, z: number,
+    vx: number, vy: number, vz: number,
+    material: THREE.MeshBasicMaterial, scale: number, life: number,
+  ): void => {
+    if (activeParticles.length >= PARTICLE_POOL_LIMIT) return;
+    const mat = material.clone();
+    const mesh = new THREE.Mesh(particleSphereGeometry, mat);
+    mesh.position.set(x, y, z);
+    mesh.scale.setScalar(scale);
+    mesh.renderOrder = 800;
+    scene.add(mesh);
+    activeParticles.push({ mesh, vx, vy, vz, life, maxLife: life, startScale: scale });
+  };
+
+  const spawnExplosion = (x: number, y: number, z: number, radius: number): void => {
+    const count = Math.min(12, Math.max(4, Math.ceil(radius * 1.5)));
+    const speed = Math.max(2, radius * 0.6);
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const elevation = Math.random() * Math.PI * 0.5;
+      const v = speed * (0.5 + Math.random() * 0.5);
+      const vx = Math.cos(angle) * Math.cos(elevation) * v;
+      const vy = Math.sin(elevation) * v + 2;
+      const vz = Math.sin(angle) * Math.cos(elevation) * v;
+      const scale = 0.3 + Math.random() * 0.5 * Math.min(radius * 0.15, 2);
+      // Mix fire and smoke particles.
+      const mat = i < count * 0.6 ? explosionMaterial : smokeMaterial;
+      const life = 0.3 + Math.random() * 0.5;
+      spawnParticle(x, y + 0.5, z, vx, vy, vz, mat, scale, life);
+    }
+  };
+
+  const spawnMuzzleFlash = (x: number, y: number, z: number): void => {
+    for (let i = 0; i < 3; i++) {
+      const vx = (Math.random() - 0.5) * 2;
+      const vy = Math.random() * 3;
+      const vz = (Math.random() - 0.5) * 2;
+      spawnParticle(x, y, z, vx, vy, vz, flashMaterial, 0.2 + Math.random() * 0.15, 0.1 + Math.random() * 0.1);
+    }
+  };
+
+  const spawnDestructionEffect = (x: number, y: number, z: number, radius: number): void => {
+    // Large explosion + debris.
+    spawnExplosion(x, y, z, radius);
+    const debrisCount = Math.min(8, Math.max(3, Math.ceil(radius * 0.5)));
+    for (let i = 0; i < debrisCount; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 3 + Math.random() * 5;
+      const vx = Math.cos(angle) * speed;
+      const vy = 5 + Math.random() * 8;
+      const vz = Math.sin(angle) * speed;
+      spawnParticle(x, y + 1, z, vx, vy, vz, debrisMaterial, 0.15 + Math.random() * 0.2, 0.8 + Math.random() * 0.5);
+    }
+  };
+
+  const updateParticles = (dt: number): void => {
+    for (let i = activeParticles.length - 1; i >= 0; i--) {
+      const p = activeParticles[i]!;
+      p.life -= dt;
+      if (p.life <= 0) {
+        scene.remove(p.mesh);
+        (p.mesh.material as THREE.MeshBasicMaterial).dispose();
+        activeParticles.splice(i, 1);
+        continue;
+      }
+      // Physics update.
+      p.vy -= 9.8 * dt; // Gravity.
+      p.mesh.position.x += p.vx * dt;
+      p.mesh.position.y += p.vy * dt;
+      p.mesh.position.z += p.vz * dt;
+      // Fade out and shrink.
+      const lifeRatio = p.life / p.maxLife;
+      (p.mesh.material as THREE.MeshBasicMaterial).opacity = lifeRatio;
+      p.mesh.scale.setScalar(p.startScale * (0.3 + 0.7 * lifeRatio));
+      // Floor clamp.
+      if (p.mesh.position.y < 0) {
+        p.mesh.position.y = 0;
+        p.vy = 0;
+        p.vx *= 0.8;
+        p.vz *= 0.8;
+      }
+    }
+  };
+
+  // ========================================================================
+  // Rubble and smoke columns (persistent destruction effects)
+  // ========================================================================
+
+  interface RubblePiece {
+    mesh: THREE.Mesh;
+    spawnTime: number;
+    duration: number;
+  }
+
+  interface SmokeColumn {
+    x: number;
+    y: number;
+    z: number;
+    spawnTime: number;
+    duration: number;
+  }
+
+  const rubblePieces: RubblePiece[] = [];
+  const smokeColumns: SmokeColumn[] = [];
+  const RUBBLE_DURATION = 30; // seconds
+  const SMOKE_DURATION = 15;
+  const rubbleGeometry = new THREE.BoxGeometry(1, 0.3, 1);
+  const rubbleMaterials = [
+    new THREE.MeshBasicMaterial({ color: 0x3a3a3a }),
+    new THREE.MeshBasicMaterial({ color: 0x4a4030 }),
+    new THREE.MeshBasicMaterial({ color: 0x555045 }),
+  ];
+
+  const spawnRubble = (x: number, y: number, z: number, radius: number): void => {
+    const count = Math.min(6, Math.max(2, Math.ceil(radius * 0.5)));
+    const now = performance.now() / 1000;
+    for (let i = 0; i < count; i++) {
+      const dx = (Math.random() - 0.5) * radius * 1.5;
+      const dz = (Math.random() - 0.5) * radius * 1.5;
+      const mat = rubbleMaterials[i % rubbleMaterials.length]!.clone();
+      const mesh = new THREE.Mesh(rubbleGeometry, mat);
+      const terrainY = heightmap.getInterpolatedHeight(x + dx, z + dz);
+      mesh.position.set(x + dx, terrainY + 0.15, z + dz);
+      mesh.rotation.y = Math.random() * Math.PI * 2;
+      mesh.scale.set(0.5 + Math.random(), 0.3, 0.5 + Math.random());
+      mesh.renderOrder = 100;
+      scene.add(mesh);
+      rubblePieces.push({ mesh, spawnTime: now, duration: RUBBLE_DURATION });
+    }
+  };
+
+  const spawnSmokeColumn = (x: number, y: number, z: number): void => {
+    smokeColumns.push({
+      x, y, z,
+      spawnTime: performance.now() / 1000,
+      duration: SMOKE_DURATION,
+    });
+  };
+
+  const updateRubbleAndSmoke = (dt: number): void => {
+    const now = performance.now() / 1000;
+
+    // Fade and remove old rubble.
+    for (let i = rubblePieces.length - 1; i >= 0; i--) {
+      const r = rubblePieces[i]!;
+      const age = now - r.spawnTime;
+      if (age > r.duration) {
+        scene.remove(r.mesh);
+        (r.mesh.material as THREE.MeshBasicMaterial).dispose();
+        rubblePieces.splice(i, 1);
+        continue;
+      }
+      // Fade in last 5 seconds.
+      if (age > r.duration - 5) {
+        const fadeRatio = (r.duration - age) / 5;
+        (r.mesh.material as THREE.MeshBasicMaterial).opacity = fadeRatio;
+        (r.mesh.material as THREE.MeshBasicMaterial).transparent = true;
+      }
+    }
+
+    // Emit smoke particles from active smoke columns.
+    for (let i = smokeColumns.length - 1; i >= 0; i--) {
+      const col = smokeColumns[i]!;
+      const age = now - col.spawnTime;
+      if (age > col.duration) {
+        smokeColumns.splice(i, 1);
+        continue;
+      }
+      // Emit rising smoke particles periodically (every ~0.2s worth of dt accumulated).
+      if (Math.random() < dt * 5) {
+        const fadeRatio = 1 - age / col.duration;
+        spawnParticle(
+          col.x + (Math.random() - 0.5) * 1.5,
+          col.y + 2 + Math.random() * 2,
+          col.z + (Math.random() - 0.5) * 1.5,
+          (Math.random() - 0.5) * 0.5,
+          2 + Math.random() * 3,
+          (Math.random() - 0.5) * 0.5,
+          smokeMaterial,
+          0.4 + Math.random() * 0.3,
+          1.5 + Math.random() * fadeRatio,
+        );
+      }
+    }
+  };
+
+  const processVisualEvents = (): void => {
+    const events = gameLogic.drainVisualEvents();
+    for (const event of events) {
+      const pos: readonly [number, number, number] = [event.x, event.y, event.z];
+      switch (event.type) {
+        case 'WEAPON_IMPACT':
+          spawnExplosion(event.x, event.y, event.z, event.radius);
+          audioManager.addAudioEvent(
+            event.radius > 5 ? 'CombatExplosionLarge' : 'CombatExplosionSmall',
+            pos,
+          );
+          break;
+        case 'WEAPON_FIRED':
+          spawnMuzzleFlash(event.x, event.y, event.z);
+          if (event.projectileType === 'MISSILE') {
+            audioManager.addAudioEvent('CombatMissileLaunch', pos);
+          } else if (event.projectileType === 'ARTILLERY') {
+            audioManager.addAudioEvent('CombatArtilleryFire', pos);
+          } else {
+            audioManager.addAudioEvent('CombatGunshot', pos);
+          }
+          break;
+        case 'ENTITY_DESTROYED':
+          spawnDestructionEffect(event.x, event.y, event.z, event.radius);
+          spawnRubble(event.x, event.y, event.z, event.radius);
+          spawnSmokeColumn(event.x, event.y, event.z);
+          audioManager.addAudioEvent('CombatEntityDestroyed', pos);
+          break;
+      }
+    }
+  };
+
+  // ========================================================================
+  // Projectile visuals
+  // ========================================================================
+
+  const projectileMeshPool = new Map<number, THREE.Mesh>();
+
+  // Shared geometries for projectile types.
+  const bulletGeometry = new THREE.SphereGeometry(0.3, 6, 4);
+  const missileGeometry = new THREE.ConeGeometry(0.25, 1.5, 6);
+  const artilleryGeometry = new THREE.SphereGeometry(0.5, 8, 6);
+
+  // Shared materials for projectile types.
+  const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffee44 });
+  const missileMaterial = new THREE.MeshBasicMaterial({ color: 0xff6600 });
+  const artilleryMaterial = new THREE.MeshBasicMaterial({ color: 0x444444 });
+  const laserMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+
+  const _projectileActiveIds = new Set<number>();
+  const updateProjectileVisuals = (): void => {
+    const activeProjectiles = gameLogic.getActiveProjectiles();
+    _projectileActiveIds.clear();
+    const activeIds = _projectileActiveIds;
+
+    for (const proj of activeProjectiles) {
+      activeIds.add(proj.id);
+      let mesh = projectileMeshPool.get(proj.id);
+      if (!mesh) {
+        // Create new mesh based on visual type.
+        let geometry: THREE.BufferGeometry;
+        let material: THREE.Material;
+        switch (proj.visualType) {
+          case 'MISSILE':
+            geometry = missileGeometry;
+            material = missileMaterial;
+            break;
+          case 'ARTILLERY':
+            geometry = artilleryGeometry;
+            material = artilleryMaterial;
+            break;
+          case 'LASER':
+            geometry = bulletGeometry;
+            material = laserMaterial;
+            break;
+          default:
+            geometry = bulletGeometry;
+            material = bulletMaterial;
+            break;
+        }
+        mesh = new THREE.Mesh(geometry, material);
+        mesh.name = `projectile-${proj.id}`;
+        mesh.renderOrder = 600;
+        scene.add(mesh);
+        projectileMeshPool.set(proj.id, mesh);
+      }
+
+      mesh.position.set(proj.x, proj.y, proj.z);
+      mesh.rotation.y = proj.heading;
+      // Missiles and bullets point forward (tilt along flight path).
+      if (proj.visualType === 'MISSILE') {
+        const pitchAngle = -Math.PI / 2 + (1 - proj.progress) * Math.PI * 0.3;
+        mesh.rotation.x = pitchAngle;
+      }
+      mesh.visible = true;
+    }
+
+    // Remove projectiles that are no longer in flight.
+    for (const [id, mesh] of projectileMeshPool) {
+      if (!activeIds.has(id)) {
+        scene.remove(mesh);
+        mesh.geometry !== bulletGeometry &&
+          mesh.geometry !== missileGeometry &&
+          mesh.geometry !== artilleryGeometry &&
+          mesh.geometry.dispose();
+        projectileMeshPool.delete(id);
+      }
+    }
+  };
+
+  // ========================================================================
   // Control groups (Ctrl+1-9 to save, 1-9 to recall, double-tap to center)
   // ========================================================================
 
@@ -1526,6 +2047,11 @@ async function startGame(
 
       objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
 
+      // Process visual events (explosions, muzzle flashes, etc.) and update particles.
+      processVisualEvents();
+      updateParticles(dt);
+      updateRubbleAndSmoke(dt);
+
       // Update fog of war overlay at reduced frequency.
       fogUpdateCounter++;
       if (fogUpdateCounter >= FOG_UPDATE_INTERVAL) {
@@ -1540,6 +2066,8 @@ async function startGame(
       updateProductionPanel();
       updateRallyPointVisual();
       updateMoveIndicators();
+      updateProjectileVisuals();
+      updateEntityInfoPanel();
 
       // FPS counter
       frameCount++;

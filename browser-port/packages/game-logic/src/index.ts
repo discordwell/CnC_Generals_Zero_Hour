@@ -639,6 +639,16 @@ interface PendingWeaponDamageEvent {
   executeFrame: number;
   delivery: 'DIRECT' | 'PROJECTILE';
   weapon: AttackWeaponProfile;
+  /** Frame when the projectile was launched. */
+  launchFrame: number;
+  /** Launch origin in world coordinates. */
+  sourceX: number;
+  sourceY: number;
+  sourceZ: number;
+  /** Unique visual id for renderer tracking. */
+  projectileVisualId: number;
+  /** Cached visual type classification. */
+  cachedVisualType: import('./types.js').ProjectileVisualType;
 }
 
 interface SellingEntityState {
@@ -821,6 +831,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly gameRandom = new GameRandom(1);
 
   private nextId = 1;
+  private nextProjectileVisualId = 1;
   private animationTime = 0;
   private selectedEntityId: number | null = null;
   private selectedEntityIds: readonly number[] = [];
@@ -847,6 +858,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly shortcutSpecialPowerNamesByEntityId = new Map<number, Set<string>>();
   private readonly sharedShortcutSpecialPowerReadyFrames = new Map<string, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
+  private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
   private readonly pendingDyingRenderableStates = new Map<number, {
     state: RenderableEntityState;
     expireFrame: number;
@@ -1012,6 +1024,7 @@ export class GameLogicSubsystem implements Subsystem {
       maxHealth: entity.maxHealth,
       isSelected: entity.selected,
       side: entity.side,
+      veterancyLevel: entity.experienceState.currentLevel,
     };
   }
 
@@ -1681,6 +1694,63 @@ export class GameLogicSubsystem implements Subsystem {
    */
   isSideDefeated(side: string): boolean {
     return this.defeatedSides.has(this.normalizeSide(side));
+  }
+
+  /**
+   * Drain the visual events buffer. Returns all events since the last drain.
+   * The caller should consume these for particle effects, sounds, etc.
+   */
+  drainVisualEvents(): import('./types.js').VisualEvent[] {
+    if (this.visualEventBuffer.length === 0) return [];
+    const events = this.visualEventBuffer.slice();
+    this.visualEventBuffer.length = 0;
+    return events;
+  }
+
+  /**
+   * Return in-flight projectile data for renderer visualization.
+   * Each projectile has an interpolated position based on launch/impact timing.
+   */
+  getActiveProjectiles(): import('./types.js').ActiveProjectile[] {
+    const projectiles: import('./types.js').ActiveProjectile[] = [];
+    const heightmap = this.mapHeightmap;
+
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.delivery !== 'PROJECTILE') continue;
+
+      const totalFrames = event.executeFrame - event.launchFrame;
+      if (totalFrames <= 0) continue;
+
+      const elapsed = this.frameCounter - event.launchFrame;
+      const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
+
+      // Linear interpolation for x/z.
+      const x = event.sourceX + (event.impactX - event.sourceX) * progress;
+      const z = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+
+      // Parabolic arc for y: peak at midpoint.
+      const baseY = event.sourceY;
+      const arcHeight = Math.max(5, Math.hypot(event.impactX - event.sourceX, event.impactZ - event.sourceZ) * 0.15);
+      const arcY = baseY + arcHeight * 4 * progress * (1 - progress);
+      const terrainY = heightmap ? heightmap.getInterpolatedHeight(x, z) : 0;
+      const y = Math.max(terrainY + 1, arcY);
+
+      // Heading from source to target.
+      const heading = Math.atan2(event.impactX - event.sourceX, event.impactZ - event.sourceZ);
+
+      projectiles.push({
+        id: event.projectileVisualId,
+        sourceEntityId: event.sourceEntityId,
+        visualType: event.cachedVisualType,
+        x, y, z,
+        targetX: event.impactX,
+        targetZ: event.impactZ,
+        progress,
+        heading,
+      });
+    }
+
+    return projectiles;
   }
 
   getSelectedEntityInfos(entityIds: readonly number[]): SelectedEntityInfo[] {
@@ -7653,6 +7723,35 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return entity.productionProfile.quantityModifiers.map(qm => qm.templateName);
       },
+      getWorldDimensions: () => {
+        const hm = this.mapHeightmap;
+        return hm ? { width: hm.worldWidth, depth: hm.worldDepth } : null;
+      },
+      getDozers: (side: string) => {
+        const normalizedSide = this.normalizeSide(side);
+        const result: MapEntity[] = [];
+        for (const entity of this.spawnedEntities.values()) {
+          if (entity.destroyed) continue;
+          if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+          if (entity.templateName.toUpperCase().includes('DOZER')
+            || entity.templateName.toUpperCase().includes('WORKER')) {
+            result.push(entity);
+          }
+        }
+        return result;
+      },
+      getBuildableStructures: (entity: MapEntity) => {
+        if (!entity.productionProfile) return [];
+        return entity.productionProfile.quantityModifiers
+          .filter(qm => {
+            const upper = qm.templateName.toUpperCase();
+            return !upper.includes('UPGRADE') && !upper.includes('SCIENCE');
+          })
+          .map(qm => qm.templateName);
+      },
+      isDozerBusy: (entity: MapEntity) => {
+        return entity.moving || entity.productionQueue.length > 0;
+      },
     };
 
     for (const aiState of this.skirmishAIStates.values()) {
@@ -9971,11 +10070,21 @@ export class GameLogicSubsystem implements Subsystem {
       executeFrame: this.frameCounter + delayFrames,
       delivery,
       weapon,
+      launchFrame: this.frameCounter,
+      sourceX,
+      sourceY: attacker.y,
+      sourceZ,
+      projectileVisualId: this.nextProjectileVisualId++,
+      cachedVisualType: this.classifyWeaponVisualType(weapon),
     };
+
+    // Emit muzzle flash visual event.
+    this.emitWeaponFiredVisualEvent(attacker, weapon);
 
     if (delivery === 'DIRECT' && delayFrames <= 0) {
       // Source parity subset: WeaponTemplate::fireWeaponTemplate() applies non-projectile
       // damage immediately when delayInFrames < 1.0f instead of queuing delayed damage.
+      this.emitWeaponImpactVisualEvent(event);
       applyWeaponDamageEventImpl(this.createCombatDamageEventContext(), event);
       return;
     }
@@ -9985,6 +10094,41 @@ export class GameLogicSubsystem implements Subsystem {
     // TODO(C&C source parity): port projectile-object launch/collision/countermeasure and
     // laser/scatter handling from Weapon::fireWeaponTemplate() instead of routing both
     // direct and projectile delivery through pending impact events.
+  }
+
+  private classifyWeaponVisualType(weapon: AttackWeaponProfile): import('./types.js').ProjectileVisualType {
+    const name = weapon.name.toUpperCase();
+    if (name.includes('MISSILE') || name.includes('ROCKET') || name.includes('PATRIOT')) return 'MISSILE';
+    if (name.includes('ARTILLERY') || name.includes('CANNON') || name.includes('SHELL')
+      || weapon.primaryDamageRadius > 10) return 'ARTILLERY';
+    if (name.includes('LASER')) return 'LASER';
+    return 'BULLET';
+  }
+
+  private emitWeaponFiredVisualEvent(attacker: MapEntity, weapon: AttackWeaponProfile): void {
+    this.visualEventBuffer.push({
+      type: 'WEAPON_FIRED',
+      x: attacker.x,
+      y: attacker.y + 1.5,
+      z: attacker.z,
+      radius: 0,
+      sourceEntityId: attacker.id,
+      projectileType: this.classifyWeaponVisualType(weapon),
+    });
+  }
+
+  private emitWeaponImpactVisualEvent(event: PendingWeaponDamageEvent): void {
+    const heightmap = this.mapHeightmap;
+    const impactY = heightmap ? heightmap.getInterpolatedHeight(event.impactX, event.impactZ) : 0;
+    this.visualEventBuffer.push({
+      type: 'WEAPON_IMPACT',
+      x: event.impactX,
+      y: impactY,
+      z: event.impactZ,
+      radius: Math.max(event.weapon.primaryDamageRadius, 1),
+      sourceEntityId: event.sourceEntityId,
+      projectileType: this.classifyWeaponVisualType(event.weapon),
+    });
   }
 
   private setEntityAttackStatus(entity: MapEntity, isAttacking: boolean): void {
@@ -10125,6 +10269,12 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updatePendingWeaponDamage(): void {
+    // Emit impact visual events for projectiles resolving this frame.
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.executeFrame <= this.frameCounter) {
+        this.emitWeaponImpactVisualEvent(event);
+      }
+    }
     updatePendingWeaponDamageImpl(this.createCombatDamageEventContext());
   }
 
@@ -10296,6 +10446,17 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed) {
       return;
     }
+
+    // Emit entity destroyed visual event.
+    this.visualEventBuffer.push({
+      type: 'ENTITY_DESTROYED',
+      x: entity.x,
+      y: entity.y,
+      z: entity.z,
+      radius: entity.category === 'building' ? 8 : 3,
+      sourceEntityId: entityId,
+      projectileType: 'BULLET',
+    });
 
     // Source parity: award XP to killer on victim death.
     this.awardExperienceOnKill(entityId, attackerId);
@@ -10713,6 +10874,8 @@ export class GameLogicSubsystem implements Subsystem {
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
     this.pendingWeaponDamageEvents.length = 0;
+    this.visualEventBuffer.length = 0;
+    this.nextProjectileVisualId = 1;
     for (const [entityId] of this.overchargeStateByEntityId) {
       const entity = this.spawnedEntities.get(entityId);
       if (entity && !entity.destroyed) {

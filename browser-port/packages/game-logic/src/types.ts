@@ -32,6 +32,7 @@ export interface RenderableEntityState {
   maxHealth: number;
   isSelected: boolean;
   side?: string;
+  veterancyLevel: number;
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';
@@ -41,6 +42,40 @@ export interface GameEndState {
   endFrame: number;
   victorSides: string[];
   defeatedSides: string[];
+}
+
+export type ProjectileVisualType = 'BULLET' | 'MISSILE' | 'ARTILLERY' | 'LASER';
+
+export interface ActiveProjectile {
+  id: number;
+  sourceEntityId: number;
+  visualType: ProjectileVisualType;
+  /** Current interpolated position. */
+  x: number;
+  y: number;
+  z: number;
+  /** Target impact position. */
+  targetX: number;
+  targetZ: number;
+  /** Flight progress 0..1. */
+  progress: number;
+  /** Heading angle in radians. */
+  heading: number;
+}
+
+export type VisualEventType = 'WEAPON_IMPACT' | 'ENTITY_DESTROYED' | 'WEAPON_FIRED';
+
+export interface VisualEvent {
+  type: VisualEventType;
+  x: number;
+  y: number;
+  z: number;
+  /** Damage radius (for scaling explosion size). 0 for non-AOE. */
+  radius: number;
+  /** Source entity id (for muzzle flash positioning). */
+  sourceEntityId: number | null;
+  /** Visual type hint for the effect. */
+  projectileType: ProjectileVisualType;
 }
 
 export interface SelectByIdCommand {
