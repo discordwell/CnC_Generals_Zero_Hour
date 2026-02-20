@@ -10336,3 +10336,170 @@ describe('WEAPON_DOESNT_AFFECT_AIRBORNE', () => {
     expect(airState!.health).toBe(100);
   });
 });
+
+// ── Disabled entity restrictions ─────────────────────────────────────────────
+
+describe('disabled entity movement restrictions', () => {
+  function makeMovementSetup() {
+    const tankDef = makeObjectDef('TestTank', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Locomotor', 'SET_NORMAL TankLocomotor', { Speed: 30 }),
+    ]);
+
+    const bundle = makeBundle({ objects: [tankDef], weapons: [] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestTank', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    return { logic };
+  }
+
+  it('DISABLED_EMP blocks movement', () => {
+    // Source parity: Object::isMobile() returns false when isDisabled() is true.
+    const { logic } = makeMovementSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { objectStatusFlags: Set<string>; x: number; z: number }> };
+    const entity = priv.spawnedEntities.get(1)!;
+    const startX = entity.x;
+    const startZ = entity.z;
+
+    entity.objectStatusFlags.add('DISABLED_EMP');
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 100, targetZ: 100 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Entity should not have moved.
+    expect(entity.x).toBe(startX);
+    expect(entity.z).toBe(startZ);
+  });
+
+  it('DISABLED_HACKED blocks movement', () => {
+    const { logic } = makeMovementSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { objectStatusFlags: Set<string>; x: number; z: number }> };
+    const entity = priv.spawnedEntities.get(1)!;
+    const startX = entity.x;
+
+    entity.objectStatusFlags.add('DISABLED_HACKED');
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 100, targetZ: 100 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(entity.x).toBe(startX);
+  });
+
+  it('DISABLED_SUBDUED blocks movement', () => {
+    const { logic } = makeMovementSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { objectStatusFlags: Set<string>; x: number; z: number }> };
+    const entity = priv.spawnedEntities.get(1)!;
+    const startX = entity.x;
+
+    entity.objectStatusFlags.add('DISABLED_SUBDUED');
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 100, targetZ: 100 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(entity.x).toBe(startX);
+  });
+});
+
+describe('disabled container evacuation restrictions', () => {
+  function makeGarrisonEvacSetup() {
+    const buildingDef = makeObjectDef('CivBuilding', 'Neutral', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'GarrisonContain ModuleTag_Garrison', {
+        ContainMax: 5,
+      }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 15,
+      GeometryMinorRadius: 15,
+    });
+
+    const infantryDef = makeObjectDef('USARanger', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Locomotor', 'SET_NORMAL InfantryLocomotor', { Speed: 20 }),
+    ]);
+
+    const bundle = makeBundle({ objects: [buildingDef, infantryDef], weapons: [] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CivBuilding', 50, 50),
+        makeMapObject('USARanger', 51, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'Neutral', 2);
+    logic.setTeamRelationship('Neutral', 'America', 2);
+    return { logic };
+  }
+
+  it('DISABLED_SUBDUED blocks evacuation from garrisoned building', () => {
+    // Source parity: AIUpdate::privateEvacuate — DISABLED_SUBDUED container blocks evacuation.
+    const { logic } = makeGarrisonEvacSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { objectStatusFlags: Set<string>; garrisonContainerId: number | null }> };
+
+    // Enter garrison.
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.update(1 / 30);
+
+    // Verify infantry is garrisoned.
+    const infantry = priv.spawnedEntities.get(2)!;
+    expect(infantry.garrisonContainerId).toBe(1);
+
+    // Subdue the building (e.g., Microwave Tank).
+    const building = priv.spawnedEntities.get(1)!;
+    building.objectStatusFlags.add('DISABLED_SUBDUED');
+
+    // Attempt evacuation — should be blocked.
+    logic.submitCommand({ type: 'evacuate', entityId: 1 });
+    logic.update(1 / 30);
+
+    // Infantry should still be garrisoned.
+    expect(infantry.garrisonContainerId).toBe(1);
+  });
+
+  it('DISABLED_SUBDUED blocks individual exit from garrisoned building', () => {
+    // Source parity: AIUpdate::privateExit — DISABLED_SUBDUED container blocks passenger exit.
+    const { logic } = makeGarrisonEvacSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { objectStatusFlags: Set<string>; garrisonContainerId: number | null }> };
+
+    // Enter garrison.
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.update(1 / 30);
+
+    const infantry = priv.spawnedEntities.get(2)!;
+    expect(infantry.garrisonContainerId).toBe(1);
+
+    // Subdue the building.
+    const building = priv.spawnedEntities.get(1)!;
+    building.objectStatusFlags.add('DISABLED_SUBDUED');
+
+    // Attempt individual exit — should be blocked.
+    logic.submitCommand({ type: 'exitContainer', entityId: 2 });
+    logic.update(1 / 30);
+
+    // Infantry should still be garrisoned.
+    expect(infantry.garrisonContainerId).toBe(1);
+  });
+
+  it('evacuation works when building is NOT subdued', () => {
+    const { logic } = makeGarrisonEvacSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { garrisonContainerId: number | null }> };
+
+    // Enter garrison.
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.update(1 / 30);
+
+    const infantry = priv.spawnedEntities.get(2)!;
+    expect(infantry.garrisonContainerId).toBe(1);
+
+    // Evacuate without subdued status — should work.
+    logic.submitCommand({ type: 'evacuate', entityId: 1 });
+    logic.update(1 / 30);
+
+    // Infantry should have exited.
+    expect(infantry.garrisonContainerId).toBeNull();
+  });
+});

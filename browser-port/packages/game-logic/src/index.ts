@@ -8388,6 +8388,12 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    // Source parity: AIUpdate::privateExit — blocked when container is DISABLED_SUBDUED.
+    // C++ AIUpdate.cpp:3819-3840: prevents passengers exiting subdued containers.
+    if (this.entityHasObjectStatus(container, 'DISABLED_SUBDUED')) {
+      return;
+    }
+
     this.cancelEntityCommandPathActions(entity.id);
     this.releaseEntityFromContainer(entity);
     entity.x = container.x;
@@ -8403,6 +8409,12 @@ export class GameLogicSubsystem implements Subsystem {
   private handleEvacuateCommand(entityId: number): void {
     const container = this.spawnedEntities.get(entityId);
     if (!container || container.destroyed) {
+      return;
+    }
+
+    // Source parity: AIUpdate::privateEvacuate — blocked when container is DISABLED_SUBDUED.
+    // C++ AIUpdate.cpp:3894-3896: prevents evacuation of subdued buildings (e.g., Microwave Tank).
+    if (this.entityHasObjectStatus(container, 'DISABLED_SUBDUED')) {
       return;
     }
 
@@ -9168,6 +9180,20 @@ export class GameLogicSubsystem implements Subsystem {
 
   private isImmobileForConstruction(entity: MapEntity): boolean {
     return this.resolveEntityKindOfSet(entity).has('IMMOBILE');
+  }
+
+  /**
+   * Source parity: Object::isMobile() — returns false when isDisabled() is true.
+   * C++ Object.cpp:2902-2911: checks m_disabledMask.any() which covers all disabled types.
+   * We check the specific gameplay-relevant disabled flags we track.
+   */
+  private isEntityDisabledForMovement(entity: MapEntity): boolean {
+    return (
+      this.entityHasObjectStatus(entity, 'DISABLED_HELD')
+      || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
+      || this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')
+    );
   }
 
   private isDisabledForConstruction(entity: MapEntity): boolean {
@@ -12899,8 +12925,9 @@ export class GameLogicSubsystem implements Subsystem {
   ): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.canMove) return;
-    // Source parity: Object::isMobile — KINDOF_IMMOBILE or DISABLED_HELD blocks movement.
-    if (entity.isImmobile || this.entityHasObjectStatus(entity, 'DISABLED_HELD')) {
+    // Source parity: Object::isMobile — KINDOF_IMMOBILE or any DISABLED state blocks movement.
+    // C++ Object.cpp:2902 — isMobile() returns false when isDisabled() is true (any flag set).
+    if (entity.isImmobile || this.isEntityDisabledForMovement(entity)) {
       return;
     }
 
