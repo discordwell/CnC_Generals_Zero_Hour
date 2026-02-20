@@ -28,6 +28,7 @@ interface CombatDamageWeaponLike {
   primaryDamage: number;
   secondaryDamage: number;
   damageType: string;
+  deathType: string;
   continueAttackRange: number;
 }
 
@@ -81,6 +82,7 @@ export interface CombatDamageEventContext<
     target: TEntity,
     amount: number,
     damageType: string,
+    weaponDeathType?: string,
   ): void;
   canEntityAttackFromStatus(entity: TEntity): boolean;
   canAttackerTargetEntity(attacker: TEntity, target: TEntity, commandSource: string): boolean;
@@ -277,7 +279,7 @@ export function applyWeaponDamageEvent<
     && (weapon.radiusDamageAffectsMask & context.masks.killsSelf) !== 0
     && effectRadius <= 0
   ) {
-    context.applyWeaponDamageAmount(source.id, source, context.hugeDamageAmount, weapon.damageType);
+    context.applyWeaponDamageAmount(source.id, source, context.hugeDamageAmount, weapon.damageType, weapon.deathType);
     return;
   }
 
@@ -341,7 +343,7 @@ export function applyWeaponDamageEvent<
     const rawAmount = killSelf
       ? context.hugeDamageAmount
       : (victim.distanceSqr <= primaryRadiusSqr ? weapon.primaryDamage : weapon.secondaryDamage);
-    context.applyWeaponDamageAmount(source?.id ?? null, candidate, rawAmount, weapon.damageType);
+    context.applyWeaponDamageAmount(source?.id ?? null, candidate, rawAmount, weapon.damageType, weapon.deathType);
   }
 
   if (source && primaryVictimWasAlive && primaryVictim && primaryVictim.destroyed) {

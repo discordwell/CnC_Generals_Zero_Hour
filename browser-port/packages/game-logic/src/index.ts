@@ -704,6 +704,8 @@ interface AttackWeaponProfile {
   scatterRadiusVsInfantry: number;
   radiusDamageAngle: number;
   damageType: string;
+  /** Source parity: WeaponTemplate::m_deathType — per-weapon death type (default NORMAL). */
+  deathType: string;
   damageDealtAtSelfPosition: boolean;
   radiusDamageAffectsMask: number;
   projectileCollideMask: number;
@@ -980,7 +982,7 @@ interface ParkingPlaceProfile {
   reservedProductionIds: Set<number>;
 }
 
-type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL';
+type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL' | 'HEAL';
 
 interface ContainProfile {
   moduleType: ContainModuleType;
@@ -1284,6 +1286,8 @@ interface MapEntity {
   tunnelContainerId: number | null;
   /** Frame at which this entity entered the tunnel (for heal calculation). */
   tunnelEnteredFrame: number;
+  /** Source parity: HealContain — frame at which this entity entered the heal container. */
+  healContainEnteredFrame: number;
   helixPortableRiderId: number | null;
   /** Source parity: SlavedUpdate — ID of the spawner/slaver that owns this slave. */
   slaverEntityId: number | null;
@@ -1401,6 +1405,10 @@ interface MapEntity {
   flameLastDamageReceivedFrame: number;
   /** Flammable module profile (null = not flammable). */
   flammableProfile: FlammableProfile | null;
+  /** Fire spread module profile (null = no fire spreading). */
+  fireSpreadProfile: FireSpreadProfile | null;
+  /** Frame at which next fire spread attempt occurs. */
+  fireSpreadNextFrame: number;
 
   // ── Source parity: MinefieldBehavior — mine collision detonation ──
   /** Mine module profile (null = not a mine). */
@@ -1472,6 +1480,12 @@ interface MapEntity {
   autoDepositNextFrame: number;
   /** Whether the initial capture bonus has been awarded. */
   autoDepositInitialBonusAwarded: boolean;
+
+  // ── Source parity: AutoFindHealingUpdate — AI auto-seek healing ──
+  /** Auto-find-healing profile (null = no auto-heal seeking). */
+  autoFindHealingProfile: AutoFindHealingProfile | null;
+  /** Frame at which next heal pad scan occurs. */
+  autoFindHealingNextScanFrame: number;
 
   // ── Source parity: CreateObjectDie / SlowDeathBehavior — OCL on death ──
   /** OCL entries to execute when entity is destroyed, with DieMuxData filtering. */
@@ -1686,6 +1700,34 @@ interface FlammableProfile {
   aflameDamageAmount: number;
   /** Frames before BURNED status is set (0 = never burns out). Independent of AFLAME duration. */
   burnedDelayFrames: number;
+}
+
+/**
+ * Source parity: FireSpreadUpdate module parsed from INI.
+ * C++ file: FireSpreadUpdate.cpp — spreads fire from burning entities to nearby flammable ones.
+ */
+interface FireSpreadProfile {
+  /** Minimum frames between fire spread attempts. */
+  minSpreadDelayFrames: number;
+  /** Maximum frames between fire spread attempts. */
+  maxSpreadDelayFrames: number;
+  /** Radius within which to search for flammable targets. */
+  spreadTryRange: number;
+}
+
+/**
+ * Source parity: AutoFindHealingUpdate module parsed from INI.
+ * C++ file: AutoFindHealingUpdate.cpp — AI units auto-seek nearby heal pads when damaged.
+ */
+interface AutoFindHealingProfile {
+  /** Frames between scans for heal pads. */
+  scanRateFrames: number;
+  /** Radius to search for HEAL_PAD entities. */
+  scanRange: number;
+  /** Health ratio above which unit never seeks healing (default 0.95). */
+  neverHeal: number;
+  /** Health ratio below which unit always seeks healing even if busy (default 0.25). */
+  alwaysHeal: number;
 }
 
 /**
@@ -2230,20 +2272,24 @@ function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState
 }
 
 /**
- * Source parity: DamageInfo.in.m_deathType mapping from damage type.
- * C++ sets m_deathType explicitly per damage source (Damage.h lines 169-200).
+ * Source parity: DamageInfo.in.m_deathType — fallback mapping from damage type.
+ * C++ weapons carry their own DeathType field (Weapon.h m_deathType, default DEATH_NORMAL).
+ * This function is used as a fallback for non-weapon damage sources (crush, topple, etc.).
+ * When a weapon fires, prefer the weapon's explicit DeathType over this mapping.
  */
 function damageTypeToDeathType(damageType: string): string {
   switch (damageType.toUpperCase()) {
     case 'CRUSH': return 'CRUSHED';
-    case 'POISON': case 'POISON_BETA': return 'POISONED';
+    case 'POISON': return 'POISONED';
+    case 'POISON_BETA': return 'POISONED_BETA';
     case 'FLAME': case 'PARTICLE_BEAM': return 'BURNED';
-    case 'EXPLOSION': case 'ARMOR_PIERCING': return 'EXPLODED';
+    case 'EXPLOSION': return 'EXPLODED';
     case 'LASER': return 'LASERED';
     case 'TOPPLING': return 'TOPPLED';
     case 'WATER': return 'FLOODED';
     case 'SUICIDE': return 'SUICIDED';
     case 'DETONATION': return 'DETONATED';
+    case 'FALLING': return 'SPLATTED';
     default: return 'NORMAL';
   }
 }
@@ -2862,12 +2908,15 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSpecialAbility();
     this.updatePoisonedEntities();
     this.updateFlammableEntities();
+    this.updateFireSpread();
     this.updateHealing();
     this.updateMineBehavior();
     this.updateMineCollisions();
     this.updateDemoTraps();
     this.updateCrateCollisions();
     this.updateTunnelHealing();
+    this.updateHealContainHealing();
+    this.updateAutoFindHealing();
     this.updateFogOfWar();
     this.updateSupplyChain();
     this.updateSkirmishAI();
@@ -4491,6 +4540,7 @@ export class GameLogicSubsystem implements Subsystem {
       transportContainerId: null,
       tunnelContainerId: null,
       tunnelEnteredFrame: 0,
+      healContainEnteredFrame: 0,
       helixPortableRiderId: null,
       slaverEntityId: null,
       spawnBehaviorState: this.extractSpawnBehaviorState(objectDef),
@@ -4555,6 +4605,8 @@ export class GameLogicSubsystem implements Subsystem {
       flameDamageNextFrame: 0,
       flameLastDamageReceivedFrame: 0,
       flammableProfile: this.extractFlammableProfile(objectDef),
+      fireSpreadProfile: this.extractFireSpreadProfile(objectDef),
+      fireSpreadNextFrame: 0,
       // Mine behavior
       minefieldProfile: this.extractMinefieldProfile(objectDef),
       mineVirtualMinesRemaining: 0,
@@ -4591,6 +4643,9 @@ export class GameLogicSubsystem implements Subsystem {
       autoDepositProfile: this.extractAutoDepositProfile(objectDef),
       autoDepositNextFrame: 0,
       autoDepositInitialBonusAwarded: false,
+      // Auto-find-healing
+      autoFindHealingProfile: this.extractAutoFindHealingProfile(objectDef),
+      autoFindHealingNextScanFrame: 0,
       // Death OCLs
       deathOCLEntries: this.extractDeathOCLEntries(objectDef),
       // Deploy state machine
@@ -5354,6 +5409,11 @@ export class GameLogicSubsystem implements Subsystem {
     const { continuousFireMeanRateOfFire, continuousFireFastRateOfFire } =
       this.resolveWeaponContinuousFireBonuses(weaponDef);
 
+    // Source parity: WeaponTemplate::m_deathType — per-weapon death type (Weapon.cpp line 186).
+    // Default is DEATH_NORMAL. INI field: DeathType (parsed as index list into TheDeathNames).
+    const deathTypeRaw = readStringField(weaponDef.fields, ['DeathType'])?.trim().toUpperCase() ?? '';
+    const deathType = deathTypeRaw || 'NORMAL';
+
     // Source parity: Weapon::isLaser() — weapon is a laser if LaserName is non-empty.
     const laserNameRaw = readStringField(weaponDef.fields, ['LaserName'])?.trim() ?? '';
     const laserName = laserNameRaw && laserNameRaw.toUpperCase() !== 'NONE' ? laserNameRaw : null;
@@ -5380,6 +5440,7 @@ export class GameLogicSubsystem implements Subsystem {
       scatterRadiusVsInfantry,
       radiusDamageAngle,
       damageType: this.resolveWeaponDamageTypeName(weaponDef),
+      deathType,
       damageDealtAtSelfPosition,
       radiusDamageAffectsMask,
       projectileCollideMask,
@@ -6144,6 +6205,18 @@ export class GameLogicSubsystem implements Subsystem {
           transportCapacity: 0,
           timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
         };
+      } else if (moduleType === 'HEALCONTAIN') {
+        // Source parity: HealContain — passengers healed inside, auto-ejected when full health.
+        // C++ file: HealContain.cpp — extends OpenContain, single param TimeForFullHeal.
+        const timeForFullHealMs = readNumericField(block.fields, ['TimeForFullHeal']) ?? 0;
+        profile = {
+          moduleType: 'HEAL',
+          passengersAllowedToFire: false,
+          passengersAllowedToFireDefault: false,
+          garrisonCapacity: 0,
+          transportCapacity: containMax,
+          timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
+        };
       }
 
       for (const child of block.blocks) {
@@ -6711,6 +6784,35 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: FireSpreadUpdate — extract fire spread profile from INI.
+   * C++ file: FireSpreadUpdate.cpp — spreads fire to nearby flammable objects.
+   */
+  private extractFireSpreadProfile(objectDef: ObjectDef | undefined): FireSpreadProfile | null {
+    if (!objectDef) return null;
+    let profile: FireSpreadProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FIRESPREADUPDATE') {
+          profile = {
+            minSpreadDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['MinSpreadDelay']) ?? 500),
+            maxSpreadDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['MaxSpreadDelay']) ?? 1500),
+            spreadTryRange: (readNumericField(block.fields, ['SpreadTryRange']) ?? 10) * MAP_XY_FACTOR,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: PoisonedBehavior — extract per-entity poison DoT parameters from INI.
    * C++ file: PoisonedBehavior.cpp lines 56-63 (buildFieldParse).
    */
@@ -7244,6 +7346,36 @@ export class GameLogicSubsystem implements Subsystem {
             depositFrames: Math.max(1, this.msToLogicFrames(depositTimingMs)),
             depositAmount,
             initialCaptureBonus,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: AutoFindHealingUpdate — extract auto-heal-seeking config from INI.
+   * C++ file: AutoFindHealingUpdate.cpp — AI units automatically enter nearby heal pads.
+   */
+  private extractAutoFindHealingProfile(objectDef: ObjectDef | undefined): AutoFindHealingProfile | null {
+    if (!objectDef) return null;
+    let profile: AutoFindHealingProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'AUTOFINDHEALING' || moduleType === 'AUTOFINDHEALINGUPDATE') {
+          profile = {
+            scanRateFrames: this.msToLogicFrames(readNumericField(block.fields, ['ScanRate']) ?? 1000),
+            scanRange: (readNumericField(block.fields, ['ScanRange']) ?? 200) * MAP_XY_FACTOR,
+            neverHeal: readNumericField(block.fields, ['NeverHeal']) ?? 0.95,
+            alwaysHeal: readNumericField(block.fields, ['AlwaysHeal']) ?? 0.25,
           };
         }
       }
@@ -11788,7 +11920,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (containProfile.moduleType !== 'TRANSPORT'
       && containProfile.moduleType !== 'OVERLORD'
       && containProfile.moduleType !== 'HELIX'
-      && containProfile.moduleType !== 'OPEN') return;
+      && containProfile.moduleType !== 'OPEN'
+      && containProfile.moduleType !== 'HEAL') return;
 
     // Source parity: TransportContain type checks — only infantry for TRANSPORT,
     // infantry + portable structures for OVERLORD/HELIX.
@@ -11825,6 +11958,10 @@ export class GameLogicSubsystem implements Subsystem {
     passenger.z = transport.z;
     passenger.y = transport.y;
     passenger.moving = false;
+    // Source parity: HealContain — track entry frame for healing calculation.
+    if (transport.containProfile?.moduleType === 'HEAL') {
+      passenger.healContainEnteredFrame = this.frameCounter;
+    }
     // Source parity: Object::onContainedBy — set UNSELECTABLE and MASKED for enclosed containers.
     passenger.objectStatusFlags.add('UNSELECTABLE');
     if (this.isEnclosingContainer(transport)) {
@@ -11844,7 +11981,8 @@ export class GameLogicSubsystem implements Subsystem {
     return profile.moduleType === 'TRANSPORT'
       || profile.moduleType === 'OVERLORD'
       || profile.moduleType === 'HELIX'
-      || profile.moduleType === 'TUNNEL';
+      || profile.moduleType === 'TUNNEL'
+      || profile.moduleType === 'HEAL';
   }
 
   private updatePendingTransportActions(): void {
@@ -12839,6 +12977,93 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: FireSpreadUpdate::update() — entities on fire try to ignite nearby
+   * flammable objects at random intervals. C++ uses PartitionFilterFlammable to find
+   * the closest flammable target that wouldIgnite(), then calls tryToIgnite().
+   */
+  private updateFireSpread(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const prof = entity.fireSpreadProfile;
+      if (!prof) continue;
+
+      // Source parity: sleeps forever until entity is AFLAME.
+      if (entity.flameStatus !== 'AFLAME') {
+        entity.fireSpreadNextFrame = 0;
+        continue;
+      }
+
+      // Activate spread timer when first set aflame.
+      if (entity.fireSpreadNextFrame === 0) {
+        entity.fireSpreadNextFrame = this.frameCounter + this.calcFireSpreadDelay(prof);
+        continue;
+      }
+
+      if (this.frameCounter < entity.fireSpreadNextFrame) continue;
+
+      // Schedule next attempt.
+      entity.fireSpreadNextFrame = this.frameCounter + this.calcFireSpreadDelay(prof);
+
+      if (prof.spreadTryRange <= 0) continue;
+
+      // Source parity: find closest flammable target within range.
+      const rangeSqr = prof.spreadTryRange * prof.spreadTryRange;
+      let closestTarget: MapEntity | null = null;
+      let closestDistSqr = Infinity;
+
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate.destroyed || candidate.id === entity.id) continue;
+        if (!candidate.flammableProfile) continue;
+        // Source parity: PartitionFilterFlammable::wouldIgnite — only NORMAL status can ignite.
+        if (candidate.flameStatus !== 'NORMAL') continue;
+
+        const dx = candidate.x - entity.x;
+        const dz = candidate.z - entity.z;
+        const distSqr = dx * dx + dz * dz;
+        if (distSqr < rangeSqr && distSqr < closestDistSqr) {
+          closestDistSqr = distSqr;
+          closestTarget = candidate;
+        }
+      }
+
+      // Source parity: tryToIgnite — set target aflame instantly.
+      if (closestTarget) {
+        this.igniteEntity(closestTarget);
+      }
+    }
+  }
+
+  /**
+   * Source parity: calcNextSpreadDelay — random delay between min/max spread delay.
+   */
+  private calcFireSpreadDelay(prof: FireSpreadProfile): number {
+    if (prof.minSpreadDelayFrames >= prof.maxSpreadDelayFrames) {
+      return Math.max(1, prof.minSpreadDelayFrames);
+    }
+    return Math.max(1, this.gameRandom.nextRange(prof.minSpreadDelayFrames, prof.maxSpreadDelayFrames));
+  }
+
+  /**
+   * Source parity: FlammableUpdate::tryToIgnite — force-ignite a flammable entity.
+   * Sets entity aflame immediately (bypasses damage accumulation threshold).
+   */
+  private igniteEntity(entity: MapEntity): void {
+    const prof = entity.flammableProfile;
+    if (!prof) return;
+    if (entity.flameStatus !== 'NORMAL') return;
+
+    entity.flameStatus = 'AFLAME';
+    entity.objectStatusFlags.add('AFLAME');
+    entity.flameEndFrame = this.frameCounter + prof.aflameDurationFrames;
+    entity.flameBurnedEndFrame = prof.burnedDelayFrames > 0
+      ? this.frameCounter + prof.burnedDelayFrames
+      : 0;
+    entity.flameDamageNextFrame = prof.aflameDamageDelayFrames > 0
+      ? this.frameCounter + prof.aflameDamageDelayFrames
+      : 0;
+  }
+
+  /**
    * Source parity: FlammableUpdate.onDamage — accumulate fire damage and try to ignite.
    */
   private applyFireDamageToEntity(entity: MapEntity, actualDamage: number): void {
@@ -12853,21 +13078,13 @@ export class GameLogicSubsystem implements Subsystem {
     entity.flameLastDamageReceivedFrame = this.frameCounter;
     entity.flameDamageAccumulated += actualDamage;
 
-    // Check ignition threshold
+    // Check ignition threshold.
+    // C++ parity: do NOT reset flameDamageAccumulated on ignition. The accumulated
+    // value stays, so if the entity returns to NORMAL and receives fire damage
+    // before the expiration delay, it re-ignites instantly (matching C++ where
+    // m_flameDamageLimit stays depleted after tryToIgnite).
     if (entity.flameDamageAccumulated >= prof.flameDamageLimit) {
-      entity.flameStatus = 'AFLAME';
-      entity.objectStatusFlags.add('AFLAME');
-      entity.flameEndFrame = this.frameCounter + prof.aflameDurationFrames;
-      entity.flameBurnedEndFrame = prof.burnedDelayFrames > 0
-        ? this.frameCounter + prof.burnedDelayFrames
-        : 0;
-      entity.flameDamageNextFrame = prof.aflameDamageDelayFrames > 0
-        ? this.frameCounter + prof.aflameDamageDelayFrames
-        : 0;
-      // C++ parity: do NOT reset flameDamageAccumulated here.  The accumulated
-      // value stays, so if the entity returns to NORMAL and receives fire damage
-      // before the expiration delay, it re-ignites instantly (matching C++ where
-      // m_flameDamageLimit stays depleted after tryToIgnite).
+      this.igniteEntity(entity);
     }
   }
 
@@ -13697,6 +13914,7 @@ export class GameLogicSubsystem implements Subsystem {
     const primaryDamage = readNumericField(weaponDef.fields, ['PrimaryDamage']) ?? 0;
     const primaryDamageRadius = readNumericField(weaponDef.fields, ['PrimaryDamageRadius', 'AttackRange']) ?? 0;
     const damageType = readStringField(weaponDef.fields, ['DamageType'])?.toUpperCase() ?? 'EXPLOSION';
+    const deathType = readStringField(weaponDef.fields, ['DeathType'])?.toUpperCase() || undefined;
 
     // Apply area damage centered at the detonation point.
     if (primaryDamage > 0 && primaryDamageRadius > 0) {
@@ -13706,7 +13924,7 @@ export class GameLogicSubsystem implements Subsystem {
         const tdz = target.z - targetZ;
         const dist = Math.sqrt(tdx * tdx + tdz * tdz);
         if (dist > primaryDamageRadius) continue;
-        this.applyWeaponDamageAmount(source.id, target, primaryDamage, damageType);
+        this.applyWeaponDamageAmount(source.id, target, primaryDamage, damageType, deathType);
       }
     }
 
@@ -13927,6 +14145,139 @@ export class GameLogicSubsystem implements Subsystem {
           const healPerFrame = passenger.maxHealth / healFrames;
           passenger.health = Math.min(passenger.maxHealth, passenger.health + healPerFrame);
         }
+      }
+    }
+  }
+
+  /**
+   * Source parity: HealContain::update — heal all passengers per frame, auto-eject when full.
+   * C++ file: HealContain.cpp lines 92-132.
+   */
+  private updateHealContainHealing(): void {
+    // Find all heal containers and process their passengers.
+    for (const container of this.spawnedEntities.values()) {
+      if (container.destroyed) continue;
+      const profile = container.containProfile;
+      if (!profile || profile.moduleType !== 'HEAL') continue;
+      const healFrames = profile.timeForFullHealFrames;
+      if (healFrames <= 0) continue;
+
+      // Collect passengers inside this heal container.
+      const passengerIds: number[] = [];
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.transportContainerId === container.id && !entity.destroyed) {
+          passengerIds.push(entity.id);
+        }
+      }
+
+      const toEject: number[] = [];
+      for (const passengerId of passengerIds) {
+        const passenger = this.spawnedEntities.get(passengerId);
+        if (!passenger || passenger.destroyed) continue;
+
+        // Source parity: HealContain::doHeal — two-phase: if elapsed >= total, full heal; else linear.
+        const framesInside = this.frameCounter - passenger.healContainEnteredFrame;
+        if (passenger.health < passenger.maxHealth) {
+          if (framesInside >= healFrames) {
+            passenger.health = passenger.maxHealth;
+          } else {
+            const healPerFrame = passenger.maxHealth / healFrames;
+            passenger.health = Math.min(passenger.maxHealth, passenger.health + healPerFrame);
+          }
+        }
+
+        // Source parity: HealContain::update — auto-eject when fully healed.
+        if (passenger.health >= passenger.maxHealth) {
+          toEject.push(passengerId);
+        }
+      }
+
+      // Eject healed passengers.
+      for (const passengerId of toEject) {
+        const passenger = this.spawnedEntities.get(passengerId);
+        if (!passenger || passenger.destroyed) continue;
+        this.releaseEntityFromContainer(passenger);
+        passenger.x = container.x;
+        passenger.z = container.z;
+        passenger.y = this.resolveGroundHeight(container.x, container.z) + passenger.baseHeight;
+        this.updatePathfindPosCell(passenger);
+        if (passenger.canMove) {
+          this.issueMoveTo(passenger.id, container.x + MAP_XY_FACTOR, container.z);
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: AutoFindHealingUpdate::update() — AI-controlled units auto-seek
+   * nearby heal pads when damaged and idle. C++ checks player type, health thresholds,
+   * and idle state before issuing aiGetHealed() command.
+   */
+  private updateAutoFindHealing(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const prof = entity.autoFindHealingProfile;
+      if (!prof) continue;
+
+      // Source parity: only AI-controlled players auto-seek healing.
+      const normalizedSide = this.normalizeSide(entity.side);
+      if (!normalizedSide) continue;
+      const playerType = this.sidePlayerTypes.get(normalizedSide);
+      if (!playerType || playerType === 'HUMAN') continue;
+
+      // Scan rate throttle.
+      if (this.frameCounter < entity.autoFindHealingNextScanFrame) continue;
+      entity.autoFindHealingNextScanFrame = this.frameCounter + prof.scanRateFrames;
+
+      // Source parity: skip if already contained (in a transport/heal container).
+      if (this.isEntityContained(entity)) continue;
+
+      // Source parity: health threshold checks.
+      const healthRatio = entity.health / Math.max(1, entity.maxHealth);
+      if (healthRatio >= prof.neverHeal) continue;
+
+      // Source parity: if busy (moving/attacking), only seek healing if critically wounded.
+      const isIdle = !entity.moving
+        && entity.attackTargetEntityId === null
+        && entity.guardState === 'NONE';
+      if (!isIdle && healthRatio > prof.alwaysHeal) continue;
+
+      // Source parity: scan for closest HEAL_PAD entity in range.
+      const rangeSqr = prof.scanRange * prof.scanRange;
+      let closestHealPad: MapEntity | null = null;
+      let closestDistSqr = Infinity;
+
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate.destroyed || candidate.id === entity.id) continue;
+        // Must be a heal pad (KINDOF HEAL_PAD).
+        const kindOf = this.resolveEntityKindOfSet(candidate);
+        if (!kindOf.has('HEAL_PAD')) continue;
+        // Must be same side.
+        if (this.normalizeSide(candidate.side) !== normalizedSide) continue;
+        // Must have a HEAL contain profile with capacity.
+        const containProfile = candidate.containProfile;
+        if (!containProfile || containProfile.moduleType !== 'HEAL') continue;
+        if (containProfile.transportCapacity > 0) {
+          const occupants = this.collectContainedEntityIds(candidate.id).length;
+          if (occupants >= containProfile.transportCapacity) continue;
+        }
+
+        const dx = candidate.x - entity.x;
+        const dz = candidate.z - entity.z;
+        const distSqr = dx * dx + dz * dz;
+        if (distSqr < rangeSqr && distSqr < closestDistSqr) {
+          closestDistSqr = distSqr;
+          closestHealPad = candidate;
+        }
+      }
+
+      // Source parity: aiGetHealed — issue enter transport command to heal pad.
+      if (closestHealPad) {
+        this.handleEnterTransportCommand({
+          type: 'enterTransport',
+          entityId: entity.id,
+          targetTransportId: closestHealPad.id,
+        });
       }
     }
   }
@@ -14713,6 +15064,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (entity.transportContainerId !== null) {
       entity.transportContainerId = null;
+      entity.healContainEnteredFrame = 0;
     }
 
     if (entity.tunnelContainerId !== null) {
@@ -17740,8 +18092,8 @@ export class GameLogicSubsystem implements Subsystem {
         ),
       ),
       getTeamRelationship: (attacker, target) => this.getTeamRelationship(attacker, target),
-      applyWeaponDamageAmount: (sourceEntityId, target, amount, damageType) =>
-        this.applyWeaponDamageAmount(sourceEntityId, target, amount, damageType),
+      applyWeaponDamageAmount: (sourceEntityId, target, amount, damageType, weaponDeathType) =>
+        this.applyWeaponDamageAmount(sourceEntityId, target, amount, damageType, weaponDeathType),
       canEntityAttackFromStatus: (entity) => this.canEntityAttackFromStatus(entity),
       canAttackerTargetEntity: (attacker, target, commandSource) =>
         this.canAttackerTargetEntity(attacker, target, commandSource as AttackCommandSource),
@@ -18489,6 +18841,7 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     amount: number,
     damageType: string,
+    weaponDeathType?: string,
   ): void {
     // Source parity: InactiveBody::attemptDamage — only UNRESISTABLE triggers death.
     // Must check before canTakeDamage guard since InactiveBody has canTakeDamage=false.
@@ -18496,7 +18849,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (target.destroyed) return;
       if (damageType.toUpperCase() === 'UNRESISTABLE') {
         target.health = 0;
-        target.pendingDeathType = damageTypeToDeathType(damageType);
+        target.pendingDeathType = weaponDeathType || damageTypeToDeathType(damageType);
         if (!target.slowDeathState) {
           this.fireDeathWeapons(target);
           this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
@@ -18604,7 +18957,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (target.health <= 0 && !target.destroyed && !target.slowDeathState) {
       // Source parity: DamageInfo.in.m_deathType — set death cause for die module filtering.
-      target.pendingDeathType = damageTypeToDeathType(damageType);
+      target.pendingDeathType = weaponDeathType || damageTypeToDeathType(damageType);
       // Source parity: DemoTrapUpdate::update() — detonate on kill if configured.
       if (target.demoTrapProfile?.detonateWhenKilled && !target.demoTrapDetonated) {
         this.detonateDemoTrap(target, target.demoTrapProfile);
@@ -21986,10 +22339,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: VictoryConditions.cpp — hasSinglePlayerBeenDefeated.
-   * Default skirmish mode: a side is defeated when it has no buildings AND no
-   * combat units remaining (excludes projectiles, mines, inert objects).
-   * Buildings must have KINDOF_MP_COUNT_FOR_VICTORY to count.
+   * Source parity: VictoryConditions.cpp — checks for defeat & victory.
+   * Default skirmish mode: a side is defeated when it has zero non-excluded
+   * entities remaining. C++ hasAnyObjects() counts ALL objects on the team
+   * except projectiles, mines, and inert objects.
    */
   private checkVictoryConditions(): void {
     if (this.gameEndFrame !== null) {
@@ -22034,6 +22387,10 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (remainingSides.length === 0) {
+      // Source parity: all sides eliminated simultaneously — game ends as draw.
+      if (this.defeatedSides.size > 0) {
+        this.gameEndFrame = this.frameCounter;
+      }
       return;
     }
 
@@ -22067,17 +22424,15 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: VictoryConditions::hasSinglePlayerBeenDefeated — check if a
-   * single side has lost all qualifying objects.
-   * Default mode (VICTORY_NOUNITS | VICTORY_NOBUILDINGS): side must have NO
-   * buildings AND NO units to be considered defeated.
-   * Buildings only count if they have KINDOF MP_COUNT_FOR_VICTORY.
+   * single side has lost all surviving objects. C++ hasAnyObjects() counts ALL
+   * non-excluded entities (excludes PROJECTILE, MINE, INERT kindOf).
    */
   private hasSingleSideBeenDefeated(side: string): boolean {
     // Source parity: VictoryConditions.cpp — both VICTORY_NOUNITS and VICTORY_NOBUILDINGS
     // are set by default. C++ hasAnyObjects() counts ALL non-excluded entities regardless
     // of MP_COUNT_FOR_VICTORY. Defeat occurs only when a side has zero eligible entities.
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.health <= 0) continue;
       const entitySide = this.normalizeSide(entity.side);
       if (entitySide !== side) continue;
 
@@ -22098,6 +22453,16 @@ export class GameLogicSubsystem implements Subsystem {
    * C++ iterates the player's object list and calls kill() on each.
    */
   private killRemainingEntitiesForSide(side: string): void {
+    // Source parity: evacuate containers before killing, so contained entities
+    // are released and can be killed individually (prevents orphaned passengers).
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== side) continue;
+      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+        this.evacuateContainedEntities(entity, entity.x, entity.z, null);
+      }
+    }
+
     const toKill: number[] = [];
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) continue;

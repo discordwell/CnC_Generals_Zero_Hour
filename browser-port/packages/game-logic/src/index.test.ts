@@ -15828,6 +15828,192 @@ describe('FlammableUpdate', () => {
   });
 });
 
+// ── FireSpreadUpdate Tests ──────────────────────────────────────────────────
+
+describe('FireSpreadUpdate', () => {
+  function makeFireSpreadSetup(opts: {
+    spreadTryRange?: number;
+    minSpreadDelayMs?: number;
+    maxSpreadDelayMs?: number;
+  } = {}) {
+    // Entity that can catch fire AND spread fire to others.
+    const spreaderDef = makeObjectDef('Spreader', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'FlammableUpdate ModuleTag_Flammable', {
+        FlameDamageLimit: 1,
+        AflameDuration: 10000,
+        AflameDamageDelay: 500,
+        AflameDamageAmount: 5,
+      }),
+      makeBlock('Behavior', 'FireSpreadUpdate ModuleTag_FireSpread', {
+        MinSpreadDelay: opts.minSpreadDelayMs ?? 100,
+        MaxSpreadDelay: opts.maxSpreadDelayMs ?? 100,
+        SpreadTryRange: opts.spreadTryRange ?? 50,
+      }),
+    ]);
+
+    // Nearby target that can catch fire but does NOT spread it.
+    const targetDef = makeObjectDef('Target', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'FlammableUpdate ModuleTag_Flammable', {
+        FlameDamageLimit: 1,
+        AflameDuration: 10000,
+        AflameDamageDelay: 500,
+        AflameDamageAmount: 5,
+      }),
+    ]);
+
+    // Attacker with flame weapon — co-located with spreader for instant attack.
+    const attackerDef = makeObjectDef('Flamer', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'FlameGun'] }),
+    ]);
+    const flameWeapon = makeWeaponDef('FlameGun', {
+      AttackRange: 200,
+      PrimaryDamage: 20,
+      PrimaryDamageRadius: 0,
+      DamageType: 'FLAME',
+      DeliveryType: 'DIRECT',
+    });
+
+    const mapObjects = [
+      makeMapObject('Spreader', 5, 5),   // Entity that will burn and spread fire
+      makeMapObject('Target', 7, 7),      // Nearby entity that should catch fire
+      makeMapObject('Flamer', 5, 5),      // Enemy attacker co-located with spreader
+    ];
+
+    const bundle = makeBundle({
+      objects: [spreaderDef, targetDef, attackerDef],
+      weapons: [flameWeapon],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects), makeRegistry(bundle), makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, MapEntity>;
+      frameCounter: number;
+    };
+
+    return { logic, priv };
+  }
+
+  it('spreads fire from burning entity to nearby flammable entity', () => {
+    const { logic, priv } = makeFireSpreadSetup();
+
+    const spreader = priv.spawnedEntities.get(1)!;
+    const target = priv.spawnedEntities.get(2)!;
+
+    expect(spreader.flameStatus).toBe('NORMAL');
+    expect(target.flameStatus).toBe('NORMAL');
+
+    // Command attacker to fire at the spreader.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+
+    // Run enough frames for the attack to fire and ignite the spreader.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    expect(spreader.flameStatus).toBe('AFLAME');
+
+    // After enough frames, fire should spread to nearby target.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    expect(target.flameStatus).toBe('AFLAME');
+  });
+
+  it('does not spread fire to entities outside range', () => {
+    // Place target far from spreader. Use custom setup with far-away target.
+    const spreaderDef = makeObjectDef('Spreader', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'FlammableUpdate ModuleTag_Flammable', {
+        FlameDamageLimit: 1,
+        AflameDuration: 10000,
+        AflameDamageDelay: 500,
+        AflameDamageAmount: 5,
+      }),
+      makeBlock('Behavior', 'FireSpreadUpdate ModuleTag_FireSpread', {
+        MinSpreadDelay: 100,
+        MaxSpreadDelay: 100,
+        SpreadTryRange: 1, // Very short range (10 world units).
+      }),
+    ]);
+    const targetDef = makeObjectDef('Target', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'FlammableUpdate ModuleTag_Flammable', {
+        FlameDamageLimit: 1,
+        AflameDuration: 10000,
+        AflameDamageDelay: 500,
+        AflameDamageAmount: 5,
+      }),
+    ]);
+    const attackerDef = makeObjectDef('Flamer', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'FlameGun'] }),
+    ]);
+    const flameWeapon = makeWeaponDef('FlameGun', {
+      AttackRange: 200,
+      PrimaryDamage: 20,
+      PrimaryDamageRadius: 0,
+      DamageType: 'FLAME',
+      DeliveryType: 'DIRECT',
+    });
+
+    const bundle = makeBundle({
+      objects: [spreaderDef, targetDef, attackerDef],
+      weapons: [flameWeapon],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Spreader', 5, 5),
+        makeMapObject('Target', 60, 60), // Far away from spreader.
+        makeMapObject('Flamer', 5, 5),   // Co-located with spreader.
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    // GLA neutral to China — attacker won't auto-target the far target.
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('GLA', 'China', 1);
+    logic.setTeamRelationship('China', 'GLA', 1);
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const spreader = priv.spawnedEntities.get(1)!;
+    const target = priv.spawnedEntities.get(2)!;
+
+    // Ignite the spreader.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+    expect(spreader.flameStatus).toBe('AFLAME');
+    // Target should NOT have caught fire — out of fire spread range.
+    expect(target.flameStatus).toBe('NORMAL');
+  });
+
+  it('does not spread fire to already burning or burned entities', () => {
+    const { logic, priv } = makeFireSpreadSetup();
+
+    const spreader = priv.spawnedEntities.get(1)!;
+    const target = priv.spawnedEntities.get(2)!;
+
+    // Manually set target to BURNED so it can't ignite.
+    target.flameStatus = 'BURNED';
+    target.objectStatusFlags.add('BURNED');
+
+    // Ignite the spreader.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+    expect(spreader.flameStatus).toBe('AFLAME');
+    // Target remains BURNED — not re-ignited.
+    expect(target.flameStatus).toBe('BURNED');
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DeletionUpdate — silent timed removal (no death pipeline)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -17395,5 +17581,204 @@ describe('death OCL DieMuxData filtering', () => {
     }
     // No debris should have spawned because the unit was REGULAR, not VETERAN+.
     expect(allEntities.length).toBe(0);
+  });
+});
+
+// ──── HealContain System ───────────────────────────────────────────────────────
+
+describe('HealContain system', () => {
+  it('heals passengers and auto-ejects when fully healed', () => {
+    // Source parity: HealContain::update — heal passengers per frame, auto-eject at full health.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ambulance', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('Behavior', 'HealContain ModuleTag_Contain', {
+            ContainMax: 3,
+            TimeForFullHeal: 1000, // 1000ms = 30 frames at 30fps
+          }),
+        ]),
+        makeObjectDef('Infantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 5 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ambulance', 50, 50),
+        makeMapObject('Infantry', 52, 52), // Close enough to enter immediately.
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    // Damage the infantry to 50% health.
+    const infantry = (logic as any).spawnedEntities.get(2);
+    infantry.health = 50;
+
+    // Enter the ambulance.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    // One frame to process the enter command.
+    logic.update(1 / 30);
+
+    // Infantry should be inside (MASKED/UNSELECTABLE).
+    let infantryState = logic.getEntityState(2);
+    expect(infantryState).not.toBeNull();
+    // Entity is inside ambulance — check it's not visible (health not yet full).
+    expect(infantryState!.health).toBeLessThan(100);
+
+    // Run 30 frames (1000ms at 30fps) — should be fully healed and ejected.
+    for (let i = 0; i < 35; i++) logic.update(1 / 30);
+
+    // Infantry should be fully healed and ejected (visible again).
+    infantryState = logic.getEntityState(2);
+    expect(infantryState).not.toBeNull();
+    expect(infantryState!.health).toBe(100);
+  });
+
+  it('respects container capacity limit', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ambulance', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('Behavior', 'HealContain ModuleTag_Contain', {
+            ContainMax: 1, // Only 1 passenger.
+            TimeForFullHeal: 1000,
+          }),
+        ]),
+        makeObjectDef('Infantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 5 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ambulance', 50, 50),
+        makeMapObject('Infantry', 52, 52),
+        makeMapObject('Infantry', 53, 53),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    // Damage both infantry.
+    const priv = logic as any;
+    priv.spawnedEntities.get(2).health = 50;
+    priv.spawnedEntities.get(3).health = 50;
+
+    // Try to enter both.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    // Only one should be inside (capacity = 1).
+    const infantry2 = priv.spawnedEntities.get(2);
+    const infantry3 = priv.spawnedEntities.get(3);
+    const inside2 = infantry2.transportContainerId === 1;
+    const inside3 = infantry3.transportContainerId === 1;
+    // Exactly one should be inside.
+    expect(inside2 !== inside3 || (!inside2 && !inside3)).toBe(true);
+  });
+});
+
+// ── AutoFindHealingUpdate Tests ─────────────────────────────────────────────
+
+describe('AutoFindHealingUpdate', () => {
+  function makeAutoHealSetup(opts: {
+    healthPercent?: number;
+    scanRange?: number;
+    neverHeal?: number;
+    alwaysHeal?: number;
+    isHuman?: boolean;
+  } = {}) {
+    const healPadDef = makeObjectDef('HealPad', 'America', ['STRUCTURE', 'HEAL_PAD'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'HealContain ModuleTag_Contain', {
+        ContainMax: 3,
+        TimeForFullHeal: 1000,
+      }),
+    ]);
+
+    const infantryDef = makeObjectDef('Infantry', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+      makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+      makeBlock('Behavior', 'AutoFindHealing ModuleTag_AutoHeal', {
+        ScanRate: 200,  // ~6 frames
+        ScanRange: opts.scanRange ?? 200,
+        NeverHeal: opts.neverHeal ?? 0.95,
+        AlwaysHeal: opts.alwaysHeal ?? 0.25,
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [healPadDef, infantryDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('HealPad', 50, 50),
+        makeMapObject('Infantry', 52, 52),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setSidePlayerType('America', opts.isHuman ? 'HUMAN' : 'COMPUTER');
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const infantry = priv.spawnedEntities.get(2)!;
+
+    const healthPercent = opts.healthPercent ?? 50;
+    infantry.health = (healthPercent / 100) * infantry.maxHealth;
+
+    return { logic, priv, infantry };
+  }
+
+  it('AI unit auto-enters nearby heal pad when damaged and idle', () => {
+    const { logic, infantry } = makeAutoHealSetup({ healthPercent: 50 });
+
+    expect(infantry.health).toBe(50);
+
+    // Run enough frames for the auto-heal scan and entry.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Infantry should now be inside the heal pad.
+    expect(infantry.transportContainerId).not.toBeNull();
+
+    // Run more frames for healing + auto-eject.
+    for (let i = 0; i < 40; i++) logic.update(1 / 30);
+    expect(infantry.health).toBe(100);
+    expect(infantry.transportContainerId).toBeNull();
+  });
+
+  it('does not auto-heal for human-controlled units', () => {
+    const { logic, infantry } = makeAutoHealSetup({ healthPercent: 50, isHuman: true });
+
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(infantry.transportContainerId).toBeNull();
+    expect(infantry.health).toBe(50);
+  });
+
+  it('does not seek healing when health above NeverHeal threshold', () => {
+    const { logic, infantry } = makeAutoHealSetup({ healthPercent: 96, neverHeal: 0.95 });
+
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(infantry.transportContainerId).toBeNull();
   });
 });

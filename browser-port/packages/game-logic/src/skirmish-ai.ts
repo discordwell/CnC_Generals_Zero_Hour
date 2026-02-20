@@ -1169,8 +1169,6 @@ function evaluateSpecialPowers<TEntity extends AIEntity>(
   const readyPowers = context.getReadySpecialPowers(state.side);
   if (readyPowers.length === 0) return;
 
-  const normalizedSide = context.normalizeSide(state.side);
-
   for (const power of readyPowers) {
     const upper = power.effectCategory.toUpperCase();
 
