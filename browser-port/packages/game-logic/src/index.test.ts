@@ -16027,3 +16027,800 @@ describe('Spy Vision Duration', () => {
     expect(priv.temporaryVisionReveals).toHaveLength(0);
   });
 });
+
+// ── PoisonedBehavior Tests ────────────────────────────────────────────────────
+
+describe('PoisonedBehavior', () => {
+  function makePoisonSetup(opts: {
+    poisonDamageIntervalMs?: number;
+    poisonDurationMs?: number;
+    attackDamage?: number;
+    includeAutoHeal?: boolean;
+  } = {}) {
+    const targetBlocks = [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'PoisonedBehavior ModuleTag_Poison', {
+        PoisonDamageInterval: opts.poisonDamageIntervalMs ?? 333,
+        PoisonDuration: opts.poisonDurationMs ?? 3000,
+      }),
+    ];
+    if (opts.includeAutoHeal) {
+      targetBlocks.push(
+        makeBlock('Behavior', 'AutoHealBehavior ModuleTag_AutoHeal', {
+          HealingAmount: 50,
+          HealingDelay: 0,
+          StartHealingDelay: 0,
+          StartsActive: 'Yes',
+        }),
+      );
+    }
+    const targetDef = makeObjectDef('PoisonTarget', 'America', ['INFANTRY'], targetBlocks);
+
+    const attackerDef = makeObjectDef('PoisonAttacker', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'ToxinGun'] }),
+    ]);
+    const toxinWeapon = makeWeaponDef('ToxinGun', {
+      AttackRange: 200,
+      PrimaryDamage: opts.attackDamage ?? 10,
+      PrimaryDamageRadius: 0,
+      DamageType: 'POISON',
+      DelayBetweenShots: 500,
+      WeaponSpeed: 999999,
+    });
+
+    const bundle = makeBundle({
+      objects: [targetDef, attackerDef],
+      weapons: [toxinWeapon],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PoisonTarget', 5, 5),
+        makeMapObject('PoisonAttacker', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(0);
+    return { logic };
+  }
+
+  it('extracts PoisonedBehaviorProfile from INI', () => {
+    const { logic } = makePoisonSetup({ poisonDamageIntervalMs: 500, poisonDurationMs: 5000 });
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { poisonedBehaviorProfile: { poisonDamageIntervalFrames: number; poisonDurationFrames: number } | null }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.poisonedBehaviorProfile).not.toBeNull();
+    // 500ms at 30fps = 15 frames
+    expect(entity.poisonedBehaviorProfile!.poisonDamageIntervalFrames).toBe(15);
+    // 5000ms at 30fps = 150 frames
+    expect(entity.poisonedBehaviorProfile!.poisonDurationFrames).toBe(150);
+  });
+
+  it('applies poison DoT after POISON damage and clears on expiry', () => {
+    const { logic } = makePoisonSetup({ poisonDamageIntervalMs: 333, poisonDurationMs: 1000, attackDamage: 10 });
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; poisonDamageAmount: number; objectStatusFlags: Set<string> }>;
+    };
+
+    // Attack with poison weapon to trigger poison.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const target = priv.spawnedEntities.get(1)!;
+    expect(target.objectStatusFlags.has('POISONED')).toBe(true);
+    expect(target.poisonDamageAmount).toBeGreaterThan(0);
+    const healthAfterPoison = target.health;
+    expect(healthAfterPoison).toBeLessThan(500); // took initial + some tick damage
+
+    // Stop the attacker so it doesn't keep re-poisoning.
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+
+    // Run past poison duration (1000ms = 30 frames). Run extra to be safe.
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+
+    // Poison should have expired.
+    expect(target.objectStatusFlags.has('POISONED')).toBe(false);
+    expect(target.poisonDamageAmount).toBe(0);
+  });
+
+  it('healing clears poison state', () => {
+    // C++ parity: PoisonedBehavior::onHealing clears poison when entity receives healing.
+    // Directly set poison state on entity, then reduce health and run a frame so
+    // the ambulance healer triggers clearPoisonFromEntity.
+    const targetDef = makeObjectDef('PoisonHealTarget', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'PoisonedBehavior ModuleTag_Poison', {
+        PoisonDamageInterval: 333,
+        PoisonDuration: 10000,
+      }),
+    ]);
+    // External healer with radius-mode AutoHeal.
+    const healerDef = makeObjectDef('Ambulance', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'AutoHealBehavior ModuleTag_AutoHeal', {
+        HealingAmount: 100,
+        HealingDelay: 1,
+        StartHealingDelay: 0,
+        Radius: 200,
+        StartsActive: 'Yes',
+      }),
+    ]);
+    const bundle = makeBundle({ objects: [targetDef, healerDef], weapons: [] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PoisonHealTarget', 5, 5),
+        makeMapObject('Ambulance', 5, 5),
+      ]),
+      makeRegistry(bundle), makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number; maxHealth: number; poisonDamageAmount: number;
+        poisonNextDamageFrame: number; poisonExpireFrame: number;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const target = priv.spawnedEntities.get(1)!;
+
+    // Manually inject poison state (simulating a POISON damage hit).
+    target.poisonDamageAmount = 10;
+    target.poisonNextDamageFrame = 9999; // Far future — no tick during test
+    target.poisonExpireFrame = 9999;
+    target.objectStatusFlags.add('POISONED');
+    target.health = 400; // Below max so the ambulance will heal
+    expect(target.objectStatusFlags.has('POISONED')).toBe(true);
+
+    // Run a few frames. The ambulance should heal and clear poison.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    expect(target.objectStatusFlags.has('POISONED')).toBe(false);
+    expect(target.poisonDamageAmount).toBe(0);
+    expect(target.health).toBe(500); // Healed back to full
+  });
+
+  it('entities without PoisonedBehavior module cannot be poisoned', () => {
+    // Create a target WITHOUT PoisonedBehavior module.
+    const targetDef = makeObjectDef('NoPoisonTarget', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const attackerDef = makeObjectDef('PoisonAttacker2', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'ToxinGun2'] }),
+    ]);
+    const toxinWeapon = makeWeaponDef('ToxinGun2', {
+      AttackRange: 200,
+      PrimaryDamage: 10,
+      PrimaryDamageRadius: 0,
+      DamageType: 'POISON',
+      DelayBetweenShots: 500,
+      WeaponSpeed: 999999,
+    });
+
+    const bundle = makeBundle({
+      objects: [targetDef, attackerDef],
+      weapons: [toxinWeapon],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NoPoisonTarget', 5, 5),
+        makeMapObject('PoisonAttacker2', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(0);
+
+    // Attack with poison weapon.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { poisonDamageAmount: number; objectStatusFlags: Set<string> }>;
+    };
+    const target = priv.spawnedEntities.get(1)!;
+    // Entity takes POISON damage but should NOT become poisoned (no PoisonedBehavior module).
+    expect(target.objectStatusFlags.has('POISONED')).toBe(false);
+    expect(target.poisonDamageAmount).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// StickyBombUpdate — bomb attachment, tracking, and detonation
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('StickyBombUpdate', () => {
+  it('extracts StickyBombUpdateProfile from INI', () => {
+    const bombDef = makeObjectDef('StickyBomb', 'America', ['VEHICLE', 'BOOBY_TRAP'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      {
+        type: 'Behavior',
+        name: 'StickyBombUpdate ModuleTag_StickyBomb',
+        fields: {
+          GeometryBasedDamageWeapon: 'StickyBombDetonation',
+          OffsetZ: 15.0,
+        },
+        blocks: [],
+      },
+    ]);
+    const bundle = makeBundle({ objects: [bombDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('StickyBomb', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        stickyBombProfile: { offsetZ: number; geometryBasedDamageWeaponName: string | null } | null;
+      }>;
+    };
+    const bomb = priv.spawnedEntities.get(1)!;
+    expect(bomb.stickyBombProfile).not.toBeNull();
+    expect(bomb.stickyBombProfile!.offsetZ).toBe(15.0);
+    expect(bomb.stickyBombProfile!.geometryBasedDamageWeaponName).toBe('StickyBombDetonation');
+  });
+
+  it('tracks mobile target position each frame', () => {
+    // Create a bomb and a mobile target.
+    const targetDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const bombDef = makeObjectDef('StickyBomb', 'America', ['VEHICLE', 'BOOBY_TRAP'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      {
+        type: 'Behavior',
+        name: 'StickyBombUpdate ModuleTag_SB',
+        fields: { OffsetZ: 10 },
+        blocks: [],
+      },
+    ]);
+    const bundle = makeBundle({ objects: [targetDef, bombDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),
+        makeMapObject('StickyBomb', 10, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number; z: number;
+        stickyBombTargetId: number;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const bomb = priv.spawnedEntities.get(2)!;
+    const target = priv.spawnedEntities.get(1)!;
+
+    // Manually attach bomb to target (simulates OCL onCreatePost).
+    bomb.stickyBombTargetId = 1;
+    target.objectStatusFlags.add('BOOBY_TRAPPED');
+
+    // Move target.
+    target.x = 50;
+    target.z = 60;
+    logic.update(1 / 30);
+
+    // Bomb should follow target position.
+    expect(bomb.x).toBe(50);
+    expect(bomb.z).toBe(60);
+  });
+
+  it('detonates bomb with geometry-scaled damage when LifetimeUpdate timer expires', () => {
+    // Bomb with LifetimeUpdate (30 frames = 1 second).
+    const targetDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], {
+      GeometryMajorRadius: 20,
+    });
+    const bombDef = makeObjectDef('StickyBomb', 'America', ['VEHICLE', 'BOOBY_TRAP'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      {
+        type: 'Behavior',
+        name: 'StickyBombUpdate ModuleTag_SB',
+        fields: {
+          GeometryBasedDamageWeapon: 'StickyBombWeapon',
+          OffsetZ: 10,
+        },
+        blocks: [],
+      },
+      {
+        type: 'Behavior',
+        name: 'LifetimeUpdate ModuleTag_Lifetime',
+        fields: {
+          MinLifetime: 1000, // 30 frames
+          MaxLifetime: 1000,
+        },
+        blocks: [],
+      },
+    ]);
+    // Nearby enemy unit to take splash damage (500 HP so it survives the 200 damage detonation).
+    const bystander = makeObjectDef('Infantry', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const detonationWeapon = makeWeaponDef('StickyBombWeapon', {
+      PrimaryDamage: 200,
+      PrimaryDamageRadius: 30,
+      DamageType: 'EXPLOSION',
+    });
+    const bundle = makeBundle({
+      objects: [targetDef, bombDef, bystander],
+      weapons: [detonationWeapon],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),        // id 1
+        makeMapObject('StickyBomb', 10, 10),   // id 2
+        makeMapObject('Infantry', 10, 10),     // id 3 (within blast radius)
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number; z: number;
+        health: number;
+        destroyed: boolean;
+        stickyBombTargetId: number;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const bomb = priv.spawnedEntities.get(2)!;
+    const target = priv.spawnedEntities.get(1)!;
+
+    // Attach bomb to target.
+    bomb.stickyBombTargetId = 1;
+    target.objectStatusFlags.add('BOOBY_TRAPPED');
+
+    const targetInitialHealth = target.health;
+    const bystanderInitialHealth = priv.spawnedEntities.get(3)!.health;
+
+    // Advance past LifetimeUpdate timer (30 frames).
+    for (let i = 0; i < 35; i++) logic.update(1 / 30);
+
+    // Bomb should be destroyed.
+    expect(bomb.destroyed).toBe(true);
+
+    // Target should have taken geometry-scaled damage (radius = 30 + 20 majorRadius = 50).
+    expect(target.health).toBeLessThan(targetInitialHealth);
+
+    // Bystander at same position should also have taken damage.
+    const bystander3 = priv.spawnedEntities.get(3)!;
+    expect(bystander3.health).toBeLessThan(bystanderInitialHealth);
+
+    // BOOBY_TRAPPED status should be cleared.
+    expect(target.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(false);
+  });
+
+  it('detonates bomb via checkAndDetonateBoobyTrap when target dies', () => {
+    const targetDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      GeometryMajorRadius: 10,
+    });
+    const bombDef = makeObjectDef('StickyBomb', 'America', ['VEHICLE', 'BOOBY_TRAP'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      {
+        type: 'Behavior',
+        name: 'StickyBombUpdate ModuleTag_SB',
+        fields: {
+          GeometryBasedDamageWeapon: 'StickyBombWeapon2',
+          OffsetZ: 10,
+        },
+        blocks: [],
+      },
+    ]);
+    // Attacker to kill the target.
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun'] }),
+    ]);
+    const attackerWeapon = makeWeaponDef('BigGun', {
+      AttackRange: 200,
+      PrimaryDamage: 200,
+      PrimaryDamageRadius: 0,
+      DamageType: 'ARMOR_PIERCING',
+      DelayBetweenShots: 100,
+      WeaponSpeed: 999999,
+    });
+    const detonationWeapon = makeWeaponDef('StickyBombWeapon2', {
+      PrimaryDamage: 150,
+      PrimaryDamageRadius: 25,
+      DamageType: 'EXPLOSION',
+    });
+    // Nearby enemy bystander to verify splash damage from detonation.
+    const bystanderDef = makeObjectDef('Bystander', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const bundle = makeBundle({
+      objects: [targetDef, bombDef, attackerDef, bystanderDef],
+      weapons: [attackerWeapon, detonationWeapon],
+      commandSets: [makeCommandSetDef('AttackerCS', { '1': 'AttackButton' })],
+      commandButtons: [makeCommandButtonDef('AttackButton', {
+        Command: 'ATTACK_MOVE',
+        Options: 'NEED_TARGET_ENEMY_OBJECT',
+      })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),       // id 1 — target
+        makeMapObject('StickyBomb', 10, 10),  // id 2 — bomb
+        makeMapObject('Attacker', 10, 10),    // id 3 — attacker
+        makeMapObject('Bystander', 10, 10),   // id 4 — splash damage recipient
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        destroyed: boolean;
+        stickyBombTargetId: number;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const bomb = priv.spawnedEntities.get(2)!;
+    const target = priv.spawnedEntities.get(1)!;
+
+    // Attach bomb to target.
+    bomb.stickyBombTargetId = 1;
+    target.objectStatusFlags.add('BOOBY_TRAPPED');
+
+    const bystanderInitialHealth = priv.spawnedEntities.get(4)!.health;
+
+    // Order attacker to kill the target.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Target should be destroyed (200 damage > 100 HP).
+    expect(target.destroyed).toBe(true);
+
+    // Bomb should also be destroyed (via checkAndDetonateBoobyTrap → detonateStickyBomb → markEntityDestroyed,
+    // or via updateStickyBombs → silentDestroyEntity when target is dead).
+    expect(bomb.destroyed).toBe(true);
+
+    // Bystander should have taken splash damage from the bomb detonation.
+    const bystander4 = priv.spawnedEntities.get(4)!;
+    expect(bystander4.health).toBeLessThan(bystanderInitialHealth);
+  });
+
+  it('silently destroys bomb when target is already dead and bomb has no lifetime', () => {
+    const targetDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bombDef = makeObjectDef('StickyBomb', 'America', ['VEHICLE', 'BOOBY_TRAP'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      {
+        type: 'Behavior',
+        name: 'StickyBombUpdate ModuleTag_SB',
+        fields: { OffsetZ: 10 },
+        blocks: [],
+      },
+    ]);
+    const bundle = makeBundle({ objects: [targetDef, bombDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),
+        makeMapObject('StickyBomb', 10, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        destroyed: boolean;
+        stickyBombTargetId: number;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const bomb = priv.spawnedEntities.get(2)!;
+    const target = priv.spawnedEntities.get(1)!;
+
+    // Attach bomb.
+    bomb.stickyBombTargetId = 1;
+    target.objectStatusFlags.add('BOOBY_TRAPPED');
+
+    // Destroy target directly (simulate external death without booby trap check).
+    (target as unknown as { destroyed: boolean }).destroyed = true;
+
+    // Next update: bomb's updateStickyBombs sees target is dead, silently destroys bomb.
+    logic.update(1 / 30);
+
+    expect(bomb.destroyed).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// InstantDeathBehavior — die module with filtering and weapon/OCL effects
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('InstantDeathBehavior', () => {
+  it('extracts InstantDeathBehavior profiles from INI', () => {
+    const tankDef = makeObjectDef('Tank', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      {
+        type: 'Die',
+        name: 'InstantDeathBehavior ModuleTag_Die1',
+        fields: {
+          DeathTypes: 'BURNED EXPLODED',
+          ExemptStatus: 'SOLD',
+          Weapon: 'TankDeathExplosion',
+        },
+        blocks: [],
+      },
+      {
+        type: 'Die',
+        name: 'InstantDeathBehavior ModuleTag_Die2',
+        fields: {
+          DeathTypes: 'CRUSHED',
+          RequiredStatus: 'DAMAGED',
+          OCL: 'OCLCrushedDebris',
+        },
+        blocks: [],
+      },
+    ]);
+    const bundle = makeBundle({ objects: [tankDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Tank', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        instantDeathProfiles: Array<{
+          deathTypes: Set<string>;
+          exemptStatus: Set<string>;
+          requiredStatus: Set<string>;
+          weaponNames: string[];
+          oclNames: string[];
+        }>;
+      }>;
+    };
+    const tank = priv.spawnedEntities.get(1)!;
+    expect(tank.instantDeathProfiles).toHaveLength(2);
+
+    const p0 = tank.instantDeathProfiles[0]!;
+    expect(p0.deathTypes.has('BURNED')).toBe(true);
+    expect(p0.deathTypes.has('EXPLODED')).toBe(true);
+    expect(p0.exemptStatus.has('SOLD')).toBe(true);
+    expect(p0.weaponNames).toEqual(['TankDeathExplosion']);
+
+    const p1 = tank.instantDeathProfiles[1]!;
+    expect(p1.deathTypes.has('CRUSHED')).toBe(true);
+    expect(p1.requiredStatus.has('DAMAGED')).toBe(true);
+    expect(p1.oclNames).toEqual(['OCLCrushedDebris']);
+  });
+
+  it('fires death weapon on entity destruction', () => {
+    const tankDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      {
+        type: 'Die',
+        name: 'InstantDeathBehavior ModuleTag_Die',
+        fields: {
+          Weapon: 'DeathBlast',
+        },
+        blocks: [],
+      },
+    ]);
+    const nearbyDef = makeObjectDef('Bystander', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigCannon'] }),
+    ]);
+    const bigCannon = makeWeaponDef('BigCannon', {
+      AttackRange: 200,
+      PrimaryDamage: 300,
+      PrimaryDamageRadius: 0,
+      DamageType: 'ARMOR_PIERCING',
+      DelayBetweenShots: 100,
+      WeaponSpeed: 999999,
+    });
+    const deathBlast = makeWeaponDef('DeathBlast', {
+      PrimaryDamage: 75,
+      PrimaryDamageRadius: 50,
+      DamageType: 'EXPLOSION',
+    });
+    const bundle = makeBundle({
+      objects: [tankDef, nearbyDef, attackerDef],
+      weapons: [bigCannon, deathBlast],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),       // id 1 — dies and fires DeathBlast
+        makeMapObject('Bystander', 10, 10),   // id 2 — nearby, should take death weapon damage
+        makeMapObject('Attacker', 10, 10),    // id 3 — kills the tank
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; destroyed: boolean }>;
+    };
+    const tank = priv.spawnedEntities.get(1)!;
+    const bystander = priv.spawnedEntities.get(2)!;
+    const bystanderBefore = bystander.health;
+
+    // Kill the tank.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+
+    // Tank should be destroyed.
+    expect(tank.destroyed).toBe(true);
+
+    // Bystander should have taken death weapon damage (75 EXPLOSION, radius 50).
+    expect(bystander.health).toBeLessThan(bystanderBefore);
+  });
+
+  it('skips die module when ExemptStatus matches', () => {
+    const tankDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      {
+        type: 'Die',
+        name: 'InstantDeathBehavior ModuleTag_Die',
+        fields: {
+          ExemptStatus: 'SOLD',
+          Weapon: 'DeathBlast2',
+        },
+        blocks: [],
+      },
+    ]);
+    const nearbyDef = makeObjectDef('Bystander', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const deathBlast = makeWeaponDef('DeathBlast2', {
+      PrimaryDamage: 100,
+      PrimaryDamageRadius: 50,
+      DamageType: 'EXPLOSION',
+    });
+    const bundle = makeBundle({
+      objects: [tankDef, nearbyDef],
+      weapons: [deathBlast],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),
+        makeMapObject('Bystander', 10, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        destroyed: boolean;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const tank = priv.spawnedEntities.get(1)!;
+    const bystanderBefore = priv.spawnedEntities.get(2)!.health;
+
+    // Mark tank as SOLD — this should exempt the die module.
+    tank.objectStatusFlags.add('SOLD');
+
+    // Kill the tank directly via UNRESISTABLE damage.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, tank, 500, 'UNRESISTABLE');
+
+    // Advance one frame to process.
+    logic.update(1 / 30);
+
+    // Tank should be destroyed.
+    expect(tank.destroyed).toBe(true);
+
+    // Bystander should NOT have taken damage (die module was exempt).
+    expect(priv.spawnedEntities.get(2)!.health).toBe(bystanderBefore);
+  });
+
+  it('skips die module when RequiredStatus is missing', () => {
+    const tankDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      {
+        type: 'Die',
+        name: 'InstantDeathBehavior ModuleTag_Die',
+        fields: {
+          RequiredStatus: 'BOOBY_TRAPPED',
+          Weapon: 'DeathBlast3',
+        },
+        blocks: [],
+      },
+    ]);
+    const nearbyDef = makeObjectDef('Bystander', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const deathBlast = makeWeaponDef('DeathBlast3', {
+      PrimaryDamage: 100,
+      PrimaryDamageRadius: 50,
+      DamageType: 'EXPLOSION',
+    });
+    const bundle = makeBundle({
+      objects: [tankDef, nearbyDef],
+      weapons: [deathBlast],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),
+        makeMapObject('Bystander', 10, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        destroyed: boolean;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const tank = priv.spawnedEntities.get(1)!;
+    const bystanderBefore = priv.spawnedEntities.get(2)!.health;
+
+    // Tank does NOT have BOOBY_TRAPPED status — RequiredStatus check should block die module.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, tank, 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(tank.destroyed).toBe(true);
+    // Bystander should NOT have taken damage (RequiredStatus not met).
+    expect(priv.spawnedEntities.get(2)!.health).toBe(bystanderBefore);
+  });
+});

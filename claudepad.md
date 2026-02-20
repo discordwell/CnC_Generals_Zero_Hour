@@ -1,5 +1,41 @@
 # Session Summaries
 
+## 2026-02-21T03:15Z — PoisonedBehavior Fixes + StickyBombUpdate + InstantDeathBehavior
+- PoisonedBehavior C++ parity fixes:
+  - Profile-based poison params (guard: only entities WITH PoisonedBehavior can be poisoned)
+  - Re-poison timer uses Math.min() for C++ parity
+  - Healing clears poison (all heal paths: self-heal, radius, whole-player, base regen, callback)
+  - Fixed AutoHeal radius mode bug: full-health healers couldn't heal others
+  - 4 tests — All 1215 tests pass
+- StickyBombUpdate: bomb attachment/tracking/detonation system:
+  - Profile INI (OffsetZ, GeometryBasedDamageWeapon), position tracking, detonation damage
+  - executeStickyBombDetonationDamage in markEntityDestroyed (handles LifetimeUpdate death + explicit detonation)
+  - checkAndDetonateBoobyTrap with ally check (C++ line 966)
+  - Recursion guard via clearing stickyBombTargetId before damage application
+  - 5 tests — All 1220 tests pass
+- InstantDeathBehavior: die module with DieMuxData filtering:
+  - DeathTypes, VeterancyLevels, ExemptStatus, RequiredStatus filtering
+  - Weapon and OCL effects (random selection from lists)
+  - Shared isDieModuleApplicable (refactored from isSlowDeathApplicable)
+  - 4 tests — All 1224 tests pass
+- Code review fixes: dyingEntityIds re-entrancy guard (C++ m_hasDiedAlready), removed dead poison entity fields
+
+## 2026-02-21T02:00Z — FlammableUpdate + DeletionUpdate + RadarUpdate + FloatUpdate + SpyVision
+- FlammableUpdate parity fixes — committed dde82a5
+  - Added burnedDelayFrames independent timer, fixed AFLAME→NORMAL/BURNED transition
+  - Fixed flameDamageAccumulated re-ignition parity (don't reset on ignition)
+  - 6 tests — All 1205 tests pass
+- DeletionUpdate: silent timed removal (no death pipeline) — committed 67124f6
+  - silentDestroyEntity() method: cleans up references without death events/XP/crates
+  - RadarUpdateProfile + FloatUpdateProfile extraction (update logic deferred)
+  - RadarUpdate extension animation timer on RadarUpgrade application
+  - 5 tests — All 1210 tests pass
+- Spy Vision duration expiry — committed 3e71ae5
+  - temporaryVisionReveals tracking with expiration timers
+  - revealFogOfWar now accepts durationMs parameter, defaults to 30s
+  - updateTemporaryVisionReveals() removes expired lookers each frame
+  - 1 test — All 1211 tests pass
+
 ## 2026-02-20T23:00Z — SpecialAbilityUpdate State Machine
 - SpecialAbilityUpdate: unit-based special ability system (Black Lotus, Hackers, Burton, Jarmen Kell)
   - SpecialAbilityProfile INI: SpecialPowerTemplate, StartAbilityRange, PreparationTime, PackTime, UnpackTime, SkipPackingWithNoTarget, PersistentPrepTime, FlipOwnerAfterPacking/Unpacking, LoseStealthOnTrigger, AwardXPForTriggering
@@ -47,13 +83,6 @@
   - HORDE/NATIONALISM/FANATICISM weapon bonus condition flags based on horde status + player sciences
   - Code review fixes: ALL-match kindOf (not ANY), idempotent flag recalculation, allowedNationalism clearing
   - 9 tests — All 1120 tests pass
-
-## 2026-02-20T19:00Z — BattlePlanUpdate System (Task #88)
-- Task #88: USA Strategy Center BattlePlanUpdate with full C++ source parity — committed a3a1872
-  - BattlePlanProfile INI: Bombardment/HoldTheLine/SearchAndDestroy bonus flags + scalars
-  - State machine: IDLE → UNPACKING → ACTIVE → PACKING → IDLE with timed transitions
-  - Reference-counted bonuses via sideBattlePlanBonuses (0→1 apply, 1→0 remove)
-  - 7 tests — All 1106 tests pass, clean build
 
 # Key Findings
 

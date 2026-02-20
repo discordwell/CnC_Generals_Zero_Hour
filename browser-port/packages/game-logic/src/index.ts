@@ -1375,16 +1375,14 @@ interface MapEntity {
   guardOuterRange: number;
 
   // ── Source parity: PoisonedBehavior — per-entity poison DoT state ──
+  /** INI-extracted poison behavior profile (null = entity cannot be poisoned). */
+  poisonedBehaviorProfile: PoisonedBehaviorProfile | null;
   /** Damage amount per poison tick (0 = not poisoned). */
   poisonDamageAmount: number;
   /** Frame at which next poison tick fires. */
   poisonNextDamageFrame: number;
   /** Frame at which poison effect expires. */
   poisonExpireFrame: number;
-  /** Frames between poison damage ticks (from INI PoisonDamageInterval). */
-  poisonDamageIntervalFrames: number;
-  /** Total poison duration frames (from INI PoisonDuration). */
-  poisonDurationFrames: number;
 
   // ── Source parity: FlammableUpdate — per-entity fire DoT state ──
   /** Flammability status: 'NORMAL' | 'AFLAME' | 'BURNED'. */
@@ -1507,6 +1505,14 @@ interface MapEntity {
   /** Frame at which this entity should be silently destroyed (null = no deletion timer). */
   deletionDieFrame: number | null;
 
+  // ── Source parity: StickyBombUpdate — bomb attachment and tracking ──
+  /** Sticky bomb profile (null = not a sticky bomb). */
+  stickyBombProfile: StickyBombUpdateProfile | null;
+  /** ID of entity this bomb is attached to (0 = not attached). */
+  stickyBombTargetId: number;
+  /** Frame at which timed bomb detonates (0 = remote-triggered). */
+  stickyBombDieFrame: number;
+
   // ── Source parity: FireWeaponWhenDeadBehavior — weapon fired on death ──
   /** Weapon template names to fire at entity position on death (from FireWeaponWhenDeadBehavior). */
   deathWeaponNames: string[];
@@ -1542,6 +1548,10 @@ interface MapEntity {
   tempWeaponBonusFlag: number;
   /** Frame when the current temp bonus expires. */
   tempWeaponBonusExpiryFrame: number;
+
+  // ── Source parity: InstantDeathBehavior — die modules with filtering ──
+  /** Parsed InstantDeathBehavior modules from INI (all matching profiles fire on death). */
+  instantDeathProfiles: InstantDeathProfile[];
 
   // ── Source parity: SlowDeathBehavior — phased death sequences ──
   /** Parsed SlowDeathBehavior modules from INI (multiple per entity, one selected on death). */
@@ -1668,6 +1678,29 @@ interface FlammableProfile {
   aflameDamageAmount: number;
   /** Frames before BURNED status is set (0 = never burns out). Independent of AFLAME duration. */
   burnedDelayFrames: number;
+}
+
+/**
+ * Source parity: PoisonedBehavior module parsed from INI.
+ * C++ file: PoisonedBehavior.cpp — per-entity poison DoT configuration.
+ */
+interface PoisonedBehaviorProfile {
+  /** Frames between poison damage ticks. C++ field: m_poisonDamageIntervalData. */
+  poisonDamageIntervalFrames: number;
+  /** Total poison duration in frames after last dose. C++ field: m_poisonDurationData. */
+  poisonDurationFrames: number;
+}
+
+/**
+ * Source parity: StickyBombUpdate module parsed from INI.
+ * C++ file: StickyBombUpdate.h — bomb attachment and tracking behavior.
+ * Used for Colonel Burton demo charges, Jarmen Kell booby traps.
+ */
+interface StickyBombUpdateProfile {
+  /** Vertical offset above target for mobile targets. C++ default: 10.0. */
+  offsetZ: number;
+  /** Weapon template name for geometry-scaled detonation damage (null = use death weapons). */
+  geometryBasedDamageWeaponName: string | null;
 }
 
 /**
@@ -2176,6 +2209,26 @@ interface SlowDeathProfile {
 }
 
 /**
+ * Source parity: InstantDeathBehavior — die module that fires effects and instantly
+ * destroys the entity. Multiple can exist per entity; each has DieMuxData filtering.
+ * C++ file: InstantDeathBehavior.h / InstantDeathBehavior.cpp
+ */
+interface InstantDeathProfile {
+  /** Which death types trigger this (empty = ALL). */
+  deathTypes: Set<string>;
+  /** Which veterancy levels allow this (empty = ALL). */
+  veterancyLevels: Set<string>;
+  /** Status flags that exempt this behavior. */
+  exemptStatus: Set<string>;
+  /** Status flags required for this behavior. */
+  requiredStatus: Set<string>;
+  /** Weapon template names to fire (one chosen randomly). */
+  weaponNames: string[];
+  /** OCL names to execute (one chosen randomly). */
+  oclNames: string[];
+}
+
+/**
  * Source parity: RadarUpdate module parsed from INI.
  * Manages the radar dish extension animation timer.
  * Actual radar functionality is tracked via player-level radarCount.
@@ -2287,6 +2340,8 @@ export class GameLogicSubsystem implements Subsystem {
     state: RenderableEntityState;
     expireFrame: number;
   }>();
+  /** Source parity: Object::m_hasDiedAlready — prevents re-entrant death pipeline. */
+  private readonly dyingEntityIds = new Set<number>();
   private readonly sellingEntities = new Map<number, SellingEntityState>();
   private readonly hackInternetStateByEntityId = new Map<number, HackInternetRuntimeState>();
   private readonly hackInternetPendingCommandByEntityId = new Map<number, HackInternetPendingCommandState>();
@@ -2743,6 +2798,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateRenderStates();
     this.updateLifetimeEntities();
     this.updateDeletionEntities();
+    this.updateStickyBombs();
     this.updateSlowDeathEntities();
     this.updateWeaponIdleAutoReload();
     this.updatePointDefenseLaser();
@@ -4395,11 +4451,10 @@ export class GameLogicSubsystem implements Subsystem {
       guardInnerRange: 0,
       guardOuterRange: 0,
       // Poison DoT state
+      poisonedBehaviorProfile: this.extractPoisonedBehaviorProfile(objectDef),
       poisonDamageAmount: 0,
       poisonNextDamageFrame: 0,
       poisonExpireFrame: 0,
-      poisonDamageIntervalFrames: DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES,
-      poisonDurationFrames: DEFAULT_POISON_DURATION_FRAMES,
       // Fire DoT state
       flameStatus: 'NORMAL' as const,
       flameDamageAccumulated: 0,
@@ -4459,6 +4514,10 @@ export class GameLogicSubsystem implements Subsystem {
       lifetimeDieFrame: this.resolveLifetimeDieFrame(objectDef),
       // Deletion
       deletionDieFrame: this.resolveDeletionDieFrame(objectDef),
+      // Sticky bomb
+      stickyBombProfile: this.extractStickyBombUpdateProfile(objectDef),
+      stickyBombTargetId: 0,
+      stickyBombDieFrame: 0,
       // Death weapons
       deathWeaponNames: this.extractDeathWeaponNames(objectDef),
       // Fire weapon when damaged
@@ -4477,6 +4536,8 @@ export class GameLogicSubsystem implements Subsystem {
       // Temp weapon bonus (target side)
       tempWeaponBonusFlag: 0,
       tempWeaponBonusExpiryFrame: 0,
+      // Instant death die modules
+      instantDeathProfiles: this.extractInstantDeathProfiles(objectDef),
       // Slow death
       slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
       slowDeathState: null,
@@ -6542,6 +6603,34 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: PoisonedBehavior — extract per-entity poison DoT parameters from INI.
+   * C++ file: PoisonedBehavior.cpp lines 56-63 (buildFieldParse).
+   */
+  private extractPoisonedBehaviorProfile(objectDef: ObjectDef | undefined): PoisonedBehaviorProfile | null {
+    if (!objectDef) return null;
+    let profile: PoisonedBehaviorProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'POISONEDBEHAVIOR') {
+          profile = {
+            poisonDamageIntervalFrames: this.msToLogicFrames(readNumericField(block.fields, ['PoisonDamageInterval']) ?? 333),
+            poisonDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['PoisonDuration']) ?? 3000),
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: FireWeaponWhenDeadBehavior — extract death weapon names from INI.
    * C++ fires createAndFireTempWeapon at entity position on death.
    */
@@ -6764,6 +6853,34 @@ export class GameLogicSubsystem implements Subsystem {
           const enabledStr = readStringField(block.fields, ['Enabled'])?.toUpperCase();
           profile = {
             enabled: enabledStr === 'YES' || enabledStr === 'TRUE' || enabledStr === '1',
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: StickyBombUpdate — extract bomb attachment config from INI.
+   * C++ file: StickyBombUpdate.h (StickyBombUpdateModuleData).
+   */
+  private extractStickyBombUpdateProfile(objectDef: ObjectDef | undefined): StickyBombUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: StickyBombUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'STICKYBOMBUPDATE') {
+          profile = {
+            offsetZ: readNumericField(block.fields, ['OffsetZ']) ?? 10.0,
+            geometryBasedDamageWeaponName: readStringField(block.fields, ['GeometryBasedDamageWeapon']) ?? null,
           };
         }
       }
@@ -7561,6 +7678,98 @@ export class GameLogicSubsystem implements Subsystem {
             requiredStatus,
             phaseOCLs,
             phaseWeapons,
+          });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: InstantDeathBehavior — extract die module profiles from INI.
+   * C++ file: InstantDeathBehavior.cpp (buildFieldParse) + DieModule.cpp (DieMuxData).
+   * An entity can have multiple InstantDeathBehavior modules; all matching ones fire on death.
+   */
+  private extractInstantDeathProfiles(objectDef: ObjectDef | undefined): InstantDeathProfile[] {
+    if (!objectDef) return [];
+    const profiles: InstantDeathProfile[] = [];
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'DIE') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'INSTANTDEATHBEHAVIOR' || moduleType === 'DESTROYDIE') {
+          // Parse DieMuxData fields.
+          const deathTypes = new Set<string>();
+          const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
+          if (deathTypesStr) {
+            for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
+              if (token) deathTypes.add(token);
+            }
+          }
+
+          const veterancyLevels = new Set<string>();
+          const vetStr = readStringField(block.fields, ['VeterancyLevels']);
+          if (vetStr) {
+            for (const token of vetStr.toUpperCase().split(/\s+/)) {
+              if (token) veterancyLevels.add(token);
+            }
+          }
+
+          const exemptStatus = new Set<string>();
+          const exemptStr = readStringField(block.fields, ['ExemptStatus']);
+          if (exemptStr) {
+            for (const token of exemptStr.toUpperCase().split(/\s+/)) {
+              if (token) exemptStatus.add(token);
+            }
+          }
+
+          const requiredStatus = new Set<string>();
+          const reqStr = readStringField(block.fields, ['RequiredStatus']);
+          if (reqStr) {
+            for (const token of reqStr.toUpperCase().split(/\s+/)) {
+              if (token) requiredStatus.add(token);
+            }
+          }
+
+          // Parse effect lists (Weapon, OCL — space-separated or multi-valued).
+          const weaponNames: string[] = [];
+          const weaponRaw = block.fields['Weapon'];
+          if (typeof weaponRaw === 'string') {
+            const name = weaponRaw.trim();
+            if (name) weaponNames.push(name);
+          } else if (Array.isArray(weaponRaw)) {
+            for (const entry of weaponRaw) {
+              const name = typeof entry === 'string' ? entry.trim() : '';
+              if (name) weaponNames.push(name);
+            }
+          }
+
+          const oclNames: string[] = [];
+          const oclRaw = block.fields['OCL'];
+          if (typeof oclRaw === 'string') {
+            const name = oclRaw.trim();
+            if (name) oclNames.push(name);
+          } else if (Array.isArray(oclRaw)) {
+            for (const entry of oclRaw) {
+              const name = typeof entry === 'string' ? entry.trim() : '';
+              if (name) oclNames.push(name);
+            }
+          }
+
+          profiles.push({
+            deathTypes,
+            veterancyLevels,
+            exemptStatus,
+            requiredStatus,
+            weaponNames,
+            oclNames,
           });
         }
       }
@@ -12365,7 +12574,8 @@ export class GameLogicSubsystem implements Subsystem {
       // Apply poison damage tick
       if (this.frameCounter >= entity.poisonNextDamageFrame) {
         this.applyWeaponDamageAmount(null, entity, entity.poisonDamageAmount, 'UNRESISTABLE');
-        entity.poisonNextDamageFrame = this.frameCounter + entity.poisonDamageIntervalFrames;
+        const interval = entity.poisonedBehaviorProfile?.poisonDamageIntervalFrames ?? DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES;
+        entity.poisonNextDamageFrame = this.frameCounter + interval;
       }
     }
   }
@@ -12446,16 +12656,38 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: PoisonedBehavior.onDamage — start or refresh poison DoT.
+   * C++ file: PoisonedBehavior.cpp lines 157-183 (startPoisonedEffects).
+   * Only entities with a PoisonedBehavior module can be poisoned.
    */
   private applyPoisonToEntity(entity: MapEntity, actualDamage: number): void {
     if (actualDamage <= 0) return;
+    // C++ parity: only entities with the PoisonedBehavior module react to poison.
+    if (!entity.poisonedBehaviorProfile) return;
+    const prof = entity.poisonedBehaviorProfile;
     entity.poisonDamageAmount = actualDamage;
-    entity.poisonExpireFrame = this.frameCounter + entity.poisonDurationFrames;
-    // Only reset next-damage timer if not already ticking
-    if (entity.poisonNextDamageFrame <= this.frameCounter) {
-      entity.poisonNextDamageFrame = this.frameCounter + entity.poisonDamageIntervalFrames;
+    entity.poisonExpireFrame = this.frameCounter + prof.poisonDurationFrames;
+    // C++ parity: re-poisoning uses min() of existing timer and new interval
+    // to prevent "early" damage ticks. (PoisonedBehavior.cpp line 169-173)
+    const newDamageFrame = this.frameCounter + prof.poisonDamageIntervalFrames;
+    if (entity.poisonNextDamageFrame > this.frameCounter) {
+      entity.poisonNextDamageFrame = Math.min(entity.poisonNextDamageFrame, newDamageFrame);
+    } else {
+      entity.poisonNextDamageFrame = newDamageFrame;
     }
     entity.objectStatusFlags.add('POISONED');
+  }
+
+  /**
+   * Source parity: PoisonedBehavior::onHealing / stopPoisonedEffects.
+   * C++ file: PoisonedBehavior.cpp lines 99-104, 186-195.
+   * Any healing immediately clears all poison state.
+   */
+  private clearPoisonFromEntity(entity: MapEntity): void {
+    if (entity.poisonDamageAmount <= 0) return;
+    entity.poisonDamageAmount = 0;
+    entity.poisonNextDamageFrame = 0;
+    entity.poisonExpireFrame = 0;
+    entity.objectStatusFlags.delete('POISONED');
   }
 
   /**
@@ -12468,17 +12700,20 @@ export class GameLogicSubsystem implements Subsystem {
 
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) continue;
-      if (entity.health >= entity.maxHealth && entity.health > 0) {
-        // Already at full health — skip self-heal and base-regen (but propaganda tower still runs)
-        if (!entity.propagandaTowerProfile) continue;
-      }
+
+      // C++ parity: full-health check only skips self-heal and base-regen.
+      // Radius and whole-player AutoHeal must still run to heal OTHER entities.
+      const atFullHealth = entity.health >= entity.maxHealth && entity.health > 0;
+      const hasRadiusOrPlayerHeal = entity.autoHealProfile
+        && (entity.autoHealProfile.radius > 0 || entity.autoHealProfile.affectsWholePlayer);
+      if (atFullHealth && !entity.propagandaTowerProfile && !hasRadiusOrPlayerHeal) continue;
 
       const isDisabled = entity.objectStatusFlags.has('DISABLED_EMP')
         || entity.objectStatusFlags.has('DISABLED_HACKED')
         || entity.objectStatusFlags.has('DISABLED_SUBDUED');
 
-      // ── AutoHealBehavior (self-heal) ──
-      if (entity.autoHealProfile && !isDisabled && entity.health < entity.maxHealth) {
+      // ── AutoHealBehavior ──
+      if (entity.autoHealProfile && !isDisabled) {
         const prof = entity.autoHealProfile;
         if (prof.initiallyActive || entity.completedUpgrades.size > 0) {
           // Check damage delay.
@@ -12505,17 +12740,22 @@ export class GameLogicSubsystem implements Subsystem {
                   if (this.normalizeSide(target.side) !== side) continue;
                   const prevHealth = target.health;
                   target.health = Math.min(target.maxHealth, target.health + prof.healingAmount);
-                  if (target.minefieldProfile && target.health > prevHealth) {
-                    this.mineOnDamage(target, entity.id, 'HEALING');
+                  if (target.health > prevHealth) {
+                    this.clearPoisonFromEntity(target);
+                    if (target.minefieldProfile) {
+                      this.mineOnDamage(target, entity.id, 'HEALING');
+                    }
                   }
                 }
-              } else {
-                // Self-heal mode.
+              } else if (entity.health < entity.maxHealth) {
+                // Self-heal mode — only when entity is damaged.
                 const prevHealth = entity.health;
                 entity.health = Math.min(entity.maxHealth, entity.health + prof.healingAmount);
-                // Source parity: healing triggers mineOnDamage(HEALING) for virtual mine recalculation.
-                if (entity.minefieldProfile && entity.health > prevHealth) {
-                  this.mineOnDamage(entity, entity.id, 'HEALING');
+                if (entity.health > prevHealth) {
+                  this.clearPoisonFromEntity(entity);
+                  if (entity.minefieldProfile) {
+                    this.mineOnDamage(entity, entity.id, 'HEALING');
+                  }
                 }
               }
               entity.autoHealNextFrame = this.frameCounter + prof.healingDelayFrames;
@@ -12531,8 +12771,12 @@ export class GameLogicSubsystem implements Subsystem {
           && BASE_REGEN_HEALTH_PERCENT_PER_SECOND > 0) {
         if (this.frameCounter >= entity.baseRegenDelayUntilFrame) {
           if (this.frameCounter % BASE_REGEN_INTERVAL === 0) {
+            const prevHealth = entity.health;
             const amount = BASE_REGEN_INTERVAL * entity.maxHealth * BASE_REGEN_HEALTH_PERCENT_PER_SECOND / LOGICFRAMES_PER_SECOND;
             entity.health = Math.min(entity.maxHealth, entity.health + amount);
+            if (entity.health > prevHealth) {
+              this.clearPoisonFromEntity(entity);
+            }
           }
         }
       }
@@ -12587,9 +12831,13 @@ export class GameLogicSubsystem implements Subsystem {
       target.soleHealingBenefactorExpirationFrame = now + duration;
       const prevHealth = target.health;
       target.health = Math.min(target.maxHealth, target.health + amount);
-      // Source parity: healing triggers onDamage(HEALING) which recalculates virtual mines.
-      if (target.minefieldProfile && target.health > prevHealth) {
-        this.mineOnDamage(target, sourceId, 'HEALING');
+      if (target.health > prevHealth) {
+        // Source parity: PoisonedBehavior::onHealing clears poison on any healing.
+        this.clearPoisonFromEntity(target);
+        // Source parity: healing triggers onDamage(HEALING) which recalculates virtual mines.
+        if (target.minefieldProfile) {
+          this.mineOnDamage(target, sourceId, 'HEALING');
+        }
       }
     }
   }
@@ -13494,7 +13742,11 @@ export class GameLogicSubsystem implements Subsystem {
         if (target.destroyed || amount <= 0) {
           return;
         }
+        const prevHealth = target.health;
         target.health = Math.min(target.maxHealth, target.health + amount);
+        if (target.health > prevHealth) {
+          this.clearPoisonFromEntity(target);
+        }
       },
       depositCredits: (side, amount) => {
         depositSideCreditsImpl(this.sideCredits, this.normalizeSide(side), amount);
@@ -20162,32 +20414,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: DieMuxData::isDieApplicable — check if a slow death profile matches.
    */
   private isSlowDeathApplicable(entity: MapEntity, profile: SlowDeathProfile): boolean {
-    // DeathTypes filter (empty = all death types accepted).
-    // Simplified: we don't track specific death types yet, so empty means applicable.
-    // If deathTypes is non-empty, it requires specific death types to match — for now
-    // we accept all unless NONE is the only type.
-    if (profile.deathTypes.size > 0 && profile.deathTypes.has('NONE') && profile.deathTypes.size === 1) {
-      return false;
-    }
-
-    // VeterancyLevels filter (empty = all levels accepted).
-    if (profile.veterancyLevels.size > 0) {
-      const levelNames = ['REGULAR', 'VETERAN', 'ELITE', 'HEROIC'] as const;
-      const entityLevel = levelNames[entity.experienceState.currentLevel] ?? 'REGULAR';
-      if (!profile.veterancyLevels.has(entityLevel)) return false;
-    }
-
-    // ExemptStatus — entity must NOT have any of these flags.
-    for (const status of profile.exemptStatus) {
-      if (entity.objectStatusFlags.has(status)) return false;
-    }
-
-    // RequiredStatus — entity must have ALL of these flags.
-    for (const status of profile.requiredStatus) {
-      if (!entity.objectStatusFlags.has(status)) return false;
-    }
-
-    return true;
+    return this.isDieModuleApplicable(entity, profile);
   }
 
   /**
@@ -20275,6 +20502,120 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.frameCounter < entity.deletionDieFrame) continue;
       // Source parity: destroyObject — instant silent removal (NOT kill).
       this.silentDestroyEntity(entity.id);
+    }
+  }
+
+  /**
+   * Source parity: StickyBombUpdate::update — track sticky bomb positions and handle
+   * target death. C++ file: StickyBombUpdate.cpp lines 166-216.
+   */
+  private updateStickyBombs(): void {
+    for (const bomb of this.spawnedEntities.values()) {
+      if (bomb.destroyed || !bomb.stickyBombProfile || bomb.stickyBombTargetId === 0) continue;
+
+      const target = this.spawnedEntities.get(bomb.stickyBombTargetId);
+      if (!target || target.destroyed) {
+        // C++ parity: if target dies, destroy bomb silently (detonation handled
+        // by checkAndDetonateBoobyTrap in the target's death path).
+        this.silentDestroyEntity(bomb.id);
+        continue;
+      }
+
+      // Track target position.
+      if (target.kindOf.has('IMMOBILE')) {
+        // Buildings: keep bomb at current XZ, ground level (for mine-clearing units).
+        // Z is unchanged — stays where initially placed.
+      } else {
+        // Mobile targets: follow target position + offsetZ.
+        bomb.x = target.x;
+        bomb.z = target.z;
+        // bomb.y would be target.y + offsetZ if we had vertical positioning.
+      }
+    }
+  }
+
+  /**
+   * Source parity: StickyBombUpdate::detonate — fire geometry-scaled damage and kill bomb.
+   * C++ file: StickyBombUpdate.cpp lines 231-286.
+   * Called from checkAndDetonateBoobyTrap (target dies) or directly for remote detonation.
+   * The actual damage is applied in executeStickyBombDetonationDamage, called from
+   * markEntityDestroyed to handle both explicit detonation and LifetimeUpdate death.
+   */
+  private detonateStickyBomb(bombId: number): void {
+    const bomb = this.spawnedEntities.get(bombId);
+    if (!bomb || bomb.destroyed || !bomb.stickyBombProfile) return;
+
+    // Kill the bomb — markEntityDestroyed will call executeStickyBombDetonationDamage.
+    this.markEntityDestroyed(bomb.id, bomb.id);
+  }
+
+  /**
+   * Execute sticky bomb geometry-scaled damage. Called from markEntityDestroyed
+   * so it fires both when the bomb is explicitly detonated and when it dies from
+   * LifetimeUpdate. C++ file: StickyBombUpdate.cpp lines 231-286.
+   */
+  private executeStickyBombDetonationDamage(bomb: MapEntity): void {
+    const prof = bomb.stickyBombProfile;
+    if (!prof || bomb.stickyBombTargetId === 0) return;
+
+    const targetId = bomb.stickyBombTargetId;
+    // Clear target ID before applying damage to prevent infinite recursion:
+    // detonation damage may kill the target → target death → checkAndDetonateBoobyTrap
+    // → would find this bomb again if targetId wasn't cleared.
+    bomb.stickyBombTargetId = 0;
+
+    const target = this.spawnedEntities.get(targetId);
+
+    // Geometry-based damage: weapon damage radius scales with target bounding circle.
+    if (prof.geometryBasedDamageWeaponName && target && !target.destroyed) {
+      const weaponDef = this.iniDataRegistry?.getWeapon(prof.geometryBasedDamageWeaponName);
+      if (weaponDef) {
+        const primaryDamage = readNumericField(weaponDef.fields, ['PrimaryDamage']) ?? 0;
+        const primaryDamageRadius = readNumericField(weaponDef.fields, ['PrimaryDamageRadius']) ?? 0;
+        const damageType = readStringField(weaponDef.fields, ['DamageType'])?.toUpperCase() ?? 'EXPLOSION';
+        const targetRadius = target.obstacleGeometry?.majorRadius ?? 0;
+        const baseRadius = primaryDamageRadius + targetRadius;
+        const radiusSq = baseRadius * baseRadius;
+
+        for (const victim of this.spawnedEntities.values()) {
+          if (victim.destroyed || !victim.canTakeDamage) continue;
+          const dx = victim.x - target.x;
+          const dz = victim.z - target.z;
+          if (dx * dx + dz * dz <= radiusSq) {
+            this.applyWeaponDamageAmount(bomb.id, victim, primaryDamage, damageType);
+          }
+        }
+      }
+    }
+
+    // Clear BOOBY_TRAPPED status on the target.
+    if (bomb.kindOf.has('BOOBY_TRAP') && target && !target.destroyed) {
+      target.objectStatusFlags.delete('BOOBY_TRAPPED');
+    }
+  }
+
+  /**
+   * Source parity: Object::checkAndDetonateBoobyTrap — find and detonate sticky bombs
+   * attached to a target entity. Called when target dies, enters container, etc.
+   * C++ file: Object.cpp lines 934-975.
+   */
+  private checkAndDetonateBoobyTrap(targetId: number): void {
+    const target = this.spawnedEntities.get(targetId);
+    if (!target?.objectStatusFlags.has('BOOBY_TRAPPED')) return;
+
+    for (const bomb of this.spawnedEntities.values()) {
+      if (bomb.destroyed || !bomb.stickyBombProfile) continue;
+      if (bomb.stickyBombTargetId !== targetId) continue;
+      if (!bomb.kindOf.has('BOOBY_TRAP')) continue;
+
+      // Source parity: C++ Object.cpp line 966 — "Friends don't touch friends' boobies."
+      // Don't detonate if the dying target is now an ally of the bomb's owner (e.g., after defection).
+      if (this.getTeamRelationshipBySides(bomb.side ?? '', target.side ?? '') === RELATIONSHIP_ALLIES) {
+        continue;
+      }
+
+      this.detonateStickyBomb(bomb.id);
+      break; // One detonation per call.
     }
   }
 
@@ -20400,6 +20741,26 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed) {
       return;
     }
+
+    // Source parity: Object::m_hasDiedAlready — prevent re-entrant death pipeline.
+    // Death effects (sticky bomb detonation, InstantDeathBehavior weapons) can kill other
+    // entities, which may cascade back. Guard against processing the same entity twice.
+    if (this.dyingEntityIds.has(entityId)) {
+      return;
+    }
+    this.dyingEntityIds.add(entityId);
+
+    // Source parity: Object::onDie calls checkAndDetonateBoobyTrap before die modules.
+    // C++ file: Object.cpp line 4575.
+    this.checkAndDetonateBoobyTrap(entityId);
+
+    // Source parity: StickyBombUpdate die module — if this entity IS a sticky bomb,
+    // execute its detonation damage before the bomb is marked destroyed.
+    // In C++, a die module calls StickyBombUpdate::detonate() on bomb death.
+    if (entity.stickyBombProfile && entity.stickyBombTargetId !== 0) {
+      this.executeStickyBombDetonationDamage(entity);
+    }
+
     // Emit entity destroyed visual event.
     this.visualEventBuffer.push({
       type: 'ENTITY_DESTROYED',
@@ -20441,6 +20802,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: CreateObjectDie / SlowDeathBehavior — execute death OCLs.
     this.executeDeathOCLs(entity);
+
+    // Source parity: InstantDeathBehavior::onDie — fire matching die module effects.
+    this.executeInstantDeathModules(entity);
 
     // Source parity: CreateCrateDie::onDie — spawn salvage crate on death.
     this.trySpawnCrateOnDeath(entity, attackerId);
@@ -20530,6 +20894,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.animationState = 'DIE';
     // Source parity: upgrade modules clean up side state via removeEntityUpgrade/onDelete parity.
     entity.destroyed = true;
+    this.dyingEntityIds.delete(entityId);
     entity.moving = false;
     entity.moveTarget = null;
     entity.movePath = [];
@@ -20729,6 +21094,77 @@ export class GameLogicSubsystem implements Subsystem {
     for (const oclName of entity.deathOCLNames) {
       this.executeOCL(oclName, entity);
     }
+  }
+
+  /**
+   * Source parity: InstantDeathBehavior::onDie — execute all matching die module effects.
+   * Each profile checks DieMuxData filters (DeathTypes, VeterancyLevels, ExemptStatus,
+   * RequiredStatus). Matching profiles fire one random OCL and one random Weapon.
+   * C++ file: InstantDeathBehavior.cpp lines 123-175.
+   */
+  private executeInstantDeathModules(entity: MapEntity): void {
+    for (const profile of entity.instantDeathProfiles) {
+      if (!this.isDieModuleApplicable(entity, profile)) continue;
+
+      // Fire one random OCL from the list.
+      if (profile.oclNames.length > 0) {
+        const idx = profile.oclNames.length === 1 ? 0
+          : this.gameRandom.nextRange(0, profile.oclNames.length - 1);
+        const oclName = profile.oclNames[idx];
+        if (oclName) {
+          this.executeOCL(oclName, entity);
+        }
+      }
+
+      // Fire one random weapon from the list.
+      if (profile.weaponNames.length > 0) {
+        const idx = profile.weaponNames.length === 1 ? 0
+          : this.gameRandom.nextRange(0, profile.weaponNames.length - 1);
+        const weaponName = profile.weaponNames[idx];
+        if (weaponName) {
+          const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
+          if (weaponDef) {
+            this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: DieMuxData::isDieApplicable — check if a die module should fire
+   * based on death type, veterancy level, exempt/required status.
+   * C++ file: DieModule.cpp lines 71-91.
+   */
+  private isDieModuleApplicable(entity: MapEntity, profile: {
+    deathTypes: Set<string>;
+    veterancyLevels: Set<string>;
+    exemptStatus: Set<string>;
+    requiredStatus: Set<string>;
+  }): boolean {
+    // DeathTypes filter (empty = all death types accepted).
+    if (profile.deathTypes.size > 0 && profile.deathTypes.has('NONE') && profile.deathTypes.size === 1) {
+      return false;
+    }
+
+    // VeterancyLevels filter (empty = all levels accepted).
+    if (profile.veterancyLevels.size > 0) {
+      const levelNames = ['REGULAR', 'VETERAN', 'ELITE', 'HEROIC'] as const;
+      const entityLevel = levelNames[entity.experienceState.currentLevel] ?? 'REGULAR';
+      if (!profile.veterancyLevels.has(entityLevel)) return false;
+    }
+
+    // ExemptStatus — entity must NOT have any of these flags.
+    for (const status of profile.exemptStatus) {
+      if (entity.objectStatusFlags.has(status)) return false;
+    }
+
+    // RequiredStatus — entity must have ALL of these flags.
+    for (const status of profile.requiredStatus) {
+      if (!entity.objectStatusFlags.has(status)) return false;
+    }
+
+    return true;
   }
 
   // ── EVA Announcer system ──

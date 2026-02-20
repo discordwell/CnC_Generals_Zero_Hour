@@ -1,5 +1,12 @@
 # Old Session Summaries
 
+## 2026-02-20T19:00Z — BattlePlanUpdate System (Task #88)
+- Task #88: USA Strategy Center BattlePlanUpdate with full C++ source parity — committed a3a1872
+  - BattlePlanProfile INI: Bombardment/HoldTheLine/SearchAndDestroy bonus flags + scalars
+  - State machine: IDLE → UNPACKING → ACTIVE → PACKING → IDLE with timed transitions
+  - Reference-counted bonuses via sideBattlePlanBonuses (0→1 apply, 1→0 remove)
+  - 7 tests — All 1106 tests pass, clean build
+
 ## 2026-02-20T17:50Z — INI-Driven Stealth/Detection System + Code Review Fixes (Tasks #85-87)
 - Tasks #85-87: INI-driven stealth and detection system with C++ StealthUpdate/StealthDetectorUpdate parity
   - StealthProfile + DetectorProfile INI parsing, 9 forbidden condition tokens, detection rate throttle
