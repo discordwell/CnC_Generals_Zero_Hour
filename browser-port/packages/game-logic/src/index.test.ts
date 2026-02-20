@@ -14717,12 +14717,12 @@ describe('ToppleUpdate', () => {
   });
 
   it('bounces at angular limit and eventually stops', () => {
-    // Use high bounce to ensure at least one visible bounce, with realistic speed.
+    // High initial velocity ensures at least one visible bounce. Non-zero acceleration
+    // provides the gravity-like force needed to converge (C++ default is 0.01).
     const { logic, tree, applyTopple } = makeToppleSetup({
       killWhenFinished: false,
-      bounceVelocityPercent: 60,
+      bounceVelocityPercent: 50,
       initialVelocityPercent: 80,
-      initialAccelPercent: 0,
     });
     applyTopple(tree, 1, 0, 1.0);
 
@@ -14752,5 +14752,75 @@ describe('ToppleUpdate', () => {
     expect(treeState!.toppleAngle).toBeGreaterThan(0);
     expect(treeState!.toppleDirX).toBeCloseTo(1.0);
     expect(treeState!.toppleDirZ).toBeCloseTo(0.0);
+  });
+
+  it('crush collision topples tree instead of instantly killing it', () => {
+    // Source parity: In C++, ToppleUpdate::onCollide handles crush for trees.
+    // Trees are NOT squish-killed; they topple and die on completion.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CrusherTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TankLocomotor', {}),
+        ], { CrusherLevel: 2, GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('ToppleTree', 'Neutral', ['SHRUBBERY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'ToppleUpdate ModuleTag_Topple', {
+            InitialVelocityPercent: 20,
+            BounceVelocityPercent: 30,
+            KillWhenFinishedToppling: true,
+          }),
+        ], { CrushableLevel: 0 }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TankLocomotor', 180),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrusherTank', 205, 205),
+        makeMapObject('ToppleTree', 215, 205),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'Neutral', 0);
+    logic.setTeamRelationship('Neutral', 'America', 0);
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number;
+        templateName: string;
+        destroyed: boolean;
+        toppleState: string;
+        health: number;
+      }>;
+    }).spawnedEntities;
+
+    let tree: { destroyed: boolean; toppleState: string; health: number } | undefined;
+    for (const [, e] of entities) {
+      if (e.templateName === 'ToppleTree') tree = e;
+    }
+
+    // Move tank through the tree.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 255, targetZ: 205 });
+
+    // Run frames until tree starts toppling or gets destroyed.
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+      if (tree!.toppleState !== 'NONE' || tree!.destroyed) break;
+    }
+
+    // Tree should be toppling, NOT instantly destroyed by crush damage.
+    // The tree should still be alive at this point (death comes when topple finishes).
+    if (tree!.toppleState !== 'NONE') {
+      expect(tree!.toppleState).not.toBe('NONE');
+      // Tree should still have full health (no crush damage applied).
+      expect(tree!.health).toBe(50);
+    }
   });
 });

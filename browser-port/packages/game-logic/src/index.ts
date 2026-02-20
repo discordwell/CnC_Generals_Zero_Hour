@@ -6738,12 +6738,14 @@ export class GameLogicSubsystem implements Subsystem {
       if (blockType === 'BEHAVIOR') {
         const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
         if (moduleType === 'TOPPLEUPDATE') {
-          const parsePercent = (raw: number | null | undefined): number =>
-            raw != null ? raw / 100 : 0;
+          // Source parity: C++ defaults are 0.2f, 0.01f, 0.3f (set in constructor).
+          // Use null to distinguish "field not present" from "field explicitly set to 0".
+          const parsePercent = (raw: number | null | undefined): number | null =>
+            raw != null ? raw / 100 : null;
           profile = {
-            initialVelocityPercent: parsePercent(readNumericField(block.fields, ['InitialVelocityPercent'])) || 0.20,
-            initialAccelPercent: parsePercent(readNumericField(block.fields, ['InitialAccelPercent'])) || 0.01,
-            bounceVelocityPercent: parsePercent(readNumericField(block.fields, ['BounceVelocityPercent'])) || 0.30,
+            initialVelocityPercent: parsePercent(readNumericField(block.fields, ['InitialVelocityPercent'])) ?? 0.20,
+            initialAccelPercent: parsePercent(readNumericField(block.fields, ['InitialAccelPercent'])) ?? 0.01,
+            bounceVelocityPercent: parsePercent(readNumericField(block.fields, ['BounceVelocityPercent'])) ?? 0.30,
             killWhenFinishedToppling: readBooleanField(block.fields, ['KillWhenFinishedToppling']) ?? true,
             killWhenStartToppling: readBooleanField(block.fields, ['KillWhenStartToppling']) ?? false,
             toppleLeftOrRightOnly: readBooleanField(block.fields, ['ToppleLeftOrRightOnly']) ?? false,
@@ -18656,12 +18658,33 @@ export class GameLogicSubsystem implements Subsystem {
     const profile = entity.toppleProfile;
     if (!profile) return;
     if (entity.toppleState !== 'NONE') return; // already toppling
+    // Source parity: isEffectivelyDead() guard — don't topple dead/dying entities.
+    if (entity.destroyed || entity.slowDeathState) return;
 
     // Normalize direction.
     const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
     if (len < 0.001) return;
-    entity.toppleDirX = dirX / len;
-    entity.toppleDirZ = dirZ / len;
+
+    let normDirX = dirX / len;
+    let normDirZ = dirZ / len;
+
+    // Source parity: ToppleLeftOrRightOnly — constrain topple direction to perpendicular
+    // to the entity's current orientation (for fence-like objects).
+    if (profile.toppleLeftOrRightOnly) {
+      const facingX = Math.sin(entity.rotationY);
+      const facingZ = -Math.cos(entity.rotationY);
+      const dot = normDirX * facingX + normDirZ * facingZ;
+      // Remove the forward/backward component, keeping only the left/right component.
+      normDirX -= dot * facingX;
+      normDirZ -= dot * facingZ;
+      const sideLen = Math.sqrt(normDirX * normDirX + normDirZ * normDirZ);
+      if (sideLen < 0.001) return;
+      normDirX /= sideLen;
+      normDirZ /= sideLen;
+    }
+
+    entity.toppleDirX = normDirX;
+    entity.toppleDirZ = normDirZ;
     entity.toppleSpeed = speed;
     entity.toppleAngularVelocity = speed * profile.initialVelocityPercent;
     entity.toppleAngularAccumulation = 0;
@@ -20238,13 +20261,15 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
 
-        // Source parity: CRUSH damage uses HUGE_DAMAGE_AMOUNT (guaranteed kill).
-        this.applyWeaponDamageAmount(mover.id, target, HUGE_DAMAGE_AMOUNT, 'CRUSH');
-
-        // Source parity: ToppleUpdate — if target has topple profile, apply topple force.
+        // Source parity: ToppleUpdate::onCollide — entities with topple profile get toppled
+        // instead of crushed. Death is handled by topple completion (KillWhenFinishedToppling).
+        // In C++, ToppleUpdate is the collide handler, not SquishCollide.
         if (target.toppleProfile && target.toppleState === 'NONE') {
           const moverSpeed = mover.speed > 0 ? mover.speed : 1.0;
           this.applyTopplingForce(target, dx, dz, moverSpeed);
+        } else {
+          // Source parity: CRUSH damage uses HUGE_DAMAGE_AMOUNT (guaranteed kill).
+          this.applyWeaponDamageAmount(mover.id, target, HUGE_DAMAGE_AMOUNT, 'CRUSH');
         }
       }
     }
