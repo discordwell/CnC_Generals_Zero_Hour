@@ -5618,7 +5618,10 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(keepAttacking).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
 
     const stopEarly = runProjectileSneakyPersistAfterStopTimeline(2);
-    expect(stopEarly).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 60, 60, 60]);
+    // After persist expires, a previously sneaky-offset projectile still in flight can collide
+    // with the real entity position (source parity: C++ projectiles are physical objects that
+    // detect collisions each frame along their flight path).
+    expect(stopEarly).toEqual([100, 100, 100, 100, 100, 100, 60, 60, 60, 20, 20, 20]);
   });
 
   it('keeps projectile-delivery timing and splash deterministic across repeated runs', () => {
@@ -5723,6 +5726,192 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       selfPositionScatter: runDamageAtSelfScatterTargetTimeline(true),
     };
     expect(first).toEqual(second);
+  });
+
+  it('detonates projectile early when it collides with an entity along the flight path', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    // Attacker at 0,0 fires a slow projectile at a target at 50,0.
+    // A blocker sits at 25,0 (halfway). The projectile should collide mid-flight.
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SlowMissile'] }),
+    ]);
+    const blockerDef = makeObjectDef('Blocker', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    const targetDef = makeObjectDef('Target', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    // DummyProjectile object for the projectile weapon.
+    const projectileDef = makeObjectDef('SlowMissileProjectile', 'Neutral', ['PROJECTILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+    ]);
+
+    const weaponDef = makeWeaponDef('SlowMissile', {
+      PrimaryDamage: 50,
+      PrimaryDamageRadius: 0,
+      AttackRange: 200,
+      WeaponSpeed: 5, // 5 units/frame → 10 frames to reach 50 units away
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'SlowMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, blockerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('Attacker', 0, 0),
+      makeMapObject('Blocker', 25, 0),  // Halfway along the flight path
+      makeMapObject('Target', 50, 0),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3 });
+
+    // Collect health timelines for both blocker and target.
+    const blockerHealth: number[] = [];
+    const targetHealth: number[] = [];
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+      const blocker = [...(logic as any).spawnedEntities.values()].find(
+        (e: any) => e.templateName === 'Blocker',
+      );
+      const target = [...(logic as any).spawnedEntities.values()].find(
+        (e: any) => e.templateName === 'Target',
+      );
+      blockerHealth.push(blocker ? blocker.health : 0);
+      targetHealth.push(target ? target.health : 0);
+    }
+
+    // The projectile should hit the blocker before reaching the target.
+    // Blocker is at ~25 units, speed is 5/frame → hits around frame 5.
+    // Target at 50 units should NOT take damage.
+    expect(blockerHealth[blockerHealth.length - 1]).toBeLessThan(200);
+    expect(targetHealth[targetHealth.length - 1]).toBe(200);
+  });
+
+  it('projectile passes through allies without collision when ProjectileCollidesWith excludes ALLIES', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    // Attacker fires through an allied unit. Projectile should pass through.
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SlowMissile'] }),
+    ]);
+    const allyDef = makeObjectDef('AllyBlocker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    const targetDef = makeObjectDef('Target', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    const projectileDef = makeObjectDef('SlowMissileProjectile', 'Neutral', ['PROJECTILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+    ]);
+
+    const weaponDef = makeWeaponDef('SlowMissile', {
+      PrimaryDamage: 50,
+      PrimaryDamageRadius: 0,
+      AttackRange: 200,
+      WeaponSpeed: 5,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'SlowMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES', // Does NOT include ALLIES
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, allyDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('Attacker', 0, 0),
+      makeMapObject('AllyBlocker', 25, 0),
+      makeMapObject('Target', 50, 0),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3 });
+
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    const ally = [...(logic as any).spawnedEntities.values()].find(
+      (e: any) => e.templateName === 'AllyBlocker',
+    );
+    const target = [...(logic as any).spawnedEntities.values()].find(
+      (e: any) => e.templateName === 'Target',
+    );
+
+    // Ally should be unharmed; target should take damage from the projectile.
+    expect(ally.health).toBe(200);
+    expect(target.health).toBeLessThan(200);
+  });
+
+  it('does not collide with the launcher itself during flight', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    // Attacker fires at a distant target. Ensure the projectile doesn't hit the
+    // attacker's own collision radius (launcher exclusion).
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SlowMissile'] }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+    const targetDef = makeObjectDef('Target', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    const projectileDef = makeObjectDef('SlowMissileProjectile', 'Neutral', ['PROJECTILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+    ]);
+
+    const weaponDef = makeWeaponDef('SlowMissile', {
+      PrimaryDamage: 50,
+      PrimaryDamageRadius: 0,
+      AttackRange: 200,
+      WeaponSpeed: 5,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'SlowMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES ALLIES', // Collides with everything
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('Attacker', 0, 0),
+      makeMapObject('Target', 50, 0),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    const attacker = [...(logic as any).spawnedEntities.values()].find(
+      (e: any) => e.templateName === 'Attacker',
+    );
+    const target = [...(logic as any).spawnedEntities.values()].find(
+      (e: any) => e.templateName === 'Target',
+    );
+
+    // Attacker should not be damaged by its own projectile.
+    expect(attacker.health).toBe(100);
+    // Target should take damage.
+    expect(target.health).toBeLessThan(200);
   });
 
   it('keeps DamageDealtAtSelfPosition anchored at source even when ScatterTarget offsets are present', () => {

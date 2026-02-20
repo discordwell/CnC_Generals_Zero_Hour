@@ -1934,6 +1934,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSellingEntities();
     this.updateRenderStates();
     this.updateWeaponIdleAutoReload();
+    this.updateProjectileFlightCollisions();
     this.updatePendingWeaponDamage();
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
@@ -14298,6 +14299,103 @@ export class GameLogicSubsystem implements Subsystem {
       },
       hugeDamageAmount: HUGE_DAMAGE_AMOUNT,
     };
+  }
+
+  /**
+   * Source parity: DumbProjectileBehavior::update() / PhysicsBehavior collision detection.
+   * For each in-flight projectile, interpolate the current position and check for
+   * entity collisions using shouldProjectileCollideWithEntity(). If a collision is
+   * detected before the pre-calculated impact frame, early-detonate the projectile
+   * at the collision point.
+   */
+  private updateProjectileFlightCollisions(): void {
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.delivery !== 'PROJECTILE') continue;
+      if (event.executeFrame <= this.frameCounter) continue;
+
+      const totalFrames = event.executeFrame - event.launchFrame;
+      if (totalFrames <= 0) continue;
+
+      const elapsed = this.frameCounter - event.launchFrame;
+      const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
+
+      // Interpolate the projectile's current position.
+      let projX: number, projZ: number;
+      if (event.hasBezierArc) {
+        const p0x = event.sourceX, p0z = event.sourceZ;
+        const p3x = event.impactX, p3z = event.impactZ;
+        const dx = p3x - p0x, dz = p3z - p0z;
+        const dist = Math.hypot(dx, dz);
+        const nx = dist > 0 ? dx / dist : 0;
+        const nz = dist > 0 ? dz / dist : 0;
+        const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
+        const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
+        const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
+        const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
+        projX = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
+        projZ = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+      } else {
+        projX = event.sourceX + (event.impactX - event.sourceX) * progress;
+        projZ = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+      }
+
+      const launcher = this.spawnedEntities.get(event.sourceEntityId);
+      const weapon = event.weapon;
+
+      // Check each entity for collision with the projectile's current position.
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate.destroyed || !candidate.canTakeDamage) continue;
+        // Skip the intended victim — damage will be applied at the final impact point.
+        if (event.primaryVictimEntityId !== null && candidate.id === event.primaryVictimEntityId) continue;
+
+        const collisionRadius = resolveProjectilePointCollisionRadiusImpl(candidate, MAP_XY_FACTOR);
+        const dx = projX - candidate.x;
+        const dz = projZ - candidate.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq > collisionRadius * collisionRadius) continue;
+
+        // Verify this collision is valid per shouldProjectileCollideWithEntity rules.
+        const shouldCollide = shouldProjectileCollideWithEntityImpl(
+          launcher ?? null,
+          weapon,
+          candidate,
+          event.primaryVictimEntityId,
+          (l) => this.resolveProjectileLauncherContainer(l),
+          (e) => this.resolveEntityKindOfSet(e),
+          (entity, kindOf, victimId) => isAirfieldReservedForProjectileVictimImpl(
+            entity, kindOf, victimId,
+            (entityId) => this.spawnedEntities.get(entityId) ?? null,
+          ),
+          (e) => this.entityHasSneakyTargetingOffset(e),
+          (l, e) => this.getTeamRelationship(l, e),
+          (side) => this.normalizeSide(side),
+          (e) => this.resolveEntityFenceWidth(e),
+          { allies: RELATIONSHIP_ALLIES, enemies: RELATIONSHIP_ENEMIES },
+          {
+            collideAllies: WEAPON_COLLIDE_ALLIES,
+            collideEnemies: WEAPON_COLLIDE_ENEMIES,
+            collideControlledStructures: WEAPON_COLLIDE_CONTROLLED_STRUCTURES,
+            collideStructures: WEAPON_COLLIDE_STRUCTURES,
+            collideShrubbery: WEAPON_COLLIDE_SHRUBBERY,
+            collideProjectile: WEAPON_COLLIDE_PROJECTILE,
+            collideWalls: WEAPON_COLLIDE_WALLS,
+            collideSmallMissiles: WEAPON_COLLIDE_SMALL_MISSILES,
+            collideBallisticMissiles: WEAPON_COLLIDE_BALLISTIC_MISSILES,
+          },
+        );
+
+        if (shouldCollide) {
+          // Early-detonate: redirect impact to the collision point and resolve this frame.
+          event.impactX = projX;
+          event.impactZ = projZ;
+          event.impactY = this.resolveGroundHeight(projX, projZ);
+          event.executeFrame = this.frameCounter;
+          // Redirect damage to the collided entity instead of the original victim.
+          event.primaryVictimEntityId = candidate.id;
+          break;
+        }
+      }
+    }
   }
 
   private updatePendingWeaponDamage(): void {
