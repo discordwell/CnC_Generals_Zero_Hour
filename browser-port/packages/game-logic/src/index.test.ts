@@ -12588,3 +12588,255 @@ describe('PointDefenseLaserUpdate', () => {
     expect(logic.getEntityState(2)!.health).toBe(1000);
   });
 });
+
+// ── HordeUpdate tests ────────────────────────────────────────────────────────
+
+describe('HordeUpdate', () => {
+  const WEAPON_BONUS_HORDE = 1 << 1;
+  const WEAPON_BONUS_NATIONALISM = 1 << 4;
+  const WEAPON_BONUS_FANATICISM = 1 << 23;
+
+  function makeHordeBlock(overrides: Record<string, unknown> = {}): IniBlock {
+    return {
+      type: 'Behavior',
+      name: 'HordeUpdate ModuleTag_Horde',
+      fields: {
+        KindOf: 'INFANTRY',
+        Count: 3,
+        Radius: 80,
+        UpdateRate: 100,
+        RubOffRadius: 20,
+        AlliesOnly: 'Yes',
+        ExactMatch: 'No',
+        AllowedNationalism: 'Yes',
+        ...overrides,
+      } as Record<string, string | number | boolean | string[] | number[]>,
+      blocks: [],
+    };
+  }
+
+  function makeHordeSetup(opts?: {
+    unitCount?: number;
+    hordeOverrides?: Record<string, unknown>;
+    mapWidth?: number;
+  }) {
+    const unitCount = opts?.unitCount ?? 3;
+    const hordeOverrides = opts?.hordeOverrides ?? {};
+    const mapWidth = opts?.mapWidth ?? 20;
+
+    const objects = [
+      makeObjectDef('HordeInfantry', 'China', ['INFANTRY'], [
+        makeHordeBlock(hordeOverrides),
+      ], { MaxHealth: 100 }),
+    ];
+
+    // Place units close together (cell 5,5 / 5,6 / 5,7 → within 20 world units of each other).
+    const mapObjects: MapObjectJSON[] = [];
+    for (let i = 0; i < unitCount; i++) {
+      mapObjects.push(makeMapObject('HordeInfantry', 5, 5 + i));
+    }
+
+    const scene = new THREE.Scene();
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, mapWidth, mapWidth), registry, makeHeightmap(mapWidth, mapWidth));
+
+    return { logic, registry };
+  }
+
+  it('grants HORDE weapon bonus when enough units are grouped', () => {
+    // 3 infantry within radius → all get HORDE bonus (minCount=3).
+    const { logic } = makeHordeSetup({ unitCount: 3 });
+
+    // Run enough frames for the staggered scan to trigger.
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // All 3 entities should have HORDE bonus.
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+    expect(logic.getEntityState(3)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+  });
+
+  it('does not grant HORDE bonus with too few units', () => {
+    // Only 2 infantry when minCount=3 → no HORDE bonus.
+    const { logic } = makeHordeSetup({ unitCount: 2 });
+
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+  });
+
+  it('removes HORDE bonus when unit is destroyed', () => {
+    const { logic } = makeHordeSetup({ unitCount: 3 });
+
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Verify horde is active.
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+
+    // Kill entity 3 to drop below threshold.
+    const priv = logic as unknown as { markEntityDestroyed: (id: number, attackerId: number) => void };
+    priv.markEntityDestroyed(3, 0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Entity 1 and 2 should lose HORDE bonus (only 2 alive, need 3).
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+  });
+
+  it('does not count enemy units toward horde when AlliesOnly is true', () => {
+    // 2 China infantry + 1 America "enemy" infantry → only 2 allies, not enough.
+    const objects = [
+      makeObjectDef('HordeInfantry', 'China', ['INFANTRY'], [makeHordeBlock()], { MaxHealth: 100 }),
+      makeObjectDef('EnemyInfantry', 'America', ['INFANTRY'], [makeHordeBlock()], { MaxHealth: 100 }),
+    ];
+    const mapObjects = [
+      makeMapObject('HordeInfantry', 5, 5),
+      makeMapObject('HordeInfantry', 5, 6),
+      makeMapObject('EnemyInfantry', 5, 7),
+    ];
+
+    const scene = new THREE.Scene();
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, 20, 20), registry, makeHeightmap(20, 20));
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Only 2 allied infantry → not enough for horde.
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+  });
+
+  it('does not count units outside scan range', () => {
+    // 3 infantry but one is far away (outside 80 radius).
+    // Positions are world coordinates: (5,5), (5,6), (5,100).
+    // Distance from (5,5) to (5,100) = 95 > 80 scan radius.
+    const objects = [
+      makeObjectDef('HordeInfantry', 'China', ['INFANTRY'], [makeHordeBlock()], { MaxHealth: 100 }),
+    ];
+    const mapObjects = [
+      makeMapObject('HordeInfantry', 5, 5),
+      makeMapObject('HordeInfantry', 5, 6),
+      makeMapObject('HordeInfantry', 5, 100), // Far away (95 units > 80 scan radius).
+    ];
+
+    const scene = new THREE.Scene();
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, 120, 120), registry, makeHeightmap(120, 120));
+
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Units 1 and 2 only have 1 neighbor each (each other) → not enough (need 2 neighbors).
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+    // Unit 3 is isolated (both other units are > 80 away).
+    expect(logic.getEntityState(3)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+  });
+
+  it('grants NATIONALISM bonus when horde is active and player has science', () => {
+    const { logic } = makeHordeSetup({ unitCount: 3 });
+
+    // Directly add nationalism science for China via private method.
+    // normalizeSide('China') = 'china' (lowercase), so use lowercase key.
+    const priv = logic as unknown as { addScienceToSide: (side: string, science: string) => boolean };
+    priv.addScienceToSide('china', 'SCIENCE_NATIONALISM');
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // All entities should have HORDE + NATIONALISM.
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_NATIONALISM).toBe(WEAPON_BONUS_NATIONALISM);
+    // No fanaticism without the upgrade.
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_FANATICISM).toBe(0);
+  });
+
+  it('grants FANATICISM bonus when both nationalism and fanaticism sciences are active', () => {
+    const { logic } = makeHordeSetup({ unitCount: 3 });
+
+    const priv = logic as unknown as { addScienceToSide: (side: string, science: string) => boolean };
+    priv.addScienceToSide('china', 'SCIENCE_NATIONALISM');
+    priv.addScienceToSide('china', 'SCIENCE_FANATICISM');
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_NATIONALISM).toBe(WEAPON_BONUS_NATIONALISM);
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_FANATICISM).toBe(WEAPON_BONUS_FANATICISM);
+  });
+
+  it('rub-off inheritance grants horde to nearby non-qualifying units', () => {
+    // 3 units qualify as true horde members. 4th unit placed close to them
+    // but it only has 2 neighbors within count range (needs 3). However,
+    // it's within rubOffRadius of a true horde member → inherits.
+    const objects = [
+      makeObjectDef('HordeInfantry', 'China', ['INFANTRY'], [
+        makeHordeBlock({ RubOffRadius: 30 }),
+      ], { MaxHealth: 100 }),
+    ];
+    // Place 3 close together (cell 5,5 / 5,6 / 5,7) → true horde members.
+    // Place 4th at cell 5,8 → within rubOffRadius of entity at cell 5,7 (10 units away).
+    // But 4th only has 2 neighbors in scan range (5,6 and 5,7) → not enough for minCount=3,
+    // but entity at 5,7 IS a true horde member and within rubOffRadius.
+    const mapObjects = [
+      makeMapObject('HordeInfantry', 5, 5),
+      makeMapObject('HordeInfantry', 5, 6),
+      makeMapObject('HordeInfantry', 5, 7),
+      makeMapObject('HordeInfantry', 5, 8),
+    ];
+
+    const scene = new THREE.Scene();
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, 20, 20), registry, makeHeightmap(20, 20));
+
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // All 4 should have HORDE bonus (3 true + 1 via rub-off).
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+    expect(logic.getEntityState(4)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(WEAPON_BONUS_HORDE);
+  });
+
+  it('kindOf filter rejects non-matching units', () => {
+    // HordeUpdate requires INFANTRY kindOf, but we place VEHICLE units nearby.
+    const objects = [
+      makeObjectDef('HordeInfantry', 'China', ['INFANTRY'], [
+        makeHordeBlock({ KindOf: 'INFANTRY' }),
+      ], { MaxHealth: 100 }),
+      makeObjectDef('Vehicle', 'China', ['VEHICLE'], [
+        makeHordeBlock({ KindOf: 'INFANTRY' }),
+      ], { MaxHealth: 100 }),
+    ];
+    const mapObjects = [
+      makeMapObject('HordeInfantry', 5, 5),
+      makeMapObject('Vehicle', 5, 6),
+      makeMapObject('Vehicle', 5, 7),
+    ];
+
+    const scene = new THREE.Scene();
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, 20, 20), registry, makeHeightmap(20, 20));
+
+    logic.update(0);
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // HordeInfantry only counts INFANTRY neighbors — vehicles don't count.
+    // Only 1 infantry (itself) → not enough for horde.
+    expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
+  });
+});

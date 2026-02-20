@@ -1445,6 +1445,15 @@ interface MapEntity {
   pdlTargetProjectileVisualId: number;
   /** Frame when the PDL weapon can fire again. */
   pdlNextShotFrame: number;
+
+  // ── Source parity: HordeUpdate — formation bonus system ──
+  hordeProfile: HordeUpdateProfile | null;
+  /** Frame when next horde membership scan should run. */
+  hordeNextCheckFrame: number;
+  /** Currently has horde bonus active. */
+  isInHorde: boolean;
+  /** Counted enough nearby units to be a true horde member (vs rub-off inheritance). */
+  isTrueHordeMember: boolean;
 }
 
 /**
@@ -1697,6 +1706,30 @@ interface PointDefenseLaserProfile {
   scanRange: number;
   /** Velocity prediction factor for out-of-range targets. */
   predictTargetVelocityFactor: number;
+}
+
+/**
+ * Source parity: HordeUpdate module — passive formation bonus for grouped units.
+ * When enough nearby units match the kindOf filter, the HORDE weapon bonus
+ * condition is set, granting damage/rate bonuses from the global weapon bonus table.
+ */
+interface HordeUpdateProfile {
+  /** Frames between expensive spatial scans. */
+  updateRate: number;
+  /** KindOf flags that count toward horde membership. */
+  kindOf: Set<string>;
+  /** Minimum count of nearby matching units (including self) for horde status. */
+  minCount: number;
+  /** Scan radius for counting nearby units (world units). */
+  minDist: number;
+  /** Source parity: RubOffRadius — inherit horde status from a nearby true horde member. */
+  rubOffRadius: number;
+  /** Only allied units count toward horde membership. */
+  alliesOnly: boolean;
+  /** Only exact-match template types count. */
+  exactMatch: boolean;
+  /** Allow NATIONALISM weapon bonus when in horde. */
+  allowedNationalism: boolean;
 }
 
 // Body damage state thresholds (source parity: GlobalData defaults).
@@ -2267,6 +2300,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSupplyChain();
     this.updateSkirmishAI();
     this.updateEva();
+    this.updateHorde();
     this.updateFireWhenDamagedContinuous();
     this.updateSellingEntities();
     this.updateRenderStates();
@@ -3983,6 +4017,11 @@ export class GameLogicSubsystem implements Subsystem {
       pdlNextScanFrame: 0,
       pdlTargetProjectileVisualId: 0,
       pdlNextShotFrame: 0,
+      // Horde formation bonus
+      hordeProfile: this.extractHordeUpdateProfile(objectDef),
+      hordeNextCheckFrame: 0,
+      isInHorde: false,
+      isTrueHordeMember: false,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -4011,6 +4050,13 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.pointDefenseLaserProfile) {
       const rate = Math.max(1, entity.pointDefenseLaserProfile.scanRate);
       entity.pdlNextScanFrame = this.frameCounter + this.gameRandom.nextRange(0, rate);
+    }
+
+    // Source parity: HordeUpdate init — stagger initial scan to spread load.
+    // C++ uses GameLogicRandomValue(1, delay) → [1, delay] inclusive.
+    if (entity.hordeProfile) {
+      const rate = Math.max(1, entity.hordeProfile.updateRate);
+      entity.hordeNextCheckFrame = this.frameCounter + this.gameRandom.nextRange(1, rate);
     }
 
     return entity;
@@ -6018,6 +6064,47 @@ export class GameLogicSubsystem implements Subsystem {
             scanRate: Math.max(1, this.msToLogicFrames(scanRateMs)),
             scanRange: readNumericField(block.fields, ['ScanRange']) ?? 0,
             predictTargetVelocityFactor: readNumericField(block.fields, ['PredictTargetVelocityFactor']) ?? 0,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: HordeUpdate — extract horde formation bonus config from INI.
+   */
+  private extractHordeUpdateProfile(objectDef: ObjectDef | undefined): HordeUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: HordeUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'HORDEUPDATE') {
+          const kindOfStr = readStringField(block.fields, ['KindOf']) ?? '';
+          const kindOf = new Set<string>();
+          for (const token of kindOfStr.split(/\s+/)) {
+            if (token) kindOf.add(token.toUpperCase());
+          }
+
+          const updateRateMs = readNumericField(block.fields, ['UpdateRate']) ?? 1000;
+          profile = {
+            updateRate: Math.max(1, this.msToLogicFrames(updateRateMs)),
+            kindOf,
+            minCount: readNumericField(block.fields, ['Count']) ?? 2,
+            minDist: readNumericField(block.fields, ['Radius']) ?? 100,
+            rubOffRadius: readNumericField(block.fields, ['RubOffRadius']) ?? 20,
+            alliesOnly: (readStringField(block.fields, ['AlliesOnly']) ?? 'Yes').toUpperCase() !== 'NO',
+            exactMatch: (readStringField(block.fields, ['ExactMatch']) ?? 'No').toUpperCase() === 'YES',
+            allowedNationalism: (readStringField(block.fields, ['AllowedNationalism']) ?? 'Yes').toUpperCase() !== 'NO',
           };
         }
       }
@@ -16798,6 +16885,132 @@ export class GameLogicSubsystem implements Subsystem {
         sourceEntityId: defender.id,
         projectileType: 'LASER',
       });
+    }
+  }
+
+  // ── HordeUpdate implementation ─────────────────────────────────────────
+
+  /**
+   * Source parity: HordeUpdate::update() — periodic spatial scan to detect
+   * nearby matching units. When enough units are grouped, sets HORDE weapon
+   * bonus condition, granting damage/rate bonuses. Also evaluates NATIONALISM
+   * and FANATICISM bonuses if the player has those upgrades.
+   */
+  private updateHorde(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.hordeProfile;
+      if (!profile) continue;
+
+      // Source parity: periodic expensive scan (staggered per entity).
+      if (this.frameCounter < entity.hordeNextCheckFrame) continue;
+      entity.hordeNextCheckFrame = this.frameCounter + profile.updateRate;
+
+      const wasInHorde = entity.isInHorde;
+      let join = false;
+      let trueHordeMember = false;
+
+      // Count nearby matching units (including self count implicitly via >= minCount-1).
+      let nearbyCount = 0;
+      const scanRangeSqr = profile.minDist * profile.minDist;
+      const rubOffRadiusSqr = profile.rubOffRadius * profile.rubOffRadius;
+      let nearbyTrueHordeMember = false;
+
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate === entity) continue;
+        if (candidate.destroyed || candidate.slowDeathState) continue;
+
+        // Source parity: PartitionFilterHordeMember checks.
+        // Must have HordeUpdate module.
+        if (!candidate.hordeProfile) continue;
+
+        // Source parity: ExactMatch check — same template name.
+        if (profile.exactMatch && entity.templateName !== candidate.templateName) continue;
+
+        // Source parity: KindOf filter — candidate must match ALL required kindOf flags.
+        // C++ uses isKindOfMulti() with KINDOFMASK_NONE which requires all bits in mustBeSet.
+        if (profile.kindOf.size > 0) {
+          let allMatch = true;
+          for (const k of profile.kindOf) {
+            if (!candidate.kindOf.has(k)) {
+              allMatch = false;
+              break;
+            }
+          }
+          if (!allMatch) continue;
+        }
+
+        // Source parity: AlliesOnly filter.
+        if (profile.alliesOnly) {
+          const rel = this.getTeamRelationshipBySides(
+            entity.side ?? '',
+            candidate.side ?? '',
+          );
+          if (rel !== RELATIONSHIP_ALLIES) continue;
+        }
+
+        // Distance check.
+        const dx = candidate.x - entity.x;
+        const dz = candidate.z - entity.z;
+        const distSqr = dx * dx + dz * dz;
+        if (distSqr > scanRangeSqr) continue;
+
+        nearbyCount++;
+
+        // Source parity: rub-off check — if any nearby matching unit is a true horde member
+        // within rubOffRadius, we inherit horde status even without enough count.
+        if (candidate.isTrueHordeMember && distSqr <= rubOffRadiusSqr) {
+          nearbyTrueHordeMember = true;
+        }
+      }
+
+      // Source parity: minCount includes self, so check >= minCount - 1 neighbors.
+      if (nearbyCount >= profile.minCount - 1) {
+        join = true;
+        trueHordeMember = true;
+      } else if (nearbyTrueHordeMember) {
+        // Source parity: rub-off inheritance — close enough to a true member.
+        join = true;
+      }
+
+      entity.isInHorde = join;
+      entity.isTrueHordeMember = trueHordeMember;
+
+      // Source parity: AIUpdateInterface::evaluateMoraleBonus() — always recalculate
+      // and write the correct flags (C++ is idempotent, not gated on change detection).
+      if (join) {
+        entity.weaponBonusConditionFlags |= WEAPON_BONUS_HORDE;
+      } else {
+        entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_HORDE;
+        entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_NATIONALISM;
+        entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
+      }
+
+      // Source parity: NATIONALISM/FANATICISM bonuses require horde + allowedNationalism + player science.
+      if (join) {
+        if (profile.allowedNationalism) {
+          const sideSciences = this.getSideScienceSet(this.normalizeSide(entity.side ?? ''));
+          const hasNationalism = sideSciences.has('SCIENCE_NATIONALISM')
+            || sideSciences.has('NATIONALISM');
+          const hasFanaticism = sideSciences.has('SCIENCE_FANATICISM')
+            || sideSciences.has('FANATICISM');
+          if (hasNationalism) {
+            entity.weaponBonusConditionFlags |= WEAPON_BONUS_NATIONALISM;
+            if (hasFanaticism) {
+              entity.weaponBonusConditionFlags |= WEAPON_BONUS_FANATICISM;
+            } else {
+              entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
+            }
+          } else {
+            entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_NATIONALISM;
+            entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
+          }
+        } else {
+          // Source parity: allowedNationalism=false forces nationalism/fanaticism off.
+          entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_NATIONALISM;
+          entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
+        }
+      }
     }
   }
 
