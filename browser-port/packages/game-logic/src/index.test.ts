@@ -10503,3 +10503,125 @@ describe('disabled container evacuation restrictions', () => {
     expect(infantry.garrisonContainerId).toBeNull();
   });
 });
+
+// ── DISABLED_UNDERPOWERED (power brown-out) tests ────────────────────────────
+
+describe('DISABLED_UNDERPOWERED power brown-out', () => {
+  function makePowerSetup() {
+    // Power plant: produces 5 energy, is POWERED itself.
+    const powerPlantDef = makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'POWERED'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], { EnergyBonus: 5 });
+
+    // Barracks: consumes 3 energy, is POWERED (will be disabled when underpowered).
+    const barracksDef = makeObjectDef('Barracks', 'America', ['STRUCTURE', 'POWERED'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], { EnergyBonus: -3 });
+
+    // Non-POWERED building: never gets DISABLED_UNDERPOWERED.
+    const wallDef = makeObjectDef('Wall', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const bundle = makeBundle({ objects: [powerPlantDef, barracksDef, wallDef], weapons: [] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    return { logic, bundle };
+  }
+
+  it('sets DISABLED_UNDERPOWERED on POWERED entities when power drops below consumption', () => {
+    // Source parity: Player::onPowerBrownOutChange + doPowerDisable.
+    const { logic, bundle } = makePowerSetup();
+    // Power plant produces 5, barracks consumes 3, barracks2 consumes 3 = 6 consumption, 5 production → brownout.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 50, 50),
+        makeMapObject('Barracks', 80, 50),
+        makeMapObject('Barracks', 80, 80),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    // Initial state: no brownout yet (check happens on update).
+    logic.update(1 / 30);
+
+    // Check power state: production=5, consumption=6 → brownout.
+    const state1 = logic.getEntityState(1)!;
+    const state2 = logic.getEntityState(2)!;
+    const state3 = logic.getEntityState(3)!;
+
+    // Power plant is POWERED so it gets DISABLED_UNDERPOWERED too.
+    expect(state1.statusFlags).toContain('DISABLED_UNDERPOWERED');
+    expect(state2.statusFlags).toContain('DISABLED_UNDERPOWERED');
+    expect(state3.statusFlags).toContain('DISABLED_UNDERPOWERED');
+  });
+
+  it('does NOT set DISABLED_UNDERPOWERED when power is sufficient', () => {
+    const { logic, bundle } = makePowerSetup();
+    // Power plant produces 5, barracks consumes 3 = sufficient power.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 50, 50),
+        makeMapObject('Barracks', 80, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.update(1 / 30);
+
+    const state1 = logic.getEntityState(1)!;
+    const state2 = logic.getEntityState(2)!;
+    expect(state1.statusFlags).not.toContain('DISABLED_UNDERPOWERED');
+    expect(state2.statusFlags).not.toContain('DISABLED_UNDERPOWERED');
+  });
+
+  it('does NOT set DISABLED_UNDERPOWERED on non-POWERED buildings', () => {
+    const { logic, bundle } = makePowerSetup();
+    // Even with brownout, Wall (no POWERED kindof) should not be disabled.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Barracks', 50, 50),
+        makeMapObject('Barracks', 80, 50),
+        makeMapObject('Wall', 80, 80),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.update(1 / 30);
+
+    // No power plant → 0 production, 6 consumption → brownout.
+    const barrState = logic.getEntityState(1)!;
+    const wallState = logic.getEntityState(3)!;
+    expect(barrState.statusFlags).toContain('DISABLED_UNDERPOWERED');
+    expect(wallState.statusFlags).not.toContain('DISABLED_UNDERPOWERED');
+  });
+
+  it('clears DISABLED_UNDERPOWERED when power is restored via destruction of consumer', () => {
+    const { logic, bundle } = makePowerSetup();
+    // Power plant (5), barracks (3), barracks (3) → brownout.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 50, 50),
+        makeMapObject('Barracks', 80, 50),
+        makeMapObject('Barracks', 80, 80),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)!.statusFlags).toContain('DISABLED_UNDERPOWERED');
+
+    // Destroy one barracks to restore power balance: 5 production, 3 consumption → sufficient.
+    const priv = logic as unknown as { markEntityDestroyed: (id: number, attackerId: number) => void };
+    priv.markEntityDestroyed(3, -1);
+    logic.update(1 / 30);
+
+    // Power should be restored.
+    expect(logic.getEntityState(1)!.statusFlags).not.toContain('DISABLED_UNDERPOWERED');
+    expect(logic.getEntityState(2)!.statusFlags).not.toContain('DISABLED_UNDERPOWERED');
+  });
+});

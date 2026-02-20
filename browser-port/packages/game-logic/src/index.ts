@@ -864,6 +864,8 @@ interface SidePowerState {
   energyProduction: number;
   /** Total energy consumption from all alive buildings (absolute of negative energyBonus values). */
   energyConsumption: number;
+  /** Source parity: Player::m_energy — tracks whether side is currently in brown-out. */
+  brownedOut: boolean;
 }
 
 /**
@@ -2058,6 +2060,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.flushCommands();
     this.updateDisabledHackedStatuses();
     this.updateDisabledEmpStatuses();
+    this.updatePowerBrownOut();
     this.updateProduction();
     this.updateSpawnBehaviors();
     this.updateDeployStyleEntities();
@@ -2895,7 +2898,7 @@ export class GameLogicSubsystem implements Subsystem {
   getSidePowerState(side: string): SidePowerState {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
-      return { powerBonus: 0, energyProduction: 0, energyConsumption: 0 };
+      return { powerBonus: 0, energyProduction: 0, energyConsumption: 0, brownedOut: false };
     }
     const state = this.getSidePowerStateMap(normalizedSide);
     return {
@@ -3075,7 +3078,7 @@ export class GameLogicSubsystem implements Subsystem {
       return existing;
     }
 
-    const created: SidePowerState = { powerBonus: 0, energyProduction: 0, energyConsumption: 0 };
+    const created: SidePowerState = { powerBonus: 0, energyProduction: 0, energyConsumption: 0, brownedOut: false };
     this.sidePowerBonus.set(normalizedSide, created);
     return created;
   }
@@ -6360,6 +6363,71 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: Player::onPowerBrownOutChange — set/clear DISABLED_UNDERPOWERED
+   * on all KINDOF_POWERED entities when power balance crosses the threshold.
+   * C++ Player.cpp:3250-3273: iterates objects with doPowerDisable callback.
+   */
+  private updatePowerBrownOut(): void {
+    for (const [side, powerState] of this.sidePowerBonus.entries()) {
+      const totalProduction = powerState.energyProduction + powerState.powerBonus;
+      const isNowBrownedOut = powerState.energyConsumption > 0
+        && totalProduction < powerState.energyConsumption;
+
+      if (isNowBrownedOut === powerState.brownedOut) {
+        // No change in power state for this side.
+        if (isNowBrownedOut) {
+          // Source parity: SpecialPowerModule::pauseCountdown — while paused,
+          // countdown frame is pushed forward by 1 each logic frame.
+          this.pauseSpecialPowerCountdownsForSide(side);
+        }
+        continue;
+      }
+
+      powerState.brownedOut = isNowBrownedOut;
+
+      // TODO(C&C source parity): Player::onPowerBrownOutChange also calls
+      // disableRadar()/enableRadar() to toggle radar availability during brown-out.
+      // Wire radar disable/enable when the radar subsystem is fully implemented.
+
+      // Apply or clear DISABLED_UNDERPOWERED on all KINDOF_POWERED entities.
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed) continue;
+        const entitySide = this.normalizeSide(entity.side);
+        if (entitySide !== side) continue;
+        if (!entity.kindOf.has('POWERED')) continue;
+
+        if (isNowBrownedOut) {
+          entity.objectStatusFlags.add('DISABLED_UNDERPOWERED');
+        } else {
+          entity.objectStatusFlags.delete('DISABLED_UNDERPOWERED');
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: Object::pauseAllSpecialPowers — increment ready frames by 1
+   * for all special powers on underpowered entities of the given side.
+   */
+  private pauseSpecialPowerCountdownsForSide(side: string): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const entitySide = this.normalizeSide(entity.side);
+      if (entitySide !== side) continue;
+      if (!entity.objectStatusFlags.has('DISABLED_UNDERPOWERED')) continue;
+
+      for (const [, module] of entity.specialPowerModules) {
+        const normalizedPower = module.specialPowerTemplateName.toUpperCase().replace(/\s+/g, '');
+        const currentReady = this.sharedShortcutSpecialPowerReadyFrames.get(normalizedPower) ?? 0;
+        // Only push forward if the countdown is still running (readyFrame > current frame).
+        if (currentReady > this.frameCounter) {
+          this.sharedShortcutSpecialPowerReadyFrames.set(normalizedPower, currentReady + 1);
+        }
+      }
+    }
+  }
+
   private applyRadarUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
     const side = this.normalizeSide(entity.side);
     if (!side) {
@@ -6724,6 +6792,7 @@ export class GameLogicSubsystem implements Subsystem {
       this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')
       || this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
       || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
+      || this.entityHasObjectStatus(entity, 'DISABLED_UNDERPOWERED')
     );
   }
 
@@ -9195,6 +9264,7 @@ export class GameLogicSubsystem implements Subsystem {
       || this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')
       || this.entityHasObjectStatus(entity, 'DISABLED_PARALYZED')
       || this.entityHasObjectStatus(entity, 'DISABLED_UNMANNED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_UNDERPOWERED')
     );
   }
 
@@ -9205,6 +9275,7 @@ export class GameLogicSubsystem implements Subsystem {
       || this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
       || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
       || this.entityHasObjectStatus(entity, 'DISABLED_HELD')
+      || this.entityHasObjectStatus(entity, 'DISABLED_UNDERPOWERED')
       || this.entityHasObjectStatus(entity, 'SCRIPT_DISABLED')
       || this.entityHasObjectStatus(entity, 'SCRIPT_UNPOWERED')
     );
