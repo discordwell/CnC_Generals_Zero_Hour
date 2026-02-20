@@ -287,6 +287,8 @@ export interface PurchaseScienceCommand {
   type: 'purchaseScience';
   scienceName: string;
   scienceCost: number;
+  /** Source parity: AI players specify their side explicitly; human players use local-player fallback. */
+  side?: string;
 }
 
 export interface IssueSpecialPowerCommand {

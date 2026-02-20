@@ -21,6 +21,9 @@ const STRUCTURE_EVAL_INTERVAL = 60; // ~4 seconds
 const DEFENSE_EVAL_INTERVAL = 20;  // ~1.3 seconds
 const SCOUT_EVAL_INTERVAL = 150;   // ~10 seconds
 const POWER_EVAL_INTERVAL = 45;    // ~3 seconds
+const UPGRADE_EVAL_INTERVAL = 120;  // ~8 seconds
+const SCIENCE_EVAL_INTERVAL = 150;  // ~10 seconds
+const DOZER_EVAL_INTERVAL = 60;     // ~4 seconds
 
 // ──── Resource thresholds (source parity: AIData.ini) ────────────────────────
 const RESOURCES_POOR_THRESHOLD = 500;
@@ -88,6 +91,18 @@ export interface SkirmishAIContext<TEntity extends AIEntity> {
 
   /** Get power balance (produced minus consumed) for a side. */
   getSidePowerBalance?(side: string): number;
+
+  /** Get researchable upgrade names for a building entity. */
+  getResearchableUpgrades?(entity: TEntity): string[];
+
+  /** Check if a side has completed a specific upgrade. */
+  hasUpgradeCompleted?(side: string, upgradeName: string): boolean;
+
+  /** Get unspent science purchase (General's) points for a side. */
+  getSciencePurchasePoints?(side: string): number;
+
+  /** Get purchasable sciences for a side: {name, cost}[]. */
+  getAvailableSciences?(side: string): Array<{ name: string; cost: number }>;
 }
 
 // ──── Per-AI state ──────────────────────────────────────────────────────────
@@ -102,6 +117,9 @@ export interface SkirmishAIState {
   lastDefenseFrame: number;
   lastScoutFrame: number;
   lastPowerFrame: number;
+  lastUpgradeFrame: number;
+  lastScienceFrame: number;
+  lastDozerFrame: number;
   /** Rally point for new units. */
   rallyX: number;
   rallyZ: number;
@@ -126,6 +144,12 @@ export interface SkirmishAIState {
   lastEnemyVehicleRatio: number;
   /** Track last production template index for variety. */
   productionRotationIndex: number;
+  /** Track which upgrades have been queued to avoid re-queueing. */
+  queuedUpgrades: Set<string>;
+  /** Track which sciences have been purchased. */
+  purchasedSciences: Set<string>;
+  /** Entity IDs that have had rally points set. */
+  rallyPointEntities: Set<number>;
 }
 
 export function createSkirmishAIState(side: string): SkirmishAIState {
@@ -139,6 +163,9 @@ export function createSkirmishAIState(side: string): SkirmishAIState {
     lastDefenseFrame: 0,
     lastScoutFrame: 0,
     lastPowerFrame: 0,
+    lastUpgradeFrame: 0,
+    lastScienceFrame: 0,
+    lastDozerFrame: 0,
     rallyX: 0,
     rallyZ: 0,
     enemyBaseX: 0,
@@ -153,6 +180,9 @@ export function createSkirmishAIState(side: string): SkirmishAIState {
     builtStructureKeywords: new Set(),
     lastEnemyVehicleRatio: 0.5,
     productionRotationIndex: 0,
+    queuedUpgrades: new Set(),
+    purchasedSciences: new Set(),
+    rallyPointEntities: new Set(),
   };
 }
 
@@ -253,6 +283,21 @@ export function updateSkirmishAI<TEntity extends AIEntity>(
     state.lastProductionFrame = frame;
   }
 
+  if (frame - state.lastDozerFrame >= DOZER_EVAL_INTERVAL) {
+    evaluateDozerReplacement(state, context);
+    state.lastDozerFrame = frame;
+  }
+
+  if (frame - state.lastUpgradeFrame >= UPGRADE_EVAL_INTERVAL) {
+    evaluateUpgrades(state, context);
+    state.lastUpgradeFrame = frame;
+  }
+
+  if (frame - state.lastScienceFrame >= SCIENCE_EVAL_INTERVAL) {
+    evaluateSciences(state, context);
+    state.lastScienceFrame = frame;
+  }
+
   if (frame - state.lastScoutFrame >= SCOUT_EVAL_INTERVAL) {
     evaluateScout(state, context);
     state.lastScoutFrame = frame;
@@ -261,6 +306,11 @@ export function updateSkirmishAI<TEntity extends AIEntity>(
   if (frame - state.lastCombatFrame >= COMBAT_EVAL_INTERVAL) {
     evaluateCombat(state, context);
     state.lastCombatFrame = frame;
+  }
+
+  // Source parity: AIPlayer::update() — set rally points on new factories toward enemy.
+  if (state.enemyBaseKnown) {
+    setFactoryRallyPoints(state, context);
   }
 }
 
@@ -364,20 +414,7 @@ function evaluatePower<TEntity extends AIEntity>(
   });
   if (!powerTemplate) return;
 
-  const offsetAngle = state.buildOrderPhase * 0.7;
-  const offsetDist = 15 + state.buildOrderPhase * 5;
-  const placeX = state.rallyX + Math.cos(offsetAngle) * offsetDist;
-  const placeZ = state.rallyZ + Math.sin(offsetAngle) * offsetDist;
-
-  context.submitCommand({
-    type: 'constructBuilding',
-    entityId: idleDozer.id,
-    templateName: powerTemplate,
-    targetPosition: [placeX, 0, placeZ],
-    angle: 0,
-    lineEndPosition: null,
-  });
-  state.buildOrderPhase = (state.buildOrderPhase + 1) % 20;
+  issueConstructCommand(state, context, idleDozer.id, powerTemplate);
 }
 
 // ──── Economy evaluation ────────────────────────────────────────────────────
@@ -395,12 +432,12 @@ function evaluateEconomy<TEntity extends AIEntity>(
   );
 
   if (harvesters.length < DESIRED_HARVESTERS) {
-    // Find a factory that can produce harvesters.
+    // Find a factory that can produce harvesters (exclude dozers).
     const factories = collectEntitiesBySide(
       context.spawnedEntities,
       state.side,
       context.normalizeSide,
-      (e) => context.hasProductionQueue(e) && !context.isProducing(e),
+      (e) => context.hasProductionQueue(e) && !context.isProducing(e) && !hasKindOf(e, 'DOZER'),
     );
 
     for (const factory of factories) {
@@ -472,12 +509,13 @@ function evaluateProduction<TEntity extends AIEntity>(
     (e) => isCombatUnit(e),
   );
 
-  // Find idle factories (not currently producing).
+  // Find idle factories (not currently producing). Exclude dozers — they build
+  // via constructBuilding, not queueUnitProduction.
   const factories = collectEntitiesBySide(
     context.spawnedEntities,
     state.side,
     context.normalizeSide,
-    (e) => context.hasProductionQueue(e) && !context.isProducing(e),
+    (e) => context.hasProductionQueue(e) && !context.isProducing(e) && !hasKindOf(e, 'DOZER'),
   );
 
   if (factories.length === 0) {
@@ -713,12 +751,9 @@ function evaluateStructures<TEntity extends AIEntity>(
   const dozers = context.getDozers(state.side);
   if (dozers.length === 0) return;
 
-  // Find idle dozer.
-  const idleDozer = dozers.find((d) => !context.isDozerBusy(d));
-  if (!idleDozer) return;
-
-  const buildable = context.getBuildableStructures(idleDozer);
-  if (buildable.length === 0) return;
+  // Source parity: AIPlayer uses ALL idle dozers for parallel construction.
+  const idleDozers = dozers.filter((d) => !context.isDozerBusy(d));
+  if (idleDozers.length === 0) return;
 
   // Check existing structures to determine what we have.
   const ownedStructures = collectEntitiesBySide(
@@ -727,8 +762,12 @@ function evaluateStructures<TEntity extends AIEntity>(
   );
   const ownedNames = new Set(ownedStructures.map((s) => s.templateName.toUpperCase()));
 
-  // Walk the build order and find the first structure we don't have.
+  let dozerIndex = 0;
+
+  // Walk the build order and find structures we don't have.
   for (const keyword of BUILD_ORDER_KEYWORDS) {
+    if (dozerIndex >= idleDozers.length) break;
+
     // Check if we already own a structure matching this keyword.
     let alreadyHave = false;
     for (const name of ownedNames) {
@@ -748,34 +787,24 @@ function evaluateStructures<TEntity extends AIEntity>(
       continue; // Don't build defenses until we can afford them.
     }
 
+    const dozer = idleDozers[dozerIndex]!;
+    const buildable = context.getBuildableStructures(dozer);
+
     // Find a buildable template matching the keyword.
     const template = buildable.find(
       (name) => name.toUpperCase().includes(keyword),
     );
     if (!template) continue;
 
-    // Place structure near base center with an offset.
-    const offsetAngle = state.buildOrderPhase * 0.7;
-    const offsetDist = 15 + state.buildOrderPhase * 5;
-    const placeX = state.rallyX + Math.cos(offsetAngle) * offsetDist;
-    const placeZ = state.rallyZ + Math.sin(offsetAngle) * offsetDist;
-
-    context.submitCommand({
-      type: 'constructBuilding',
-      entityId: idleDozer.id,
-      templateName: template,
-      targetPosition: [placeX, 0, placeZ],
-      angle: 0,
-      lineEndPosition: null,
-    });
-    state.buildOrderPhase = (state.buildOrderPhase + 1) % 20;
+    issueConstructCommand(state, context, dozer.id, template);
     state.builtStructureKeywords.add(keyword);
-    return;
+    dozerIndex++;
   }
 
-  // If we've built everything in the order, try to build a second power plant
-  // or additional defense when wealthy.
-  if (credits >= RESOURCES_WEALTHY_THRESHOLD) {
+  // If we've built everything in the order, try to build additional defenses when wealthy.
+  if (dozerIndex < idleDozers.length && credits >= RESOURCES_WEALTHY_THRESHOLD) {
+    const dozer = idleDozers[dozerIndex]!;
+    const buildable = context.getBuildableStructures(dozer);
     const defenseTemplate = buildable.find((name) => {
       const upper = name.toUpperCase();
       return upper.includes('PATRIOT') || upper.includes('GATTLING')
@@ -783,22 +812,32 @@ function evaluateStructures<TEntity extends AIEntity>(
         || upper.includes('TUNNELNETWORK');
     });
     if (defenseTemplate) {
-      const offsetAngle = state.buildOrderPhase * 0.7;
-      const offsetDist = 10 + state.buildOrderPhase * 4;
-      const placeX = state.rallyX + Math.cos(offsetAngle) * offsetDist;
-      const placeZ = state.rallyZ + Math.sin(offsetAngle) * offsetDist;
-
-      context.submitCommand({
-        type: 'constructBuilding',
-        entityId: idleDozer.id,
-        templateName: defenseTemplate,
-        targetPosition: [placeX, 0, placeZ],
-        angle: 0,
-        lineEndPosition: null,
-      });
-      state.buildOrderPhase = (state.buildOrderPhase + 1) % 20;
+      issueConstructCommand(state, context, dozer.id, defenseTemplate);
     }
   }
+}
+
+/** Helper: issue a construct-building command with spiral placement offset. */
+function issueConstructCommand<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+  dozerId: number,
+  templateName: string,
+): void {
+  const offsetAngle = state.buildOrderPhase * 0.7;
+  const offsetDist = 15 + state.buildOrderPhase * 5;
+  const placeX = state.rallyX + Math.cos(offsetAngle) * offsetDist;
+  const placeZ = state.rallyZ + Math.sin(offsetAngle) * offsetDist;
+
+  context.submitCommand({
+    type: 'constructBuilding',
+    entityId: dozerId,
+    templateName,
+    targetPosition: [placeX, 0, placeZ],
+    angle: 0,
+    lineEndPosition: null,
+  });
+  state.buildOrderPhase = (state.buildOrderPhase + 1) % 20;
 }
 
 // ──── Defense evaluation (retreat damaged units, defend base) ─────────────────
@@ -929,5 +968,197 @@ function evaluateScout<TEntity extends AIEntity>(
       });
       state.scoutWaypointIndex++;
     }
+  }
+}
+
+// ──── Dozer replacement (source parity: AIPlayer::queueDozer) ──────────────
+
+function evaluateDozerReplacement<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  const dozers = context.getDozers(state.side);
+  if (dozers.length > 0) return;
+
+  // No dozers — queue one from a factory (not a dozer) that can produce them.
+  const factories = collectEntitiesBySide(
+    context.spawnedEntities, state.side, context.normalizeSide,
+    (e) => context.hasProductionQueue(e) && !context.isProducing(e) && !hasKindOf(e, 'DOZER'),
+  );
+
+  for (const factory of factories) {
+    const producible = context.getProducibleUnits(factory);
+    const dozerTemplate = producible.find((name) => {
+      const upper = name.toUpperCase();
+      return upper.includes('DOZER') || upper.includes('WORKER');
+    });
+    if (dozerTemplate) {
+      context.submitCommand({
+        type: 'queueUnitProduction',
+        entityId: factory.id,
+        unitTemplateName: dozerTemplate,
+      });
+      return;
+    }
+  }
+}
+
+// ──── Upgrade research (source parity: AIPlayer::doUpgradesAndSkills) ──────
+
+/**
+ * Source parity: C++ AIPlayer researches upgrades at buildings when affordable.
+ * Prioritizes weapon/armor upgrades, then utility upgrades.
+ */
+const UPGRADE_PRIORITY_KEYWORDS = [
+  'WEAPON', 'ARMOR', 'COMPOSITE', 'TOW', 'LASER', 'FLASHBANG',
+  'CHEMICAL', 'ANTHRAX', 'STEALTH', 'CAMO', 'DRONE', 'MINE',
+  'SUBLIM', 'PATRIOT', 'CAPTURE',
+];
+
+function evaluateUpgrades<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  if (!context.getResearchableUpgrades || !context.hasUpgradeCompleted) return;
+
+  const credits = context.getSideCredits(state.side);
+  if (credits < RESOURCES_POOR_THRESHOLD) return;
+
+  // Find buildings with idle production queues.
+  const buildings = collectEntitiesBySide(
+    context.spawnedEntities, state.side, context.normalizeSide,
+    (e) => hasKindOf(e, 'STRUCTURE') && context.hasProductionQueue(e) && !context.isProducing(e),
+  );
+
+  for (const building of buildings) {
+    const upgrades = context.getResearchableUpgrades(building);
+    if (upgrades.length === 0) continue;
+
+    // Filter out already-completed and already-queued upgrades.
+    const available = upgrades.filter((name) =>
+      !context.hasUpgradeCompleted!(state.side, name) && !state.queuedUpgrades.has(name.toUpperCase()),
+    );
+    if (available.length === 0) continue;
+
+    // Pick highest-priority upgrade by keyword match.
+    let bestUpgrade: string | null = null;
+    let bestPriority = UPGRADE_PRIORITY_KEYWORDS.length;
+
+    for (const name of available) {
+      const upper = name.toUpperCase();
+      let priority = UPGRADE_PRIORITY_KEYWORDS.length; // lowest
+      for (let i = 0; i < UPGRADE_PRIORITY_KEYWORDS.length; i++) {
+        if (upper.includes(UPGRADE_PRIORITY_KEYWORDS[i]!)) {
+          priority = i;
+          break;
+        }
+      }
+      if (priority < bestPriority) {
+        bestPriority = priority;
+        bestUpgrade = name;
+      }
+    }
+
+    // Fall back to first available if no keyword match.
+    if (!bestUpgrade) {
+      bestUpgrade = available[0]!;
+    }
+
+    context.submitCommand({
+      type: 'queueUpgradeProduction',
+      entityId: building.id,
+      upgradeName: bestUpgrade,
+    });
+    state.queuedUpgrades.add(bestUpgrade.toUpperCase());
+    return; // One upgrade per evaluation cycle to pace spending.
+  }
+}
+
+// ──── Science purchasing (source parity: AIPlayer::doUpgradesAndSkills) ─────
+
+/**
+ * Source parity: C++ AI spends General's points as they become available.
+ * Prioritizes combat sciences over utility.
+ */
+const SCIENCE_PRIORITY_KEYWORDS = [
+  'PALADIN', 'STEALTH', 'MOAB', 'LEAFLET', 'A10',
+  'NUKE', 'CLUSTER', 'CARPET', 'ANTHRAX', 'CASH_HACK',
+  'ARTILLERY', 'REBEL', 'HIJACK', 'BLACK_MARKET',
+  'HACKER', 'EMPPULSE',
+];
+
+function evaluateSciences<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  if (!context.getSciencePurchasePoints || !context.getAvailableSciences) return;
+
+  const points = context.getSciencePurchasePoints(state.side);
+  if (points <= 0) return;
+
+  const available = context.getAvailableSciences(state.side)
+    .filter((s) => !state.purchasedSciences.has(s.name.toUpperCase()) && s.cost <= points);
+  if (available.length === 0) return;
+
+  // Pick highest-priority science by keyword match.
+  let bestScience: { name: string; cost: number } | null = null;
+  let bestPriority = SCIENCE_PRIORITY_KEYWORDS.length;
+
+  for (const sci of available) {
+    const upper = sci.name.toUpperCase();
+    let priority = SCIENCE_PRIORITY_KEYWORDS.length;
+    for (let i = 0; i < SCIENCE_PRIORITY_KEYWORDS.length; i++) {
+      if (upper.includes(SCIENCE_PRIORITY_KEYWORDS[i]!)) {
+        priority = i;
+        break;
+      }
+    }
+    if (priority < bestPriority) {
+      bestPriority = priority;
+      bestScience = sci;
+    }
+  }
+
+  // Fall back to first available.
+  if (!bestScience) {
+    bestScience = available[0]!;
+  }
+
+  context.submitCommand({
+    type: 'purchaseScience',
+    scienceName: bestScience.name,
+    scienceCost: bestScience.cost,
+    side: state.side,
+  });
+  state.purchasedSciences.add(bestScience.name.toUpperCase());
+}
+
+// ──── Rally point management ────────────────────────────────────────────────
+
+/**
+ * Source parity: AI sets rally points on production buildings toward the enemy base.
+ * This ensures newly produced units automatically move toward the fight.
+ */
+function setFactoryRallyPoints<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  const factories = collectEntitiesBySide(
+    context.spawnedEntities, state.side, context.normalizeSide,
+    (e) => hasKindOf(e, 'STRUCTURE') && context.hasProductionQueue(e),
+  );
+
+  for (const factory of factories) {
+    if (state.rallyPointEntities.has(factory.id)) continue;
+    // Set rally point between our base and enemy base (30% toward enemy).
+    const rallyX = factory.x + (state.enemyBaseX - factory.x) * 0.3;
+    const rallyZ = factory.z + (state.enemyBaseZ - factory.z) * 0.3;
+    context.submitCommand({
+      type: 'setRallyPoint',
+      entityId: factory.id,
+      targetX: rallyX,
+      targetZ: rallyZ,
+    });
+    state.rallyPointEntities.add(factory.id);
   }
 }

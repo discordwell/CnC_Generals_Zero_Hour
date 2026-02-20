@@ -88,6 +88,10 @@ export function findScienceDefByName(iniDataRegistry: IniDataRegistry, scienceNa
   );
 }
 
+export function iterAllScienceDefs(iniDataRegistry: IniDataRegistry): Iterable<ScienceDef> {
+  return iniDataRegistry.sciences.values();
+}
+
 export function resolveUpgradeType(upgradeDef: UpgradeDef): 'PLAYER' | 'OBJECT' {
   const type = readStringField(upgradeDef.fields, ['Type'])?.toUpperCase();
   if (type === 'OBJECT') {

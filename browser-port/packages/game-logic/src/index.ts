@@ -127,6 +127,7 @@ import {
   findScienceDefByName,
   findUpgradeDefByName,
   findWeaponDefByName,
+  iterAllScienceDefs,
   resolveUpgradeBuildCost,
   resolveUpgradeBuildTimeFrames,
   resolveUpgradeType,
@@ -7349,8 +7350,11 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'purchaseScience': {
-        const localSide = this.resolveLocalPlayerSide();
-        if (!localSide) {
+        // Source parity: AI players pass side explicitly; human players fall back to local player.
+        const purchaseSide = command.side
+          ? this.normalizeSide(command.side)
+          : this.resolveLocalPlayerSide();
+        if (!purchaseSide) {
           return;
         }
         const normalizedScienceName = command.scienceName.trim().toUpperCase();
@@ -7373,16 +7377,16 @@ export class GameLogicSubsystem implements Subsystem {
           return;
         }
 
-        const scienceCost = this.getPurchasableScienceCost(localSide, normalizedScience);
+        const scienceCost = this.getPurchasableScienceCost(purchaseSide, normalizedScience);
         if (scienceCost <= 0) {
           return;
         }
-        if (!this.addScienceToSide(localSide, normalizedScience)) {
+        if (!this.addScienceToSide(purchaseSide, normalizedScience)) {
           return;
         }
-        const normalizedLocalSide = this.normalizeSide(localSide);
-        if (normalizedLocalSide) {
-          const rankState = this.getSideRankStateMap(normalizedLocalSide);
+        const normalizedPurchaseSide = this.normalizeSide(purchaseSide);
+        if (normalizedPurchaseSide) {
+          const rankState = this.getSideRankStateMap(normalizedPurchaseSide);
           rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
         }
         return;
@@ -10857,11 +10861,11 @@ export class GameLogicSubsystem implements Subsystem {
       hasProductionQueue: (entity: MapEntity) => entity.productionProfile !== null,
       isProducing: (entity: MapEntity) => entity.productionQueue.length > 0,
       getProducibleUnits: (entity: MapEntity) => {
-        // Return template names this entity can produce based on its production profile.
-        // For now, derive from INI data or return empty.
-        if (!entity.productionProfile) {
-          return [];
-        }
+        if (!entity.productionProfile) return [];
+        // Source parity: producible units come from command set UNIT_BUILD buttons.
+        const fromCommandSet = this.collectCommandSetTemplates(entity, ['UNIT_BUILD', 'DOZER_CONSTRUCT']);
+        if (fromCommandSet.length > 0) return fromCommandSet;
+        // Fallback to quantityModifiers for tests without command set data.
         return entity.productionProfile.quantityModifiers.map(qm => qm.templateName);
       },
       getWorldDimensions: () => {
@@ -10883,6 +10887,10 @@ export class GameLogicSubsystem implements Subsystem {
       },
       getBuildableStructures: (entity: MapEntity) => {
         if (!entity.productionProfile) return [];
+        // Source parity: buildable structures come from command set DOZER_CONSTRUCT buttons.
+        const fromCommandSet = this.collectCommandSetTemplates(entity, ['DOZER_CONSTRUCT']);
+        if (fromCommandSet.length > 0) return fromCommandSet;
+        // Fallback to quantityModifiers for tests without command set data.
         return entity.productionProfile.quantityModifiers
           .filter(qm => {
             const upper = qm.templateName.toUpperCase();
@@ -10891,11 +10899,57 @@ export class GameLogicSubsystem implements Subsystem {
           .map(qm => qm.templateName);
       },
       isDozerBusy: (entity: MapEntity) => {
-        return entity.moving || entity.productionQueue.length > 0;
+        return entity.moving || entity.productionQueue.length > 0
+          || this.pendingConstructionActions.has(entity.id);
       },
       getSidePowerBalance: (side: string) => {
         const ps = this.getSidePowerState(side);
         return ps.energyProduction - ps.energyConsumption + ps.powerBonus;
+      },
+      getResearchableUpgrades: (entity: MapEntity) => {
+        if (!entity.productionProfile) return [];
+        // Source parity: researchable upgrades come from PLAYER_UPGRADE command buttons.
+        const fromCommandSet = this.collectCommandSetTemplates(entity, ['PLAYER_UPGRADE']);
+        if (fromCommandSet.length > 0) return fromCommandSet;
+        // Fallback for tests without command set data.
+        return entity.productionProfile.quantityModifiers
+          .filter(qm => qm.templateName.toUpperCase().includes('UPGRADE'))
+          .map(qm => qm.templateName);
+      },
+      hasUpgradeCompleted: (side: string, upgradeName: string) => {
+        return this.hasSideUpgradeCompleted(side, upgradeName);
+      },
+      getSciencePurchasePoints: (side: string) => {
+        const normalizedSide = this.normalizeSide(side);
+        if (!normalizedSide) return 0;
+        return this.getSideRankStateMap(normalizedSide).sciencePurchasePoints;
+      },
+      getAvailableSciences: (side: string) => {
+        const registry = this.iniDataRegistry;
+        if (!registry) return [];
+        const normalizedSide = this.normalizeSide(side);
+        if (!normalizedSide) return [];
+        const rankState = this.getSideRankStateMap(normalizedSide);
+        const result: Array<{ name: string; cost: number }> = [];
+        for (const scienceDef of iterAllScienceDefs(registry)) {
+          const scienceName = scienceDef.name.trim().toUpperCase();
+          if (!scienceName || scienceName === 'NONE') continue;
+          if (this.hasSideScience(normalizedSide, scienceName)) continue;
+          const cost = this.getSciencePurchaseCost(scienceDef);
+          if (cost <= 0 || cost > rankState.sciencePurchasePoints) continue;
+          // Check prerequisites.
+          const prereqs = this.getSciencePrerequisites(scienceDef);
+          let prereqsMet = true;
+          for (const prereq of prereqs) {
+            if (!this.hasSideScience(normalizedSide, prereq)) {
+              prereqsMet = false;
+              break;
+            }
+          }
+          if (!prereqsMet) continue;
+          result.push({ name: scienceName, cost });
+        }
+        return result;
       },
     };
 
@@ -11419,7 +11473,7 @@ export class GameLogicSubsystem implements Subsystem {
       normalizedAllowedTypes.add(this.normalizeCommandTypeNameForBuildCheck(commandType));
     }
 
-    for (let buttonSlot = 1; buttonSlot <= 12; buttonSlot += 1) {
+    for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
       const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
       if (!commandButtonName) {
         continue;
@@ -11462,6 +11516,58 @@ export class GameLogicSubsystem implements Subsystem {
       return normalized.slice('GUI_COMMAND_'.length);
     }
     return normalized;
+  }
+
+  /**
+   * Extract all template names producible via command set buttons of the given command types.
+   * Source parity subset: scans the entity's command set for UNIT_BUILD / DOZER_CONSTRUCT /
+   * PLAYER_UPGRADE buttons and returns the associated Object / Upgrade names.
+   */
+  private collectCommandSetTemplates(
+    entity: MapEntity,
+    allowedCommandTypes: readonly string[],
+  ): string[] {
+    const registry = this.iniDataRegistry;
+    if (!registry) return [];
+
+    const producerObjectDef = findObjectDefByName(registry, entity.templateName);
+    if (!producerObjectDef) return [];
+
+    const commandSetName = this.resolveEntityCommandSetName(entity, producerObjectDef);
+    if (!commandSetName) return [];
+
+    const commandSetDef = findCommandSetDefByName(registry, commandSetName);
+    if (!commandSetDef) return [];
+
+    const normalizedAllowedTypes = new Set<string>();
+    for (const commandType of allowedCommandTypes) {
+      normalizedAllowedTypes.add(this.normalizeCommandTypeNameForBuildCheck(commandType));
+    }
+
+    const result: string[] = [];
+    for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
+      const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      if (!commandButtonName) continue;
+
+      const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+      if (!commandButtonDef) continue;
+
+      const buttonCommandType = this.normalizeCommandTypeNameForBuildCheck(
+        commandButtonDef.commandTypeName
+        ?? readStringField(commandButtonDef.fields, ['Command'])
+        ?? '',
+      );
+      if (!normalizedAllowedTypes.has(buttonCommandType)) continue;
+
+      const templateName =
+        readStringField(commandButtonDef.fields, ['Object'])
+        ?? readStringField(commandButtonDef.fields, ['ThingTemplate'])
+        ?? readStringField(commandButtonDef.fields, ['Upgrade']);
+      if (templateName) {
+        result.push(templateName);
+      }
+    }
+    return result;
   }
 
   private hasAvailableParkingSpaceFor(producer: MapEntity, unitDef: ObjectDef): boolean {
@@ -11721,7 +11827,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    for (let buttonSlot = 1; buttonSlot <= 12; buttonSlot += 1) {
+    for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
       const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
       if (!commandButtonName) {
         continue;

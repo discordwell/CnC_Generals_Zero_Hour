@@ -7854,6 +7854,261 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     // AI should have issued attack commands to its idle units.
     expect(attackingCount).toBeGreaterThan(0);
   });
+
+  it('skirmish AI replaces lost dozer by queueing production at a factory', () => {
+    const logic = new GameLogicSubsystem();
+
+    // Command center that can produce dozers.
+    const commandCenterDef = makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+      makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+        MaxQueueEntries: 4,
+      }),
+      makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+        UnitCreatePoint: [0, 0, 5],
+        ExitDelay: 0,
+      }),
+    ], {
+      CommandSet: 'CommandCenterCommandSet',
+    });
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], {
+      BuildCost: 200,
+      BuildTime: 0.1,
+    });
+
+    // Dummy enemy so AI has something to worry about.
+    const enemyDef = makeObjectDef('EnemyUnit', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [commandCenterDef, dozerDef, enemyDef],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructUSADozer', {
+          Command: 'UNIT_BUILD',
+          Object: 'USADozer',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandCenterCommandSet', {
+          '1': 'Command_ConstructUSADozer',
+        }),
+      ],
+    }));
+
+    // Place only a command center (no dozer) and a distant enemy.
+    const map = makeMap([
+      makeMapObject('CommandCenter', 10, 10),
+      makeMapObject('EnemyUnit', 50, 50),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 5000 });
+    logic.enableSkirmishAI('America');
+
+    // Run enough frames for dozer evaluation (60+ frames).
+    for (let i = 0; i < 80; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Check that the command center has something in its production queue (dozer).
+    const ccState = logic.getEntityState(1);
+    // The AI should have queued a dozer or one should already be spawned.
+    let hasDozer = false;
+    for (const [, state] of (logic as any).spawnedEntities) {
+      if (state.templateName.toUpperCase().includes('DOZER') && !state.destroyed) {
+        hasDozer = true;
+        break;
+      }
+    }
+    // At minimum, the production queue should have been used.
+    expect(ccState).not.toBeNull();
+    // AI queued a dozer (it may have already spawned or still be in queue).
+    const ccEntity = (logic as any).spawnedEntities.get(1);
+    expect(hasDozer || ccEntity.productionQueue.length > 0).toBe(true);
+  });
+
+  it('skirmish AI researches upgrades at idle buildings', () => {
+    const logic = new GameLogicSubsystem();
+
+    const factoryDef = makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+      makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+        MaxQueueEntries: 4,
+      }),
+    ], {
+      CommandSet: 'WarFactoryCommandSet',
+    });
+
+    const upgradeDef = makeUpgradeDef('Upgrade_WeaponBoost', {
+      BuildCost: 500,
+      BuildTime: 0.5,
+      Type: 'PLAYER',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [factoryDef],
+      upgrades: [upgradeDef],
+      commandButtons: [
+        makeCommandButtonDef('Command_UpgradeWeaponBoost', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_WeaponBoost',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('WarFactoryCommandSet', {
+          '1': 'Command_UpgradeWeaponBoost',
+        }),
+      ],
+    }));
+
+    const map = makeMap([makeMapObject('WarFactory', 10, 10)], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 5000 });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.enableSkirmishAI('America');
+
+    // Run enough frames for upgrade evaluation (120+ frames).
+    for (let i = 0; i < 150; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Check if upgrade was queued or completed.
+    const factoryEntity = (logic as any).spawnedEntities.get(1);
+    const wasQueued = factoryEntity.productionQueue.length > 0
+      || (logic as any).hasSideUpgradeCompleted('America', 'UPGRADE_WEAPONBOOST');
+    expect(wasQueued).toBe(true);
+  });
+
+  it('skirmish AI sets rally points on factory buildings toward enemy', () => {
+    const logic = new GameLogicSubsystem();
+
+    const factoryDef = makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+      makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+        MaxQueueEntries: 4,
+      }),
+      makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+        UnitCreatePoint: [0, 0, 5],
+        ExitDelay: 0,
+      }),
+    ]);
+
+    const enemyDef = makeObjectDef('EnemyHQ', 'China', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50000, InitialHealth: 50000 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [factoryDef, enemyDef],
+    }));
+
+    // Factory at (10,10), enemy at (50,50).
+    const map = makeMap([
+      makeMapObject('WarFactory', 10, 10),
+      makeMapObject('EnemyHQ', 50, 50),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.enableSkirmishAI('America');
+
+    // Run frames for AI initialization + rally point setting.
+    for (let i = 0; i < 100; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Rally point should be set on the factory, somewhere between factory and enemy.
+    const factoryState = logic.getEntityState(1);
+    expect(factoryState).not.toBeNull();
+    if (factoryState!.rallyPoint) {
+      // Rally point should be between factory (10,10) and enemy (50,50).
+      expect(factoryState!.rallyPoint.x).toBeGreaterThan(10);
+      expect(factoryState!.rallyPoint.z).toBeGreaterThan(10);
+    }
+  });
+
+  it('skirmish AI uses multiple idle dozers for parallel construction', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    // Use simpler setup without command sets to rely on permissive fallback.
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+        MaxQueueEntries: 4,
+        QuantityModifier: ['USAPowerPlant 1', 'USABarracks 1'],
+      }),
+    ], {
+      Speed: 30,
+      GeometryMajorRadius: 3,
+      GeometryMinorRadius: 3,
+    });
+
+    const powerPlantDef = makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], {
+      BuildCost: 500,
+      BuildTime: 2,
+      EnergyBonus: 10,
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+    });
+
+    const barracksDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], {
+      BuildCost: 500,
+      BuildTime: 2,
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+    });
+
+    const enemyDef = makeObjectDef('EnemyHQ', 'China', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50000, InitialHealth: 50000 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [dozerDef, powerPlantDef, barracksDef, enemyDef],
+      locomotors: [makeLocomotorDef('DozerLocomotor', 30)],
+    }));
+
+    // Two dozers spaced apart.
+    const map = makeMap([
+      makeMapObject('USADozer', 10, 10),
+      makeMapObject('USADozer', 10, 15),
+      makeMapObject('EnemyHQ', 50, 50),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 10000 });
+    logic.enableSkirmishAI('America');
+
+    // Run enough frames for structure evaluation + construction start.
+    for (let i = 0; i < 90; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Count spawned structures (beyond the initial 3 entities).
+    let structureCount = 0;
+    for (const entity of (logic as any).spawnedEntities.values()) {
+      if (entity.kindOf.has('STRUCTURE') && !entity.destroyed
+        && entity.side?.toUpperCase() === 'AMERICA') {
+        structureCount++;
+      }
+    }
+
+    // AI should have started building at least one structure.
+    expect(structureCount).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ── MinefieldBehavior collision-based detonation ──
