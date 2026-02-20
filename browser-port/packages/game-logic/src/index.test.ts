@@ -19043,3 +19043,273 @@ describe('CheckpointUpdate', () => {
     expect(geom.minorRadius).toBe(maxMinor);
   });
 });
+
+// ── StructureCollapseUpdate Tests ──────────────────────────────────────────
+
+describe('StructureCollapseUpdate', () => {
+  function makeCollapseBundle(collapseFields: Record<string, unknown> = {}) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('CollapseBuilding', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'StructureCollapseUpdate ModuleTag_Collapse', {
+            MinCollapseDelay: 100, // ~3 frames
+            MaxCollapseDelay: 100, // ~3 frames (deterministic)
+            MinBurstDelay: 200,    // ~6 frames
+            MaxBurstDelay: 200,    // ~6 frames
+            CollapseDamping: 0.5,
+            BigBurstFrequency: 2,
+            ...collapseFields,
+          }),
+        ], { Geometry: 'BOX', GeometryMajorRadius: '10', GeometryMinorRadius: '10', GeometryHeight: '20' }),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BuildingKiller'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('BuildingKiller', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+  }
+
+  it('building persists during collapse and is eventually destroyed', () => {
+    const bundle = makeCollapseBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CollapseBuilding', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Advance until lethal damage — building enters collapse.
+    let enteredCollapse = false;
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0 && s.animationState === 'DIE') {
+        enteredCollapse = true;
+        break;
+      }
+    }
+    expect(enteredCollapse).toBe(true);
+
+    // Building should still be in entity state (not destroyed yet) during collapse.
+    const midCollapse = logic.getEntityState(1);
+    expect(midCollapse).not.toBeNull();
+    expect(midCollapse!.animationState).toBe('DIE');
+
+    // Access internal state to verify collapse state.
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { structureCollapseState: { state: string } | null; destroyed: boolean }>;
+    };
+    const buildingEntity = priv.spawnedEntities.get(1)!;
+    expect(buildingEntity.structureCollapseState).not.toBeNull();
+
+    // Run enough frames for the building to fully collapse and be destroyed.
+    // With height=20, gravity=-1.0, damping=0.5: velocity grows at 0.5/frame.
+    // After N frames of COLLAPSING, currentHeight reaches -20 and building is destroyed.
+    for (let i = 0; i < 100; i++) logic.update(1 / 30);
+
+    // Building should now be fully destroyed.
+    const afterCollapse = logic.getEntityState(1);
+    expect(afterCollapse).toBeNull();
+  });
+
+  it('transitions through WAITING → COLLAPSING → DONE states', () => {
+    const bundle = makeCollapseBundle({
+      MinCollapseDelay: 200,  // ~6 frames
+      MaxCollapseDelay: 200,
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CollapseBuilding', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the building.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        structureCollapseState: { state: string; currentHeight: number } | null;
+        destroyed: boolean;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.structureCollapseState).not.toBeNull();
+    expect(entity.structureCollapseState!.state).toBe('WAITING');
+
+    // Advance past collapse delay (6 frames).
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Should be COLLAPSING now with height decreasing.
+    if (entity.structureCollapseState) {
+      expect(entity.structureCollapseState.state).toBe('COLLAPSING');
+      expect(entity.structureCollapseState.currentHeight).toBeLessThan(0);
+    }
+  });
+
+  it('does not take further damage during collapse', () => {
+    const bundle = makeCollapseBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CollapseBuilding', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill building to enter collapse.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { canTakeDamage: boolean; structureCollapseState: object | null }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.structureCollapseState).not.toBeNull();
+    expect(entity.canTakeDamage).toBe(false);
+  });
+
+  it('executes INITIAL phase OCL on collapse start', () => {
+    const bundle = makeCollapseBundle({
+      OCL: 'INITIAL CollapseDebrisOCL',
+    });
+    // Add the debris OCL and debris object def.
+    (bundle as Record<string, unknown>).objectCreationLists = [
+      {
+        name: 'CollapseDebrisOCL',
+        fields: {},
+        blocks: [{
+          type: 'CreateObject',
+          name: 'CreateObject',
+          fields: { ObjectNames: 'CollapseDebris', Count: '1' },
+          blocks: [],
+        }],
+      },
+    ];
+    // Add the debris object definition to the bundle.
+    (bundle.objects as ObjectDef[]).push(
+      makeObjectDef('CollapseDebris', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      ]),
+    );
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CollapseBuilding', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill building — INITIAL phase should fire and spawn debris.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Check that a CollapseDebris entity was spawned.
+    const allStates = logic.getRenderableEntityStates();
+    const debrisEntities = allStates.filter(s => s.templateName === 'CollapseDebris');
+    expect(debrisEntities.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('respects DieMuxData death type filtering', () => {
+    const bundle = makeCollapseBundle({
+      DeathTypes: 'LASERED', // Only fire on laser death.
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CollapseBuilding', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill with normal weapon (not LASERED) — collapse should NOT trigger.
+    // Building should be immediately destroyed (no collapse animation).
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Entity should be fully destroyed and no longer visible.
+    const afterDeath = logic.getEntityState(1);
+    expect(afterDeath).toBeNull();
+  });
+
+  it('gravity-damped sinking causes height to decrease each frame during collapse', () => {
+    const bundle = makeCollapseBundle({
+      MinCollapseDelay: 0,
+      MaxCollapseDelay: 0,
+      CollapseDamping: 0.0, // Full gravity, no damping.
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CollapseBuilding', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill and enter collapse.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        structureCollapseState: { state: string; currentHeight: number; collapseVelocity: number } | null;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    // With 0 collapse delay, should immediately be COLLAPSING after one update.
+    // Run a few more frames to let physics take effect.
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    if (entity.structureCollapseState) {
+      // With full gravity (damping=0), velocity = (1.0)^N cumulative.
+      // Height should be negative and decreasing.
+      expect(entity.structureCollapseState.currentHeight).toBeLessThan(0);
+      expect(entity.structureCollapseState.collapseVelocity).toBeGreaterThan(0);
+    }
+  });
+});

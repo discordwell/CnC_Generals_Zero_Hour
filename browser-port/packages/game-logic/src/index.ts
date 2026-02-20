@@ -1594,6 +1594,11 @@ interface MapEntity {
   /** Active slow death state when entity is in a phased death sequence (null = not dying slowly). */
   slowDeathState: SlowDeathRuntimeState | null;
 
+  // ── Source parity: StructureCollapseUpdate — building collapse die module ──
+  structureCollapseProfile: StructureCollapseProfile | null;
+  /** Active collapse state (null = not collapsing). Entity persists during collapse. */
+  structureCollapseState: StructureCollapseRuntimeState | null;
+
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
@@ -2569,6 +2574,53 @@ interface SlowDeathRuntimeState {
 const SLOW_DEATH_BEGIN_MIDPOINT_RATIO = 0.35;
 const SLOW_DEATH_END_MIDPOINT_RATIO = 0.65;
 
+/**
+ * Source parity: StructureCollapseUpdate — building collapse die module with gravity-based
+ * sinking and phased OCL/FX spawning. C++ file: StructureCollapseUpdate.h/cpp.
+ * 4 phases: INITIAL (on die), DELAY (small bursts), BURST (big bursts), FINAL (collapse done).
+ */
+interface StructureCollapseProfile {
+  /** DieMuxData: which death types trigger this (empty = ALL). */
+  deathTypes: Set<string>;
+  /** DieMuxData: which veterancy levels allow this (empty = ALL). */
+  veterancyLevels: Set<string>;
+  /** DieMuxData: status flags that exempt this behavior. */
+  exemptStatus: Set<string>;
+  /** DieMuxData: status flags required for this behavior. */
+  requiredStatus: Set<string>;
+  /** Min frames of dramatic pause before collapse starts. */
+  minCollapseDelay: number;
+  /** Max frames of dramatic pause before collapse starts. */
+  maxCollapseDelay: number;
+  /** Min frames between burst OCL events during collapse. */
+  minBurstDelay: number;
+  /** Max frames between burst OCL events during collapse. */
+  maxBurstDelay: number;
+  /** Gravity damping factor (0.0 = full gravity, 1.0 = no gravity). */
+  collapseDamping: number;
+  /** 1 in N chance that a burst is "big" (BURST phase) vs "small" (DELAY phase). */
+  bigBurstFrequency: number;
+  /** OCL names per phase: [INITIAL, DELAY, BURST, FINAL]. */
+  phaseOCLs: [string[], string[], string[], string[]];
+}
+
+type StructureCollapseState = 'WAITING' | 'COLLAPSING' | 'DONE';
+
+interface StructureCollapseRuntimeState {
+  state: StructureCollapseState;
+  /** Frame when collapse transition from WAITING to COLLAPSING happens. */
+  collapseFrame: number;
+  /** Frame when next burst OCL fires during COLLAPSING state. */
+  burstFrame: number;
+  /** Current downward displacement (negative = below original position). */
+  currentHeight: number;
+  /** Current downward velocity (increases each frame due to gravity). */
+  collapseVelocity: number;
+}
+
+/** Source parity: GlobalData::m_gravity = -1.0f */
+const STRUCTURE_COLLAPSE_GRAVITY = -1.0;
+
 /** Source parity: PoisonedBehavior default INI values. */
 const DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES = 10; // ~0.33s at 30fps
 const DEFAULT_POISON_DURATION_FRAMES = 90; // ~3s at 30fps
@@ -3136,6 +3188,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHeightDieEntities();
     this.updateStickyBombs();
     this.updateSlowDeathEntities();
+    this.updateStructureCollapseEntities();
     this.updateWeaponIdleAutoReload();
     this.updatePointDefenseLaser();
     this.updateCountermeasures();
@@ -4907,6 +4960,9 @@ export class GameLogicSubsystem implements Subsystem {
       // Slow death
       slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
       slowDeathState: null,
+      // Structure collapse
+      structureCollapseProfile: this.extractStructureCollapseProfile(objectDef),
+      structureCollapseState: null,
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -5171,7 +5227,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity note:
     // Generals/Code/GameEngine/Source/GameLogic/Thing/Drawable.cpp
     // drives render-state from object locomotor/combat lifecycle transitions.
-    if (entity.slowDeathState) {
+    if (entity.slowDeathState || entity.structureCollapseState) {
       return 'DIE';
     }
     if (entity.destroyed) {
@@ -8618,6 +8674,101 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profiles;
+  }
+
+  /**
+   * Source parity: StructureCollapseUpdate — extract building collapse profile from INI.
+   * C++ file: StructureCollapseUpdate.cpp (buildFieldParse) + DieModule.cpp (DieMuxData).
+   * One per entity; combines UpdateModule + DieModuleInterface.
+   */
+  private extractStructureCollapseProfile(objectDef: ObjectDef | undefined): StructureCollapseProfile | null {
+    if (!objectDef) return null;
+    let profile: StructureCollapseProfile | null = null;
+
+    const scPhaseNames = ['INITIAL', 'DELAY', 'BURST', 'FINAL'] as const;
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'UPDATE') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'STRUCTURECOLLAPSEUPDATE') {
+          // Parse DieMuxData fields.
+          const deathTypes = new Set<string>();
+          const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
+          if (deathTypesStr) {
+            for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
+              if (token) deathTypes.add(token);
+            }
+          }
+          const veterancyLevels = new Set<string>();
+          const vetStr = readStringField(block.fields, ['VeterancyLevels']);
+          if (vetStr) {
+            for (const token of vetStr.toUpperCase().split(/\s+/)) {
+              if (token) veterancyLevels.add(token);
+            }
+          }
+          const exemptStatus = new Set<string>();
+          const exemptStr = readStringField(block.fields, ['ExemptStatus']);
+          if (exemptStr) {
+            for (const token of exemptStr.toUpperCase().split(/\s+/)) {
+              if (token) exemptStatus.add(token);
+            }
+          }
+          const requiredStatus = new Set<string>();
+          const reqStr = readStringField(block.fields, ['RequiredStatus']);
+          if (reqStr) {
+            for (const token of reqStr.toUpperCase().split(/\s+/)) {
+              if (token) requiredStatus.add(token);
+            }
+          }
+
+          // Parse phase OCLs: "OCL INITIAL SomeOCLName AnotherOCL"
+          const phaseOCLs: [string[], string[], string[], string[]] = [[], [], [], []];
+          const rawOCL = block.fields['OCL'];
+          const oclEntries: string[] = [];
+          if (typeof rawOCL === 'string') {
+            oclEntries.push(rawOCL);
+          } else if (Array.isArray(rawOCL)) {
+            for (const e of rawOCL) {
+              if (typeof e === 'string') oclEntries.push(e);
+            }
+          }
+          for (const entry of oclEntries) {
+            const parts = entry.trim().split(/\s+/);
+            if (parts.length >= 2) {
+              const phaseIdx = scPhaseNames.indexOf(parts[0]!.toUpperCase() as typeof scPhaseNames[number]);
+              if (phaseIdx >= 0) {
+                // All subsequent tokens are OCL names for this phase.
+                for (let i = 1; i < parts.length; i++) {
+                  if (parts[i]) phaseOCLs[phaseIdx]!.push(parts[i]!);
+                }
+              }
+            }
+          }
+
+          profile = {
+            deathTypes,
+            veterancyLevels,
+            exemptStatus,
+            requiredStatus,
+            minCollapseDelay: this.msToLogicFrames(readNumericField(block.fields, ['MinCollapseDelay']) ?? 0),
+            maxCollapseDelay: this.msToLogicFrames(readNumericField(block.fields, ['MaxCollapseDelay']) ?? 0),
+            minBurstDelay: this.msToLogicFrames(readNumericField(block.fields, ['MinBurstDelay']) ?? 9999),
+            maxBurstDelay: this.msToLogicFrames(readNumericField(block.fields, ['MaxBurstDelay']) ?? 9999),
+            collapseDamping: readNumericField(block.fields, ['CollapseDamping']) ?? 0.0,
+            bigBurstFrequency: readNumericField(block.fields, ['BigBurstFrequency']) ?? 0,
+            phaseOCLs,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
   }
 
   /**
@@ -17722,7 +17873,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (pointInPolygon(worldX, worldZ, poly.points)) {
         // Source parity: C++ getWaterHandle returns the trigger with the highest waterZ.
-        if (bestHeight === null || poly.waterHeight > bestHeight) {
+        if (bestHeight === null || poly.waterHeight >= bestHeight) {
           bestHeight = poly.waterHeight;
         }
       }
@@ -19541,9 +19692,10 @@ export class GameLogicSubsystem implements Subsystem {
       if (damageType.toUpperCase() === 'UNRESISTABLE') {
         target.health = 0;
         target.pendingDeathType = weaponDeathType || damageTypeToDeathType(damageType);
-        if (!target.slowDeathState) {
+        if (!target.slowDeathState && !target.structureCollapseState) {
           this.fireDeathWeapons(target);
-          this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
+          this.tryBeginStructureCollapse(target) ||
+            this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
             this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
         }
       }
@@ -19689,7 +19841,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    if (target.health <= 0 && !target.destroyed && !target.slowDeathState) {
+    if (target.health <= 0 && !target.destroyed && !target.slowDeathState && !target.structureCollapseState) {
       // Source parity: DamageInfo.in.m_deathType — set death cause for die module filtering.
       target.pendingDeathType = weaponDeathType || damageTypeToDeathType(damageType);
       // Source parity: DemoTrapUpdate::update() — detonate on kill if configured.
@@ -19699,7 +19851,8 @@ export class GameLogicSubsystem implements Subsystem {
       }
       // Source parity: FireWeaponWhenDeadBehavior::onDie fires BEFORE slow death begins.
       this.fireDeathWeapons(target);
-      this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
+      this.tryBeginStructureCollapse(target) ||
+        this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
         this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
   }
@@ -19728,7 +19881,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private updateFireWhenDamagedContinuous(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.fireWhenDamagedProfiles.length === 0) continue;
       const bodyState = calcBodyDamageState(entity.health, entity.maxHealth);
       for (const profile of entity.fireWhenDamagedProfiles) {
@@ -19794,7 +19947,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateOCLUpdate(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.oclUpdateProfiles.length === 0) continue;
 
       // Source parity: OCLUpdate::getDisabledTypesToProcess returns DISABLEDMASK_ALL.
@@ -19845,7 +19998,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateWeaponBonusUpdate(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.weaponBonusUpdateProfiles.length === 0) continue;
 
       for (let i = 0; i < entity.weaponBonusUpdateProfiles.length; i++) {
@@ -19860,7 +20013,7 @@ export class GameLogicSubsystem implements Subsystem {
 
         // Scan all allies in range.
         for (const target of this.spawnedEntities.values()) {
-          if (target.destroyed || target.slowDeathState) continue;
+          if (target.destroyed || target.slowDeathState || target.structureCollapseState) continue;
           // Source parity: PartitionFilterRelationship ALLOW_ALLIES.
           if (!this.areEntitiesAllied(entity, target)) continue;
           // Source parity: PartitionFilterAlive.
@@ -19956,7 +20109,7 @@ export class GameLogicSubsystem implements Subsystem {
     const interceptedThisFrame = new Set<number>();
 
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.pointDefenseLaserProfile;
       if (!profile) continue;
       // Source parity: disabled/sold/under-construction entities cannot defend.
@@ -20193,7 +20346,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateProneEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.proneFramesRemaining <= 0) continue;
       entity.proneFramesRemaining--;
       if (entity.proneFramesRemaining <= 0) {
@@ -20392,7 +20545,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private updateHorde(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.hordeProfile;
       if (!profile) continue;
 
@@ -20412,7 +20565,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       for (const candidate of this.spawnedEntities.values()) {
         if (candidate === entity) continue;
-        if (candidate.destroyed || candidate.slowDeathState) continue;
+        if (candidate.destroyed || candidate.slowDeathState || candidate.structureCollapseState) continue;
 
         // Source parity: PartitionFilterHordeMember checks.
         // Must have HordeUpdate module.
@@ -20517,7 +20670,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateDemoTraps(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.demoTrapProfile;
       if (!profile || entity.demoTrapDetonated) continue;
 
@@ -20540,7 +20693,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       for (const other of this.spawnedEntities.values()) {
         if (other === entity) continue;
-        if (other.destroyed || other.slowDeathState) continue;
+        if (other.destroyed || other.slowDeathState || other.structureCollapseState) continue;
 
         // Source parity: isEffectivelyDead().
         if (other.health <= 0) continue;
@@ -20681,7 +20834,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateRebuildHoles(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.rebuildHoleProfile;
       if (!profile) continue;
       // Only holes with an active rebuild template participate.
@@ -20831,7 +20984,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateWanderAI(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (!entity.hasWanderAI) continue;
       if (!entity.canMove || entity.isImmobile) continue;
       if (this.isEntityDisabledForMovement(entity)) continue;
@@ -20859,7 +21012,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateFloatEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (!entity.floatUpdateProfile?.enabled) continue;
 
       const waterHeight = this.getWaterHeightAt(entity.x, entity.z);
@@ -20878,7 +21031,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateAutoDeposit(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.autoDepositProfile;
       if (!profile) continue;
 
@@ -20931,7 +21084,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateDynamicShroud(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const prof = entity.dynamicShroudProfile;
       if (!prof) continue;
       if (entity.dynamicShroudState === 'SLEEPING') continue;
@@ -21014,7 +21167,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateSlavedEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (!entity.slavedUpdateProfile) continue;
       if (entity.slaverEntityId === null) continue;
 
@@ -21251,7 +21404,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateCountermeasures(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.countermeasuresProfile;
       const state = entity.countermeasuresState;
       if (!profile || !state) continue;
@@ -21400,7 +21553,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updatePilotFindVehicle(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.pilotFindVehicleProfile;
       if (!profile) continue;
 
@@ -21452,7 +21605,7 @@ export class GameLogicSubsystem implements Subsystem {
       let closestDistSq = Infinity;
 
       for (const candidate of this.spawnedEntities.values()) {
-        if (candidate.destroyed || candidate.slowDeathState) continue;
+        if (candidate.destroyed || candidate.slowDeathState || candidate.structureCollapseState) continue;
         if (candidate.id === entity.id) continue;
         if (candidate.category !== 'vehicle') continue;
 
@@ -21507,7 +21660,7 @@ export class GameLogicSubsystem implements Subsystem {
     let totalZ = 0;
     let count = 0;
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.category !== 'building') continue;
       const entitySide = entity.side ? this.normalizeSide(entity.side) : null;
       if (entitySide !== side) continue;
@@ -21579,7 +21732,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!profile || !state || !state.active) continue;
 
       // Source parity: isEffectivelyDead check — clean up ability on dying entity.
-      if (entity.destroyed || entity.slowDeathState) {
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) {
         this.finishSpecialAbility(entity, false);
         continue;
       }
@@ -21587,7 +21740,7 @@ export class GameLogicSubsystem implements Subsystem {
       // ── Target validation ──
       if (state.targetEntityId !== null) {
         const target = this.spawnedEntities.get(state.targetEntityId);
-        if (!target || target.destroyed || target.slowDeathState) {
+        if (!target || target.destroyed || target.slowDeathState || target.structureCollapseState) {
           // Target died — abort.
           this.finishSpecialAbility(entity, false);
           continue;
@@ -21922,7 +22075,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!profile) return;
     if (entity.toppleState !== 'NONE') return; // already toppling
     // Source parity: isEffectivelyDead() guard — don't topple dead/dying entities.
-    if (entity.destroyed || entity.slowDeathState) return;
+    if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) return;
 
     // Normalize direction.
     const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
@@ -22016,7 +22169,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateDeployStyleEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const profile = entity.deployStyleProfile;
       if (!profile) continue;
 
@@ -22304,13 +22457,151 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  // ── StructureCollapseUpdate implementation ────────────────────────────────
+
+  /**
+   * Source parity: StructureCollapseUpdate::onDie — initiate building collapse sequence.
+   * Checks DieMuxData, marks AI as dead, deselects, and begins the collapse.
+   * Returns true if collapse was started (entity persists during collapse).
+   */
+  private tryBeginStructureCollapse(entity: MapEntity): boolean {
+    const profile = entity.structureCollapseProfile;
+    if (!profile) return false;
+    if (!this.isDieModuleApplicable(entity, profile)) return false;
+
+    // Source parity: StructureCollapseUpdate::onDie — AIUpdateInterface::markAsDead + deselect.
+    // Prevent further combat, production, movement during collapse.
+    entity.animationState = 'DIE';
+    entity.canTakeDamage = false;
+    entity.attackTargetEntityId = null;
+    entity.attackTargetPosition = null;
+    entity.attackOriginalVictimPosition = null;
+    entity.attackCommandSource = 'AI';
+    entity.attackSubState = 'IDLE';
+    entity.moving = false;
+    entity.moveTarget = null;
+    entity.movePath = [];
+    entity.pathIndex = 0;
+    entity.pathfindGoalCell = null;
+    entity.selected = false;
+
+    // Unregister energy while collapsing.
+    this.unregisterEntityEnergy(entity);
+    this.cancelEntityCommandPathActions(entity.id);
+    this.cancelAndRefundAllProductionOnDeath(entity);
+
+    // Source parity: beginStructureCollapse — randomize collapse delay, fire INITIAL OCLs.
+    const collapseFrame = this.frameCounter +
+      (profile.minCollapseDelay >= profile.maxCollapseDelay
+        ? profile.minCollapseDelay
+        : this.gameRandom.nextRange(profile.minCollapseDelay, profile.maxCollapseDelay));
+
+    entity.structureCollapseState = {
+      state: 'WAITING',
+      collapseFrame,
+      burstFrame: 0,
+      currentHeight: 0,
+      collapseVelocity: 0,
+    };
+
+    // Execute INITIAL phase OCLs.
+    this.executeStructureCollapsePhase(entity, profile, 0); // SCPHASE_INITIAL
+
+    return true;
+  }
+
+  /**
+   * Source parity: StructureCollapseUpdate::update — progress all active structure collapses.
+   * Handles WAITING → COLLAPSING → DONE state transitions with gravity-based sinking.
+   */
+  private updateStructureCollapseEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (!entity.structureCollapseState || entity.destroyed) continue;
+      const state = entity.structureCollapseState;
+      const profile = entity.structureCollapseProfile;
+      if (!profile) {
+        this.markEntityDestroyed(entity.id, -1);
+        continue;
+      }
+
+      if (state.state === 'WAITING') {
+        // Source parity: dramatic pause — building shudders (visual-only in C++).
+        // Transition to COLLAPSING when collapseFrame is reached.
+        if (this.frameCounter >= state.collapseFrame) {
+          state.state = 'COLLAPSING';
+          // Execute BURST phase OCLs at transition.
+          this.executeStructureCollapsePhase(entity, profile, 2); // SCPHASE_BURST
+          // Schedule next burst.
+          state.burstFrame = this.frameCounter +
+            (profile.minBurstDelay >= profile.maxBurstDelay
+              ? profile.minBurstDelay
+              : this.gameRandom.nextRange(profile.minBurstDelay, profile.maxBurstDelay));
+        }
+      }
+
+      if (state.state === 'COLLAPSING') {
+        // Source parity: gravity-based collapse — velocity increases, height decreases.
+        // C++ line 213-214: m_currentHeight -= m_collapseVelocity;
+        //                    m_collapseVelocity -= m_gravity * (1.0 - collapseDamping);
+        // With m_gravity = -1.0f: velocity += (1.0 - damping) per frame, height -= velocity.
+        state.currentHeight -= state.collapseVelocity;
+        state.collapseVelocity -= STRUCTURE_COLLAPSE_GRAVITY * (1.0 - profile.collapseDamping);
+
+        // Source parity: periodic burst OCLs during collapse.
+        if (this.frameCounter >= state.burstFrame) {
+          if (profile.bigBurstFrequency > 0 &&
+              this.gameRandom.nextRange(1, profile.bigBurstFrequency) === 1) {
+            this.executeStructureCollapsePhase(entity, profile, 2); // SCPHASE_BURST
+          } else {
+            this.executeStructureCollapsePhase(entity, profile, 1); // SCPHASE_DELAY
+          }
+          // Schedule next burst.
+          state.burstFrame += (profile.minBurstDelay >= profile.maxBurstDelay
+            ? profile.minBurstDelay
+            : this.gameRandom.nextRange(profile.minBurstDelay, profile.maxBurstDelay));
+        }
+
+        // Source parity: done when building has sunk below ground.
+        // C++ line 241: if (currentHeight + templateGeometry.maxHeightAbovePosition <= 0)
+        const structHeight = entity.obstacleGeometry?.height ?? 10;
+        if (state.currentHeight + structHeight <= 0) {
+          state.state = 'DONE';
+          // Execute FINAL phase OCLs.
+          this.executeStructureCollapsePhase(entity, profile, 3); // SCPHASE_FINAL
+          // Source parity: in C++, building stays as rubble with POST_COLLAPSE model condition.
+          // In our system, destroy the entity since we don't have permanent rubble rendering.
+          entity.structureCollapseState = null;
+          this.markEntityDestroyed(entity.id, -1);
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: StructureCollapseUpdate::doPhaseStuff — execute OCLs for a collapse phase.
+   * Unlike SlowDeath's single-OCL selection, StructureCollapse picks a non-duplicate random
+   * subset of OCLs from the phase list. C++ uses buildNonDupRandomIndexList with count=1 default.
+   * @param phaseIndex 0=INITIAL, 1=DELAY, 2=BURST, 3=FINAL
+   */
+  private executeStructureCollapsePhase(
+    entity: MapEntity,
+    profile: StructureCollapseProfile,
+    phaseIndex: number,
+  ): void {
+    const oclList = profile.phaseOCLs[phaseIndex as 0 | 1 | 2 | 3];
+    if (!oclList || oclList.length === 0) return;
+    // Source parity: C++ defaults oclCount[phase] = 1 — execute one random OCL per phase.
+    const idx = oclList.length === 1 ? 0 : this.gameRandom.nextRange(0, oclList.length - 1);
+    this.executeOCL(oclList[idx]!, entity);
+  }
+
   /**
    * Source parity: LifetimeUpdate::update — destroy entities when their lifetime expires.
    * C++ calls object->kill() which applies unresistable damage equal to maxHealth.
    */
   private updateLifetimeEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.lifetimeDieFrame === null) continue;
       if (this.frameCounter < entity.lifetimeDieFrame) continue;
       // Source parity: kill() applies DAMAGE_UNRESISTABLE at maxHealth amount.
@@ -22375,7 +22666,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateHeightDieEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       const prof = entity.heightDieProfile;
       if (!prof) continue;
 
@@ -23615,7 +23906,7 @@ export class GameLogicSubsystem implements Subsystem {
     // are set by default. C++ hasAnyObjects() counts ALL non-excluded entities regardless
     // of MP_COUNT_FOR_VICTORY. Defeat occurs only when a side has zero eligible entities.
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState || entity.health <= 0) continue;
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState || entity.health <= 0) continue;
       const entitySide = this.normalizeSide(entity.side);
       if (entitySide !== side) continue;
 
