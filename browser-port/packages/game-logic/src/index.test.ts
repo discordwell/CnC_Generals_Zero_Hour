@@ -15182,3 +15182,145 @@ describe('SpecialAbilityUpdate', () => {
     expect(rotDiff).toBeCloseTo(Math.PI, 1);
   });
 });
+
+// ── FireWeaponUpdate Tests ──────────────────────────────────────────────────
+
+describe('FireWeaponUpdate', () => {
+  function makeFireWeaponSetup(opts: {
+    weaponName?: string;
+    initialDelayMs?: number;
+    exclusiveWeaponDelayMs?: number;
+    weaponDamage?: number;
+    weaponRadius?: number;
+    delayBetweenShotsMs?: number;
+    targetHealth?: number;
+  } = {}) {
+    const weaponName = opts.weaponName ?? 'AutoFireWeapon';
+    const autofireWeapon = makeWeaponDef(weaponName, {
+      PrimaryDamage: opts.weaponDamage ?? 10,
+      PrimaryDamageRadius: opts.weaponRadius ?? 50,
+      DamageType: 'EXPLOSION',
+      DelayBetweenShots: opts.delayBetweenShotsMs ?? 200, // ~6 frames
+    });
+
+    const emitterDef = makeObjectDef('PoisonEmitter', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'FireWeaponUpdate ModuleTag_AutoFire', {
+        Weapon: weaponName,
+        InitialDelay: opts.initialDelayMs ?? 0,
+        ExclusiveWeaponDelay: opts.exclusiveWeaponDelayMs ?? 0,
+      }),
+    ]);
+
+    const targetDef = makeObjectDef('Victim', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+        MaxHealth: opts.targetHealth ?? 200,
+        InitialHealth: opts.targetHealth ?? 200,
+      }),
+    ]);
+
+    const bundle = makeBundle({
+      objects: [emitterDef, targetDef],
+      weapons: [autofireWeapon],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Place emitter and target at same map cell so they overlap within damage radius.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PoisonEmitter', 5, 5),
+        makeMapObject('Victim', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+    return { logic };
+  }
+
+  it('extracts FireWeaponUpdateProfile from INI', () => {
+    const { logic } = makeFireWeaponSetup();
+    const state = logic.getEntityState(1);
+    expect(state).not.toBeNull();
+    // Entity should exist and be alive.
+    expect(state!.health).toBe(500);
+  });
+
+  it('fires weapon at own position every frame when ready', () => {
+    const { logic } = makeFireWeaponSetup({ delayBetweenShotsMs: 100, targetHealth: 500 });
+
+    // Record health after initial frame (first shot may fire on frame 0).
+    const initial = logic.getEntityState(2);
+    expect(initial).not.toBeNull();
+    const healthAfterInit = initial!.health;
+
+    // Run several more frames — weapon should keep firing and deal cumulative damage.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    const after = logic.getEntityState(2);
+    expect(after).not.toBeNull();
+    expect(after!.health).toBeLessThan(healthAfterInit);
+  });
+
+  it('respects initial delay before first fire', () => {
+    const { logic } = makeFireWeaponSetup({
+      initialDelayMs: 500, // ~15 frames
+      delayBetweenShotsMs: 100,
+      targetHealth: 200,
+    });
+
+    // Run 5 frames — should still be in initial delay.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const mid = logic.getEntityState(2);
+    expect(mid).not.toBeNull();
+    expect(mid!.health).toBe(200); // No damage yet.
+
+    // Run past initial delay — should start firing.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+    const after = logic.getEntityState(2);
+    expect(after).not.toBeNull();
+    expect(after!.health).toBeLessThan(200);
+  });
+
+  it('does not fire while UNDER_CONSTRUCTION', () => {
+    const { logic } = makeFireWeaponSetup({
+      delayBetweenShotsMs: 100,
+      targetHealth: 500,
+    });
+
+    // Mark emitter as under construction AFTER the initial update(0).
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const emitter = priv.spawnedEntities.get(1)!;
+    emitter.objectStatusFlags.add('UNDER_CONSTRUCTION');
+
+    // Record target health after UNDER_CONSTRUCTION is set.
+    const healthBefore = logic.getEntityState(2)!.health;
+
+    // Run several frames — emitter should NOT fire while under construction.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Target health should not have changed.
+    const after = logic.getEntityState(2);
+    expect(after).not.toBeNull();
+    expect(after!.health).toBe(healthBefore);
+  });
+
+  it('respects weapon delay between shots', () => {
+    const { logic } = makeFireWeaponSetup({
+      delayBetweenShotsMs: 1000, // ~30 frames — fires once per second
+      weaponDamage: 50,
+      weaponRadius: 100,
+      targetHealth: 500,
+    });
+
+    // Run exactly 10 frames — should fire at most once (delay = 30 frames).
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    const after10 = logic.getEntityState(2);
+    expect(after10).not.toBeNull();
+    // At most one shot of 50 damage.
+    expect(after10!.health).toBeGreaterThanOrEqual(450);
+  });
+});

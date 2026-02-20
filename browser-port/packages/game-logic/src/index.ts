@@ -1509,6 +1509,14 @@ interface MapEntity {
   /** Reaction weapons keyed by body damage state (fired once per damage event). */
   fireWhenDamagedProfiles: FireWhenDamagedProfile[];
 
+  // ── Source parity: FireWeaponUpdate — autonomous weapon fire at own position ──
+  /** Parsed FireWeaponUpdate modules from INI (multiple allowed per entity). */
+  fireWeaponUpdateProfiles: FireWeaponUpdateProfile[];
+  /** Per-profile next-fire-frame tracker (matches fireWeaponUpdateProfiles by index). */
+  fireWeaponUpdateNextFireFrames: number[];
+  /** Frame when this entity last fired a normal combat weapon (for ExclusiveWeaponDelay). */
+  lastShotFiredFrame: number;
+
   // ── Source parity: SlowDeathBehavior — phased death sequences ──
   /** Parsed SlowDeathBehavior modules from INI (multiple per entity, one selected on death). */
   slowDeathProfiles: SlowDeathProfile[];
@@ -1813,6 +1821,19 @@ interface FireWhenDamagedProfile {
   // Source parity: per-weapon cooldown — each Weapon instance tracks m_whenWeCanFireAgain.
   reactionNextFireFrame: [number, number, number, number];
   continuousNextFireFrame: [number, number, number, number];
+}
+
+/**
+ * Source parity: FireWeaponUpdate — autonomous weapon that fires at own position every frame.
+ * Used for things like poison fields, area denial weapons, persistent effects.
+ */
+interface FireWeaponUpdateProfile {
+  /** Weapon template name to fire. */
+  weaponName: string;
+  /** Delay in logic frames before first fire after entity creation. */
+  initialDelayFrames: number;
+  /** If > 0, suppress this module for this many frames after entity fires a normal weapon. */
+  exclusiveWeaponDelayFrames: number;
 }
 
 /**
@@ -2607,6 +2628,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHorde();
     this.updateProneEntities();
     this.updateFireWhenDamagedContinuous();
+    this.updateFireWeaponUpdate();
     this.updateSellingEntities();
     this.updateRebuildHoles();
     this.updateAutoDeposit();
@@ -4330,6 +4352,10 @@ export class GameLogicSubsystem implements Subsystem {
       deathWeaponNames: this.extractDeathWeaponNames(objectDef),
       // Fire weapon when damaged
       fireWhenDamagedProfiles: this.extractFireWhenDamagedProfiles(objectDef),
+      // Fire weapon update (autonomous fire at own position)
+      fireWeaponUpdateProfiles: this.extractFireWeaponUpdateProfiles(objectDef),
+      fireWeaponUpdateNextFireFrames: [],
+      lastShotFiredFrame: 0,
       // Slow death
       slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
       slowDeathState: null,
@@ -4454,6 +4480,13 @@ export class GameLogicSubsystem implements Subsystem {
         incomingMissiles: 0,
         divertedMissiles: 0,
       };
+    }
+
+    // Source parity: FireWeaponUpdate — initialize per-module fire timers with initial delay.
+    if (entity.fireWeaponUpdateProfiles.length > 0) {
+      entity.fireWeaponUpdateNextFireFrames = entity.fireWeaponUpdateProfiles.map(
+        p => this.frameCounter + p.initialDelayFrames,
+      );
     }
 
     return entity;
@@ -6421,6 +6454,38 @@ export class GameLogicSubsystem implements Subsystem {
             damageAmount: readNumericField(block.fields, ['DamageAmount']) ?? 0,
             reactionNextFireFrame: [0, 0, 0, 0],
             continuousNextFireFrame: [0, 0, 0, 0],
+          });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: FireWeaponUpdate — extract autonomous weapon fire config from INI.
+   * Multiple FireWeaponUpdate modules can exist on a single entity.
+   */
+  private extractFireWeaponUpdateProfiles(objectDef: ObjectDef | undefined): FireWeaponUpdateProfile[] {
+    if (!objectDef) return [];
+    const profiles: FireWeaponUpdateProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FIREWEAPONUPDATE') {
+          const weaponName = readStringField(block.fields, ['Weapon']);
+          if (!weaponName) return;
+
+          profiles.push({
+            weaponName,
+            initialDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['InitialDelay']) ?? 0),
+            exclusiveWeaponDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['ExclusiveWeaponDelay']) ?? 0),
           });
         }
       }
@@ -16238,6 +16303,8 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private queueWeaponDamageEvent(attacker: MapEntity, target: MapEntity, weapon: AttackWeaponProfile): void {
+    // Source parity: Object::getLastShotFiredFrame() — track last normal weapon fire for ExclusiveWeaponDelay.
+    attacker.lastShotFiredFrame = this.frameCounter;
     const sourceX = attacker.x;
     const sourceZ = attacker.z;
     const targetX = target.x;
@@ -17527,6 +17594,46 @@ export class GameLogicSubsystem implements Subsystem {
         this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
         // Source parity: Weapon::privateFireWeapon sets m_whenWeCanFireAgain = now + delayBetweenShots.
         profile.continuousNextFireFrame[bodyState] = this.frameCounter + this.resolveWeaponDefDelayFrames(weaponDef);
+      }
+    }
+  }
+
+  // ── FireWeaponUpdate implementation ─────────────────────────────────────
+
+  /**
+   * Source parity: FireWeaponUpdate::update() — autonomous weapon fire at own position.
+   * Fires a weapon at the entity's feet every frame the weapon is ready.
+   */
+  private updateFireWeaponUpdate(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.fireWeaponUpdateProfiles.length === 0) continue;
+      // Source parity: no firing while UNDER_CONSTRUCTION.
+      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) continue;
+
+      for (let i = 0; i < entity.fireWeaponUpdateProfiles.length; i++) {
+        const profile = entity.fireWeaponUpdateProfiles[i]!;
+        const nextFireFrame = entity.fireWeaponUpdateNextFireFrames[i] ?? 0;
+
+        // Source parity: initial delay — skip if not yet past the delay frame.
+        if (this.frameCounter < nextFireFrame) continue;
+
+        // Source parity: ExclusiveWeaponDelay — if the entity fired a normal weapon recently, skip.
+        if (profile.exclusiveWeaponDelayFrames > 0) {
+          if (this.frameCounter < entity.lastShotFiredFrame + profile.exclusiveWeaponDelayFrames) {
+            continue;
+          }
+        }
+
+        // Resolve weapon def and fire at own position.
+        const weaponDef = this.iniDataRegistry?.getWeapon(profile.weaponName);
+        if (!weaponDef) continue;
+
+        this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
+
+        // Source parity: Weapon::privateFireWeapon sets m_whenWeCanFireAgain.
+        // Re-resolve per shot so weapons with random delay ranges re-roll each time.
+        entity.fireWeaponUpdateNextFireFrames[i] = this.frameCounter + this.resolveWeaponDefDelayFrames(weaponDef);
       }
     }
   }
