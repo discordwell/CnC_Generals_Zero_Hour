@@ -1,5 +1,36 @@
 # Session Summaries
 
+## 2026-02-20T15:20Z — 3D Damage Distance + Bounding Sphere Subtraction (Tasks #93-94)
+- Task #93: 3D damage distance for radius damage victim gathering — committed b6a67fd
+  - Changed distance calc from XZ-only to full 3D (dx² + dy² + dz²)
+  - entity.y (center) vs impactY (terrain height) gives proper elevation difference
+  - DIRECT delivery uses getPosition() (terrain-level), not center
+  - RadiusDamageAngle cone check upgraded to 3D vectors (commit d290c98)
+- Task #94: FROM_BOUNDINGSPHERE_3D bounding sphere subtraction — committed 1e62ef5
+  - resolveBoundingSphereRadius(): CYLINDER=max(major, h/2), BOX=hypot(major, minor, h/2)
+  - GeometryHeight read from INI, stored on ObstacleGeometry.height
+  - BSR subtracted from raw 3D distance, clamped to zero for overlap
+  - Fallback to baseHeight when no explicit geometry (covers most combat units)
+  - Code review caught BOX formula bug: was max(hypot2D, halfH), fixed to hypot3D
+  - Updated scatter test expectations (BSR makes larger entities easier to hit)
+  - 1 new test: BSR extends effective hit zone for entities with explicit geometry
+- All 1075 tests pass, clean build
+
+## 2026-02-20T14:12Z — Power Brown-Out + Disabled Movement Restrictions (Tasks #88-89)
+- Task #88: Disabled entity movement + evacuation restrictions — committed 5e8548e, review fix 84a78fa
+  - isEntityDisabledForMovement() helper: checks DISABLED_HELD/EMP/HACKED/SUBDUED/PARALYZED/UNMANNED/UNDERPOWERED
+  - issueMoveTo uses new helper instead of just DISABLED_HELD
+  - DISABLED_SUBDUED blocks handleEvacuateCommand and handleExitContainerCommand
+  - 6 new tests: EMP/HACKED/SUBDUED block movement, SUBDUED blocks evacuate/exit, normal evacuate works
+- Task #89: DISABLED_UNDERPOWERED power brown-out system — committed ff369fe
+  - SidePowerState.brownedOut tracking with edge detection
+  - updatePowerBrownOut(): sets/clears DISABLED_UNDERPOWERED on KINDOF_POWERED entities
+  - pauseSpecialPowerCountdownsForSide(): frame-by-frame countdown push
+  - DISABLED_UNDERPOWERED added to isDisabledForConstruction + isObjectDisabledForUpgradeSideEffects
+  - TODO: radar disable/enable during brown-out (radar subsystem not fully wired)
+  - 4 new tests: brownout flag set/clear, non-POWERED unaffected, power restore
+- All 1069 tests pass, clean build
+
 ## 2026-02-20T09:30Z — Projectile Flight Collision Detection (Task #78)
 - Task #78: Projectile flight collision detection with C++ DumbProjectileBehavior parity — committed 7fa2d1b
   - updateProjectileFlightCollisions() method: interpolates projectile position each frame (linear + Bezier)
@@ -59,28 +90,6 @@
   - Integration: collectContainedEntityIds, releaseEntityFromContainer, resolveEntityContainingObject, isEnclosingContainer, handleExitContainerCommand, handleEvacuateCommand, combat-containment firecheck
   - 9 new tests: enter/exit flags, aircraft block, shared capacity, cave-in, reassign, evacuate, healing, sell eject
 - All 1026 tests pass, clean build
-
-## 2026-02-20T07:12Z — Fog of War targeting/render + Mine collision detonation system
-- Task #70: Fog-of-war targeting gate in canAttackerTargetEntity(), resolveEntityShroudStatusForLocalPlayer(), shroudStatus on RenderableEntityState — committed d6c87a1
-- Task #71: Collision-based mine detonation system with full C++ MinefieldBehavior parity:
-  - MinefieldProfile INI parsing (DetonationWeapon, DetonatedBy, NumVirtualMines, etc.)
-  - Geometry-based collision detection (2D bounding circle overlap)
-  - handleMineCollision with immunity list, worker rejection, relationship mask, mine-clearing immunity
-  - detonateMineOnce with weapon firing, charge tracking, MASKED status
-  - fireTemporaryWeaponAtPosition for area damage
-  - Fixed: mine entities now get obstacleGeometry even though they don't block path (MINE kindOf)
-  - 7 new tests: detonation, ally immunity, DetonatedBy override, multi-charge, out-of-range, worker immunity, visual events
-- All 1016 tests pass, clean build
-
-## 2026-02-19T15:15Z — ObjectStatus + WeaponSet + maxShotsToFire + Weapon State Preservation
-- Task #48: Wired ObjectStatus side-effects — INDESTRUCTIBLE (body field), IMMOBILE (kindOf), DISABLED_HELD, UNSELECTABLE, MASKED (selection+targeting), NO_COLLISIONS (pathfinding), NO_ATTACK_FROM_AI
-- Task #49: Weapon anti-mask system — parsed 8 anti-mask flags from INI, totalWeaponAntiMask per entity, resolveTargetAntiMask from kindOf, container enclosure check (garrison/helix), helix portable rider exempt
-- Task #50: maxShotsToFire shot counter + LOCKED_TEMPORARILY weapon lock in combat-update, clearMaxShotsAttackState callback
-- Task #51: Preserve weapon slot runtime state across set changes — only reset timing when template name changes
-- Code review fixes each task: INDESTRUCTIBLE as body field not status, entity.isImmobile not status bit, DEMOTRAP in mine branch, helix portable rider, anti-mask priority order, AntiGround pre-seeded default
-- Commits: 440e329, 3a7c40b, baeedc1, c3e7e68
-- All 1009 tests pass, clean build
-- Next: Tasks #52-55 created (containment fire rules, slaver linkage, transport containment, AI state machine)
 
 # Key Findings
 
