@@ -54,8 +54,8 @@ export interface SpecialPowerEffectContext<TEntity extends SpecialPowerEntity> {
   /** Get team relationship: 0=enemies, 1=neutral, 2=allies. */
   getRelationship(sideA: string, sideB: string): number;
 
-  /** Reveal fog of war at position for a side. */
-  revealFogOfWar(side: string, worldX: number, worldZ: number, radius: number): void;
+  /** Reveal fog of war at position for a side. durationMs=0 means default (~30s). */
+  revealFogOfWar(side: string, worldX: number, worldZ: number, radius: number, durationMs?: number): void;
 
   /** Normalize a side string. */
   normalizeSide(side: string | undefined): string;
@@ -189,18 +189,20 @@ export interface SpyVisionParams {
   targetX: number;
   targetZ: number;
   revealRadius: number;
+  /** Duration in milliseconds (0 = use default ~30s). */
+  durationMs: number;
 }
 
 /**
  * Reveal fog of war around a target position for a side.
  * Source parity: SpyVisionSpecialPower.cpp — activates SpyVisionUpdate module
- * which reveals enemy positions. We simplify to direct fog reveal.
+ * which reveals enemy positions. We simplify to direct fog reveal with duration.
  */
 export function executeSpyVision<TEntity extends SpecialPowerEntity>(
   params: SpyVisionParams,
   context: SpecialPowerEffectContext<TEntity>,
 ): void {
-  context.revealFogOfWar(params.sourceSide, params.targetX, params.targetZ, params.revealRadius);
+  context.revealFogOfWar(params.sourceSide, params.targetX, params.targetZ, params.revealRadius, params.durationMs);
 }
 
 // ──── Effect: Area Heal (Repair vehicles, Emergency Repair, etc.) ────────────

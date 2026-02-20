@@ -2309,6 +2309,14 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly supplyWarehouseStates = new Map<number, SupplyWarehouseState>();
   private readonly supplyTruckStates = new Map<number, SupplyTruckState>();
   private fogOfWarGrid: FogOfWarGrid | null = null;
+  /** Source parity: SpyVisionSpecialPower — temporary fog reveals with expiration timers. */
+  private readonly temporaryVisionReveals: {
+    playerIndex: number;
+    worldX: number;
+    worldZ: number;
+    radius: number;
+    expiryFrame: number;
+  }[] = [];
   private readonly sidePlayerIndex = new Map<string, number>();
   private nextPlayerIndex = 0;
   private readonly skirmishAIStates = new Map<string, SkirmishAIState>();
@@ -2731,6 +2739,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePilotFindVehicle();
     this.updateToppleEntities();
     this.updateRadarExtension();
+    this.updateTemporaryVisionReveals();
     this.updateRenderStates();
     this.updateLifetimeEntities();
     this.updateDeletionEntities();
@@ -4148,6 +4157,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.localPlayerScienceAvailability.clear();
     this.sidePowerBonus.clear();
     this.sideRadarState.clear();
+    this.temporaryVisionReveals.length = 0;
     this.sideRankState.clear();
     this.frameCounter = 0;
     this.gameRandom.setSeed(1);
@@ -9988,6 +9998,7 @@ export class GameLogicSubsystem implements Subsystem {
           targetX: source.x,
           targetZ: source.z,
           revealRadius: source.visionRange > 0 ? source.visionRange : DEFAULT_SPY_VISION_RADIUS,
+          durationMs: module.spyVisionBaseDurationMs,
         }, effectContext);
         break;
       case 'CASH_BOUNTY': {
@@ -10066,6 +10077,7 @@ export class GameLogicSubsystem implements Subsystem {
           targetX,
           targetZ,
           revealRadius: source.visionRange > 0 ? source.visionRange : DEFAULT_SPY_VISION_RADIUS,
+          durationMs: module.spyVisionBaseDurationMs,
         }, effectContext);
         break;
       case 'AREA_HEAL':
@@ -13499,7 +13511,7 @@ export class GameLogicSubsystem implements Subsystem {
       getRelationship: (sideA, sideB) => {
         return this.getTeamRelationshipBySides(sideA, sideB);
       },
-      revealFogOfWar: (side, worldX, worldZ, radius) => {
+      revealFogOfWar: (side, worldX, worldZ, radius, durationMs) => {
         const grid = this.fogOfWarGrid;
         if (!grid) {
           return;
@@ -13509,6 +13521,19 @@ export class GameLogicSubsystem implements Subsystem {
           return;
         }
         grid.addLooker(playerIdx, worldX, worldZ, radius);
+        // Source parity: spy vision reveals are time-limited.
+        // Default to ~30 seconds (900 frames) if no duration specified.
+        const DEFAULT_SPY_DURATION_FRAMES = 900;
+        const durationFrames = durationMs && durationMs > 0
+          ? this.msToLogicFrames(durationMs)
+          : DEFAULT_SPY_DURATION_FRAMES;
+        this.temporaryVisionReveals.push({
+          playerIndex: playerIdx,
+          worldX,
+          worldZ,
+          radius,
+          expiryFrame: this.frameCounter + durationFrames,
+        });
       },
       normalizeSide: (side) => this.normalizeSide(side),
     };
@@ -20201,6 +20226,22 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: kill() applies DAMAGE_UNRESISTABLE at maxHealth amount.
       // This triggers the normal death pipeline (SlowDeath, death OCLs, etc.).
       this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
+    }
+  }
+
+  /**
+   * Source parity: SpyVisionSpecialPower — expire temporary fog-of-war reveals.
+   * When a spy vision reveal expires, remove the looker from the fog grid.
+   */
+  private updateTemporaryVisionReveals(): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) return;
+    for (let i = this.temporaryVisionReveals.length - 1; i >= 0; i--) {
+      const reveal = this.temporaryVisionReveals[i]!;
+      if (this.frameCounter >= reveal.expiryFrame) {
+        grid.removeLooker(reveal.playerIndex, reveal.worldX, reveal.worldZ, reveal.radius);
+        this.temporaryVisionReveals.splice(i, 1);
+      }
     }
   }
 
