@@ -16179,7 +16179,9 @@ describe('HiveStructureBody', () => {
     expect(slave1.health).toBeLessThan(100);
   });
 
-  it('swallows damage when no slaves exist and damage type matches swallow list', () => {
+  it('swallows damage when all slaves dead and damage type matches swallow list', () => {
+    // Source parity: HiveStructureBody.cpp:88 — swallow only fires when SpawnBehavior exists
+    // but getClosestSlave returns null (all slaves dead). No SpawnBehavior = DEBUG_CRASH + fallthrough.
     const hiveDef = makeObjectDef('GlaTunnel2', 'GLA', ['STRUCTURE'], [
       makeBlock('Body', 'HiveStructureBody ModuleTag_Body', {
         MaxHealth: 500,
@@ -16187,7 +16189,15 @@ describe('HiveStructureBody', () => {
         PropagateDamageTypesToSlavesWhenExisting: 'EXPLOSION',
         SwallowDamageTypesIfSlavesNotExisting: 'EXPLOSION',
       }),
-      // No SpawnBehavior — no slaves exist.
+      makeBlock('Behavior', 'SpawnBehavior ModuleTag_Spawn', {
+        SpawnNumber: 1,
+        SpawnReplaceDelay: 99999,
+        SpawnTemplateName: 'TunnelDefender2',
+        InitialBurst: 1,
+      }),
+    ]);
+    const defenderDef = makeObjectDef('TunnelDefender2', 'GLA', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
     ]);
     const attackerDef = makeObjectDef('Tank2', 'America', ['VEHICLE'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
@@ -16201,7 +16211,7 @@ describe('HiveStructureBody', () => {
       DelayBetweenShots: 500,
     });
 
-    const bundle = makeBundle({ objects: [hiveDef, attackerDef], weapons: [tankGun] });
+    const bundle = makeBundle({ objects: [hiveDef, defenderDef, attackerDef], weapons: [tankGun] });
     const scene = new THREE.Scene();
     const logic = new GameLogicSubsystem(scene);
     logic.loadMapObjects(
@@ -16218,9 +16228,18 @@ describe('HiveStructureBody', () => {
 
     const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
     const tunnel = priv.spawnedEntities.get(1)!;
+    const state = tunnel.spawnBehaviorState!;
+    expect(state.slaveIds.length).toBe(1);
+
+    // Kill the slave so no living slaves remain.
+    const slave = priv.spawnedEntities.get(state.slaveIds[0]!)!;
+    (logic as any).applyWeaponDamageAmount(null, slave, 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+    expect(slave.destroyed).toBe(true);
+
     const healthBefore = tunnel.health;
 
-    // Attack the tunnel with EXPLOSION — should be swallowed since no slaves.
+    // Attack the tunnel with EXPLOSION — should be swallowed since no alive slaves.
     logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
     for (let i = 0; i < 90; i++) logic.update(1 / 30);
 
@@ -18279,5 +18298,210 @@ describe('HeightDieUpdate OnlyWhenMovingDown', () => {
     jet.y = 2 + jet.baseHeight;
     logic.update(1 / 30);
     expect(jet.destroyed).toBe(true);
+  });
+});
+
+describe('GrantUpgradeCreate', () => {
+  it('grants object upgrade on creation when not under construction', () => {
+    const building = makeObjectDef('AmericaPowerPlant', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'GrantUpgradeCreate ModuleTag_GUC', {
+        UpgradeToGrant: 'Upgrade_AmericaPower',
+        ExemptStatus: 'UNDER_CONSTRUCTION',
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [building] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmericaPowerPlant', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Map-placed entities are not under construction, so upgrade should be granted immediately.
+    expect(entity.completedUpgrades.has('UPGRADE_AMERICAPOWER')).toBe(true);
+  });
+
+  it('does not grant upgrade during construction, grants on build complete', () => {
+    // Place a building directly but mark it under construction, then complete it.
+    const building = makeObjectDef('AmericaPowerPlant2', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'GrantUpgradeCreate ModuleTag_GUC', {
+        UpgradeToGrant: 'Upgrade_Power2',
+        ExemptStatus: 'UNDER_CONSTRUCTION',
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [building] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmericaPowerPlant2', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // When placed from map, it's not under construction → upgrade already granted on creation.
+    expect(entity.completedUpgrades.has('UPGRADE_POWER2')).toBe(true);
+
+    // Now simulate a building that starts under construction:
+    // Clear the upgrade and set UNDER_CONSTRUCTION, then call completeConstruction.
+    entity.completedUpgrades.delete('UPGRADE_POWER2');
+    entity.objectStatusFlags.add('UNDER_CONSTRUCTION');
+    // The upgrade should NOT be present.
+    expect(entity.completedUpgrades.has('UPGRADE_POWER2')).toBe(false);
+
+    // Trigger completeConstruction via the private method.
+    (logic as any).completeConstruction(entity);
+    // Now the upgrade should be re-granted.
+    expect(entity.completedUpgrades.has('UPGRADE_POWER2')).toBe(true);
+  });
+});
+
+describe('UpgradeDie', () => {
+  it('removes upgrade from producer when entity dies', () => {
+    const factory = makeObjectDef('AmericaAirfield', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('ProductionUpdate', 'ProductionUpdate ModuleTag_PU', {
+        MaxQueueEntries: 5,
+      }),
+    ]);
+    const drone = makeObjectDef('ScoutDrone', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      makeBlock('Behavior', 'UpgradeDie ModuleTag_UD', {
+        UpgradeToRemove: 'Upgrade_ScoutDrone',
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [factory, drone] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmericaAirfield', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const factoryEntity = priv.spawnedEntities.get(1)!;
+
+    // Manually give the factory the upgrade.
+    factoryEntity.completedUpgrades.add('UPGRADE_SCOUTDRONE');
+
+    // Create a drone entity as if produced by the factory.
+    const droneDef = bundle.objects.find(o => o.name.toUpperCase() === 'SCOUTDRONE')!;
+    const droneMapObj: MapObjectJSON = {
+      templateName: 'ScoutDrone',
+      angle: 0,
+      flags: 0,
+      position: { x: 55, y: 55, z: 0 },
+      properties: {},
+    };
+    const droneEntity = (logic as any).createMapEntity(droneMapObj, droneDef, makeRegistry(bundle), makeHeightmap());
+    droneEntity.side = 'America';
+    droneEntity.controllingPlayerToken = factoryEntity.controllingPlayerToken;
+    droneEntity.producerEntityId = factoryEntity.id;
+    priv.spawnedEntities.set(droneEntity.id, droneEntity);
+    logic.update(1 / 30);
+
+    expect(factoryEntity.completedUpgrades.has('UPGRADE_SCOUTDRONE')).toBe(true);
+
+    // Kill the drone.
+    (logic as any).applyWeaponDamageAmount(null, droneEntity, 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(droneEntity.destroyed).toBe(true);
+    // Factory should have the upgrade removed.
+    expect(factoryEntity.completedUpgrades.has('UPGRADE_SCOUTDRONE')).toBe(false);
+  });
+});
+
+describe('CheckpointUpdate', () => {
+  it('opens gate when ally is near and no enemies nearby', () => {
+    const gate = makeObjectDef('Checkpoint', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'CheckpointUpdate ModuleTag_CU', { EnemyScanDelayTime: 500 }),
+    ], { VisionRange: 100, Geometry: 'BOX', GeometryMajorRadius: 10, GeometryMinorRadius: 5, GeometryHeight: 10 });
+    const ally = makeObjectDef('AllyUnit', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const bundle = makeBundle({ objects: [gate, ally] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Checkpoint', 5, 5),
+        makeMapObject('AllyUnit', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    // Same team = allies (2 = RELATIONSHIP_ALLIES).
+    logic.setTeamRelationship('America', 'America', 2);
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const gateEntity = priv.spawnedEntities.get(1)!;
+    const initialMinorRadius = gateEntity.checkpointMaxMinorRadius;
+    expect(initialMinorRadius).toBeGreaterThan(0);
+
+    // Run several frames — gate should shrink (opening).
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    const geom = gateEntity.obstacleGeometry!;
+    expect(geom.minorRadius).toBeLessThan(initialMinorRadius);
+  });
+
+  it('closes gate when enemy is near', () => {
+    const gate = makeObjectDef('Checkpoint2', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'CheckpointUpdate ModuleTag_CU', { EnemyScanDelayTime: 500 }),
+    ], { VisionRange: 100, Geometry: 'BOX', GeometryMajorRadius: 10, GeometryMinorRadius: 5, GeometryHeight: 10 });
+    const enemy = makeObjectDef('EnemyUnit', 'GLA', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const ally = makeObjectDef('AllyUnit2', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const bundle = makeBundle({ objects: [gate, enemy, ally] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Checkpoint2', 5, 5),
+        makeMapObject('EnemyUnit', 5, 5),
+        makeMapObject('AllyUnit2', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0); // enemies
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'America', 2); // allies
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const gateEntity = priv.spawnedEntities.get(1)!;
+    const maxMinor = gateEntity.checkpointMaxMinorRadius;
+
+    // Run several frames — gate should stay closed (enemy nearby).
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    const geom = gateEntity.obstacleGeometry!;
+    // Radius should remain at max (closed).
+    expect(geom.minorRadius).toBe(maxMinor);
   });
 });

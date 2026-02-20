@@ -1678,6 +1678,21 @@ interface MapEntity {
 
   // ── Source parity: FloatUpdate — water surface snapping ──
   floatUpdateProfile: FloatUpdateProfile | null;
+
+  // ── Source parity: GrantUpgradeCreate — grants upgrade on creation/build complete ──
+  grantUpgradeCreateProfiles: GrantUpgradeCreateProfile[];
+
+  // ── Source parity: UpgradeDie — removes upgrade from producer on death ──
+  upgradeDieProfiles: UpgradeDieProfile[];
+  /** Source parity: Object::m_producerID — entity that created this one (factory/producer). */
+  producerEntityId: number;
+
+  // ── Source parity: CheckpointUpdate — gate opens for allies, closes for enemies ──
+  checkpointProfile: CheckpointProfile | null;
+  checkpointAllyNear: boolean;
+  checkpointEnemyNear: boolean;
+  checkpointMaxMinorRadius: number;
+  checkpointScanCountdown: number;
 }
 
 /**
@@ -1776,6 +1791,41 @@ interface HeightDieProfile {
   snapToGroundOnDeath: boolean;
   /** Initial delay frames before height checks begin. */
   initialDelayFrames: number;
+}
+
+/**
+ * Source parity: GrantUpgradeCreate — grants an upgrade when entity is created or build completes.
+ * C++ file: GrantUpgradeCreate.cpp — used by units that auto-grant upgrades on creation.
+ */
+interface GrantUpgradeCreateProfile {
+  /** Name of upgrade to grant (normalized to uppercase). */
+  upgradeName: string;
+  /** If true, the upgrade is a PLAYER-scoped upgrade (granted to side, not object). */
+  isPlayerUpgrade: boolean;
+  /** If UNDER_CONSTRUCTION is in ExemptStatus, grant on create when not under construction. */
+  exemptUnderConstruction: boolean;
+}
+
+/**
+ * Source parity: UpgradeDie — when entity dies, removes specified upgrade from its producer.
+ * C++ file: UpgradeDie.cpp — used by scout drones etc. that remove upgrade on death.
+ */
+interface UpgradeDieProfile {
+  /** Name of upgrade to remove from producer on death (normalized to uppercase). */
+  upgradeName: string;
+  /** Die filtering: DeathTypes, ExemptStatus, RequiredStatus, VeterancyLevels. */
+  deathTypes: Set<string> | null;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
+}
+
+/**
+ * Source parity: CheckpointUpdate — autonomous gate that opens for allies, closes for enemies.
+ * C++ file: CheckpointUpdate.cpp — used by GLA checkpoints and similar neutral structures.
+ */
+interface CheckpointProfile {
+  /** Delay between enemy scans in logic frames. */
+  scanDelayFrames: number;
 }
 
 /**
@@ -2972,6 +3022,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateEva();
     this.updateHorde();
     this.updateEnemyNear();
+    this.updateCheckpoints();
     this.updateProneEntities();
     this.updateFireWhenDamagedContinuous();
     this.updateFireWeaponUpdate();
@@ -4804,6 +4855,17 @@ export class GameLogicSubsystem implements Subsystem {
       radarActive: false,
       // FloatUpdate
       floatUpdateProfile: this.extractFloatUpdateProfile(objectDef),
+      // GrantUpgradeCreate
+      grantUpgradeCreateProfiles: this.extractGrantUpgradeCreateProfiles(objectDef),
+      // UpgradeDie
+      upgradeDieProfiles: this.extractUpgradeDieProfiles(objectDef),
+      producerEntityId: 0,
+      // CheckpointUpdate
+      checkpointProfile: this.extractCheckpointProfile(objectDef),
+      checkpointAllyNear: false,
+      checkpointEnemyNear: false,
+      checkpointMaxMinorRadius: 0,
+      checkpointScanCountdown: 0,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -4885,6 +4947,21 @@ export class GameLogicSubsystem implements Subsystem {
         incomingMissiles: 0,
         divertedMissiles: 0,
       };
+    }
+
+    // Source parity: CheckpointUpdate constructor — cache maxMinorRadius, random scan stagger.
+    if (entity.checkpointProfile) {
+      entity.checkpointMaxMinorRadius = entity.obstacleGeometry?.minorRadius ?? 0;
+      entity.checkpointScanCountdown = this.gameRandom.nextRange(0, entity.checkpointProfile.scanDelayFrames);
+    }
+
+    // Source parity: GrantUpgradeCreate::onCreate — grant upgrades on entity creation.
+    // C++ only grants in onCreate if ExemptStatus includes UNDER_CONSTRUCTION and entity
+    // is NOT currently under construction (i.e. placed fully built).
+    for (const prof of entity.grantUpgradeCreateProfiles) {
+      if (prof.exemptUnderConstruction && !entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+        this.applyGrantUpgradeCreate(entity, prof);
+      }
     }
 
     // Source parity: FireWeaponUpdate — initialize per-module fire timers with initial delay.
@@ -7323,6 +7400,109 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return result;
+  }
+
+  /**
+   * Source parity: GrantUpgradeCreate — extract all GrantUpgradeCreate modules from INI.
+   * C++ file: GrantUpgradeCreate.cpp — grants upgrades on object creation / build complete.
+   */
+  private extractGrantUpgradeCreateProfiles(objectDef: ObjectDef | undefined): GrantUpgradeCreateProfile[] {
+    if (!objectDef) return [];
+    const profiles: GrantUpgradeCreateProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'GRANTUPGRADECREATE') {
+          const upgradeName = readStringField(block.fields, ['UpgradeToGrant'])?.trim().toUpperCase() ?? '';
+          if (upgradeName) {
+            const exemptStatus = readStringField(block.fields, ['ExemptStatus'])?.trim().toUpperCase() ?? '';
+            // Source parity: determine if this is a PLAYER upgrade by checking the UpgradeDef.
+            // We check at runtime; for now store the name and resolve type on application.
+            profiles.push({
+              upgradeName,
+              isPlayerUpgrade: false, // Resolved at application time from UpgradeDef.
+              exemptUnderConstruction: exemptStatus.includes('UNDER_CONSTRUCTION'),
+            });
+          }
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: UpgradeDie — extract all UpgradeDie modules from INI.
+   * C++ file: UpgradeDie.cpp — removes upgrade from producer when entity dies.
+   */
+  private extractUpgradeDieProfiles(objectDef: ObjectDef | undefined): UpgradeDieProfile[] {
+    if (!objectDef) return [];
+    const profiles: UpgradeDieProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'UPGRADEDIE') {
+          const upgradeName = readStringField(block.fields, ['UpgradeToRemove'])?.trim().toUpperCase() ?? '';
+          if (upgradeName) {
+            // DieMuxData filtering.
+            const deathTypesRaw = readStringField(block.fields, ['DeathTypes'])?.trim().toUpperCase() ?? '';
+            const deathTypes: Set<string> | null = deathTypesRaw
+              ? new Set(deathTypesRaw.split(/\s+/).filter(Boolean))
+              : null;
+            const exemptStatusRaw = readStringField(block.fields, ['ExemptStatus'])?.trim().toUpperCase() ?? '';
+            const exemptStatus = new Set(exemptStatusRaw.split(/\s+/).filter(Boolean));
+            const requiredStatusRaw = readStringField(block.fields, ['RequiredStatus'])?.trim().toUpperCase() ?? '';
+            const requiredStatus = new Set(requiredStatusRaw.split(/\s+/).filter(Boolean));
+            profiles.push({
+              upgradeName,
+              deathTypes,
+              exemptStatus,
+              requiredStatus,
+            });
+          }
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: CheckpointUpdate — extract checkpoint gate profile from INI.
+   * C++ file: CheckpointUpdate.cpp — gate opens for allies when no enemies near.
+   */
+  private extractCheckpointProfile(objectDef: ObjectDef | undefined): CheckpointProfile | null {
+    if (!objectDef) return null;
+    let profile: CheckpointProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'CHECKPOINTUPDATE') {
+          const scanDelayMs = readNumericField(block.fields, ['EnemyScanDelayTime']) ?? 1000;
+          profile = {
+            scanDelayFrames: Math.max(1, this.msToLogicFrames(scanDelayMs)),
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
   }
 
   /**
@@ -12356,6 +12536,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (building.side) {
       this.emitEvaEvent('CONSTRUCTION_COMPLETE', building.side, 'own', building.id, building.templateName);
     }
+
+    // Source parity: GrantUpgradeCreate::onBuildComplete — grant upgrades when construction finishes.
+    for (const prof of building.grantUpgradeCreateProfiles) {
+      this.applyGrantUpgradeCreate(building, prof);
+    }
   }
 
   private updatePendingEnterObjectActions(): void {
@@ -16255,6 +16440,8 @@ export class GameLogicSubsystem implements Subsystem {
       created.side = producer.side;
     }
     created.controllingPlayerToken = producer.controllingPlayerToken;
+    // Source parity: Object::m_producerID — track who created this unit (for UpgradeDie).
+    created.producerEntityId = producer.id;
 
     if (!this.reserveParkingSpaceForProducedUnit(producer, created, unitDef, productionId)) {
       return null;
@@ -19042,37 +19229,38 @@ export class GameLogicSubsystem implements Subsystem {
       const upperDamageType = damageType.toUpperCase();
       if (hiveProf.propagateDamageTypes.has(upperDamageType)) {
         const state = target.spawnBehaviorState;
-        const aliveSlaveIds = state?.slaveIds.filter((id) => {
-          const slave = this.spawnedEntities.get(id);
-          return slave && !slave.destroyed;
-        }) ?? [];
-        if (aliveSlaveIds.length > 0) {
-          // Source parity: HiveStructureBody.cpp:81 — getClosestSlave(shooter->getPosition()).
-          // Distance is computed from slave to shooter, not from slave to hive.
-          const shooter = sourceEntityId !== null ? this.spawnedEntities.get(sourceEntityId) ?? null : null;
-          const refX = shooter ? shooter.x : target.x;
-          const refZ = shooter ? shooter.z : target.z;
-          let closestSlave: MapEntity | null = null;
-          let closestDistSqr = Infinity;
-          for (const slaveId of aliveSlaveIds) {
-            const slave = this.spawnedEntities.get(slaveId)!;
-            const dx = slave.x - refX;
-            const dz = slave.z - refZ;
-            const distSqr = dx * dx + dz * dz;
-            if (distSqr < closestDistSqr) {
-              closestDistSqr = distSqr;
-              closestSlave = slave;
+        // Source parity: HiveStructureBody.cpp:78-96 — only redirect if shooter exists.
+        // C++ calls findObjectByID(sourceID), and if null falls through to normal damage.
+        const shooter = sourceEntityId !== null ? this.spawnedEntities.get(sourceEntityId) ?? null : null;
+        if (shooter && state) {
+          const aliveSlaveIds = state.slaveIds.filter((id) => {
+            const slave = this.spawnedEntities.get(id);
+            return slave && !slave.destroyed;
+          });
+          if (aliveSlaveIds.length > 0) {
+            // Source parity: HiveStructureBody.cpp:81 — getClosestSlave(shooter->getPosition()).
+            let closestSlave: MapEntity | null = null;
+            let closestDistSqr = Infinity;
+            for (const slaveId of aliveSlaveIds) {
+              const slave = this.spawnedEntities.get(slaveId)!;
+              const dx = slave.x - shooter.x;
+              const dz = slave.z - shooter.z;
+              const distSqr = dx * dx + dz * dz;
+              if (distSqr < closestDistSqr) {
+                closestDistSqr = distSqr;
+                closestSlave = slave;
+              }
             }
-          }
-          if (closestSlave) {
-            this.applyWeaponDamageAmount(sourceEntityId, closestSlave, amount, damageType, weaponDeathType);
+            if (closestSlave) {
+              this.applyWeaponDamageAmount(sourceEntityId, closestSlave, amount, damageType, weaponDeathType);
+              return;
+            }
+          } else if (hiveProf.swallowDamageTypes.has(upperDamageType)) {
+            // No slaves and damage type is swallowed — silently ignore.
             return;
           }
-        } else if (hiveProf.swallowDamageTypes.has(upperDamageType)) {
-          // No slaves and damage type is swallowed — silently ignore.
-          return;
         }
-        // Fall through to normal StructureBody damage if not redirected or swallowed.
+        // Fall through to normal StructureBody damage if shooter is null or no redirect.
       }
     }
 
@@ -19730,6 +19918,127 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
       entity.enemyNearDetected = foundEnemy;
+    }
+  }
+
+  /**
+   * Source parity: CheckpointUpdate::update — gate opens for allies, closes for enemies.
+   * C++ file: CheckpointUpdate.cpp lines 107-171.
+   * Scans for allies and enemies within vision range, adjusts geometry to allow/block passage.
+   */
+  private updateCheckpoints(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const prof = entity.checkpointProfile;
+      if (!prof) continue;
+
+      // Save previous state for change detection.
+      const wasAllyNear = entity.checkpointAllyNear;
+      const wasEnemyNear = entity.checkpointEnemyNear;
+
+      // Source parity: C++ line 71 — always scan (delay code effectively disabled with `|| TRUE`).
+      const visionRange = entity.visionRange;
+      if (visionRange > 0) {
+        const rangeSqr = visionRange * visionRange;
+        let foundEnemy = false;
+        let foundAlly = false;
+        for (const candidate of this.spawnedEntities.values()) {
+          if (candidate.id === entity.id || candidate.destroyed) continue;
+          if (!candidate.canTakeDamage) continue;
+          const dx = candidate.x - entity.x;
+          const dz = candidate.z - entity.z;
+          if (dx * dx + dz * dz > rangeSqr) continue;
+          const relationship = this.getTeamRelationship(entity, candidate);
+          if (relationship === RELATIONSHIP_ENEMIES) foundEnemy = true;
+          else if (relationship === RELATIONSHIP_ALLIES) foundAlly = true;
+          if (foundEnemy && foundAlly) break;
+        }
+        entity.checkpointEnemyNear = foundEnemy;
+        entity.checkpointAllyNear = foundAlly;
+      } else {
+        entity.checkpointEnemyNear = false;
+        entity.checkpointAllyNear = false;
+      }
+
+      const open = !entity.checkpointEnemyNear && entity.checkpointAllyNear;
+
+      // Source parity: C++ lines 153-161 — gradually shrink/expand minor radius.
+      // When open: shrink to 0 (units can pass through). When closed: expand to max.
+      const geom = entity.obstacleGeometry;
+      if (geom) {
+        if (open) {
+          if (geom.minorRadius > 0) {
+            geom.minorRadius = Math.max(0, geom.minorRadius - 0.333);
+          }
+        } else {
+          if (geom.minorRadius < entity.checkpointMaxMinorRadius) {
+            geom.minorRadius = Math.min(entity.checkpointMaxMinorRadius, geom.minorRadius + 0.333);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: GrantUpgradeCreate — apply upgrade to entity or its controlling side.
+   * C++ file: GrantUpgradeCreate.cpp lines 93-109 / 124-140.
+   * Note: entity may not yet be in spawnedEntities when called from createMapEntity,
+   * so we apply directly to the entity struct instead of going through applyUpgradeToEntity.
+   */
+  private applyGrantUpgradeCreate(entity: MapEntity, prof: GrantUpgradeCreateProfile): void {
+    // Check if upgrade is a PLAYER upgrade by looking at the UpgradeDef.
+    const registry = this.iniDataRegistry;
+    if (registry) {
+      const upgradeDef = findUpgradeDefByName(registry, prof.upgradeName);
+      if (upgradeDef) {
+        const upgradeType = readStringField(upgradeDef.fields, ['Type'])?.trim().toUpperCase() ?? 'OBJECT';
+        if (upgradeType === 'PLAYER') {
+          // Grant as a side-level upgrade.
+          const side = this.resolveEntityOwnerSide(entity);
+          if (side) {
+            this.setSideUpgradeCompleted(side, prof.upgradeName, true);
+            this.applyCompletedPlayerUpgrade(side, prof.upgradeName);
+          }
+          return;
+        }
+      }
+    }
+    // Grant as an object-level upgrade directly on the entity struct.
+    // Can't use applyUpgradeToEntity() because entity may not be in spawnedEntities yet.
+    const normalizedUpgrade = prof.upgradeName.trim().toUpperCase();
+    entity.completedUpgrades.add(normalizedUpgrade);
+  }
+
+  /**
+   * Source parity: UpgradeDie::onDie — remove upgrade from producer when this entity dies.
+   * C++ file: UpgradeDie.cpp lines 58-87.
+   */
+  private executeUpgradeDieModules(entity: MapEntity): void {
+    for (const prof of entity.upgradeDieProfiles) {
+      // Apply DieMuxData filtering.
+      if (prof.deathTypes !== null && prof.deathTypes.size > 0) {
+        if (!prof.deathTypes.has(entity.pendingDeathType)) continue;
+      }
+      // ExemptStatus — entity must NOT have any of these flags.
+      let exempt = false;
+      for (const status of prof.exemptStatus) {
+        if (entity.objectStatusFlags.has(status)) { exempt = true; break; }
+      }
+      if (exempt) continue;
+      // RequiredStatus — entity must have ALL of these flags.
+      let missingRequired = false;
+      for (const status of prof.requiredStatus) {
+        if (!entity.objectStatusFlags.has(status)) { missingRequired = true; break; }
+      }
+      if (missingRequired) continue;
+
+      // Find producer and remove upgrade.
+      if (entity.producerEntityId === 0) continue;
+      const producer = this.spawnedEntities.get(entity.producerEntityId);
+      if (!producer || producer.destroyed) continue;
+      if (producer.completedUpgrades.has(prof.upgradeName)) {
+        this.removeEntityUpgrade(producer, prof.upgradeName);
+      }
     }
   }
 
@@ -21582,7 +21891,11 @@ export class GameLogicSubsystem implements Subsystem {
       if (!prof) continue;
 
       // Source parity: skip if contained (inside transport).
-      if (this.isEntityContained(entity)) continue;
+      // C++ line 131: m_lastPosition is still updated while contained.
+      if (this.isEntityContained(entity)) {
+        entity.heightDieLastY = entity.y;
+        continue;
+      }
 
       // Source parity: InitialDelay — don't check until delay expires.
       if (entity.heightDieActiveFrame === 0) {
@@ -21592,15 +21905,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.frameCounter < entity.heightDieActiveFrame) continue;
 
       // Source parity: HeightDieUpdate.cpp:144-154 — OnlyWhenMovingDown check.
-      // If entity is not moving downward, skip the height check entirely.
+      // If entity is not moving downward, skip the height-death check but NOT the lastY update.
       const currentY = entity.y;
       let directionOK = true;
       if (prof.onlyWhenMovingDown && currentY >= entity.heightDieLastY) {
         directionOK = false;
       }
-      entity.heightDieLastY = currentY;
-
-      if (!directionOK) continue;
 
       // Source parity: calculate height above terrain.
       const terrainY = this.resolveGroundHeight(entity.x, entity.z);
@@ -21611,8 +21921,16 @@ export class GameLogicSubsystem implements Subsystem {
       if (prof.targetHeightIncludesStructures) {
         // TODO(C&C source parity): bridge/pathfind layer height checks (lines 160-169).
         // Scan nearby structures and raise target height above the tallest one.
+        // C++ uses getBoundingCircleRadius(): SPHERE/CYLINDER=majorRadius, BOX=sqrt(major²+minor²).
         const geom = entity.obstacleGeometry;
-        const scanRange = geom ? Math.max(geom.majorRadius, geom.minorRadius) : entity.baseHeight;
+        let scanRange: number;
+        if (!geom) {
+          scanRange = entity.baseHeight;
+        } else if (geom.type === 'BOX') {
+          scanRange = Math.sqrt(geom.majorRadius * geom.majorRadius + geom.minorRadius * geom.minorRadius);
+        } else {
+          scanRange = geom.majorRadius;
+        }
         const scanRangeSqr = scanRange * scanRange;
         let tallestStructureHeight = 0;
         for (const candidate of this.spawnedEntities.values()) {
@@ -21631,15 +21949,21 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
 
-      const entityAbsoluteHeight = entity.y - entity.baseHeight;
-      if (entityAbsoluteHeight < targetHeight) {
-        // Source parity: snap to ground if configured.
-        if (prof.snapToGroundOnDeath) {
-          entity.y = terrainY + entity.baseHeight;
+      // Source parity: C++ line 224 — death check gated on directionOK.
+      if (directionOK) {
+        const entityAbsoluteHeight = entity.y - entity.baseHeight;
+        if (entityAbsoluteHeight < targetHeight) {
+          // Source parity: snap to ground if configured, or if below terrain.
+          if (prof.snapToGroundOnDeath || (entity.y - entity.baseHeight) < terrainY) {
+            entity.y = terrainY + entity.baseHeight;
+          }
+          // Source parity: kill via UNRESISTABLE damage (same as LifetimeUpdate).
+          this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
         }
-        // Source parity: kill via UNRESISTABLE damage (same as LifetimeUpdate).
-        this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
       }
+
+      // Source parity: C++ line 266 — always update lastPosition at end of update.
+      entity.heightDieLastY = currentY;
     }
   }
 
@@ -21943,6 +22267,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: InstantDeathBehavior::onDie — fire matching die module effects.
     this.executeInstantDeathModules(entity);
+
+    // Source parity: UpgradeDie::onDie — remove upgrade from producer on death.
+    this.executeUpgradeDieModules(entity);
 
     // Source parity: CreateCrateDie::onDie — spawn salvage crate on death.
     this.trySpawnCrateOnDeath(entity, attackerId);
