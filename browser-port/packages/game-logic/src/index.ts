@@ -183,6 +183,7 @@ import {
   executeDefector as executeDefectorImpl,
   executeSpyVision as executeSpyVisionImpl,
   executeAreaHeal as executeAreaHealImpl,
+  executeEmpPulse as executeEmpPulseImpl,
   resolveEffectCategory as resolveEffectCategoryImpl,
   DEFAULT_AREA_DAMAGE_RADIUS,
   DEFAULT_AREA_DAMAGE_AMOUNT,
@@ -190,6 +191,8 @@ import {
   DEFAULT_SPY_VISION_RADIUS,
   DEFAULT_AREA_HEAL_AMOUNT,
   DEFAULT_AREA_HEAL_RADIUS,
+  DEFAULT_EMP_RADIUS,
+  DEFAULT_EMP_DAMAGE,
   type SpecialPowerEffectContext,
 } from './special-power-effects.js';
 import {
@@ -773,6 +776,26 @@ interface SpecialPowerModuleProfile {
    * INI field: MaxMoveDistanceFromLocation. Default 0.
    */
   cleanupMoveRange: number;
+  /**
+   * Source parity: OCLSpecialPower / area-damage fallback radius.
+   * INI field: Radius. Default 0 (use fallback constant).
+   */
+  areaDamageRadius: number;
+  /**
+   * Source parity: Area-damage fallback damage amount.
+   * INI field: Damage. Default 0 (use fallback constant).
+   */
+  areaDamageAmount: number;
+  /**
+   * Source parity: CleanupAreaPower / Emergency Repair heal amount.
+   * INI field: HealAmount. Default 0 (use fallback constant).
+   */
+  areaHealAmount: number;
+  /**
+   * Source parity: Heal effect radius.
+   * INI field: HealRange. Default 0 (use fallback constant).
+   */
+  areaHealRadius: number;
 }
 
 interface SpecialPowerDispatchProfile {
@@ -5965,6 +5988,10 @@ export class GameLogicSubsystem implements Subsystem {
               spyVisionBaseDurationMs: readNumericField(block.fields, ['BaseDuration']) ?? 0,
               fireWeaponMaxShots: readNumericField(block.fields, ['MaxShotsToFire']) ?? 1,
               cleanupMoveRange: readNumericField(block.fields, ['MaxMoveDistanceFromLocation']) ?? 0,
+              areaDamageRadius: readNumericField(block.fields, ['Radius', 'WeaponRadius', 'DamageRadius']) ?? 0,
+              areaDamageAmount: readNumericField(block.fields, ['Damage', 'DamageAmount']) ?? 0,
+              areaHealAmount: readNumericField(block.fields, ['HealAmount', 'RepairAmount']) ?? 0,
+              areaHealRadius: readNumericField(block.fields, ['HealRange', 'HealRadius', 'RepairRange']) ?? 0,
             });
           }
         }
@@ -8124,8 +8151,8 @@ export class GameLogicSubsystem implements Subsystem {
           sourceSide,
           targetX,
           targetZ,
-          radius: DEFAULT_AREA_DAMAGE_RADIUS,
-          damage: DEFAULT_AREA_DAMAGE_AMOUNT,
+          radius: module.areaDamageRadius > 0 ? module.areaDamageRadius : DEFAULT_AREA_DAMAGE_RADIUS,
+          damage: module.areaDamageAmount > 0 ? module.areaDamageAmount : DEFAULT_AREA_DAMAGE_AMOUNT,
           damageType: 'EXPLOSION',
         }, effectContext);
         break;
@@ -8142,10 +8169,26 @@ export class GameLogicSubsystem implements Subsystem {
           sourceSide,
           targetX,
           targetZ,
-          radius: DEFAULT_AREA_HEAL_RADIUS,
-          healAmount: DEFAULT_AREA_HEAL_AMOUNT,
+          radius: module.areaHealRadius > 0 ? module.areaHealRadius : DEFAULT_AREA_HEAL_RADIUS,
+          healAmount: module.areaHealAmount > 0 ? module.areaHealAmount : DEFAULT_AREA_HEAL_AMOUNT,
           kindOfFilter: [],
         }, effectContext);
+        break;
+      case 'EMP_PULSE':
+        // Source parity: EMP damage pulse at position, disabling vehicles/electronics in radius.
+        executeEmpPulseImpl({
+          sourceEntityId,
+          sourceSide,
+          targetX,
+          targetZ,
+          radius: module.areaDamageRadius > 0 ? module.areaDamageRadius : DEFAULT_EMP_RADIUS,
+          damage: module.areaDamageAmount > 0 ? module.areaDamageAmount : DEFAULT_EMP_DAMAGE,
+        }, effectContext);
+        break;
+      case 'FIRE_WEAPON':
+        // Source parity: FireWeaponPower — reloads ammo and issues attack at position.
+        // C++ calls ai->aiAttackPosition(loc, maxShotsToFire, CMD_FROM_AI).
+        this.issueFireWeaponAtPosition(sourceEntityId, targetX, targetZ, module.fireWeaponMaxShots);
         break;
     }
   }
@@ -12980,6 +13023,30 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     this.issueAttackEntity(entityId, targetEntity.id, 'PLAYER');
+  }
+
+  /**
+   * Source parity: FireWeaponPower::doSpecialPowerAtLocation — reloads ammo and
+   * issues ai->aiAttackPosition(loc, maxShotsToFire, CMD_FROM_AI).
+   */
+  private issueFireWeaponAtPosition(
+    entityId: number,
+    targetX: number,
+    targetZ: number,
+    maxShotsToFire: number,
+  ): void {
+    const attacker = this.spawnedEntities.get(entityId);
+    if (!attacker || attacker.destroyed) {
+      return;
+    }
+
+    // Source parity: FireWeaponPower reloads all ammo before firing.
+    if (attacker.attackWeapon) {
+      attacker.attackWeapon.currentClipAmmo = attacker.attackWeapon.clipSize;
+    }
+
+    // Issue attack at position using primary weapon slot (0).
+    this.issueFireWeapon(entityId, 0, maxShotsToFire, null, [targetX, 0, targetZ]);
   }
 
   private findFireWeaponTargetForPosition(

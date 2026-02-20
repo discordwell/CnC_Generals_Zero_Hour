@@ -70,6 +70,8 @@ interface DeterministicMapEntityLike {
   obstacleGeometry: ObstacleGeometryLike | null;
   locomotorSets: Map<string, LocomotorSetProfileLike>;
   locomotorUpgradeTriggers: Set<string>;
+  deployState: string;
+  deployFrameToWait: number;
 }
 
 interface NavigationGridLike {
@@ -269,6 +271,10 @@ function writeDeterministicObjectsCrc(
     for (const upgradeTrigger of upgradeTriggers) {
       crc.addAsciiString(upgradeTrigger);
     }
+
+    // Source parity: DeployStyleAIUpdate state affects combat/movement determinism.
+    crc.addAsciiString(entity.deployState);
+    crc.addUnsignedInt(entity.deployFrameToWait >>> 0);
   }
 }
 

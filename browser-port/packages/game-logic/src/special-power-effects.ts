@@ -304,10 +304,12 @@ export const MODULE_TYPE_EFFECTS: Record<string, string> = {
   CASHBOUNTYPOWER: 'CASH_BOUNTY',
   // Cleanup area
   CLEANUPAREAPOWER: 'AREA_HEAL',
-  // Fire weapon power (Zero Hour)
-  FIREWEAPONPOWER: 'AREA_DAMAGE',
+  // Fire weapon power (Zero Hour) — issues attack using entity's existing weapon set
+  FIREWEAPONPOWER: 'FIRE_WEAPON',
   // Demoralize
   DEMORALIZESPECIALPOWER: 'AREA_DAMAGE',
+  // EMP pulse (China general)
+  EMPSPECIALPOWER: 'EMP_PULSE',
   // Generic special ability
   SPECIALABILITY: 'GENERIC',
   // Generic special power module

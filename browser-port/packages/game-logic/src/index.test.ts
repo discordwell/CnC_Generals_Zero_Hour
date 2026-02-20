@@ -10028,3 +10028,156 @@ describe('deploy style AI update', () => {
     expect(afterReversal!.health).toBe(200);
   });
 });
+
+// ── Garrison firing tests ────────────────────────────────────────────────────
+
+describe('garrison firing', () => {
+  function makeGarrisonSetup() {
+    const buildingDef = makeObjectDef('CivBuilding', 'Neutral', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'GarrisonContain ModuleTag_Garrison', {
+        ContainMax: 5,
+      }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 15,
+      GeometryMinorRadius: 15,
+    });
+
+    const infantryDef = makeObjectDef('USARanger', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'RangerRifle'] }),
+      makeBlock('Locomotor', 'SET_NORMAL InfantryLocomotor', { Speed: 20 }),
+    ]);
+
+    const enemyTankDef = makeObjectDef('EnemyTank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const bundle = makeBundle({
+      objects: [buildingDef, infantryDef, enemyTankDef],
+      weapons: [
+        makeWeaponDef('RangerRifle', {
+          AttackRange: 100,
+          PrimaryDamage: 25,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Building at 50,50; infantry close enough to enter immediately; enemy nearby.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CivBuilding', 50, 50),
+        makeMapObject('USARanger', 51, 50),
+        makeMapObject('EnemyTank', 80, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'Neutral', 2);
+    logic.setTeamRelationship('Neutral', 'America', 2);
+    return { logic };
+  }
+
+  it('garrisoned infantry auto-targets and damages nearby enemy', () => {
+    const { logic } = makeGarrisonSetup();
+
+    // Enter garrison.
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.update(1 / 30);
+
+    // Verify infantry entered the garrison.
+    const infantryState = logic.getEntityState(2);
+    // Infantry at building position now.
+    expect(infantryState).not.toBeNull();
+
+    // Tick enough frames for auto-targeting scan and weapon firing.
+    const enemyBefore = logic.getEntityState(3);
+    expect(enemyBefore).not.toBeNull();
+    const initialHealth = enemyBefore!.health;
+    expect(initialHealth).toBe(500);
+
+    // Run 90 frames (~3 seconds) — should be enough for auto-target + fire cycle.
+    for (let i = 0; i < 90; i++) logic.update(1 / 30);
+
+    const enemyAfter = logic.getEntityState(3);
+    expect(enemyAfter).not.toBeNull();
+    expect(enemyAfter!.health).toBeLessThan(initialHealth);
+  });
+});
+
+// ── Special power INI parameter tests ────────────────────────────────────────
+
+describe('special power INI parameters', () => {
+  it('area damage uses module radius and damage from INI', () => {
+    const superWeaponDef = makeObjectDef('SuperWeapon', 'America', ['STRUCTURE', 'FS_SUPERWEAPON'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SP', {
+        SpecialPowerTemplate: 'SuperTestPower',
+        Radius: 50,
+        Damage: 300,
+      }),
+    ]);
+
+    const targetDef = makeObjectDef('Target', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    // Target slightly outside 50-unit radius (should NOT be hit).
+    const farTargetDef = makeObjectDef('FarTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    const bundle = makeBundle({
+      objects: [superWeaponDef, targetDef, farTargetDef],
+      specialPowers: [{ name: 'SuperTestPower', fields: {}, blocks: [] } as SpecialPowerDef],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // SuperWeapon at 50,50; Target at 80,50 (30 units away, within 50 radius);
+    // FarTarget at 120,50 (70 units away, outside 50 radius).
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SuperWeapon', 50, 50),
+        makeMapObject('Target', 80, 50),
+        makeMapObject('FarTarget', 120, 50),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(1 / 30);
+
+    // Issue area damage special power at center (50, 50).
+    // commandOption 0x20 = COMMAND_OPTION_NEED_TARGET_POS (position-targeted power).
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'SuperTestButton',
+      specialPowerName: 'SuperTestPower',
+      commandOption: 0x20,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 50,
+      targetZ: 50,
+    });
+    logic.update(1 / 30);
+
+    // Close target (30 units away, within 50 radius) should take 300 damage.
+    const closeTarget = logic.getEntityState(2);
+    expect(closeTarget).not.toBeNull();
+    expect(closeTarget!.health).toBe(700);
+
+    // Far target (70 units away, outside 50 radius) should be unharmed.
+    const farTarget = logic.getEntityState(3);
+    expect(farTarget).not.toBeNull();
+    expect(farTarget!.health).toBe(1000);
+  });
+});
