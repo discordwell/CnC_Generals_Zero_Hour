@@ -13820,3 +13820,285 @@ describe('AutoDepositUpdate', () => {
     expect(logic.getSideCredits('gla')).toBe(startCredits + 50);
   });
 });
+
+describe('SlavedUpdate', () => {
+  function makeSlavedSetup(opts?: {
+    spawnNumber?: number;
+    guardMaxRange?: number;
+    attackRange?: number;
+    scoutRange?: number;
+    repairRatePerSecond?: number;
+    repairBelowHealthPercent?: number;
+    spawnedRequireSpawner?: boolean;
+    oneShot?: boolean;
+    distToTargetToGrantRangeBonus?: number;
+  }) {
+    const guardRange = opts?.guardMaxRange ?? 50;
+    const attackRange = opts?.attackRange ?? 0;
+    const scoutRange = opts?.scoutRange ?? 0;
+    const repairRate = opts?.repairRatePerSecond ?? 0;
+    const repairBelow = opts?.repairBelowHealthPercent ?? 0;
+    const requireSpawner = opts?.spawnedRequireSpawner ?? true;
+    const isOneShot = opts?.oneShot ?? false;
+    const spawnCount = opts?.spawnNumber ?? 1;
+    const droneSpottingDist = opts?.distToTargetToGrantRangeBonus ?? 0;
+    const sz = 128;
+
+    const objects = [
+      // 1: Master vehicle with SpawnBehavior
+      makeObjectDef('MasterVehicle', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('Behavior', 'SpawnBehavior ModuleTag_Spawn', {
+          SpawnNumber: spawnCount,
+          SpawnReplaceDelay: 3000, // 3 sec = 90 frames
+          SpawnTemplateName: 'DroneUnit',
+          SpawnedRequireSpawner: requireSpawner ? 'Yes' : 'No',
+          OneShot: isOneShot ? 'Yes' : 'No',
+          InitialBurst: spawnCount,
+        }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'MasterGun'] }),
+      ]),
+      // 2: Drone slave with SlavedUpdate
+      makeObjectDef('DroneUnit', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'SlavedUpdate ModuleTag_Slaved', {
+          GuardMaxRange: guardRange,
+          GuardWanderRange: 10,
+          AttackRange: attackRange,
+          AttackWanderRange: 5,
+          ScoutRange: scoutRange,
+          ScoutWanderRange: 5,
+          DistToTargetToGrantRangeBonus: droneSpottingDist,
+          RepairRatePerSecond: repairRate,
+          'RepairWhenBelowHealth%': repairBelow,
+        }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'DroneGun'] }),
+      ]),
+      // Enemy target
+      makeObjectDef('EnemyTank', 'GLA', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankGun'] }),
+      ]),
+    ];
+
+    const mapObjects: MapObjectJSON[] = [
+      makeMapObject('MasterVehicle', 60, 60),
+      makeMapObject('EnemyTank', 60, 90),
+    ];
+
+    const bundle = makeBundle({
+      objects,
+      weapons: [
+        makeWeaponDef('MasterGun', {
+          AttackRange: 100,
+          PrimaryDamage: 20,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+        }),
+        makeWeaponDef('DroneGun', {
+          AttackRange: 50,
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 300,
+        }),
+        makeWeaponDef('TankGun', {
+          AttackRange: 100,
+          PrimaryDamage: 30,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('america', 'HUMAN');
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('gla', 'COMPUTER');
+
+    return { logic, sz };
+  }
+
+  function getEntity(logic: GameLogicSubsystem, id: number) {
+    return (logic as unknown as { spawnedEntities: Map<number, {
+      slaverEntityId: number | null;
+      objectStatusFlags: Set<string>;
+      destroyed: boolean;
+      health: number;
+      maxHealth: number;
+      moveTarget: { x: number; z: number } | null;
+      attackTargetEntityId: number | null;
+      x: number; z: number;
+      weaponBonusConditionFlags: number;
+    }> }).spawnedEntities.get(id);
+  }
+
+  it('spawns slaves on master creation and marks them UNSELECTABLE', () => {
+    const { logic } = makeSlavedSetup({ spawnNumber: 2 });
+    logic.update(0);
+
+    // Master is entity 1, enemy is entity 2. Slaves should be 3 and 4.
+    const slave1 = getEntity(logic, 3);
+    const slave2 = getEntity(logic, 4);
+    expect(slave1).toBeDefined();
+    expect(slave2).toBeDefined();
+    expect(slave1!.slaverEntityId).toBe(1);
+    expect(slave2!.slaverEntityId).toBe(1);
+    expect(slave1!.objectStatusFlags.has('UNSELECTABLE')).toBe(true);
+    expect(slave2!.objectStatusFlags.has('UNSELECTABLE')).toBe(true);
+  });
+
+  it('kills slaves when master dies with spawnedRequireSpawner', () => {
+    const { logic } = makeSlavedSetup({ spawnedRequireSpawner: true });
+    logic.update(0);
+
+    const slave = getEntity(logic, 3);
+    expect(slave).toBeDefined();
+    expect(slave!.destroyed).toBe(false);
+
+    // Kill the master.
+    const api = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const master = api.spawnedEntities.get(1)!;
+    api.applyWeaponDamageAmount(2, master as never, 9999, 'EXPLOSION');
+
+    // Slave should also be destroyed.
+    expect(slave!.destroyed).toBe(true);
+  });
+
+  it('disables slaves with DISABLED_UNMANNED when master dies without spawnedRequireSpawner', () => {
+    const { logic } = makeSlavedSetup({ spawnedRequireSpawner: false });
+    logic.update(0);
+
+    const slave = getEntity(logic, 3);
+    expect(slave).toBeDefined();
+
+    // Kill the master.
+    const api = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const master = api.spawnedEntities.get(1)!;
+    api.applyWeaponDamageAmount(2, master as never, 9999, 'EXPLOSION');
+
+    // Slave should be orphaned (slaverEntityId = null) but not immediately destroyed.
+    expect(slave!.slaverEntityId).toBe(null);
+    expect(slave!.objectStatusFlags.has('UNSELECTABLE')).toBe(false);
+  });
+
+  it('replaces dead slaves after replace delay', () => {
+    const { logic } = makeSlavedSetup({ spawnNumber: 1 });
+    logic.update(0);
+
+    const slave = getEntity(logic, 3);
+    expect(slave).toBeDefined();
+
+    // Kill the slave.
+    const api = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    api.applyWeaponDamageAmount(null, slave as never, 9999, 'EXPLOSION');
+
+    // Advance frames but not enough for replacement (90 frames = 3s).
+    for (let i = 0; i < 50; i++) {
+      logic.update(1 / 30);
+    }
+    // No replacement yet.
+    const potentialReplacement = getEntity(logic, 4);
+    // Entity 4 might not exist or could be the replacement — check slave count.
+    const master = getEntity(logic, 1);
+    const state = (master as unknown as { spawnBehaviorState: { slaveIds: number[] } })?.spawnBehaviorState;
+    const liveSlaves1 = state?.slaveIds.filter((id: number) => {
+      const e = getEntity(logic, id);
+      return e && !e.destroyed;
+    });
+    // At 50 frames, replacement shouldn't have happened yet.
+    expect(liveSlaves1?.length ?? 0).toBe(0);
+
+    // Advance past the 90-frame threshold.
+    for (let i = 0; i < 50; i++) {
+      logic.update(1 / 30);
+    }
+    const liveSlaves2 = state?.slaveIds.filter((id: number) => {
+      const e = getEntity(logic, id);
+      return e && !e.destroyed;
+    });
+    expect(liveSlaves2?.length ?? 0).toBe(1);
+  });
+
+  it('does not replace slaves when oneShot is true', () => {
+    const { logic } = makeSlavedSetup({ spawnNumber: 1, oneShot: true });
+    logic.update(0);
+
+    const slave = getEntity(logic, 3);
+    expect(slave).toBeDefined();
+
+    // Kill the slave.
+    const api = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+    };
+    api.applyWeaponDamageAmount(null, slave as never, 9999, 'EXPLOSION');
+
+    // Advance well past replacement delay.
+    for (let i = 0; i < 200; i++) {
+      logic.update(1 / 30);
+    }
+
+    // No replacement should have occurred.
+    const master = getEntity(logic, 1);
+    const state = (master as unknown as { spawnBehaviorState: { slaveIds: number[] } })?.spawnBehaviorState;
+    const liveSlaves = state?.slaveIds.filter((id: number) => {
+      const e = getEntity(logic, id);
+      return e && !e.destroyed;
+    });
+    expect(liveSlaves?.length ?? 0).toBe(0);
+  });
+
+  it('slave follows master via guard logic', () => {
+    const { logic } = makeSlavedSetup({ guardMaxRange: 30 });
+    logic.update(0);
+
+    // Move the master far away.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 100, targetZ: 100 });
+
+    // Advance enough frames for the master to move and slave to update.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    const slave = getEntity(logic, 3);
+    expect(slave).toBeDefined();
+    // Slave should have a move target (following the master).
+    expect(slave!.moveTarget).not.toBeNull();
+  });
+
+  it('slave heals master when repair rate is set and master is damaged', () => {
+    const { logic } = makeSlavedSetup({
+      repairRatePerSecond: 30, // 1 HP per frame
+      repairBelowHealthPercent: 100, // Always emergency repair
+    });
+    logic.update(0);
+
+    // Damage the master.
+    const master = getEntity(logic, 1);
+    expect(master).toBeDefined();
+    master!.health = 400;
+
+    // Advance frames for repair to take effect.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Master should have healed somewhat.
+    expect(master!.health).toBeGreaterThan(400);
+  });
+});

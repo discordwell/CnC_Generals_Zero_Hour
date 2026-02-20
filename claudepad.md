@@ -1,12 +1,28 @@
 # Session Summaries
 
-## 2026-02-20T21:10Z — ProneUpdate + Continued Feature Work
+## 2026-02-20T22:00Z — RebuildHoleBehavior
+- RebuildHoleBehavior: GLA building reconstruction system — committed 9efcdca
+  - Two-module system: RebuildHoleExposeDieProfile (buildings) + RebuildHoleBehaviorProfile (holes)
+  - Full lifecycle: building dies → hole created → worker spawns → construction → completion
+  - INI extractors for HoleName, HoleMaxHealth, TransferAttackers, WorkerObjectName, WorkerRespawnDelay, HoleHealthRegen%PerSecond
+  - Death hook in markEntityDestroyed, per-frame updateRebuildHoles, rebuildHoleSpawnWorker
+  - Worker/reconstruction death detection with respawn, passive hole health regen, attacker transfer
+  - Code review fixes: C++ update order parity, unconditional unmask, geometry transfer, parsePercentToReal
+  - 9 tests — All 1140 tests pass
+
+## 2026-02-20T21:30Z — ProneUpdate + DemoTrapUpdate
 - ProneUpdate: infantry prone behavior — committed 7b02c75
   - proneDamageToFramesRatio INI extraction, proneFramesRemaining countdown
   - Damage trigger in applyWeaponDamageAmount with NO_ATTACK status flag
   - PRONE added to RenderAnimationState, integrated into deriveRenderAnimationState priority
-  - Code review fixes: C++ double-truncation parity (Math.trunc before multiply), removed redundant animationState assignment
+  - Code review fixes: C++ double-truncation parity, removed redundant animationState assignment
   - 4 tests — All 1124 tests pass
+- DemoTrapUpdate: GLA proximity detonation trap — committed b34b25b
+  - DemoTrapProfile INI: DefaultProximityMode, TriggerDetonationRange, ScanRate, IgnoreTargetTypes, DetonationWeapon, DetonateWhenKilled, AutoDetonationWithFriendsInvolved
+  - Proximity scan with friendly blocking (non-enemy in range prevents detonation)
+  - Manual/proximity mode toggle, manual detonation command, DetonateWhenKilled in death path
+  - Code review fixes: distance pre-filter before relationship check, construction/sold guard on manual detonate
+  - 7 tests — All 1131 tests pass
 
 ## 2026-02-20T20:30Z — PointDefenseLaserUpdate + HordeUpdate
 - PointDefenseLaserUpdate: anti-projectile defense system — committed 31db58d
@@ -33,11 +49,6 @@
 - Tasks #85-87: INI-driven stealth and detection system with C++ StealthUpdate/StealthDetectorUpdate parity
   - StealthProfile + DetectorProfile INI parsing, 9 forbidden condition tokens, detection rate throttle
   - 12 tests — All 1091 tests pass, clean build
-
-## 2026-02-20T16:00Z — Crush/Squish Damage During Movement (Task #95)
-- Task #95: Crush collision system with C++ PhysicsUpdate::checkForOverlapCollision + SquishCollide parity — committed 926c982
-  - updateCrushCollisions(), direction dot-product check, canBeSquished, CRUSH damage type
-  - 4 new tests — All 1079 tests pass, clean build
 
 # Key Findings
 

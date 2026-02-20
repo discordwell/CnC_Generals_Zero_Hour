@@ -992,6 +992,8 @@ interface SpawnBehaviorProfile {
   aggregateHealth: boolean;
   /** How many to create immediately, ignoring the replace delay. */
   initialBurst: number;
+  /** If true, slaves handle their own targeting (not forwarded from master). */
+  slavesHaveFreeWill: boolean;
 }
 
 /**
@@ -1499,6 +1501,14 @@ interface MapEntity {
   isInHorde: boolean;
   /** Counted enough nearby units to be a true horde member (vs rub-off inheritance). */
   isTrueHordeMember: boolean;
+
+  // ── Source parity: SlavedUpdate — slave following/guard behavior ──
+  slavedUpdateProfile: SlavedUpdateProfile | null;
+  /** Guard point offset from master position (randomized on enslave). */
+  slaveGuardOffsetX: number;
+  slaveGuardOffsetZ: number;
+  /** Frame countdown until next slaved update tick. */
+  slavedNextUpdateFrame: number;
 }
 
 /**
@@ -1835,6 +1845,37 @@ interface AutoDepositProfile {
   /** One-time bonus deposited when a neutral building is captured. Source parity: InitialCaptureBonus. */
   initialCaptureBonus: number;
 }
+
+/**
+ * Source parity: SlavedUpdateModuleData — slave side behavior for following master.
+ */
+interface SlavedUpdateProfile {
+  /** Max distance from master when idle (guard radius). */
+  guardMaxRange: number;
+  /** Random wander radius while guarding. */
+  guardWanderRange: number;
+  /** Max distance from master when master is attacking. */
+  attackRange: number;
+  /** Random wander radius around attack position. */
+  attackWanderRange: number;
+  /** Max distance ahead of master when scouting. */
+  scoutRange: number;
+  /** Random wander radius around scout position. */
+  scoutWanderRange: number;
+  /** Distance to target to grant DRONE_SPOTTING bonus. */
+  distToTargetToGrantRangeBonus: number;
+  /** HP per second the slave heals its master (0 = no repair). */
+  repairRatePerSecond: number;
+  /** Master health % threshold for emergency repair priority. */
+  repairWhenBelowHealthPercent: number;
+  /** If true, slave is forced to same pathfinding layer as master. */
+  stayOnSameLayerAsMaster: boolean;
+}
+
+/** Source parity: SlavedUpdate constants. */
+const SLAVED_UPDATE_RATE = 8; // LOGICFRAMES_PER_SECOND / 4 ≈ 7.5, round to 8
+const STRAY_MULTIPLIER = 2.0;
+const SLAVE_CLOSE_ENOUGH = 15.0;
 
 // Body damage state thresholds (source parity: GlobalData defaults).
 const UNIT_DAMAGED_THRESH = 0.5;
@@ -2372,6 +2413,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePowerBrownOut();
     this.updateProduction();
     this.updateSpawnBehaviors();
+    this.updateSlavedEntities();
     this.updateDeployStyleEntities();
     this.updateCombat();
     this.updateIdleAutoTargeting();
@@ -4152,6 +4194,11 @@ export class GameLogicSubsystem implements Subsystem {
       hordeNextCheckFrame: 0,
       isInHorde: false,
       isTrueHordeMember: false,
+      // Slaved update (slave following behavior)
+      slavedUpdateProfile: this.extractSlavedUpdateProfile(objectDef),
+      slaveGuardOffsetX: 0,
+      slaveGuardOffsetZ: 0,
+      slavedNextUpdateFrame: 0,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -5699,6 +5746,8 @@ export class GameLogicSubsystem implements Subsystem {
           // Source parity: C++ defaults m_initialBurst to 0 when absent from INI.
           const initialBurst = Math.max(0, Math.trunc(readNumericField(block.fields, ['InitialBurst']) ?? 0));
 
+          const slavesHaveFreeWill = readBooleanField(block.fields, ['SlavesHaveFreeWill']) === true;
+
           if (spawnNumber > 0 && templateNames.length > 0) {
             profile = {
               spawnNumber,
@@ -5708,6 +5757,7 @@ export class GameLogicSubsystem implements Subsystem {
               spawnedRequireSpawner,
               aggregateHealth,
               initialBurst,
+              slavesHaveFreeWill,
             };
           }
         }
@@ -6411,6 +6461,42 @@ export class GameLogicSubsystem implements Subsystem {
             depositFrames: Math.max(1, this.msToLogicFrames(depositTimingMs)),
             depositAmount,
             initialCaptureBonus,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: SlavedUpdateModuleData — extract slave behavior config from INI.
+   */
+  private extractSlavedUpdateProfile(objectDef: ObjectDef | undefined): SlavedUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: SlavedUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SLAVEDUPDATE') {
+          profile = {
+            guardMaxRange: readNumericField(block.fields, ['GuardMaxRange']) ?? 0,
+            guardWanderRange: readNumericField(block.fields, ['GuardWanderRange']) ?? 0,
+            attackRange: readNumericField(block.fields, ['AttackRange']) ?? 0,
+            attackWanderRange: readNumericField(block.fields, ['AttackWanderRange']) ?? 0,
+            scoutRange: readNumericField(block.fields, ['ScoutRange']) ?? 0,
+            scoutWanderRange: readNumericField(block.fields, ['ScoutWanderRange']) ?? 0,
+            distToTargetToGrantRangeBonus: readNumericField(block.fields, ['DistToTargetToGrantRangeBonus']) ?? 0,
+            repairRatePerSecond: readNumericField(block.fields, ['RepairRatePerSecond']) ?? 0,
+            repairWhenBelowHealthPercent: readNumericField(block.fields, ['RepairWhenBelowHealth%']) ?? 0,
+            stayOnSameLayerAsMaster: readStringField(block.fields, ['StayOnSameLayerAsMaster'])?.toUpperCase() === 'YES',
           };
         }
       }
@@ -16459,6 +16545,20 @@ export class GameLogicSubsystem implements Subsystem {
           state.oneShotCompleted = true;
         }
       }
+
+      // Source parity: attack forwarding for SPAWNS_ARE_THE_WEAPONS masters.
+      if (entity.kindOf.has('SPAWNS_ARE_THE_WEAPONS') && !state.profile.slavesHaveFreeWill) {
+        const masterTarget = entity.attackTargetEntityId;
+        if (masterTarget !== null) {
+          for (const slaveId of state.slaveIds) {
+            const slave = this.spawnedEntities.get(slaveId);
+            if (slave && !slave.destroyed && slave.attackTargetEntityId !== masterTarget) {
+              slave.attackTargetEntityId = masterTarget;
+              slave.attackTargetPosition = null;
+            }
+          }
+        }
+      }
     }
   }
 
@@ -16492,6 +16592,17 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: SlavedUpdate::onEnslave — link slave to slaver.
     slave.slaverEntityId = slaver.id;
     state.slaveIds.push(slave.id);
+
+    // Source parity: onEnslave marks slaves as UNSELECTABLE.
+    slave.objectStatusFlags.add('UNSELECTABLE');
+
+    // Source parity: randomize initial guard offset at guardMaxRange distance (on circle perimeter).
+    const guardRange = slave.slavedUpdateProfile?.guardMaxRange ?? 30;
+    if (guardRange > 0) {
+      const angle = this.gameRandom.nextFloat() * Math.PI * 2;
+      slave.slaveGuardOffsetX = Math.cos(angle) * guardRange;
+      slave.slaveGuardOffsetZ = Math.sin(angle) * guardRange;
+    }
   }
 
   /**
@@ -16511,12 +16622,16 @@ export class GameLogicSubsystem implements Subsystem {
       if (!slave || slave.destroyed) {
         continue;
       }
-      // Source parity: sdu->onSlaverDie() — clear slaver link.
+      // Source parity: sdu->onSlaverDie() → stopSlavedEffects() — clear slaver link and flags.
       slave.slaverEntityId = null;
+      slave.objectStatusFlags.delete('UNSELECTABLE');
 
       if (state.profile.spawnedRequireSpawner) {
         // Source parity: SpawnBehavior::onDie kills slaves when spawnedRequireSpawner.
         this.applyWeaponDamageAmount(null, slave, slave.health, 'UNRESISTABLE');
+      } else {
+        // Source parity: orphaned slave gets DISABLED_UNMANNED (crashes/dies on next update).
+        slave.objectStatusFlags.add('DISABLED_UNMANNED');
       }
     }
 
@@ -17742,6 +17857,212 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: SlavedUpdate::update() — slave follows master with priority system.
+   * Priority: emergency repair > attack > scout > idle repair > guard.
+   * Runs at SLAVED_UPDATE_RATE (every ~8 frames).
+   */
+  private updateSlavedEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (!entity.slavedUpdateProfile) continue;
+      if (entity.slaverEntityId === null) continue;
+
+      // Source parity: throttled update rate.
+      if (this.frameCounter < entity.slavedNextUpdateFrame) continue;
+      entity.slavedNextUpdateFrame = this.frameCounter + SLAVED_UPDATE_RATE;
+
+      const profile = entity.slavedUpdateProfile;
+      const master = this.spawnedEntities.get(entity.slaverEntityId);
+
+      // Source parity: if master is dead or DISABLED_UNMANNED, disable slave.
+      if (!master || master.destroyed || master.objectStatusFlags.has('DISABLED_UNMANNED')) {
+        entity.slaverEntityId = null;
+        entity.objectStatusFlags.delete('UNSELECTABLE');
+        entity.objectStatusFlags.add('DISABLED_UNMANNED');
+        // Source parity: slave goes idle / crashes (flying drones).
+        entity.attackTargetEntityId = null;
+        entity.attackTargetPosition = null;
+        entity.moveTarget = null;
+        entity.moving = false;
+        continue;
+      }
+
+      // Source parity: clear drone spotting each tick — slave must re-earn it.
+      master.weaponBonusConditionFlags &= ~WEAPON_BONUS_DRONE_SPOTTING;
+
+      // Source parity: repair logic — heal master if below health threshold.
+      const masterHealthPercent = master.maxHealth > 0 ? (master.health / master.maxHealth) * 100 : 100;
+      const needsEmergencyRepair = profile.repairRatePerSecond > 0
+        && profile.repairWhenBelowHealthPercent > 0
+        && masterHealthPercent <= profile.repairWhenBelowHealthPercent;
+
+      if (needsEmergencyRepair) {
+        this.slavedDoRepair(entity, master, profile);
+        continue;
+      }
+
+      // Source parity: attack logic — move near master's target.
+      if (profile.attackRange > 0 && master.attackTargetEntityId !== null) {
+        const target = this.spawnedEntities.get(master.attackTargetEntityId);
+        if (target && !target.destroyed) {
+          this.slavedDoAttack(entity, master, target, profile);
+          continue;
+        }
+      }
+
+      // Source parity: scout logic — move ahead toward master's destination.
+      if (profile.scoutRange > 0 && master.moveTarget !== null) {
+        const destX = master.moveTarget.x;
+        const destZ = master.moveTarget.z;
+        const dx = destX - master.x;
+        const dz = destZ - master.z;
+        const distToDest = Math.sqrt(dx * dx + dz * dz);
+        // Only scout if destination is far enough from master (> half guard range).
+        if (distToDest > (profile.guardMaxRange / 2)) {
+          this.slavedDoScout(entity, master, destX, destZ, profile);
+          continue;
+        }
+      }
+
+      // Source parity: idle repair — heal master if not at full health.
+      if (profile.repairRatePerSecond > 0 && master.health < master.maxHealth) {
+        this.slavedDoRepair(entity, master, profile);
+        continue;
+      }
+
+      // Source parity: guard logic — stay near master.
+      this.slavedDoGuard(entity, master, profile);
+    }
+  }
+
+  /** Source parity: SlavedUpdate::doRepairLogic — simplified: heal master per frame. */
+  private slavedDoRepair(slave: MapEntity, master: MapEntity, profile: SlavedUpdateProfile): void {
+    const dx = master.x - slave.x;
+    const dz = master.z - slave.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    // Move toward master if too far.
+    if (dist > SLAVE_CLOSE_ENOUGH) {
+      slave.moveTarget = { x: master.x, z: master.z };
+      slave.attackTargetEntityId = null;
+      slave.attackTargetPosition = null;
+    }
+
+    // Source parity: heal master at repairRatePerSecond / LOGIC_FRAMES_PER_SECOND per frame.
+    // Apply healing on every frame (not just throttled ticks) for smoother repair.
+    if (dist <= SLAVE_CLOSE_ENOUGH * 2) {
+      const healPerFrame = profile.repairRatePerSecond / 30;
+      if (healPerFrame > 0) {
+        master.health = Math.min(master.maxHealth, master.health + healPerFrame);
+      }
+    }
+  }
+
+  /** Source parity: SlavedUpdate::doAttackLogic — move near master's target, grant drone spotting. */
+  private slavedDoAttack(
+    slave: MapEntity, master: MapEntity, target: MapEntity, profile: SlavedUpdateProfile,
+  ): void {
+    // Calculate position near target, clamped to attackRange from master.
+    let goalX = target.x;
+    let goalZ = target.z;
+
+    const dx = goalX - master.x;
+    const dz = goalZ - master.z;
+    const distToTarget = Math.sqrt(dx * dx + dz * dz);
+    if (distToTarget > profile.attackRange && distToTarget > 0) {
+      const scale = profile.attackRange / distToTarget;
+      goalX = master.x + dx * scale;
+      goalZ = master.z + dz * scale;
+    }
+
+    // Add wander offset.
+    if (profile.attackWanderRange > 0) {
+      const angle = this.gameRandom.nextFloat() * Math.PI * 2;
+      const dist = this.gameRandom.nextFloat() * profile.attackWanderRange;
+      goalX += Math.cos(angle) * dist;
+      goalZ += Math.sin(angle) * dist;
+    }
+
+    slave.moveTarget = { x: goalX, z: goalZ };
+
+    // Source parity: grant DRONE_SPOTTING bonus if slave is close enough to target.
+    if (profile.distToTargetToGrantRangeBonus > 0) {
+      const sdx = target.x - slave.x;
+      const sdz = target.z - slave.z;
+      const slaveDist = Math.sqrt(sdx * sdx + sdz * sdz);
+      if (slaveDist <= profile.distToTargetToGrantRangeBonus) {
+        master.weaponBonusConditionFlags |= WEAPON_BONUS_DRONE_SPOTTING;
+      }
+    }
+  }
+
+  /** Source parity: SlavedUpdate::doScoutLogic — move ahead toward master's destination. */
+  private slavedDoScout(
+    slave: MapEntity, master: MapEntity, destX: number, destZ: number, profile: SlavedUpdateProfile,
+  ): void {
+    let goalX = destX;
+    let goalZ = destZ;
+
+    const dx = goalX - master.x;
+    const dz = goalZ - master.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist > profile.scoutRange && dist > 0) {
+      const scale = profile.scoutRange / dist;
+      goalX = master.x + dx * scale;
+      goalZ = master.z + dz * scale;
+    }
+
+    if (profile.scoutWanderRange > 0) {
+      const angle = this.gameRandom.nextFloat() * Math.PI * 2;
+      const wanderDist = this.gameRandom.nextFloat() * profile.scoutWanderRange;
+      goalX += Math.cos(angle) * wanderDist;
+      goalZ += Math.sin(angle) * wanderDist;
+    }
+
+    slave.moveTarget = { x: goalX, z: goalZ };
+    slave.attackTargetEntityId = null;
+    slave.attackTargetPosition = null;
+  }
+
+  /** Source parity: SlavedUpdate::doGuardLogic — stay near pinned position around master. */
+  private slavedDoGuard(slave: MapEntity, master: MapEntity, profile: SlavedUpdateProfile): void {
+    const guardRange = profile.guardMaxRange || 30;
+    const leash = STRAY_MULTIPLIER * guardRange;
+
+    // Source parity: stray check — if beyond leash distance from master, force return.
+    const masterDx = slave.x - master.x;
+    const masterDz = slave.z - master.z;
+    const masterDist = Math.sqrt(masterDx * masterDx + masterDz * masterDz);
+
+    if (masterDist > leash) {
+      // Beyond leash — pick new guard offset and move back.
+      if (profile.guardMaxRange > 0) {
+        const angle = this.gameRandom.nextFloat() * Math.PI * 2;
+        slave.slaveGuardOffsetX = Math.cos(angle) * guardRange;
+        slave.slaveGuardOffsetZ = Math.sin(angle) * guardRange;
+      }
+      const newPinnedX = master.x + slave.slaveGuardOffsetX;
+      const newPinnedZ = master.z + slave.slaveGuardOffsetZ;
+      slave.moveTarget = { x: newPinnedX, z: newPinnedZ };
+      slave.attackTargetEntityId = null;
+      slave.attackTargetPosition = null;
+      return;
+    }
+
+    // Source parity: idle guard — if far from pinned position, move toward it.
+    const pinnedX = master.x + slave.slaveGuardOffsetX;
+    const pinnedZ = master.z + slave.slaveGuardOffsetZ;
+    const dx = slave.x - pinnedX;
+    const dz = slave.z - pinnedZ;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    if (dist > SLAVE_CLOSE_ENOUGH) {
+      slave.moveTarget = { x: pinnedX, z: pinnedZ };
+      slave.attackTargetEntityId = null;
+      slave.attackTargetPosition = null;
+    }
+  }
   /**
    * Source parity: DeployStyleAIUpdate::update() — per-frame deploy state machine.
    * Transitions: READY_TO_MOVE ↔ DEPLOY ↔ READY_TO_ATTACK ↔ UNDEPLOY ↔ READY_TO_MOVE.

@@ -1,5 +1,10 @@
 # Old Session Summaries
 
+## 2026-02-20T16:00Z — Crush/Squish Damage During Movement (Task #95)
+- Task #95: Crush collision system with C++ PhysicsUpdate::checkForOverlapCollision + SquishCollide parity — committed 926c982
+  - updateCrushCollisions(), direction dot-product check, canBeSquished, CRUSH damage type
+  - 4 new tests — All 1079 tests pass, clean build
+
 ## 2026-02-20T15:20Z — 3D Damage Distance + Bounding Sphere Subtraction (Tasks #93-94)
 - Tasks #93-94: 3D distance for radius damage + FROM_BOUNDINGSPHERE_3D subtraction — commits b6a67fd, 1e62ef5
   - Full 3D damage gathering, BSR by geometry type
