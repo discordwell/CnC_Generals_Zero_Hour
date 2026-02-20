@@ -1,5 +1,15 @@
 # Old Session Summaries
 
+## 2026-02-20T15:20Z — 3D Damage Distance + Bounding Sphere Subtraction (Tasks #93-94)
+- Tasks #93-94: 3D distance for radius damage + FROM_BOUNDINGSPHERE_3D subtraction — commits b6a67fd, 1e62ef5
+  - Full 3D damage gathering, BSR by geometry type
+  - 1 new test — All 1075 tests pass, clean build
+
+## 2026-02-20T14:12Z — Power Brown-Out + Disabled Movement Restrictions (Tasks #88-89)
+- Tasks #88-89: Disabled movement restrictions + DISABLED_UNDERPOWERED power brown-out — commits 5e8548e, ff369fe
+  - isEntityDisabledForMovement(), SUBDUED blocks evacuate, brownedOut edge detection, countdown push
+  - 10 new tests — All 1069 tests pass, clean build
+
 ## 2026-02-20T09:10Z — Skirmish AI Enhancements (Task #77)
 - Task #77: AI system enhancements for skirmish parity — committed afa1b93
   - Dozer replacement, upgrade research, science purchasing, rally points, multi-dozer parallel construction

@@ -236,6 +236,8 @@ import {
   type SellCommand,
   type SelectedEntityInfo,
   type ToggleOverchargeCommand,
+  type DetonateDemoTrapCommand,
+  type ToggleDemoTrapModeCommand,
 } from './types.js';
 
 export * from './types.js';
@@ -1385,6 +1387,15 @@ interface MapEntity {
   /** Remaining frames of prone state (0 = not prone). */
   proneFramesRemaining: number;
 
+  // ── Source parity: DemoTrapUpdate — proximity/manual detonation trap ──
+  demoTrapProfile: DemoTrapProfile | null;
+  /** Countdown for next proximity scan. */
+  demoTrapNextScanFrame: number;
+  /** True once the trap has detonated (prevents double-fire). */
+  demoTrapDetonated: boolean;
+  /** Whether the trap is currently in proximity (auto-scan) mode. */
+  demoTrapProximityMode: boolean;
+
   // ── Source parity: CreateObjectDie / SlowDeathBehavior — OCL on death ──
   /** OCL names to execute when entity is destroyed. */
   deathOCLNames: string[];
@@ -1736,6 +1747,26 @@ interface HordeUpdateProfile {
   exactMatch: boolean;
   /** Allow NATIONALISM weapon bonus when in horde. */
   allowedNationalism: boolean;
+}
+
+/**
+ * Source parity: DemoTrapUpdateModuleData — demo trap detonation profile.
+ */
+interface DemoTrapProfile {
+  /** Whether the trap starts in proximity (auto-scan) mode vs manual-only. */
+  defaultsToProximityMode: boolean;
+  /** Proximity detection radius (world units, 2D center-to-center). */
+  triggerDetonationRange: number;
+  /** KindOf flags for objects to skip during scanning. */
+  ignoreKindOf: Set<string>;
+  /** Frames between proximity scans. */
+  scanFrames: number;
+  /** If true, detonates even with friendly units nearby. */
+  friendlyDetonation: boolean;
+  /** Weapon template name fired at own position on detonation. */
+  detonationWeaponName: string | null;
+  /** Whether the trap detonates when killed. */
+  detonateWhenKilled: boolean;
 }
 
 // Body damage state thresholds (source parity: GlobalData defaults).
@@ -2300,6 +2331,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHealing();
     this.updateMineBehavior();
     this.updateMineCollisions();
+    this.updateDemoTraps();
     this.updateCrateCollisions();
     this.updateTunnelHealing();
     this.updateFogOfWar();
@@ -3990,6 +4022,11 @@ export class GameLogicSubsystem implements Subsystem {
       // Prone behavior
       proneDamageToFramesRatio: this.extractProneDamageToFramesRatio(objectDef),
       proneFramesRemaining: 0,
+      // Demo trap
+      demoTrapProfile: this.extractDemoTrapProfile(objectDef),
+      demoTrapNextScanFrame: 0,
+      demoTrapDetonated: false,
+      demoTrapProximityMode: false,
       // Death OCLs
       deathOCLNames: this.extractDeathOCLNames(objectDef),
       // Deploy state machine
@@ -4067,6 +4104,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.hordeProfile) {
       const rate = Math.max(1, entity.hordeProfile.updateRate);
       entity.hordeNextCheckFrame = this.frameCounter + this.gameRandom.nextRange(1, rate);
+    }
+
+    // Source parity: DemoTrapUpdate::onObjectCreated — set initial mode.
+    if (entity.demoTrapProfile) {
+      entity.demoTrapProximityMode = entity.demoTrapProfile.defaultsToProximityMode;
     }
 
     return entity;
@@ -6157,6 +6199,43 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return ratio;
+  }
+
+  /**
+   * Source parity: DemoTrapUpdateModuleData — extract demo trap profile from INI.
+   */
+  private extractDemoTrapProfile(objectDef: ObjectDef | undefined): DemoTrapProfile | null {
+    if (!objectDef) return null;
+    let profile: DemoTrapProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'DEMOTRAPUPDATE') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DEMOTRAPUPDATE' || blockType === 'DEMOTRAPUPDATE') {
+          const ignoreStr = readStringField(block.fields, ['IgnoreTargetTypes']) ?? '';
+          const ignoreKindOf = new Set<string>(
+            ignoreStr.split(/\s+/).filter(Boolean).map(s => s.toUpperCase()),
+          );
+          profile = {
+            defaultsToProximityMode: readBooleanField(block.fields, ['DefaultProximityMode']) ?? false,
+            triggerDetonationRange: readNumericField(block.fields, ['TriggerDetonationRange']) ?? 0,
+            ignoreKindOf,
+            scanFrames: this.msToLogicFrames(readNumericField(block.fields, ['ScanRate']) ?? 0),
+            friendlyDetonation: readBooleanField(block.fields, ['AutoDetonationWithFriendsInvolved']) ?? false,
+            detonationWeaponName: readStringField(block.fields, ['DetonationWeapon']),
+            detonateWhenKilled: readBooleanField(block.fields, ['DetonateWhenKilled']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
   }
 
   /**
@@ -8654,6 +8733,12 @@ export class GameLogicSubsystem implements Subsystem {
       case 'toggleOvercharge':
         this.handleToggleOverchargeCommand(command);
         return;
+      case 'detonateDemoTrap':
+        this.handleDetonateDemoTrapCommand(command);
+        return;
+      case 'toggleDemoTrapMode':
+        this.handleToggleDemoTrapModeCommand(command);
+        return;
       case 'combatDrop':
         this.handleCombatDropCommand(command);
         return;
@@ -8760,6 +8845,8 @@ export class GameLogicSubsystem implements Subsystem {
       case 'combatDrop':
       case 'hackInternet':
       case 'toggleOvercharge':
+      case 'detonateDemoTrap':
+      case 'toggleDemoTrapMode':
       case 'setRallyPoint':
       case 'garrisonBuilding':
       case 'repairBuilding':
@@ -9346,6 +9433,24 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.enableOverchargeForEntity(entity, profile);
+  }
+
+  private handleDetonateDemoTrapCommand(command: DetonateDemoTrapCommand): void {
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed) return;
+    const profile = entity.demoTrapProfile;
+    if (!profile || entity.demoTrapDetonated) return;
+    // Source parity: C++ update() returns early if UNDER_CONSTRUCTION or SOLD.
+    if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION') ||
+        entity.objectStatusFlags.has('SOLD')) return;
+    this.detonateDemoTrap(entity, profile);
+  }
+
+  private handleToggleDemoTrapModeCommand(command: ToggleDemoTrapModeCommand): void {
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed) return;
+    if (!entity.demoTrapProfile || entity.demoTrapDetonated) return;
+    entity.demoTrapProximityMode = !entity.demoTrapProximityMode;
   }
 
   private handleCombatDropCommand(command: CombatDropCommand): void {
@@ -16652,6 +16757,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (target.health <= 0 && !target.destroyed && !target.slowDeathState) {
+      // Source parity: DemoTrapUpdate::update() — detonate on kill if configured.
+      if (target.demoTrapProfile?.detonateWhenKilled && !target.demoTrapDetonated) {
+        this.detonateDemoTrap(target, target.demoTrapProfile);
+        return; // detonateDemoTrap calls markEntityDestroyed
+      }
       // Source parity: FireWeaponWhenDeadBehavior::onDie fires BEFORE slow death begins.
       this.fireDeathWeapons(target);
       this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
@@ -17086,6 +17196,110 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
     }
+  }
+
+  // ── DemoTrapUpdate implementation ────────────────────────────────────────
+
+  /**
+   * Source parity: DemoTrapUpdate::update() — periodic proximity scan.
+   * In proximity mode, scans nearby entities; detonates when an enemy
+   * enters the trigger range (unless friendlies are blocking).
+   */
+  private updateDemoTraps(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.demoTrapProfile;
+      if (!profile || entity.demoTrapDetonated) continue;
+
+      // Source parity: skip while under construction or sold.
+      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION') ||
+          entity.objectStatusFlags.has('SOLD')) {
+        continue;
+      }
+
+      // Not in proximity mode → dormant, skip scanning.
+      if (!entity.demoTrapProximityMode) continue;
+
+      // Scan throttle.
+      if (this.frameCounter < entity.demoTrapNextScanFrame) continue;
+      entity.demoTrapNextScanFrame = this.frameCounter + Math.max(1, profile.scanFrames);
+
+      // Proximity scan.
+      const rangeSq = profile.triggerDetonationRange * profile.triggerDetonationRange;
+      let shallDetonate = false;
+
+      for (const other of this.spawnedEntities.values()) {
+        if (other === entity) continue;
+        if (other.destroyed || other.slowDeathState) continue;
+
+        // Source parity: isEffectivelyDead().
+        if (other.health <= 0) continue;
+
+        // IgnoreTargetTypes filter.
+        if (profile.ignoreKindOf.size > 0) {
+          let skip = false;
+          for (const k of profile.ignoreKindOf) {
+            if (other.kindOf.has(k)) { skip = true; break; }
+          }
+          if (skip) continue;
+        }
+
+        // Source parity: partition manager pre-filters by range. Only consider
+        // entities within the trigger range for both detonation and friendly blocking.
+        const dx = entity.x - other.x;
+        const dz = entity.z - other.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq > rangeSq) continue;
+
+        // Source parity (ZH): dozer with DISARM weapon that is actively attacking → skip.
+        if (other.kindOf.has('DOZER') && other.objectStatusFlags.has('IS_ATTACKING')) {
+          continue;
+        }
+
+        // Relationship check — we want to know if entity considers other to be enemy.
+        const rel = this.getTeamRelationship(entity, other);
+        if (rel !== RELATIONSHIP_ENEMIES) {
+          if (!profile.friendlyDetonation) {
+            // Non-enemy in range blocks detonation entirely.
+            shallDetonate = false;
+            break;
+          }
+          // friendlyDetonation=true → skip non-enemies, keep looking.
+          continue;
+        }
+
+        // Source parity: don't detonate on anything airborne.
+        if (other.kindOf.has('AIRCRAFT') && other.category === 'air') continue;
+
+        shallDetonate = true;
+        if (profile.friendlyDetonation) break; // no need to check for friendlies
+      }
+
+      if (shallDetonate) {
+        this.detonateDemoTrap(entity, profile);
+      }
+    }
+  }
+
+  /**
+   * Source parity: DemoTrapUpdate::detonate() — fire temp weapon, kill self.
+   */
+  private detonateDemoTrap(entity: MapEntity, profile: DemoTrapProfile): void {
+    entity.demoTrapDetonated = true;
+
+    // Fire detonation weapon at own position (if not under construction/sold).
+    if (!entity.objectStatusFlags.has('UNDER_CONSTRUCTION') &&
+        !entity.objectStatusFlags.has('SOLD')) {
+      if (profile.detonationWeaponName) {
+        const weaponDef = this.iniDataRegistry?.getWeapon(profile.detonationWeaponName);
+        if (weaponDef) {
+          this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
+        }
+      }
+    }
+
+    // Kill the trap.
+    this.markEntityDestroyed(entity.id, entity.id);
   }
 
   /**

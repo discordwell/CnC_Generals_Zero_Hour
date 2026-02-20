@@ -344,6 +344,16 @@ export interface ToggleOverchargeCommand {
   entityId: number;
 }
 
+export interface DetonateDemoTrapCommand {
+  type: 'detonateDemoTrap';
+  entityId: number;
+}
+
+export interface ToggleDemoTrapModeCommand {
+  type: 'toggleDemoTrapMode';
+  entityId: number;
+}
+
 export interface CombatDropCommand {
   type: 'combatDrop';
   entityId: number;
@@ -431,6 +441,8 @@ export type GameLogicCommand =
   | SellCommand
   | HackInternetCommand
   | ToggleOverchargeCommand
+  | DetonateDemoTrapCommand
+  | ToggleDemoTrapModeCommand
   | CombatDropCommand
   | PlaceBeaconCommand
   | EnterObjectCommand

@@ -1,39 +1,43 @@
 # Session Summaries
 
+## 2026-02-20T21:10Z — ProneUpdate + Continued Feature Work
+- ProneUpdate: infantry prone behavior — committed 7b02c75
+  - proneDamageToFramesRatio INI extraction, proneFramesRemaining countdown
+  - Damage trigger in applyWeaponDamageAmount with NO_ATTACK status flag
+  - PRONE added to RenderAnimationState, integrated into deriveRenderAnimationState priority
+  - Code review fixes: C++ double-truncation parity (Math.trunc before multiply), removed redundant animationState assignment
+  - 4 tests — All 1124 tests pass
+
+## 2026-02-20T20:30Z — PointDefenseLaserUpdate + HordeUpdate
+- PointDefenseLaserUpdate: anti-projectile defense system — committed 31db58d
+  - PointDefenseLaserProfile INI: WeaponTemplate, PrimaryTargetTypes, SecondaryTargetTypes, ScanRate, ScanRange
+  - Scan/track/fire state machine with staggered init, projectile kindOf matching via template cache
+  - Double-tracking prevention (interceptedThisFrame Set), fire-immediately-after-scan C++ parity
+  - interceptProjectileEvent: splices PendingWeaponDamageEvent, emits WEAPON_FIRED/WEAPON_IMPACT
+  - 5 tests — All 1111 tests pass
+- HordeUpdate: formation bonus system — committed 62d0c68
+  - HordeUpdateProfile INI: UpdateRate, KindOf, Count, Radius, RubOffRadius, AlliesOnly, ExactMatch, AllowedNationalism
+  - Periodic spatial scan, three-tier detection (true member, rub-off inheritance, none)
+  - HORDE/NATIONALISM/FANATICISM weapon bonus condition flags based on horde status + player sciences
+  - Code review fixes: ALL-match kindOf (not ANY), idempotent flag recalculation, allowedNationalism clearing
+  - 9 tests — All 1120 tests pass
+
 ## 2026-02-20T19:00Z — BattlePlanUpdate System (Task #88)
 - Task #88: USA Strategy Center BattlePlanUpdate with full C++ source parity — committed a3a1872
   - BattlePlanProfile INI: Bombardment/HoldTheLine/SearchAndDestroy bonus flags + scalars
   - State machine: IDLE → UNPACKING → ACTIVE → PACKING → IDLE with timed transitions
-  - Three plans: BOMBARDMENT (weapon bonus), HOLDTHELINE (armor scalar), SEARCHANDDESTROY (vision range)
-  - C++ parity: bonuses/paralysis applied immediately at packing start, not end
   - Reference-counted bonuses via sideBattlePlanBonuses (0→1 apply, 1→0 remove)
-  - Special power routing: specialPowerName-based plan ID (avoids commandOption bitmask collision with 0x01)
-  - Vision range uses absolute restoration (not multiplicative inverse) to prevent FP drift
-  - InvalidMemberKindOf filtering, building self-exclusion from paralysis
-  - 7 tests: bombardment, armor scalar, vision, immediate paralysis, destruction cleanup, kindOf filter, building immunity
-- Code review fixes: reference counting, packing timing, requestBattlePlanChange simplified to desiredPlan only
-- All 1106 tests pass, clean build
+  - 7 tests — All 1106 tests pass, clean build
 
 ## 2026-02-20T17:50Z — INI-Driven Stealth/Detection System + Code Review Fixes (Tasks #85-87)
-- Tasks #85-87: INI-driven stealth and detection system upgrade with full C++ StealthUpdate/StealthDetectorUpdate parity
+- Tasks #85-87: INI-driven stealth and detection system with C++ StealthUpdate/StealthDetectorUpdate parity
   - StealthProfile + DetectorProfile INI parsing, 9 forbidden condition tokens, detection rate throttle
-  - SOLD check, garrison check, contained-in-non-garrisonable, TAKING_DAMAGE frame window, healing exclusion
   - 12 tests — All 1091 tests pass, clean build
 
 ## 2026-02-20T16:00Z — Crush/Squish Damage During Movement (Task #95)
 - Task #95: Crush collision system with C++ PhysicsUpdate::checkForOverlapCollision + SquishCollide parity — committed 926c982
   - updateCrushCollisions(), direction dot-product check, canBeSquished, CRUSH damage type
   - 4 new tests — All 1079 tests pass, clean build
-
-## 2026-02-20T15:20Z — 3D Damage Distance + Bounding Sphere Subtraction (Tasks #93-94)
-- Tasks #93-94: 3D distance for radius damage + FROM_BOUNDINGSPHERE_3D subtraction — commits b6a67fd, 1e62ef5
-  - Full 3D damage gathering, BSR by geometry type, code review caught BOX formula bug
-  - 1 new test — All 1075 tests pass, clean build
-
-## 2026-02-20T14:12Z — Power Brown-Out + Disabled Movement Restrictions (Tasks #88-89)
-- Tasks #88-89: Disabled movement restrictions + DISABLED_UNDERPOWERED power brown-out — commits 5e8548e, ff369fe
-  - isEntityDisabledForMovement(), SUBDUED blocks evacuate, brownedOut edge detection, countdown push
-  - 10 new tests — All 1069 tests pass, clean build
 
 # Key Findings
 

@@ -13045,3 +13045,255 @@ describe('ProneUpdate', () => {
     expect(state.animationState).not.toBe('PRONE');
   });
 });
+
+describe('DemoTrapUpdate', () => {
+  function makeDemoTrapBlock(overrides: Record<string, unknown> = {}): IniBlock {
+    return {
+      type: 'Behavior',
+      name: 'DemoTrapUpdate ModuleTag_DemoTrap',
+      fields: {
+        DefaultProximityMode: 'Yes',
+        TriggerDetonationRange: 30,
+        ScanRate: 100,
+        AutoDetonationWithFriendsInvolved: 'No',
+        DetonationWeapon: 'TrapExplosion',
+        DetonateWhenKilled: 'Yes',
+        ...overrides,
+      } as Record<string, string | number | boolean | string[] | number[]>,
+      blocks: [],
+    };
+  }
+
+  function makeDemoTrapSetup(opts?: {
+    trapOverrides?: Record<string, unknown>;
+    enemyDistance?: number;
+    includeAlly?: boolean;
+    mapSize?: number;
+  }) {
+    const overrides = opts?.trapOverrides ?? {};
+    const enemyDist = opts?.enemyDistance ?? 1;
+    const sz = opts?.mapSize ?? 64;
+
+    const objects = [
+      makeObjectDef('DemoTrap', 'GLA', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeDemoTrapBlock(overrides),
+      ]),
+      makeObjectDef('EnemyTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      ]),
+    ];
+
+    if (opts?.includeAlly) {
+      objects.push(
+        makeObjectDef('AllyUnit', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      );
+    }
+
+    const mapObjects: MapObjectJSON[] = [
+      makeMapObject('DemoTrap', 30, 30),
+      makeMapObject('EnemyTank', 30, 30 + enemyDist),
+    ];
+    if (opts?.includeAlly) {
+      mapObjects.push(makeMapObject('AllyUnit', 30, 31));
+    }
+
+    const bundle = makeBundle({
+      objects,
+      weapons: [
+        makeWeaponDef('TrapExplosion', {
+          AttackRange: 10,
+          PrimaryDamage: 200,
+          PrimaryDamageRadius: 40,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    return { logic };
+  }
+
+  it('detonates when enemy enters proximity range', () => {
+    // Enemy 1 unit away, range=30 → should detonate.
+    const { logic } = makeDemoTrapSetup({ enemyDistance: 1 });
+
+    logic.update(0);
+    // Run enough frames for scan to trigger.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Trap should be destroyed.
+    const trapState = logic.getEntityState(1);
+    expect(trapState === null || !trapState.alive).toBe(true);
+
+    // Enemy should have taken damage from the explosion.
+    const enemyState = logic.getEntityState(2)!;
+    expect(enemyState.health).toBeLessThan(500);
+  });
+
+  it('does not detonate when enemy is outside range', () => {
+    // Enemy 50 units away, range=30 → no detonation.
+    const { logic } = makeDemoTrapSetup({ enemyDistance: 50 });
+
+    logic.update(0);
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Trap should still be alive.
+    const trapState = logic.getEntityState(1)!;
+    expect(trapState.alive).toBe(true);
+
+    // Enemy should be untouched.
+    const enemyState = logic.getEntityState(2)!;
+    expect(enemyState.health).toBe(500);
+  });
+
+  it('blocks detonation when friendly is nearby and AutoDetonationWithFriendsInvolved=No', () => {
+    // Ally unit at (30,31) within range, enemy also in range → no detonation.
+    const { logic } = makeDemoTrapSetup({
+      includeAlly: true,
+      enemyDistance: 2,
+      trapOverrides: { AutoDetonationWithFriendsInvolved: 'No' },
+    });
+
+    logic.update(0);
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Trap should still be alive (ally blocked detonation).
+    const trapState = logic.getEntityState(1)!;
+    expect(trapState.alive).toBe(true);
+  });
+
+  it('detonates with friendly nearby when AutoDetonationWithFriendsInvolved=Yes', () => {
+    const { logic } = makeDemoTrapSetup({
+      includeAlly: true,
+      enemyDistance: 2,
+      trapOverrides: { AutoDetonationWithFriendsInvolved: 'Yes' },
+    });
+
+    logic.update(0);
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Trap should have detonated despite ally being nearby.
+    const trapState = logic.getEntityState(1);
+    expect(trapState === null || !trapState.alive).toBe(true);
+  });
+
+  it('detonates on manual command', () => {
+    // Start in manual mode (not proximity).
+    const { logic } = makeDemoTrapSetup({
+      enemyDistance: 50,
+      trapOverrides: { DefaultProximityMode: 'No' },
+    });
+
+    logic.update(0);
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Trap should still be alive (manual mode, no proximity scan).
+    expect(logic.getEntityState(1)!.alive).toBe(true);
+
+    // Issue manual detonate command.
+    logic.submitCommand({ type: 'detonateDemoTrap', entityId: 1 });
+    logic.update(1 / 30);
+
+    // Trap should be destroyed.
+    const trapState = logic.getEntityState(1);
+    expect(trapState === null || !trapState.alive).toBe(true);
+  });
+
+  it('detonates when killed if DetonateWhenKilled=Yes', () => {
+    const { logic } = makeDemoTrapSetup({
+      enemyDistance: 5,
+      trapOverrides: { DefaultProximityMode: 'No', DetonateWhenKilled: 'Yes' },
+    });
+
+    // Add an attacker to kill the trap.
+    const objects2 = [
+      makeObjectDef('DemoTrap', 'GLA', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeDemoTrapBlock({ DefaultProximityMode: 'No', DetonateWhenKilled: 'Yes' }),
+      ]),
+      makeObjectDef('EnemyTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun'] }),
+      ]),
+    ];
+    const bundle2 = makeBundle({
+      objects: objects2,
+      weapons: [
+        makeWeaponDef('BigGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+        makeWeaponDef('TrapExplosion', {
+          AttackRange: 10,
+          PrimaryDamage: 200,
+          PrimaryDamageRadius: 40,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+      ],
+    });
+    const scene2 = new THREE.Scene();
+    const registry2 = makeRegistry(bundle2);
+    const logic2 = new GameLogicSubsystem(scene2);
+    logic2.loadMapObjects(
+      makeMap([
+        makeMapObject('DemoTrap', 30, 30),
+        makeMapObject('EnemyTank', 28, 30),
+      ], 64, 64),
+      registry2,
+      makeHeightmap(64, 64),
+    );
+    logic2.setTeamRelationship('GLA', 'America', 0);
+    logic2.setTeamRelationship('America', 'GLA', 0);
+
+    // Order the tank to attack the trap.
+    logic2.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    const enemyBefore = logic2.getEntityState(2)!.health;
+
+    // Run until the trap is killed by the tank.
+    for (let i = 0; i < 15; i++) logic2.update(1 / 30);
+
+    // Trap should be dead, and its detonation weapon should have damaged the tank.
+    const trapState = logic2.getEntityState(1);
+    expect(trapState === null || !trapState.alive).toBe(true);
+
+    const enemyAfter = logic2.getEntityState(2)!;
+    expect(enemyAfter.health).toBeLessThan(enemyBefore);
+  });
+
+  it('does not scan in manual mode', () => {
+    // Start in manual mode — enemy in range should NOT trigger detonation.
+    const { logic } = makeDemoTrapSetup({
+      enemyDistance: 1,
+      trapOverrides: { DefaultProximityMode: 'No' },
+    });
+
+    logic.update(0);
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Trap should still be alive (manual mode, no scanning).
+    expect(logic.getEntityState(1)!.alive).toBe(true);
+
+    // Toggle to proximity mode.
+    logic.submitCommand({ type: 'toggleDemoTrapMode', entityId: 1 });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Now it should have detonated.
+    const trapState = logic.getEntityState(1);
+    expect(trapState === null || !trapState.alive).toBe(true);
+  });
+});
