@@ -86,6 +86,8 @@ export interface CombatDamageEventContext<
   canAttackerTargetEntity(attacker: TEntity, target: TEntity, commandSource: string): boolean;
   /** Source parity: Thing::isSignificantlyAboveTerrain — checks entity altitude above ground. */
   isEntitySignificantlyAboveTerrain(entity: TEntity): boolean;
+  /** Source parity: GeometryInfo::getBoundingSphereRadius — bounding sphere for 3D distance. */
+  resolveBoundingSphereRadius(entity: TEntity): number;
   masks: CombatDamageMasks;
   relationships: CombatDamageRelationships;
   hugeDamageAmount: number;
@@ -180,8 +182,8 @@ export function applyWeaponDamageEvent<
   let impactZ = event.impactZ;
   if (event.delivery === 'DIRECT' && primaryVictim && !primaryVictim.destroyed) {
     impactX = primaryVictim.x;
-    // Use base position (terrain level) for DIRECT delivery to match the base-position
-    // distance check in victim gathering below.
+    // Source parity: Weapon.cpp:1281-1283 — DIRECT delivery uses getPosition() which
+    // returns the base (terrain-level) position, not the center.
     impactY = primaryVictim.y - primaryVictim.baseHeight;
     impactZ = primaryVictim.z;
   }
@@ -211,12 +213,23 @@ export function applyWeaponDamageEvent<
       }
       const dx = entity.x - impactX;
       // Source parity: PartitionManager::iterateObjectsInRange(FROM_BOUNDINGSPHERE_3D)
-      // computes center-to-center 3D distance minus bounding sphere radii. We approximate
-      // using base-to-base (terrain level) distance, which is equivalent to center-to-center
-      // for same-height entities and correctly captures terrain elevation differences.
-      const dy = (entity.y - entity.baseHeight) - impactY;
+      // uses center-to-center 3D distance minus bounding sphere radii. entity.y is the
+      // center position (terrain + baseHeight); impactY is the terrain height at impact.
+      const dy = entity.y - impactY;
       const dz = entity.z - impactZ;
-      const distanceSqr = dx * dx + dy * dy + dz * dz;
+      const rawDistSqr = dx * dx + dy * dy + dz * dz;
+      // Source parity: Geometry.cpp:distCalcProc_BoundaryAndBoundary_3D — subtract the
+      // target entity's bounding sphere radius from the 3D distance (impact point has no
+      // object so only the candidate radius is subtracted). Clamp to zero for overlap.
+      const bsr = context.resolveBoundingSphereRadius(entity);
+      let distanceSqr: number;
+      if (bsr > 0) {
+        const rawDist = Math.sqrt(rawDistSqr);
+        const shrunken = rawDist - bsr;
+        distanceSqr = shrunken > 0 ? shrunken * shrunken : 0;
+      } else {
+        distanceSqr = rawDistSqr;
+      }
       if (distanceSqr <= effectRadiusSqr) {
         victims.push({ entity, distanceSqr });
       }
@@ -335,8 +348,8 @@ export function applyWeaponDamageEvent<
     tryContinueAttackOnVictimDeath(context, source, primaryVictim, weapon);
   }
 
-  // TODO(C&C source parity): subtract bounding-sphere radius from 3D distance
-  // per PartitionManager::iterateObjectsInRange(FROM_BOUNDINGSPHERE_3D).
+  // Source parity: FROM_BOUNDINGSPHERE_3D bounding-sphere subtraction implemented above.
+  // Remaining approximation: box geometry uses bounding circle radius, not exact OBB test.
 }
 
 export function updatePendingWeaponDamage<

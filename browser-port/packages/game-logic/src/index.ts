@@ -675,6 +675,8 @@ interface ObstacleGeometry {
   shape: ObstacleGeometryShape;
   majorRadius: number;
   minorRadius: number;
+  /** Source parity: GeometryInfo::m_height — used for bounding sphere radius computation. */
+  height: number;
 }
 
 interface CliffStateBits {
@@ -7627,8 +7629,33 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
+    const heightRaw = readNumericField(objectDef.fields, ['GeometryHeight', 'Height']);
+    const height = heightRaw !== null && Number.isFinite(heightRaw) ? Math.abs(heightRaw) : 0;
     const shape: ObstacleGeometryShape = geometryType.includes('BOX') ? 'box' : 'circle';
-    return { shape, majorRadius, minorRadius };
+    return { shape, majorRadius, minorRadius, height };
+  }
+
+  /**
+   * Source parity: GeometryInfo::calcBoundingStuff() — computes the bounding sphere radius.
+   *   SPHERE:   majorRadius
+   *   CYLINDER: max(majorRadius, height/2)
+   *   BOX:      sqrt(majorRadius² + minorRadius² + (height/2)²)
+   * Falls back to baseHeight when no explicit geometry is available.
+   */
+  private resolveBoundingSphereRadius(entity: MapEntity): number {
+    const geom = entity.obstacleGeometry;
+    if (geom) {
+      const halfHeight = geom.height * 0.5;
+      if (geom.shape === 'box') {
+        // Source parity: Geometry.cpp:515 — 3D diagonal of the box's half-extents.
+        return Math.hypot(geom.majorRadius, geom.minorRadius, halfHeight);
+      }
+      // cylinder (circle shape)
+      return Math.max(geom.majorRadius, halfHeight);
+    }
+    // Fallback: use baseHeight (= nominalHeight/2 ≈ GeometryHeight/2 for default geometry).
+    // This covers the center-offset so entities at the same terrain level are not penalized.
+    return entity.baseHeight;
   }
 
   private rasterizeObstacleGeometry(entity: MapEntity, grid: NavigationGrid): void {
@@ -9071,6 +9098,7 @@ export class GameLogicSubsystem implements Subsystem {
       shape: 'circle',
       majorRadius: radius,
       minorRadius: radius,
+      height: geometry.height,
     };
   }
 
@@ -14928,6 +14956,7 @@ export class GameLogicSubsystem implements Subsystem {
         const terrainY = this.resolveGroundHeight(entity.x, entity.z);
         return (entity.y - entity.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD;
       },
+      resolveBoundingSphereRadius: (entity) => this.resolveBoundingSphereRadius(entity),
       masks: {
         affectsSelf: WEAPON_AFFECTS_SELF,
         affectsAllies: WEAPON_AFFECTS_ALLIES,

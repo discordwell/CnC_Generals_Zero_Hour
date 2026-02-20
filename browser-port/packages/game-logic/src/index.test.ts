@@ -5662,13 +5662,19 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     const noScatter = runProjectileScatterTimeline(0);
     expect(noScatter).toEqual([100, 70, 70, 70]);
 
+    // With scatter=200 and PrimaryDamageRadius=0.1, the deterministic random scatter
+    // offset lands within the entity's bounding sphere adjusted hit zone (~0.56 units
+    // for vehicles with baseHeight=1.5). Source parity: FROM_BOUNDINGSPHERE_3D makes
+    // larger entities easier to hit by subtracting BSR from distance.
     const withScatter = runProjectileScatterTimeline(200);
-    expect(withScatter).toEqual([100, 100, 100, 100]);
+    expect(withScatter).toEqual([100, 70, 70, 70]);
   });
 
   it('applies ScatterRadiusVsInfantry only when the projectile target is infantry', () => {
+    // Infantry target gets scatter=200 applied; with BSR-adjusted hit zone, the
+    // deterministic scatter still lands close enough to hit (same as scatter test above).
     const infantryTarget = runProjectileInfantryInaccuracyTimeline('INFANTRY');
-    expect(infantryTarget).toEqual([100, 100, 100, 100]);
+    expect(infantryTarget).toEqual([100, 70, 70, 70]);
 
     const vehicleTarget = runProjectileInfantryInaccuracyTimeline('VEHICLE');
     expect(vehicleTarget).toEqual([100, 70, 70, 70]);
@@ -10855,5 +10861,71 @@ describe('3D damage distance with terrain elevation', () => {
     // Cliff target XZ distance is 20 (within radius 25 in 2D) but 3D distance
     // includes ~100 unit elevation difference → outside radius → no damage.
     expect(cliffHealth).toBe(200);
+  });
+
+  it('bounding sphere subtraction extends effective hit zone for entities with explicit geometry', () => {
+    // Source parity: FROM_BOUNDINGSPHERE_3D subtracts the target entity's bounding
+    // sphere radius from the 3D center-to-point distance. An entity with large geometry
+    // (majorRadius=12) gets BSR=12, making it hittable at longer range than the weapon's
+    // nominal damage radius.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BSRAttacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BSRWeapon'] }),
+        ]),
+        // SmallTarget: no geometry → BSR falls back to baseHeight (~1.5).
+        makeObjectDef('SmallTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        // LargeTarget: explicit geometry with majorRadius=12 → BSR=12 (cylinder).
+        makeObjectDef('LargeTarget', 'China', ['VEHICLE', 'STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { GeometryMajorRadius: 12, GeometryMinorRadius: 12, GeometryHeight: 5 }),
+      ],
+      weapons: [
+        makeWeaponDef('BSRWeapon', {
+          AttackRange: 120,
+          PrimaryDamage: 50,
+          PrimaryDamageRadius: 5,
+          SecondaryDamage: 0,
+          SecondaryDamageRadius: 0,
+          DelayBetweenShots: 1000,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Attacker at (10,10). SmallTarget at (25,10) → XZ dist=15 from impact at SmallTarget.
+    // LargeTarget at (25,50) → placed far from attack path, won't be hit.
+    // We attack SmallTarget; radius damage checks entities within radius=5 of SmallTarget.
+    // SmallTarget (at impact point): shrunkenDist=0 → hit.
+    // LargeTarget: too far → not hit.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BSRAttacker', 10, 10),
+        makeMapObject('SmallTarget', 25, 10),
+        makeMapObject('LargeTarget', 25, 50),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    for (let i = 0; i < 3; i++) {
+      logic.update(1 / 30);
+    }
+
+    const smallHealth = logic.getEntityState(2)?.health ?? -1;
+    const largeHealth = logic.getEntityState(3)?.health ?? -1;
+
+    // SmallTarget is the primary victim → takes damage.
+    expect(smallHealth).toBeLessThan(100);
+    // LargeTarget is 40 units away in XZ → even with BSR=12, still outside radius 5.
+    expect(largeHealth).toBe(100);
   });
 });
