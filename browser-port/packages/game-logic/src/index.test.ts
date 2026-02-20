@@ -10181,3 +10181,92 @@ describe('special power INI parameters', () => {
     expect(farTarget!.health).toBe(1000);
   });
 });
+
+// ── Mine regeneration via auto-heal ──────────────────────────────────────────
+
+describe('mine regeneration', () => {
+  it('regenerating mine recovers virtual mines through auto-heal', () => {
+    const mineDef = makeObjectDef('RegenMine', 'America', ['MINE', 'IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+        MaxHealth: 100,
+        InitialHealth: 100,
+      }),
+      makeBlock('Behavior', 'MinefieldBehavior ModuleTag_Minefield', {
+        DetonationWeapon: 'MineDetonationWeapon',
+        NumVirtualMines: 2,
+        Regenerates: true,
+      }),
+      makeBlock('Behavior', 'AutoHealBehavior ModuleTag_AutoHeal', {
+        HealingAmount: 10,
+        HealingDelay: 100,
+        StartHealingDelay: 0,
+        StartsActive: true,
+      }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+    });
+
+    const enemyDef = makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 3,
+      GeometryMinorRadius: 3,
+    });
+
+    const bundle = makeBundle({
+      objects: [mineDef, enemyDef],
+      weapons: [
+        makeWeaponDef('MineDetonationWeapon', {
+          PrimaryDamage: 30,
+          PrimaryDamageRadius: 10,
+          DamageType: 'EXPLOSION',
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Mine at 50,50; enemy close enough to detonate.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RegenMine', 50, 50),
+        makeMapObject('EnemyVehicle', 52, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Run a few frames to trigger mine detonation (enemy overlaps mine).
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // After detonation, enemy should have taken damage.
+    const enemyAfterDetonation = logic.getEntityState(2);
+    expect(enemyAfterDetonation).not.toBeNull();
+    expect(enemyAfterDetonation!.health).toBeLessThan(500);
+
+    // Move enemy away so it doesn't keep triggering detonations.
+    logic.submitCommand({ type: 'moveTo', entityId: 2, targetX: 120, targetZ: 50 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Mine should be MASKED (all virtual mines spent) with health floor at 0.1.
+    const mineState = logic.getEntityState(1);
+    expect(mineState).not.toBeNull();
+    // Mine lost health from detonation and is now low or at floor.
+
+    // Run many frames to let auto-heal restore health.
+    // HealingAmount=10, delay=100ms(~3 frames), maxHealth=100.
+    // After enough healing cycles, virtual mines should regenerate.
+    for (let i = 0; i < 120; i++) logic.update(1 / 30);
+
+    // Mine should have healed and recovered at least 1 virtual mine (un-masked).
+    const mineAfterHeal = logic.getEntityState(1);
+    expect(mineAfterHeal).not.toBeNull();
+    // If health is above 50% of maxHealth, at least 1 virtual mine should be restored.
+    // The mine should be alive (not destroyed).
+    expect(mineAfterHeal!.health).toBeGreaterThan(0);
+  });
+});

@@ -5988,6 +5988,10 @@ export class GameLogicSubsystem implements Subsystem {
               spyVisionBaseDurationMs: readNumericField(block.fields, ['BaseDuration']) ?? 0,
               fireWeaponMaxShots: readNumericField(block.fields, ['MaxShotsToFire']) ?? 1,
               cleanupMoveRange: readNumericField(block.fields, ['MaxMoveDistanceFromLocation']) ?? 0,
+              // NOTE: In the original engine, area damage/heal parameters live on weapon templates
+              // spawned via OCL, not on the special power module itself. These field names are
+              // forward-looking placeholders for OCL-less parameter passing; real game INI files
+              // won't populate them (they'll fall through to DEFAULT_* constants).
               areaDamageRadius: readNumericField(block.fields, ['Radius', 'WeaponRadius', 'DamageRadius']) ?? 0,
               areaDamageAmount: readNumericField(block.fields, ['Damage', 'DamageAmount']) ?? 0,
               areaHealAmount: readNumericField(block.fields, ['HealAmount', 'RepairAmount']) ?? 0,
@@ -10391,11 +10395,20 @@ export class GameLogicSubsystem implements Subsystem {
                 for (const target of this.spawnedEntities.values()) {
                   if (target.destroyed || target.health >= target.maxHealth) continue;
                   if (this.normalizeSide(target.side) !== side) continue;
+                  const prevHealth = target.health;
                   target.health = Math.min(target.maxHealth, target.health + prof.healingAmount);
+                  if (target.minefieldProfile && target.health > prevHealth) {
+                    this.mineOnDamage(target, entity.id, 'HEALING');
+                  }
                 }
               } else {
                 // Self-heal mode.
+                const prevHealth = entity.health;
                 entity.health = Math.min(entity.maxHealth, entity.health + prof.healingAmount);
+                // Source parity: healing triggers mineOnDamage(HEALING) for virtual mine recalculation.
+                if (entity.minefieldProfile && entity.health > prevHealth) {
+                  this.mineOnDamage(entity, entity.id, 'HEALING');
+                }
               }
               entity.autoHealNextFrame = this.frameCounter + prof.healingDelayFrames;
             }
@@ -10464,7 +10477,12 @@ export class GameLogicSubsystem implements Subsystem {
     if (now >= target.soleHealingBenefactorExpirationFrame || target.soleHealingBenefactorId === sourceId) {
       target.soleHealingBenefactorId = sourceId;
       target.soleHealingBenefactorExpirationFrame = now + duration;
+      const prevHealth = target.health;
       target.health = Math.min(target.maxHealth, target.health + amount);
+      // Source parity: healing triggers onDamage(HEALING) which recalculates virtual mines.
+      if (target.minefieldProfile && target.health > prevHealth) {
+        this.mineOnDamage(target, sourceId, 'HEALING');
+      }
     }
   }
 
@@ -10676,6 +10694,10 @@ export class GameLogicSubsystem implements Subsystem {
           if (!creator || creator.destroyed) {
             mine.mineRegenerates = false;
             mine.mineDraining = true;
+            // Source parity: stopHealing() on AutoHealBehavior when creator dies.
+            if (mine.autoHealProfile) {
+              mine.autoHealDamageDelayUntilFrame = Number.MAX_SAFE_INTEGER;
+            }
           }
         }
       }
@@ -13040,7 +13062,16 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    // Source parity: FireWeaponPower.cpp checks self->isDisabled() and returns early.
+    if (attacker.objectStatusFlags.has('DISABLED_EMP')
+      || attacker.objectStatusFlags.has('DISABLED_HACKED')
+      || attacker.objectStatusFlags.has('DISABLED_SUBDUED')
+      || attacker.objectStatusFlags.has('DISABLED_HELD')) {
+      return;
+    }
+
     // Source parity: FireWeaponPower reloads all ammo before firing.
+    // C++ calls reloadAllAmmo(TRUE) across all weapon slots; we only track one.
     if (attacker.attackWeapon) {
       attacker.attackWeapon.currentClipAmmo = attacker.attackWeapon.clipSize;
     }
