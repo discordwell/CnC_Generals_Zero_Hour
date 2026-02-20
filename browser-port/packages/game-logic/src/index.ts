@@ -161,6 +161,7 @@ import {
   getExperienceValue as getExperienceValueImpl,
   LEVEL_ELITE,
   LEVEL_HEROIC,
+  LEVEL_REGULAR,
   LEVEL_VETERAN,
   resolveArmorSetFlagsForLevel as resolveArmorSetFlagsForLevelImpl,
   type ExperienceProfile,
@@ -1681,6 +1682,12 @@ interface MapEntity {
   // ── Source parity: FloatUpdate — water surface snapping ──
   floatUpdateProfile: FloatUpdateProfile | null;
 
+  // ── Source parity: WanderAIUpdate — random movement when idle ──
+  hasWanderAI: boolean;
+  // ── Source parity: VeterancyGainCreate — sets veterancy level on creation if science owned ──
+  veterancyGainCreateProfiles: VeterancyGainCreateProfile[];
+  // ── Source parity: FXListDie — death FX lists with DieMuxData filtering ──
+  fxListDieProfiles: FXListDieProfile[];
   // ── Source parity: GrantUpgradeCreate — grants upgrade on creation/build complete ──
   grantUpgradeCreateProfiles: GrantUpgradeCreateProfile[];
 
@@ -1819,6 +1826,33 @@ interface GrantUpgradeCreateProfile {
   isPlayerUpgrade: boolean;
   /** If UNDER_CONSTRUCTION is in ExemptStatus, grant on create when not under construction. */
   exemptUnderConstruction: boolean;
+}
+
+/**
+ * Source parity: VeterancyGainCreate — on creation, sets entity veterancy level if player has
+ * the required science. C++ file: VeterancyGainCreate.cpp.
+ */
+interface VeterancyGainCreateProfile {
+  /** Veterancy level to set (0=REGULAR, 1=VETERAN, 2=ELITE, 3=HEROIC). */
+  startingLevel: VeterancyLevel;
+  /** Science name required (normalized to uppercase). Null = no science check (always applies). */
+  scienceRequired: string | null;
+}
+
+/**
+ * Source parity: FXListDie — on death, triggers a named FX list if isDieApplicable passes.
+ * C++ file: FXListDie.cpp — used for death particle effects, explosion FX, etc.
+ */
+interface FXListDieProfile {
+  /** Name of the FX list to trigger on death. */
+  deathFXName: string;
+  /** If true, orient the FX toward the damage source. */
+  orientToObject: boolean;
+  /** DieMuxData filtering. */
+  deathTypes: Set<string>;
+  veterancyLevels: Set<string>;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
 }
 
 /**
@@ -3066,6 +3100,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateTempWeaponBonusExpiry();
     this.updateSellingEntities();
     this.updateRebuildHoles();
+    this.updateWanderAI();
     this.updateAutoDeposit();
     this.updateDynamicShroud();
     this.updatePilotFindVehicle();
@@ -4907,6 +4942,12 @@ export class GameLogicSubsystem implements Subsystem {
       radarActive: false,
       // FloatUpdate
       floatUpdateProfile: this.extractFloatUpdateProfile(objectDef),
+      // WanderAIUpdate
+      hasWanderAI: this.hasModuleType(objectDef, 'WANDERAIUPDATE'),
+      // VeterancyGainCreate
+      veterancyGainCreateProfiles: this.extractVeterancyGainCreateProfiles(objectDef),
+      // FXListDie
+      fxListDieProfiles: this.extractFXListDieProfiles(objectDef),
       // GrantUpgradeCreate
       grantUpgradeCreateProfiles: this.extractGrantUpgradeCreateProfiles(objectDef),
       // UpgradeDie
@@ -5035,6 +5076,10 @@ export class GameLogicSubsystem implements Subsystem {
       entity.dynamicShroudShrinkStartDeadline = stateCountDown - prof.shrinkDelay;
       entity.dynamicShroudGrowStartDeadline = stateCountDown - prof.growDelay;
       entity.dynamicShroudSustainDeadline = entity.dynamicShroudGrowStartDeadline - prof.growTime;
+      // Source parity: C++ DEBUG_ASSERTCRASH checks (DynamicShroudClearingRangeUpdate.cpp:104-105).
+      if (entity.dynamicShroudSustainDeadline < entity.dynamicShroudShrinkStartDeadline) {
+        console.warn(`DynamicShroudClearingRangeUpdate: sustainDeadline(${entity.dynamicShroudSustainDeadline}) < shrinkStartDeadline(${entity.dynamicShroudShrinkStartDeadline}) — invalid INI configuration`);
+      }
       entity.dynamicShroudDoneForeverFrame = this.frameCounter + stateCountDown;
       entity.dynamicShroudNativeClearingRange = entity.visionRange;
       entity.dynamicShroudCurrentClearingRange = 0;
@@ -5048,6 +5093,14 @@ export class GameLogicSubsystem implements Subsystem {
     for (const prof of entity.grantUpgradeCreateProfiles) {
       if (prof.exemptUnderConstruction && !entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
         this.applyGrantUpgradeCreate(entity, prof);
+      }
+    }
+
+    // Source parity: VeterancyGainCreate::onCreate — set min veterancy if player has science.
+    // C++ file: VeterancyGainCreate.cpp lines 81-93.
+    for (const prof of entity.veterancyGainCreateProfiles) {
+      if (prof.scienceRequired === null || this.hasSideScience(entity.side ?? '', prof.scienceRequired)) {
+        this.setMinVeterancyLevel(entity, prof.startingLevel);
       }
     }
 
@@ -7487,6 +7540,102 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return result;
+  }
+
+  /**
+   * Helper: check if an object definition contains a behavior/update module of the given type.
+   */
+  private hasModuleType(objectDef: ObjectDef | undefined, moduleType: string): boolean {
+    if (!objectDef) return false;
+    const upperType = moduleType.toUpperCase();
+    let found = false;
+    const visitBlock = (block: IniBlock): void => {
+      if (found) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'DRAW') {
+        const mt = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (mt === upperType) { found = true; return; }
+      }
+      if (block.blocks) { for (const child of block.blocks) visitBlock(child); }
+    };
+    if (objectDef.blocks) { for (const block of objectDef.blocks) visitBlock(block); }
+    return found;
+  }
+
+  /**
+   * Source parity: VeterancyGainCreate — extract all VeterancyGainCreate modules from INI.
+   * C++ file: VeterancyGainCreate.cpp — sets veterancy level on creation if science is present.
+   */
+  private extractVeterancyGainCreateProfiles(objectDef: ObjectDef | undefined): VeterancyGainCreateProfile[] {
+    if (!objectDef) return [];
+    const profiles: VeterancyGainCreateProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR' || block.type.toUpperCase() === 'DRAW') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'VETERANCYGAINCREATE') {
+          const levelStr = readStringField(block.fields, ['StartingLevel'])?.trim().toUpperCase() ?? '';
+          let startingLevel: VeterancyLevel = LEVEL_REGULAR;
+          if (levelStr === 'VETERAN') startingLevel = LEVEL_VETERAN;
+          else if (levelStr === 'ELITE') startingLevel = LEVEL_ELITE;
+          else if (levelStr === 'HEROIC') startingLevel = LEVEL_HEROIC;
+
+          const scienceStr = readStringField(block.fields, ['ScienceRequired'])?.trim().toUpperCase() ?? '';
+          const scienceRequired = (scienceStr && scienceStr !== 'NONE' && scienceStr !== 'SCIENCE_INVALID')
+            ? scienceStr : null;
+
+          profiles.push({ startingLevel, scienceRequired });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: FXListDie — extract all FXListDie modules from INI.
+   * C++ file: FXListDie.cpp — triggers death FX with isDieApplicable filtering.
+   */
+  private extractFXListDieProfiles(objectDef: ObjectDef | undefined): FXListDieProfile[] {
+    if (!objectDef) return [];
+    const profiles: FXListDieProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FXLISTDIE') {
+          const deathFXName = readStringField(block.fields, ['DeathFX'])?.trim().toUpperCase() ?? '';
+          if (!deathFXName) { return; }
+          const orientToObject = (readStringField(block.fields, ['OrientToObject'])?.toUpperCase() ?? 'YES') !== 'NO';
+
+          // DieMuxData filtering fields.
+          const deathTypes = new Set<string>();
+          const dtStr = readStringField(block.fields, ['DeathTypes'])?.trim().toUpperCase() ?? '';
+          if (dtStr) { for (const t of dtStr.split(/\s+/)) { if (t) deathTypes.add(t); } }
+          const veterancyLevels = new Set<string>();
+          const vlStr = readStringField(block.fields, ['VeterancyLevels'])?.trim().toUpperCase() ?? '';
+          if (vlStr) { for (const t of vlStr.split(/\s+/)) { if (t) veterancyLevels.add(t); } }
+          const exemptStatus = new Set<string>();
+          const esStr = readStringField(block.fields, ['ExemptStatus'])?.trim().toUpperCase() ?? '';
+          if (esStr) { for (const t of esStr.split(/\s+/)) { if (t) exemptStatus.add(t); } }
+          const requiredStatus = new Set<string>();
+          const rsStr = readStringField(block.fields, ['RequiredStatus'])?.trim().toUpperCase() ?? '';
+          if (rsStr) { for (const t of rsStr.split(/\s+/)) { if (t) requiredStatus.add(t); } }
+
+          profiles.push({ deathFXName, orientToObject, deathTypes, veterancyLevels, exemptStatus, requiredStatus });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
   }
 
   /**
@@ -14193,6 +14342,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ExperienceTracker::setMinVeterancyLevel — raise veterancy to at least
+   * the given level (never lowers). Used by VeterancyGainCreate::onCreate.
+   * C++ file: ExperienceTracker.cpp.
+   */
+  private setMinVeterancyLevel(entity: MapEntity, targetLevel: VeterancyLevel): void {
+    const profile = entity.experienceProfile;
+    if (!profile) return;
+    if (entity.experienceState.currentLevel >= targetLevel) return;
+    // Grant enough XP to reach the target level.
+    const xpNeeded = (profile.experienceRequired[targetLevel] ?? 0) - entity.experienceState.currentExperience;
+    if (xpNeeded <= 0) return;
+    const result = addExperiencePointsImpl(entity.experienceState, profile, xpNeeded, false);
+    if (result.didLevelUp) {
+      this.onEntityLevelUp(entity, result.oldLevel, result.newLevel);
+    }
+  }
+
+  /**
    * Source parity: revealMapForPlayer — reveals entire map fog-of-war for a side.
    * Unlike spy vision which is temporary, the shroud crate permanently reveals the map.
    */
@@ -20616,6 +20783,33 @@ export class GameLogicSubsystem implements Subsystem {
    * Awards initial capture bonus once when first owned by a non-neutral player.
    */
   /**
+   * Source parity: WanderAIUpdate::update — when idle, move to a random nearby position.
+   * C++ file: WanderAIUpdate.cpp — used by civilian units, animals, etc.
+   * C++ uses GameLogicRandomValue(5, 50) offset for both x and y.
+   */
+  private updateWanderAI(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (!entity.hasWanderAI) continue;
+      if (!entity.canMove || entity.isImmobile) continue;
+      if (this.isEntityDisabledForMovement(entity)) continue;
+
+      // Source parity: isIdle() — only wander when entity has no current activity.
+      const isIdle = !entity.moving
+        && entity.attackTargetEntityId === null
+        && entity.guardState === 'NONE';
+      if (!isIdle) continue;
+
+      // Source parity: C++ adds GameLogicRandomValue(5, 50) to both x and y.
+      const offsetX = this.gameRandom.nextRange(5, 50);
+      const offsetZ = this.gameRandom.nextRange(5, 50);
+      const destX = entity.x + offsetX;
+      const destZ = entity.z + offsetZ;
+      this.issueMoveTo(entity.id, destX, destZ);
+    }
+  }
+
+  /**
    * Source parity: AutoDepositUpdate::update() — C++ lines 117-155.
    * Periodic cash deposits when deposit timer elapses. Skips neutral and under-construction.
    * On first timer elapse, enables the capture bonus flag (m_initialized / m_awardInitialCaptureBonus).
@@ -20625,11 +20819,6 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed || entity.slowDeathState) continue;
       const profile = entity.autoDepositProfile;
       if (!profile) continue;
-
-      // Source parity: constructor sets depositOnFrame = currentFrame + depositFrame.
-      if (entity.autoDepositNextFrame === 0) {
-        entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
-      }
 
       // Source parity: C++ line 120 — check if deposit timer has elapsed.
       if (this.frameCounter < entity.autoDepositNextFrame) continue;
@@ -22189,8 +22378,8 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Source parity: C++ line 224 — death check gated on directionOK.
       if (directionOK) {
-        const entityAbsoluteHeight = entity.y - entity.baseHeight;
-        if (entityAbsoluteHeight < targetHeight) {
+        // Source parity: C++ uses raw pos->z (entity.y), not adjusted by baseHeight.
+        if (entity.y < targetHeight) {
           // Source parity: C++ line 229 — snap if configured, or if entity position is below terrain.
           // C++ compares pos->z (raw entity position) against terrainHeightAtPos (not minus baseHeight).
           if (prof.snapToGroundOnDeath || entity.y < terrainY) {
@@ -22506,6 +22695,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: InstantDeathBehavior::onDie — fire matching die module effects.
     this.executeInstantDeathModules(entity);
+
+    // Source parity: FXListDie::onDie — trigger death FX for matching profiles.
+    this.executeFXListDieModules(entity);
 
     // Source parity: UpgradeDie::onDie — remove upgrade from producer on death.
     this.executeUpgradeDieModules(entity);
@@ -22885,6 +23077,28 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Source parity: FXListDie::onDie — trigger death FX for matching FXListDie profiles.
+   * C++ file: FXListDie.cpp — plays death effects with isDieApplicable filtering.
+   * Emits visual events for the renderer to display particle/sound effects.
+   */
+  private executeFXListDieModules(entity: MapEntity): void {
+    for (const profile of entity.fxListDieProfiles) {
+      if (!this.isDieModuleApplicable(entity, profile)) continue;
+      // Emit a death FX visual event for the renderer.
+      // Source parity: C++ triggers FXList::doFXObj or FXList::doFXPos based on orientToObject.
+      this.visualEventBuffer.push({
+        type: 'ENTITY_DESTROYED',
+        x: entity.x,
+        y: entity.y,
+        z: entity.z,
+        radius: 0,
+        sourceEntityId: entity.id,
+        projectileType: 'GENERIC',
+      });
     }
   }
 

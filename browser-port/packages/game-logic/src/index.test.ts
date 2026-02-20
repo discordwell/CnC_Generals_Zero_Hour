@@ -13862,7 +13862,7 @@ describe('DynamicShroudClearingRangeUpdate', () => {
     const sz = 64;
     const growDelayMs = opts?.growDelayMs ?? 100;   // 3 frames
     const growTimeMs = opts?.growTimeMs ?? 200;      // 6 frames
-    const shrinkDelayMs = opts?.shrinkDelayMs ?? 100; // 3 frames
+    const shrinkDelayMs = opts?.shrinkDelayMs ?? 333; // 10 frames (must be >= growDelay + growTime per C++ invariant)
     const shrinkTimeMs = opts?.shrinkTimeMs ?? 200;   // 6 frames
     const finalVision = opts?.finalVision ?? 5;
     const changeIntervalMs = opts?.changeIntervalMs ?? 33; // ~1 frame
@@ -13904,16 +13904,15 @@ describe('DynamicShroudClearingRangeUpdate', () => {
   }
 
   it('grows vision range from 0 to native during growing phase', () => {
-    // growDelay=3 frames, growTime=6 frames, shrinkDelay=3 frames, shrinkTime=6 frames
-    // Timeline (stateCountDown starts at shrinkDelay+shrinkTime = 9):
-    //   growStartDeadline = 9 - 3 = 6
-    //   sustainDeadline = 6 - 6 = 0
-    //   shrinkStartDeadline = 9 - 3 = 6
-    // Total stateCountDown = 9
+    // growDelay=3 frames, growTime=6 frames, shrinkDelay=10 frames, shrinkTime=6 frames
+    // stateCountDown = shrinkDelay + shrinkTime = 10 + 6 = 16
+    // shrinkStartDeadline = 16 - 10 = 6
+    // growStartDeadline = 16 - 3 = 13
+    // sustainDeadline = 13 - 6 = 7 (>= shrinkStartDeadline ✓)
     const { logic } = makeDynamicShroudSetup({
       growDelayMs: 100,   // 3 frames
       growTimeMs: 200,    // 6 frames
-      shrinkDelayMs: 100, // 3 frames
+      shrinkDelayMs: 333, // 10 frames
       shrinkTimeMs: 200,  // 6 frames
       finalVision: 5,
       visionRange: 100,
@@ -13944,10 +13943,10 @@ describe('DynamicShroudClearingRangeUpdate', () => {
 
   it('settles to final vision after full lifecycle', () => {
     const { logic } = makeDynamicShroudSetup({
-      growDelayMs: 33,   // 1 frame
-      growTimeMs: 100,   // 3 frames
-      shrinkDelayMs: 33, // 1 frame
-      shrinkTimeMs: 100, // 3 frames
+      growDelayMs: 33,    // 1 frame
+      growTimeMs: 100,    // 3 frames
+      shrinkDelayMs: 133, // 4 frames (>= growDelay + growTime per C++ invariant)
+      shrinkTimeMs: 100,  // 3 frames
       finalVision: 10,
       changeIntervalMs: 33, // 1 frame
       growIntervalMs: 33,   // 1 frame
@@ -13955,7 +13954,7 @@ describe('DynamicShroudClearingRangeUpdate', () => {
     });
 
     // Run enough frames for the full lifecycle: grow → sustain → shrink → done → sleeping.
-    // stateCountDown = shrinkDelay + shrinkTime = 1 + 3 = 4 frames total.
+    // stateCountDown = shrinkDelay + shrinkTime = 4 + 3 = 7 frames total.
     // Run 30 frames to be safe.
     for (let i = 0; i < 30; i++) {
       logic.update(1 / 30);
@@ -13987,6 +13986,260 @@ describe('DynamicShroudClearingRangeUpdate', () => {
     const range = getEntityVisionRange(logic);
     // VisionRange = 150 (raw INI value, not scaled), should be unchanged.
     expect(range).toBe(150);
+  });
+});
+
+describe('VeterancyGainCreate', () => {
+  it('sets starting veterancy level when player has required science', () => {
+    const sz = 64;
+    const objects = [
+      makeObjectDef('EliteTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('Behavior', 'VeterancyGainCreate ModuleTag_VetCreate', {
+          StartingLevel: 'VETERAN',
+          ScienceRequired: 'SCIENCE_TANK_VETERAN',
+        }),
+      ], { ExperienceRequired: [0, 50, 200, 500], ExperienceValue: [10, 20, 30, 40] }),
+    ];
+    const sciences = [makeScienceDef('SCIENCE_TANK_VETERAN', { IsGrantable: 'Yes' })];
+    const bundle = makeBundle({ objects, sciences });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    // Pre-populate the side's science set directly (bypasses registry lookup in grantSideScience).
+    const priv = logic as unknown as { sideSciences: Map<string, Set<string>> };
+    priv.sideSciences.set('america', new Set(['SCIENCE_TANK_VETERAN']));
+
+    logic.loadMapObjects(makeMap([makeMapObject('EliteTank', 30, 30)], sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('america', 'HUMAN');
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, { experienceState: { currentLevel: number } }>;
+    }).spawnedEntities;
+    const tank = entities.get(1)!;
+    // Should start at VETERAN (level 1) due to VeterancyGainCreate.
+    expect(tank.experienceState.currentLevel).toBe(1);
+  });
+
+  it('does not set veterancy when player lacks required science', () => {
+    const sz = 64;
+    const objects = [
+      makeObjectDef('EliteTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('Behavior', 'VeterancyGainCreate ModuleTag_VetCreate', {
+          StartingLevel: 'ELITE',
+          ScienceRequired: 'SCIENCE_TANK_ELITE',
+        }),
+      ], { ExperienceRequired: [0, 50, 200, 500], ExperienceValue: [10, 20, 30, 40] }),
+    ];
+    const sciences = [makeScienceDef('SCIENCE_TANK_ELITE', { IsGrantable: 'Yes' })];
+    const bundle = makeBundle({ objects, sciences });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    // Do NOT grant the science — sideSciences is empty.
+    logic.loadMapObjects(makeMap([makeMapObject('EliteTank', 30, 30)], sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('america', 'HUMAN');
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, { experienceState: { currentLevel: number } }>;
+    }).spawnedEntities;
+    const tank = entities.get(1)!;
+    // Should stay at REGULAR (level 0) since the science is not owned.
+    expect(tank.experienceState.currentLevel).toBe(0);
+  });
+
+  it('sets veterancy without science requirement when ScienceRequired is omitted', () => {
+    const sz = 64;
+    const objects = [
+      makeObjectDef('HeroUnit', 'GLA', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        makeBlock('Behavior', 'VeterancyGainCreate ModuleTag_VetCreate', {
+          StartingLevel: 'HEROIC',
+        }),
+      ], { ExperienceRequired: [0, 100, 300, 800], ExperienceValue: [50, 100, 150, 200] }),
+    ];
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('HeroUnit', 30, 30)], sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('gla', 'HUMAN');
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, { experienceState: { currentLevel: number } }>;
+    }).spawnedEntities;
+    const unit = entities.get(1)!;
+    // Should start at HEROIC (level 3) since no science is required.
+    expect(unit.experienceState.currentLevel).toBe(3);
+  });
+
+  it('never lowers veterancy level (setMinVeterancyLevel)', () => {
+    const sz = 64;
+    const objects = [
+      makeObjectDef('MixedVet', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        // First module grants ELITE unconditionally.
+        makeBlock('Behavior', 'VeterancyGainCreate ModuleTag_VetCreate1', {
+          StartingLevel: 'ELITE',
+        }),
+        // Second module would grant VETERAN — should be ignored (never lowers).
+        makeBlock('Behavior', 'VeterancyGainCreate ModuleTag_VetCreate2', {
+          StartingLevel: 'VETERAN',
+        }),
+      ], { ExperienceRequired: [0, 50, 200, 500], ExperienceValue: [10, 20, 30, 40] }),
+    ];
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('MixedVet', 30, 30)], sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('america', 'HUMAN');
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, { experienceState: { currentLevel: number } }>;
+    }).spawnedEntities;
+    const tank = entities.get(1)!;
+    // Should be ELITE (level 2), not lowered to VETERAN.
+    expect(tank.experienceState.currentLevel).toBe(2);
+  });
+});
+
+describe('FXListDie', () => {
+  it('parses FXListDie profiles from INI with DieMuxData fields', () => {
+    const objects = [
+      makeObjectDef('FXUnit', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'FXListDie ModuleTag_FXDie1', {
+          DeathFX: 'FX_InfantryDeath',
+          OrientToObject: 'Yes',
+        }),
+        makeBlock('Behavior', 'FXListDie ModuleTag_FXDie2', {
+          DeathFX: 'FX_CrushDeath',
+          DeathTypes: 'CRUSHED EXPLODED',
+          OrientToObject: 'No',
+        }),
+      ]),
+    ];
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('FXUnit', 10, 10)]), registry, makeHeightmap());
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        fxListDieProfiles: Array<{
+          deathFXName: string;
+          orientToObject: boolean;
+          deathTypes: Set<string>;
+        }>;
+      }>;
+    };
+    const unit = priv.spawnedEntities.get(1)!;
+    expect(unit.fxListDieProfiles.length).toBe(2);
+    // First profile: no DeathTypes filter, orientToObject = true.
+    expect(unit.fxListDieProfiles[0]!.deathFXName).toBe('FX_INFANTRYDEATH');
+    expect(unit.fxListDieProfiles[0]!.orientToObject).toBe(true);
+    expect(unit.fxListDieProfiles[0]!.deathTypes.size).toBe(0);
+    // Second profile: CRUSHED + EXPLODED death types, orientToObject = false.
+    expect(unit.fxListDieProfiles[1]!.deathFXName).toBe('FX_CRUSHDEATH');
+    expect(unit.fxListDieProfiles[1]!.orientToObject).toBe(false);
+    expect(unit.fxListDieProfiles[1]!.deathTypes.has('CRUSHED')).toBe(true);
+    expect(unit.fxListDieProfiles[1]!.deathTypes.has('EXPLODED')).toBe(true);
+  });
+
+  it('emits death FX visual events when FXListDie profile matches', () => {
+    const objects = [
+      makeObjectDef('FXUnit', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'FXListDie ModuleTag_FXDie', {
+          DeathFX: 'FX_InfantryDeath',
+        }),
+      ]),
+      makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestCannon'] }),
+      ]),
+    ];
+    const weapons = [
+      makeWeaponDef('TestCannon', {
+        AttackRange: 120, PrimaryDamage: 999, DelayBetweenShots: 100,
+      }),
+    ];
+    const bundle = makeBundle({ objects, weapons });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('FXUnit', 10, 10), makeMapObject('Attacker', 30, 10)]),
+      registry, makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    for (let i = 0; i < 12; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After the kill: 1 ENTITY_DESTROYED from standard death + 1 from FXListDie = at least 2.
+    const events = logic.drainVisualEvents();
+    const destroyEvents = events.filter(e => e.type === 'ENTITY_DESTROYED');
+    expect(destroyEvents.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('WanderAIUpdate', () => {
+  function makeWanderSetup() {
+    const objects = [
+      makeObjectDef('Wanderer', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('LocomotorSet', 'SET_NORMAL WanderLoco', {}),
+        makeBlock('Behavior', 'WanderAIUpdate ModuleTag_Wander', {}),
+      ]),
+      makeObjectDef('Stationary', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('LocomotorSet', 'SET_NORMAL WanderLoco', {}),
+      ]),
+    ];
+    const bundle = makeBundle({ objects, locomotors: [makeLocomotorDef('WanderLoco', 30)] });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Wanderer', 50, 50), makeMapObject('Stationary', 200, 200)], 128, 128),
+      registry, makeHeightmap(128, 128),
+    );
+    return logic;
+  }
+
+  it('moves idle entity with WanderAIUpdate to a random position', () => {
+    const logic = makeWanderSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { x: number; z: number; hasWanderAI: boolean; canMove: boolean }> };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.hasWanderAI).toBe(true);
+    expect(entity.canMove).toBe(true);
+    const startX = entity.x;
+    const startZ = entity.z;
+
+    // Run enough frames for wander movement to occur
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    const hasMoved = entity.x !== startX || entity.z !== startZ;
+    expect(hasMoved).toBe(true);
+  });
+
+  it('does not move entity without WanderAIUpdate', () => {
+    const logic = makeWanderSetup();
+    const priv = logic as unknown as { spawnedEntities: Map<number, { x: number; z: number }> };
+    const entity = priv.spawnedEntities.get(2)!;
+    const startX = entity.x;
+    const startZ = entity.z;
+
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(entity.x).toBe(startX);
+    expect(entity.z).toBe(startZ);
   });
 });
 
