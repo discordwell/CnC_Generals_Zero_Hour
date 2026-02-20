@@ -16824,3 +16824,346 @@ describe('InstantDeathBehavior', () => {
     expect(priv.spawnedEntities.get(2)!.health).toBe(bystanderBefore);
   });
 });
+
+// ─────────── Body Type Polymorphism Tests ───────────────────────────────────
+describe('BodyModuleType', () => {
+  it('resolves body type from INI block name (ActiveBody default)', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('Tank', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as { spawnedEntities: Map<number, { bodyType: string; health: number; maxHealth: number; canTakeDamage: boolean }> };
+    const tank = priv.spawnedEntities.get(1)!;
+    expect(tank.bodyType).toBe('ACTIVE');
+    expect(tank.health).toBe(200);
+    expect(tank.canTakeDamage).toBe(true);
+  });
+
+  it('resolves HighlanderBody type from INI', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Boss', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'HighlanderBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('Boss', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as { spawnedEntities: Map<number, { bodyType: string; health: number }> };
+    expect(priv.spawnedEntities.get(1)!.bodyType).toBe('HIGHLANDER');
+  });
+
+  it('HighlanderBody caps damage at health-1 for non-UNRESISTABLE', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Boss', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'HighlanderBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('Boss', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; destroyed: boolean }>;
+    };
+    const boss = priv.spawnedEntities.get(1)!;
+
+    // Apply massive EXPLOSION damage — should be capped at health-1.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, boss, 9999, 'EXPLOSION');
+
+    expect(boss.health).toBe(1);
+    expect(boss.destroyed).toBe(false);
+
+    // Now apply UNRESISTABLE — should kill.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, boss, 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(boss.health).toBe(0);
+    expect(boss.destroyed).toBe(true);
+  });
+
+  it('ImmortalBody never lets health drop below 1', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Immortal', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ImmortalBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('Immortal', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; destroyed: boolean }>;
+    };
+    const unit = priv.spawnedEntities.get(1)!;
+
+    // Apply massive EXPLOSION damage — should not drop below 1.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, unit, 9999, 'EXPLOSION');
+
+    expect(unit.health).toBe(1);
+    expect(unit.destroyed).toBe(false);
+
+    // UNRESISTABLE should ALSO be capped at 1 for ImmortalBody (unlike HighlanderBody).
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, unit, 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(unit.health).toBe(1);
+    expect(unit.destroyed).toBe(false);
+  });
+
+  it('InactiveBody ignores all damage except UNRESISTABLE', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Scenery', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'InactiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('Scenery', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; destroyed: boolean; canTakeDamage: boolean; bodyType: string }>;
+    };
+    const scenery = priv.spawnedEntities.get(1)!;
+
+    // InactiveBody has no health and cannot take damage.
+    expect(scenery.bodyType).toBe('INACTIVE');
+    expect(scenery.canTakeDamage).toBe(false);
+    expect(scenery.health).toBe(0);
+
+    // Normal damage is ignored (canTakeDamage is false so applyWeaponDamageAmount is a no-op).
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, scenery, 9999, 'EXPLOSION');
+    logic.update(1 / 30);
+    expect(scenery.destroyed).toBe(false);
+  });
+});
+
+// ─────────── Crate Collection System Tests ──────────────────────────────────
+describe('CrateCollideSystem', () => {
+  it('HealCrateCollide heals all units of collector side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('HealCrate', 'Neutral', ['CRATE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'HealCrateCollide ModuleTag_Collide', {}),
+        ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5 }),
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 100 }),
+        ], { Geometry: 'BOX', GeometryMajorRadius: 5 }),
+        makeObjectDef('Soldier', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 25 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('HealCrate', 100, 100),
+        makeMapObject('Tank', 102, 100),
+        makeMapObject('Soldier', 500, 500),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; maxHealth: number; destroyed: boolean }>;
+    };
+
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+
+    // Crate should be destroyed (collected).
+    const crate = priv.spawnedEntities.get(1);
+    expect(crate === undefined || crate.destroyed).toBe(true);
+    // Tank should be at max health.
+    const tank = priv.spawnedEntities.get(2)!;
+    expect(tank.health).toBe(tank.maxHealth);
+    // Soldier (same side) should also be at max health.
+    const soldier = priv.spawnedEntities.get(3)!;
+    expect(soldier.health).toBe(soldier.maxHealth);
+  });
+
+  it('MoneyCrateCollide deposits credits to collector side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('MoneyCrate', 'Neutral', ['CRATE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'MoneyCrateCollide ModuleTag_Collide', {
+            MoneyProvided: 2000,
+          }),
+        ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5 }),
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { Geometry: 'BOX', GeometryMajorRadius: 5 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('MoneyCrate', 100, 100),
+        makeMapObject('Tank', 102, 100),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    // Get initial credits via private field.
+    const priv = logic as unknown as {
+      sideCredits: Map<string, number>;
+      normalizeSide(s: string): string;
+    };
+    const creditsBefore = priv.sideCredits.get(priv.normalizeSide('America')) ?? 0;
+
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+
+    const creditsAfter = priv.sideCredits.get(priv.normalizeSide('America')) ?? 0;
+
+    // Should have gained 2000 credits.
+    expect(creditsAfter - creditsBefore).toBe(2000);
+  });
+
+  it('VeterancyCrateCollide grants veterancy level to collector', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('VetCrate', 'Neutral', ['CRATE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'VeterancyCrateCollide ModuleTag_Collide', {}),
+        ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5 }),
+        // ExperienceRequired is a top-level ObjectDef field, not a Behavior block field.
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { Geometry: 'BOX', GeometryMajorRadius: 5, ExperienceRequired: [1, 50, 100, 200] }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('VetCrate', 100, 100),
+        makeMapObject('Tank', 102, 100),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        experienceState: { currentLevel: number };
+      }>;
+    };
+    const tank = priv.spawnedEntities.get(2)!;
+    const levelBefore = tank.experienceState.currentLevel;
+
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+
+    // Should have gained at least 1 veterancy level.
+    expect(tank.experienceState.currentLevel).toBeGreaterThan(levelBefore);
+  });
+
+  it('UnitCrateCollide spawns units near crate', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitCrate', 'Neutral', ['CRATE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'UnitCrateCollide ModuleTag_Collide', {
+            UnitName: 'SpawnedSoldier',
+            UnitCount: 3,
+          }),
+        ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5 }),
+        makeObjectDef('SpawnedSoldier', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        ]),
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { Geometry: 'BOX', GeometryMajorRadius: 5 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('UnitCrate', 100, 100),
+        makeMapObject('Tank', 102, 100),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { templateName: string }>;
+    };
+
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+
+    // Should have 3 new SpawnedSoldier entities.
+    let spawnedCount = 0;
+    for (const e of priv.spawnedEntities.values()) {
+      if (e.templateName === 'SpawnedSoldier') spawnedCount++;
+    }
+    expect(spawnedCount).toBe(3);
+  });
+
+  it('crate ForbidOwnerPlayer prevents same-side unit from collecting', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('MoneyCrate', 'America', ['CRATE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'MoneyCrateCollide ModuleTag_Collide', {
+            MoneyProvided: 1000,
+            ForbidOwnerPlayer: true,
+          }),
+        ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5 }),
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { Geometry: 'BOX', GeometryMajorRadius: 5 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('MoneyCrate', 100, 100),
+        makeMapObject('Tank', 102, 100),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const priv = logic as unknown as {
+      sideCredits: Map<string, number>;
+      normalizeSide(s: string): string;
+    };
+    const creditsBefore = priv.sideCredits.get(priv.normalizeSide('America')) ?? 0;
+
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+
+    const creditsAfter = priv.sideCredits.get(priv.normalizeSide('America')) ?? 0;
+
+    // ForbidOwnerPlayer = true: America crate should NOT be collectable by America tank.
+    expect(creditsAfter - creditsBefore).toBe(0);
+  });
+});

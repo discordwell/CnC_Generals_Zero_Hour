@@ -1227,6 +1227,8 @@ interface MapEntity {
   isImmobile: boolean;
   noCollisions: boolean;
   isIndestructible: boolean;
+  /** Source parity: Body module type determines damage behavior (HighlanderBody caps at 1HP, ImmortalBody never dies). */
+  bodyType: BodyModuleType;
   canTakeDamage: boolean;
   maxHealth: number;
   health: number;
@@ -1568,6 +1570,8 @@ interface MapEntity {
 
   // ── Source parity: SalvageCrateCollide — crate collection ──
   salvageCrateProfile: SalvageCrateProfile | null;
+  // ── Source parity: CrateCollide hierarchy — general crate collection ──
+  crateCollideProfile: CrateCollideProfile | null;
 
   // ── Source parity: BattlePlanUpdate — Strategy Center plan system ──
   battlePlanProfile: BattlePlanProfile | null;
@@ -1773,6 +1777,44 @@ interface SalvageCrateProfile {
   minMoney: number;
   /** Maximum money if both weapon and level fail (default 75). */
   maxMoney: number;
+}
+
+/**
+ * Source parity: CrateCollide hierarchy — general crate collection profiles.
+ * Parsed from Behavior blocks on crate object templates.
+ *   HealCrateCollide — heals all units of collector's side
+ *   MoneyCrateCollide — deposits credits to collector's side
+ *   VeterancyCrateCollide — grants veterancy levels
+ *   ShroudCrateCollide — reveals entire map for collector's player
+ *   UnitCrateCollide — spawns N units nearby
+ */
+type CrateCollideType = 'HEAL' | 'MONEY' | 'VETERANCY' | 'SHROUD' | 'UNIT';
+
+interface CrateCollideProfile {
+  crateType: CrateCollideType;
+  /** KindOf requirements for collector (empty = any unit). */
+  requiredKindOf: string[];
+  /** KindOf exclusions (collector must NOT have any of these). */
+  forbiddenKindOf: string[];
+  /** Dead unit's team cannot collect this crate. */
+  forbidOwnerPlayer: boolean;
+  /** Buildings can collect this crate (bypasses movement requirement). */
+  buildingPickup: boolean;
+  /** Only human players can collect. */
+  humanOnly: boolean;
+  // Crate-specific parameters:
+  /** MoneyCrateCollide: amount to deposit. */
+  moneyProvided: number;
+  /** UnitCrateCollide: template name. */
+  unitType: string;
+  /** UnitCrateCollide: number of units to spawn. */
+  unitCount: number;
+  /** VeterancyCrateCollide: area of effect radius (0 = single unit). */
+  veterancyRange: number;
+  /** VeterancyCrateCollide: if true, gain levels = crate's vet level; else always 1. */
+  addsOwnerVeterancy: boolean;
+  /** VeterancyCrateCollide: pilot mode restrictions. */
+  isPilot: boolean;
 }
 
 /**
@@ -2163,6 +2205,16 @@ const UNIT_DAMAGED_THRESH = 0.5;
 const UNIT_REALLY_DAMAGED_THRESH = 0.1;
 
 type BodyDamageState = 0 | 1 | 2 | 3; // PRISTINE=0, DAMAGED=1, REALLYDAMAGED=2, RUBBLE=3
+
+/**
+ * Source parity: Body module types from C++ hierarchy.
+ *   ActiveBody — standard health system (default)
+ *   StructureBody — extends ActiveBody for buildings (functionally same for damage)
+ *   HighlanderBody — caps damage at health-1 for non-UNRESISTABLE damage (can only die from UNRESISTABLE)
+ *   ImmortalBody — health never drops below 1 (cannot die from any damage)
+ *   InactiveBody — no health, ignores all damage (except UNRESISTABLE triggers death)
+ */
+type BodyModuleType = 'ACTIVE' | 'STRUCTURE' | 'HIGHLANDER' | 'IMMORTAL' | 'INACTIVE';
 
 function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState {
   if (maxHealth <= 0) return 0;
@@ -4351,9 +4403,10 @@ export class GameLogicSubsystem implements Subsystem {
       activeLocomotorSet: LOCOMOTORSET_NORMAL,
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
-      canTakeDamage: bodyStats.maxHealth > 0,
+      bodyType: bodyStats.bodyType,
+      canTakeDamage: bodyStats.bodyType !== 'INACTIVE' && bodyStats.maxHealth > 0,
       maxHealth: bodyStats.maxHealth,
-      health: bodyStats.initialHealth,
+      health: bodyStats.bodyType === 'INACTIVE' ? 0 : bodyStats.initialHealth,
       energyBonus,
       attackWeapon,
       weaponTemplateSets,
@@ -4548,6 +4601,7 @@ export class GameLogicSubsystem implements Subsystem {
       createCrateDieProfile: this.extractCreateCrateDieProfile(objectDef),
       // Salvage crate collection
       salvageCrateProfile: this.extractSalvageCrateProfile(objectDef),
+      crateCollideProfile: this.extractCrateCollideProfile(objectDef),
       // Battle plan
       battlePlanProfile: this.extractBattlePlanProfile(objectDef),
       battlePlanState: null,
@@ -5668,13 +5722,15 @@ export class GameLogicSubsystem implements Subsystem {
   private resolveBodyStats(objectDef: ObjectDef | undefined): {
     maxHealth: number;
     initialHealth: number;
+    bodyType: BodyModuleType;
   } {
     if (!objectDef) {
-      return { maxHealth: 0, initialHealth: 0 };
+      return { maxHealth: 0, initialHealth: 0, bodyType: 'ACTIVE' };
     }
 
     let maxHealth: number | null = null;
     let initialHealth: number | null = null;
+    let bodyType: BodyModuleType = 'ACTIVE';
 
     const visitBlock = (block: IniBlock): void => {
       if (block.type.toUpperCase() === 'BODY') {
@@ -5685,6 +5741,17 @@ export class GameLogicSubsystem implements Subsystem {
         }
         if (blockInitialHealth !== null) {
           initialHealth = blockInitialHealth;
+        }
+        // Source parity: detect body module type from block name.
+        const moduleName = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleName === 'HIGHLANDERBODY') {
+          bodyType = 'HIGHLANDER';
+        } else if (moduleName === 'IMMORTALBODY') {
+          bodyType = 'IMMORTAL';
+        } else if (moduleName === 'INACTIVEBODY') {
+          bodyType = 'INACTIVE';
+        } else if (moduleName === 'STRUCTUREBODY' || moduleName === 'HIVESTRUCTUREBODY') {
+          bodyType = 'STRUCTURE';
         }
       }
       for (const child of block.blocks) {
@@ -5706,6 +5773,7 @@ export class GameLogicSubsystem implements Subsystem {
     return {
       maxHealth: resolvedMax,
       initialHealth: resolvedInitial,
+      bodyType,
     };
   }
 
@@ -7433,6 +7501,55 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: CrateCollide hierarchy — extract general crate collide profile from INI.
+   * Matches HealCrateCollide, MoneyCrateCollide, VeterancyCrateCollide,
+   * ShroudCrateCollide, UnitCrateCollide behavior blocks.
+   */
+  private extractCrateCollideProfile(objectDef: ObjectDef | undefined): CrateCollideProfile | null {
+    if (!objectDef) return null;
+    let profile: CrateCollideProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        let crateType: CrateCollideType | null = null;
+        if (moduleType === 'HEALCRATECOLLIDE') crateType = 'HEAL';
+        else if (moduleType === 'MONEYCRATECOLLIDE') crateType = 'MONEY';
+        else if (moduleType === 'VETERANCYCRATECOLLIDE') crateType = 'VETERANCY';
+        else if (moduleType === 'SHROUDCRATECOLLIDE') crateType = 'SHROUD';
+        else if (moduleType === 'UNITCRATECOLLIDE') crateType = 'UNIT';
+        if (crateType !== null) {
+          // Parse base CrateCollide fields.
+          const requiredKindOf = this.parseKindOf(block.fields['RequiredKindOf'] ?? block.fields['KindOf']);
+          const forbiddenKindOf = this.parseKindOf(block.fields['ForbiddenKindOf'] ?? block.fields['KindOfNot']);
+          profile = {
+            crateType,
+            requiredKindOf,
+            forbiddenKindOf,
+            forbidOwnerPlayer: readBooleanField(block.fields, ['ForbidOwnerPlayer']) ?? false,
+            buildingPickup: readBooleanField(block.fields, ['BuildingPickup']) ?? false,
+            humanOnly: readBooleanField(block.fields, ['HumanOnly']) ?? false,
+            moneyProvided: readNumericField(block.fields, ['MoneyProvided']) ?? 0,
+            unitType: readStringField(block.fields, ['UnitName']) ?? '',
+            unitCount: readNumericField(block.fields, ['UnitCount']) ?? 1,
+            veterancyRange: readNumericField(block.fields, ['EffectRange']) ?? 0,
+            addsOwnerVeterancy: readBooleanField(block.fields, ['AddsOwnerVeterancy']) ?? false,
+            isPilot: readBooleanField(block.fields, ['IsPilot']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: DeployStyleAIUpdate — extract deploy/undeploy config from INI.
    */
   private extractDeployStyleProfile(objectDef: ObjectDef | undefined): DeployStyleProfile | null {
@@ -8611,7 +8728,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.health < 0) {
       entity.health = 0;
     }
-    entity.canTakeDamage = entity.maxHealth > 0;
+    entity.canTakeDamage = entity.bodyType !== 'INACTIVE' && entity.maxHealth > 0;
     return true;
   }
 
@@ -13086,7 +13203,10 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private updateCrateCollisions(): void {
     for (const crate of this.spawnedEntities.values()) {
-      if (!crate.salvageCrateProfile || crate.destroyed) continue;
+      if (crate.destroyed) continue;
+      const isSalvage = !!crate.salvageCrateProfile;
+      const isGeneral = !!crate.crateCollideProfile;
+      if (!isSalvage && !isGeneral) continue;
 
       const crateGeom = crate.obstacleGeometry;
       const crateRadius = crateGeom
@@ -13095,7 +13215,12 @@ export class GameLogicSubsystem implements Subsystem {
 
       for (const other of this.spawnedEntities.values()) {
         if (other.id === crate.id || other.destroyed) continue;
-        if (!other.kindOf.has('SALVAGER')) continue;
+
+        // Source parity: SalvageCrateCollide requires SALVAGER KindOf.
+        if (isSalvage && !other.kindOf.has('SALVAGER')) continue;
+
+        // Source parity: CrateCollide::isValidToExecute — general crate eligibility.
+        if (isGeneral && !this.isCrateCollideEligible(crate, other)) continue;
 
         const otherRadius = other.obstacleGeometry
           ? Math.max(other.obstacleGeometry.majorRadius, other.obstacleGeometry.minorRadius)
@@ -13105,11 +13230,205 @@ export class GameLogicSubsystem implements Subsystem {
         const combinedRadius = crateRadius + otherRadius;
         if (dx * dx + dz * dz > combinedRadius * combinedRadius) continue;
 
-        // Collision detected — execute salvage behavior.
-        this.executeSalvageCrateBehavior(crate, other);
+        // Collision detected — execute appropriate behavior.
+        if (isSalvage) {
+          this.executeSalvageCrateBehavior(crate, other);
+        } else {
+          this.executeGeneralCrateBehavior(crate, other);
+        }
         break; // Crate consumed.
       }
     }
+  }
+
+  /**
+   * Source parity: CrateCollide::isValidToExecute — validate collector eligibility.
+   * Checks KindOf requirements, death ownership, building pickup, human-only, etc.
+   */
+  private isCrateCollideEligible(crate: MapEntity, collector: MapEntity): boolean {
+    const prof = crate.crateCollideProfile!;
+    // Must not be effectively dead.
+    if (collector.health <= 0 || collector.destroyed) return false;
+    // Source parity: neutral units cannot collect crates.
+    if (!collector.side) return false;
+    // Source parity: must have KindOf requirements.
+    if (prof.requiredKindOf.length > 0) {
+      if (!prof.requiredKindOf.every(k => collector.kindOf.has(k))) return false;
+    }
+    // Source parity: must NOT have forbidden KindOf.
+    if (prof.forbiddenKindOf.length > 0) {
+      if (prof.forbiddenKindOf.some(k => collector.kindOf.has(k))) return false;
+    }
+    // Source parity: ForbidOwnerPlayer — dead unit's team cannot collect.
+    if (prof.forbidOwnerPlayer && crate.side) {
+      if (this.normalizeSide(collector.side) === this.normalizeSide(crate.side)) return false;
+    }
+    // Source parity: BuildingPickup — only buildings can bypass AI/movement check.
+    if (!prof.buildingPickup && collector.kindOf.has('STRUCTURE')) return false;
+    // Source parity: non-buildings must be able to move (have AI).
+    if (!collector.kindOf.has('STRUCTURE') && !collector.canMove) return false;
+    return true;
+  }
+
+  /**
+   * Source parity: CrateCollide::onCollide → executeCrateBehavior dispatch.
+   * Routes to the appropriate crate behavior handler based on crateType.
+   */
+  private executeGeneralCrateBehavior(crate: MapEntity, collector: MapEntity): void {
+    const prof = crate.crateCollideProfile!;
+    let success = false;
+    switch (prof.crateType) {
+      case 'HEAL':
+        success = this.executeCrateHeal(collector);
+        break;
+      case 'MONEY':
+        success = this.executeCrateMoney(collector, prof.moneyProvided);
+        break;
+      case 'VETERANCY':
+        success = this.executeCrateVeterancy(crate, collector, prof);
+        break;
+      case 'SHROUD':
+        success = this.executeCrateShroud(collector);
+        break;
+      case 'UNIT':
+        success = this.executeCrateUnit(crate, collector, prof);
+        break;
+    }
+    if (success) {
+      this.markEntityDestroyed(crate.id, collector.id);
+    }
+  }
+
+  /**
+   * Source parity: HealCrateCollide::executeCrateBehavior — heals all units of collector's side.
+   */
+  private executeCrateHeal(collector: MapEntity): boolean {
+    if (!collector.side) return false;
+    const collectorSide = this.normalizeSide(collector.side);
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.health >= entity.maxHealth) continue;
+      if (!entity.side) continue;
+      if (this.normalizeSide(entity.side) !== collectorSide) continue;
+      entity.health = entity.maxHealth;
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: MoneyCrateCollide::executeCrateBehavior — deposits credits.
+   */
+  private executeCrateMoney(collector: MapEntity, amount: number): boolean {
+    if (!collector.side || amount <= 0) return false;
+    depositSideCreditsImpl(this.sideCredits, this.normalizeSide(collector.side), amount);
+    return true;
+  }
+
+  /**
+   * Source parity: VeterancyCrateCollide::executeCrateBehavior — grants veterancy levels.
+   */
+  private executeCrateVeterancy(crate: MapEntity, collector: MapEntity, prof: CrateCollideProfile): boolean {
+    if (!collector.experienceProfile) return false;
+    if (collector.experienceState.currentLevel >= LEVEL_HEROIC) return false;
+
+    const levelsToGain = prof.addsOwnerVeterancy
+      ? Math.max(1, crate.experienceState.currentLevel)
+      : 1;
+
+    if (prof.veterancyRange <= 0) {
+      // Single unit effect.
+      this.grantVeterancyLevels(collector, levelsToGain);
+    } else {
+      // Area effect — upgrade all nearby same-side units.
+      const collectorSide = this.normalizeSide(collector.side ?? '');
+      const rangeSq = prof.veterancyRange * prof.veterancyRange;
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed || !entity.experienceProfile) continue;
+        if (!entity.side || this.normalizeSide(entity.side) !== collectorSide) continue;
+        if (entity.experienceState.currentLevel >= LEVEL_HEROIC) continue;
+        const dx = entity.x - collector.x;
+        const dz = entity.z - collector.z;
+        if (dx * dx + dz * dz <= rangeSq) {
+          this.grantVeterancyLevels(entity, levelsToGain);
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ShroudCrateCollide::executeCrateBehavior — reveals entire map.
+   */
+  private executeCrateShroud(collector: MapEntity): boolean {
+    if (!collector.side) return false;
+    // Reveal entire map for collector's side by marking all fog-of-war as revealed.
+    const side = this.normalizeSide(collector.side);
+    this.revealEntireMapForSide(side);
+    return true;
+  }
+
+  /**
+   * Source parity: UnitCrateCollide::executeCrateBehavior — spawns N units nearby.
+   */
+  private executeCrateUnit(crate: MapEntity, collector: MapEntity, prof: CrateCollideProfile): boolean {
+    if (!prof.unitType) return false;
+    const count = Math.max(1, prof.unitCount);
+    for (let i = 0; i < count; i++) {
+      // Find position around crate (0-20 unit radius).
+      const angle = this.gameRandom.nextFloat() * Math.PI * 2;
+      const radius = this.gameRandom.nextFloat() * 20;
+      const spawnX = crate.x + Math.cos(angle) * radius;
+      const spawnZ = crate.z + Math.sin(angle) * radius;
+      const rotation = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
+      this.spawnEntityFromTemplate(prof.unitType, spawnX, spawnZ, rotation, collector.side);
+    }
+    return true;
+  }
+
+  /**
+   * Helper: grant N veterancy levels to an entity.
+   */
+  private grantVeterancyLevels(entity: MapEntity, levels: number): void {
+    const profile = entity.experienceProfile;
+    if (!profile) return;
+    for (let i = 0; i < levels; i++) {
+      const currentLevel = entity.experienceState.currentLevel;
+      const targetLevel = Math.min(currentLevel + 1, LEVEL_HEROIC) as VeterancyLevel;
+      if (targetLevel <= currentLevel) break;
+      const xpNeeded = (profile.experienceRequired[targetLevel] ?? 0) - entity.experienceState.currentExperience;
+      if (xpNeeded <= 0) break;
+      const result = addExperiencePointsImpl(entity.experienceState, profile, xpNeeded, true);
+      if (result.didLevelUp) {
+        this.onEntityLevelUp(entity, result.oldLevel, result.newLevel);
+      }
+    }
+  }
+
+  /**
+   * Source parity: revealMapForPlayer — reveals entire map fog-of-war for a side.
+   * Unlike spy vision which is temporary, the shroud crate permanently reveals the map.
+   */
+  private revealEntireMapForSide(side: string): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) return;
+    const playerIdx = this.resolvePlayerIndexForSide(side);
+    if (playerIdx < 0) return;
+    // Source parity: PartitionManager::revealMapForPlayer — reveal with a massive radius.
+    // Use terrain dimensions for a guaranteed full-map reveal.
+    const hm = this.mapHeightmap;
+    const mapW = hm ? hm.worldWidth : 2000;
+    const mapH = hm ? hm.worldDepth : 2000;
+    const centerX = mapW / 2;
+    const centerZ = mapH / 2;
+    const maxRadius = Math.hypot(mapW, mapH);
+    grid.addLooker(playerIdx, centerX, centerZ, maxRadius);
+    // Add a long-duration temporary reveal (~10 minutes) so it persists through gameplay.
+    this.temporaryVisionReveals.push({
+      playerIndex: playerIdx,
+      worldX: centerX,
+      worldZ: centerZ,
+      radius: maxRadius,
+      expiryFrame: this.frameCounter + 18000, // ~10 minutes at 30fps
+    });
   }
 
   /**
@@ -18068,6 +18387,20 @@ export class GameLogicSubsystem implements Subsystem {
     amount: number,
     damageType: string,
   ): void {
+    // Source parity: InactiveBody::attemptDamage — only UNRESISTABLE triggers death.
+    // Must check before canTakeDamage guard since InactiveBody has canTakeDamage=false.
+    if (target.bodyType === 'INACTIVE') {
+      if (target.destroyed) return;
+      if (damageType.toUpperCase() === 'UNRESISTABLE') {
+        target.health = 0;
+        if (!target.slowDeathState) {
+          this.fireDeathWeapons(target);
+          this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
+            this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
+        }
+      }
+      return;
+    }
     if (!target.canTakeDamage || target.destroyed || !Number.isFinite(amount) || amount <= 0) {
       return;
     }
@@ -18076,7 +18409,18 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    let adjustedDamage = this.adjustDamageByArmorSet(target, amount, damageType);
+    // Source parity: HighlanderBody::attemptDamage — cap raw damage before armor adjustment
+    // so health doesn't drop below 1, UNLESS damage type is UNRESISTABLE.
+    // C++ caps damageInfo->in.m_amount (pre-armor) then calls ActiveBody::attemptDamage.
+    let inputAmount = amount;
+    if (target.bodyType === 'HIGHLANDER' && damageType.toUpperCase() !== 'UNRESISTABLE') {
+      inputAmount = Math.min(inputAmount, target.health - 1);
+      if (inputAmount <= 0) {
+        return;
+      }
+    }
+
+    let adjustedDamage = this.adjustDamageByArmorSet(target, inputAmount, damageType);
     if (adjustedDamage <= 0) {
       return;
     }
@@ -18084,6 +18428,15 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: Body::applyDamageScalar — multiply by battle plan armor scalar.
     if (target.battlePlanDamageScalar !== 1.0) {
       adjustedDamage = Math.max(0, adjustedDamage * target.battlePlanDamageScalar);
+    }
+
+    // Source parity: ImmortalBody::internalChangeHealth — clamp delta so health never drops below 1.
+    // C++ overrides internalChangeHealth (post-armor), so this is correctly placed post-armor.
+    if (target.bodyType === 'IMMORTAL') {
+      adjustedDamage = Math.min(adjustedDamage, target.health - 1);
+      if (adjustedDamage <= 0) {
+        return;
+      }
     }
 
     target.health = Math.max(0, target.health - adjustedDamage);
