@@ -1530,6 +1530,8 @@ interface MapEntity {
   heightDieProfile: HeightDieProfile | null;
   /** Frame after which height checks begin (accounts for InitialDelay). */
   heightDieActiveFrame: number;
+  /** Source parity: HeightDieUpdate — last-frame Y position for OnlyWhenMovingDown check. */
+  heightDieLastY: number;
 
   // ── Source parity: DeletionUpdate — timed silent removal (no death pipeline) ──
   /** Frame at which this entity should be silently destroyed (null = no deletion timer). */
@@ -1626,6 +1628,13 @@ interface MapEntity {
   isInHorde: boolean;
   /** Counted enough nearby units to be a true horde member (vs rub-off inheritance). */
   isTrueHordeMember: boolean;
+
+  // ── Source parity: EnemyNearUpdate — model condition flag when enemy in range ──
+  enemyNearScanDelayFrames: number;
+  /** Countdown frames until next enemy scan. */
+  enemyNearNextScanCountdown: number;
+  /** Whether an enemy is currently detected nearby. */
+  enemyNearDetected: boolean;
 
   // ── Source parity: SlavedUpdate — slave following/guard behavior ──
   slavedUpdateProfile: SlavedUpdateProfile | null;
@@ -2962,6 +2971,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSkirmishAI();
     this.updateEva();
     this.updateHorde();
+    this.updateEnemyNear();
     this.updateProneEntities();
     this.updateFireWhenDamagedContinuous();
     this.updateFireWeaponUpdate();
@@ -4706,6 +4716,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Height die
       heightDieProfile: this.extractHeightDieProfile(objectDef),
       heightDieActiveFrame: 0, // Set after first update.
+      heightDieLastY: 0,
       // Deletion
       deletionDieFrame: this.resolveDeletionDieFrame(objectDef),
       // Sticky bomb
@@ -4758,6 +4769,10 @@ export class GameLogicSubsystem implements Subsystem {
       hordeNextCheckFrame: 0,
       isInHorde: false,
       isTrueHordeMember: false,
+      // EnemyNear
+      enemyNearScanDelayFrames: this.extractEnemyNearScanDelay(objectDef),
+      enemyNearNextScanCountdown: 0,
+      enemyNearDetected: false,
       // Slaved update (slave following behavior)
       slavedUpdateProfile: this.extractSlavedUpdateProfile(objectDef),
       slaveGuardOffsetX: 0,
@@ -4824,6 +4839,12 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.hordeProfile) {
       const rate = Math.max(1, entity.hordeProfile.updateRate);
       entity.hordeNextCheckFrame = this.frameCounter + this.gameRandom.nextRange(1, rate);
+    }
+
+    // Source parity: EnemyNearUpdate constructor — random initial delay for staggered scanning.
+    // C++ uses GameLogicRandomValue(0, m_enemyScanDelayTime).
+    if (entity.enemyNearScanDelayFrames > 0) {
+      entity.enemyNearNextScanCountdown = this.gameRandom.nextRange(0, entity.enemyNearScanDelayFrames);
     }
 
     // Source parity: DemoTrapUpdate::onObjectCreated — set initial mode.
@@ -7275,6 +7296,33 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profile;
+  }
+
+  /**
+   * Source parity: EnemyNearUpdate — extract ScanDelayTime from INI.
+   * Returns 0 if no EnemyNearUpdate behavior block is found.
+   * C++ default: LOGICFRAMES_PER_SECOND (30 frames).
+   */
+  private extractEnemyNearScanDelay(objectDef: ObjectDef | undefined): number {
+    if (!objectDef) return 0;
+    let result = 0;
+    const visitBlock = (block: IniBlock): void => {
+      if (result > 0) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'ENEMYNEARUPDATE') {
+          const scanDelayMs = readNumericField(block.fields, ['ScanDelayTime']) ?? 1000;
+          result = Math.max(1, this.msToLogicFrames(scanDelayMs));
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return result;
   }
 
   /**
@@ -18999,13 +19047,17 @@ export class GameLogicSubsystem implements Subsystem {
           return slave && !slave.destroyed;
         }) ?? [];
         if (aliveSlaveIds.length > 0) {
-          // Redirect to closest slave.
+          // Source parity: HiveStructureBody.cpp:81 — getClosestSlave(shooter->getPosition()).
+          // Distance is computed from slave to shooter, not from slave to hive.
+          const shooter = sourceEntityId !== null ? this.spawnedEntities.get(sourceEntityId) ?? null : null;
+          const refX = shooter ? shooter.x : target.x;
+          const refZ = shooter ? shooter.z : target.z;
           let closestSlave: MapEntity | null = null;
           let closestDistSqr = Infinity;
           for (const slaveId of aliveSlaveIds) {
             const slave = this.spawnedEntities.get(slaveId)!;
-            const dx = slave.x - target.x;
-            const dz = slave.z - target.z;
+            const dx = slave.x - refX;
+            const dz = slave.z - refZ;
             const distSqr = dx * dx + dz * dz;
             if (distSqr < closestDistSqr) {
               closestDistSqr = distSqr;
@@ -19638,6 +19690,49 @@ export class GameLogicSubsystem implements Subsystem {
    * bonus condition, granting damage/rate bonuses. Also evaluates NATIONALISM
    * and FANATICISM bonuses if the player has those upgrades.
    */
+
+  /**
+   * Source parity: EnemyNearUpdate::update — periodic scan for nearby enemies.
+   * Sets/clears entity.enemyNearDetected based on whether an enemy exists within visionRange.
+   * C++ file: EnemyNearUpdate.cpp lines 65-107.
+   */
+  private updateEnemyNear(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.enemyNearScanDelayFrames <= 0) continue;
+
+      // Source parity: countdown-based scan delay (decrements each frame, resets on scan).
+      if (entity.enemyNearNextScanCountdown > 0) {
+        entity.enemyNearNextScanCountdown--;
+        continue;
+      }
+      // Reset countdown for next scan.
+      entity.enemyNearNextScanCountdown = entity.enemyNearScanDelayFrames;
+
+      // Source parity: TheAI->findClosestEnemy(getObject(), visionRange, AI::CAN_SEE).
+      // Simplified: scan for any enemy entity within vision range.
+      const visionRange = entity.visionRange;
+      if (visionRange <= 0) {
+        entity.enemyNearDetected = false;
+        continue;
+      }
+      const rangeSqr = visionRange * visionRange;
+      let foundEnemy = false;
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate.id === entity.id || candidate.destroyed) continue;
+        if (!candidate.canTakeDamage) continue;
+        if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) continue;
+        const dx = candidate.x - entity.x;
+        const dz = candidate.z - entity.z;
+        if (dx * dx + dz * dz <= rangeSqr) {
+          foundEnemy = true;
+          break;
+        }
+      }
+      entity.enemyNearDetected = foundEnemy;
+    }
+  }
+
   private updateHorde(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed || entity.slowDeathState) continue;
@@ -21492,14 +21587,52 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: InitialDelay — don't check until delay expires.
       if (entity.heightDieActiveFrame === 0) {
         entity.heightDieActiveFrame = this.frameCounter + prof.initialDelayFrames;
+        entity.heightDieLastY = entity.y;
       }
       if (this.frameCounter < entity.heightDieActiveFrame) continue;
 
+      // Source parity: HeightDieUpdate.cpp:144-154 — OnlyWhenMovingDown check.
+      // If entity is not moving downward, skip the height check entirely.
+      const currentY = entity.y;
+      let directionOK = true;
+      if (prof.onlyWhenMovingDown && currentY >= entity.heightDieLastY) {
+        directionOK = false;
+      }
+      entity.heightDieLastY = currentY;
+
+      if (!directionOK) continue;
+
       // Source parity: calculate height above terrain.
       const terrainY = this.resolveGroundHeight(entity.x, entity.z);
-      const entityHeightAboveTerrain = entity.y - entity.baseHeight - terrainY;
+      let targetHeight = terrainY + prof.targetHeight;
 
-      if (entityHeightAboveTerrain < prof.targetHeight) {
+      // Source parity: HeightDieUpdate.cpp:160-221 — TargetHeightIncludesStructures
+      // raises targetHeight based on bridge layers and nearby STRUCTURE entities.
+      if (prof.targetHeightIncludesStructures) {
+        // TODO(C&C source parity): bridge/pathfind layer height checks (lines 160-169).
+        // Scan nearby structures and raise target height above the tallest one.
+        const geom = entity.obstacleGeometry;
+        const scanRange = geom ? Math.max(geom.majorRadius, geom.minorRadius) : entity.baseHeight;
+        const scanRangeSqr = scanRange * scanRange;
+        let tallestStructureHeight = 0;
+        for (const candidate of this.spawnedEntities.values()) {
+          if (candidate.id === entity.id || candidate.destroyed) continue;
+          if (!candidate.kindOf.has('STRUCTURE')) continue;
+          const dx = candidate.x - entity.x;
+          const dz = candidate.z - entity.z;
+          if (dx * dx + dz * dz > scanRangeSqr) continue;
+          const structHeight = candidate.obstacleGeometry?.height ?? 0;
+          if (structHeight > tallestStructureHeight) {
+            tallestStructureHeight = structHeight;
+          }
+        }
+        if (tallestStructureHeight > prof.targetHeight) {
+          targetHeight = tallestStructureHeight + terrainY;
+        }
+      }
+
+      const entityAbsoluteHeight = entity.y - entity.baseHeight;
+      if (entityAbsoluteHeight < targetHeight) {
         // Source parity: snap to ground if configured.
         if (prof.snapToGroundOnDeath) {
           entity.y = terrainY + entity.baseHeight;

@@ -18146,3 +18146,138 @@ describe('AutoFindHealingUpdate', () => {
     expect(infantry.transportContainerId).toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EnemyNearUpdate — proximity detection for model condition
+// ═══════════════════════════════════════════════════════════════════════════
+describe('EnemyNearUpdate', () => {
+  it('detects enemy within vision range and sets enemyNearDetected', () => {
+    const guard = makeObjectDef('Guard', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'EnemyNearUpdate ModuleTag_EN', { ScanDelayTime: 500 }),
+    ], { VisionRange: 150 });
+    const tank = makeObjectDef('Tank', 'GLA', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [guard, tank] });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('Guard', 5, 5), makeMapObject('Tank', 5, 5)]);
+    const heightmap = makeHeightmap();
+    const scene = { add: () => {}, remove: () => {} } as any;
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(map, registry, heightmap);
+    logic.setTeamRelationship('America', 'GLA', 0); // enemies
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as any;
+    const guardEntity = priv.spawnedEntities.get(1)!;
+    expect(guardEntity.enemyNearScanDelayFrames).toBeGreaterThan(0);
+    expect(guardEntity.enemyNearDetected).toBe(false);
+
+    // Run enough frames for the initial random delay to expire + a scan.
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+
+    expect(guardEntity.enemyNearDetected).toBe(true);
+  });
+
+  it('clears enemyNearDetected when enemy moves out of range', () => {
+    const guard = makeObjectDef('Guard', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'EnemyNearUpdate ModuleTag_EN', { ScanDelayTime: 100 }),
+    ], { VisionRange: 50 });
+    const tank = makeObjectDef('Tank', 'GLA', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [guard, tank] });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('Guard', 5, 5), makeMapObject('Tank', 5, 5)]);
+    const heightmap = makeHeightmap();
+    const scene = { add: () => {}, remove: () => {} } as any;
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(map, registry, heightmap);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as any;
+    const guardEntity = priv.spawnedEntities.get(1)!;
+    const tankEntity = priv.spawnedEntities.get(2)!;
+
+    // Run to detect enemy.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    expect(guardEntity.enemyNearDetected).toBe(true);
+
+    // Move enemy far away — beyond vision range.
+    tankEntity.x = 9999;
+    tankEntity.z = 9999;
+
+    // Run again to clear detection.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    expect(guardEntity.enemyNearDetected).toBe(false);
+  });
+
+  it('does not detect allies as enemies', () => {
+    const guard = makeObjectDef('Guard', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'EnemyNearUpdate ModuleTag_EN', { ScanDelayTime: 100 }),
+    ], { VisionRange: 150 });
+    const friendly = makeObjectDef('Friendly', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [guard, friendly] });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('Guard', 5, 5), makeMapObject('Friendly', 5, 5)]);
+    const heightmap = makeHeightmap();
+    const scene = { add: () => {}, remove: () => {} } as any;
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(map, registry, heightmap);
+
+    const priv = logic as any;
+    const guardEntity = priv.spawnedEntities.get(1)!;
+
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+
+    // Allied unit nearby should not trigger enemy near.
+    expect(guardEntity.enemyNearDetected).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HeightDieUpdate — OnlyWhenMovingDown parity
+// ═══════════════════════════════════════════════════════════════════════════
+describe('HeightDieUpdate OnlyWhenMovingDown', () => {
+  it('survives when below target height but moving upward', () => {
+    const aircraft = makeObjectDef('Jet', 'America', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'HeightDieUpdate ModuleTag_HD', {
+        TargetHeight: 5,
+        OnlyWhenMovingDown: 'Yes',
+        SnapToGroundOnDeath: 'Yes',
+      }),
+    ], { VisionRange: 100 });
+    const bundle = makeBundle({ objects: [aircraft] });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('Jet', 3, 3)]);
+    const heightmap = makeHeightmap();
+    const scene = { add: () => {}, remove: () => {} } as any;
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(map, registry, heightmap);
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+
+    // Start at height 2 (below target 5) — first update initializes lastY.
+    jet.y = 2 + jet.baseHeight;
+    logic.update(1 / 30);
+    expect(jet.destroyed).toBe(false); // First frame initializes lastY
+
+    // Now move upward — below target but ascending. Should survive.
+    jet.y = 3 + jet.baseHeight;
+    logic.update(1 / 30);
+    expect(jet.destroyed).toBe(false);
+
+    // Move downward — now the check fires and it's below target → die.
+    jet.y = 2 + jet.baseHeight;
+    logic.update(1 / 30);
+    expect(jet.destroyed).toBe(true);
+  });
+});
