@@ -12840,3 +12840,208 @@ describe('HordeUpdate', () => {
     expect(logic.getEntityState(1)!.weaponBonusConditionFlags & WEAPON_BONUS_HORDE).toBe(0);
   });
 });
+
+describe('ProneUpdate', () => {
+  function makeProneSetup(opts?: {
+    damageToFramesRatio?: number;
+    attackDamage?: number;
+    infantryHealth?: number;
+    mapSize?: number;
+  }) {
+    const ratio = opts?.damageToFramesRatio ?? 2.0;
+    const atkDmg = opts?.attackDamage ?? 10;
+    const hp = opts?.infantryHealth ?? 200;
+    const sz = opts?.mapSize ?? 64;
+
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ProneInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: hp, InitialHealth: hp }),
+          makeBlock('Behavior', 'ProneUpdate ModuleTag_Prone', {
+            DamageToFramesRatio: ratio,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SmallArm'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('SmallArm', {
+          AttackRange: 220,
+          PrimaryDamage: atkDmg,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ProneInfantry', 30, 30),
+        makeMapObject('Attacker', 20, 30),
+      ], sz, sz),
+      registry,
+      makeHeightmap(sz, sz),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    return { logic, scene, registry };
+  }
+
+  it('sets PRONE animation and NO_ATTACK when infantry takes damage', () => {
+    const { logic } = makeProneSetup({ damageToFramesRatio: 2.0, attackDamage: 10 });
+
+    // Before combat: entity should start IDLE.
+    logic.update(0);
+    expect(logic.getEntityState(1)!.animationState).toBe('IDLE');
+
+    // Command attacker (entity 2) to attack infantry (entity 1).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Run frames until the attacker fires.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const after = logic.getEntityState(1)!;
+    // Infantry took damage → should be PRONE and have lost HP.
+    expect(after.health).toBeLessThan(200);
+    expect(after.animationState).toBe('PRONE');
+  });
+
+  it('recovers from prone after countdown expires', () => {
+    // 10 damage * 2.0 ratio = 20 frames of prone.
+    const { logic } = makeProneSetup({ damageToFramesRatio: 2.0, attackDamage: 10, infantryHealth: 500 });
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Fire first shot.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Should be prone now.
+    expect(logic.getEntityState(1)!.animationState).toBe('PRONE');
+
+    // Stop the attacker so no more damage is dealt.
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+
+    // Tick enough frames for prone to expire (20 frames at 30fps = ~0.67s).
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Should have recovered from prone.
+    const recovered = logic.getEntityState(1)!;
+    expect(recovered.animationState).not.toBe('PRONE');
+  });
+
+  it('stacks prone duration when hit multiple times', () => {
+    // Use a fast-firing weapon so we get two hits quickly.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ProneInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50000, InitialHealth: 50000 }),
+          makeBlock('Behavior', 'ProneUpdate ModuleTag_Prone', {
+            DamageToFramesRatio: 5.0,
+          }),
+        ]),
+        makeObjectDef('FastAttacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'FastGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('FastGun', {
+          AttackRange: 220,
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 200,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ProneInfantry', 30, 30),
+        makeMapObject('FastAttacker', 20, 30),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Run enough frames for at least two shots (200ms delay = ~6 frames at 30fps).
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Destroy attacker to prevent auto-targeting re-acquisition and further damage.
+    const priv = logic as unknown as { markEntityDestroyed: (id: number, attackerId: number) => void };
+    priv.markEntityDestroyed(2, 0);
+    logic.update(1 / 30);
+
+    const midState = logic.getEntityState(1)!;
+    expect(midState.animationState).toBe('PRONE');
+    expect(midState.health).toBeLessThan(50000);
+
+    // Each hit: floor(10 * 5.0) = 50 prone frames. With ~200ms between shots,
+    // multiple hits accumulate (3-4 in 20 frames). Total ~150-200 prone frames,
+    // minus ~21 already decayed. Run 50 more — should still be prone (stacking confirmed).
+    for (let i = 0; i < 50; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(1)!.animationState).toBe('PRONE');
+
+    // Run enough frames to fully expire even a worst-case accumulation.
+    for (let i = 0; i < 300; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(1)!.animationState).not.toBe('PRONE');
+  });
+
+  it('does not trigger prone on entities without ProneUpdate profile', () => {
+    // The attacker has no ProneUpdate — taking damage should not cause prone.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NormalUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SmallGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('SmallGun', {
+          AttackRange: 220,
+          PrimaryDamage: 50,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NormalUnit', 30, 30),
+        makeMapObject('Attacker', 20, 30),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const state = logic.getEntityState(1)!;
+    // Should have taken damage but NOT be prone.
+    expect(state.health).toBeLessThan(200);
+    expect(state.animationState).not.toBe('PRONE');
+  });
+});

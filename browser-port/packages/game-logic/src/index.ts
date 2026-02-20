@@ -1379,6 +1379,12 @@ interface MapEntity {
   /** Minimum veterancy level to eject (default 1 = VETERAN). */
   ejectPilotMinVeterancy: number;
 
+  // ── Source parity: ProneUpdate — infantry goes prone when damaged ──
+  /** DamageToFramesRatio: damage-to-frames conversion. Null = no prone behavior. */
+  proneDamageToFramesRatio: number | null;
+  /** Remaining frames of prone state (0 = not prone). */
+  proneFramesRemaining: number;
+
   // ── Source parity: CreateObjectDie / SlowDeathBehavior — OCL on death ──
   /** OCL names to execute when entity is destroyed. */
   deathOCLNames: string[];
@@ -2301,6 +2307,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSkirmishAI();
     this.updateEva();
     this.updateHorde();
+    this.updateProneEntities();
     this.updateFireWhenDamagedContinuous();
     this.updateSellingEntities();
     this.updateRenderStates();
@@ -3980,6 +3987,9 @@ export class GameLogicSubsystem implements Subsystem {
       // Pilot eject
       ejectPilotTemplateName: this.extractEjectPilotTemplateName(objectDef),
       ejectPilotMinVeterancy: 1,
+      // Prone behavior
+      proneDamageToFramesRatio: this.extractProneDamageToFramesRatio(objectDef),
+      proneFramesRemaining: 0,
       // Death OCLs
       deathOCLNames: this.extractDeathOCLNames(objectDef),
       // Deploy state machine
@@ -4091,6 +4101,11 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (entity.attackTargetEntityId !== null && this.canEntityAttackFromStatus(entity)) {
       return 'ATTACK';
+    }
+
+    // Source parity: ProneUpdate — prone overrides movement/idle state.
+    if (entity.proneFramesRemaining > 0) {
+      return 'PRONE';
     }
 
     if (entity.canMove && entity.moving) {
@@ -6116,6 +6131,32 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profile;
+  }
+
+  /**
+   * Source parity: ProneUpdate — extract damage-to-frames ratio from INI.
+   * Returns null if no ProneUpdate module is defined.
+   */
+  private extractProneDamageToFramesRatio(objectDef: ObjectDef | undefined): number | null {
+    if (!objectDef) return null;
+    let ratio: number | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (ratio !== null) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'PRONEUPDATE') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'PRONEUPDATE' || blockType === 'PRONEUPDATE') {
+          ratio = readNumericField(block.fields, ['DamageToFramesRatio']) ?? 1.0;
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return ratio;
   }
 
   /**
@@ -16599,6 +16640,17 @@ export class GameLogicSubsystem implements Subsystem {
       this.fireWhenDamagedReaction(target, adjustedDamage);
     }
 
+    // Source parity: ProneUpdate::goProne() — damage adds to prone frame counter.
+    // C++ truncates damage to Int before multiplying by ratio (Real→Int then Int*float→Int).
+    if (target.proneDamageToFramesRatio !== null && adjustedDamage > 0) {
+      const wasProne = target.proneFramesRemaining > 0;
+      const truncatedDamage = Math.trunc(adjustedDamage);
+      target.proneFramesRemaining += Math.floor(truncatedDamage * target.proneDamageToFramesRatio);
+      if (!wasProne && target.proneFramesRemaining > 0) {
+        target.objectStatusFlags.add('NO_ATTACK');
+      }
+    }
+
     if (target.health <= 0 && !target.destroyed && !target.slowDeathState) {
       // Source parity: FireWeaponWhenDeadBehavior::onDie fires BEFORE slow death begins.
       this.fireDeathWeapons(target);
@@ -16885,6 +16937,28 @@ export class GameLogicSubsystem implements Subsystem {
         sourceEntityId: defender.id,
         projectileType: 'LASER',
       });
+    }
+  }
+
+  // ── ProneUpdate implementation ─────────────────────────────────────────
+
+  /**
+   * Source parity: ProneUpdate::update() — per-frame countdown.
+   * Decrements proneFramesRemaining each frame. When counter reaches 0,
+   * clears NO_ATTACK status and restores animation state.
+   */
+  private updateProneEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.proneFramesRemaining <= 0) continue;
+      entity.proneFramesRemaining--;
+      if (entity.proneFramesRemaining <= 0) {
+        // Source parity: ProneUpdate::stopProneEffects() — clear PRONE model condition and NO_ATTACK.
+        entity.objectStatusFlags.delete('NO_ATTACK');
+        if (entity.animationState === 'PRONE') {
+          entity.animationState = 'IDLE';
+        }
+      }
     }
   }
 

@@ -9,7 +9,7 @@ export interface MapObjectPlacementSummary {
   unresolvedObjects: number;
 }
 
-export type RenderAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE';
+export type RenderAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE' | 'PRONE';
 export type RenderAnimationStateClipCandidates = Partial<Record<RenderAnimationState, string[]>>;
 
 export type RenderableObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
