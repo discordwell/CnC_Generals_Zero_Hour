@@ -1480,10 +1480,12 @@ interface MapEntity {
   // ── Source parity: AutoDepositUpdate — periodic income ──
   /** AutoDeposit profile (null = no periodic income). */
   autoDepositProfile: AutoDepositProfile | null;
-  /** Frame number when next deposit should occur (0 = not scheduled). */
+  /** Frame when next deposit occurs (C++ m_depositOnFrame). */
   autoDepositNextFrame: number;
-  /** Whether the initial capture bonus has been awarded. */
-  autoDepositInitialBonusAwarded: boolean;
+  /** C++ m_initialized — set TRUE on first deposit frame to enable capture bonus. */
+  autoDepositInitialized: boolean;
+  /** C++ m_awardInitialCaptureBonus — TRUE when bonus is pending, cleared after award. */
+  autoDepositCaptureBonusPending: boolean;
 
   // ── Source parity: AutoFindHealingUpdate — AI auto-seek healing ──
   /** Auto-find-healing profile (null = no auto-heal seeking). */
@@ -1693,6 +1695,19 @@ interface MapEntity {
   checkpointEnemyNear: boolean;
   checkpointMaxMinorRadius: number;
   checkpointScanCountdown: number;
+
+  // ── Source parity: DynamicShroudClearingRangeUpdate — animated vision range ──
+  dynamicShroudProfile: DynamicShroudProfile | null;
+  dynamicShroudState: DynamicShroudState;
+  dynamicShroudStateCountdown: number;
+  dynamicShroudTotalFrames: number;
+  dynamicShroudShrinkStartDeadline: number;
+  dynamicShroudSustainDeadline: number;
+  dynamicShroudGrowStartDeadline: number;
+  dynamicShroudDoneForeverFrame: number;
+  dynamicShroudChangeIntervalCountdown: number;
+  dynamicShroudNativeClearingRange: number;
+  dynamicShroudCurrentClearingRange: number;
 }
 
 /**
@@ -1827,6 +1842,26 @@ interface CheckpointProfile {
   /** Delay between enemy scans in logic frames. */
   scanDelayFrames: number;
 }
+
+/**
+ * Source parity: DynamicShroudClearingRangeUpdate — animates vision range changes.
+ * C++ file: DynamicShroudClearingRangeUpdate.cpp — used by Spy Satellite and similar abilities.
+ * Timeline: growDelay → growing → sustaining → shrinkDelay → shrinking → done(finalVision).
+ */
+interface DynamicShroudProfile {
+  shrinkDelay: number;
+  shrinkTime: number;
+  growDelay: number;
+  growTime: number;
+  /** Vision range once fully shrunk (C++ m_finalVision). */
+  finalVision: number;
+  /** How often to actually apply the vision range change (C++ m_changeInterval). */
+  changeInterval: number;
+  /** Separate change interval during growing phase (C++ m_growInterval). */
+  growInterval: number;
+}
+
+type DynamicShroudState = 'NOT_STARTED' | 'GROWING' | 'SUSTAINING' | 'SHRINKING' | 'DONE' | 'SLEEPING';
 
 /**
  * Source parity: HiveStructureBody — damage redirection to spawn slaves.
@@ -3032,6 +3067,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSellingEntities();
     this.updateRebuildHoles();
     this.updateAutoDeposit();
+    this.updateDynamicShroud();
     this.updatePilotFindVehicle();
     this.updateToppleEntities();
     this.updateRadarExtension();
@@ -3262,6 +3298,17 @@ export class GameLogicSubsystem implements Subsystem {
       return observedSide;
     }
     return null;
+  }
+
+  /**
+   * Source parity: Object::isNeutralControlled() — entity has no controlling player side.
+   * In C++, neutral entities are controlled by ThePlayerList->getNeutralPlayer().
+   */
+  private isEntityNeutralControlled(entity: MapEntity): boolean {
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (!normalizedSide) return true;
+    // A side with no player type is considered neutral (e.g. unclaimed tech buildings).
+    return !this.sidePlayerTypes.has(normalizedSide);
   }
 
   private resolveEntityOwnerSide(entity: MapEntity): string | null {
@@ -4363,6 +4410,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.transferPowerPlantUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
     this.transferOverchargeBetweenSides(entity, normalizedOldSide, normalizedNewSide);
     this.transferRadarUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
+    // Source parity: Player.cpp line 1038 — award AutoDeposit capture bonus on non-neutral capture.
+    if (!this.isEntityNeutralControlled(entity)) {
+      this.awardAutoDepositCaptureBonus(entity);
+    }
   }
 
   private executePendingUpgradeModules(
@@ -4746,7 +4797,8 @@ export class GameLogicSubsystem implements Subsystem {
       // Auto deposit
       autoDepositProfile: this.extractAutoDepositProfile(objectDef),
       autoDepositNextFrame: 0,
-      autoDepositInitialBonusAwarded: false,
+      autoDepositInitialized: false,
+      autoDepositCaptureBonusPending: false,
       // Auto-find-healing
       autoFindHealingProfile: this.extractAutoFindHealingProfile(objectDef),
       autoFindHealingNextScanFrame: 0,
@@ -4866,6 +4918,18 @@ export class GameLogicSubsystem implements Subsystem {
       checkpointEnemyNear: false,
       checkpointMaxMinorRadius: 0,
       checkpointScanCountdown: 0,
+      // DynamicShroudClearingRangeUpdate
+      dynamicShroudProfile: this.extractDynamicShroudProfile(objectDef),
+      dynamicShroudState: 'NOT_STARTED' as DynamicShroudState,
+      dynamicShroudStateCountdown: 0,
+      dynamicShroudTotalFrames: 0,
+      dynamicShroudShrinkStartDeadline: 0,
+      dynamicShroudSustainDeadline: 0,
+      dynamicShroudGrowStartDeadline: 0,
+      dynamicShroudDoneForeverFrame: 0,
+      dynamicShroudChangeIntervalCountdown: 0,
+      dynamicShroudNativeClearingRange: 0,
+      dynamicShroudCurrentClearingRange: 0,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -4953,6 +5017,29 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.checkpointProfile) {
       entity.checkpointMaxMinorRadius = entity.obstacleGeometry?.minorRadius ?? 0;
       entity.checkpointScanCountdown = this.gameRandom.nextRange(0, entity.checkpointProfile.scanDelayFrames);
+    }
+
+    // Source parity: AutoDepositUpdate constructor — schedule first deposit.
+    // C++ line 78: m_depositOnFrame = TheGameLogic->getFrame() + m_depositFrame.
+    if (entity.autoDepositProfile) {
+      entity.autoDepositNextFrame = this.frameCounter + entity.autoDepositProfile.depositFrames;
+    }
+
+    // Source parity: DynamicShroudClearingRangeUpdate constructor — compute deadlines.
+    // C++ lines 89-133: timeline deadlines computed from profile timing values.
+    if (entity.dynamicShroudProfile) {
+      const prof = entity.dynamicShroudProfile;
+      const stateCountDown = prof.shrinkDelay + prof.shrinkTime;
+      entity.dynamicShroudStateCountdown = stateCountDown;
+      entity.dynamicShroudTotalFrames = Math.max(1, stateCountDown);
+      entity.dynamicShroudShrinkStartDeadline = stateCountDown - prof.shrinkDelay;
+      entity.dynamicShroudGrowStartDeadline = stateCountDown - prof.growDelay;
+      entity.dynamicShroudSustainDeadline = entity.dynamicShroudGrowStartDeadline - prof.growTime;
+      entity.dynamicShroudDoneForeverFrame = this.frameCounter + stateCountDown;
+      entity.dynamicShroudNativeClearingRange = entity.visionRange;
+      entity.dynamicShroudCurrentClearingRange = 0;
+      entity.dynamicShroudState = 'NOT_STARTED';
+      entity.dynamicShroudChangeIntervalCountdown = 0;
     }
 
     // Source parity: GrantUpgradeCreate::onCreate — grant upgrades on entity creation.
@@ -7658,6 +7745,41 @@ export class GameLogicSubsystem implements Subsystem {
             depositFrames: Math.max(1, this.msToLogicFrames(depositTimingMs)),
             depositAmount,
             initialCaptureBonus,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: DynamicShroudClearingRangeUpdate — extract vision animation config from INI.
+   * C++ file: DynamicShroudClearingRangeUpdate.cpp lines 61-78.
+   * All duration fields are parsed as durations (ms → frames).
+   */
+  private extractDynamicShroudProfile(objectDef: ObjectDef | undefined): DynamicShroudProfile | null {
+    if (!objectDef) return null;
+    let profile: DynamicShroudProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DYNAMICSHROUDCLEARINGRANGEUPDATE' || moduleType === 'DYNAMICSHROUDCLEARINGRANGE') {
+          profile = {
+            shrinkDelay: Math.max(0, this.msToLogicFrames(readNumericField(block.fields, ['ShrinkDelay']) ?? 0)),
+            shrinkTime: Math.max(0, this.msToLogicFrames(readNumericField(block.fields, ['ShrinkTime']) ?? 0)),
+            growDelay: Math.max(0, this.msToLogicFrames(readNumericField(block.fields, ['GrowDelay']) ?? 0)),
+            growTime: Math.max(0, this.msToLogicFrames(readNumericField(block.fields, ['GrowTime']) ?? 0)),
+            finalVision: readNumericField(block.fields, ['FinalVision']) ?? 0,
+            changeInterval: Math.max(1, this.msToLogicFrames(readNumericField(block.fields, ['ChangeInterval']) ?? 0)),
+            growInterval: Math.max(1, this.msToLogicFrames(readNumericField(block.fields, ['GrowInterval']) ?? 0)),
           };
         }
       }
@@ -19936,6 +20058,14 @@ export class GameLogicSubsystem implements Subsystem {
       const wasAllyNear = entity.checkpointAllyNear;
       const wasEnemyNear = entity.checkpointEnemyNear;
 
+      // Source parity: C++ lines 78-95 — temporarily restore full minor radius during scan
+      // to prevent oscillation when the gate is partially open and units are at the boundary.
+      const geom = entity.obstacleGeometry;
+      const savedMinorRadius = geom ? geom.minorRadius : 0;
+      if (geom) {
+        geom.minorRadius = entity.checkpointMaxMinorRadius;
+      }
+
       // Source parity: C++ line 71 — always scan (delay code effectively disabled with `|| TRUE`).
       const visionRange = entity.visionRange;
       if (visionRange > 0) {
@@ -19960,11 +20090,15 @@ export class GameLogicSubsystem implements Subsystem {
         entity.checkpointAllyNear = false;
       }
 
+      // Restore the actual minor radius after scan.
+      if (geom) {
+        geom.minorRadius = savedMinorRadius;
+      }
+
       const open = !entity.checkpointEnemyNear && entity.checkpointAllyNear;
 
       // Source parity: C++ lines 153-161 — gradually shrink/expand minor radius.
       // When open: shrink to 0 (units can pass through). When closed: expand to max.
-      const geom = entity.obstacleGeometry;
       if (geom) {
         if (open) {
           if (geom.minorRadius > 0) {
@@ -20481,40 +20615,144 @@ export class GameLogicSubsystem implements Subsystem {
    * Skips when entity is neutral, under construction, or depositAmount ≤ 0.
    * Awards initial capture bonus once when first owned by a non-neutral player.
    */
+  /**
+   * Source parity: AutoDepositUpdate::update() — C++ lines 117-155.
+   * Periodic cash deposits when deposit timer elapses. Skips neutral and under-construction.
+   * On first timer elapse, enables the capture bonus flag (m_initialized / m_awardInitialCaptureBonus).
+   */
   private updateAutoDeposit(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed || entity.slowDeathState) continue;
       const profile = entity.autoDepositProfile;
       if (!profile) continue;
 
-      // Source parity: skip neutral entities (no side or no player type).
-      const normalizedSide = this.normalizeSide(entity.side);
-      if (!normalizedSide) continue;
-      const playerType = this.sidePlayerTypes.get(normalizedSide);
-      if (!playerType) continue;
-
-      // Source parity: skip entities under construction.
-      if (entity.constructionPercent !== CONSTRUCTION_COMPLETE) continue;
-
-      // Source parity: initialize deposit schedule on first valid frame.
+      // Source parity: constructor sets depositOnFrame = currentFrame + depositFrame.
       if (entity.autoDepositNextFrame === 0) {
         entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
       }
 
-      // Source parity: award initial capture bonus once.
-      // C++ awardInitialCaptureBonus() also resets the deposit timer.
-      if (!entity.autoDepositInitialBonusAwarded && profile.initialCaptureBonus > 0) {
-        entity.autoDepositInitialBonusAwarded = true;
-        this.depositSideCredits(entity.side, profile.initialCaptureBonus);
-        entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
-      }
-
-      // Source parity: periodic deposit check.
-      if (profile.depositAmount <= 0) continue;
+      // Source parity: C++ line 120 — check if deposit timer has elapsed.
       if (this.frameCounter < entity.autoDepositNextFrame) continue;
 
-      this.depositSideCredits(entity.side, profile.depositAmount);
+      // Source parity: C++ lines 122-127 — on first deposit frame, enable capture bonus.
+      if (!entity.autoDepositInitialized) {
+        entity.autoDepositCaptureBonusPending = true;
+        entity.autoDepositInitialized = true;
+      }
+
+      // Source parity: C++ line 128 — reset deposit timer regardless of other checks.
       entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
+
+      // Source parity: C++ line 130 — skip if neutral-controlled or zero deposit.
+      if (this.isEntityNeutralControlled(entity) || profile.depositAmount <= 0) continue;
+
+      // Source parity: C++ line 134 — skip if under construction.
+      if (entity.constructionPercent !== CONSTRUCTION_COMPLETE) continue;
+
+      // Deposit money to controlling side.
+      this.depositSideCredits(entity.side, profile.depositAmount);
+    }
+  }
+
+  /**
+   * Source parity: AutoDepositUpdate::awardInitialCaptureBonus() — C++ lines 91-113.
+   * Called when a building with AutoDeposit changes ownership to a non-neutral player.
+   * Awards the one-time initial capture bonus if pending.
+   */
+  private awardAutoDepositCaptureBonus(entity: MapEntity): void {
+    const profile = entity.autoDepositProfile;
+    if (!profile) return;
+
+    // Source parity: C++ line 93 — reset deposit timer on capture.
+    entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
+
+    // Source parity: C++ line 94 — only award if bonus is pending and > 0.
+    if (!entity.autoDepositCaptureBonusPending || profile.initialCaptureBonus <= 0) return;
+
+    this.depositSideCredits(entity.side, profile.initialCaptureBonus);
+    entity.autoDepositCaptureBonusPending = false;
+  }
+
+  /**
+   * Source parity: DynamicShroudClearingRangeUpdate::update() — C++ lines 205-286.
+   * Animates shroud clearing range through states: NOT_STARTED → GROWING → SUSTAINING → SHRINKING → DONE → SLEEPING.
+   * Uses deadline-based state machine with countdown timer.
+   */
+  private updateDynamicShroud(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const prof = entity.dynamicShroudProfile;
+      if (!prof) continue;
+      if (entity.dynamicShroudState === 'SLEEPING') continue;
+
+      const countdown = entity.dynamicShroudStateCountdown;
+
+      // Source parity: C++ lines 223-231 — determine state from countdown vs deadlines.
+      if (countdown <= 0 || this.frameCounter > entity.dynamicShroudDoneForeverFrame) {
+        entity.dynamicShroudState = 'DONE';
+      } else if (countdown <= entity.dynamicShroudShrinkStartDeadline) {
+        entity.dynamicShroudState = 'SHRINKING';
+      } else if (countdown <= entity.dynamicShroudSustainDeadline) {
+        entity.dynamicShroudState = 'SUSTAINING';
+      } else if (countdown <= entity.dynamicShroudGrowStartDeadline) {
+        entity.dynamicShroudState = 'GROWING';
+      }
+      // else remains NOT_STARTED
+
+      // Source parity: C++ lines 233-269 — update clearing range based on state.
+      switch (entity.dynamicShroudState) {
+        case 'NOT_STARTED':
+          // Waiting for growDelay to elapse.
+          break;
+        case 'GROWING': {
+          // Source parity: C++ line 246 — grow by nativeClearingRange / growTime per frame.
+          const growTime = Math.max(1, prof.growTime);
+          entity.dynamicShroudCurrentClearingRange += entity.dynamicShroudNativeClearingRange / growTime;
+          if (entity.dynamicShroudCurrentClearingRange >= entity.dynamicShroudNativeClearingRange) {
+            entity.dynamicShroudCurrentClearingRange = entity.dynamicShroudNativeClearingRange;
+            entity.dynamicShroudState = 'SUSTAINING';
+          }
+          break;
+        }
+        case 'SUSTAINING':
+          // Source parity: C++ line 253 — hold at native clearing range.
+          entity.dynamicShroudCurrentClearingRange = entity.dynamicShroudNativeClearingRange;
+          break;
+        case 'SHRINKING': {
+          // Source parity: C++ line 259 — shrink by (native - finalVision) / shrinkTime per frame.
+          const shrinkTime = Math.max(1, prof.shrinkTime);
+          entity.dynamicShroudCurrentClearingRange -=
+            (entity.dynamicShroudNativeClearingRange - prof.finalVision) / shrinkTime;
+          if (entity.dynamicShroudCurrentClearingRange < prof.finalVision) {
+            entity.dynamicShroudCurrentClearingRange = prof.finalVision;
+          }
+          break;
+        }
+        case 'DONE':
+          // Source parity: C++ line 265 — clamp to final vision.
+          entity.dynamicShroudCurrentClearingRange = prof.finalVision;
+          break;
+      }
+
+      // Source parity: C++ line 271 — decrement countdown every frame.
+      if (entity.dynamicShroudStateCountdown > 0) {
+        entity.dynamicShroudStateCountdown--;
+      }
+
+      // Source parity: C++ lines 275-284 — apply vision change at intervals.
+      if (entity.dynamicShroudChangeIntervalCountdown > 0) {
+        entity.dynamicShroudChangeIntervalCountdown--;
+      } else {
+        // Reset interval timer based on current state.
+        entity.dynamicShroudChangeIntervalCountdown =
+          entity.dynamicShroudState === 'GROWING' ? prof.growInterval : prof.changeInterval;
+        // Apply the vision range change.
+        entity.visionRange = entity.dynamicShroudCurrentClearingRange;
+        // Source parity: C++ line 281-283 — transition to SLEEPING after final update in DONE state.
+        if (entity.dynamicShroudState === 'DONE') {
+          entity.dynamicShroudState = 'SLEEPING';
+        }
+      }
     }
   }
 
@@ -21953,8 +22191,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (directionOK) {
         const entityAbsoluteHeight = entity.y - entity.baseHeight;
         if (entityAbsoluteHeight < targetHeight) {
-          // Source parity: snap to ground if configured, or if below terrain.
-          if (prof.snapToGroundOnDeath || (entity.y - entity.baseHeight) < terrainY) {
+          // Source parity: C++ line 229 — snap if configured, or if entity position is below terrain.
+          // C++ compares pos->z (raw entity position) against terrainHeightAtPos (not minus baseHeight).
+          if (prof.snapToGroundOnDeath || entity.y < terrainY) {
             entity.y = terrainY + entity.baseHeight;
           }
           // Source parity: kill via UNRESISTABLE damage (same as LifetimeUpdate).

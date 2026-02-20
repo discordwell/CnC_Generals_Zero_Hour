@@ -13692,15 +13692,16 @@ describe('AutoDepositUpdate', () => {
       depositTimingMs: 1000, // 30 frames
       depositAmount: 50,
     });
-    logic.update(0); // frame 0 — initializes deposit schedule
 
-    // Advance to just before deposit (frame 29).
+    // Source parity: C++ constructor sets m_depositOnFrame = currentFrame + depositFrame.
+    // Entity created at frame 0, so first deposit at frame 30.
+    // Advance 29 frames (frameCounter 1-29) — no deposit yet.
     for (let i = 0; i < 29; i++) {
       logic.update(1 / 30);
     }
     expect(logic.getSideCredits('gla')).toBe(startCredits);
 
-    // Advance one more frame to trigger deposit.
+    // Frame 30 triggers the first deposit.
     logic.update(1 / 30);
     expect(logic.getSideCredits('gla')).toBe(startCredits + 50);
   });
@@ -13719,22 +13720,49 @@ describe('AutoDepositUpdate', () => {
     expect(logic.getSideCredits('gla')).toBe(startCredits + 75);
   });
 
-  it('awards initial capture bonus once', () => {
-    const { logic, startCredits } = makeAutoDepositSetup({
-      depositTimingMs: 10000, // Long interval so no periodic deposits.
-      depositAmount: 10,
-      initialCaptureBonus: 200,
-    });
-    logic.update(0); // frame 0 — should award capture bonus.
+  it('awards initial capture bonus on ownership change', () => {
+    // Source parity: C++ awardInitialCaptureBonus is called from Player.cpp line 1038
+    // when a building with AutoDeposit changes ownership to a non-neutral player.
+    const sz = 64;
+    const objects = [
+      makeObjectDef('OilDerrick', 'Neutral', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        makeBlock('Behavior', 'AutoDepositUpdate ModuleTag_AutoDeposit', {
+          DepositTiming: 10000, // Long interval — no periodic deposits during test.
+          DepositAmount: 10,
+          InitialCaptureBonus: 200,
+        }),
+      ]),
+    ];
 
-    expect(logic.getSideCredits('gla')).toBe(startCredits + 200);
+    const mapObjects: MapObjectJSON[] = [makeMapObject('OilDerrick', 30, 30)];
+    const bundle = makeBundle({ objects });
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('gla', 'HUMAN');
+    logic.submitCommand({ type: 'setSideCredits', side: 'gla', amount: 500 });
 
-    // Advance more frames — bonus should not be awarded again.
-    for (let i = 0; i < 30; i++) {
+    // Let the deposit timer elapse so m_initialized becomes true and capture bonus is pending.
+    // DepositTiming = 10000ms → 300 frames. Advance 301 frames to let the timer fire.
+    for (let i = 0; i < 301; i++) {
       logic.update(1 / 30);
     }
-    // Only bonus, no periodic deposit yet (interval is 300 frames = 10s).
-    expect(logic.getSideCredits('gla')).toBe(startCredits + 200);
+    // Still neutral — no deposit and no capture bonus yet.
+    expect(logic.getSideCredits('gla')).toBe(500);
+
+    // Capture: change ownership to GLA.
+    logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'gla' });
+    logic.update(1 / 30);
+
+    // Capture bonus of 200 should be awarded.
+    expect(logic.getSideCredits('gla')).toBe(700);
+
+    // Capture again — bonus should NOT be awarded again.
+    logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'gla' });
+    logic.update(1 / 30);
+    expect(logic.getSideCredits('gla')).toBe(700);
   });
 
   it('does not deposit for entities under construction', () => {
@@ -13806,18 +13834,159 @@ describe('AutoDepositUpdate', () => {
 
   it('skips deposit when depositAmount is zero', () => {
     const { logic, startCredits } = makeAutoDepositSetup({
-      depositTimingMs: 100,
+      depositTimingMs: 100, // 3 frames
       depositAmount: 0,
-      initialCaptureBonus: 50,
     });
-    logic.update(0);
 
+    // Advance 60 frames — deposit timer fires many times but amount is zero.
     for (let i = 0; i < 60; i++) {
       logic.update(1 / 30);
     }
 
-    // Only capture bonus, no periodic deposits.
-    expect(logic.getSideCredits('gla')).toBe(startCredits + 50);
+    // No deposits should have occurred.
+    expect(logic.getSideCredits('gla')).toBe(startCredits);
+  });
+});
+
+describe('DynamicShroudClearingRangeUpdate', () => {
+  function makeDynamicShroudSetup(opts?: {
+    growDelayMs?: number;
+    growTimeMs?: number;
+    shrinkDelayMs?: number;
+    shrinkTimeMs?: number;
+    finalVision?: number;
+    changeIntervalMs?: number;
+    growIntervalMs?: number;
+    visionRange?: number;
+  }) {
+    const sz = 64;
+    const growDelayMs = opts?.growDelayMs ?? 100;   // 3 frames
+    const growTimeMs = opts?.growTimeMs ?? 200;      // 6 frames
+    const shrinkDelayMs = opts?.shrinkDelayMs ?? 100; // 3 frames
+    const shrinkTimeMs = opts?.shrinkTimeMs ?? 200;   // 6 frames
+    const finalVision = opts?.finalVision ?? 5;
+    const changeIntervalMs = opts?.changeIntervalMs ?? 33; // ~1 frame
+    const growIntervalMs = opts?.growIntervalMs ?? 33;     // ~1 frame
+    const visionRange = opts?.visionRange ?? 100;
+
+    const objects = [
+      makeObjectDef('SpySat', 'USA', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'DynamicShroudClearingRangeUpdate ModuleTag_Shroud', {
+          GrowDelay: growDelayMs,
+          GrowTime: growTimeMs,
+          ShrinkDelay: shrinkDelayMs,
+          ShrinkTime: shrinkTimeMs,
+          FinalVision: finalVision,
+          ChangeInterval: changeIntervalMs,
+          GrowInterval: growIntervalMs,
+        }),
+      ], { VisionRange: visionRange }),
+    ];
+
+    const mapObjects: MapObjectJSON[] = [makeMapObject('SpySat', 30, 30)];
+    const bundle = makeBundle({ objects });
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('usa', 'HUMAN');
+
+    return { logic };
+  }
+
+  function getEntityVisionRange(logic: GameLogicSubsystem): number {
+    const entities = (logic as unknown as { spawnedEntities: Map<number, { visionRange: number }> }).spawnedEntities;
+    for (const entity of entities.values()) {
+      return entity.visionRange;
+    }
+    return 0;
+  }
+
+  it('grows vision range from 0 to native during growing phase', () => {
+    // growDelay=3 frames, growTime=6 frames, shrinkDelay=3 frames, shrinkTime=6 frames
+    // Timeline (stateCountDown starts at shrinkDelay+shrinkTime = 9):
+    //   growStartDeadline = 9 - 3 = 6
+    //   sustainDeadline = 6 - 6 = 0
+    //   shrinkStartDeadline = 9 - 3 = 6
+    // Total stateCountDown = 9
+    const { logic } = makeDynamicShroudSetup({
+      growDelayMs: 100,   // 3 frames
+      growTimeMs: 200,    // 6 frames
+      shrinkDelayMs: 100, // 3 frames
+      shrinkTimeMs: 200,  // 6 frames
+      finalVision: 5,
+      visionRange: 100,
+    });
+
+    // Initial vision range should be entity's native range (set at creation before DynamicShroud modifies it).
+    // After first update, DynamicShroud starts modifying the vision range.
+    logic.update(1 / 30); // frame 1
+
+    // After enough frames, the vision range should start growing.
+    // The grow phase grows by nativeClearingRange/growTime per frame.
+    // Native = 100*MAP_XY_FACTOR = 1000, growTime = 6 frames, so +166.67 per frame.
+    // After 6 grow frames, vision should reach native.
+    for (let i = 0; i < 20; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After all phases complete, vision should reach finalVision = 5 (raw INI value).
+    // Keep advancing until DONE/SLEEPING.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    const finalRange = getEntityVisionRange(logic);
+    // Should be at or near finalVision = 5.
+    expect(finalRange).toBeCloseTo(5, 0);
+  });
+
+  it('settles to final vision after full lifecycle', () => {
+    const { logic } = makeDynamicShroudSetup({
+      growDelayMs: 33,   // 1 frame
+      growTimeMs: 100,   // 3 frames
+      shrinkDelayMs: 33, // 1 frame
+      shrinkTimeMs: 100, // 3 frames
+      finalVision: 10,
+      changeIntervalMs: 33, // 1 frame
+      growIntervalMs: 33,   // 1 frame
+      visionRange: 50,
+    });
+
+    // Run enough frames for the full lifecycle: grow → sustain → shrink → done → sleeping.
+    // stateCountDown = shrinkDelay + shrinkTime = 1 + 3 = 4 frames total.
+    // Run 30 frames to be safe.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    const finalRange = getEntityVisionRange(logic);
+    // finalVision = 10 (raw INI value).
+    expect(finalRange).toBeCloseTo(10, 0);
+  });
+
+  it('does not modify vision range for entities without the module', () => {
+    const sz = 64;
+    const objects = [
+      makeObjectDef('Tank', 'USA', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ], { VisionRange: 150 }),
+    ];
+    const mapObjects: MapObjectJSON[] = [makeMapObject('Tank', 30, 30)];
+    const bundle = makeBundle({ objects });
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    const range = getEntityVisionRange(logic);
+    // VisionRange = 150 (raw INI value, not scaled), should be unchanged.
+    expect(range).toBe(150);
   });
 });
 

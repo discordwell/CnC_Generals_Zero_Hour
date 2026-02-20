@@ -1,5 +1,19 @@
 # Old Session Summaries
 
+## 2026-02-20T20:30Z — PointDefenseLaserUpdate + HordeUpdate
+- PointDefenseLaserUpdate: anti-projectile defense system — committed 31db58d
+  - PointDefenseLaserProfile INI: WeaponTemplate, PrimaryTargetTypes, SecondaryTargetTypes, ScanRate, ScanRange
+  - Scan/track/fire state machine with staggered init, projectile kindOf matching via template cache
+  - Double-tracking prevention (interceptedThisFrame Set), fire-immediately-after-scan C++ parity
+  - interceptProjectileEvent: splices PendingWeaponDamageEvent, emits WEAPON_FIRED/WEAPON_IMPACT
+  - 5 tests — All 1111 tests pass
+- HordeUpdate: formation bonus system — committed 62d0c68
+  - HordeUpdateProfile INI: UpdateRate, KindOf, Count, Radius, RubOffRadius, AlliesOnly, ExactMatch, AllowedNationalism
+  - Periodic spatial scan, three-tier detection (true member, rub-off inheritance, none)
+  - HORDE/NATIONALISM/FANATICISM weapon bonus condition flags based on horde status + player sciences
+  - Code review fixes: ALL-match kindOf (not ANY), idempotent flag recalculation, allowedNationalism clearing
+  - 9 tests — All 1120 tests pass
+
 ## 2026-02-20T19:00Z — BattlePlanUpdate System (Task #88)
 - Task #88: USA Strategy Center BattlePlanUpdate with full C++ source parity — committed a3a1872
   - BattlePlanProfile INI: Bombardment/HoldTheLine/SearchAndDestroy bonus flags + scalars

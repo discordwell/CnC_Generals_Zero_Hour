@@ -1,5 +1,24 @@
 # Session Summaries
 
+## 2026-02-21T06:50Z — AutoDeposit + DynamicShroud + Code Review Fixes
+- AutoDepositUpdate: C++ parity rewrite
+  - Constructor-based timer init (not lazy), 3-field state (nextFrame, initialized, captureBonusPending)
+  - Capture bonus awarded via captureEntity hook (Player.cpp line 1038 parity)
+  - isEntityNeutralControlled() helper (checks side + player type mapping)
+  - 6 tests — All 1266 tests pass
+- DynamicShroudClearingRangeUpdate: animated vision range system
+  - 5-state machine: NOT_STARTED → GROWING → SUSTAINING → SHRINKING → DONE → SLEEPING
+  - Deadline-based state transitions from countdown timer
+  - Growing: +nativeClearingRange/growTime per frame; Shrinking: -(native-final)/shrinkTime per frame
+  - Change interval throttling (growInterval during GROWING, changeInterval otherwise)
+  - Profile INI extraction with duration parsing
+  - 3 tests — All 1266 tests pass
+- Code review fixes (from agent a4f3d98):
+  - CheckpointUpdate geometry save/restore before scan (prevents gate oscillation — HIGH)
+  - HeightDieUpdate snap condition: entity.y < terrainY (not entity.y - baseHeight — MEDIUM)
+  - Cleaned up duplicate AutoDepositProfile interface and entity fields
+  - Removed duplicate entity creation fields
+
 ## 2026-02-21T03:15Z — PoisonedBehavior Fixes + StickyBombUpdate + InstantDeathBehavior
 - PoisonedBehavior C++ parity fixes:
   - Profile-based poison params (guard: only entities WITH PoisonedBehavior can be poisoned)
@@ -69,20 +88,6 @@
   - Manual/proximity mode toggle, manual detonation command, DetonateWhenKilled in death path
   - Code review fixes: distance pre-filter before relationship check, construction/sold guard on manual detonate
   - 7 tests — All 1131 tests pass
-
-## 2026-02-20T20:30Z — PointDefenseLaserUpdate + HordeUpdate
-- PointDefenseLaserUpdate: anti-projectile defense system — committed 31db58d
-  - PointDefenseLaserProfile INI: WeaponTemplate, PrimaryTargetTypes, SecondaryTargetTypes, ScanRate, ScanRange
-  - Scan/track/fire state machine with staggered init, projectile kindOf matching via template cache
-  - Double-tracking prevention (interceptedThisFrame Set), fire-immediately-after-scan C++ parity
-  - interceptProjectileEvent: splices PendingWeaponDamageEvent, emits WEAPON_FIRED/WEAPON_IMPACT
-  - 5 tests — All 1111 tests pass
-- HordeUpdate: formation bonus system — committed 62d0c68
-  - HordeUpdateProfile INI: UpdateRate, KindOf, Count, Radius, RubOffRadius, AlliesOnly, ExactMatch, AllowedNationalism
-  - Periodic spatial scan, three-tier detection (true member, rub-off inheritance, none)
-  - HORDE/NATIONALISM/FANATICISM weapon bonus condition flags based on horde status + player sciences
-  - Code review fixes: ALL-match kindOf (not ANY), idempotent flag recalculation, allowedNationalism clearing
-  - 9 tests — All 1120 tests pass
 
 # Key Findings
 
