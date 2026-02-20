@@ -1353,6 +1353,12 @@ interface MapEntity {
   buildTotalFrames: number;
 
   destroyed: boolean;
+
+  // ── Source parity: SlowDeathBehavior — phased death sequences ──
+  /** Parsed SlowDeathBehavior modules from INI (multiple per entity, one selected on death). */
+  slowDeathProfiles: SlowDeathProfile[];
+  /** Active slow death state when entity is in a phased death sequence (null = not dying slowly). */
+  slowDeathState: SlowDeathRuntimeState | null;
 }
 
 /**
@@ -1438,6 +1444,58 @@ interface MineDetonatorEntry {
   x: number;
   z: number;
 }
+
+/**
+ * Source parity: SlowDeathBehavior module parsed from INI.
+ * Controls phased death sequences with configurable timing, effects, and sinking.
+ */
+interface SlowDeathProfile {
+  /** Weighting for this death behavior when multiple are applicable. */
+  probabilityModifier: number;
+  /** Extra probability per % overkill damage. */
+  modifierBonusPerOverkillPercent: number;
+  /** Frames before sinking begins. */
+  sinkDelay: number;
+  /** Random variance in sink delay. */
+  sinkDelayVariance: number;
+  /** Units per frame to sink (0 = no sinking). */
+  sinkRate: number;
+  /** Frames until final destruction. */
+  destructionDelay: number;
+  /** Random variance in destruction delay. */
+  destructionDelayVariance: number;
+  /** Z-coordinate threshold for destruction (default: -10). */
+  destructionAltitude: number;
+  /** Which death types trigger this behavior (empty = ALL). */
+  deathTypes: Set<string>;
+  /** Which veterancy levels allow this (empty = ALL). */
+  veterancyLevels: Set<string>;
+  /** Status flags that exempt this behavior. */
+  exemptStatus: Set<string>;
+  /** Status flags required for this behavior. */
+  requiredStatus: Set<string>;
+  /** OCL names to execute at each phase (INITIAL=0, MIDPOINT=1, FINAL=2). */
+  phaseOCLs: [string[], string[], string[]];
+  /** Weapon names to fire at each phase. */
+  phaseWeapons: [string[], string[], string[]];
+}
+
+interface SlowDeathRuntimeState {
+  /** Index into the entity's slowDeathProfiles array. */
+  profileIndex: number;
+  /** Frame when sinking begins. */
+  sinkFrame: number;
+  /** Frame when midpoint phase triggers. */
+  midpointFrame: number;
+  /** Frame when final destruction occurs. */
+  destructionFrame: number;
+  /** Whether the midpoint phase has been executed. */
+  midpointExecuted: boolean;
+}
+
+/** Source parity: SlowDeathBehavior midpoint is randomly placed between 35-65% of destruction time. */
+const SLOW_DEATH_BEGIN_MIDPOINT_RATIO = 0.35;
+const SLOW_DEATH_END_MIDPOINT_RATIO = 0.65;
 
 /** Source parity: PoisonedBehavior default INI values. */
 const DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES = 10; // ~0.33s at 30fps
@@ -1934,6 +1992,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateEva();
     this.updateSellingEntities();
     this.updateRenderStates();
+    this.updateSlowDeathEntities();
     this.updateWeaponIdleAutoReload();
     this.updateProjectileFlightCollisions();
     this.updatePendingWeaponDamage();
@@ -3581,6 +3640,9 @@ export class GameLogicSubsystem implements Subsystem {
       builderId: 0,
       buildTotalFrames: 0,
       destroyed: false,
+      // Slow death
+      slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
+      slowDeathState: null,
     };
   }
 
@@ -3604,6 +3666,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity note:
     // Generals/Code/GameEngine/Source/GameLogic/Thing/Drawable.cpp
     // drives render-state from object locomotor/combat lifecycle transitions.
+    if (entity.slowDeathState) {
+      return 'DIE';
+    }
     if (entity.destroyed) {
       return 'DIE';
     }
@@ -5346,6 +5411,116 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profile;
+  }
+
+  /**
+   * Source parity: SlowDeathBehavior modules — extract all slow death profiles from INI.
+   * An entity can have multiple SlowDeathBehavior modules; one is selected via weighted
+   * random on death based on DeathTypes, VeterancyLevels, and ProbabilityModifier.
+   */
+  private extractSlowDeathProfiles(objectDef: ObjectDef | undefined): SlowDeathProfile[] {
+    if (!objectDef) return [];
+    const profiles: SlowDeathProfile[] = [];
+    const phaseNames = ['INITIAL', 'MIDPOINT', 'FINAL'] as const;
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'DIE') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType.includes('SLOWDEATH') || moduleType === 'HELICOPTERSLOWDEATHBEHAVIOR'
+            || moduleType === 'JETSLOWDEATHBEHAVIOR') {
+          // Parse DeathTypes set.
+          const deathTypes = new Set<string>();
+          const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
+          if (deathTypesStr) {
+            for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
+              if (token) deathTypes.add(token);
+            }
+          }
+
+          // Parse VeterancyLevels set.
+          const veterancyLevels = new Set<string>();
+          const vetStr = readStringField(block.fields, ['VeterancyLevels']);
+          if (vetStr) {
+            for (const token of vetStr.toUpperCase().split(/\s+/)) {
+              if (token) veterancyLevels.add(token);
+            }
+          }
+
+          // Parse ExemptStatus / RequiredStatus.
+          const exemptStatus = new Set<string>();
+          const exemptStr = readStringField(block.fields, ['ExemptStatus']);
+          if (exemptStr) {
+            for (const token of exemptStr.toUpperCase().split(/\s+/)) {
+              if (token) exemptStatus.add(token);
+            }
+          }
+          const requiredStatus = new Set<string>();
+          const reqStr = readStringField(block.fields, ['RequiredStatus']);
+          if (reqStr) {
+            for (const token of reqStr.toUpperCase().split(/\s+/)) {
+              if (token) requiredStatus.add(token);
+            }
+          }
+
+          // Parse phase-specific OCLs and Weapons.
+          // INI format: "OCL INITIAL OCLName" or "Weapon MIDPOINT WeaponName"
+          // Fields can appear multiple times — INI parser stores as string or string[].
+          const phaseOCLs: [string[], string[], string[]] = [[], [], []];
+          const phaseWeapons: [string[], string[], string[]] = [[], [], []];
+
+          const parsePhaseEntries = (fieldName: string, target: [string[], string[], string[]]): void => {
+            const raw = block.fields[fieldName];
+            const entries: string[] = [];
+            if (typeof raw === 'string') {
+              entries.push(raw);
+            } else if (Array.isArray(raw)) {
+              for (const entry of raw) {
+                if (typeof entry === 'string') entries.push(entry);
+              }
+            }
+            for (const entry of entries) {
+              const parts = entry.trim().split(/\s+/);
+              if (parts.length >= 2) {
+                const phaseIdx = phaseNames.indexOf(parts[0]!.toUpperCase() as typeof phaseNames[number]);
+                const name = parts[parts.length - 1]!;
+                if (phaseIdx >= 0 && name) {
+                  target[phaseIdx]!.push(name);
+                }
+              } else if (parts.length === 1 && parts[0]) {
+                target[0]!.push(parts[0]);
+              }
+            }
+          };
+          parsePhaseEntries('OCL', phaseOCLs);
+          parsePhaseEntries('Weapon', phaseWeapons);
+
+          profiles.push({
+            probabilityModifier: readNumericField(block.fields, ['ProbabilityModifier']) ?? 10,
+            modifierBonusPerOverkillPercent: readNumericField(block.fields, ['ModifierBonusPerOverkillPercent']) ?? 0,
+            sinkDelay: this.msToLogicFrames(readNumericField(block.fields, ['SinkDelay']) ?? 0),
+            sinkDelayVariance: this.msToLogicFrames(readNumericField(block.fields, ['SinkDelayVariance']) ?? 0),
+            sinkRate: (readNumericField(block.fields, ['SinkRate']) ?? 0) / LOGIC_FRAME_RATE,
+            destructionDelay: this.msToLogicFrames(readNumericField(block.fields, ['DestructionDelay']) ?? 0),
+            destructionDelayVariance: this.msToLogicFrames(readNumericField(block.fields, ['DestructionDelayVariance']) ?? 0),
+            destructionAltitude: readNumericField(block.fields, ['DestructionAltitude']) ?? -10,
+            deathTypes,
+            veterancyLevels,
+            exemptStatus,
+            requiredStatus,
+            phaseOCLs,
+            phaseWeapons,
+          });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
   }
 
   /**
@@ -15004,13 +15179,202 @@ export class GameLogicSubsystem implements Subsystem {
       this.mineOnDamage(target, sourceEntityId, normalizedDamageType);
     }
 
-    if (target.health <= 0 && !target.destroyed) {
-      this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
+    if (target.health <= 0 && !target.destroyed && !target.slowDeathState) {
+      this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
+        this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
   }
 
   private adjustDamageByArmorSet(target: MapEntity, amount: number, damageType: string): number {
     return adjustDamageByArmorSetImpl(target, amount, damageType);
+  }
+
+  // ── SlowDeathBehavior implementation ──────────────────────────────────────
+
+  /**
+   * Source parity: SlowDeathBehavior::onDie — attempt to begin a slow death sequence.
+   * Selects one applicable SlowDeathBehavior via weighted random probability.
+   * Returns true if slow death was initiated, false if no applicable profile found.
+   */
+  private tryBeginSlowDeath(entity: MapEntity, attackerId: number): boolean {
+    if (entity.slowDeathProfiles.length === 0) return false;
+
+    // Collect applicable profiles with their weights.
+    const candidates: { index: number; weight: number }[] = [];
+    for (let i = 0; i < entity.slowDeathProfiles.length; i++) {
+      const profile = entity.slowDeathProfiles[i]!;
+      if (!this.isSlowDeathApplicable(entity, profile)) continue;
+      // Source parity: overkill bonus = (overkillDamage / maxHealth) * bonusPerOverkillPercent.
+      // C++ uses fraction (0.0–1.0+), not percentage. Simplified: overkill = -health.
+      const overkillFraction = entity.maxHealth > 0 ? -entity.health / entity.maxHealth : 0;
+      const overkillBonus = Math.floor(overkillFraction * profile.modifierBonusPerOverkillPercent);
+      const weight = Math.max(1, profile.probabilityModifier + overkillBonus);
+      candidates.push({ index: i, weight });
+    }
+    if (candidates.length === 0) return false;
+
+    // Source parity: weighted random selection among applicable profiles.
+    const totalWeight = candidates.reduce((sum, c) => sum + c.weight, 0);
+    let roll = this.gameRandom.nextRange(1, totalWeight);
+    let selectedIndex = candidates[0]!.index;
+    for (const candidate of candidates) {
+      roll -= candidate.weight;
+      if (roll <= 0) {
+        selectedIndex = candidate.index;
+        break;
+      }
+    }
+
+    const profile = entity.slowDeathProfiles[selectedIndex]!;
+
+    // Calculate frame timings.
+    const sinkDelay = profile.sinkDelay + (profile.sinkDelayVariance > 0
+      ? this.gameRandom.nextRange(0, profile.sinkDelayVariance) : 0);
+    const destructionDelay = profile.destructionDelay + (profile.destructionDelayVariance > 0
+      ? this.gameRandom.nextRange(0, profile.destructionDelayVariance) : 0);
+    const sinkFrame = this.frameCounter + sinkDelay;
+    const destructionFrame = this.frameCounter + Math.max(1, destructionDelay);
+
+    // Source parity: midpoint is randomly placed between 35-65% of destruction time.
+    const midpointBegin = Math.floor(destructionDelay * SLOW_DEATH_BEGIN_MIDPOINT_RATIO);
+    const midpointEnd = Math.floor(destructionDelay * SLOW_DEATH_END_MIDPOINT_RATIO);
+    const midpointFrame = this.frameCounter + (midpointBegin < midpointEnd
+      ? this.gameRandom.nextRange(midpointBegin, midpointEnd) : midpointBegin);
+
+    entity.slowDeathState = {
+      profileIndex: selectedIndex,
+      sinkFrame,
+      midpointFrame,
+      destructionFrame,
+      midpointExecuted: false,
+    };
+
+    // Source parity: mark AI as dead — prevent further combat, production, movement.
+    entity.animationState = 'DIE';
+    entity.canTakeDamage = false;
+    entity.attackTargetEntityId = null;
+    entity.attackTargetPosition = null;
+    entity.attackOriginalVictimPosition = null;
+    entity.attackCommandSource = 'AI';
+    entity.attackSubState = 'IDLE';
+    entity.moving = false;
+    entity.moveTarget = null;
+    entity.movePath = [];
+    entity.pathIndex = 0;
+    entity.pathfindGoalCell = null;
+
+    // Unregister energy while dying.
+    this.unregisterEntityEnergy(entity);
+    // Cancel production and pending actions.
+    this.cancelEntityCommandPathActions(entity.id);
+    this.cancelAndRefundAllProductionOnDeath(entity);
+
+    // Source parity: deselect for all players.
+    entity.selected = false;
+
+    // Execute INITIAL phase.
+    this.executeSlowDeathPhase(entity, profile, 0);
+
+    return true;
+  }
+
+  /**
+   * Source parity: DieMuxData::isDieApplicable — check if a slow death profile matches.
+   */
+  private isSlowDeathApplicable(entity: MapEntity, profile: SlowDeathProfile): boolean {
+    // DeathTypes filter (empty = all death types accepted).
+    // Simplified: we don't track specific death types yet, so empty means applicable.
+    // If deathTypes is non-empty, it requires specific death types to match — for now
+    // we accept all unless NONE is the only type.
+    if (profile.deathTypes.size > 0 && profile.deathTypes.has('NONE') && profile.deathTypes.size === 1) {
+      return false;
+    }
+
+    // VeterancyLevels filter (empty = all levels accepted).
+    if (profile.veterancyLevels.size > 0) {
+      const levelNames = ['REGULAR', 'VETERAN', 'ELITE', 'HEROIC'] as const;
+      const entityLevel = levelNames[entity.experienceState.currentLevel] ?? 'REGULAR';
+      if (!profile.veterancyLevels.has(entityLevel)) return false;
+    }
+
+    // ExemptStatus — entity must NOT have any of these flags.
+    for (const status of profile.exemptStatus) {
+      if (entity.objectStatusFlags.has(status)) return false;
+    }
+
+    // RequiredStatus — entity must have ALL of these flags.
+    for (const status of profile.requiredStatus) {
+      if (!entity.objectStatusFlags.has(status)) return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity: SlowDeathBehavior::doPhaseStuff — execute OCLs and weapons for a death phase.
+   * @param phaseIndex 0=INITIAL, 1=MIDPOINT, 2=FINAL
+   */
+  private executeSlowDeathPhase(entity: MapEntity, profile: SlowDeathProfile, phaseIndex: number): void {
+    // Execute ONE random OCL from this phase's list.
+    const oclList = profile.phaseOCLs[phaseIndex as 0 | 1 | 2];
+    if (oclList && oclList.length > 0) {
+      const idx = oclList.length === 1 ? 0 : this.gameRandom.nextRange(0, oclList.length - 1);
+      this.executeOCL(oclList[idx]!, entity);
+    }
+
+    // Fire ONE random weapon from this phase's list.
+    const weaponList = profile.phaseWeapons[phaseIndex as 0 | 1 | 2];
+    if (weaponList && weaponList.length > 0) {
+      const idx = weaponList.length === 1 ? 0 : this.gameRandom.nextRange(0, weaponList.length - 1);
+      const weaponName = weaponList[idx]!;
+      const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
+      if (weaponDef) {
+        this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
+      }
+    }
+  }
+
+  /**
+   * Source parity: SlowDeathBehavior::update — progress all active slow death sequences.
+   * Handles sinking, midpoint phase, and final destruction timing.
+   */
+  private updateSlowDeathEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (!entity.slowDeathState || entity.destroyed) continue;
+      const state = entity.slowDeathState;
+      const profile = entity.slowDeathProfiles[state.profileIndex];
+      if (!profile) {
+        // Profile missing — fall through to immediate destruction.
+        this.markEntityDestroyed(entity.id, -1);
+        continue;
+      }
+
+      // Source parity: sink the entity below terrain.
+      if (profile.sinkRate > 0 && this.frameCounter >= state.sinkFrame) {
+        entity.y -= profile.sinkRate;
+        // Altitude check: destroy when sunk below threshold.
+        if (entity.y <= profile.destructionAltitude) {
+          this.executeSlowDeathPhase(entity, profile, 2); // FINAL
+          entity.slowDeathState = null;
+          this.markEntityDestroyed(entity.id, -1);
+          continue;
+        }
+      }
+
+      // Source parity: midpoint phase — execute once at the midpoint frame.
+      if (!state.midpointExecuted && this.frameCounter >= state.midpointFrame) {
+        this.executeSlowDeathPhase(entity, profile, 1); // MIDPOINT
+        state.midpointExecuted = true;
+      }
+
+      // Source parity: destruction frame — execute final phase and destroy.
+      if (this.frameCounter >= state.destructionFrame) {
+        this.executeSlowDeathPhase(entity, profile, 2); // FINAL
+        entity.slowDeathState = null;
+        this.markEntityDestroyed(entity.id, -1);
+        continue;
+      }
+    }
   }
 
   private markEntityDestroyed(entityId: number, attackerId: number): void {
@@ -15666,7 +16030,7 @@ export class GameLogicSubsystem implements Subsystem {
       let hasUnits = false;
 
       for (const entity of this.spawnedEntities.values()) {
-        if (entity.destroyed) continue;
+        if (entity.destroyed || entity.slowDeathState) continue;
         const entitySide = this.normalizeSide(entity.side);
         if (entitySide !== side) continue;
 

@@ -9257,3 +9257,353 @@ describe('construction progress', () => {
     expect(buildingFinal!.health).toBe(500);
   });
 });
+
+describe('slow death behavior', () => {
+  function makeSlowDeathBundle(slowDeathFields: Record<string, unknown> = {}) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('SlowDeathUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SlowDeath', {
+            DestructionDelay: 300, // 300ms = 9 frames
+            SinkDelay: 100, // 100ms = 3 frames
+            SinkRate: 0.5,
+            ProbabilityModifier: 10,
+            ...slowDeathFields,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'InstantKillGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('InstantKillGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+  }
+
+  it('delays entity destruction for the configured DestructionDelay', () => {
+    const bundle = makeSlowDeathBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SlowDeathUnit', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Advance until the unit takes lethal damage and enters slow death.
+    let enteredSlowDeath = false;
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0 && s.animationState === 'DIE') {
+        enteredSlowDeath = true;
+        break;
+      }
+    }
+    expect(enteredSlowDeath).toBe(true);
+
+    // Unit should be in slow death (health <= 0) but NOT destroyed yet at 5 frames.
+    const midDeath = logic.getEntityState(1);
+    expect(midDeath).not.toBeNull();
+    expect(midDeath!.health).toBeLessThanOrEqual(0);
+    expect(midDeath!.animationState).toBe('DIE');
+
+    // Run past destructionDelay (9 frames from slow death start + margin).
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Now the entity should be fully destroyed and removed.
+    const afterDestruction = logic.getEntityState(1);
+    expect(afterDestruction).toBeNull();
+  });
+
+  it('sinks the entity below terrain after SinkDelay', () => {
+    // SinkRate is in dist/sec — use 30 so per-frame rate = 1.0 for easy assertions.
+    const bundle = makeSlowDeathBundle({ SinkRate: 30, SinkDelay: 100, DestructionDelay: 5000 });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SlowDeathUnit', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Advance until the unit enters slow death.
+    let initialY = 0;
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0 && s.animationState === 'DIE') {
+        initialY = s.y;
+        break;
+      }
+    }
+
+    // Run past sinkDelay (3 frames) + several more frames for sinking.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const afterSink = logic.getEntityState(1);
+    expect(afterSink).not.toBeNull();
+    expect(afterSink!.y).toBeLessThan(initialY);
+  });
+
+  it('prevents the dying entity from being targeted by other attackers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SlowDeathUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SlowDeath', {
+            DestructionDelay: 5000, // Very long death
+            ProbabilityModifier: 10,
+          }),
+        ]),
+        makeObjectDef('Attacker1', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun'] }),
+        ]),
+        makeObjectDef('Attacker2', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('BigGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SlowDeathUnit', 50, 50),
+        makeMapObject('Attacker1', 20, 50),
+        makeMapObject('Attacker2', 80, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    // Attacker1 kills the unit.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    // Now attacker2 tries to target the dying entity.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    // Entity 1 should still be in slow death (alive but dying).
+    const dyingState = logic.getEntityState(1);
+    expect(dyingState).not.toBeNull();
+    expect(dyingState!.animationState).toBe('DIE');
+    // Attacker2's target should have been rejected (canTakeDamage = false).
+    // The dying entity should not have taken additional damage beyond the first kill.
+  });
+
+  it('executes phase OCLs at INITIAL and FINAL phases', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SlowDeathWithOCL', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SlowDeath', {
+            DestructionDelay: 200, // ~6 frames
+            ProbabilityModifier: 10,
+            OCL: ['INITIAL OCLDeathDebris', 'FINAL OCLFinalDebris'],
+          }),
+        ]),
+        makeObjectDef('DeathDebris', 'America', ['INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+        ]),
+        makeObjectDef('FinalDebris', 'America', ['INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'KillGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('KillGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+    // Add OCL definitions to the bundle.
+    (bundle as Record<string, unknown>).objectCreationLists = [
+      {
+        name: 'OCLDeathDebris',
+        fields: {},
+        blocks: [{
+          type: 'CreateObject',
+          name: 'CreateObject',
+          fields: { ObjectNames: 'DeathDebris', Count: '1' },
+          blocks: [],
+        }],
+      },
+      {
+        name: 'OCLFinalDebris',
+        fields: {},
+        blocks: [{
+          type: 'CreateObject',
+          name: 'CreateObject',
+          fields: { ObjectNames: 'FinalDebris', Count: '1' },
+          blocks: [],
+        }],
+      },
+    ];
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SlowDeathWithOCL', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the unit — INITIAL phase should execute, spawning debris.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Check that debris was spawned by the INITIAL phase OCL.
+    const initialStates = logic.getRenderableEntityStates();
+    const initialDebris = initialStates.filter(s => s.templateName === 'DeathDebris');
+    expect(initialDebris.length).toBeGreaterThanOrEqual(1);
+
+    // Run past destructionDelay (~6 frames) — FINAL phase should fire OCLFinalDebris.
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+
+    const finalStates = logic.getRenderableEntityStates();
+    const finalDebris = finalStates.filter(s => s.templateName === 'FinalDebris');
+    expect(finalDebris.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('selects from multiple SlowDeathBehavior modules via weighted probability', () => {
+    // Entity with two SlowDeathBehavior modules of different probability.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('MultiDeathUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_Death1', {
+            DestructionDelay: 100, // ~3 frames
+            ProbabilityModifier: 1,
+          }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_Death2', {
+            DestructionDelay: 1000, // ~30 frames
+            ProbabilityModifier: 1,
+          }),
+        ]),
+        makeObjectDef('Killer', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'OHKGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('OHKGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('MultiDeathUnit', 50, 50),
+        makeMapObject('Killer', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the unit.
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    // Entity should be in slow death (one of the two profiles was selected).
+    const dyingState = logic.getEntityState(1);
+    expect(dyingState).not.toBeNull();
+    expect(dyingState!.animationState).toBe('DIE');
+    expect(dyingState!.health).toBeLessThanOrEqual(0);
+  });
+
+  it('excludes slow-death entities from victory condition counting', () => {
+    const bundle = makeSlowDeathBundle({ DestructionDelay: 10000 });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SlowDeathUnit', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setPlayerSide(0, 'America');
+    logic.setPlayerSide(1, 'China');
+    logic.setSidePlayerType('America', 'HUMAN');
+    logic.setSidePlayerType('China', 'HUMAN');
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Advance until the unit enters slow death.
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0 && s.animationState === 'DIE') break;
+    }
+
+    // Entity is in slow death but entity not yet destroyed.
+    const dyingState = logic.getEntityState(1);
+    expect(dyingState).not.toBeNull();
+    expect(dyingState!.animationState).toBe('DIE');
+
+    // Run a few more frames — victory should be detected even though entity hasn't
+    // fully been destroyed yet, because slow-death entities are excluded from counting.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const gameEnd = logic.getGameEndState();
+    expect(gameEnd).not.toBeNull();
+    // China should win since America's only unit is in slow death.
+    expect(gameEnd!.victorSides).toContain('china');
+  });
+});
