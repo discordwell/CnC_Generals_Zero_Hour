@@ -1352,6 +1352,11 @@ interface MapEntity {
   /** Total frames to build from INI BuildTime. 0 = instant. */
   buildTotalFrames: number;
 
+  // ── Source parity: DeployStyleAIUpdate — deploy/undeploy state machine ──
+  deployStyleProfile: DeployStyleProfile | null;
+  deployState: DeployState;
+  deployFrameToWait: number;
+
   destroyed: boolean;
 
   // ── Source parity: LifetimeUpdate — timed self-destruction ──
@@ -1459,6 +1464,18 @@ interface MineDetonatorEntry {
   entityId: number;
   x: number;
   z: number;
+}
+
+/**
+ * Source parity: DeployStyleAIUpdate — deploy/undeploy state machine for units that must
+ * deploy to attack and pack to move (artillery, mortars, gatling cannons).
+ */
+type DeployState = 'READY_TO_MOVE' | 'DEPLOY' | 'READY_TO_ATTACK' | 'UNDEPLOY';
+
+interface DeployStyleProfile {
+  unpackTimeFrames: number;
+  packTimeFrames: number;
+  turretsFunctionOnlyWhenDeployed: boolean;
 }
 
 /**
@@ -2018,6 +2035,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateDisabledEmpStatuses();
     this.updateProduction();
     this.updateSpawnBehaviors();
+    this.updateDeployStyleEntities();
     this.updateCombat();
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
@@ -3692,6 +3710,10 @@ export class GameLogicSubsystem implements Subsystem {
       ejectPilotMinVeterancy: 1,
       // Death OCLs
       deathOCLNames: this.extractDeathOCLNames(objectDef),
+      // Deploy state machine
+      deployStyleProfile: this.extractDeployStyleProfile(objectDef),
+      deployState: 'READY_TO_MOVE' as DeployState,
+      deployFrameToWait: 0,
       // Construction state — born complete unless dozer-placed.
       constructionPercent: CONSTRUCTION_COMPLETE,
       builderId: 0,
@@ -5579,6 +5601,38 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: DeployStyleAIUpdate — extract deploy/undeploy config from INI.
+   */
+  private extractDeployStyleProfile(objectDef: ObjectDef | undefined): DeployStyleProfile | null {
+    if (!objectDef) return null;
+    let profile: DeployStyleProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DEPLOYSTYLEAIUPDATE') {
+          const unpackMs = readNumericField(block.fields, ['UnpackTime']) ?? 0;
+          const packMs = readNumericField(block.fields, ['PackTime']) ?? 0;
+          profile = {
+            unpackTimeFrames: this.msToLogicFrames(unpackMs),
+            packTimeFrames: this.msToLogicFrames(packMs),
+            turretsFunctionOnlyWhenDeployed:
+              readBooleanField(block.fields, ['TurretsFunctionOnlyWhenDeployed']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: SlowDeathBehavior modules — extract all slow death profiles from INI.
    * An entity can have multiple SlowDeathBehavior modules; one is selected via weighted
    * random on death based on DeathTypes, VeterancyLevels, and ProbabilityModifier.
@@ -6721,6 +6775,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private canEntityAttackFromStatus(entity: MapEntity): boolean {
+    // Source parity: DeployStyleAIUpdate — only allow attacks when fully deployed.
+    if (entity.deployStyleProfile && entity.deployState !== 'READY_TO_ATTACK') {
+      return false;
+    }
     // Source parity: GeneralsMD Object::isAbleToAttack() early-outs on OBJECT_STATUS_NO_ATTACK,
     // OBJECT_STATUS_UNDER_CONSTRUCTION, and OBJECT_STATUS_SOLD.
     if (this.entityHasObjectStatus(entity, 'NO_ATTACK')) {
@@ -15440,6 +15498,112 @@ export class GameLogicSubsystem implements Subsystem {
         profile.continuousNextFireFrame[bodyState] = this.frameCounter + this.resolveWeaponDefDelayFrames(weaponDef);
       }
     }
+  }
+
+  /**
+   * Source parity: DeployStyleAIUpdate::update() — per-frame deploy state machine.
+   * Transitions: READY_TO_MOVE ↔ DEPLOY ↔ READY_TO_ATTACK ↔ UNDEPLOY ↔ READY_TO_MOVE.
+   * Timer-based: DEPLOY finishes after unpackTime, UNDEPLOY finishes after packTime.
+   * Reversal: mid-deploy/undeploy can be reversed at current progress frame.
+   */
+  private updateDeployStyleEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.deployStyleProfile;
+      if (!profile) continue;
+
+      const isTryingToAttack = entity.attackTargetEntityId !== null || entity.attackTargetPosition !== null;
+      const isTryingToMove = entity.moving || entity.moveTarget !== null;
+
+      // Check timer expiry for DEPLOY/UNDEPLOY transitions.
+      if (entity.deployFrameToWait !== 0 && this.frameCounter >= entity.deployFrameToWait) {
+        if (entity.deployState === 'DEPLOY') {
+          this.setDeployState(entity, 'READY_TO_ATTACK');
+        } else if (entity.deployState === 'UNDEPLOY') {
+          this.setDeployState(entity, 'READY_TO_MOVE');
+        }
+      }
+
+      // Source parity: If trying to attack (or idle auto-target will engage), deploy.
+      if (isTryingToAttack) {
+        switch (entity.deployState) {
+          case 'READY_TO_MOVE':
+            this.setDeployState(entity, 'DEPLOY');
+            break;
+          case 'READY_TO_ATTACK':
+            // Already deployed — let combat system handle attacking.
+            break;
+          case 'DEPLOY':
+            // Still deploying — wait for timer.
+            break;
+          case 'UNDEPLOY':
+            // Reverse the undeploy.
+            if (entity.deployFrameToWait !== 0) {
+              this.reverseDeployTransition(entity, 'DEPLOY', profile.unpackTimeFrames);
+            }
+            break;
+        }
+      } else if (isTryingToMove) {
+        // Source parity: If trying to move, undeploy.
+        switch (entity.deployState) {
+          case 'READY_TO_MOVE':
+            // Already mobile — movement system handles it.
+            break;
+          case 'READY_TO_ATTACK':
+            this.setDeployState(entity, 'UNDEPLOY');
+            break;
+          case 'DEPLOY':
+            // Reverse the deploy.
+            if (entity.deployFrameToWait !== 0) {
+              // Source parity: C++ setMyState(UNDEPLOY, TRUE) uses getUnpackTime() for both reversal directions.
+              this.reverseDeployTransition(entity, 'UNDEPLOY', profile.unpackTimeFrames);
+            }
+            break;
+          case 'UNDEPLOY':
+            // Still undeploying — wait for timer.
+            break;
+        }
+      }
+
+      // Source parity: Block movement during DEPLOY/UNDEPLOY/READY_TO_ATTACK.
+      if (entity.deployState !== 'READY_TO_MOVE') {
+        entity.moving = false;
+      }
+    }
+  }
+
+  private setDeployState(entity: MapEntity, state: DeployState): void {
+    const profile = entity.deployStyleProfile;
+    if (!profile) return;
+    entity.deployState = state;
+    switch (state) {
+      case 'DEPLOY':
+        entity.deployFrameToWait = this.frameCounter + profile.unpackTimeFrames;
+        entity.objectStatusFlags.delete('DEPLOYED');
+        break;
+      case 'UNDEPLOY':
+        entity.deployFrameToWait = this.frameCounter + profile.packTimeFrames;
+        entity.objectStatusFlags.delete('DEPLOYED');
+        break;
+      case 'READY_TO_ATTACK':
+        entity.deployFrameToWait = 0;
+        entity.objectStatusFlags.add('DEPLOYED');
+        break;
+      case 'READY_TO_MOVE':
+        entity.deployFrameToWait = 0;
+        entity.objectStatusFlags.delete('DEPLOYED');
+        // Source parity: re-enable movement if a pending move target exists.
+        if (entity.moveTarget !== null && entity.movePath.length > 0) {
+          entity.moving = true;
+        }
+        break;
+    }
+  }
+
+  private reverseDeployTransition(entity: MapEntity, newState: DeployState, totalFrames: number): void {
+    const framesLeft = Math.max(0, entity.deployFrameToWait - this.frameCounter);
+    entity.deployState = newState;
+    entity.deployFrameToWait = this.frameCounter + (totalFrames - framesLeft);
   }
 
   /**

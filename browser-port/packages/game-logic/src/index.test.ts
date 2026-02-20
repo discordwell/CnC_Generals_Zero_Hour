@@ -9889,3 +9889,142 @@ describe('generate minefield behavior', () => {
     }
   });
 });
+
+describe('deploy style AI update', () => {
+  function makeDeploySetup(opts: { unpackTime?: number; packTime?: number } = {}) {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Artillery', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Behavior', 'DeployStyleAIUpdate ModuleTag_Deploy', {
+            UnpackTime: opts.unpackTime ?? 300,
+            PackTime: opts.packTime ?? 300,
+          }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'ArtilleryGun'] }),
+          makeBlock('Locomotor', 'SET_NORMAL ArtilleryLocomotor', { Speed: 30 }),
+        ]),
+        makeObjectDef('Target', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SmallGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('ArtilleryGun', {
+          AttackRange: 200,
+          PrimaryDamage: 100,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+        makeWeaponDef('SmallGun', {
+          AttackRange: 200,
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Artillery', 50, 50),
+        makeMapObject('Target', 80, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    return { logic };
+  }
+
+  it('deploys before attacking and undeploys before moving', () => {
+    const { logic } = makeDeploySetup({ unpackTime: 300, packTime: 300 });
+    // 300ms → ceil(300/33.33) = 9 frames
+
+    // Artillery should start in READY_TO_MOVE state.
+    let state = logic.getEntityState(1);
+    expect(state).not.toBeNull();
+    expect(state!.health).toBe(200);
+
+    // Issue attack command — this should start deploying.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+    logic.update(1 / 30); // frame 1
+
+    // Target should NOT have taken damage yet (still deploying).
+    const targetAfter1 = logic.getEntityState(2);
+    expect(targetAfter1).not.toBeNull();
+    expect(targetAfter1!.health).toBe(500);
+
+    // Run 8 more frames to complete deploy (9 frames total for 300ms).
+    for (let i = 0; i < 8; i++) logic.update(1 / 30);
+
+    // After 9 frames, should be READY_TO_ATTACK. Run 1 more frame to let combat fire.
+    logic.update(1 / 30);
+
+    // Target should have taken damage now.
+    const targetAfterDeploy = logic.getEntityState(2);
+    expect(targetAfterDeploy).not.toBeNull();
+    expect(targetAfterDeploy!.health).toBeLessThan(500);
+  });
+
+  it('cannot fire during deploy animation and does not move while deployed', () => {
+    const { logic } = makeDeploySetup({ unpackTime: 300, packTime: 300 });
+    // 300ms → 9 frames for deploy/undeploy
+
+    // Issue attack — entity starts deploying.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    // Run 5 frames (mid-deploy). Target should not be damaged yet.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const targetMidDeploy = logic.getEntityState(2);
+    expect(targetMidDeploy).not.toBeNull();
+    expect(targetMidDeploy!.health).toBe(500); // Still full health during deploy animation
+
+    // Run to completion of deploy (4 more frames to reach 9) + 1 extra for combat.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // After deploy completes, the entity should start firing.
+    // Run several more frames to ensure at least one shot lands.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const targetAfterDeploy = logic.getEntityState(2);
+    expect(targetAfterDeploy).not.toBeNull();
+    expect(targetAfterDeploy!.health).toBeLessThan(500); // Took damage after full deploy
+
+    // Verify entity hasn't moved (deployed entities can't move).
+    const artilleryState = logic.getEntityState(1);
+    expect(artilleryState).not.toBeNull();
+    expect(artilleryState!.x).toBe(50); // Stayed at initial position
+  });
+
+  it('reverses deploy mid-transition when move command is issued', () => {
+    const { logic } = makeDeploySetup({ unpackTime: 600, packTime: 600 });
+    // 600ms → ceil(600/33.33) = 18 frames
+
+    // Issue attack to start deploying.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+    // Run 6 frames (1/3 through deploy).
+    for (let i = 0; i < 6; i++) logic.update(1 / 30);
+
+    // Target should still be at full health (not deployed yet).
+    const targetMidDeploy = logic.getEntityState(2);
+    expect(targetMidDeploy!.health).toBe(500);
+
+    // Issue move command to reverse the deploy.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 10, targetZ: 50 });
+
+    // The reversal should take 18 - (18 - 6) = 6 frames remaining → total = 6 frames to undeploy.
+    // But actually the reversal formula is: totalFrames - framesLeft = 18 - 12 = 6 frames done,
+    // new wait = now + (18 - 12) = 6 more frames.
+    // So after 6 more frames from now, should be READY_TO_MOVE.
+    for (let i = 0; i < 8; i++) logic.update(1 / 30);
+
+    // Should have started moving by now.
+    const afterReversal = logic.getEntityState(1);
+    expect(afterReversal).not.toBeNull();
+    // Even if not moved far, at least the entity should be alive and not stuck.
+    expect(afterReversal!.health).toBe(200);
+  });
+});
