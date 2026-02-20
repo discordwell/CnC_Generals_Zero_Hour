@@ -1,5 +1,16 @@
 # Old Session Summaries
 
+## 2026-02-20T09:10Z — Skirmish AI Enhancements (Task #77)
+- Task #77: AI system enhancements for skirmish parity — committed afa1b93
+  - Dozer replacement, upgrade research, science purchasing, rally points, multi-dozer parallel construction
+  - Fixed: dozers excluded from factory scan, isDozerBusy checks pendingConstructionActions, 18-slot command set grid
+  - 4 new tests — All 1037 tests pass, clean build
+
+## 2026-02-20T09:30Z — Projectile Flight Collision Detection (Task #78)
+- Task #78: Projectile flight collision detection with C++ DumbProjectileBehavior parity — committed 7fa2d1b
+  - Interpolation-based collision, shouldProjectileCollideWithEntityImpl, sneaky-offset parity
+  - 3 new tests — All 1040 tests pass, clean build
+
 ## 2026-02-20T08:15Z — Construction Progress System + Tunnel Code Review Fixes
 - Task #73 code review fixes: immediate tunnel unregister on sell (double-sell race), non-movable scatter positioning — committed 141cd5b
 - Task #74: Construction Progress/Duration System with full C++ DozerAIUpdate parity:

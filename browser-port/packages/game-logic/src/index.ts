@@ -250,6 +250,9 @@ type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTR
 type SidePlayerType = 'HUMAN' | 'COMPUTER';
 type AttackCommandSource = 'PLAYER' | 'AI';
 
+/** Reusable empty kindOf set for projectile templates with no kindOf. */
+const EMPTY_KINDOF_SET = new Set<string>();
+
 type ObjectCategory = RenderableObjectCategory;
 
 interface VectorXZ {
@@ -1433,6 +1436,15 @@ interface MapEntity {
   battlePlanDamageScalar: number;
   /** Base vision range before battle plan modifiers. */
   baseVisionRange: number;
+
+  // ── Source parity: PointDefenseLaserUpdate — anti-projectile defense ──
+  pointDefenseLaserProfile: PointDefenseLaserProfile | null;
+  /** Frame when next expensive target scan should run. */
+  pdlNextScanFrame: number;
+  /** Visual ID of the currently tracked projectile event (0 = no target). */
+  pdlTargetProjectileVisualId: number;
+  /** Frame when the PDL weapon can fire again. */
+  pdlNextShotFrame: number;
 }
 
 /**
@@ -1665,6 +1677,26 @@ interface FireWhenDamagedProfile {
   // Source parity: per-weapon cooldown — each Weapon instance tracks m_whenWeCanFireAgain.
   reactionNextFireFrame: [number, number, number, number];
   continuousNextFireFrame: [number, number, number, number];
+}
+
+/**
+ * Source parity: PointDefenseLaserUpdate module parsed from INI.
+ * Autonomous anti-projectile defense that scans for incoming missiles/aircraft
+ * and fires a defensive weapon to intercept them.
+ */
+interface PointDefenseLaserProfile {
+  /** Weapon template name to fire at targets. */
+  weaponName: string;
+  /** Primary target kindOf set (e.g. SMALL_MISSILE). */
+  primaryTargetKindOf: Set<string>;
+  /** Secondary target kindOf set (fallback targets). */
+  secondaryTargetKindOf: Set<string>;
+  /** Frames between expensive target scans. */
+  scanRate: number;
+  /** Scan search radius (world units). */
+  scanRange: number;
+  /** Velocity prediction factor for out-of-range targets. */
+  predictTargetVelocityFactor: number;
 }
 
 // Body damage state thresholds (source parity: GlobalData defaults).
@@ -2241,6 +2273,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateLifetimeEntities();
     this.updateSlowDeathEntities();
     this.updateWeaponIdleAutoReload();
+    this.updatePointDefenseLaser();
     this.updateProjectileFlightCollisions();
     this.updatePendingWeaponDamage();
     this.finalizeDestroyedEntities();
@@ -3945,6 +3978,11 @@ export class GameLogicSubsystem implements Subsystem {
       battlePlanState: null,
       battlePlanDamageScalar: 1.0,
       baseVisionRange: readNumericField(objectDef?.fields ?? {}, ['VisionRange', 'ShroudClearingRange']) ?? 0,
+      // Point defense laser
+      pointDefenseLaserProfile: this.extractPointDefenseLaserProfile(objectDef),
+      pdlNextScanFrame: 0,
+      pdlTargetProjectileVisualId: 0,
+      pdlNextShotFrame: 0,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -3967,6 +4005,12 @@ export class GameLogicSubsystem implements Subsystem {
         transitionFinishFrame: 0,
         idleCooldownFinishFrame: 0,
       };
+    }
+
+    // Source parity: PointDefenseLaserUpdate init — stagger initial scan.
+    if (entity.pointDefenseLaserProfile) {
+      const rate = Math.max(1, entity.pointDefenseLaserProfile.scanRate);
+      entity.pdlNextScanFrame = this.frameCounter + this.gameRandom.nextRange(0, rate);
     }
 
     return entity;
@@ -5937,6 +5981,54 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profiles;
+  }
+
+  /**
+   * Source parity: PointDefenseLaserUpdate — extract anti-projectile defense config from INI.
+   */
+  private extractPointDefenseLaserProfile(objectDef: ObjectDef | undefined): PointDefenseLaserProfile | null {
+    if (!objectDef) return null;
+    let profile: PointDefenseLaserProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'POINTDEFENSELASERUPDATE') {
+          const weaponName = readStringField(block.fields, ['WeaponTemplate']);
+          if (!weaponName) return;
+
+          const primaryStr = readStringField(block.fields, ['PrimaryTargetTypes']) ?? '';
+          const primaryTargetKindOf = new Set<string>();
+          for (const token of primaryStr.split(/\s+/)) {
+            if (token) primaryTargetKindOf.add(token.toUpperCase());
+          }
+
+          const secondaryStr = readStringField(block.fields, ['SecondaryTargetTypes']) ?? '';
+          const secondaryTargetKindOf = new Set<string>();
+          for (const token of secondaryStr.split(/\s+/)) {
+            if (token) secondaryTargetKindOf.add(token.toUpperCase());
+          }
+
+          const scanRateMs = readNumericField(block.fields, ['ScanRate']) ?? 0;
+          profile = {
+            weaponName,
+            primaryTargetKindOf,
+            secondaryTargetKindOf,
+            scanRate: Math.max(1, this.msToLogicFrames(scanRateMs)),
+            scanRange: readNumericField(block.fields, ['ScanRange']) ?? 0,
+            predictTargetVelocityFactor: readNumericField(block.fields, ['PredictTargetVelocityFactor']) ?? 0,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
   }
 
   /**
@@ -16466,6 +16558,246 @@ export class GameLogicSubsystem implements Subsystem {
         // Source parity: Weapon::privateFireWeapon sets m_whenWeCanFireAgain = now + delayBetweenShots.
         profile.continuousNextFireFrame[bodyState] = this.frameCounter + this.resolveWeaponDefDelayFrames(weaponDef);
       }
+    }
+  }
+
+  // ── PointDefenseLaserUpdate implementation ──────────────────────────────
+
+  /**
+   * Source parity: PointDefenseLaserUpdate::update() — autonomous anti-projectile defense.
+   * Scans for in-flight enemy projectiles (SMALL_MISSILE, BALLISTIC_MISSILE, etc.)
+   * and intercepts them by removing the pending damage event.
+   */
+  private updatePointDefenseLaser(): void {
+    // Source parity fix: prevent multiple PDLs from both tracking the same projectile.
+    const interceptedThisFrame = new Set<number>();
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.pointDefenseLaserProfile;
+      if (!profile) continue;
+      // Source parity: disabled/sold/under-construction entities cannot defend.
+      if (!this.canEntityAttackFromStatus(entity)) continue;
+
+      // Resolve the PDL weapon's fire range and delay.
+      const pdlWeaponDef = this.iniDataRegistry?.getWeapon(profile.weaponName);
+      if (!pdlWeaponDef) continue;
+      const fireRangeRaw = readNumericField(pdlWeaponDef.fields, ['AttackRange', 'Range']) ?? 0;
+      const fireRange = Math.max(0, fireRangeRaw);
+      const fireRangeSqr = fireRange * fireRange;
+      const scanRangeSqr = profile.scanRange * profile.scanRange;
+
+      // Try to fire at current target.
+      if (entity.pdlTargetProjectileVisualId !== 0) {
+        if (interceptedThisFrame.has(entity.pdlTargetProjectileVisualId)) {
+          entity.pdlTargetProjectileVisualId = 0;
+        } else {
+          const targetEvent = this.findPendingProjectileByVisualId(entity.pdlTargetProjectileVisualId);
+          if (targetEvent) {
+            const projPos = this.interpolateProjectilePosition(targetEvent);
+            if (projPos) {
+              const dx = projPos.x - entity.x;
+              const dz = projPos.z - entity.z;
+              const distSqr = dx * dx + dz * dz;
+              if (distSqr <= fireRangeSqr) {
+                // Target in weapon range — try to fire.
+                if (this.frameCounter >= entity.pdlNextShotFrame) {
+                  interceptedThisFrame.add(entity.pdlTargetProjectileVisualId);
+                  this.interceptProjectileEvent(entity, targetEvent, profile);
+                  const delayFrames = this.resolveWeaponDefDelayFrames(pdlWeaponDef);
+                  entity.pdlNextShotFrame = this.frameCounter + delayFrames;
+                  entity.pdlTargetProjectileVisualId = 0;
+                  continue;
+                }
+                // Weapon on cooldown — keep tracking.
+                continue;
+              } else if (distSqr <= scanRangeSqr) {
+                // Still in scan range but not fire range — keep tracking.
+                continue;
+              }
+            }
+          }
+          // Target gone or out of range — clear and rescan.
+          entity.pdlTargetProjectileVisualId = 0;
+        }
+      }
+
+      // Periodic expensive scan for new targets.
+      if (this.frameCounter < entity.pdlNextScanFrame) continue;
+      entity.pdlNextScanFrame = this.frameCounter + profile.scanRate;
+
+      let bestPrimaryId = 0;
+      let bestPrimaryDistSqr = Infinity;
+      let bestSecondaryId = 0;
+      let bestSecondaryDistSqr = Infinity;
+
+      for (const event of this.pendingWeaponDamageEvents) {
+        if (event.delivery !== 'PROJECTILE') continue;
+        if (event.executeFrame <= this.frameCounter) continue;
+        if (interceptedThisFrame.has(event.projectileVisualId)) continue;
+        // Source parity: only intercept enemy projectiles.
+        const sourceEntity = this.spawnedEntities.get(event.sourceEntityId);
+        if (!sourceEntity) continue;
+        if (this.getTeamRelationship(entity, sourceEntity) !== RELATIONSHIP_ENEMIES) continue;
+
+        // Resolve projectile kindOf from the weapon's ProjectileObject template.
+        const projectileKindOf = this.resolveProjectileTemplateKindOf(event.weapon);
+
+        // Determine if this projectile matches primary or secondary targets.
+        let isPrimary = false;
+        let isSecondary = false;
+        if (profile.primaryTargetKindOf.size > 0) {
+          for (const kind of profile.primaryTargetKindOf) {
+            if (projectileKindOf.has(kind)) { isPrimary = true; break; }
+          }
+        }
+        if (!isPrimary && profile.secondaryTargetKindOf.size > 0) {
+          for (const kind of profile.secondaryTargetKindOf) {
+            if (projectileKindOf.has(kind)) { isSecondary = true; break; }
+          }
+        }
+        if (!isPrimary && !isSecondary) continue;
+
+        // Interpolate projectile position and check distance.
+        const projPos = this.interpolateProjectilePosition(event);
+        if (!projPos) continue;
+        const dx = projPos.x - entity.x;
+        const dz = projPos.z - entity.z;
+        const distSqr = dx * dx + dz * dz;
+        if (distSqr > scanRangeSqr) continue;
+
+        if (isPrimary && distSqr < bestPrimaryDistSqr) {
+          bestPrimaryDistSqr = distSqr;
+          bestPrimaryId = event.projectileVisualId;
+        } else if (isSecondary && distSqr < bestSecondaryDistSqr) {
+          bestSecondaryDistSqr = distSqr;
+          bestSecondaryId = event.projectileVisualId;
+        }
+      }
+
+      // Source parity: prefer primary in-range > secondary in-range.
+      entity.pdlTargetProjectileVisualId = bestPrimaryId || bestSecondaryId;
+
+      // Source parity: "1 frame can make a big difference so fire ASAP!" — fire immediately
+      // after scan instead of waiting for the next frame (C++ PointDefenseLaserUpdate::update).
+      if (entity.pdlTargetProjectileVisualId !== 0 && this.frameCounter >= entity.pdlNextShotFrame) {
+        const targetEvent = this.findPendingProjectileByVisualId(entity.pdlTargetProjectileVisualId);
+        if (targetEvent) {
+          const projPos = this.interpolateProjectilePosition(targetEvent);
+          if (projPos) {
+            const dx = projPos.x - entity.x;
+            const dz = projPos.z - entity.z;
+            if (dx * dx + dz * dz <= fireRangeSqr) {
+              interceptedThisFrame.add(entity.pdlTargetProjectileVisualId);
+              this.interceptProjectileEvent(entity, targetEvent, profile);
+              entity.pdlNextShotFrame = this.frameCounter + this.resolveWeaponDefDelayFrames(pdlWeaponDef);
+              entity.pdlTargetProjectileVisualId = 0;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Find a pending projectile event by its visual ID.
+   */
+  private findPendingProjectileByVisualId(visualId: number): PendingWeaponDamageEvent | null {
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.projectileVisualId === visualId) return event;
+    }
+    return null;
+  }
+
+  /**
+   * Interpolate the current position of an in-flight projectile event.
+   */
+  private interpolateProjectilePosition(event: PendingWeaponDamageEvent): { x: number; z: number } | null {
+    const totalFrames = event.executeFrame - event.launchFrame;
+    if (totalFrames <= 0) return null;
+    const elapsed = this.frameCounter - event.launchFrame;
+    const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
+
+    let projX: number, projZ: number;
+    if (event.hasBezierArc) {
+      const p0x = event.sourceX, p0z = event.sourceZ;
+      const p3x = event.impactX, p3z = event.impactZ;
+      const dx = p3x - p0x, dz = p3z - p0z;
+      const dist = Math.hypot(dx, dz);
+      const nx = dist > 0 ? dx / dist : 0;
+      const nz = dist > 0 ? dz / dist : 0;
+      const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
+      const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
+      const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
+      const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
+      projX = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
+      projZ = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+    } else {
+      projX = event.sourceX + (event.impactX - event.sourceX) * progress;
+      projZ = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+    }
+    return { x: projX, z: projZ };
+  }
+
+  /**
+   * Resolve the kindOf set of a weapon's projectile template.
+   * Caches results to avoid repeated INI lookups.
+   */
+  private projectileKindOfCache = new Map<string, Set<string>>();
+
+  private resolveProjectileTemplateKindOf(weapon: AttackWeaponProfile): Set<string> {
+    const templateName = weapon.projectileObjectName;
+    if (!templateName) return EMPTY_KINDOF_SET;
+
+    const cached = this.projectileKindOfCache.get(templateName);
+    if (cached) return cached;
+
+    const registry = this.iniDataRegistry;
+    if (!registry) return EMPTY_KINDOF_SET;
+
+    const objectDef = findObjectDefByName(registry, templateName);
+    if (!objectDef) return EMPTY_KINDOF_SET;
+
+    const kindOf = this.normalizeKindOf(objectDef.kindOf);
+    this.projectileKindOfCache.set(templateName, kindOf);
+    return kindOf;
+  }
+
+  /**
+   * Intercept a projectile event: remove it from pending events and emit visual event.
+   */
+  private interceptProjectileEvent(
+    defender: MapEntity,
+    event: PendingWeaponDamageEvent,
+    _profile: PointDefenseLaserProfile,
+  ): void {
+    // Remove the event from pending weapon damage events.
+    const idx = this.pendingWeaponDamageEvents.indexOf(event);
+    if (idx >= 0) {
+      this.pendingWeaponDamageEvents.splice(idx, 1);
+    }
+
+    // Emit visual event for the interception (laser beam from defender to projectile).
+    const projPos = this.interpolateProjectilePosition(event);
+    this.visualEventBuffer.push({
+      type: 'WEAPON_FIRED',
+      x: defender.x,
+      y: defender.y + 1.5,
+      z: defender.z,
+      radius: 0,
+      sourceEntityId: defender.id,
+      projectileType: 'LASER',
+    });
+    if (projPos) {
+      this.visualEventBuffer.push({
+        type: 'WEAPON_IMPACT',
+        x: projPos.x,
+        y: this.resolveGroundHeight(projPos.x, projPos.z),
+        z: projPos.z,
+        radius: 2,
+        sourceEntityId: defender.id,
+        projectileType: 'LASER',
+      });
     }
   }
 

@@ -12365,3 +12365,226 @@ describe('BattlePlanUpdate', () => {
     expect(logic.getEntityState(1)!.statusFlags).not.toContain('DISABLED_SUBDUED');
   });
 });
+
+// ── PointDefenseLaserUpdate tests ─────────────────────────────────────────
+describe('PointDefenseLaserUpdate', () => {
+  /**
+   * Setup: Enemy missile launcher fires PROJECTILE at a target.
+   * A PDL defender is positioned on the flight path to intercept.
+   *
+   * Map layout (128×128, MAP_XY_FACTOR=10 → world = cell*10+5):
+   *   Entity 1: PDL defender (America) at cell (5,4) → world (55,45)
+   *   Entity 2: Target building (America) at cell (5,7) → world (55,75)
+   *   Entity 3: Enemy missile launcher (China) at cell (5,2) → world (55,25)
+   *
+   * Flight path: (55,25) → (55,75), distance = 50 world units.
+   * PDL at (55,45) is right on the flight path, 20 units from launcher.
+   */
+  function makePdlSetup(opts?: {
+    pdlScanRange?: number;
+    pdlWeaponRange?: number;
+    pdlScanRate?: number;
+    missileSpeed?: number;
+    primaryTargetTypes?: string;
+    secondaryTargetTypes?: string;
+  }) {
+    const pdlScanRange = opts?.pdlScanRange ?? 60;
+    const pdlWeaponRange = opts?.pdlWeaponRange ?? 40;
+    const pdlScanRate = opts?.pdlScanRate ?? 33; // 33ms → 1 frame
+    const missileSpeed = opts?.missileSpeed ?? 5; // 50 units / 5 = ~10 frame flight
+    const primaryTargetTypes = opts?.primaryTargetTypes ?? 'SMALL_MISSILE';
+    const secondaryTargetTypes = opts?.secondaryTargetTypes ?? '';
+
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('PDLDefender', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'PointDefenseLaserUpdate ModuleTag_PDL', {
+            WeaponTemplate: 'PDLLaser',
+            PrimaryTargetTypes: primaryTargetTypes,
+            SecondaryTargetTypes: secondaryTargetTypes,
+            ScanRate: pdlScanRate,
+            ScanRange: pdlScanRange,
+            PredictTargetVelocityFactor: 0,
+          }),
+        ]),
+        makeObjectDef('TargetBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+        makeObjectDef('MissileLauncher', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'EnemyMissile'] }),
+        ]),
+        makeObjectDef('MissileProjectile', 'China', ['PROJECTILE', 'SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('PDLLaser', {
+          AttackRange: pdlWeaponRange,
+          PrimaryDamage: 100,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 33,
+        }),
+        makeWeaponDef('EnemyMissile', {
+          AttackRange: 120,
+          PrimaryDamage: 200,
+          WeaponSpeed: missileSpeed,
+          DelayBetweenShots: 5000,
+          ProjectileObject: 'MissileProjectile',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PDLDefender', 5, 4),
+        makeMapObject('TargetBuilding', 5, 7),
+        makeMapObject('MissileLauncher', 5, 2),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    return { logic };
+  }
+
+  it('intercepts an in-flight enemy missile within range', () => {
+    const { logic } = makePdlSetup();
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    logic.update(0);
+
+    // Missile flies 50 units at speed 5 → ~10 frames. PDL should intercept within that time.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(2)!.health).toBe(1000);
+  });
+
+  it('does not intercept ally projectiles', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('PDLDefender', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'PointDefenseLaserUpdate ModuleTag_PDL', {
+            WeaponTemplate: 'PDLLaser',
+            PrimaryTargetTypes: 'SMALL_MISSILE',
+            ScanRate: 33,
+            ScanRange: 60,
+          }),
+        ]),
+        makeObjectDef('AllyLauncher', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'AllyMissile'] }),
+        ]),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+        makeObjectDef('MissileProjectile', 'America', ['PROJECTILE', 'SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('PDLLaser', { AttackRange: 40, PrimaryDamage: 100, WeaponSpeed: 999999, DelayBetweenShots: 33 }),
+        makeWeaponDef('AllyMissile', { AttackRange: 120, PrimaryDamage: 200, WeaponSpeed: 5, DelayBetweenShots: 5000, ProjectileObject: 'MissileProjectile' }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('PDLDefender', 5, 4), makeMapObject('AllyLauncher', 5, 2), makeMapObject('EnemyTarget', 5, 7)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 3 });
+    logic.update(0);
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Ally missile should hit — PDL does not intercept ally projectiles.
+    expect(logic.getEntityState(3)!.health).toBeLessThan(1000);
+  });
+
+  it('ignores projectiles that do not match target kindOf', () => {
+    // PDL only targets BALLISTIC_MISSILE, but enemy fires SMALL_MISSILE.
+    const { logic } = makePdlSetup({ primaryTargetTypes: 'BALLISTIC_MISSILE' });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    logic.update(0);
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Missile should hit — PDL doesn't target SMALL_MISSILE.
+    expect(logic.getEntityState(2)!.health).toBeLessThan(1000);
+  });
+
+  it('respects scan range — does not intercept projectiles beyond range', () => {
+    // PDL positioned far from flight path with tiny scan range.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('PDLDefender', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'PointDefenseLaserUpdate ModuleTag_PDL', {
+            WeaponTemplate: 'PDLLaser',
+            PrimaryTargetTypes: 'SMALL_MISSILE',
+            ScanRate: 33,
+            ScanRange: 5, // very short scan range
+          }),
+        ]),
+        makeObjectDef('TargetBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+        makeObjectDef('MissileLauncher', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'EnemyMissile'] }),
+        ]),
+        makeObjectDef('MissileProjectile', 'China', ['PROJECTILE', 'SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('PDLLaser', { AttackRange: 3, PrimaryDamage: 100, WeaponSpeed: 999999, DelayBetweenShots: 33 }),
+        makeWeaponDef('EnemyMissile', { AttackRange: 120, PrimaryDamage: 200, WeaponSpeed: 5, DelayBetweenShots: 5000, ProjectileObject: 'MissileProjectile' }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // PDL at cell (9,4) → world (95,45), 40 units away from flight path at x=55.
+    logic.loadMapObjects(
+      makeMap([makeMapObject('PDLDefender', 9, 4), makeMapObject('TargetBuilding', 5, 7), makeMapObject('MissileLauncher', 5, 2)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    logic.update(0);
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Missile should hit — PDL is too far away.
+    expect(logic.getEntityState(2)!.health).toBeLessThan(1000);
+  });
+
+  it('intercepts using secondary target types as fallback', () => {
+    // Primary targets BALLISTIC_MISSILE (no match), secondary targets SMALL_MISSILE (match).
+    const { logic } = makePdlSetup({
+      primaryTargetTypes: 'BALLISTIC_MISSILE',
+      secondaryTargetTypes: 'SMALL_MISSILE',
+    });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    logic.update(0);
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Missile intercepted via secondary target type.
+    expect(logic.getEntityState(2)!.health).toBe(1000);
+  });
+});

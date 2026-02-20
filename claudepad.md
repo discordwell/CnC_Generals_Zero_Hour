@@ -1,91 +1,39 @@
 # Session Summaries
 
+## 2026-02-20T19:00Z — BattlePlanUpdate System (Task #88)
+- Task #88: USA Strategy Center BattlePlanUpdate with full C++ source parity — committed a3a1872
+  - BattlePlanProfile INI: Bombardment/HoldTheLine/SearchAndDestroy bonus flags + scalars
+  - State machine: IDLE → UNPACKING → ACTIVE → PACKING → IDLE with timed transitions
+  - Three plans: BOMBARDMENT (weapon bonus), HOLDTHELINE (armor scalar), SEARCHANDDESTROY (vision range)
+  - C++ parity: bonuses/paralysis applied immediately at packing start, not end
+  - Reference-counted bonuses via sideBattlePlanBonuses (0→1 apply, 1→0 remove)
+  - Special power routing: specialPowerName-based plan ID (avoids commandOption bitmask collision with 0x01)
+  - Vision range uses absolute restoration (not multiplicative inverse) to prevent FP drift
+  - InvalidMemberKindOf filtering, building self-exclusion from paralysis
+  - 7 tests: bombardment, armor scalar, vision, immediate paralysis, destruction cleanup, kindOf filter, building immunity
+- Code review fixes: reference counting, packing timing, requestBattlePlanChange simplified to desiredPlan only
+- All 1106 tests pass, clean build
+
 ## 2026-02-20T17:50Z — INI-Driven Stealth/Detection System + Code Review Fixes (Tasks #85-87)
 - Tasks #85-87: INI-driven stealth and detection system upgrade with full C++ StealthUpdate/StealthDetectorUpdate parity
-  - StealthProfile: INI parsing of StealthDelay, InnateStealth, StealthForbiddenConditions (9 tokens matching TheStealthLevelNames), MoveThresholdSpeed
-  - Bitmask values match C++ enum ordering: ATTACKING(0), MOVING(1), USING_ABILITY(2), FIRING_PRIMARY(3), FIRING_SECONDARY(4), FIRING_TERTIARY(5), NO_BLACK_MARKET(6), TAKING_DAMAGE(7), RIDERS_ATTACKING(8)
-  - Both short-form (ATTACKING) and long-form (STEALTH_NOT_WHILE_ATTACKING) token parsing
-  - FIRING_WEAPON composite maps to PRIMARY|SECONDARY|TERTIARY
-  - DetectorProfile: DetectionRange, DetectionRate throttle, CanDetectWhileGarrisoned/Contained, ExtraRequiredKindOf/ExtraForbiddenKindOf
-  - Detection includes ENEMIES and NEUTRAL (C++ PartitionFilterRelationship parity)
-  - SOLD status check on detectors, garrisonCapacity-based garrison check (not isEnclosingContainer)
-  - Contained-in-non-garrisonable prevents stealth (allowedToStealth parity)
-  - TAKING_DAMAGE frame window <= 1 (matching C++ getLastDamageTimestamp >= now - 1)
-  - Healing damage excluded from lastDamageFrame tracking (C++ DAMAGE_HEALING exception)
-  - Staggered initial detectorNextScanFrame with gameRandom offset
-  - 12 tests: innate stealth, damage breaks stealth, detector reveals enemy, ally immunity, range check, detection expiration, non-innate, extraRequired/ForbiddenKindOf, movement break, re-entry delay, short-form tokens
-- All 1091 tests pass, clean build
+  - StealthProfile + DetectorProfile INI parsing, 9 forbidden condition tokens, detection rate throttle
+  - SOLD check, garrison check, contained-in-non-garrisonable, TAKING_DAMAGE frame window, healing exclusion
+  - 12 tests — All 1091 tests pass, clean build
 
 ## 2026-02-20T16:00Z — Crush/Squish Damage During Movement (Task #95)
 - Task #95: Crush collision system with C++ PhysicsUpdate::checkForOverlapCollision + SquishCollide parity — committed 926c982
-  - updateCrushCollisions(): moving entities with crusherLevel > crushableLevel crush overlapping enemies
-  - Direction check via dot product (moveDirX*dx + moveDirZ*dz > 0) — approaching targets only
-  - canBeSquished (SquishCollide module) uses radius 1.0 per C++ source
-  - CRUSH damage type with HUGE_DAMAGE_AMOUNT (1B) for guaranteed kill
-  - Extended needsGeometry to include crusherLevel > 0 for proper obstacleGeometry resolution
-  - moverRadius fallback changed to 1.0 (code review fix from MAP_XY_FACTOR/2)
-  - TODO: Vehicle crush point system (front/back/center), hijacker/TNT-hunter immunity
-  - 4 new tests: crush kill, ally immunity, crushable level resistance, direction rejection
-  - Tests use cell-center positions (x%10=5) for straight-line A* pathfinding reliability
-- All 1079 tests pass, clean build
+  - updateCrushCollisions(), direction dot-product check, canBeSquished, CRUSH damage type
+  - 4 new tests — All 1079 tests pass, clean build
 
 ## 2026-02-20T15:20Z — 3D Damage Distance + Bounding Sphere Subtraction (Tasks #93-94)
-- Task #93: 3D damage distance for radius damage victim gathering — committed b6a67fd
-  - Changed distance calc from XZ-only to full 3D (dx² + dy² + dz²)
-  - entity.y (center) vs impactY (terrain height) gives proper elevation difference
-  - DIRECT delivery uses getPosition() (terrain-level), not center
-  - RadiusDamageAngle cone check upgraded to 3D vectors (commit d290c98)
-- Task #94: FROM_BOUNDINGSPHERE_3D bounding sphere subtraction — committed 1e62ef5
-  - resolveBoundingSphereRadius(): CYLINDER=max(major, h/2), BOX=hypot(major, minor, h/2)
-  - GeometryHeight read from INI, stored on ObstacleGeometry.height
-  - BSR subtracted from raw 3D distance, clamped to zero for overlap
-  - Fallback to baseHeight when no explicit geometry (covers most combat units)
-  - Code review caught BOX formula bug: was max(hypot2D, halfH), fixed to hypot3D
-  - Updated scatter test expectations (BSR makes larger entities easier to hit)
-  - 1 new test: BSR extends effective hit zone for entities with explicit geometry
-- All 1075 tests pass, clean build
+- Tasks #93-94: 3D distance for radius damage + FROM_BOUNDINGSPHERE_3D subtraction — commits b6a67fd, 1e62ef5
+  - Full 3D damage gathering, BSR by geometry type, code review caught BOX formula bug
+  - 1 new test — All 1075 tests pass, clean build
 
 ## 2026-02-20T14:12Z — Power Brown-Out + Disabled Movement Restrictions (Tasks #88-89)
-- Task #88: Disabled entity movement + evacuation restrictions — committed 5e8548e, review fix 84a78fa
-  - isEntityDisabledForMovement() helper: checks DISABLED_HELD/EMP/HACKED/SUBDUED/PARALYZED/UNMANNED/UNDERPOWERED
-  - issueMoveTo uses new helper instead of just DISABLED_HELD
-  - DISABLED_SUBDUED blocks handleEvacuateCommand and handleExitContainerCommand
-  - 6 new tests: EMP/HACKED/SUBDUED block movement, SUBDUED blocks evacuate/exit, normal evacuate works
-- Task #89: DISABLED_UNDERPOWERED power brown-out system — committed ff369fe
-  - SidePowerState.brownedOut tracking with edge detection
-  - updatePowerBrownOut(): sets/clears DISABLED_UNDERPOWERED on KINDOF_POWERED entities
-  - pauseSpecialPowerCountdownsForSide(): frame-by-frame countdown push
-  - DISABLED_UNDERPOWERED added to isDisabledForConstruction + isObjectDisabledForUpgradeSideEffects
-  - TODO: radar disable/enable during brown-out (radar subsystem not fully wired)
-  - 4 new tests: brownout flag set/clear, non-POWERED unaffected, power restore
-- All 1069 tests pass, clean build
-
-## 2026-02-20T09:30Z — Projectile Flight Collision Detection (Task #78)
-- Task #78: Projectile flight collision detection with C++ DumbProjectileBehavior parity — committed 7fa2d1b
-  - updateProjectileFlightCollisions() method: interpolates projectile position each frame (linear + Bezier)
-  - Checks each entity for collision using shouldProjectileCollideWithEntityImpl validation
-  - Early-detonation: redirects impact point and victim to collision entity
-  - Sneaky-offset projectiles correctly collide after persist-immunity expires (source parity)
-  - Added canTakeDamage guard on flight collision candidates (code review fix)
-  - 3 new tests: blocker interception, ally pass-through, self-collision exclusion
-  - Updated sneaky persist test: 2 hits instead of 1 (flight collision detects sneaky-offset projectile mid-flight)
-- All 1040 tests pass, clean build
-
-## 2026-02-20T09:10Z — Skirmish AI Enhancements (Task #77)
-- Task #77: AI system enhancements for skirmish parity — committed afa1b93
-  - Dozer replacement: queues dozer production when AI has none
-  - Upgrade research: evaluates idle buildings for researchable upgrades (keyword priority)
-  - Science purchasing: spends General's points on available sciences
-  - Rally points: per-entity tracking on production buildings toward enemy
-  - Multi-dozer parallel construction: all idle dozers build simultaneously
-  - Fixed: dozers excluded from factory scan in evaluateProduction/Economy/DozerReplacement
-  - Fixed: isDozerBusy now checks pendingConstructionActions
-  - Fixed: command set button slot scan uses 18 slots (6x3 grid parity)
-  - Added collectCommandSetTemplates for command-set-aware AI context
-  - Added PurchaseScienceCommand.side for AI side specification
-  - Refactored evaluatePower to use shared issueConstructCommand helper
-  - 4 new tests: dozer replacement, upgrade research, rally points, parallel construction
-- All 1037 tests pass, clean build
+- Tasks #88-89: Disabled movement restrictions + DISABLED_UNDERPOWERED power brown-out — commits 5e8548e, ff369fe
+  - isEntityDisabledForMovement(), SUBDUED blocks evacuate, brownedOut edge detection, countdown push
+  - 10 new tests — All 1069 tests pass, clean build
 
 # Key Findings
 
