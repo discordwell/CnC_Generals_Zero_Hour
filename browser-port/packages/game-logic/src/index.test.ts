@@ -15324,3 +15324,138 @@ describe('FireWeaponUpdate', () => {
     expect(after10!.health).toBeGreaterThanOrEqual(450);
   });
 });
+
+// ── OCLUpdate Tests ─────────────────────────────────────────────────────────
+
+describe('OCLUpdate', () => {
+  function makeOCLUpdateSetup(opts: {
+    minDelayMs?: number;
+    maxDelayMs?: number;
+  } = {}) {
+    const spawnerDef = makeObjectDef('Spawner', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'OCLUpdate ModuleTag_OCLSpawn', {
+        OCL: 'OCLSpawnUnit',
+        MinDelay: opts.minDelayMs ?? 1000,
+        MaxDelay: opts.maxDelayMs ?? 1000,
+      }),
+    ]);
+
+    const spawnedUnitDef = makeObjectDef('SpawnedUnit', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const bundle = makeBundle({
+      objects: [spawnerDef, spawnedUnitDef],
+    });
+    // Add OCL definitions to the bundle.
+    (bundle as Record<string, unknown>).objectCreationLists = [
+      {
+        name: 'OCLSpawnUnit',
+        fields: {},
+        blocks: [{
+          type: 'CreateObject',
+          name: 'CreateObject',
+          fields: { ObjectNames: 'SpawnedUnit', Count: '1' },
+          blocks: [],
+        }],
+      },
+    ];
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Spawner', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+    return { logic };
+  }
+
+  it('extracts OCLUpdateProfile from INI', () => {
+    const { logic } = makeOCLUpdateSetup();
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { oclUpdateProfiles: { oclName: string; minDelayFrames: number; maxDelayFrames: number }[] }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.oclUpdateProfiles.length).toBe(1);
+    expect(entity.oclUpdateProfiles[0]!.oclName).toBe('OCLSpawnUnit');
+    // 1000ms at 30fps = 30 frames
+    expect(entity.oclUpdateProfiles[0]!.minDelayFrames).toBe(30);
+  });
+
+  it('spawns object after delay elapses', () => {
+    const { logic } = makeOCLUpdateSetup({ minDelayMs: 1000, maxDelayMs: 1000 });
+
+    // After initial frame, only the spawner should exist.
+    const initialStates = logic.getRenderableEntityStates();
+    expect(initialStates.filter(s => s.templateName === 'SpawnedUnit').length).toBe(0);
+
+    // Run 15 frames — first shouldCreate sets the timer, so no spawn yet.
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    const midStates = logic.getRenderableEntityStates();
+    expect(midStates.filter(s => s.templateName === 'SpawnedUnit').length).toBe(0);
+
+    // Run past the 30-frame delay — OCL should fire and spawn unit.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+    const afterStates = logic.getRenderableEntityStates();
+    expect(afterStates.filter(s => s.templateName === 'SpawnedUnit').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not spawn while UNDER_CONSTRUCTION', () => {
+    const { logic } = makeOCLUpdateSetup({ minDelayMs: 100, maxDelayMs: 100 });
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const spawner = priv.spawnedEntities.get(1)!;
+    spawner.objectStatusFlags.add('UNDER_CONSTRUCTION');
+
+    // Run well past the delay — should NOT spawn.
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+    const states = logic.getRenderableEntityStates();
+    expect(states.filter(s => s.templateName === 'SpawnedUnit').length).toBe(0);
+  });
+
+  it('pauses timer while disabled (EMP)', () => {
+    const { logic } = makeOCLUpdateSetup({ minDelayMs: 500, maxDelayMs: 500 });
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const spawner = priv.spawnedEntities.get(1)!;
+
+    // Run 5 frames to initialize the timer.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Disable with EMP.
+    spawner.objectStatusFlags.add('DISABLED_EMP');
+
+    // Run 30 frames while disabled — timer should be paused.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    const midStates = logic.getRenderableEntityStates();
+    expect(midStates.filter(s => s.templateName === 'SpawnedUnit').length).toBe(0);
+
+    // Re-enable and run past the remaining delay.
+    spawner.objectStatusFlags.delete('DISABLED_EMP');
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    const afterStates = logic.getRenderableEntityStates();
+    expect(afterStates.filter(s => s.templateName === 'SpawnedUnit').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('spawns repeatedly on timer cycle', () => {
+    // Short delay so we get multiple spawns.
+    const { logic } = makeOCLUpdateSetup({ minDelayMs: 200, maxDelayMs: 200 });
+
+    // Run 90 frames (3 seconds) — with 200ms (~6 frame) delay, should get multiple spawns.
+    // First shouldCreate sets timer at frame ~0, first spawn at frame ~6, next at ~12, etc.
+    for (let i = 0; i < 90; i++) logic.update(1 / 30);
+
+    const states = logic.getRenderableEntityStates();
+    const spawned = states.filter(s => s.templateName === 'SpawnedUnit');
+    // Should have spawned multiple units.
+    expect(spawned.length).toBeGreaterThanOrEqual(3);
+  });
+});

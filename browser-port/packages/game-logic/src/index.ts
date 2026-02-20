@@ -1517,6 +1517,14 @@ interface MapEntity {
   /** Frame when this entity last fired a normal combat weapon (for ExclusiveWeaponDelay). */
   lastShotFiredFrame: number;
 
+  // ── Source parity: OCLUpdate — periodic Object Creation List spawning ──
+  /** Parsed OCLUpdate modules from INI (multiple allowed per entity). */
+  oclUpdateProfiles: OCLUpdateProfile[];
+  /** Per-profile next-creation-frame tracker (matches oclUpdateProfiles by index). */
+  oclUpdateNextCreationFrames: number[];
+  /** Per-profile flag: true once the initial timer has been set (first shouldCreate skips). */
+  oclUpdateTimerStarted: boolean[];
+
   // ── Source parity: SlowDeathBehavior — phased death sequences ──
   /** Parsed SlowDeathBehavior modules from INI (multiple per entity, one selected on death). */
   slowDeathProfiles: SlowDeathProfile[];
@@ -1834,6 +1842,20 @@ interface FireWeaponUpdateProfile {
   initialDelayFrames: number;
   /** If > 0, suppress this module for this many frames after entity fires a normal weapon. */
   exclusiveWeaponDelayFrames: number;
+}
+
+/**
+ * Source parity: OCLUpdate module parsed from INI.
+ * Periodically spawns objects via ObjectCreationList on a timer.
+ * Used for supply drops, reinforcement spawns, beacon effects, etc.
+ */
+interface OCLUpdateProfile {
+  /** OCL name to execute (non-faction-triggered mode). */
+  oclName: string;
+  /** Minimum delay in logic frames between OCL spawns. */
+  minDelayFrames: number;
+  /** Maximum delay in logic frames between OCL spawns. */
+  maxDelayFrames: number;
 }
 
 /**
@@ -2629,6 +2651,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProneEntities();
     this.updateFireWhenDamagedContinuous();
     this.updateFireWeaponUpdate();
+    this.updateOCLUpdate();
     this.updateSellingEntities();
     this.updateRebuildHoles();
     this.updateAutoDeposit();
@@ -4356,6 +4379,10 @@ export class GameLogicSubsystem implements Subsystem {
       fireWeaponUpdateProfiles: this.extractFireWeaponUpdateProfiles(objectDef),
       fireWeaponUpdateNextFireFrames: [],
       lastShotFiredFrame: 0,
+      // OCL update (periodic Object Creation List spawning)
+      oclUpdateProfiles: this.extractOCLUpdateProfiles(objectDef),
+      oclUpdateNextCreationFrames: [],
+      oclUpdateTimerStarted: [],
       // Slow death
       slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
       slowDeathState: null,
@@ -4487,6 +4514,12 @@ export class GameLogicSubsystem implements Subsystem {
       entity.fireWeaponUpdateNextFireFrames = entity.fireWeaponUpdateProfiles.map(
         p => this.frameCounter + p.initialDelayFrames,
       );
+    }
+
+    // Source parity: OCLUpdate — initialize per-module creation timers (start at 0, first check sets timer).
+    if (entity.oclUpdateProfiles.length > 0) {
+      entity.oclUpdateNextCreationFrames = entity.oclUpdateProfiles.map(() => 0);
+      entity.oclUpdateTimerStarted = entity.oclUpdateProfiles.map(() => false);
     }
 
     return entity;
@@ -6486,6 +6519,39 @@ export class GameLogicSubsystem implements Subsystem {
             weaponName,
             initialDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['InitialDelay']) ?? 0),
             exclusiveWeaponDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['ExclusiveWeaponDelay']) ?? 0),
+          });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: OCLUpdate — extract periodic OCL spawning config from INI.
+   * INI fields: OCL (name), MinDelay (ms), MaxDelay (ms).
+   */
+  private extractOCLUpdateProfiles(objectDef: ObjectDef | undefined): OCLUpdateProfile[] {
+    if (!objectDef) return [];
+    const profiles: OCLUpdateProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'OCLUPDATE') {
+          const oclName = readStringField(block.fields, ['OCL']);
+          if (!oclName) return;
+          const minDelayMs = readNumericField(block.fields, ['MinDelay']) ?? 0;
+          const maxDelayMs = readNumericField(block.fields, ['MaxDelay']) ?? minDelayMs;
+          profiles.push({
+            oclName,
+            minDelayFrames: this.msToLogicFrames(minDelayMs),
+            maxDelayFrames: this.msToLogicFrames(maxDelayMs),
           });
         }
       }
@@ -17634,6 +17700,57 @@ export class GameLogicSubsystem implements Subsystem {
         // Source parity: Weapon::privateFireWeapon sets m_whenWeCanFireAgain.
         // Re-resolve per shot so weapons with random delay ranges re-roll each time.
         entity.fireWeaponUpdateNextFireFrames[i] = this.frameCounter + this.resolveWeaponDefDelayFrames(weaponDef);
+      }
+    }
+  }
+
+  // ── OCLUpdate implementation ────────────────────────────────────────────
+
+  /**
+   * Source parity: OCLUpdate::update() — periodic Object Creation List spawning.
+   * Fires an OCL at the entity's position on a randomized timer.
+   * When disabled, the timer is paused by pushing nextCreationFrame forward.
+   */
+  private updateOCLUpdate(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.oclUpdateProfiles.length === 0) continue;
+
+      // Source parity: OCLUpdate::getDisabledTypesToProcess returns DISABLEDMASK_ALL.
+      // When disabled, push the timer back by one frame each frame (pausing it).
+      // C++ Object::isDisabled checks all disabled bits; we check the ones actively tracked.
+      const isDisabled = entity.objectStatusFlags.has('DISABLED_EMP')
+        || entity.objectStatusFlags.has('DISABLED_HACKED')
+        || entity.objectStatusFlags.has('DISABLED_SUBDUED')
+        || entity.objectStatusFlags.has('DISABLED_UNDERPOWERED');
+
+      for (let i = 0; i < entity.oclUpdateProfiles.length; i++) {
+        const profile = entity.oclUpdateProfiles[i]!;
+
+        if (isDisabled) {
+          // Source parity: OCLUpdate::update — disabled path increments m_nextCreationFrame.
+          entity.oclUpdateNextCreationFrames[i] = (entity.oclUpdateNextCreationFrames[i] ?? 0) + 1;
+          continue;
+        }
+
+        // Source parity: OCLUpdate::shouldCreate — check timer and UNDER_CONSTRUCTION.
+        const nextCreationFrame = entity.oclUpdateNextCreationFrames[i] ?? 0;
+        if (this.frameCounter < nextCreationFrame) continue;
+        if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) continue;
+
+        // Source parity: first time shouldCreate passes, just set the timer (don't spawn).
+        if (!entity.oclUpdateTimerStarted[i]) {
+          entity.oclUpdateTimerStarted[i] = true;
+          const delay = this.gameRandom.nextRange(profile.minDelayFrames, profile.maxDelayFrames);
+          entity.oclUpdateNextCreationFrames[i] = this.frameCounter + delay;
+          continue;
+        }
+
+        // Timer has elapsed — set next creation frame and execute OCL.
+        const delay = this.gameRandom.nextRange(profile.minDelayFrames, profile.maxDelayFrames);
+        entity.oclUpdateNextCreationFrames[i] = this.frameCounter + delay;
+
+        this.executeOCL(profile.oclName, entity);
       }
     }
   }
