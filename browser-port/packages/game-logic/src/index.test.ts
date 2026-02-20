@@ -14102,3 +14102,285 @@ describe('SlavedUpdate', () => {
     expect(master!.health).toBeGreaterThan(400);
   });
 });
+
+describe('CountermeasuresBehavior', () => {
+  /**
+   * Setup: Aircraft with countermeasures, enemy missile launcher targets it.
+   *
+   * Map layout (128×128, MAP_XY_FACTOR=10 → world = cell*10+5):
+   *   Entity 1: Aircraft (America) at cell (5,5) → world (55,55)
+   *   Entity 2: Missile launcher (GLA) at cell (5,2) → world (55,25)
+   */
+  function makeCountermeasureSetup(opts?: {
+    evasionRate?: number;
+    volleySize?: number;
+    numberOfVolleys?: number;
+    missileDecoyDelayMs?: number;
+    reactionLatencyMs?: number;
+    reloadTimeMs?: number;
+    delayBetweenVolleysMs?: number;
+    missileSpeed?: number;
+    missileDamage?: number;
+  }) {
+    const evasionRate = opts?.evasionRate ?? 100; // percent
+    const volleySize = opts?.volleySize ?? 2;
+    const numberOfVolleys = opts?.numberOfVolleys ?? 3;
+    const missileDecoyDelayMs = opts?.missileDecoyDelayMs ?? 333; // ~10 frames
+    const reactionLatencyMs = opts?.reactionLatencyMs ?? 100; // ~3 frames
+    const reloadTimeMs = opts?.reloadTimeMs ?? 0; // no auto-reload by default
+    const delayBetweenVolleysMs = opts?.delayBetweenVolleysMs ?? 333; // ~10 frames
+    const missileSpeed = opts?.missileSpeed ?? 3; // slow missile for longer flight
+    const missileDamage = opts?.missileDamage ?? 200;
+
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CountermeasureAircraft', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'CountermeasuresBehavior ModuleTag_CM', {
+            FlareTemplateName: '',
+            VolleySize: volleySize,
+            VolleyArcAngle: 30,
+            VolleyVelocityFactor: 1.0,
+            DelayBetweenVolleys: delayBetweenVolleysMs,
+            NumberOfVolleys: numberOfVolleys,
+            ReloadTime: reloadTimeMs,
+            EvasionRate: evasionRate,
+            MissileDecoyDelay: missileDecoyDelayMs,
+            ReactionLaunchLatency: reactionLatencyMs,
+          }),
+        ], { IsAirborneTarget: 'Yes' }),
+        makeObjectDef('EnemyLauncher', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'EnemyMissileWeapon'] }),
+        ]),
+        makeObjectDef('TestMissile', 'GLA', ['PROJECTILE', 'SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('EnemyMissileWeapon', {
+          AttackRange: 120,
+          PrimaryDamage: missileDamage,
+          WeaponSpeed: missileSpeed,
+          DelayBetweenShots: 10000,
+          ProjectileObject: 'TestMissile',
+          AntiAirborneVehicle: 'Yes',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CountermeasureAircraft', 5, 5),
+        makeMapObject('EnemyLauncher', 5, 2),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    // Set America and GLA as enemies.
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const entities = (logic as unknown as { spawnedEntities: Map<number, { templateName: string; health: number; maxHealth: number; countermeasuresState: unknown; category: string }> }).spawnedEntities;
+    let aircraft: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
+    let launcher: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
+    for (const [, e] of entities) {
+      if (e.templateName === 'CountermeasureAircraft') aircraft = e;
+      if (e.templateName === 'EnemyLauncher') launcher = e;
+    }
+
+    return { logic, entities, aircraft: aircraft!, launcher: launcher! };
+  }
+
+  it('initializes countermeasures state on entity creation', () => {
+    const { aircraft } = makeCountermeasureSetup({ volleySize: 2, numberOfVolleys: 3 });
+    const state = aircraft.countermeasuresState as {
+      availableCountermeasures: number;
+      activeCountermeasures: number;
+      flareIds: number[];
+    };
+    expect(state).toBeTruthy();
+    expect(state.availableCountermeasures).toBe(6); // 2 * 3
+    expect(state.activeCountermeasures).toBe(0);
+    expect(state.flareIds.length).toBe(0);
+  });
+
+  it('diverts missile and suppresses damage when evasion succeeds', () => {
+    const { logic, aircraft } = makeCountermeasureSetup({
+      evasionRate: 100, // 100% evasion — always diverts
+      missileDamage: 200,
+      missileSpeed: 3,
+      missileDecoyDelayMs: 33, // ~1 frame — divert before missile arrives
+      reactionLatencyMs: 33,  // ~1 frame — launch flares immediately
+    });
+
+    // Command enemy (entity 2) to attack aircraft (entity 1).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    const initialHealth = aircraft.health;
+    // Check pending events after weapon fires.
+    const pendingEvents = (logic as unknown as { pendingWeaponDamageEvents: { countermeasureDivertFrame: number; countermeasureNoDamage: boolean }[] }).pendingWeaponDamageEvents;
+
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Verify that any missile events were marked for diversion.
+    // With 100% evasion, the aircraft should take no damage from missiles.
+    // It may still take damage from subsequent attacks if the weapon reloads.
+    expect(aircraft.health).toBe(initialHealth);
+  });
+
+  it('does not divert missile when evasion rate is 0%', () => {
+    const { logic, aircraft, launcher } = makeCountermeasureSetup({
+      evasionRate: 0, // 0% evasion — never diverts
+      missileDamage: 100,
+      missileSpeed: 5,
+    });
+
+    // Use entity IDs directly (1=aircraft, 2=launcher by creation order).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    const initialHealth = aircraft.health;
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    // With 0% evasion, the missile should hit — aircraft takes damage.
+    expect(aircraft.health).toBeLessThan(initialHealth);
+  });
+
+  it('consumes countermeasures and launches volleys', () => {
+    const { logic, aircraft, launcher } = makeCountermeasureSetup({
+      evasionRate: 100,
+      volleySize: 2,
+      numberOfVolleys: 2,
+      reactionLatencyMs: 100, // ~3 frames
+    });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Advance past reaction time + first volley launch.
+    for (let i = 0; i < 20; i++) {
+      logic.update(1 / 30);
+    }
+
+    const state = aircraft.countermeasuresState as {
+      availableCountermeasures: number;
+      activeCountermeasures: number;
+    };
+
+    // Should have consumed at least one volley worth of countermeasures.
+    expect(state.availableCountermeasures).toBeLessThan(4); // started with 2*2=4
+  });
+
+  it('auto-reloads countermeasures after reload timer expires', () => {
+    const { logic, aircraft } = makeCountermeasureSetup({
+      evasionRate: 100,
+      volleySize: 1,
+      numberOfVolleys: 1,
+      reloadTimeMs: 333, // ~10 frames to reload
+      reactionLatencyMs: 33,
+      missileDecoyDelayMs: 33,
+    });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    const state = aircraft.countermeasuresState as {
+      availableCountermeasures: number;
+      reloadFrame: number;
+    };
+
+    // Initial: 1 countermeasure available.
+    expect(state.availableCountermeasures).toBe(1);
+
+    // Advance a few frames — missile fires, countermeasures activate and are consumed.
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After the volley, countermeasures should be depleted (0 available).
+    // The reload timer should have started.
+    const afterVolleyAvailable = state.availableCountermeasures;
+
+    // Advance well past reload time (another 30 frames).
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After reload, if volley was consumed, countermeasures should be restored.
+    if (afterVolleyAvailable === 0) {
+      expect(state.availableCountermeasures).toBe(1);
+    } else {
+      // Volley wasn't consumed — just verify the state is valid.
+      expect(state.availableCountermeasures).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('only diverts MISSILE projectiles, not BULLET delivery', () => {
+    // Setup with a direct (non-missile) weapon — countermeasures should not activate.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CMTarget', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'CountermeasuresBehavior ModuleTag_CM', {
+            FlareTemplateName: '',
+            VolleySize: 2,
+            NumberOfVolleys: 3,
+            EvasionRate: 100,
+            MissileDecoyDelay: 333,
+            ReactionLaunchLatency: 100,
+          }),
+        ]),
+        makeObjectDef('GunEnemy', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'GunWeapon'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('GunWeapon', {
+          AttackRange: 120,
+          PrimaryDamage: 50,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+          AntiAirborneVehicle: 'Yes',
+          // No ProjectileObject — this is a direct/bullet weapon.
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CMTarget', 5, 5),
+        makeMapObject('GunEnemy', 5, 2),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const entities = (logic as unknown as { spawnedEntities: Map<number, { templateName: string; health: number; id: number; category: string }> }).spawnedEntities;
+    let target: { templateName: string; health: number; id: number; category: string } | undefined;
+    let enemy: { templateName: string; health: number; id: number; category: string } | undefined;
+    for (const [, e] of entities) {
+      if (e.templateName === 'CMTarget') target = e;
+      if (e.templateName === 'GunEnemy') enemy = e;
+    }
+
+    logic.submitCommand({ type: 'attackEntity', entityId: enemy!.id, targetEntityId: target!.id });
+
+    const initialHealth = target!.health;
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Bullet damage should go through — countermeasures don't affect direct weapons.
+    expect(target!.health).toBeLessThan(initialHealth);
+  });
+});

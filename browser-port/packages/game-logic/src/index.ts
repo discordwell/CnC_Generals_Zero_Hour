@@ -1079,6 +1079,11 @@ interface PendingWeaponDamageEvent {
   bezierSecondPercentIndent: number;
   /** Whether this projectile uses a Bezier arc (has DumbProjectileBehavior data). */
   hasBezierArc: boolean;
+  // ── Source parity: CountermeasuresBehavior missile diversion ──
+  /** Frame when this missile diverts to a countermeasure flare (0 = not diverted). */
+  countermeasureDivertFrame: number;
+  /** If true, this missile has been diverted and deals no damage on detonation. */
+  countermeasureNoDamage: boolean;
 }
 
 interface SellingEntityState {
@@ -1509,6 +1514,9 @@ interface MapEntity {
   slaveGuardOffsetZ: number;
   /** Frame countdown until next slaved update tick. */
   slavedNextUpdateFrame: number;
+  // ── Source parity: CountermeasuresBehavior (aircraft flare defense) ──
+  countermeasuresProfile: CountermeasuresProfile | null;
+  countermeasuresState: CountermeasuresState | null;
 }
 
 /**
@@ -1870,6 +1878,53 @@ interface SlavedUpdateProfile {
   repairWhenBelowHealthPercent: number;
   /** If true, slave is forced to same pathfinding layer as master. */
   stayOnSameLayerAsMaster: boolean;
+}
+
+/**
+ * Source parity: CountermeasuresBehavior — aircraft flare/countermeasure defense.
+ * (GeneralsMD/Code/GameEngine/Include/GameLogic/Module/CountermeasuresBehavior.h)
+ */
+interface CountermeasuresProfile {
+  /** ThingTemplate name of the flare object. */
+  flareTemplateName: string;
+  /** Number of flares per volley. */
+  volleySize: number;
+  /** Half-angle spread in radians for distributing flares. */
+  volleyArcAngle: number;
+  /** Velocity multiplier for flare launch speed. */
+  volleyVelocityFactor: number;
+  /** Frames between successive volleys. */
+  framesBetweenVolleys: number;
+  /** Total number of volleys before reload needed. */
+  numberOfVolleys: number;
+  /** Frames for auto-reload (0 = must reload at airfield). */
+  reloadFrames: number;
+  /** Probability [0..1] that incoming missile is diverted. */
+  evasionRate: number;
+  /** Frames before missile diverts to flare (must > reactionFrames). */
+  missileDecoyFrames: number;
+  /** Frames of delay before first volley after detecting missile. */
+  reactionFrames: number;
+}
+
+/** Source parity: CountermeasuresBehavior runtime state per entity. */
+interface CountermeasuresState {
+  /** Total countermeasures available to launch. */
+  availableCountermeasures: number;
+  /** Number of active flare objects in world. */
+  activeCountermeasures: number;
+  /** Active flare IDs. */
+  flareIds: number[];
+  /** Frame when first volley will launch (0 = not waiting). */
+  reactionFrame: number;
+  /** Frame when next volley fires (0 = not scheduled). */
+  nextVolleyFrame: number;
+  /** Frame when auto-reload completes (0 = not reloading). */
+  reloadFrame: number;
+  /** Source parity: lifetime count of all missiles fired at this entity. */
+  incomingMissiles: number;
+  /** Source parity: lifetime count of missiles marked for diversion. */
+  divertedMissiles: number;
 }
 
 /** Source parity: SlavedUpdate constants. */
@@ -2458,7 +2513,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSlowDeathEntities();
     this.updateWeaponIdleAutoReload();
     this.updatePointDefenseLaser();
+    this.updateCountermeasures();
     this.updateProjectileFlightCollisions();
+    this.processCountermeasureDiversions();
     this.updatePendingWeaponDamage();
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
@@ -4199,6 +4256,9 @@ export class GameLogicSubsystem implements Subsystem {
       slaveGuardOffsetX: 0,
       slaveGuardOffsetZ: 0,
       slavedNextUpdateFrame: 0,
+      // Countermeasures (aircraft flare defense)
+      countermeasuresProfile: this.extractCountermeasuresProfile(objectDef),
+      countermeasuresState: null,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -4239,6 +4299,21 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: DemoTrapUpdate::onObjectCreated — set initial mode.
     if (entity.demoTrapProfile) {
       entity.demoTrapProximityMode = entity.demoTrapProfile.defaultsToProximityMode;
+    }
+
+    // Source parity: CountermeasuresBehavior::onObjectCreated — init state.
+    if (entity.countermeasuresProfile) {
+      const cp = entity.countermeasuresProfile;
+      entity.countermeasuresState = {
+        availableCountermeasures: cp.numberOfVolleys * cp.volleySize,
+        activeCountermeasures: 0,
+        flareIds: [],
+        reactionFrame: 0,
+        nextVolleyFrame: 0,
+        reloadFrame: 0,
+        incomingMissiles: 0,
+        divertedMissiles: 0,
+      };
     }
 
     return entity;
@@ -6497,6 +6572,44 @@ export class GameLogicSubsystem implements Subsystem {
             repairRatePerSecond: readNumericField(block.fields, ['RepairRatePerSecond']) ?? 0,
             repairWhenBelowHealthPercent: readNumericField(block.fields, ['RepairWhenBelowHealth%']) ?? 0,
             stayOnSameLayerAsMaster: readStringField(block.fields, ['StayOnSameLayerAsMaster'])?.toUpperCase() === 'YES',
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: CountermeasuresBehavior — extract countermeasure config from INI.
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/CountermeasuresBehavior.cpp)
+   */
+  private extractCountermeasuresProfile(objectDef: ObjectDef | undefined): CountermeasuresProfile | null {
+    if (!objectDef) return null;
+    let profile: CountermeasuresProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'COUNTERMEASURESBEHAVIOR') {
+          const evasionRaw = readNumericField(block.fields, ['EvasionRate']);
+          profile = {
+            flareTemplateName: readStringField(block.fields, ['FlareTemplateName']) ?? '',
+            volleySize: readNumericField(block.fields, ['VolleySize']) ?? 0,
+            volleyArcAngle: (readNumericField(block.fields, ['VolleyArcAngle']) ?? 0) * (Math.PI / 180),
+            volleyVelocityFactor: readNumericField(block.fields, ['VolleyVelocityFactor']) ?? 1.0,
+            framesBetweenVolleys: this.msToLogicFrames(readNumericField(block.fields, ['DelayBetweenVolleys']) ?? 0),
+            numberOfVolleys: readNumericField(block.fields, ['NumberOfVolleys']) ?? 0,
+            reloadFrames: this.msToLogicFrames(readNumericField(block.fields, ['ReloadTime']) ?? 0),
+            evasionRate: evasionRaw != null ? evasionRaw / 100 : 0,
+            missileDecoyFrames: this.msToLogicFrames(readNumericField(block.fields, ['MissileDecoyDelay']) ?? 0),
+            reactionFrames: this.msToLogicFrames(readNumericField(block.fields, ['ReactionLaunchLatency']) ?? 0),
           };
         }
       }
@@ -16021,6 +16134,8 @@ export class GameLogicSubsystem implements Subsystem {
       bezierFirstPercentIndent,
       bezierSecondPercentIndent,
       hasBezierArc,
+      countermeasureDivertFrame: 0,
+      countermeasureNoDamage: false,
     };
 
     // Emit muzzle flash visual event.
@@ -16042,11 +16157,18 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    this.pendingWeaponDamageEvents.push(event);
+    // Source parity: Weapon.cpp:1169-1177 — check victim for countermeasures at weapon fire time.
+    // Only MISSILE projectiles (KINDOF_SMALL_MISSILE) can be diverted.
+    // Source parity: supersonic jets cannot deploy countermeasures (too fast).
+    if (delivery === 'PROJECTILE' && event.cachedVisualType === 'MISSILE' && primaryVictimEntityId !== null) {
+      const victim = this.spawnedEntities.get(primaryVictimEntityId);
+      if (victim && victim.countermeasuresState && victim.countermeasuresProfile
+        && !victim.locomotorSets.has(LOCOMOTORSET_SUPERSONIC)) {
+        this.reportMissileForCountermeasures(victim, event);
+      }
+    }
 
-    // TODO(C&C source parity): port projectile-object launch/collision/countermeasure
-    // handling from Weapon::fireWeaponTemplate() instead of routing projectile delivery
-    // through pending impact events.
+    this.pendingWeaponDamageEvents.push(event);
   }
 
   private classifyWeaponVisualType(weapon: AttackWeaponProfile): import('./types.js').ProjectileVisualType {
@@ -16373,7 +16495,20 @@ export class GameLogicSubsystem implements Subsystem {
     // Emit impact visual events for projectiles resolving this frame.
     for (const event of this.pendingWeaponDamageEvents) {
       if (event.executeFrame <= this.frameCounter) {
+        // Source parity: MissileAIUpdate::doKillState — diverted missiles still detonate
+        // visually but deal no damage. Emit the visual event regardless.
         this.emitWeaponImpactVisualEvent(event);
+
+        // Source parity: countermeasure-diverted missiles — suppress damage and radii.
+        if (event.countermeasureNoDamage) {
+          event.weapon = {
+            ...event.weapon,
+            primaryDamage: 0,
+            secondaryDamage: 0,
+            primaryDamageRadius: 0,
+            secondaryDamageRadius: 0,
+          };
+        }
       }
     }
     updatePendingWeaponDamageImpl(this.createCombatDamageEventContext());
@@ -18063,6 +18198,186 @@ export class GameLogicSubsystem implements Subsystem {
       slave.attackTargetPosition = null;
     }
   }
+  // ── Source parity: CountermeasuresBehavior ──
+
+  /**
+   * Source parity: CountermeasuresBehavior::reportMissileForCountermeasures —
+   * called at weapon-fire time when a SMALL_MISSILE targets a unit with countermeasures.
+   * Rolls evasion probability and marks the missile for diversion if successful.
+   */
+  private reportMissileForCountermeasures(victim: MapEntity, event: PendingWeaponDamageEvent): void {
+    const profile = victim.countermeasuresProfile!;
+    const state = victim.countermeasuresState!;
+
+    // Source parity: track all incoming missiles.
+    state.incomingMissiles++;
+
+    // Source parity: only divert if countermeasures are available or active (can redirect to).
+    if (state.availableCountermeasures + state.activeCountermeasures <= 0) return;
+
+    // Source parity: roll evasion probability using deterministic game RNG.
+    if (this.gameRandom.nextFloat() >= profile.evasionRate) return;
+
+    // Source parity: track successful diversions.
+    state.divertedMissiles++;
+
+    // Mark the missile for future diversion.
+    event.countermeasureDivertFrame = this.frameCounter + profile.missileDecoyFrames;
+
+    // Source parity: if this is the first threat, start the reaction timer.
+    if (state.activeCountermeasures === 0 && state.reactionFrame === 0) {
+      state.reactionFrame = this.frameCounter + profile.reactionFrames;
+    }
+  }
+
+  /**
+   * Source parity: CountermeasuresBehavior::update — per-frame countermeasure state machine.
+   * Manages volley launching, flare cleanup, and auto-reload.
+   */
+  private updateCountermeasures(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.countermeasuresProfile;
+      const state = entity.countermeasuresState;
+      if (!profile || !state) continue;
+
+      // Source parity: clean up dead/expired flares (runs regardless of airborne).
+      for (let i = state.flareIds.length - 1; i >= 0; i--) {
+        const flareId = state.flareIds[i]!;
+        const flare = this.spawnedEntities.get(flareId);
+        if (!flare || flare.destroyed) {
+          state.flareIds.splice(i, 1);
+          state.activeCountermeasures--;
+        }
+      }
+
+      // Source parity: volley launching only when airborne.
+      if (entity.category !== 'air') continue;
+
+      // Source parity: first volley — reaction timer fires on exact frame.
+      if (state.reactionFrame !== 0 && this.frameCounter === state.reactionFrame) {
+        this.launchCountermeasureVolley(entity, profile, state);
+        state.nextVolleyFrame = this.frameCounter + profile.framesBetweenVolleys;
+        state.reactionFrame = 0;
+      }
+
+      // Source parity: subsequent volleys — fire on exact frame.
+      if (state.nextVolleyFrame !== 0 && this.frameCounter === state.nextVolleyFrame
+        && state.availableCountermeasures > 0) {
+        this.launchCountermeasureVolley(entity, profile, state);
+        state.nextVolleyFrame = this.frameCounter + profile.framesBetweenVolleys;
+      }
+
+      // Source parity: auto-reload when all countermeasures spent and reloadFrames > 0.
+      if (state.availableCountermeasures === 0 && profile.reloadFrames > 0) {
+        if (state.reloadFrame === 0) {
+          state.reloadFrame = this.frameCounter + profile.reloadFrames;
+        } else if (this.frameCounter >= state.reloadFrame) {
+          state.availableCountermeasures = profile.numberOfVolleys * profile.volleySize;
+          state.reloadFrame = 0;
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: CountermeasuresBehavior::launchVolley — spawn flare objects.
+   * Flares are spawned at the aircraft's position with velocity-based offsets.
+   */
+  private launchCountermeasureVolley(
+    aircraft: MapEntity,
+    profile: CountermeasuresProfile,
+    state: CountermeasuresState,
+  ): void {
+    const count = Math.min(profile.volleySize, state.availableCountermeasures);
+    if (count <= 0) return;
+
+    for (let i = 0; i < count; i++) {
+      // Source parity: distribute flares across the volley arc.
+      // ratio = i / (N-1) * 2 - 1 ranges from -1..+1; single flare = 0.
+      const ratio = count > 1 ? (i / (count - 1)) * 2 - 1 : 0;
+      const arcAngle = ratio * profile.volleyArcAngle;
+
+      // Source parity: flare is spawned at aircraft position with backward offset.
+      const facingAngle = aircraft.rotationY + Math.PI + arcAngle;
+      const offsetDist = 5.0; // small backward offset for visual separation
+      const flareX = aircraft.x + Math.sin(facingAngle) * offsetDist;
+      const flareZ = aircraft.z + Math.cos(facingAngle) * offsetDist;
+
+      // Try to spawn from INI template; fall back to creating a minimal tracked entity.
+      const flare = profile.flareTemplateName
+        ? this.spawnEntityFromTemplate(profile.flareTemplateName, flareX, flareZ, 0, aircraft.side)
+        : null;
+
+      if (flare) {
+        // Source parity: flares have a short lifetime.
+        if (flare.lifetimeDieFrame === null) {
+          flare.lifetimeDieFrame = this.frameCounter + 90; // ~3s fallback
+        }
+        state.flareIds.push(flare.id);
+      } else {
+        // No INI template available — track as a virtual flare position.
+        // Create a minimal entity manually using nextId.
+        const flareId = this.nextId++;
+        state.flareIds.push(flareId);
+        // Virtual flare — no physical entity, tracked by ID only.
+        // Expires after ~3 seconds (cleanup loop handles null lookups).
+      }
+      state.activeCountermeasures++;
+      state.availableCountermeasures--;
+    }
+  }
+
+  /**
+   * Source parity: CountermeasuresBehavior — process missile diversions.
+   * Called during pending weapon damage update to redirect diverted missiles.
+   */
+  private processCountermeasureDiversions(): void {
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.countermeasureDivertFrame === 0) continue;
+      if (this.frameCounter < event.countermeasureDivertFrame) continue;
+      if (event.countermeasureNoDamage) continue; // already diverted
+
+      // Source parity: MissileAIUpdate — set noDamage and redirect to nearest flare.
+      event.countermeasureNoDamage = true;
+      event.countermeasureDivertFrame = 0; // one-shot
+
+      // Find the victim's closest flare to redirect to.
+      const victim = event.primaryVictimEntityId !== null
+        ? this.spawnedEntities.get(event.primaryVictimEntityId)
+        : null;
+      if (!victim?.countermeasuresState) continue;
+
+      const state = victim.countermeasuresState;
+      let closestFlareId: number | null = null;
+      let closestDistSqr = Infinity;
+
+      // Source parity: search from end of flareIds (most recent), limited to volleySize.
+      const profile = victim.countermeasuresProfile;
+      const searchLimit = Math.min(state.flareIds.length, profile?.volleySize ?? state.flareIds.length);
+      for (let i = state.flareIds.length - 1; i >= state.flareIds.length - searchLimit; i--) {
+        const flareId = state.flareIds[i]!;
+        const flare = this.spawnedEntities.get(flareId);
+        if (!flare || flare.destroyed) continue;
+        const dx = flare.x - victim.x;
+        const dz = flare.z - victim.z;
+        const distSqr = dx * dx + dz * dz;
+        if (distSqr < closestDistSqr) {
+          closestDistSqr = distSqr;
+          closestFlareId = flareId;
+        }
+      }
+
+      if (closestFlareId !== null) {
+        // Redirect missile impact to flare position.
+        const flare = this.spawnedEntities.get(closestFlareId)!;
+        event.impactX = flare.x;
+        event.impactZ = flare.z;
+        event.primaryVictimEntityId = closestFlareId;
+      }
+    }
+  }
+
   /**
    * Source parity: DeployStyleAIUpdate::update() — per-frame deploy state machine.
    * Transitions: READY_TO_MOVE ↔ DEPLOY ↔ READY_TO_ATTACK ↔ UNDEPLOY ↔ READY_TO_MOVE.
