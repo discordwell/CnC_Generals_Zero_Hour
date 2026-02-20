@@ -14243,6 +14243,122 @@ describe('WanderAIUpdate', () => {
   });
 });
 
+describe('FloatUpdate', () => {
+  function makeFloatSetup(opts?: { enabled?: boolean; waterHeight?: number }) {
+    const sz = 64;
+    const waterH = opts?.waterHeight ?? 20;
+    const enabled = opts?.enabled ?? true;
+    const objects = [
+      makeObjectDef('Boat', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('Behavior', 'FloatUpdate ModuleTag_Float', {
+          Enabled: enabled ? 'Yes' : 'No',
+        }),
+      ]),
+      makeObjectDef('Tank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]),
+    ];
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    // Create map with a water polygon trigger covering the area 0..500, 0..500.
+    // MapPoint uses original engine coordinates: x=horizontal X, y=horizontal Z, z=height.
+    const mapData: MapDataJSON = {
+      heightmap: {
+        width: sz,
+        height: sz,
+        borderSize: 0,
+        data: uint8ArrayToBase64(new Uint8Array(sz * sz).fill(0)),
+      },
+      objects: [
+        makeMapObject('Boat', 50, 50),
+        makeMapObject('Tank', 200, 200),
+      ],
+      triggers: [{
+        name: 'WaterArea1',
+        id: 1,
+        isWaterArea: true,
+        isRiver: false,
+        points: [
+          { x: 0, y: 0, z: waterH },
+          { x: 500, y: 0, z: waterH },
+          { x: 500, y: 500, z: waterH },
+          { x: 0, y: 500, z: waterH },
+        ],
+      }],
+      textureClasses: [],
+      blendTileCount: 0,
+    };
+
+    logic.loadMapObjects(mapData, registry, makeHeightmap(sz, sz));
+    return logic;
+  }
+
+  it('snaps entity with FloatUpdate to water surface height', () => {
+    const waterHeight = 25;
+    const logic = makeFloatSetup({ waterHeight });
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { y: number; baseHeight: number; floatUpdateProfile: { enabled: boolean } | null }>;
+    };
+    const boat = priv.spawnedEntities.get(1)!;
+    expect(boat.floatUpdateProfile?.enabled).toBe(true);
+
+    // Before update, entity is on terrain (height = 0 + baseHeight).
+    const baseH = boat.baseHeight;
+    expect(boat.y).toBeCloseTo(baseH, 1);
+
+    // After one frame, entity should snap to water surface.
+    logic.update(1 / 30);
+    expect(boat.y).toBeCloseTo(waterHeight + baseH, 1);
+  });
+
+  it('does not modify entity without FloatUpdate', () => {
+    const logic = makeFloatSetup({ waterHeight: 25 });
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { y: number; floatUpdateProfile: { enabled: boolean } | null }>;
+    };
+    const tank = priv.spawnedEntities.get(2)!;
+    expect(tank.floatUpdateProfile).toBeNull();
+
+    const startY = tank.y;
+    logic.update(1 / 30);
+    expect(tank.y).toBe(startY);
+  });
+
+  it('does not modify entity with FloatUpdate when not over water', () => {
+    const sz = 64;
+    const objects = [
+      makeObjectDef('Boat', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('Behavior', 'FloatUpdate ModuleTag_Float', { Enabled: 'Yes' }),
+      ]),
+    ];
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    // Map with NO water triggers.
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Boat', 50, 50)], sz, sz),
+      registry,
+      makeHeightmap(sz, sz),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { y: number; floatUpdateProfile: { enabled: boolean } | null }>;
+    };
+    const boat = priv.spawnedEntities.get(1)!;
+    expect(boat.floatUpdateProfile?.enabled).toBe(true);
+
+    const startY = boat.y;
+    logic.update(1 / 30);
+    // Not over water, so height should not change.
+    expect(boat.y).toBe(startY);
+  });
+});
+
 describe('SlavedUpdate', () => {
   function makeSlavedSetup(opts?: {
     spawnNumber?: number;

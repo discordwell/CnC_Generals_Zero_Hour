@@ -2669,6 +2669,13 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly supplyWarehouseStates = new Map<number, SupplyWarehouseState>();
   private readonly supplyTruckStates = new Map<number, SupplyTruckState>();
   private fogOfWarGrid: FogOfWarGrid | null = null;
+  /** Source parity: Cached water polygon trigger data for FloatUpdate water height queries. */
+  private waterPolygonData: Array<{
+    points: Array<{ x: number; y: number; z: number }>;
+    minX: number; maxX: number; minZ: number; maxZ: number;
+    /** Water surface height (original engine Z → game-logic Y). */
+    waterHeight: number;
+  }> = [];
   /** Source parity: SpyVisionSpecialPower — temporary fog reveals with expiration timers. */
   private readonly temporaryVisionReveals: {
     playerIndex: number;
@@ -2776,6 +2783,21 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.navigationGrid = this.buildNavigationGrid(mapData, heightmap);
+
+    // Source parity: Cache water polygon data for FloatUpdate water height queries.
+    // C++ TerrainLogic::isUnderwater uses polygon triggers to resolve water surface height.
+    // MapPoint uses original engine coordinates: x=horizontal X, y=horizontal Z, z=height.
+    this.waterPolygonData = mapData.triggers
+      .filter((trigger) => trigger.isWaterArea || trigger.isRiver)
+      .map((trigger) => ({
+        points: trigger.points,
+        minX: Math.min(...trigger.points.map((p) => p.x)),
+        maxX: Math.max(...trigger.points.map((p) => p.x)),
+        minZ: Math.min(...trigger.points.map((p) => p.y)),
+        maxZ: Math.max(...trigger.points.map((p) => p.y)),
+        // Source parity: C++ getWaterHeight returns pTrig->getPoint(0)->z (original engine Z = height).
+        waterHeight: trigger.points[0]?.z ?? 0,
+      }));
 
     // Initialize fog of war grid based on map dimensions.
     if (heightmap) {
@@ -3101,6 +3123,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSellingEntities();
     this.updateRebuildHoles();
     this.updateWanderAI();
+    this.updateFloatEntities();
     this.updateAutoDeposit();
     this.updateDynamicShroud();
     this.updatePilotFindVehicle();
@@ -5079,6 +5102,9 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: C++ DEBUG_ASSERTCRASH checks (DynamicShroudClearingRangeUpdate.cpp:104-105).
       if (entity.dynamicShroudSustainDeadline < entity.dynamicShroudShrinkStartDeadline) {
         console.warn(`DynamicShroudClearingRangeUpdate: sustainDeadline(${entity.dynamicShroudSustainDeadline}) < shrinkStartDeadline(${entity.dynamicShroudShrinkStartDeadline}) — invalid INI configuration`);
+      }
+      if (entity.dynamicShroudGrowStartDeadline < entity.dynamicShroudShrinkStartDeadline) {
+        console.warn(`DynamicShroudClearingRangeUpdate: growStartDeadline(${entity.dynamicShroudGrowStartDeadline}) < shrinkStartDeadline(${entity.dynamicShroudShrinkStartDeadline}) — invalid INI configuration`);
       }
       entity.dynamicShroudDoneForeverFrame = this.frameCounter + stateCountDown;
       entity.dynamicShroudNativeClearingRange = entity.visionRange;
@@ -14350,13 +14376,13 @@ export class GameLogicSubsystem implements Subsystem {
     const profile = entity.experienceProfile;
     if (!profile) return;
     if (entity.experienceState.currentLevel >= targetLevel) return;
-    // Grant enough XP to reach the target level.
-    const xpNeeded = (profile.experienceRequired[targetLevel] ?? 0) - entity.experienceState.currentExperience;
-    if (xpNeeded <= 0) return;
-    const result = addExperiencePointsImpl(entity.experienceState, profile, xpNeeded, false);
-    if (result.didLevelUp) {
-      this.onEntityLevelUp(entity, result.oldLevel, result.newLevel);
-    }
+    // Source parity: C++ ExperienceTracker::setMinVeterancyLevel directly sets level and XP
+    // rather than going through addExperiencePoints. This handles edge cases where
+    // experienceRequired thresholds are 0.
+    const oldLevel = entity.experienceState.currentLevel;
+    entity.experienceState.currentLevel = targetLevel;
+    entity.experienceState.currentExperience = profile.experienceRequired[targetLevel] ?? 0;
+    this.onEntityLevelUp(entity, oldLevel, targetLevel);
   }
 
   /**
@@ -17683,6 +17709,27 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
+  /**
+   * Source parity: TerrainLogic::isUnderwater — returns the water surface height at a world
+   * position, or null if the position is not over water. Uses cached water polygon trigger data.
+   * C++ file: TerrainLogic.cpp lines 2141-2171.
+   */
+  private getWaterHeightAt(worldX: number, worldZ: number): number | null {
+    let bestHeight: number | null = null;
+    for (const poly of this.waterPolygonData) {
+      if (worldX < poly.minX || worldX > poly.maxX || worldZ < poly.minZ || worldZ > poly.maxZ) {
+        continue;
+      }
+      if (pointInPolygon(worldX, worldZ, poly.points)) {
+        // Source parity: C++ getWaterHandle returns the trigger with the highest waterZ.
+        if (bestHeight === null || poly.waterHeight > bestHeight) {
+          bestHeight = poly.waterHeight;
+        }
+      }
+    }
+    return bestHeight;
+  }
+
   private footprintInCells(
     category: ObjectCategory,
     objectDef?: ObjectDef,
@@ -20778,11 +20825,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: AutoDepositUpdate::update() — periodic income deposits.
-   * Skips when entity is neutral, under construction, or depositAmount ≤ 0.
-   * Awards initial capture bonus once when first owned by a non-neutral player.
-   */
-  /**
    * Source parity: WanderAIUpdate::update — when idle, move to a random nearby position.
    * C++ file: WanderAIUpdate.cpp — used by civilian units, animals, etc.
    * C++ uses GameLogicRandomValue(5, 50) offset for both x and y.
@@ -20800,12 +20842,32 @@ export class GameLogicSubsystem implements Subsystem {
         && entity.guardState === 'NONE';
       if (!isIdle) continue;
 
-      // Source parity: C++ adds GameLogicRandomValue(5, 50) to both x and y.
+      // NOTE: C++ parity bug — offset is always positive, entities drift southeast over time.
+      // C++ source (WanderAIUpdate.cpp:58-59) uses GameLogicRandomValue(5, 50) for both axes.
       const offsetX = this.gameRandom.nextRange(5, 50);
       const offsetZ = this.gameRandom.nextRange(5, 50);
       const destX = entity.x + offsetX;
       const destZ = entity.z + offsetZ;
       this.issueMoveTo(entity.id, destX, destZ);
+    }
+  }
+
+  /**
+   * Source parity: FloatUpdate::update — snaps entities with FloatUpdateProfile to the water
+   * surface height each frame. C++ file: FloatUpdate.cpp lines 107-120.
+   * C++ also applies visual bobbing (yaw/pitch sine oscillation) which is render-only.
+   */
+  private updateFloatEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (!entity.floatUpdateProfile?.enabled) continue;
+
+      const waterHeight = this.getWaterHeightAt(entity.x, entity.z);
+      if (waterHeight === null) continue;
+
+      // Source parity: C++ sets pos->z = waterZ (raw ground position).
+      // TS entity.y = waterHeight + baseHeight (center position including baseHeight offset).
+      entity.y = waterHeight + entity.baseHeight;
     }
   }
 
