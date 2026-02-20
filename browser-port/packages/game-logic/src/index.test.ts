@@ -10270,3 +10270,69 @@ describe('mine regeneration', () => {
     expect(mineAfterHeal!.health).toBeGreaterThan(0);
   });
 });
+
+describe('WEAPON_DOESNT_AFFECT_AIRBORNE', () => {
+  it('skips entities significantly above terrain in radius damage', () => {
+    // Source parity: Weapon.cpp:1375 — NOT_AIRBORNE in RadiusDamageAffects
+    // skips targets where isSignificantlyAboveTerrain() is true (height > 9.0).
+    const launcherDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'GroundBomb'] }),
+    ]);
+    const groundTargetDef = makeObjectDef('GroundTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const airTargetDef = makeObjectDef('AirTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const bundle = makeBundle({
+      objects: [launcherDef, groundTargetDef, airTargetDef],
+      weapons: [
+        makeWeaponDef('GroundBomb', {
+          AttackRange: 120,
+          PrimaryDamage: 30,
+          PrimaryDamageRadius: 100,
+          DamageType: 'EXPLOSION',
+          DeathType: 'NORMAL',
+          RadiusDamageAffects: 'ENEMIES NOT_AIRBORNE',
+          DelayBetweenShots: 100,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Attacker', 10, 10),
+        makeMapObject('GroundTarget', 30, 10),
+        makeMapObject('AirTarget', 30, 12),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Elevate entity 3 by 20 units above its base position (>9.0 threshold).
+    const entities = (logic as unknown as { spawnedEntities: Map<number, { y: number; baseHeight: number }> }).spawnedEntities;
+    const airEntity = entities.get(3)!;
+    airEntity.y += 20;
+
+    // Attack ground target.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    // Run enough frames for weapon to fire (matches existing combat timeline pattern).
+    for (let i = 0; i < 6; i++) logic.update(1 / 30);
+
+    // Ground target should have taken radius damage.
+    const groundState = logic.getEntityState(2);
+    expect(groundState).not.toBeNull();
+    expect(groundState!.health).toBeLessThan(100);
+
+    // Air target should NOT have taken radius damage (NOT_AIRBORNE filter).
+    const airState = logic.getEntityState(3);
+    expect(airState).not.toBeNull();
+    expect(airState!.health).toBe(100);
+  });
+});

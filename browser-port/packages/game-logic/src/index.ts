@@ -360,6 +360,8 @@ const WEAPON_ANTI_AIRBORNE_INFANTRY = 0x20;
 const WEAPON_ANTI_BALLISTIC_MISSILE = 0x40;
 const WEAPON_ANTI_PARACHUTE = 0x80;
 const HUGE_DAMAGE_AMOUNT = 1_000_000_000;
+// Source parity: Thing::isSignificantlyAboveTerrain — -(3*3)*m_gravity with m_gravity=-1.0.
+const SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD = 9.0;
 const ARMOR_SET_FLAG_VETERAN = 1 << 0;
 const ARMOR_SET_FLAG_ELITE = 1 << 1;
 const ARMOR_SET_FLAG_HERO = 1 << 2;
@@ -14799,6 +14801,12 @@ export class GameLogicSubsystem implements Subsystem {
       canEntityAttackFromStatus: (entity) => this.canEntityAttackFromStatus(entity),
       canAttackerTargetEntity: (attacker, target, commandSource) =>
         this.canAttackerTargetEntity(attacker, target, commandSource as AttackCommandSource),
+      isEntitySignificantlyAboveTerrain: (entity) => {
+        // Source parity: Thing::isSignificantlyAboveTerrain — getHeightAboveTerrain() > 9.0.
+        // C++ position is object base; browser port y includes baseHeight (center offset).
+        const terrainY = this.resolveGroundHeight(entity.x, entity.z);
+        return (entity.y - entity.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD;
+      },
       masks: {
         affectsSelf: WEAPON_AFFECTS_SELF,
         affectsAllies: WEAPON_AFFECTS_ALLIES,
@@ -14806,6 +14814,7 @@ export class GameLogicSubsystem implements Subsystem {
         affectsNeutrals: WEAPON_AFFECTS_NEUTRALS,
         killsSelf: WEAPON_KILLS_SELF,
         doesntAffectSimilar: WEAPON_DOESNT_AFFECT_SIMILAR,
+        doesntAffectAirborne: WEAPON_DOESNT_AFFECT_AIRBORNE,
       },
       relationships: {
         allies: RELATIONSHIP_ALLIES,

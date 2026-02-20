@@ -8,7 +8,9 @@ interface VectorXZLike {
 interface CombatDamageEntityLike {
   id: number;
   x: number;
+  y: number;
   z: number;
+  baseHeight: number;
   destroyed: boolean;
   canTakeDamage: boolean;
   templateName: string;
@@ -46,6 +48,7 @@ interface CombatDamageMasks {
   affectsNeutrals: number;
   killsSelf: number;
   doesntAffectSimilar: number;
+  doesntAffectAirborne: number;
 }
 
 interface CombatDamageRelationships {
@@ -79,6 +82,8 @@ export interface CombatDamageEventContext<
   ): void;
   canEntityAttackFromStatus(entity: TEntity): boolean;
   canAttackerTargetEntity(attacker: TEntity, target: TEntity, commandSource: string): boolean;
+  /** Source parity: Thing::isSignificantlyAboveTerrain — checks entity altitude above ground. */
+  isEntitySignificantlyAboveTerrain(entity: TEntity): boolean;
   masks: CombatDamageMasks;
   relationships: CombatDamageRelationships;
   hugeDamageAmount: number;
@@ -276,8 +281,14 @@ export function applyWeaponDamageEvent<
           continue;
         }
 
-        // TODO(C&C source parity): implement WEAPON_DOESNT_AFFECT_AIRBORNE via
-        // Object::isSignificantlyAboveTerrain once 3D movement altitude parity is represented.
+        // Source parity: Weapon.cpp:1375 — skip airborne targets for ground-only weapons.
+        if (
+          (weapon.radiusDamageAffectsMask & context.masks.doesntAffectAirborne) !== 0
+          && context.isEntitySignificantlyAboveTerrain(candidate)
+        ) {
+          continue;
+        }
+
         let requiredMask = context.masks.affectsNeutrals;
         const relationship = context.getTeamRelationship(source, candidate);
         if (relationship === context.relationships.allies) {
