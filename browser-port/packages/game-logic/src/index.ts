@@ -9193,6 +9193,8 @@ export class GameLogicSubsystem implements Subsystem {
       || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
       || this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
       || this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_PARALYZED')
+      || this.entityHasObjectStatus(entity, 'DISABLED_UNMANNED')
     );
   }
 
