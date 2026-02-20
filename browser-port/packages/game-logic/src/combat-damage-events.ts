@@ -97,6 +97,18 @@ function normalizeVector2(x: number, z: number): VectorXZLike {
   return { x: x / length, z: z / length };
 }
 
+/**
+ * Source parity: Weapon.cpp:1425-1427 — the C++ RadiusDamageAngle check uses
+ * full 3D vectors for both source orientation and victim direction.
+ */
+function normalizeVector3(x: number, y: number, z: number): { x: number; y: number; z: number } {
+  const length = Math.hypot(x, y, z);
+  if (length <= 1e-6) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  return { x: x / length, y: y / length, z: z / length };
+}
+
 function tryContinueAttackOnVictimDeath<
   TEntity extends CombatDamageEntityLike,
   TWeapon extends CombatDamageWeaponLike,
@@ -175,9 +187,12 @@ export function applyWeaponDamageEvent<
   const primaryRadiusSqr = primaryRadius * primaryRadius;
   const effectRadius = Math.max(primaryRadius, secondaryRadius);
   const effectRadiusSqr = effectRadius * effectRadius;
+  // Source parity: Weapon.cpp:1424 — source orientation is from Get_X_Vector (3D transform forward).
+  // Our forward vector is XZ-only; y=0 matches ground units (pitch not yet represented).
   const sourceFacingVector = source
-    ? normalizeVector2(
+    ? normalizeVector3(
       context.resolveForwardUnitVector(source).x,
+      0,
       context.resolveForwardUnitVector(source).z,
     )
     : null;
@@ -250,12 +265,9 @@ export function applyWeaponDamageEvent<
       if (!source || !sourceFacingVector) {
         continue;
       }
-      const damageVector = normalizeVector2(candidate.x - source.x, candidate.z - source.z);
-      // Source parity subset: WeaponTemplate::dealDamageInternal gates radius damage by
-      // comparing source orientation to candidate direction against RadiusDamageAngle.
-      // TODO(C&C source parity): include full 3D source/candidate vectors once altitude and
-      // pitch-limited facing are represented in simulation data.
-      if ((sourceFacingVector.x * damageVector.x) + (sourceFacingVector.z * damageVector.z) < radiusDamageAngleCos) {
+      // Source parity: Weapon.cpp:1425-1431 — 3D damage direction and dot product check.
+      const damageVector = normalizeVector3(candidate.x - source.x, candidate.y - source.y, candidate.z - source.z);
+      if ((sourceFacingVector.x * damageVector.x) + (sourceFacingVector.y * damageVector.y) + (sourceFacingVector.z * damageVector.z) < radiusDamageAngleCos) {
         continue;
       }
     }
