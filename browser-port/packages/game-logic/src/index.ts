@@ -1503,6 +1503,10 @@ interface MapEntity {
   /** Frame at which this entity should self-destruct (null = no lifetime limit). */
   lifetimeDieFrame: number | null;
 
+  // ── Source parity: DeletionUpdate — timed silent removal (no death pipeline) ──
+  /** Frame at which this entity should be silently destroyed (null = no deletion timer). */
+  deletionDieFrame: number | null;
+
   // ── Source parity: FireWeaponWhenDeadBehavior — weapon fired on death ──
   /** Weapon template names to fire at entity position on death (from FireWeaponWhenDeadBehavior). */
   deathWeaponNames: string[];
@@ -1611,6 +1615,18 @@ interface MapEntity {
   toppleAngularAccumulation: number;
   /** Topple speed used to compute acceleration. */
   toppleSpeed: number;
+
+  // ── Source parity: RadarUpdate — radar dish extension animation ──
+  radarUpdateProfile: RadarUpdateProfile | null;
+  /** Frame at which the radar extension animation completes. */
+  radarExtendDoneFrame: number;
+  /** Whether the radar extension animation has completed. */
+  radarExtendComplete: boolean;
+  /** Whether this radar is actively providing radar to the player. */
+  radarActive: boolean;
+
+  // ── Source parity: FloatUpdate — water surface snapping ──
+  floatUpdateProfile: FloatUpdateProfile | null;
 }
 
 /**
@@ -2159,6 +2175,25 @@ interface SlowDeathProfile {
   phaseWeapons: [string[], string[], string[]];
 }
 
+/**
+ * Source parity: RadarUpdate module parsed from INI.
+ * Manages the radar dish extension animation timer.
+ * Actual radar functionality is tracked via player-level radarCount.
+ */
+interface RadarUpdateProfile {
+  /** Frames for the radar dish extension animation to complete. */
+  radarExtendTimeFrames: number;
+}
+
+/**
+ * Source parity: FloatUpdate module parsed from INI.
+ * Snaps object Z to water surface each frame when enabled.
+ */
+interface FloatUpdateProfile {
+  /** Whether water-surface snapping is enabled. */
+  enabled: boolean;
+}
+
 interface SlowDeathRuntimeState {
   /** Index into the entity's slowDeathProfiles array. */
   profileIndex: number;
@@ -2695,8 +2730,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateAutoDeposit();
     this.updatePilotFindVehicle();
     this.updateToppleEntities();
+    this.updateRadarExtension();
     this.updateRenderStates();
     this.updateLifetimeEntities();
+    this.updateDeletionEntities();
     this.updateSlowDeathEntities();
     this.updateWeaponIdleAutoReload();
     this.updatePointDefenseLaser();
@@ -4410,6 +4447,8 @@ export class GameLogicSubsystem implements Subsystem {
       destroyed: false,
       // Lifetime
       lifetimeDieFrame: this.resolveLifetimeDieFrame(objectDef),
+      // Deletion
+      deletionDieFrame: this.resolveDeletionDieFrame(objectDef),
       // Death weapons
       deathWeaponNames: this.extractDeathWeaponNames(objectDef),
       // Fire weapon when damaged
@@ -4477,6 +4516,13 @@ export class GameLogicSubsystem implements Subsystem {
       // Special ability
       specialAbilityProfile: this.extractSpecialAbilityProfile(objectDef),
       specialAbilityState: null,
+      // RadarUpdate
+      radarUpdateProfile: this.extractRadarUpdateProfile(objectDef),
+      radarExtendDoneFrame: 0,
+      radarExtendComplete: false,
+      radarActive: false,
+      // FloatUpdate
+      floatUpdateProfile: this.extractFloatUpdateProfile(objectDef),
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -6664,6 +6710,64 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: RadarUpdate — extract radar dish extension config from INI.
+   * INI fields: RadarExtendTime (ms).
+   */
+  private extractRadarUpdateProfile(objectDef: ObjectDef | undefined): RadarUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: RadarUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'RADARUPDATE') {
+          const extendTimeMs = readNumericField(block.fields, ['RadarExtendTime']) ?? 0;
+          profile = {
+            radarExtendTimeFrames: this.msToLogicFrames(extendTimeMs),
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: FloatUpdate — extract water-surface snapping config from INI.
+   * INI fields: Enabled (bool, default FALSE).
+   */
+  private extractFloatUpdateProfile(objectDef: ObjectDef | undefined): FloatUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: FloatUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FLOATUPDATE') {
+          const enabledStr = readStringField(block.fields, ['Enabled'])?.toUpperCase();
+          profile = {
+            enabled: enabledStr === 'YES' || enabledStr === 'TRUE' || enabledStr === '1',
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: PointDefenseLaserUpdate — extract anti-projectile defense config from INI.
    */
   private extractPointDefenseLaserProfile(objectDef: ObjectDef | undefined): PointDefenseLaserProfile | null {
@@ -7319,6 +7423,37 @@ export class GameLogicSubsystem implements Subsystem {
     }
     if (minFrames === null || maxFrames === null) return null;
     // Source parity: delay = GameLogicRandomValue(min, max), minimum 1 frame.
+    const delay = Math.max(1, minFrames === maxFrames
+      ? minFrames : this.gameRandom.nextRange(minFrames, maxFrames));
+    return this.frameCounter + delay;
+  }
+
+  /**
+   * Source parity: DeletionUpdate — resolve die frame for silent object removal.
+   * Same timer logic as LifetimeUpdate but calls destroyObject (instant removal, no death pipeline).
+   */
+  private resolveDeletionDieFrame(objectDef: ObjectDef | undefined): number | null {
+    if (!objectDef) return null;
+    let minFrames: number | null = null;
+    let maxFrames: number | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (minFrames !== null) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DELETIONUPDATE') {
+          minFrames = this.msToLogicFrames(readNumericField(block.fields, ['MinLifetime']) ?? 0);
+          maxFrames = this.msToLogicFrames(readNumericField(block.fields, ['MaxLifetime']) ?? 0);
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    if (minFrames === null || maxFrames === null) return null;
     const delay = Math.max(1, minFrames === maxFrames
       ? minFrames : this.gameRandom.nextRange(minFrames, maxFrames));
     return this.frameCounter + delay;
@@ -8067,6 +8202,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     this.applyRadarUpgradeToSide(side, module);
+    // Source parity: RadarUpgrade::upgradeImplementation calls radarUpdate->extendRadar().
+    if (entity.radarUpdateProfile) {
+      entity.radarExtendDoneFrame = this.frameCounter + entity.radarUpdateProfile.radarExtendTimeFrames;
+      entity.radarActive = true; // C++ sets m_radarActive = true immediately.
+    }
     return true;
   }
 
@@ -20062,6 +20202,113 @@ export class GameLogicSubsystem implements Subsystem {
       // This triggers the normal death pipeline (SlowDeath, death OCLs, etc.).
       this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
     }
+  }
+
+  /**
+   * Source parity: RadarUpdate::update — tracks the radar dish extension animation timer.
+   * When the extension time elapses, marks the extension as complete.
+   * Actual radar functionality is managed via player radarCount in the upgrade system.
+   */
+  private updateRadarExtension(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (!entity.radarUpdateProfile) continue;
+      if (entity.radarExtendComplete) continue;
+      if (entity.radarExtendDoneFrame === 0) continue;
+      if (this.frameCounter > entity.radarExtendDoneFrame) {
+        entity.radarExtendComplete = true;
+        entity.radarExtendDoneFrame = 0;
+      }
+    }
+  }
+
+  /**
+   * Source parity: DeletionUpdate::update — silently remove entities when their deletion
+   * timer expires. Unlike LifetimeUpdate, this calls destroyObject (instant removal,
+   * no death pipeline, no death OCLs, no score tracking).
+   */
+  private updateDeletionEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.deletionDieFrame === null) continue;
+      if (this.frameCounter < entity.deletionDieFrame) continue;
+      // Source parity: destroyObject — instant silent removal (NOT kill).
+      this.silentDestroyEntity(entity.id);
+    }
+  }
+
+  /**
+   * Source parity: TheGameLogic::destroyObject — silently remove an entity without
+   * triggering the death pipeline. No visual events, EVA, XP, crates, death OCLs, etc.
+   * Used by DeletionUpdate for transient objects (debris, particle emitters, trails).
+   */
+  private silentDestroyEntity(entityId: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) return;
+
+    // Still unregister energy and clean up references.
+    this.unregisterEntityEnergy(entity);
+    this.cancelEntityCommandPathActions(entityId);
+    this.railedTransportStateByEntityId.delete(entityId);
+    this.supplyWarehouseStates.delete(entityId);
+    this.supplyTruckStates.delete(entityId);
+    this.disableOverchargeForEntity(entity);
+    this.sellingEntities.delete(entityId);
+    this.disabledHackedStatusByEntityId.delete(entityId);
+    this.disabledEmpStatusByEntityId.delete(entityId);
+    this.battlePlanParalyzedUntilFrame.delete(entityId);
+
+    // Clean up pending actions referencing this entity.
+    for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
+      if (pendingAction.targetObjectId === entityId) {
+        this.pendingEnterObjectActions.delete(sourceId);
+      }
+    }
+    for (const [sourceId, targetBuildingId] of this.pendingGarrisonActions.entries()) {
+      if (targetBuildingId === entityId) {
+        this.pendingGarrisonActions.delete(sourceId);
+      }
+    }
+    for (const [sourceId, targetTransportId] of this.pendingTransportActions.entries()) {
+      if (targetTransportId === entityId) {
+        this.pendingTransportActions.delete(sourceId);
+      }
+    }
+    for (const [sourceId, targetTunnelId] of this.pendingTunnelActions.entries()) {
+      if (targetTunnelId === entityId) {
+        this.pendingTunnelActions.delete(sourceId);
+      }
+    }
+    for (const pendingAction of this.pendingCombatDropActions.values()) {
+      if (pendingAction.targetObjectId === entityId) {
+        pendingAction.targetObjectId = null;
+      }
+    }
+    for (const [dozerId, targetBuildingId] of this.pendingConstructionActions.entries()) {
+      if (targetBuildingId === entityId) {
+        this.pendingConstructionActions.delete(dozerId);
+      }
+    }
+
+    // Remove upgrades (cleans up side state like radar/power counts).
+    const completedUpgradeNames = Array.from(entity.completedUpgrades.values());
+    for (const completedUpgradeName of completedUpgradeNames) {
+      this.removeEntityUpgrade(entity, completedUpgradeName);
+    }
+
+    // Mark as destroyed — no death animation, no dying renderable state.
+    entity.destroyed = true;
+    entity.moving = false;
+    entity.moveTarget = null;
+    entity.movePath = [];
+    entity.pathIndex = 0;
+    entity.pathfindGoalCell = null;
+    entity.attackTargetEntityId = null;
+    entity.attackTargetPosition = null;
+    entity.attackOriginalVictimPosition = null;
+    entity.attackCommandSource = 'AI';
+    entity.attackSubState = 'IDLE';
+    this.onObjectDestroyed(entityId);
   }
 
   /**

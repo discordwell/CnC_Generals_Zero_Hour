@@ -15827,3 +15827,165 @@ describe('FlammableUpdate', () => {
     expect(target.flameStatus).toBe('NORMAL');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DeletionUpdate — silent timed removal (no death pipeline)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('DeletionUpdate', () => {
+  it('extracts DeletionUpdate from INI and resolves die frame', () => {
+    const objectDef = makeObjectDef('Debris', 'America', ['PROJECTILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+      makeBlock('Behavior', 'DeletionUpdate ModuleTag_Deletion', {
+        MinLifetime: 1000, // ~30 frames
+        MaxLifetime: 1000,
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Debris', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { deletionDieFrame: number | null }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.deletionDieFrame).not.toBeNull();
+    expect(entity.deletionDieFrame).toBeGreaterThan(0);
+  });
+
+  it('silently removes entity when deletion timer expires', () => {
+    const objectDef = makeObjectDef('Debris', 'America', ['PROJECTILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'DeletionUpdate ModuleTag_Deletion', {
+        MinLifetime: 500, // ~15 frames
+        MaxLifetime: 500,
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Debris', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    // Run 10 frames — should still be alive.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    const state1 = logic.getEntityState(1);
+    expect(state1).not.toBeNull();
+
+    // Run 20 more frames — past 15 frame deletion time.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+    const state2 = logic.getEntityState(1);
+    expect(state2).toBeNull(); // Entity silently removed.
+  });
+
+  it('does not trigger death pipeline (no visual events, no SlowDeath)', () => {
+    const objectDef = makeObjectDef('Debris', 'America', ['PROJECTILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'DeletionUpdate ModuleTag_Deletion', {
+        MinLifetime: 300, // ~9 frames
+        MaxLifetime: 300,
+      }),
+      makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SlowDeath', {
+        DestructionDelay: 5000, // 5 seconds — would keep entity alive if death pipeline ran
+        SinkRate: 0,
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Debris', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    // Drain any initial visual events.
+    logic.drainVisualEvents();
+
+    // Run 15 frames — past deletion time.
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    // Entity should be immediately gone (not in SlowDeath).
+    const state = logic.getEntityState(1);
+    expect(state).toBeNull();
+
+    // No ENTITY_DESTROYED visual event should have been emitted (silent removal).
+    const events = logic.drainVisualEvents();
+    const destroyedEvents = events.filter(e => e.type === 'ENTITY_DESTROYED');
+    expect(destroyedEvents).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RadarUpdate — radar dish extension animation + player radar state
+// ═══════════════════════════════════════════════════════════════════════════
+describe('RadarUpdate', () => {
+  it('extracts RadarUpdateProfile from INI', () => {
+    const objectDef = makeObjectDef('Radar', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'RadarUpdate ModuleTag_Radar', {
+        RadarExtendTime: 2000, // ~60 frames
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Radar', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { radarUpdateProfile: { radarExtendTimeFrames: number } | null }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.radarUpdateProfile).not.toBeNull();
+    expect(entity.radarUpdateProfile!.radarExtendTimeFrames).toBe(60);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FloatUpdate — water surface snapping profile extraction
+// ═══════════════════════════════════════════════════════════════════════════
+describe('FloatUpdate', () => {
+  it('extracts FloatUpdateProfile from INI', () => {
+    const objectDef = makeObjectDef('Boat', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'FloatUpdate ModuleTag_Float', {
+        Enabled: 'Yes',
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Boat', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { floatUpdateProfile: { enabled: boolean } | null }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.floatUpdateProfile).not.toBeNull();
+    expect(entity.floatUpdateProfile!.enabled).toBe(true);
+  });
+});
