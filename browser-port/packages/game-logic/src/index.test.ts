@@ -10764,3 +10764,96 @@ describe('radar disable during power brown-out', () => {
     expect(logic.getSideRadarState('America').radarDisabled).toBe(false);
   });
 });
+
+describe('3D damage distance with terrain elevation', () => {
+  it('excludes entities on elevated terrain from ground-level radius damage when 3D distance exceeds weapon radius', () => {
+    // Build a heightmap where columns 4+ are at raw value 160 → 100 world height.
+    // Columns 0-3 stay at 0 (ground level).
+    const hmWidth = 64;
+    const hmHeight = 64;
+    const rawData = new Uint8Array(hmWidth * hmHeight);
+    for (let row = 0; row < hmHeight; row++) {
+      for (let col = 0; col < hmWidth; col++) {
+        rawData[row * hmWidth + col] = col >= 4 ? 160 : 0;
+      }
+    }
+    const heightmap = HeightmapGrid.fromJSON({
+      width: hmWidth,
+      height: hmHeight,
+      borderSize: 0,
+      data: uint8ArrayToBase64(rawData),
+    });
+
+    // Weapon: DIRECT, large radius (25 world units), instant damage.
+    const attackerDef = makeObjectDef('ElevAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'ElevRadiusCannon'] }),
+    ]);
+    const groundTargetDef = makeObjectDef('GroundTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const cliffTargetDef = makeObjectDef('CliffTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const bundle = makeBundle({
+      objects: [attackerDef, groundTargetDef, cliffTargetDef],
+      weapons: [
+        makeWeaponDef('ElevRadiusCannon', {
+          AttackRange: 200,
+          PrimaryDamage: 50,
+          PrimaryDamageRadius: 25,
+          SecondaryDamage: 25,
+          SecondaryDamageRadius: 25,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Attacker at (10,10) — ground (col 1).
+    // GroundTarget at (20,10) — ground (col 2), XZ distance 10 from impact.
+    // CliffTarget at (40,10) — elevated (col 4, height ~100), XZ distance 20 from impact.
+    // Impact will be at GroundTarget position.
+    logic.loadMapObjects(
+      {
+        heightmap: {
+          width: hmWidth,
+          height: hmHeight,
+          borderSize: 0,
+          data: uint8ArrayToBase64(rawData),
+        },
+        objects: [
+          makeMapObject('ElevAttacker', 10, 10),
+          makeMapObject('GroundTarget', 20, 10),
+          makeMapObject('CliffTarget', 40, 10),
+        ],
+        triggers: [],
+      },
+      makeRegistry(bundle),
+      heightmap,
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Attack the ground target (entity 2). Radius damage centered on ground target.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    // Advance enough frames for DIRECT weapon to fire and deal damage.
+    for (let i = 0; i < 3; i++) {
+      logic.update(1 / 30);
+    }
+
+    const groundHealth = logic.getEntityState(2)?.health ?? -1;
+    const cliffHealth = logic.getEntityState(3)?.health ?? -1;
+
+    // Ground target is within radius → takes primary damage (50).
+    expect(groundHealth).toBeLessThan(200);
+    // Cliff target XZ distance is 20 (within radius 25 in 2D) but 3D distance
+    // includes ~100 unit elevation difference → outside radius → no damage.
+    expect(cliffHealth).toBe(200);
+  });
+});

@@ -35,6 +35,8 @@ interface PendingWeaponDamageEventLike<TWeapon extends CombatDamageWeaponLike> {
   sourceEntityId: number;
   primaryVictimEntityId: number | null;
   impactX: number;
+  /** Source parity: 3D impact position Y for DAMAGE_RANGE_CALC_TYPE distance checks. */
+  impactY: number;
   impactZ: number;
   executeFrame: number;
   delivery: 'DIRECT' | 'PROJECTILE' | 'LASER';
@@ -174,9 +176,13 @@ export function applyWeaponDamageEvent<
   const primaryVictimWasAlive = !!primaryVictim && !primaryVictim.destroyed && primaryVictim.canTakeDamage;
 
   let impactX = event.impactX;
+  let impactY = event.impactY;
   let impactZ = event.impactZ;
   if (event.delivery === 'DIRECT' && primaryVictim && !primaryVictim.destroyed) {
     impactX = primaryVictim.x;
+    // Use base position (terrain level) for DIRECT delivery to match the base-position
+    // distance check in victim gathering below.
+    impactY = primaryVictim.y - primaryVictim.baseHeight;
     impactZ = primaryVictim.z;
   }
 
@@ -204,8 +210,13 @@ export function applyWeaponDamageEvent<
         continue;
       }
       const dx = entity.x - impactX;
+      // Source parity: PartitionManager::iterateObjectsInRange(FROM_BOUNDINGSPHERE_3D)
+      // computes center-to-center 3D distance minus bounding sphere radii. We approximate
+      // using base-to-base (terrain level) distance, which is equivalent to center-to-center
+      // for same-height entities and correctly captures terrain elevation differences.
+      const dy = (entity.y - entity.baseHeight) - impactY;
       const dz = entity.z - impactZ;
-      const distanceSqr = dx * dx + dz * dz;
+      const distanceSqr = dx * dx + dy * dy + dz * dz;
       if (distanceSqr <= effectRadiusSqr) {
         victims.push({ entity, distanceSqr });
       }
@@ -324,8 +335,8 @@ export function applyWeaponDamageEvent<
     tryContinueAttackOnVictimDeath(context, source, primaryVictim, weapon);
   }
 
-  // TODO(C&C source parity): use 3D/bounding-volume damage distance checks from
-  // PartitionManager::iterateObjectsInRange(DAMAGE_RANGE_CALC_TYPE).
+  // TODO(C&C source parity): subtract bounding-sphere radius from 3D distance
+  // per PartitionManager::iterateObjectsInRange(FROM_BOUNDINGSPHERE_3D).
 }
 
 export function updatePendingWeaponDamage<
