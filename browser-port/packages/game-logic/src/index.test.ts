@@ -13646,3 +13646,177 @@ describe('RebuildHoleBehavior', () => {
     expect(enemy.attackTargetEntityId).toBe(3);
   });
 });
+
+describe('AutoDepositUpdate', () => {
+  /** Build a scenario with an auto-deposit building (e.g., oil derrick). */
+  function makeAutoDepositSetup(opts?: {
+    depositTimingMs?: number;
+    depositAmount?: number;
+    initialCaptureBonus?: number;
+    startCredits?: number;
+  }) {
+    const timingMs = opts?.depositTimingMs ?? 1000; // 1s = 30 frames
+    const amount = opts?.depositAmount ?? 100;
+    const captureBonus = opts?.initialCaptureBonus ?? 0;
+    const startCredits = opts?.startCredits ?? 500;
+    const sz = 64;
+
+    const objects = [
+      makeObjectDef('OilDerrick', 'GLA', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        makeBlock('Behavior', 'AutoDepositUpdate ModuleTag_AutoDeposit', {
+          DepositTiming: timingMs,
+          DepositAmount: amount,
+          InitialCaptureBonus: captureBonus,
+        }),
+      ]),
+    ];
+
+    const mapObjects: MapObjectJSON[] = [
+      makeMapObject('OilDerrick', 30, 30),
+    ];
+
+    const bundle = makeBundle({ objects });
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('gla', 'HUMAN');
+    logic.submitCommand({ type: 'setSideCredits', side: 'gla', amount: startCredits });
+
+    return { logic, startCredits };
+  }
+
+  it('deposits money at fixed intervals', () => {
+    const { logic, startCredits } = makeAutoDepositSetup({
+      depositTimingMs: 1000, // 30 frames
+      depositAmount: 50,
+    });
+    logic.update(0); // frame 0 — initializes deposit schedule
+
+    // Advance to just before deposit (frame 29).
+    for (let i = 0; i < 29; i++) {
+      logic.update(1 / 30);
+    }
+    expect(logic.getSideCredits('gla')).toBe(startCredits);
+
+    // Advance one more frame to trigger deposit.
+    logic.update(1 / 30);
+    expect(logic.getSideCredits('gla')).toBe(startCredits + 50);
+  });
+
+  it('deposits repeatedly at each interval', () => {
+    const { logic, startCredits } = makeAutoDepositSetup({
+      depositTimingMs: 500, // 15 frames
+      depositAmount: 25,
+    });
+    logic.update(0);
+
+    // Advance 45 frames = 3 deposit intervals.
+    for (let i = 0; i < 45; i++) {
+      logic.update(1 / 30);
+    }
+    expect(logic.getSideCredits('gla')).toBe(startCredits + 75);
+  });
+
+  it('awards initial capture bonus once', () => {
+    const { logic, startCredits } = makeAutoDepositSetup({
+      depositTimingMs: 10000, // Long interval so no periodic deposits.
+      depositAmount: 10,
+      initialCaptureBonus: 200,
+    });
+    logic.update(0); // frame 0 — should award capture bonus.
+
+    expect(logic.getSideCredits('gla')).toBe(startCredits + 200);
+
+    // Advance more frames — bonus should not be awarded again.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+    // Only bonus, no periodic deposit yet (interval is 300 frames = 10s).
+    expect(logic.getSideCredits('gla')).toBe(startCredits + 200);
+  });
+
+  it('does not deposit for entities under construction', () => {
+    const sz = 64;
+    const objects = [
+      makeObjectDef('OilDerrick', 'GLA', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        makeBlock('Behavior', 'AutoDepositUpdate ModuleTag_AutoDeposit', {
+          DepositTiming: 100, // Very short
+          DepositAmount: 999,
+          InitialCaptureBonus: 0,
+        }),
+      ], { BuildTime: 100 }), // 100 seconds
+      makeObjectDef('Dozer', 'GLA', ['VEHICLE', 'DOZER'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]),
+    ];
+
+    const mapObjects: MapObjectJSON[] = [
+      makeMapObject('Dozer', 25, 30),
+    ];
+
+    const bundle = makeBundle({ objects });
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('gla', 'HUMAN');
+    logic.submitCommand({ type: 'setSideCredits', side: 'gla', amount: 1000 });
+    logic.update(0);
+
+    // Command dozer to construct the building.
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'OilDerrick',
+      targetPosition: [30, 0, 30],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    // Advance frames — building is under construction.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Credits should not have increased from auto-deposit (only building cost deducted).
+    const credits = logic.getSideCredits('gla');
+    // Building cost is deducted but no auto-deposit income should have been added.
+    expect(credits).toBeLessThanOrEqual(1000);
+  });
+
+  it('does not deposit for entities without a player type', () => {
+    const { logic, startCredits } = makeAutoDepositSetup({
+      depositTimingMs: 100,
+      depositAmount: 999,
+    });
+    // Remove player type mapping.
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.delete('gla');
+    logic.update(0);
+
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    // No deposits should have been made.
+    expect(logic.getSideCredits('gla')).toBe(startCredits);
+  });
+
+  it('skips deposit when depositAmount is zero', () => {
+    const { logic, startCredits } = makeAutoDepositSetup({
+      depositTimingMs: 100,
+      depositAmount: 0,
+      initialCaptureBonus: 50,
+    });
+    logic.update(0);
+
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Only capture bonus, no periodic deposits.
+    expect(logic.getSideCredits('gla')).toBe(startCredits + 50);
+  });
+});

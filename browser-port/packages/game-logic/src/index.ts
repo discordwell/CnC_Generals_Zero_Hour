@@ -1416,6 +1416,14 @@ interface MapEntity {
   /** Whether the hole is currently masked (hidden during active reconstruction). */
   rebuildHoleMasked: boolean;
 
+  // ── Source parity: AutoDepositUpdate — periodic income ──
+  /** AutoDeposit profile (null = no periodic income). */
+  autoDepositProfile: AutoDepositProfile | null;
+  /** Frame number when next deposit should occur (0 = not scheduled). */
+  autoDepositNextFrame: number;
+  /** Whether the initial capture bonus has been awarded. */
+  autoDepositInitialBonusAwarded: boolean;
+
   // ── Source parity: CreateObjectDie / SlowDeathBehavior — OCL on death ──
   /** OCL names to execute when entity is destroyed. */
   deathOCLNames: string[];
@@ -1813,6 +1821,19 @@ interface RebuildHoleBehaviorProfile {
   workerRespawnDelay: number;
   /** Hole health regeneration as fraction of maxHealth per second (e.g. 0.1 = 10%). */
   holeHealthRegenPercentPerSecond: number;
+}
+
+/**
+ * Source parity: AutoDepositUpdateModuleData — periodic income module on buildings.
+ * Deposits money at fixed intervals. Used by supply centers, oil derricks, etc.
+ */
+interface AutoDepositProfile {
+  /** Frames between deposits. Source parity: DepositTiming (parsed as duration ms → frames). */
+  depositFrames: number;
+  /** Cash amount per deposit. Source parity: DepositAmount. */
+  depositAmount: number;
+  /** One-time bonus deposited when a neutral building is captured. Source parity: InitialCaptureBonus. */
+  initialCaptureBonus: number;
 }
 
 // Body damage state thresholds (source parity: GlobalData defaults).
@@ -2389,6 +2410,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateFireWhenDamagedContinuous();
     this.updateSellingEntities();
     this.updateRebuildHoles();
+    this.updateAutoDeposit();
     this.updateRenderStates();
     this.updateLifetimeEntities();
     this.updateSlowDeathEntities();
@@ -4084,6 +4106,10 @@ export class GameLogicSubsystem implements Subsystem {
       rebuildHoleWorkerWaitCounter: 0,
       rebuildHoleRebuildTemplateName: '',
       rebuildHoleMasked: false,
+      // Auto deposit
+      autoDepositProfile: this.extractAutoDepositProfile(objectDef),
+      autoDepositNextFrame: 0,
+      autoDepositInitialBonusAwarded: false,
       // Death OCLs
       deathOCLNames: this.extractDeathOCLNames(objectDef),
       // Deploy state machine
@@ -6352,6 +6378,39 @@ export class GameLogicSubsystem implements Subsystem {
             workerObjectName: workerName,
             workerRespawnDelay: this.msToLogicFrames(respawnDelayMs),
             holeHealthRegenPercentPerSecond: regenPercent,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: AutoDepositUpdate — extract periodic income config from INI.
+   */
+  private extractAutoDepositProfile(objectDef: ObjectDef | undefined): AutoDepositProfile | null {
+    if (!objectDef) return null;
+    let profile: AutoDepositProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'AUTODEPOSITUPDATE') {
+          // Source parity: DepositTiming is in milliseconds → convert to frames.
+          const depositTimingMs = readNumericField(block.fields, ['DepositTiming']) ?? 2000;
+          const depositAmount = readNumericField(block.fields, ['DepositAmount']) ?? 0;
+          const initialCaptureBonus = readNumericField(block.fields, ['InitialCaptureBonus']) ?? 0;
+          profile = {
+            depositFrames: Math.max(1, this.msToLogicFrames(depositTimingMs)),
+            depositAmount,
+            initialCaptureBonus,
           };
         }
       }
@@ -17638,6 +17697,48 @@ export class GameLogicSubsystem implements Subsystem {
       if (other.attackTargetEntityId === hole.id) {
         other.attackTargetEntityId = reconstructing.id;
       }
+    }
+  }
+
+  /**
+   * Source parity: AutoDepositUpdate::update() — periodic income deposits.
+   * Skips when entity is neutral, under construction, or depositAmount ≤ 0.
+   * Awards initial capture bonus once when first owned by a non-neutral player.
+   */
+  private updateAutoDeposit(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.autoDepositProfile;
+      if (!profile) continue;
+
+      // Source parity: skip neutral entities (no side or no player type).
+      const normalizedSide = this.normalizeSide(entity.side);
+      if (!normalizedSide) continue;
+      const playerType = this.sidePlayerTypes.get(normalizedSide);
+      if (!playerType) continue;
+
+      // Source parity: skip entities under construction.
+      if (entity.constructionPercent !== CONSTRUCTION_COMPLETE) continue;
+
+      // Source parity: initialize deposit schedule on first valid frame.
+      if (entity.autoDepositNextFrame === 0) {
+        entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
+      }
+
+      // Source parity: award initial capture bonus once.
+      // C++ awardInitialCaptureBonus() also resets the deposit timer.
+      if (!entity.autoDepositInitialBonusAwarded && profile.initialCaptureBonus > 0) {
+        entity.autoDepositInitialBonusAwarded = true;
+        this.depositSideCredits(entity.side, profile.initialCaptureBonus);
+        entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
+      }
+
+      // Source parity: periodic deposit check.
+      if (profile.depositAmount <= 0) continue;
+      if (this.frameCounter < entity.autoDepositNextFrame) continue;
+
+      this.depositSideCredits(entity.side, profile.depositAmount);
+      entity.autoDepositNextFrame = this.frameCounter + profile.depositFrames;
     }
   }
 
