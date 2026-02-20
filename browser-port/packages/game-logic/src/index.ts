@@ -1354,11 +1354,27 @@ interface MapEntity {
 
   destroyed: boolean;
 
+  // ── Source parity: LifetimeUpdate — timed self-destruction ──
+  /** Frame at which this entity should self-destruct (null = no lifetime limit). */
+  lifetimeDieFrame: number | null;
+
+  // ── Source parity: FireWeaponWhenDeadBehavior — weapon fired on death ──
+  /** Weapon template names to fire at entity position on death (from FireWeaponWhenDeadBehavior). */
+  deathWeaponNames: string[];
+
+  // ── Source parity: FireWeaponWhenDamagedBehavior — weapon fired on damage ──
+  /** Reaction weapons keyed by body damage state (fired once per damage event). */
+  fireWhenDamagedProfiles: FireWhenDamagedProfile[];
+
   // ── Source parity: SlowDeathBehavior — phased death sequences ──
   /** Parsed SlowDeathBehavior modules from INI (multiple per entity, one selected on death). */
   slowDeathProfiles: SlowDeathProfile[];
   /** Active slow death state when entity is in a phased death sequence (null = not dying slowly). */
   slowDeathState: SlowDeathRuntimeState | null;
+
+  // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
+  generateMinefieldProfile: GenerateMinefieldProfile | null;
+  generateMinefieldDone: boolean;
 }
 
 /**
@@ -1443,6 +1459,45 @@ interface MineDetonatorEntry {
   entityId: number;
   x: number;
   z: number;
+}
+
+/**
+ * Source parity: GenerateMinefieldBehavior — spawns mine entities around an object.
+ */
+interface GenerateMinefieldProfile {
+  mineName: string;
+  distanceAroundObject: number;
+  borderOnly: boolean;
+  alwaysCircular: boolean;
+  generateOnlyOnDeath: boolean;
+}
+
+/**
+ * Source parity: FireWeaponWhenDamagedBehavior — fires weapons when entity takes damage.
+ * Reaction weapons fire once per damage event; continuous weapons fire every frame.
+ */
+interface FireWhenDamagedProfile {
+  reactionWeapons: [string | null, string | null, string | null, string | null];
+  continuousWeapons: [string | null, string | null, string | null, string | null];
+  damageAmount: number;
+  // Source parity: per-weapon cooldown — each Weapon instance tracks m_whenWeCanFireAgain.
+  reactionNextFireFrame: [number, number, number, number];
+  continuousNextFireFrame: [number, number, number, number];
+}
+
+// Body damage state thresholds (source parity: GlobalData defaults).
+const UNIT_DAMAGED_THRESH = 0.5;
+const UNIT_REALLY_DAMAGED_THRESH = 0.1;
+
+type BodyDamageState = 0 | 1 | 2 | 3; // PRISTINE=0, DAMAGED=1, REALLYDAMAGED=2, RUBBLE=3
+
+function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState {
+  if (maxHealth <= 0) return 0;
+  const ratio = health / maxHealth;
+  if (ratio > UNIT_DAMAGED_THRESH) return 0;
+  if (ratio > UNIT_REALLY_DAMAGED_THRESH) return 1;
+  if (ratio > 0) return 2;
+  return 3;
 }
 
 /**
@@ -1990,8 +2045,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSupplyChain();
     this.updateSkirmishAI();
     this.updateEva();
+    this.updateFireWhenDamagedContinuous();
     this.updateSellingEntities();
     this.updateRenderStates();
+    this.updateLifetimeEntities();
     this.updateSlowDeathEntities();
     this.updateWeaponIdleAutoReload();
     this.updateProjectileFlightCollisions();
@@ -3640,9 +3697,18 @@ export class GameLogicSubsystem implements Subsystem {
       builderId: 0,
       buildTotalFrames: 0,
       destroyed: false,
+      // Lifetime
+      lifetimeDieFrame: this.resolveLifetimeDieFrame(objectDef),
+      // Death weapons
+      deathWeaponNames: this.extractDeathWeaponNames(objectDef),
+      // Fire weapon when damaged
+      fireWhenDamagedProfiles: this.extractFireWhenDamagedProfiles(objectDef),
       // Slow death
       slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
       slowDeathState: null,
+      // Generate minefield
+      generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
+      generateMinefieldDone: false,
     };
   }
 
@@ -5414,10 +5480,139 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: FireWeaponWhenDeadBehavior — extract death weapon names from INI.
+   * C++ fires createAndFireTempWeapon at entity position on death.
+   */
+  private extractDeathWeaponNames(objectDef: ObjectDef | undefined): string[] {
+    if (!objectDef) return [];
+    const weapons: string[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FIREWEAPONWHENDEADBEHAVIOR') {
+          const weaponName = readStringField(block.fields, ['DeathWeapon']);
+          if (weaponName) weapons.push(weaponName);
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return weapons;
+  }
+
+  /**
+   * Source parity: FireWeaponWhenDamagedBehavior — extract reaction/continuous weapon config.
+   */
+  private extractFireWhenDamagedProfiles(objectDef: ObjectDef | undefined): FireWhenDamagedProfile[] {
+    if (!objectDef) return [];
+    const profiles: FireWhenDamagedProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FIREWEAPONWHENDAMAGEDBEHAVIOR') {
+          profiles.push({
+            reactionWeapons: [
+              readStringField(block.fields, ['ReactionWeaponPristine']),
+              readStringField(block.fields, ['ReactionWeaponDamaged']),
+              readStringField(block.fields, ['ReactionWeaponReallyDamaged']),
+              readStringField(block.fields, ['ReactionWeaponRubble']),
+            ],
+            continuousWeapons: [
+              readStringField(block.fields, ['ContinuousWeaponPristine']),
+              readStringField(block.fields, ['ContinuousWeaponDamaged']),
+              readStringField(block.fields, ['ContinuousWeaponReallyDamaged']),
+              readStringField(block.fields, ['ContinuousWeaponRubble']),
+            ],
+            damageAmount: readNumericField(block.fields, ['DamageAmount']) ?? 0,
+            reactionNextFireFrame: [0, 0, 0, 0],
+            continuousNextFireFrame: [0, 0, 0, 0],
+          });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: GenerateMinefieldBehavior — extract mine generation config from INI.
+   */
+  private extractGenerateMinefieldProfile(objectDef: ObjectDef | undefined): GenerateMinefieldProfile | null {
+    if (!objectDef) return null;
+    let profile: GenerateMinefieldProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'GENERATEMINEFIELDBEHAVIOR') {
+          const mineName = readStringField(block.fields, ['MineName']);
+          if (!mineName) return;
+          profile = {
+            mineName,
+            distanceAroundObject: readNumericField(block.fields, ['DistanceAroundObject']) ?? 20,
+            borderOnly: readBooleanField(block.fields, ['BorderOnly']) ?? true,
+            alwaysCircular: readBooleanField(block.fields, ['AlwaysCircular']) ?? false,
+            generateOnlyOnDeath: readBooleanField(block.fields, ['GenerateOnlyOnDeath']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: SlowDeathBehavior modules — extract all slow death profiles from INI.
    * An entity can have multiple SlowDeathBehavior modules; one is selected via weighted
    * random on death based on DeathTypes, VeterancyLevels, and ProbabilityModifier.
    */
+  private resolveLifetimeDieFrame(objectDef: ObjectDef | undefined): number | null {
+    if (!objectDef) return null;
+    let minFrames: number | null = null;
+    let maxFrames: number | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (minFrames !== null) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'LIFETIMEUPDATE') {
+          // Source parity: parseDurationUnsignedInt stores frame counts directly.
+          // INI values are in milliseconds, convert to frames.
+          minFrames = this.msToLogicFrames(readNumericField(block.fields, ['MinLifetime']) ?? 0);
+          maxFrames = this.msToLogicFrames(readNumericField(block.fields, ['MaxLifetime']) ?? 0);
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    if (minFrames === null || maxFrames === null) return null;
+    // Source parity: delay = GameLogicRandomValue(min, max), minimum 1 frame.
+    const delay = Math.max(1, minFrames === maxFrames
+      ? minFrames : this.gameRandom.nextRange(minFrames, maxFrames));
+    return this.frameCounter + delay;
+  }
+
   private extractSlowDeathProfiles(objectDef: ObjectDef | undefined): SlowDeathProfile[] {
     if (!objectDef) return [];
     const profiles: SlowDeathProfile[] = [];
@@ -15106,6 +15301,20 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: Weapon::getDelayBetweenShots — resolve delay directly from a WeaponDef.
+   * Used by FireWeaponWhenDamagedBehavior for per-weapon cooldown tracking.
+   */
+  private resolveWeaponDefDelayFrames(weaponDef: WeaponDef): number {
+    const delayValues = readNumericList(weaponDef.fields['DelayBetweenShots']);
+    const minDelayMs = delayValues[0] ?? 0;
+    const maxDelayMs = delayValues[1] ?? minDelayMs;
+    const minFrames = this.msToLogicFrames(minDelayMs);
+    const maxFrames = Math.max(minFrames, this.msToLogicFrames(maxDelayMs));
+    if (minFrames === maxFrames) return minFrames;
+    return this.gameRandom.nextRange(minFrames, maxFrames);
+  }
+
+  /**
    * Source parity: WeaponTemplate::getDelayBetweenShots(bonus) — compute delay
    * and divide by the active RATE_OF_FIRE bonus multiplier.
    */
@@ -15179,7 +15388,14 @@ export class GameLogicSubsystem implements Subsystem {
       this.mineOnDamage(target, sourceEntityId, normalizedDamageType);
     }
 
+    // Source parity: FireWeaponWhenDamagedBehavior::onDamage — fire reaction weapons.
+    if (target.fireWhenDamagedProfiles.length > 0) {
+      this.fireWhenDamagedReaction(target, adjustedDamage);
+    }
+
     if (target.health <= 0 && !target.destroyed && !target.slowDeathState) {
+      // Source parity: FireWeaponWhenDeadBehavior::onDie fires BEFORE slow death begins.
+      this.fireDeathWeapons(target);
       this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
         this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
@@ -15191,11 +15407,89 @@ export class GameLogicSubsystem implements Subsystem {
 
   // ── SlowDeathBehavior implementation ──────────────────────────────────────
 
+  private fireWhenDamagedReaction(entity: MapEntity, actualDamageDealt: number): void {
+    const bodyState = calcBodyDamageState(entity.health, entity.maxHealth);
+    for (const profile of entity.fireWhenDamagedProfiles) {
+      if (actualDamageDealt < profile.damageAmount) continue;
+      // Source parity: Weapon::getStatus() == READY_TO_FIRE — check per-weapon cooldown.
+      if (this.frameCounter < profile.reactionNextFireFrame[bodyState]) continue;
+      const weaponName = profile.reactionWeapons[bodyState];
+      if (!weaponName) continue;
+      const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
+      if (!weaponDef) continue;
+      this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
+      // Source parity: Weapon::privateFireWeapon sets m_whenWeCanFireAgain = now + delayBetweenShots.
+      profile.reactionNextFireFrame[bodyState] = this.frameCounter + this.resolveWeaponDefDelayFrames(weaponDef);
+    }
+  }
+
+  private updateFireWhenDamagedContinuous(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.fireWhenDamagedProfiles.length === 0) continue;
+      const bodyState = calcBodyDamageState(entity.health, entity.maxHealth);
+      for (const profile of entity.fireWhenDamagedProfiles) {
+        // Source parity: Weapon::getStatus() == READY_TO_FIRE — check per-weapon cooldown.
+        if (this.frameCounter < profile.continuousNextFireFrame[bodyState]) continue;
+        const weaponName = profile.continuousWeapons[bodyState];
+        if (!weaponName) continue;
+        const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
+        if (!weaponDef) continue;
+        this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
+        // Source parity: Weapon::privateFireWeapon sets m_whenWeCanFireAgain = now + delayBetweenShots.
+        profile.continuousNextFireFrame[bodyState] = this.frameCounter + this.resolveWeaponDefDelayFrames(weaponDef);
+      }
+    }
+  }
+
   /**
-   * Source parity: SlowDeathBehavior::onDie — attempt to begin a slow death sequence.
-   * Selects one applicable SlowDeathBehavior via weighted random probability.
-   * Returns true if slow death was initiated, false if no applicable profile found.
+   * Source parity: GenerateMinefieldBehavior::onDie — spawn mines around entity on death.
+   * Implements border-only circular placement (most common use case).
    */
+  private tryGenerateMinefieldOnDeath(entity: MapEntity): void {
+    const profile = entity.generateMinefieldProfile;
+    if (!profile || entity.generateMinefieldDone) return;
+    if (!profile.generateOnlyOnDeath) return;
+    entity.generateMinefieldDone = true;
+
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+    const mineObjDef = findObjectDefByName(registry, profile.mineName);
+    if (!mineObjDef) return;
+
+    // Source parity: get mine radius from geometry for spacing.
+    const mineGeom = this.resolveObstacleGeometry(mineObjDef);
+    const mineRadius = mineGeom
+      ? Math.max(mineGeom.majorRadius, mineGeom.minorRadius)
+      : MAP_XY_FACTOR * 0.5;
+    const mineDiameter = Math.max(1, mineRadius * 2);
+
+    const radius = profile.distanceAroundObject;
+    if (radius <= 0) return;
+
+    // Source parity: circular border placement.
+    const circumference = 2 * Math.PI * radius;
+    const numMines = Math.max(1, Math.ceil(circumference / mineDiameter));
+    const angleInc = (2 * Math.PI) / numMines;
+
+    for (let i = 0; i < numMines; i++) {
+      const angle = i * angleInc;
+      const mineX = entity.x + radius * Math.cos(angle);
+      const mineZ = entity.z + radius * Math.sin(angle);
+      const rotation = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
+      this.spawnEntityFromTemplate(profile.mineName, mineX, mineZ, rotation, entity.side);
+    }
+  }
+
+  private fireDeathWeapons(entity: MapEntity): void {
+    if (entity.deathWeaponNames.length === 0) return;
+    for (const weaponName of entity.deathWeaponNames) {
+      const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
+      if (!weaponDef) continue;
+      this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
+    }
+  }
+
   private tryBeginSlowDeath(entity: MapEntity, attackerId: number): boolean {
     if (entity.slowDeathProfiles.length === 0) return false;
 
@@ -15335,6 +15629,21 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: LifetimeUpdate::update — destroy entities when their lifetime expires.
+   * C++ calls object->kill() which applies unresistable damage equal to maxHealth.
+   */
+  private updateLifetimeEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.lifetimeDieFrame === null) continue;
+      if (this.frameCounter < entity.lifetimeDieFrame) continue;
+      // Source parity: kill() applies DAMAGE_UNRESISTABLE at maxHealth amount.
+      // This triggers the normal death pipeline (SlowDeath, death OCLs, etc.).
+      this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
+    }
+  }
+
+  /**
    * Source parity: SlowDeathBehavior::update — progress all active slow death sequences.
    * Handles sinking, midpoint phase, and final destruction timing.
    */
@@ -15414,6 +15723,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: EjectPilotDie — eject pilot unit for VETERAN+ vehicles on death.
     this.tryEjectPilotOnDeath(entity);
+
+    // Source parity: GenerateMinefieldBehavior::onDie — spawn mines on death.
+    this.tryGenerateMinefieldOnDeath(entity);
 
     // Source parity: CreateObjectDie / SlowDeathBehavior — execute death OCLs.
     this.executeDeathOCLs(entity);

@@ -9607,3 +9607,285 @@ describe('slow death behavior', () => {
     expect(gameEnd!.victorSides).toContain('china');
   });
 });
+
+describe('lifetime update', () => {
+  it('destroys the entity after MinLifetime/MaxLifetime expires', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DebrisChunk', 'America', ['INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'LifetimeUpdate ModuleTag_Lifetime', {
+            MinLifetime: 300, // 9 frames
+            MaxLifetime: 300, // 9 frames (exact for deterministic test)
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('DebrisChunk', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    // Entity should exist immediately.
+    expect(logic.getEntityState(1)).not.toBeNull();
+
+    // Run 5 frames — entity should still be alive.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(1)).not.toBeNull();
+    expect(logic.getEntityState(1)!.health).toBe(10);
+
+    // Run past the 9-frame lifetime + destruction.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Entity should be destroyed.
+    expect(logic.getEntityState(1)).toBeNull();
+  });
+
+  it('triggers slow death when lifetime expires on an entity with SlowDeathBehavior', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TimedDeathUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'LifetimeUpdate ModuleTag_Lifetime', {
+            MinLifetime: 200, // 6 frames
+            MaxLifetime: 200,
+          }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SlowDeath', {
+            DestructionDelay: 5000, // 150 frames
+            ProbabilityModifier: 10,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TimedDeathUnit', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    // Run past lifetime (6 frames) + a couple extra.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Entity should be in slow death (still rendered, animationState = DIE).
+    const state = logic.getEntityState(1);
+    expect(state).not.toBeNull();
+    expect(state!.animationState).toBe('DIE');
+    expect(state!.health).toBeLessThanOrEqual(0);
+  });
+});
+
+describe('fire weapon when dead behavior', () => {
+  it('fires the death weapon at entity position when the entity dies', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Bomber', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'FireWeaponWhenDeadBehavior ModuleTag_FWWD', {
+            DeathWeapon: 'DeathExplosion',
+          }),
+        ]),
+        makeObjectDef('Bystander', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'KillGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('KillGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+        makeWeaponDef('DeathExplosion', {
+          AttackRange: 10,
+          PrimaryDamage: 50,
+          PrimaryDamageRadius: 100, // Area damage to hit Bystander
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Bomber', 50, 50),
+        makeMapObject('Bystander', 52, 50), // Close to Bomber
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+
+    const bystanderBefore = logic.getEntityState(2);
+    expect(bystanderBefore).not.toBeNull();
+    expect(bystanderBefore!.health).toBe(200);
+
+    // Kill the Bomber — death explosion should damage Bystander.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Bomber should be destroyed.
+    expect(logic.getEntityState(1)).toBeNull();
+
+    // Bystander should have taken damage from the death explosion.
+    const bystanderAfter = logic.getEntityState(2);
+    expect(bystanderAfter).not.toBeNull();
+    expect(bystanderAfter!.health).toBeLessThan(200);
+  });
+});
+
+describe('fire weapon when damaged behavior', () => {
+  it('fires the reaction weapon when entity takes damage', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ToxicBuilding', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'FireWeaponWhenDamagedBehavior ModuleTag_FWWD', {
+            ReactionWeaponPristine: 'ToxicSpray',
+            ReactionWeaponDamaged: 'ToxicSprayDamaged',
+            DamageAmount: 0,
+          }),
+        ]),
+        makeObjectDef('NearbyUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SmallGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('SmallGun', {
+          AttackRange: 220,
+          PrimaryDamage: 100,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+        makeWeaponDef('ToxicSpray', {
+          AttackRange: 10,
+          PrimaryDamage: 30,
+          PrimaryDamageRadius: 100,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+        makeWeaponDef('ToxicSprayDamaged', {
+          AttackRange: 10,
+          PrimaryDamage: 50,
+          PrimaryDamageRadius: 100,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ToxicBuilding', 50, 50),
+        makeMapObject('NearbyUnit', 52, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+
+    const nearbyBefore = logic.getEntityState(2);
+    expect(nearbyBefore).not.toBeNull();
+    expect(nearbyBefore!.health).toBe(200);
+
+    // Attack the building — reaction weapon should fire, damaging NearbyUnit.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const nearbyAfter = logic.getEntityState(2);
+    expect(nearbyAfter).not.toBeNull();
+    // NearbyUnit should have taken damage from the reaction weapon.
+    expect(nearbyAfter!.health).toBeLessThan(200);
+  });
+});
+
+describe('generate minefield behavior', () => {
+  it('spawns mines around the entity on death when GenerateOnlyOnDeath is set', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('MineLayer', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'GenerateMinefieldBehavior ModuleTag_GenMine', {
+            MineName: 'LandMine',
+            DistanceAroundObject: 15,
+            BorderOnly: true,
+            GenerateOnlyOnDeath: true,
+          }),
+        ]),
+        makeObjectDef('LandMine', 'China', ['MINE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        ]),
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'KillGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('KillGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('MineLayer', 50, 50),
+        makeMapObject('Attacker', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // No mines should exist before death.
+    const statesBefore = logic.getRenderableEntityStates();
+    const minesBefore = statesBefore.filter(s => s.templateName === 'LandMine');
+    expect(minesBefore.length).toBe(0);
+
+    // Kill the MineLayer.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // MineLayer should be destroyed.
+    expect(logic.getEntityState(1)).toBeNull();
+
+    // Mines should have been spawned in a circle around the MineLayer's position.
+    const statesAfter = logic.getRenderableEntityStates();
+    const minesAfter = statesAfter.filter(s => s.templateName === 'LandMine');
+    expect(minesAfter.length).toBeGreaterThan(0);
+
+    // All mines should be approximately 15 units away from the original position (50,50).
+    for (const mine of minesAfter) {
+      const dx = mine.x - 50;
+      const dz = mine.z - 50;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      expect(dist).toBeCloseTo(15, 0);
+    }
+  });
+});
