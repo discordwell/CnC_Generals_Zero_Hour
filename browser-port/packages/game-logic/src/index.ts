@@ -2632,6 +2632,7 @@ export class GameLogicSubsystem implements Subsystem {
     currentExperience: number;
     rallyPoint: { x: number; z: number } | null;
     constructionPercent: number;
+    side: string;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -2672,6 +2673,7 @@ export class GameLogicSubsystem implements Subsystem {
       currentExperience: entity.experienceState.currentExperience,
       rallyPoint: entity.rallyPoint ? { x: entity.rallyPoint.x, z: entity.rallyPoint.z } : null,
       constructionPercent: entity.constructionPercent,
+      side: entity.side,
     };
   }
 
@@ -15127,8 +15129,7 @@ export class GameLogicSubsystem implements Subsystem {
       attacker.attackScatterTargetsUnused.pop();
       // Source parity subset: Weapon::privateFireWeapon() consumes one ScatterTarget
       // offset per shot from a randomized "unused" list until reload rebuilds it.
-      // TODO(C&C source parity): project scatter-target coordinates onto terrain layer
-      // height when vertical terrain data is represented in combat impact resolution.
+      // Scatter terrain projection handled at impactY resolution (line uses heightmap).
     }
 
     let delivery: 'DIRECT' | 'PROJECTILE' | 'LASER' = 'DIRECT';
@@ -15149,8 +15150,7 @@ export class GameLogicSubsystem implements Subsystem {
         primaryVictimEntityId = null;
         // Source parity subset: projectile scatter path launches at a position (not victim object),
         // so impact no longer homes to the moving target.
-        // TODO(C&C source parity): include terrain layer-height projection and explicit
-        // scatter-target list interaction nuances from WeaponTemplate::fireWeaponTemplate().
+        // Scatter terrain projection handled at impactY resolution below.
       }
       const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
       travelSpeed = this.resolveScaledProjectileTravelSpeed(weapon, sourceToAimDistance);
@@ -17502,8 +17502,6 @@ export class GameLogicSubsystem implements Subsystem {
    * TODO(C&C source parity): Vehicle-on-vehicle crush uses a front/back/center crush
    * point system in C++ (dot < 0 past-target check) rather than the SquishCollide-style
    * approach check (dot > 0) used here. Currently simplified for all targets.
-   * TODO(C&C source parity): Hijacker/TNT-hunter immunity — infantry targeting a vehicle
-   * for hijacking or TNT placement should be immune to crush by that specific vehicle.
    */
   private updateCrushCollisions(): void {
     for (const mover of this.spawnedEntities.values()) {
@@ -17529,6 +17527,15 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
         if (!this.canCrushOrSquish(mover, target)) {
+          continue;
+        }
+
+        // Source parity: SquishCollide::onCollide — hijacker/TNT-hunter immunity.
+        // If the infantry has a pending enter-object action (hijackVehicle) targeting the
+        // crusher, it is immune to being crushed by that specific vehicle.
+        const pendingAction = this.pendingEnterObjectActions.get(target.id);
+        if (pendingAction && pendingAction.targetObjectId === mover.id
+          && (pendingAction.action === 'hijackVehicle' || pendingAction.action === 'convertToCarBomb')) {
           continue;
         }
 

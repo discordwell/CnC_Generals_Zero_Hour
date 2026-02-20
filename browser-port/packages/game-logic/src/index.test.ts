@@ -11076,6 +11076,76 @@ describe('crush damage during movement', () => {
     const infHealth = logic.getEntityState(2)?.health ?? -1;
     expect(infHealth).toBe(100);
   });
+
+  it('hijacker infantry is immune to crush by target vehicle', () => {
+    // Source parity: SquishCollide::onCollide — infantry with a pending hijackVehicle
+    // action targeting the crusher is immune to being crushed by that vehicle.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CrusherTank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TankLocomotor', {}),
+        ], { CrusherLevel: 2, GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Collide', 'SquishCollide ModuleTag_Squish', {}),
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+          makeBlock('LocomotorSet', 'SET_NORMAL InfLocomotor', {}),
+        ], { CrushableLevel: 0 }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TankLocomotor', 180),
+        makeLocomotorDef('InfLocomotor', 60),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Place far enough apart that the hijack doesn't resolve immediately
+    // (reachDistance = 5+5=10, so distance must exceed 10).
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrusherTank', 205, 205),
+        makeMapObject('Hijacker', 235, 205),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Issue hijack command — hijacker will move toward the tank.
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'hijackVehicle',
+    });
+
+    // Move tank toward the hijacker — they will overlap and crush would normally kill.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 265, targetZ: 205 });
+
+    // Run enough frames for the entities to meet and the hijack to resolve.
+    // Tank speed=180 (6 units/frame), hijacker speed=60 (2 units/frame).
+    // They close at 8 units/frame, gap=30, so ~4 frames to overlap.
+    // Without crush immunity the hijacker would die on overlap. With immunity,
+    // the hijacker survives to reach interaction distance and the hijack resolves.
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Hijacker is consumed by the successful hijack (destroyed after entering vehicle).
+    const hijackerState = logic.getEntityState(2);
+    expect(hijackerState).toBeNull();
+
+    // The tank should have been captured — side changed from China to America.
+    // This proves crush immunity worked: if the hijacker had been crushed,
+    // the hijack would never have resolved and the tank would remain Chinese.
+    const tankState = logic.getEntityState(1);
+    expect(tankState).not.toBeNull();
+    expect(tankState!.side.toLowerCase()).toBe('america');
+  });
 });
 
 describe('INI-driven stealth and detection', () => {
