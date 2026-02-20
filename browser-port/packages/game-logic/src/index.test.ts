@@ -15641,3 +15641,189 @@ describe('WeaponBonusUpdate', () => {
     expect(vehicle.tempWeaponBonusFlag).toBe(256);
   });
 });
+
+// ── FlammableUpdate Tests ───────────────────────────────────────────────────
+
+describe('FlammableUpdate', () => {
+  function makeFlammableSetup(opts: {
+    flameDamageLimit?: number;
+    aflameDurationMs?: number;
+    aflameDamageDelayMs?: number;
+    aflameDamageAmount?: number;
+    burnedDelayMs?: number;
+    attackDamage?: number;
+  } = {}) {
+    const flammableDef = makeObjectDef('FlammableUnit', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'FlammableUpdate ModuleTag_Flammable', {
+        FlameDamageLimit: opts.flameDamageLimit ?? 10,
+        AflameDuration: opts.aflameDurationMs ?? 2000,
+        AflameDamageDelay: opts.aflameDamageDelayMs ?? 500,
+        AflameDamageAmount: opts.aflameDamageAmount ?? 5,
+        BurnedDelay: opts.burnedDelayMs ?? 0,
+      }),
+    ]);
+
+    const attackerDef = makeObjectDef('Flamer', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'FlameGun'] }),
+    ]);
+    const flameWeapon = makeWeaponDef('FlameGun', {
+      AttackRange: 200,
+      PrimaryDamage: opts.attackDamage ?? 20,
+      PrimaryDamageRadius: 0,
+      DamageType: 'FLAME',
+      DelayBetweenShots: 500,
+      WeaponSpeed: 999999,
+    });
+
+    const bundle = makeBundle({
+      objects: [flammableDef, attackerDef],
+      weapons: [flameWeapon],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FlammableUnit', 5, 5),
+        makeMapObject('Flamer', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(0);
+    return { logic };
+  }
+
+  it('extracts FlammableProfile from INI', () => {
+    const { logic } = makeFlammableSetup();
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { flammableProfile: { flameDamageLimit: number; aflameDurationFrames: number; burnedDelayFrames: number } | null }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.flammableProfile).not.toBeNull();
+    expect(entity.flammableProfile!.flameDamageLimit).toBe(10);
+    // 2000ms at 30fps = 60 frames
+    expect(entity.flammableProfile!.aflameDurationFrames).toBe(60);
+    expect(entity.flammableProfile!.burnedDelayFrames).toBe(0);
+  });
+
+  it('ignites entity after exceeding fire damage threshold', () => {
+    const { logic } = makeFlammableSetup({ flameDamageLimit: 10, attackDamage: 20 });
+
+    // Attack with flame weapon to trigger ignition.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { flameStatus: string; objectStatusFlags: Set<string> }>;
+    };
+    const target = priv.spawnedEntities.get(1)!;
+    expect(target.flameStatus).toBe('AFLAME');
+    expect(target.objectStatusFlags.has('AFLAME')).toBe(true);
+  });
+
+  it('applies periodic fire damage while AFLAME', () => {
+    const { logic } = makeFlammableSetup({
+      flameDamageLimit: 1, // Low threshold for instant ignition
+      aflameDurationMs: 5000,
+      aflameDamageDelayMs: 200, // ~6 frames between damage ticks
+      aflameDamageAmount: 10,
+      attackDamage: 5,
+    });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    // Initial attack + ignition.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const healthAfterIgnition = logic.getEntityState(1)!.health;
+
+    // Run more frames for fire DoT to tick.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    const healthAfterBurning = logic.getEntityState(1)!.health;
+    expect(healthAfterBurning).toBeLessThan(healthAfterIgnition);
+  });
+
+  it('transitions to NORMAL (not BURNED) when burnedDelay is 0', () => {
+    const { logic } = makeFlammableSetup({
+      flameDamageLimit: 1,
+      aflameDurationMs: 500, // ~15 frames
+      burnedDelayMs: 0, // No burned state
+      attackDamage: 5,
+    });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { flameStatus: string; objectStatusFlags: Set<string> }>;
+    };
+    const target = priv.spawnedEntities.get(1)!;
+    expect(target.flameStatus).toBe('AFLAME');
+
+    // Run past aflameDuration (~15 frames).
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Should transition to NORMAL (can burn again), NOT BURNED.
+    expect(target.flameStatus).toBe('NORMAL');
+    expect(target.objectStatusFlags.has('AFLAME')).toBe(false);
+    expect(target.objectStatusFlags.has('BURNED')).toBe(false);
+  });
+
+  it('transitions to BURNED when burnedDelay < aflameDuration', () => {
+    const { logic } = makeFlammableSetup({
+      flameDamageLimit: 1,
+      aflameDurationMs: 2000, // ~60 frames
+      burnedDelayMs: 500, // ~15 frames — BURNED set before flame ends
+      attackDamage: 5,
+    });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { flameStatus: string; objectStatusFlags: Set<string> }>;
+    };
+    const target = priv.spawnedEntities.get(1)!;
+    expect(target.flameStatus).toBe('AFLAME');
+
+    // Run 20 frames — past burnedDelay but before aflameDuration.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+    expect(target.objectStatusFlags.has('BURNED')).toBe(true);
+    expect(target.flameStatus).toBe('AFLAME'); // Still burning.
+
+    // Run past aflameDuration.
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+    expect(target.flameStatus).toBe('BURNED');
+    expect(target.objectStatusFlags.has('AFLAME')).toBe(false);
+  });
+
+  it('transitions to NORMAL when burnedDelay > aflameDuration (burned timer never fires)', () => {
+    const { logic } = makeFlammableSetup({
+      flameDamageLimit: 1,
+      aflameDurationMs: 1000, // ~30 frames
+      burnedDelayMs: 5000, // ~150 frames — burned timer fires AFTER flame ends
+      attackDamage: 5,
+    });
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { flameStatus: string; objectStatusFlags: Set<string> }>;
+    };
+    const target = priv.spawnedEntities.get(1)!;
+    expect(target.flameStatus).toBe('AFLAME');
+
+    // Run past aflameDuration (~30 frames) but well before burnedDelay (~150 frames).
+    for (let i = 0; i < 40; i++) logic.update(1 / 30);
+    // BURNED status flag was never set because burnedDelay hasn't elapsed.
+    expect(target.objectStatusFlags.has('BURNED')).toBe(false);
+    // So entity transitions to NORMAL, not BURNED.
+    expect(target.flameStatus).toBe('NORMAL');
+  });
+});

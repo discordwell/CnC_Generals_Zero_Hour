@@ -1393,6 +1393,8 @@ interface MapEntity {
   flameDamageAccumulated: number;
   /** Frame at which aflame state ends. */
   flameEndFrame: number;
+  /** Frame at which entity becomes BURNED (0 = never). Independent of flameEndFrame. */
+  flameBurnedEndFrame: number;
   /** Frame at which next fire damage tick fires. */
   flameDamageNextFrame: number;
   /** Last frame flame damage was received. */
@@ -1648,6 +1650,8 @@ interface FlammableProfile {
   aflameDamageDelayFrames: number;
   /** Damage per fire tick. */
   aflameDamageAmount: number;
+  /** Frames before BURNED status is set (0 = never burns out). Independent of AFLAME duration. */
+  burnedDelayFrames: number;
 }
 
 /**
@@ -4353,6 +4357,7 @@ export class GameLogicSubsystem implements Subsystem {
       flameStatus: 'NORMAL' as const,
       flameDamageAccumulated: 0,
       flameEndFrame: 0,
+      flameBurnedEndFrame: 0,
       flameDamageNextFrame: 0,
       flameLastDamageReceivedFrame: 0,
       flammableProfile: this.extractFlammableProfile(objectDef),
@@ -6466,6 +6471,7 @@ export class GameLogicSubsystem implements Subsystem {
             aflameDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['AflameDuration']) ?? 3000),
             aflameDamageDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['AflameDamageDelay']) ?? 500),
             aflameDamageAmount: readNumericField(block.fields, ['AflameDamageAmount']) ?? DEFAULT_AFLAME_DAMAGE_AMOUNT,
+            burnedDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['BurnedDelay']) ?? 0),
           };
         }
       }
@@ -12213,28 +12219,42 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: FlammableUpdate — tick fire DoT on all aflame entities.
-   * Entities accumulate fire damage; once threshold exceeded, they ignite.
-   * While AFLAME, periodic fire damage is applied. After duration, transitions to BURNED.
+   * Source parity: FlammableUpdate::update() — three independent timers for AFLAME entities.
+   * 1. Periodic fire damage (aflameDamageDelay)
+   * 2. BURNED status set (burnedDelay) — independent of flame end
+   * 3. Flame extinguishment (aflameDuration) — transitions to NORMAL or BURNED
    */
   private updateFlammableEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) continue;
-      if (entity.flameStatus === 'NORMAL' || entity.flameStatus === 'BURNED') continue;
+      if (entity.flameStatus !== 'AFLAME') continue;
 
-      // Entity is AFLAME — check if it's time to stop burning
-      if (this.frameCounter >= entity.flameEndFrame) {
-        entity.flameStatus = 'BURNED';
-        entity.objectStatusFlags.delete('AFLAME');
-        entity.objectStatusFlags.add('BURNED');
-        continue;
+      // Source parity: Timer 1 — periodic fire damage tick.
+      const prof = entity.flammableProfile;
+      if (prof && prof.aflameDamageDelayFrames > 0 && entity.flameDamageNextFrame > 0
+          && this.frameCounter >= entity.flameDamageNextFrame) {
+        entity.flameDamageNextFrame = this.frameCounter + prof.aflameDamageDelayFrames;
+        this.applyWeaponDamageAmount(null, entity, prof.aflameDamageAmount, 'FLAME');
       }
 
-      // Apply periodic fire damage
-      const prof = entity.flammableProfile;
-      if (prof && prof.aflameDamageDelayFrames > 0 && this.frameCounter >= entity.flameDamageNextFrame) {
-        this.applyWeaponDamageAmount(null, entity, prof.aflameDamageAmount, 'FLAME');
-        entity.flameDamageNextFrame = this.frameCounter + prof.aflameDamageDelayFrames;
+      // Source parity: Timer 2 — BURNED status set (independent of flame end).
+      if (entity.flameBurnedEndFrame > 0 && this.frameCounter >= entity.flameBurnedEndFrame) {
+        entity.objectStatusFlags.add('BURNED');
+        entity.flameBurnedEndFrame = 0; // Only set once.
+      }
+
+      // Source parity: Timer 3 — flame extinguishment.
+      if (entity.flameEndFrame > 0 && this.frameCounter >= entity.flameEndFrame) {
+        if (entity.objectStatusFlags.has('BURNED')) {
+          // Already burned — permanent, can never catch fire again.
+          entity.flameStatus = 'BURNED';
+        } else {
+          // Not yet burned — return to normal (can burn again).
+          entity.flameStatus = 'NORMAL';
+        }
+        entity.objectStatusFlags.delete('AFLAME');
+        entity.flameEndFrame = 0;
+        entity.flameDamageNextFrame = 0;
       }
     }
   }
@@ -12259,10 +12279,16 @@ export class GameLogicSubsystem implements Subsystem {
       entity.flameStatus = 'AFLAME';
       entity.objectStatusFlags.add('AFLAME');
       entity.flameEndFrame = this.frameCounter + prof.aflameDurationFrames;
+      entity.flameBurnedEndFrame = prof.burnedDelayFrames > 0
+        ? this.frameCounter + prof.burnedDelayFrames
+        : 0;
       entity.flameDamageNextFrame = prof.aflameDamageDelayFrames > 0
         ? this.frameCounter + prof.aflameDamageDelayFrames
-        : Infinity;
-      entity.flameDamageAccumulated = 0;
+        : 0;
+      // C++ parity: do NOT reset flameDamageAccumulated here.  The accumulated
+      // value stays, so if the entity returns to NORMAL and receives fire damage
+      // before the expiration delay, it re-ignites instantly (matching C++ where
+      // m_flameDamageLimit stays depleted after tryToIgnite).
     }
   }
 
