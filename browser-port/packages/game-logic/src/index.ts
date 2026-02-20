@@ -818,6 +818,46 @@ interface SpecialPowerDispatchProfile {
   targetZ: number | null;
 }
 
+/**
+ * Source parity: SpecialAbilityUpdate — unit-based special abilities that require
+ * approach, pack/unpack animations, and preparation before triggering.
+ * Used by: Black Lotus, Hackers, Colonel Burton, Jarmen Kell, Infantry capture, etc.
+ */
+type SpecialAbilityPackingState = 'NONE' | 'PACKING' | 'UNPACKING' | 'PACKED' | 'UNPACKED';
+
+interface SpecialAbilityProfile {
+  specialPowerTemplateName: string;
+  startAbilityRange: number;
+  abilityAbortRange: number;
+  preparationFrames: number;
+  persistentPrepFrames: number;
+  packTimeFrames: number;
+  unpackTimeFrames: number;
+  packUnpackVariationFactor: number;
+  skipPackingWithNoTarget: boolean;
+  effectDurationFrames: number;
+  fleeRangeAfterCompletion: number;
+  flipOwnerAfterPacking: boolean;
+  flipOwnerAfterUnpacking: boolean;
+  loseStealthOnTrigger: boolean;
+  preTriggerUnstealthFrames: number;
+  awardXPForTriggering: number;
+}
+
+interface SpecialAbilityRuntimeState {
+  active: boolean;
+  packingState: SpecialAbilityPackingState;
+  prepFrames: number;
+  animFrames: number;
+  targetEntityId: number | null;
+  targetX: number | null;
+  targetZ: number | null;
+  withinStartAbilityRange: boolean;
+  noTargetCommand: boolean;
+  /** Track persistent trigger count for repeating abilities. */
+  persistentTriggerCount: number;
+}
+
 interface UpgradeModuleProfile {
   id: string;
   moduleType:
@@ -1450,6 +1490,10 @@ interface MapEntity {
   deployStyleProfile: DeployStyleProfile | null;
   deployState: DeployState;
   deployFrameToWait: number;
+
+  // ── Source parity: SpecialAbilityUpdate — unit special abilities ──
+  specialAbilityProfile: SpecialAbilityProfile | null;
+  specialAbilityState: SpecialAbilityRuntimeState | null;
 
   destroyed: boolean;
 
@@ -2547,6 +2591,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateDetection();
     this.updateBattlePlan();
     this.updateBattlePlanParalysis();
+    this.updateSpecialAbility();
     this.updatePoisonedEntities();
     this.updateFlammableEntities();
     this.updateHealing();
@@ -4331,6 +4376,9 @@ export class GameLogicSubsystem implements Subsystem {
       toppleAngularVelocity: 0,
       toppleAngularAccumulation: 0,
       toppleSpeed: 0,
+      // Special ability
+      specialAbilityProfile: this.extractSpecialAbilityProfile(objectDef),
+      specialAbilityState: null,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -4371,6 +4419,26 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: DemoTrapUpdate::onObjectCreated — set initial mode.
     if (entity.demoTrapProfile) {
       entity.demoTrapProximityMode = entity.demoTrapProfile.defaultsToProximityMode;
+    }
+
+    // Source parity: SpecialAbilityUpdate::onObjectCreated — init state machine.
+    // Default to PACKED; if no unpack time or skipPackingWithNoTarget, start UNPACKED.
+    if (entity.specialAbilityProfile) {
+      const sap = entity.specialAbilityProfile;
+      const initialPacking: SpecialAbilityPackingState =
+        sap.unpackTimeFrames === 0 ? 'UNPACKED' : 'PACKED';
+      entity.specialAbilityState = {
+        active: false,
+        packingState: initialPacking,
+        prepFrames: 0,
+        animFrames: 0,
+        targetEntityId: null,
+        targetX: null,
+        targetZ: null,
+        withinStartAbilityRange: false,
+        noTargetCommand: false,
+        persistentTriggerCount: 0,
+      };
     }
 
     // Source parity: CountermeasuresBehavior::onObjectCreated — init state.
@@ -6749,6 +6817,52 @@ export class GameLogicSubsystem implements Subsystem {
             killWhenFinishedToppling: readBooleanField(block.fields, ['KillWhenFinishedToppling']) ?? true,
             killWhenStartToppling: readBooleanField(block.fields, ['KillWhenStartToppling']) ?? false,
             toppleLeftOrRightOnly: readBooleanField(block.fields, ['ToppleLeftOrRightOnly']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: SpecialAbilityUpdate — extract special ability config from INI Behavior block.
+   * Identifies SPECIALABILITY module type and reads all SpecialAbilityUpdate-specific fields.
+   */
+  private extractSpecialAbilityProfile(objectDef: ObjectDef | undefined): SpecialAbilityProfile | null {
+    if (!objectDef) return null;
+    let profile: SpecialAbilityProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SPECIALABILITYUPDATE') {
+          const specialPowerTemplate = readStringField(block.fields, ['SpecialPowerTemplate']);
+          if (!specialPowerTemplate) return;
+          const HUGE_DISTANCE = 10000000.0;
+          profile = {
+            specialPowerTemplateName: specialPowerTemplate.trim().toUpperCase(),
+            startAbilityRange: readNumericField(block.fields, ['StartAbilityRange']) ?? HUGE_DISTANCE,
+            abilityAbortRange: readNumericField(block.fields, ['AbilityAbortRange']) ?? HUGE_DISTANCE,
+            preparationFrames: this.msToLogicFrames(readNumericField(block.fields, ['PreparationTime']) ?? 0),
+            persistentPrepFrames: this.msToLogicFrames(readNumericField(block.fields, ['PersistentPrepTime']) ?? 0),
+            packTimeFrames: this.msToLogicFrames(readNumericField(block.fields, ['PackTime']) ?? 0),
+            unpackTimeFrames: this.msToLogicFrames(readNumericField(block.fields, ['UnpackTime']) ?? 0),
+            packUnpackVariationFactor: readNumericField(block.fields, ['PackUnpackVariationFactor']) ?? 0,
+            skipPackingWithNoTarget: readBooleanField(block.fields, ['SkipPackingWithNoTarget']) === true,
+            effectDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['EffectDuration']) ?? 0),
+            fleeRangeAfterCompletion: readNumericField(block.fields, ['FleeRangeAfterCompletion']) ?? 0,
+            flipOwnerAfterPacking: readBooleanField(block.fields, ['FlipOwnerAfterPacking']) === true,
+            flipOwnerAfterUnpacking: readBooleanField(block.fields, ['FlipOwnerAfterUnpacking']) === true,
+            loseStealthOnTrigger: readBooleanField(block.fields, ['LoseStealthOnTrigger']) === true,
+            preTriggerUnstealthFrames: this.msToLogicFrames(readNumericField(block.fields, ['PreTriggerUnstealthTime']) ?? 0),
+            awardXPForTriggering: readNumericField(block.fields, ['AwardXPForTriggering']) ?? 0,
           };
         }
       }
@@ -9467,6 +9581,12 @@ export class GameLogicSubsystem implements Subsystem {
       null,
     );
 
+    // Source parity: SpecialAbilityUpdate — deferred execution via state machine.
+    if (module.moduleType === 'SPECIALABILITYUPDATE') {
+      this.initiateSpecialAbility(sourceEntityId, null, null, null);
+      return;
+    }
+
     // Execute no-target effects (spy vision centered on source, cash bounty, etc.).
     const source = this.spawnedEntities.get(sourceEntityId);
     if (!source || source.destroyed) {
@@ -9542,6 +9662,12 @@ export class GameLogicSubsystem implements Subsystem {
       targetX,
       targetZ,
     );
+
+    // Source parity: SpecialAbilityUpdate — deferred execution via state machine.
+    if (module.moduleType === 'SPECIALABILITYUPDATE') {
+      this.initiateSpecialAbility(sourceEntityId, null, targetX, targetZ);
+      return;
+    }
 
     // Execute position-targeted effects.
     const source = this.spawnedEntities.get(sourceEntityId);
@@ -9625,6 +9751,12 @@ export class GameLogicSubsystem implements Subsystem {
       null,
       null,
     );
+
+    // Source parity: SpecialAbilityUpdate — deferred execution via state machine.
+    if (module.moduleType === 'SPECIALABILITYUPDATE') {
+      this.initiateSpecialAbility(sourceEntityId, targetEntityId, null, null);
+      return;
+    }
 
     // Execute object-targeted effects.
     const source = this.spawnedEntities.get(sourceEntityId);
@@ -9724,6 +9856,20 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingRepairActions.delete(entityId);
     // Source parity: DozerAIUpdate::cancelTask — clear active construction assignment.
     this.cancelDozerConstructionTask(entityId);
+    // Source parity: SpecialAbilityUpdate — cancel any active special ability.
+    this.cancelActiveSpecialAbility(entityId);
+  }
+
+  /**
+   * Source parity: Cancel a running special ability on the given entity (if any).
+   * Called when the entity receives a new command (stop, move, attack, etc.).
+   */
+  private cancelActiveSpecialAbility(entityId: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) return;
+    const state = entity.specialAbilityState;
+    if (!state || !state.active) return;
+    this.finishSpecialAbility(entity, false);
   }
 
   /**
@@ -18649,6 +18795,393 @@ export class GameLogicSubsystem implements Subsystem {
   private static readonly TOPPLE_ANGULAR_LIMIT = Math.PI / 2 - Math.PI / 64;
   /** Below this velocity, stop bouncing. */
   private static readonly TOPPLE_VELOCITY_BOUNCE_LIMIT = 0.01;
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SpecialAbilityUpdate — unit special ability state machine
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Source parity: SpecialAbilityUpdate::initiateIntentToDoSpecialPower —
+   * begins the special ability state machine for an entity.
+   */
+  private initiateSpecialAbility(
+    entityId: number,
+    targetEntityId: number | null,
+    targetX: number | null,
+    targetZ: number | null,
+  ): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) return;
+    const profile = entity.specialAbilityProfile;
+    const state = entity.specialAbilityState;
+    if (!profile || !state) return;
+
+    // Stop current movement/combat — ability takes priority.
+    // Must happen before setting active=true so cancelActiveSpecialAbility doesn't cancel the new ability.
+    this.cancelEntityCommandPathActions(entityId);
+
+    // Store target.
+    state.targetEntityId = targetEntityId;
+    state.targetX = targetX;
+    state.targetZ = targetZ;
+    state.noTargetCommand = targetEntityId === null && targetX === null;
+    state.withinStartAbilityRange = false;
+    state.prepFrames = 0;
+    state.animFrames = 0;
+    state.persistentTriggerCount = 0;
+    state.active = true;
+
+    // Source parity: SpecialAbilityUpdate::initiateIntentToDoSpecialPower — always reset
+    // packingState to PACKED, then conditionally advance to UNPACKED.
+    state.packingState = 'PACKED';
+    if (profile.unpackTimeFrames === 0 || (profile.skipPackingWithNoTarget && state.noTargetCommand)) {
+      state.packingState = 'UNPACKED';
+    }
+  }
+
+  /**
+   * Source parity: SpecialAbilityUpdate::update() — per-frame state machine.
+   */
+  private updateSpecialAbility(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      const profile = entity.specialAbilityProfile;
+      const state = entity.specialAbilityState;
+      if (!profile || !state || !state.active) continue;
+
+      // Source parity: isEffectivelyDead check — clean up ability on dying entity.
+      if (entity.destroyed || entity.slowDeathState) {
+        this.finishSpecialAbility(entity, false);
+        continue;
+      }
+
+      // ── Target validation ──
+      if (state.targetEntityId !== null) {
+        const target = this.spawnedEntities.get(state.targetEntityId);
+        if (!target || target.destroyed || target.slowDeathState) {
+          // Target died — abort.
+          this.finishSpecialAbility(entity, false);
+          continue;
+        }
+      }
+
+      // ── Handle pack/unpack animation timers ──
+      if (state.animFrames > 0) {
+        state.animFrames--;
+        if (state.animFrames <= 0) {
+          if (state.packingState === 'UNPACKING') {
+            state.packingState = 'UNPACKED';
+            if (profile.flipOwnerAfterUnpacking) {
+              entity.rotationY += Math.PI;
+            }
+          } else if (state.packingState === 'PACKING') {
+            state.packingState = 'PACKED';
+            if (profile.flipOwnerAfterPacking) {
+              entity.rotationY += Math.PI;
+            }
+            // Packing complete → finish ability.
+            this.finishSpecialAbility(entity, true);
+            continue;
+          }
+        } else {
+          continue; // Still animating.
+        }
+      }
+
+      // ── Preparation countdown ──
+      if (state.prepFrames > 0) {
+        // Source parity: abort if target moved beyond abort range.
+        if (!this.continueSpecialAbilityPreparation(entity, profile, state)) {
+          this.startSpecialAbilityPacking(entity, profile, state, false);
+          continue;
+        }
+
+        // Source parity: pre-trigger un-stealth.
+        if (profile.loseStealthOnTrigger && profile.preTriggerUnstealthFrames > 0
+          && state.prepFrames <= profile.preTriggerUnstealthFrames) {
+          entity.detectedUntilFrame = Math.max(
+            entity.detectedUntilFrame,
+            this.frameCounter + profile.preTriggerUnstealthFrames,
+          );
+        }
+
+        state.prepFrames--;
+        if (state.prepFrames <= 0) {
+          this.triggerSpecialAbilityEffect(entity, profile, state);
+
+          // Source parity: persistent mode — reset prep for next trigger.
+          if (profile.persistentPrepFrames > 0) {
+            state.prepFrames = profile.persistentPrepFrames;
+            state.persistentTriggerCount++;
+            continue;
+          }
+
+          // Non-persistent: start packing.
+          this.startSpecialAbilityPacking(entity, profile, state, true);
+        }
+        continue;
+      }
+
+      // ── Approach phase: move within StartAbilityRange ──
+      if (!state.withinStartAbilityRange) {
+        if (this.isWithinSpecialAbilityRange(entity, state, profile.startAbilityRange)) {
+          state.withinStartAbilityRange = true;
+        } else {
+          this.approachSpecialAbilityTarget(entity, state);
+          continue;
+        }
+      }
+
+      // ── Unpack phase ──
+      if (state.packingState === 'PACKED') {
+        this.startSpecialAbilityUnpacking(entity, profile, state);
+        continue;
+      }
+
+      // ── Start preparation after unpacked ──
+      if (state.packingState === 'UNPACKED') {
+        // Source parity: IS_USING_ABILITY is set at start of preparation, not initiation.
+        entity.objectStatusFlags.add('IS_USING_ABILITY');
+        state.prepFrames = profile.preparationFrames > 0 ? profile.preparationFrames : 1;
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Source parity: Check if entity is within range of its special ability target.
+   */
+  private isWithinSpecialAbilityRange(
+    entity: MapEntity,
+    state: SpecialAbilityRuntimeState,
+    range: number,
+  ): boolean {
+    if (state.noTargetCommand) return true;
+    let tx: number;
+    let tz: number;
+    if (state.targetEntityId !== null) {
+      const target = this.spawnedEntities.get(state.targetEntityId);
+      if (!target) return true;
+      tx = target.x;
+      tz = target.z;
+    } else if (state.targetX !== null && state.targetZ !== null) {
+      tx = state.targetX;
+      tz = state.targetZ;
+    } else {
+      return true;
+    }
+    const dx = entity.x - tx;
+    const dz = entity.z - tz;
+    return dx * dx + dz * dz <= range * range;
+  }
+
+  /**
+   * Source parity: Move entity toward its special ability target.
+   */
+  private approachSpecialAbilityTarget(
+    entity: MapEntity,
+    state: SpecialAbilityRuntimeState,
+  ): void {
+    if (entity.moving) return; // Already moving.
+    if (state.targetEntityId !== null) {
+      const target = this.spawnedEntities.get(state.targetEntityId);
+      if (target && !target.destroyed) {
+        this.issueMoveTo(entity.id, target.x, target.z);
+      }
+    } else if (state.targetX !== null && state.targetZ !== null) {
+      this.issueMoveTo(entity.id, state.targetX, state.targetZ);
+    }
+  }
+
+  /**
+   * Source parity: Start the unpack animation.
+   */
+  private startSpecialAbilityUnpacking(
+    entity: MapEntity,
+    profile: SpecialAbilityProfile,
+    state: SpecialAbilityRuntimeState,
+  ): void {
+    if (profile.unpackTimeFrames <= 0) {
+      state.packingState = 'UNPACKED';
+      return;
+    }
+    state.packingState = 'UNPACKING';
+    const variation = profile.packUnpackVariationFactor > 0
+      ? 1.0 + (this.gameRandom.nextFloat() * 2 - 1) * profile.packUnpackVariationFactor
+      : 1.0;
+    state.animFrames = Math.max(1, Math.round(profile.unpackTimeFrames * variation));
+    // Stop movement during unpack.
+    entity.moving = false;
+    entity.movePath = [];
+    entity.moveTarget = null;
+  }
+
+  /**
+   * Source parity: Start the pack animation.
+   */
+  private startSpecialAbilityPacking(
+    entity: MapEntity,
+    profile: SpecialAbilityProfile,
+    state: SpecialAbilityRuntimeState,
+    _success: boolean,
+  ): void {
+    if (profile.packTimeFrames <= 0 ||
+        (profile.skipPackingWithNoTarget && state.noTargetCommand)) {
+      // No packing needed — finish immediately.
+      this.finishSpecialAbility(entity, _success);
+      return;
+    }
+    state.packingState = 'PACKING';
+    const variation = profile.packUnpackVariationFactor > 0
+      ? 1.0 + (this.gameRandom.nextFloat() * 2 - 1) * profile.packUnpackVariationFactor
+      : 1.0;
+    state.animFrames = Math.max(1, Math.round(profile.packTimeFrames * variation));
+  }
+
+  /**
+   * Source parity: continuePreparation — check abort conditions during preparation.
+   * Returns false if the ability should be aborted.
+   */
+  private continueSpecialAbilityPreparation(
+    entity: MapEntity,
+    profile: SpecialAbilityProfile,
+    state: SpecialAbilityRuntimeState,
+  ): boolean {
+    const HUGE_DISTANCE = 10000000.0;
+    if (profile.abilityAbortRange < HUGE_DISTANCE) {
+      if (!this.isWithinSpecialAbilityRange(entity, state, profile.abilityAbortRange)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: triggerAbilityEffect — execute the ability's actual effect.
+   * Delegates to the existing special-power-effects infrastructure via lastSpecialPowerDispatch.
+   */
+  private triggerSpecialAbilityEffect(
+    entity: MapEntity,
+    profile: SpecialAbilityProfile,
+    state: SpecialAbilityRuntimeState,
+  ): void {
+    // Source parity: LoseStealthOnTrigger.
+    if (profile.loseStealthOnTrigger) {
+      entity.detectedUntilFrame = Math.max(
+        entity.detectedUntilFrame,
+        this.frameCounter + LOGIC_FRAME_RATE * 2,
+      );
+    }
+
+    // Source parity: award XP for triggering.
+    if (profile.awardXPForTriggering > 0 && entity.experienceProfile) {
+      const xpResult = addExperiencePointsImpl(
+        entity.experienceState,
+        entity.experienceProfile,
+        profile.awardXPForTriggering,
+        false,
+      );
+      if (xpResult.didLevelUp) {
+        this.onEntityLevelUp(entity, xpResult.oldLevel, xpResult.newLevel);
+      }
+    }
+
+    // Execute the effect based on the last dispatch record.
+    const dispatch = entity.lastSpecialPowerDispatch;
+    if (!dispatch) return;
+
+    const effectContext = this.createSpecialPowerEffectContext();
+    const sourceSide = entity.side ?? '';
+
+    if (state.targetEntityId !== null) {
+      // Object-targeted ability: cash hack, defector, etc.
+      const module = entity.specialPowerModules.get(profile.specialPowerTemplateName);
+      if (!module) return;
+      const effectCategory = resolveEffectCategoryImpl(module.moduleType);
+      switch (effectCategory) {
+        case 'CASH_HACK':
+          executeCashHackImpl({
+            sourceEntityId: entity.id,
+            sourceSide,
+            targetEntityId: state.targetEntityId,
+            amountToSteal: module.cashHackMoneyAmount > 0
+              ? module.cashHackMoneyAmount : DEFAULT_CASH_HACK_AMOUNT,
+          }, effectContext);
+          break;
+        case 'DEFECTOR':
+          executeDefectorImpl({
+            sourceEntityId: entity.id,
+            sourceSide,
+            targetEntityId: state.targetEntityId,
+          }, effectContext);
+          break;
+      }
+    } else if (state.targetX !== null && state.targetZ !== null) {
+      // Position-targeted ability.
+      const module = entity.specialPowerModules.get(profile.specialPowerTemplateName);
+      if (!module) return;
+      const effectCategory = resolveEffectCategoryImpl(module.moduleType);
+      switch (effectCategory) {
+        case 'AREA_DAMAGE':
+          executeAreaDamageImpl({
+            sourceEntityId: entity.id,
+            sourceSide,
+            targetX: state.targetX,
+            targetZ: state.targetZ,
+            radius: module.areaDamageRadius > 0 ? module.areaDamageRadius : DEFAULT_AREA_DAMAGE_RADIUS,
+            damage: module.areaDamageAmount > 0 ? module.areaDamageAmount : DEFAULT_AREA_DAMAGE_AMOUNT,
+            damageType: 'EXPLOSION',
+          }, effectContext);
+          break;
+        case 'EMP_PULSE':
+          executeEmpPulseImpl({
+            sourceEntityId: entity.id,
+            sourceSide,
+            targetX: state.targetX,
+            targetZ: state.targetZ,
+            radius: module.areaDamageRadius > 0 ? module.areaDamageRadius : DEFAULT_EMP_RADIUS,
+            damage: module.areaDamageAmount > 0 ? module.areaDamageAmount : DEFAULT_EMP_DAMAGE,
+          }, effectContext);
+          break;
+      }
+    }
+    // No-target abilities have their effects triggered inline (e.g., cash bounty already handled).
+  }
+
+  /**
+   * Source parity: finishAbility + onExit — clean up after ability completion or abort.
+   */
+  private finishSpecialAbility(entity: MapEntity, _success: boolean): void {
+    const profile = entity.specialAbilityProfile;
+    const state = entity.specialAbilityState;
+    if (!state) return;
+
+    state.active = false;
+    state.targetEntityId = null;
+    state.targetX = null;
+    state.targetZ = null;
+    state.prepFrames = 0;
+    state.animFrames = 0;
+    state.withinStartAbilityRange = false;
+    state.noTargetCommand = false;
+    state.persistentTriggerCount = 0;
+
+    // Source parity: onExit sets m_packingState = STATE_NONE.
+    // We use 'PACKED' as the idle representation since initiateSpecialAbility always resets it.
+    state.packingState = 'PACKED';
+
+    entity.objectStatusFlags.delete('IS_USING_ABILITY');
+
+    // Source parity: flee after completion.
+    // C++ uses forward (facing) direction when flip flags are set, backward otherwise.
+    if (_success && profile && profile.fleeRangeAfterCompletion > 0) {
+      const fleeDist = profile.fleeRangeAfterCompletion;
+      const flipped = profile.flipOwnerAfterUnpacking || profile.flipOwnerAfterPacking;
+      const fleeAngle = flipped ? entity.rotationY : entity.rotationY + Math.PI;
+      const fleeX = entity.x + Math.cos(fleeAngle) * fleeDist;
+      const fleeZ = entity.z + Math.sin(fleeAngle) * fleeDist;
+      this.issueMoveTo(entity.id, fleeX, fleeZ);
+    }
+  }
 
   /**
    * Source parity: ToppleUpdate::applyTopplingForce() — initiate topple on an entity.

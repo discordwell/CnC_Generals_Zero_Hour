@@ -1,5 +1,15 @@
 # Session Summaries
 
+## 2026-02-20T23:00Z — SpecialAbilityUpdate State Machine
+- SpecialAbilityUpdate: unit-based special ability system (Black Lotus, Hackers, Burton, Jarmen Kell)
+  - SpecialAbilityProfile INI: SpecialPowerTemplate, StartAbilityRange, PreparationTime, PackTime, UnpackTime, SkipPackingWithNoTarget, PersistentPrepTime, FlipOwnerAfterPacking/Unpacking, LoseStealthOnTrigger, AwardXPForTriggering
+  - 5-state packing machine: NONE → PACKED → UNPACKING → UNPACKED → prep → trigger → PACKING → PACKED
+  - Dispatch intercepts in all three special power callbacks (NoTarget, TargetPosition, TargetObject)
+  - Target approach with range check, abort on target death, stop command cancellation
+  - Persistent mode for multi-trigger abilities, flip rotation, flee after completion
+  - XP award via addExperiencePointsImpl, stealth loss via preTriggerUnstealthFrames
+  - 9 tests — All 1183 tests pass
+
 ## 2026-02-20T22:00Z — RebuildHoleBehavior
 - RebuildHoleBehavior: GLA building reconstruction system — committed 9efcdca
   - Two-module system: RebuildHoleExposeDieProfile (buildings) + RebuildHoleBehaviorProfile (holes)
@@ -44,11 +54,6 @@
   - State machine: IDLE → UNPACKING → ACTIVE → PACKING → IDLE with timed transitions
   - Reference-counted bonuses via sideBattlePlanBonuses (0→1 apply, 1→0 remove)
   - 7 tests — All 1106 tests pass, clean build
-
-## 2026-02-20T17:50Z — INI-Driven Stealth/Detection System + Code Review Fixes (Tasks #85-87)
-- Tasks #85-87: INI-driven stealth and detection system with C++ StealthUpdate/StealthDetectorUpdate parity
-  - StealthProfile + DetectorProfile INI parsing, 9 forbidden condition tokens, detection rate throttle
-  - 12 tests — All 1091 tests pass, clean build
 
 # Key Findings
 

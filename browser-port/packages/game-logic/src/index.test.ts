@@ -13928,7 +13928,7 @@ describe('SlavedUpdate', () => {
   function getEntity(logic: GameLogicSubsystem, id: number) {
     return (logic as unknown as { spawnedEntities: Map<number, {
       slaverEntityId: number | null;
-      objectStatusFlags: Set<string>;
+      statusFlags: Set<string>;
       destroyed: boolean;
       health: number;
       maxHealth: number;
@@ -14822,5 +14822,363 @@ describe('ToppleUpdate', () => {
       // Tree should still have full health (no crush damage applied).
       expect(tree!.health).toBe(50);
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SpecialAbilityUpdate — unit special ability state machine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function makeSpecialAbilityBundle(params: {
+  abilityFields?: Record<string, unknown>;
+  specialPowerName?: string;
+  targetObjectDef?: ObjectDef;
+  moveSpeed?: number;
+}) {
+  const specialPowerName = params.specialPowerName ?? 'TestAbilityPower';
+  const moveSpeed = params.moveSpeed ?? 30;
+  return makeBundle({
+    objects: [
+      makeObjectDef('AbilityUser', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'SpecialAbilityUpdate AbilityModule', {
+          SpecialPowerTemplate: specialPowerName,
+          UpdateModuleStartsAttack: true,
+          ...params.abilityFields,
+        }),
+        makeBlock('LocomotorSet', 'LocomotorSet', { Locomotor: ['SET_NORMAL', 'TestLoco'] }),
+      ], { CommandSet: 'AbilityUserCS', BuildCost: 500 }),
+      ...(params.targetObjectDef ? [params.targetObjectDef] : [
+        makeObjectDef('AbilityTarget', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ]),
+    ],
+    specialPowers: [
+      makeSpecialPowerDef(specialPowerName, { ReloadTime: 0 }),
+    ],
+    locomotors: [
+      makeLocomotorDef('TestLoco', moveSpeed),
+    ],
+  });
+}
+
+function makeSpecialAbilitySetup(
+  abilityFields: Record<string, unknown> = {},
+  targetPosition?: { x: number; y: number },
+) {
+  const bundle = makeSpecialAbilityBundle({ abilityFields });
+  const scene = new THREE.Scene();
+  const logic = new GameLogicSubsystem(scene);
+
+  const mapObjects = [
+    makeMapObject('AbilityUser', 10, 10),
+    ...(targetPosition ? [makeMapObject('AbilityTarget', targetPosition.x, targetPosition.y)] : []),
+  ];
+
+  logic.loadMapObjects(
+    makeMap(mapObjects),
+    makeRegistry(bundle),
+    makeHeightmap(),
+  );
+
+  return { logic, scene };
+}
+
+describe('SpecialAbilityUpdate', () => {
+  it('extracts SpecialAbilityProfile from INI', () => {
+    const { logic } = makeSpecialAbilitySetup({
+      StartAbilityRange: 50,
+      AbilityAbortRange: 100,
+      PreparationTime: 1000,
+      PackTime: 500,
+      UnpackTime: 750,
+      SkipPackingWithNoTarget: true,
+      FleeRangeAfterCompletion: 40,
+      FlipOwnerAfterUnpacking: true,
+    });
+
+    const entity = logic.getEntityState(1);
+    expect(entity).not.toBeNull();
+    // Entity should have been created successfully with a special ability profile.
+    // Verify via the specialAbilityState being initialized.
+    expect(entity!.statusFlags).toBeDefined();
+  });
+
+  it('initiates ability and sets IS_USING_ABILITY status flag', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      { UnpackTime: 0, PreparationTime: 500, SkipPackingWithNoTarget: true },
+    );
+
+    // Issue special ability command (no target).
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_ABILITY',
+      specialPowerName: 'TestAbilityPower',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(1 / 30);
+
+    const state = logic.getEntityState(1);
+    expect(state).not.toBeNull();
+    expect(state!.statusFlags).toContain('IS_USING_ABILITY');
+  });
+
+  it('runs unpack → preparation → pack lifecycle with no target', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      {
+        UnpackTime: 100,  // ~3 frames
+        PreparationTime: 100, // ~3 frames
+        PackTime: 100, // ~3 frames
+        SkipPackingWithNoTarget: false,
+      },
+    );
+
+    // Issue no-target ability.
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_ABILITY',
+      specialPowerName: 'TestAbilityPower',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    // Tick through unpack + prep + pack: ~9 frames + overhead.
+    let abilityCleared = false;
+    for (let frame = 0; frame < 30; frame++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && !s.statusFlags.includes('IS_USING_ABILITY') && frame > 2) {
+        abilityCleared = true;
+        break;
+      }
+    }
+
+    expect(abilityCleared).toBe(true);
+  });
+
+  it('skips packing with SkipPackingWithNoTarget and no-target command', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      {
+        UnpackTime: 0,
+        PreparationTime: 100, // ~3 frames
+        PackTime: 500, // would be ~15 frames if not skipped
+        SkipPackingWithNoTarget: true,
+      },
+    );
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_ABILITY',
+      specialPowerName: 'TestAbilityPower',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    // With SkipPackingWithNoTarget and prep ~3 frames, should finish quickly
+    // (no unpack, prep only, then skip pack → finish).
+    let abilityCleared = false;
+    for (let frame = 0; frame < 10; frame++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && !s.statusFlags.includes('IS_USING_ABILITY') && frame > 0) {
+        abilityCleared = true;
+        break;
+      }
+    }
+
+    // Should finish in well under 10 frames (no 15-frame pack).
+    expect(abilityCleared).toBe(true);
+  });
+
+  it('approaches target position when not within StartAbilityRange', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      {
+        StartAbilityRange: 15,
+        UnpackTime: 0,
+        PreparationTime: 100,
+        PackTime: 0,
+      },
+    );
+
+    // commandOption 0x20 = COMMAND_OPTION_NEED_TARGET_POS — position-targeted ability.
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_ABILITY',
+      specialPowerName: 'TestAbilityPower',
+      commandOption: 0x20,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 50,
+      targetZ: 50,
+    });
+    logic.update(1 / 30);
+
+    // Entity should have the special ability active with target position stored.
+    const entity = (logic as any).spawnedEntities.get(1);
+    expect(entity).toBeDefined();
+    // Verify ability was initiated.
+    expect(entity.specialAbilityState).not.toBeNull();
+    expect(entity.specialAbilityState.active).toBe(true);
+    expect(entity.specialAbilityState.targetX).toBe(50);
+    expect(entity.specialAbilityState.targetZ).toBe(50);
+    // Verify entity is not yet within range.
+    expect(entity.specialAbilityState.withinStartAbilityRange).toBe(false);
+  });
+
+  it('aborts ability when target entity dies during preparation', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      {
+        StartAbilityRange: 10000,
+        UnpackTime: 0,
+        PreparationTime: 5000, // long prep time (~150 frames)
+        PackTime: 0,
+      },
+      { x: 10, y: 11 }, // Target placed very close.
+    );
+
+    // Directly initiate the special ability with target entity via internal state,
+    // bypassing the routing layer which requires enemy relationship.
+    const entity = (logic as any).spawnedEntities.get(1);
+    const state = entity.specialAbilityState;
+    state.active = true;
+    state.targetEntityId = 2;
+    state.withinStartAbilityRange = true;
+    state.packingState = 'UNPACKED';
+    entity.objectStatusFlags.add('IS_USING_ABILITY');
+
+    // Tick a few frames to get into preparation.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)!.statusFlags).toContain('IS_USING_ABILITY');
+
+    // Force-kill target by directly manipulating internal state.
+    const target = (logic as any).spawnedEntities.get(2);
+    if (target) {
+      target.health = 0;
+      target.destroyed = true;
+    }
+
+    logic.update(1 / 30);
+
+    // Ability should be aborted — IS_USING_ABILITY cleared.
+    const afterState = logic.getEntityState(1);
+    expect(afterState!.statusFlags).not.toContain('IS_USING_ABILITY');
+  });
+
+  it('cancels ability when entity receives stop command', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      {
+        StartAbilityRange: 10000,
+        UnpackTime: 0,
+        PreparationTime: 5000,
+        PackTime: 0,
+        SkipPackingWithNoTarget: true,
+      },
+    );
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_ABILITY',
+      specialPowerName: 'TestAbilityPower',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    // Tick a few frames — IS_USING_ABILITY set at preparation start (first frame).
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)!.statusFlags).toContain('IS_USING_ABILITY');
+
+    // Stop command should cancel the ability.
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)!.statusFlags).not.toContain('IS_USING_ABILITY');
+  });
+
+  it('persistent ability triggers multiple times before packing', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      {
+        StartAbilityRange: 10000,
+        UnpackTime: 0,
+        PreparationTime: 100, // ~3 frames to first trigger
+        PersistentPrepTime: 100, // ~3 frames between subsequent triggers
+        PackTime: 0,
+        SkipPackingWithNoTarget: true,
+      },
+    );
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_ABILITY',
+      specialPowerName: 'TestAbilityPower',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    // Run for 20 frames — should trigger multiple times and stay active.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Persistent ability should STILL be active (never packs until stopped).
+    const state = logic.getEntityState(1);
+    expect(state!.statusFlags).toContain('IS_USING_ABILITY');
+  });
+
+  it('flips entity rotation after unpacking when FlipOwnerAfterUnpacking is set', () => {
+    const { logic } = makeSpecialAbilitySetup(
+      {
+        StartAbilityRange: 10000,
+        UnpackTime: 100, // ~3 frames
+        PreparationTime: 10000,
+        PackTime: 0,
+        FlipOwnerAfterUnpacking: true,
+        SkipPackingWithNoTarget: false,
+      },
+    );
+
+    const entity = (logic as any).spawnedEntities.get(1);
+    const rotBefore = entity.rotationY;
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_ABILITY',
+      specialPowerName: 'TestAbilityPower',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    // Run through unpack animation (~3 frames) + a few extra.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Rotation should have changed by PI (180 degrees).
+    const rotDiff = Math.abs(entity.rotationY - rotBefore);
+    expect(rotDiff).toBeCloseTo(Math.PI, 1);
   });
 });

@@ -1,5 +1,10 @@
 # Old Session Summaries
 
+## 2026-02-20T17:50Z — INI-Driven Stealth/Detection System + Code Review Fixes (Tasks #85-87)
+- Tasks #85-87: INI-driven stealth and detection system with C++ StealthUpdate/StealthDetectorUpdate parity
+  - StealthProfile + DetectorProfile INI parsing, 9 forbidden condition tokens, detection rate throttle
+  - 12 tests — All 1091 tests pass, clean build
+
 ## 2026-02-20T16:00Z — Crush/Squish Damage During Movement (Task #95)
 - Task #95: Crush collision system with C++ PhysicsUpdate::checkForOverlapCollision + SquishCollide parity — committed 926c982
   - updateCrushCollisions(), direction dot-product check, canBeSquished, CRUSH damage type
