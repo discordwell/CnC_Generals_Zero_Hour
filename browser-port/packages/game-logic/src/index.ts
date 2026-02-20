@@ -1474,8 +1474,8 @@ interface MapEntity {
   autoDepositInitialBonusAwarded: boolean;
 
   // ── Source parity: CreateObjectDie / SlowDeathBehavior — OCL on death ──
-  /** OCL names to execute when entity is destroyed. */
-  deathOCLNames: string[];
+  /** OCL entries to execute when entity is destroyed, with DieMuxData filtering. */
+  deathOCLEntries: DeathOCLEntry[];
 
   // ── Source parity: Object::m_constructionPercent — dozer construction progress ──
   /**
@@ -1498,6 +1498,10 @@ interface MapEntity {
   specialAbilityState: SpecialAbilityRuntimeState | null;
 
   destroyed: boolean;
+
+  // ── Source parity: DamageInfo.in.m_deathType — death cause for die module filtering ──
+  /** Set before death pipeline runs. Maps from damage type (CRUSH→CRUSHED, POISON→POISONED, etc.). */
+  pendingDeathType: string;
 
   // ── Source parity: LifetimeUpdate — timed self-destruction ──
   /** Frame at which this entity should self-destruct (null = no lifetime limit). */
@@ -2226,6 +2230,25 @@ function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState
 }
 
 /**
+ * Source parity: DamageInfo.in.m_deathType mapping from damage type.
+ * C++ sets m_deathType explicitly per damage source (Damage.h lines 169-200).
+ */
+function damageTypeToDeathType(damageType: string): string {
+  switch (damageType.toUpperCase()) {
+    case 'CRUSH': return 'CRUSHED';
+    case 'POISON': case 'POISON_BETA': return 'POISONED';
+    case 'FLAME': case 'PARTICLE_BEAM': return 'BURNED';
+    case 'EXPLOSION': case 'ARMOR_PIERCING': return 'EXPLODED';
+    case 'LASER': return 'LASERED';
+    case 'TOPPLING': return 'TOPPLED';
+    case 'WATER': return 'FLOODED';
+    case 'SUICIDE': return 'SUICIDED';
+    case 'DETONATION': return 'DETONATED';
+    default: return 'NORMAL';
+  }
+}
+
+/**
  * Source parity: SlowDeathBehavior module parsed from INI.
  * Controls phased death sequences with configurable timing, effects, and sinking.
  */
@@ -2258,6 +2281,22 @@ interface SlowDeathProfile {
   phaseOCLs: [string[], string[], string[]];
   /** Weapon names to fire at each phase. */
   phaseWeapons: [string[], string[], string[]];
+}
+
+/**
+ * Source parity: CreateObjectDie / SlowDeathBehavior — death OCL entry with DieMuxData
+ * filtering. C++ DieModule base class provides isDieApplicable checks.
+ */
+interface DeathOCLEntry {
+  oclName: string;
+  /** DieMuxData: which death types trigger this (empty = ALL). */
+  deathTypes: Set<string>;
+  /** DieMuxData: which veterancy levels allow this (empty = ALL). */
+  veterancyLevels: Set<string>;
+  /** DieMuxData: status flags that exempt this behavior. */
+  exemptStatus: Set<string>;
+  /** DieMuxData: status flags required for this behavior. */
+  requiredStatus: Set<string>;
 }
 
 /**
@@ -4553,7 +4592,7 @@ export class GameLogicSubsystem implements Subsystem {
       autoDepositNextFrame: 0,
       autoDepositInitialBonusAwarded: false,
       // Death OCLs
-      deathOCLNames: this.extractDeathOCLNames(objectDef),
+      deathOCLEntries: this.extractDeathOCLEntries(objectDef),
       // Deploy state machine
       deployStyleProfile: this.extractDeployStyleProfile(objectDef),
       deployState: 'READY_TO_MOVE' as DeployState,
@@ -4563,6 +4602,7 @@ export class GameLogicSubsystem implements Subsystem {
       builderId: 0,
       buildTotalFrames: 0,
       destroyed: false,
+      pendingDeathType: 'NORMAL',
       // Lifetime
       lifetimeDieFrame: this.resolveLifetimeDieFrame(objectDef),
       // Deletion
@@ -10210,6 +10250,66 @@ export class GameLogicSubsystem implements Subsystem {
     return this.extractRailedTransportProfile(objectDef ?? undefined) !== null;
   }
 
+  /**
+   * Source parity: AIPlayer special power usage — collect all ready special powers
+   * for entities belonging to a given side. Returns power name, source entity,
+   * targeting info derived from the effect category.
+   */
+  private collectReadySpecialPowersForSide(side: string): Array<{
+    specialPowerName: string;
+    sourceEntityId: number;
+    commandOption: number;
+    commandButtonId: string;
+    effectCategory: string;
+  }> {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) return [];
+    const result: Array<{
+      specialPowerName: string;
+      sourceEntityId: number;
+      commandOption: number;
+      commandButtonId: string;
+      effectCategory: string;
+    }> = [];
+
+    for (const [powerName, sourcesMap] of this.shortcutSpecialPowerSourceByName.entries()) {
+      for (const [entityId, readyFrame] of sourcesMap.entries()) {
+        if (readyFrame > this.frameCounter) continue;
+        const entity = this.spawnedEntities.get(entityId);
+        if (!entity || entity.destroyed) continue;
+        if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+
+        // Resolve effect category from entity's special power module.
+        const module = entity.specialPowerModules.get(powerName);
+        const effectCategory = module
+          ? resolveEffectCategoryImpl(module.moduleType)
+          : 'GENERIC';
+
+        // Derive commandOption from effect category for AI dispatch.
+        const NEED_TARGET_POS = 0x20;
+        const NEED_TARGET_ENEMY = 0x01;
+        let commandOption = 0;
+        const upperCat = effectCategory.toUpperCase();
+        if (upperCat === 'AREA_DAMAGE' || upperCat === 'EMP_PULSE'
+            || upperCat === 'SPY_VISION' || upperCat === 'AREA_HEAL') {
+          commandOption = NEED_TARGET_POS;
+        } else if (upperCat === 'CASH_HACK' || upperCat === 'DEFECTOR') {
+          commandOption = NEED_TARGET_ENEMY;
+        }
+
+        result.push({
+          specialPowerName: powerName,
+          sourceEntityId: entityId,
+          commandOption,
+          commandButtonId: '', // AI doesn't need button ID — routing uses specialPowerName.
+          effectCategory,
+        });
+        break; // One source per power name is enough for AI.
+      }
+    }
+    return result;
+  }
+
   private routeIssueSpecialPowerCommand(command: IssueSpecialPowerCommand): void {
     const normalizeShortcutSpecialPowerName = this.normalizeShortcutSpecialPowerName.bind(this);
     routeIssueSpecialPowerCommandImpl(command, {
@@ -14278,6 +14378,9 @@ export class GameLogicSubsystem implements Subsystem {
           result.push({ name: scienceName, cost });
         }
         return result;
+      },
+      getReadySpecialPowers: (side: string) => {
+        return this.collectReadySpecialPowersForSide(side);
       },
     };
 
@@ -18393,6 +18496,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (target.destroyed) return;
       if (damageType.toUpperCase() === 'UNRESISTABLE') {
         target.health = 0;
+        target.pendingDeathType = damageTypeToDeathType(damageType);
         if (!target.slowDeathState) {
           this.fireDeathWeapons(target);
           this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
@@ -18499,6 +18603,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (target.health <= 0 && !target.destroyed && !target.slowDeathState) {
+      // Source parity: DamageInfo.in.m_deathType — set death cause for die module filtering.
+      target.pendingDeathType = damageTypeToDeathType(damageType);
       // Source parity: DemoTrapUpdate::update() — detonate on kill if configured.
       if (target.demoTrapProfile?.detonateWhenKilled && !target.demoTrapDetonated) {
         this.detonateDemoTrap(target, target.demoTrapProfile);
@@ -21323,13 +21429,14 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: CreateObjectDie / SlowDeathBehavior — extract death OCL names from INI.
+   * Source parity: CreateObjectDie / SlowDeathBehavior — extract death OCL entries from INI.
    * Scans modules for CreationList, GroundCreationList, or OCL fields that reference
-   * ObjectCreationList definitions.
+   * ObjectCreationList definitions. Each entry includes DieMuxData fields for filtering.
+   * C++ file: CreateObjectDie.cpp + DieModule.cpp (DieMuxData).
    */
-  private extractDeathOCLNames(objectDef: ObjectDef | undefined): string[] {
+  private extractDeathOCLEntries(objectDef: ObjectDef | undefined): DeathOCLEntry[] {
     if (!objectDef) return [];
-    const oclNames: string[] = [];
+    const entries: DeathOCLEntry[] = [];
     const moduleBlocks = objectDef.blocks ?? [];
     for (const block of moduleBlocks) {
       const blockType = block.type.toUpperCase();
@@ -21338,26 +21445,61 @@ export class GameLogicSubsystem implements Subsystem {
       const upperModuleType = moduleType.toUpperCase();
       // CreateObjectDie, SlowDeathBehavior, DestroyDie
       if (upperModuleType.includes('CREATEOBJECTDIE') || upperModuleType.includes('SLOWDEATH')) {
+        // Parse DieMuxData fields.
+        const deathTypes = new Set<string>();
+        const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
+        if (deathTypesStr) {
+          for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
+            if (token) deathTypes.add(token);
+          }
+        }
+        const veterancyLevels = new Set<string>();
+        const vetStr = readStringField(block.fields, ['VeterancyLevels']);
+        if (vetStr) {
+          for (const token of vetStr.toUpperCase().split(/\s+/)) {
+            if (token) veterancyLevels.add(token);
+          }
+        }
+        const exemptStatus = new Set<string>();
+        const exemptStr = readStringField(block.fields, ['ExemptStatus']);
+        if (exemptStr) {
+          for (const token of exemptStr.toUpperCase().split(/\s+/)) {
+            if (token) exemptStatus.add(token);
+          }
+        }
+        const requiredStatus = new Set<string>();
+        const reqStr = readStringField(block.fields, ['RequiredStatus']);
+        if (reqStr) {
+          for (const token of reqStr.toUpperCase().split(/\s+/)) {
+            if (token) requiredStatus.add(token);
+          }
+        }
+
         const oclName = readStringField(block.fields, [
           'CreationList', 'GroundCreationList', 'AirCreationList',
         ]);
         if (oclName) {
-          oclNames.push(oclName.trim());
+          entries.push({
+            oclName: oclName.trim(),
+            deathTypes, veterancyLevels, exemptStatus, requiredStatus,
+          });
         }
         // SlowDeathBehavior can have OCL fields with phase names.
         // e.g., "OCL INITIAL OCLDestroyDebris"
         const oclFieldRaw = readStringField(block.fields, ['OCL']);
         if (oclFieldRaw) {
-          // Parse "INITIAL OCLName" or just "OCLName"
           const parts = oclFieldRaw.trim().split(/\s+/);
           const oclPart = parts.length > 1 ? parts[parts.length - 1]! : parts[0]!;
-          if (oclPart && !oclNames.includes(oclPart)) {
-            oclNames.push(oclPart);
+          if (oclPart) {
+            entries.push({
+              oclName: oclPart,
+              deathTypes, veterancyLevels, exemptStatus, requiredStatus,
+            });
           }
         }
       }
     }
-    return oclNames;
+    return entries;
   }
 
   /**
@@ -21444,8 +21586,10 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: Execute all death OCLs for an entity.
    */
   private executeDeathOCLs(entity: MapEntity): void {
-    for (const oclName of entity.deathOCLNames) {
-      this.executeOCL(oclName, entity);
+    for (const entry of entity.deathOCLEntries) {
+      // Source parity: DieMuxData filtering for each CreateObjectDie module.
+      if (!this.isDieModuleApplicable(entity, entry)) continue;
+      this.executeOCL(entry.oclName, entity);
     }
   }
 
@@ -21495,9 +21639,17 @@ export class GameLogicSubsystem implements Subsystem {
     exemptStatus: Set<string>;
     requiredStatus: Set<string>;
   }): boolean {
-    // DeathTypes filter (empty = all death types accepted).
-    if (profile.deathTypes.size > 0 && profile.deathTypes.has('NONE') && profile.deathTypes.size === 1) {
-      return false;
+    // Source parity: DieModule.cpp line 76 — wrong death type? punt.
+    // C++ checks: getDeathTypeFlag(m_deathTypes, damageInfo->in.m_deathType).
+    // If profile has DeathTypes, entity's actual death cause must be in the set.
+    // Empty deathTypes set = ALL_DEATH_TYPES (accepts everything).
+    if (profile.deathTypes.size > 0) {
+      if (profile.deathTypes.has('NONE') && profile.deathTypes.size === 1) {
+        return false; // Explicitly set to NONE — never fires.
+      }
+      if (!profile.deathTypes.has(entity.pendingDeathType)) {
+        return false;
+      }
     }
 
     // VeterancyLevels filter (empty = all levels accepted).
@@ -21837,6 +21989,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: VictoryConditions.cpp — hasSinglePlayerBeenDefeated.
    * Default skirmish mode: a side is defeated when it has no buildings AND no
    * combat units remaining (excludes projectiles, mines, inert objects).
+   * Buildings must have KINDOF_MP_COUNT_FOR_VICTORY to count.
    */
   private checkVictoryConditions(): void {
     if (this.gameEndFrame !== null) {
@@ -21855,38 +22008,24 @@ export class GameLogicSubsystem implements Subsystem {
       return; // Need at least 2 sides for victory conditions.
     }
 
-    // Check each active side.
+    // Check each active side for defeat — source parity: hasSinglePlayerBeenDefeated.
+    const newlyDefeated: string[] = [];
     for (const side of activeSides) {
-      let hasBuildings = false;
-      let hasUnits = false;
-
-      for (const entity of this.spawnedEntities.values()) {
-        if (entity.destroyed || entity.slowDeathState) continue;
-        const entitySide = this.normalizeSide(entity.side);
-        if (entitySide !== side) continue;
-
-        // Exclude projectiles, mines, and inert objects (source parity: Team.cpp).
-        if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('MINE') || entity.kindOf.has('INERT')) {
-          continue;
-        }
-
-        if (entity.kindOf.has('STRUCTURE')) {
-          hasBuildings = true;
-        } else {
-          hasUnits = true;
-        }
-
-        if (hasBuildings && hasUnits) break;
-      }
-
-      // Source parity: Both VICTORY_NOUNITS and VICTORY_NOBUILDINGS are set by default.
-      // A side is defeated when it has no buildings AND no units.
-      if (!hasBuildings && !hasUnits) {
-        this.defeatedSides.add(side);
+      if (this.hasSingleSideBeenDefeated(side)) {
+        newlyDefeated.push(side);
       }
     }
 
-    // Check if only one alliance remains.
+    // Source parity: VictoryConditions::update() — on defeat: reveal map, kill remaining units.
+    for (const side of newlyDefeated) {
+      this.defeatedSides.add(side);
+      this.revealEntireMapForSide(side);
+      this.killRemainingEntitiesForSide(side);
+    }
+
+    // Source parity: Check if only one alliance remains.
+    // Build alliance groups — two sides are in the same alliance if both
+    // consider each other ALLIES (mutual relationship, like C++ areAllies).
     const remainingSides: string[] = [];
     for (const [, side] of this.playerSideByIndex) {
       if (!this.defeatedSides.has(side) && !remainingSides.includes(side)) {
@@ -21894,8 +22033,81 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    if (remainingSides.length <= 1 && this.defeatedSides.size > 0) {
+    if (remainingSides.length === 0) {
+      return;
+    }
+
+    // Group remaining sides by alliance: two sides are allied if both
+    // have RELATIONSHIP_ALLIES toward each other (mutual).
+    const allianceGroups: string[][] = [];
+    const assigned = new Set<string>();
+
+    for (const side of remainingSides) {
+      if (assigned.has(side)) continue;
+      const group = [side];
+      assigned.add(side);
+
+      for (const other of remainingSides) {
+        if (assigned.has(other)) continue;
+        // Mutual alliance check (source parity: areAllies helper in VictoryConditions.cpp).
+        if (this.getTeamRelationshipBySides(side, other) === RELATIONSHIP_ALLIES
+            && this.getTeamRelationshipBySides(other, side) === RELATIONSHIP_ALLIES) {
+          group.push(other);
+          assigned.add(other);
+        }
+      }
+      allianceGroups.push(group);
+    }
+
+    // Game ends when only one alliance group remains.
+    if (allianceGroups.length <= 1 && this.defeatedSides.size > 0) {
       this.gameEndFrame = this.frameCounter;
+    }
+  }
+
+  /**
+   * Source parity: VictoryConditions::hasSinglePlayerBeenDefeated — check if a
+   * single side has lost all qualifying objects.
+   * Default mode (VICTORY_NOUNITS | VICTORY_NOBUILDINGS): side must have NO
+   * buildings AND NO units to be considered defeated.
+   * Buildings only count if they have KINDOF MP_COUNT_FOR_VICTORY.
+   */
+  private hasSingleSideBeenDefeated(side: string): boolean {
+    // Source parity: VictoryConditions.cpp — both VICTORY_NOUNITS and VICTORY_NOBUILDINGS
+    // are set by default. C++ hasAnyObjects() counts ALL non-excluded entities regardless
+    // of MP_COUNT_FOR_VICTORY. Defeat occurs only when a side has zero eligible entities.
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const entitySide = this.normalizeSide(entity.side);
+      if (entitySide !== side) continue;
+
+      // Exclude projectiles, mines, and inert objects (source parity: Team.cpp).
+      if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('MINE') || entity.kindOf.has('INERT')) {
+        continue;
+      }
+
+      // Any surviving non-excluded entity prevents defeat.
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity: Player::killPlayer — destroy all remaining entities for a defeated side.
+   * C++ iterates the player's object list and calls kill() on each.
+   */
+  private killRemainingEntitiesForSide(side: string): void {
+    const toKill: number[] = [];
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== side) continue;
+      // Don't kill projectiles/mines — they'll clean up naturally.
+      if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('MINE')) continue;
+      toKill.push(entity.id);
+    }
+    for (const entityId of toKill) {
+      this.markEntityDestroyed(entityId, -1);
     }
   }
 

@@ -24,6 +24,7 @@ const POWER_EVAL_INTERVAL = 45;    // ~3 seconds
 const UPGRADE_EVAL_INTERVAL = 120;  // ~8 seconds
 const SCIENCE_EVAL_INTERVAL = 150;  // ~10 seconds
 const DOZER_EVAL_INTERVAL = 60;     // ~4 seconds
+const SPECIAL_POWER_EVAL_INTERVAL = 60; // ~4 seconds
 
 // ──── Resource thresholds (source parity: AIData.ini) ────────────────────────
 const RESOURCES_POOR_THRESHOLD = 500;
@@ -103,6 +104,16 @@ export interface SkirmishAIContext<TEntity extends AIEntity> {
 
   /** Get purchasable sciences for a side: {name, cost}[]. */
   getAvailableSciences?(side: string): Array<{ name: string; cost: number }>;
+
+  /** Get ready special powers for a side: powers whose cooldown has expired. */
+  getReadySpecialPowers?(side: string): ReadonlyArray<{
+    specialPowerName: string;
+    sourceEntityId: number;
+    commandOption: number;
+    commandButtonId: string;
+    /** Effect category for targeting logic: AREA_DAMAGE, CASH_HACK, etc. */
+    effectCategory: string;
+  }>;
 }
 
 // ──── Per-AI state ──────────────────────────────────────────────────────────
@@ -150,6 +161,8 @@ export interface SkirmishAIState {
   purchasedSciences: Set<string>;
   /** Entity IDs that have had rally points set. */
   rallyPointEntities: Set<number>;
+  /** Last frame special powers were evaluated. */
+  lastSpecialPowerFrame: number;
 }
 
 export function createSkirmishAIState(side: string): SkirmishAIState {
@@ -183,6 +196,7 @@ export function createSkirmishAIState(side: string): SkirmishAIState {
     queuedUpgrades: new Set(),
     purchasedSciences: new Set(),
     rallyPointEntities: new Set(),
+    lastSpecialPowerFrame: 0,
   };
 }
 
@@ -301,6 +315,11 @@ export function updateSkirmishAI<TEntity extends AIEntity>(
   if (frame - state.lastScoutFrame >= SCOUT_EVAL_INTERVAL) {
     evaluateScout(state, context);
     state.lastScoutFrame = frame;
+  }
+
+  if (frame - state.lastSpecialPowerFrame >= SPECIAL_POWER_EVAL_INTERVAL) {
+    evaluateSpecialPowers(state, context);
+    state.lastSpecialPowerFrame = frame;
   }
 
   if (frame - state.lastCombatFrame >= COMBAT_EVAL_INTERVAL) {
@@ -1131,6 +1150,229 @@ function evaluateSciences<TEntity extends AIEntity>(
     side: state.side,
   });
   state.purchasedSciences.add(bestScience.name.toUpperCase());
+}
+
+// ──── Special power evaluation ─────────────────────────────────────────────
+
+/**
+ * Source parity: C++ AIPlayer uses special powers when available.
+ * Area-damage powers target enemy base / concentrations; cash hack targets
+ * enemy production buildings; spy vision targets unknown map areas.
+ */
+function evaluateSpecialPowers<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): void {
+  if (!context.getReadySpecialPowers) return;
+  if (!state.enemyBaseKnown) return;
+
+  const readyPowers = context.getReadySpecialPowers(state.side);
+  if (readyPowers.length === 0) return;
+
+  const normalizedSide = context.normalizeSide(state.side);
+
+  for (const power of readyPowers) {
+    const upper = power.effectCategory.toUpperCase();
+
+    // Position-targeted area powers: fire at enemy base or unit concentration.
+    if (upper === 'AREA_DAMAGE' || upper === 'EMP_PULSE') {
+      // Find enemy concentration (most clustered group).
+      const target = findBestAreaTarget(state, context);
+      if (target) {
+        context.submitCommand({
+          type: 'issueSpecialPower',
+          commandButtonId: power.commandButtonId,
+          specialPowerName: power.specialPowerName,
+          commandOption: power.commandOption,
+          issuingEntityIds: [power.sourceEntityId],
+          sourceEntityId: power.sourceEntityId,
+          targetEntityId: null,
+          targetX: target.x,
+          targetZ: target.z,
+        });
+        return; // One power per evaluation cycle.
+      }
+    }
+
+    // Cash hack: target enemy production buildings.
+    if (upper === 'CASH_HACK') {
+      const enemyTarget = findEnemyProductionBuilding(state, context);
+      if (enemyTarget) {
+        context.submitCommand({
+          type: 'issueSpecialPower',
+          commandButtonId: power.commandButtonId,
+          specialPowerName: power.specialPowerName,
+          commandOption: power.commandOption,
+          issuingEntityIds: [power.sourceEntityId],
+          sourceEntityId: power.sourceEntityId,
+          targetEntityId: enemyTarget.id,
+          targetX: null,
+          targetZ: null,
+        });
+        return;
+      }
+    }
+
+    // Defector: target highest-value enemy unit.
+    if (upper === 'DEFECTOR') {
+      const highValueTarget = findHighValueEnemyUnit(state, context);
+      if (highValueTarget) {
+        context.submitCommand({
+          type: 'issueSpecialPower',
+          commandButtonId: power.commandButtonId,
+          specialPowerName: power.specialPowerName,
+          commandOption: power.commandOption,
+          issuingEntityIds: [power.sourceEntityId],
+          sourceEntityId: power.sourceEntityId,
+          targetEntityId: highValueTarget.id,
+          targetX: null,
+          targetZ: null,
+        });
+        return;
+      }
+    }
+
+    // Spy vision: reveal enemy base area.
+    if (upper === 'SPY_VISION') {
+      context.submitCommand({
+        type: 'issueSpecialPower',
+        commandButtonId: power.commandButtonId,
+        specialPowerName: power.specialPowerName,
+        commandOption: power.commandOption,
+        issuingEntityIds: [power.sourceEntityId],
+        sourceEntityId: power.sourceEntityId,
+        targetEntityId: null,
+        targetX: state.enemyBaseX,
+        targetZ: state.enemyBaseZ,
+      });
+      return;
+    }
+
+    // Area heal: target our own base.
+    if (upper === 'AREA_HEAL') {
+      context.submitCommand({
+        type: 'issueSpecialPower',
+        commandButtonId: power.commandButtonId,
+        specialPowerName: power.specialPowerName,
+        commandOption: power.commandOption,
+        issuingEntityIds: [power.sourceEntityId],
+        sourceEntityId: power.sourceEntityId,
+        targetEntityId: null,
+        targetX: state.rallyX,
+        targetZ: state.rallyZ,
+      });
+      return;
+    }
+
+    // No-target powers (cash bounty, generic): just fire them.
+    if (upper === 'CASH_BOUNTY' || upper === 'GENERIC') {
+      context.submitCommand({
+        type: 'issueSpecialPower',
+        commandButtonId: power.commandButtonId,
+        specialPowerName: power.specialPowerName,
+        commandOption: power.commandOption,
+        issuingEntityIds: [power.sourceEntityId],
+        sourceEntityId: power.sourceEntityId,
+        targetEntityId: null,
+        targetX: null,
+        targetZ: null,
+      });
+      return;
+    }
+  }
+}
+
+/** Find best area target: cluster of enemy entities near a central point. */
+function findBestAreaTarget<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): { x: number; z: number } | null {
+  const normalizedSide = context.normalizeSide(state.side);
+  const enemies: Array<{ x: number; z: number }> = [];
+
+  for (const entity of context.spawnedEntities.values()) {
+    if (entity.destroyed) continue;
+    const entitySide = context.normalizeSide(entity.side);
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) continue;
+    enemies.push({ x: entity.x, z: entity.z });
+  }
+
+  if (enemies.length === 0) return null;
+
+  // Find the centroid of the largest cluster (simplified: average position of
+  // enemies near the enemy base, or overall centroid if no base known).
+  let sumX = 0;
+  let sumZ = 0;
+  let count = 0;
+  const clusterRadiusSq = 100 * 100;
+
+  for (const e of enemies) {
+    const dSq = distSquared(e.x, e.z, state.enemyBaseX, state.enemyBaseZ);
+    if (dSq <= clusterRadiusSq) {
+      sumX += e.x;
+      sumZ += e.z;
+      count++;
+    }
+  }
+
+  if (count >= 2) {
+    return { x: sumX / count, z: sumZ / count };
+  }
+
+  // Fallback to enemy base position.
+  return { x: state.enemyBaseX, z: state.enemyBaseZ };
+}
+
+/** Find an enemy production building for cash hack targeting. */
+function findEnemyProductionBuilding<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): TEntity | null {
+  const normalizedSide = context.normalizeSide(state.side);
+
+  for (const entity of context.spawnedEntities.values()) {
+    if (entity.destroyed) continue;
+    const entitySide = context.normalizeSide(entity.side);
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) continue;
+    if (!hasKindOf(entity, 'STRUCTURE')) continue;
+    // Prefer supply/command centers for cash hack.
+    const upper = entity.templateName.toUpperCase();
+    if (upper.includes('SUPPLY') || upper.includes('COMMAND')) {
+      return entity;
+    }
+  }
+
+  // Fallback: any enemy structure.
+  for (const entity of context.spawnedEntities.values()) {
+    if (entity.destroyed) continue;
+    const entitySide = context.normalizeSide(entity.side);
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) continue;
+    if (hasKindOf(entity, 'STRUCTURE')) return entity;
+  }
+  return null;
+}
+
+/** Find highest-value enemy unit for defector targeting. */
+function findHighValueEnemyUnit<TEntity extends AIEntity>(
+  state: SkirmishAIState,
+  context: SkirmishAIContext<TEntity>,
+): TEntity | null {
+  const normalizedSide = context.normalizeSide(state.side);
+  let best: TEntity | null = null;
+  let bestHealth = 0;
+
+  for (const entity of context.spawnedEntities.values()) {
+    if (entity.destroyed || !entity.canMove) continue;
+    const entitySide = context.normalizeSide(entity.side);
+    if (context.getRelationship(normalizedSide, entitySide) !== 0) continue;
+    if (hasKindOf(entity, 'STRUCTURE')) continue;
+    // Prefer high-health (expensive) units.
+    if (entity.maxHealth > bestHealth) {
+      bestHealth = entity.maxHealth;
+      best = entity;
+    }
+  }
+  return best;
 }
 
 // ──── Rally point management ────────────────────────────────────────────────

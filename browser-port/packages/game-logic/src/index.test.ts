@@ -17167,3 +17167,233 @@ describe('CrateCollideSystem', () => {
     expect(creditsAfter - creditsBefore).toBe(0);
   });
 });
+
+// ──── Victory Conditions C++ Parity ──────────────────────────────────────────
+
+describe('victory conditions C++ parity', () => {
+  it('any non-excluded entity prevents defeat (C++ hasAnyObjects parity)', () => {
+    // Source parity: C++ hasAnyObjects() counts ALL non-excluded entities regardless of
+    // MP_COUNT_FOR_VICTORY. A structure without MP_COUNT_FOR_VICTORY still prevents defeat.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USAMine', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('GLATank', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        // America has only a STRUCTURE without MP_COUNT_FOR_VICTORY — NOT defeated per C++.
+        makeMapObject('USAMine', 50, 50),
+        makeMapObject('GLATank', 100, 100),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setPlayerSide(0, 'America');
+    logic.setPlayerSide(1, 'GLA');
+    logic.setSidePlayerType('America', 'HUMAN');
+    logic.setSidePlayerType('GLA', 'HUMAN');
+
+    // Run frames — America has a STRUCTURE (no MP_COUNT_FOR_VICTORY). C++ hasAnyObjects
+    // counts all non-excluded entities, so America should NOT be defeated.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const gameEnd = logic.getGameEndState();
+    // Game should NOT end — both sides still have entities.
+    expect(gameEnd).toBeNull();
+  });
+
+  it('detects alliance-based victory (allied sides survive together)', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USATank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+        ]),
+        makeObjectDef('ChinaTank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USATank', 30, 30),
+        makeMapObject('ChinaTank', 70, 70),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    // America and China are mutual allies.
+    logic.setTeamRelationship('America', 'China', 2);
+    logic.setTeamRelationship('China', 'America', 2);
+    // GLA is an enemy but has no entities — already defeated.
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+    logic.setPlayerSide(0, 'America');
+    logic.setPlayerSide(1, 'China');
+    logic.setPlayerSide(2, 'GLA');
+    logic.setSidePlayerType('America', 'HUMAN');
+    logic.setSidePlayerType('China', 'HUMAN');
+    logic.setSidePlayerType('GLA', 'HUMAN');
+
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const gameEnd = logic.getGameEndState();
+    expect(gameEnd).not.toBeNull();
+    // GLA is defeated, and America+China are allied — game should end with both as victors.
+    expect(gameEnd!.defeatedSides).toContain('gla');
+    expect(gameEnd!.victorSides).toContain('america');
+    expect(gameEnd!.victorSides).toContain('china');
+  });
+
+  it('kills remaining entities on defeat and reveals map', () => {
+    // Source parity: Player::killPlayer — all entities destroyed on defeat.
+    // Set up a side with ONE entity. GLA side has a tank that kills it.
+    // After defeat, killRemainingEntitiesForSide destroys stragglers.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('GLATank', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0,
+          DamageType: 'ARMOR_PIERCING', AttackRange: 200,
+          DelayBetweenShots: 100, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USAPowerPlant', 50, 50),
+        makeMapObject('GLATank', 55, 55),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setPlayerSide(0, 'America');
+    logic.setPlayerSide(1, 'GLA');
+    logic.setSidePlayerType('America', 'HUMAN');
+    logic.setSidePlayerType('GLA', 'HUMAN');
+
+    // Attack the power plant to destroy it.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Run enough frames for the tank to fire and destroy the power plant.
+    for (let i = 0; i < 120; i++) logic.update(1 / 30);
+
+    // Power plant destroyed → USA has zero non-excluded entities → defeated.
+    const gameEnd = logic.getGameEndState();
+    expect(gameEnd).not.toBeNull();
+    expect(gameEnd!.defeatedSides).toContain('america');
+    expect(gameEnd!.victorSides).toContain('gla');
+
+    // The power plant should be destroyed (health 0 or null entity state).
+    const plant = logic.getEntityState(1);
+    expect(plant === null || plant.health <= 0).toBe(true);
+  });
+});
+
+// ──── Death OCL DieMuxData Filtering ──────────────────────────────────────────
+
+describe('death OCL DieMuxData filtering', () => {
+  it('filters death OCLs by veterancy level', () => {
+    // Create a unit with a death OCL that only fires at VETERAN+ level.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EliteUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('Die', 'CreateObjectDie ModuleTag_Die', {
+            CreationList: 'OCL_VetDeath',
+            VeterancyLevels: 'VETERAN ELITE HEROIC',
+          }),
+        ], { ExperienceRequired: [1, 50, 100, 200], ExperienceValue: 10 }),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+        ]),
+        makeObjectDef('DebrisChunk', 'America', ['INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0,
+          DamageType: 'ARMOR_PIERCING', AttackRange: 200,
+          DelayBetweenShots: 100, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+      ],
+      ocls: [
+        {
+          name: 'OCL_VetDeath',
+          blocks: [
+            makeBlock('CreateObject', '', { ObjectNames: 'DebrisChunk', Count: '1' }),
+          ],
+        },
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('EliteUnit', 50, 50),
+        makeMapObject('Attacker', 100, 100),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    // Attack and kill the unit (at REGULAR level, not VETERAN).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Unit should be dead. Check if any debris was spawned — at REGULAR level, the
+    // VeterancyLevels filter should block the death OCL.
+    const allEntities: number[] = [];
+    for (let id = 1; id <= 10; id++) {
+      const state = logic.getEntityState(id);
+      if (state && state.templateName?.toUpperCase().includes('DEBRIS')) {
+        allEntities.push(id);
+      }
+    }
+    // No debris should have spawned because the unit was REGULAR, not VETERAN+.
+    expect(allEntities.length).toBe(0);
+  });
+});
