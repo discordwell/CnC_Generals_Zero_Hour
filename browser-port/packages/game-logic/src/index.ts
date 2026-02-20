@@ -1425,6 +1425,14 @@ interface MapEntity {
 
   // ── Source parity: SalvageCrateCollide — crate collection ──
   salvageCrateProfile: SalvageCrateProfile | null;
+
+  // ── Source parity: BattlePlanUpdate — Strategy Center plan system ──
+  battlePlanProfile: BattlePlanProfile | null;
+  battlePlanState: BattlePlanRuntimeState | null;
+  /** Applied damage scalar from battle plan bonuses (1.0 = no change). */
+  battlePlanDamageScalar: number;
+  /** Base vision range before battle plan modifiers. */
+  baseVisionRange: number;
 }
 
 /**
@@ -1596,6 +1604,46 @@ interface DeployStyleProfile {
 }
 
 /**
+ * Source parity: BattlePlanUpdate — USA Strategy Center battle plan system.
+ * Three plans (Bombardment, Hold the Line, Search and Destroy) provide
+ * faction-wide weapon bonus flags, armor scaling, and sight range bonuses.
+ */
+interface BattlePlanProfile {
+  bombardmentAnimationFrames: number;
+  holdTheLineAnimationFrames: number;
+  searchAndDestroyAnimationFrames: number;
+  transitionIdleFrames: number;
+  battlePlanParalyzeFrames: number;
+  holdTheLineArmorDamageScalar: number;
+  searchAndDestroySightRangeScalar: number;
+  strategyCenterSearchAndDestroySightRangeScalar: number;
+  strategyCenterSearchAndDestroyDetectsStealth: boolean;
+  strategyCenterHoldTheLineMaxHealthScalar: number;
+  validMemberKindOf: Set<string>;
+  invalidMemberKindOf: Set<string>;
+}
+
+type BattlePlanType = 'NONE' | 'BOMBARDMENT' | 'HOLDTHELINE' | 'SEARCHANDDESTROY';
+type BattlePlanTransitionStatus = 'IDLE' | 'UNPACKING' | 'ACTIVE' | 'PACKING';
+
+interface BattlePlanRuntimeState {
+  desiredPlan: BattlePlanType;
+  activePlan: BattlePlanType;
+  transitionStatus: BattlePlanTransitionStatus;
+  transitionFinishFrame: number;
+  idleCooldownFinishFrame: number;
+}
+
+/**
+ * Per-side battle plan bonus tracking for multiplicative stacking.
+ */
+interface SideBattlePlanBonuses {
+  bombardmentCount: number;
+  holdTheLineCount: number;
+  searchAndDestroyCount: number;
+}
+
+/**
  * Source parity: GenerateMinefieldBehavior — spawns mine entities around an object.
  */
 interface GenerateMinefieldProfile {
@@ -1746,6 +1794,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
+  private readonly sideBattlePlanBonuses = new Map<string, SideBattlePlanBonuses>();
+  private readonly battlePlanParalyzedUntilFrame = new Map<number, number>();
   private readonly playerSideByIndex = new Map<number, string>();
   private readonly localPlayerScienceAvailability = new Map<string, LocalScienceAvailability>();
   private readonly shortcutSpecialPowerSourceByName = new Map<string, Map<number, number>>();
@@ -2172,6 +2222,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateOvercharge();
     this.updateStealth();
     this.updateDetection();
+    this.updateBattlePlan();
+    this.updateBattlePlanParalysis();
     this.updatePoisonedEntities();
     this.updateFlammableEntities();
     this.updateHealing();
@@ -2633,6 +2685,9 @@ export class GameLogicSubsystem implements Subsystem {
     rallyPoint: { x: number; z: number } | null;
     constructionPercent: number;
     side: string;
+    weaponBonusConditionFlags: number;
+    visionRange: number;
+    battlePlanDamageScalar: number;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -2673,7 +2728,10 @@ export class GameLogicSubsystem implements Subsystem {
       currentExperience: entity.experienceState.currentExperience,
       rallyPoint: entity.rallyPoint ? { x: entity.rallyPoint.x, z: entity.rallyPoint.z } : null,
       constructionPercent: entity.constructionPercent,
-      side: entity.side,
+      side: entity.side ?? '',
+      weaponBonusConditionFlags: entity.weaponBonusConditionFlags,
+      visionRange: entity.visionRange,
+      battlePlanDamageScalar: entity.battlePlanDamageScalar,
     };
   }
 
@@ -3583,6 +3641,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCredits.clear();
     this.sidePlayerTypes.clear();
     this.sideCashBountyPercent.clear();
+    this.sideBattlePlanBonuses.clear();
+    this.battlePlanParalyzedUntilFrame.clear();
     this.sideUpgradesInProduction.clear();
     this.sideCompletedUpgrades.clear();
     this.sideKindOfProductionCostModifiers.clear();
@@ -3880,6 +3940,11 @@ export class GameLogicSubsystem implements Subsystem {
       createCrateDieProfile: this.extractCreateCrateDieProfile(objectDef),
       // Salvage crate collection
       salvageCrateProfile: this.extractSalvageCrateProfile(objectDef),
+      // Battle plan
+      battlePlanProfile: this.extractBattlePlanProfile(objectDef),
+      battlePlanState: null,
+      battlePlanDamageScalar: 1.0,
+      baseVisionRange: readNumericField(objectDef?.fields ?? {}, ['VisionRange', 'ShroudClearingRange']) ?? 0,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -3891,6 +3956,17 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.detectorProfile) {
       entity.detectorNextScanFrame = this.frameCounter
         + this.gameRandom.nextRange(1, entity.detectorProfile.detectionRate);
+    }
+
+    // Source parity: BattlePlanUpdate init — initialize state machine.
+    if (entity.battlePlanProfile) {
+      entity.battlePlanState = {
+        desiredPlan: 'NONE',
+        activePlan: 'NONE',
+        transitionStatus: 'IDLE',
+        transitionFinishFrame: 0,
+        idleCooldownFinishFrame: 0,
+      };
     }
 
     return entity;
@@ -5978,6 +6054,62 @@ export class GameLogicSubsystem implements Subsystem {
             packTimeFrames: this.msToLogicFrames(packMs),
             turretsFunctionOnlyWhenDeployed:
               readBooleanField(block.fields, ['TurretsFunctionOnlyWhenDeployed']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: BattlePlanUpdate — extract battle plan profile from INI.
+   */
+  private extractBattlePlanProfile(objectDef: ObjectDef | undefined): BattlePlanProfile | null {
+    if (!objectDef) return null;
+    let profile: BattlePlanProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'BATTLEPLANUPDATE') {
+          const bombardmentMs = readNumericField(block.fields, ['BombardmentPlanAnimationTime']) ?? 2000;
+          const holdTheLineMs = readNumericField(block.fields, ['HoldTheLinePlanAnimationTime']) ?? 2000;
+          const searchAndDestroyMs = readNumericField(block.fields, ['SearchAndDestroyPlanAnimationTime']) ?? 2000;
+          const transitionIdleMs = readNumericField(block.fields, ['TransitionIdleTime']) ?? 3000;
+          const paralyzeMs = readNumericField(block.fields, ['BattlePlanChangeParalyzeTime']) ?? 2000;
+
+          const validKindOf = readStringField(block.fields, ['ValidMemberKindOf']) ?? '';
+          const invalidKindOf = readStringField(block.fields, ['InvalidMemberKindOf']) ?? '';
+
+          profile = {
+            bombardmentAnimationFrames: this.msToLogicFrames(bombardmentMs),
+            holdTheLineAnimationFrames: this.msToLogicFrames(holdTheLineMs),
+            searchAndDestroyAnimationFrames: this.msToLogicFrames(searchAndDestroyMs),
+            transitionIdleFrames: this.msToLogicFrames(transitionIdleMs),
+            battlePlanParalyzeFrames: this.msToLogicFrames(paralyzeMs),
+            holdTheLineArmorDamageScalar:
+              readNumericField(block.fields, ['HoldTheLinePlanArmorDamageScalar']) ?? 1.0,
+            searchAndDestroySightRangeScalar:
+              readNumericField(block.fields, ['SearchAndDestroyPlanSightRangeScalar']) ?? 1.0,
+            strategyCenterSearchAndDestroySightRangeScalar:
+              readNumericField(block.fields, ['StrategyCenterSearchAndDestroySightRangeScalar']) ?? 1.0,
+            strategyCenterSearchAndDestroyDetectsStealth:
+              readBooleanField(block.fields, ['StrategyCenterSearchAndDestroyDetectsStealth']) ?? false,
+            strategyCenterHoldTheLineMaxHealthScalar:
+              readNumericField(block.fields, ['StrategyCenterHoldTheLineMaxHealthScalar']) ?? 1.0,
+            validMemberKindOf: new Set(
+              validKindOf.split(/\s+/).map((t) => t.trim().toUpperCase()).filter(Boolean),
+            ),
+            invalidMemberKindOf: new Set(
+              invalidKindOf.split(/\s+/).map((t) => t.trim().toUpperCase()).filter(Boolean),
+            ),
           };
         }
       }
@@ -8508,6 +8640,20 @@ export class GameLogicSubsystem implements Subsystem {
     const source = this.spawnedEntities.get(sourceEntityId);
     if (!source || source.destroyed) {
       return;
+    }
+
+    // Source parity: BattlePlanUpdate — each battle plan has its own SpecialPower in C++
+    // (SpecialPowerChangeBombardmentBattlePlan, etc.). Identify plan type from power name.
+    if (source.battlePlanState && source.battlePlanProfile) {
+      const upperName = specialPowerName.toUpperCase();
+      let desiredPlan: BattlePlanType = 'NONE';
+      if (upperName.includes('BOMBARDMENT')) desiredPlan = 'BOMBARDMENT';
+      else if (upperName.includes('HOLDTHELINE')) desiredPlan = 'HOLDTHELINE';
+      else if (upperName.includes('SEARCHANDDESTROY')) desiredPlan = 'SEARCHANDDESTROY';
+      if (desiredPlan !== 'NONE') {
+        this.requestBattlePlanChange(source, desiredPlan);
+        return;
+      }
     }
 
     const effectCategory = resolveEffectCategoryImpl(module.moduleType);
@@ -16216,9 +16362,14 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const adjustedDamage = this.adjustDamageByArmorSet(target, amount, damageType);
+    let adjustedDamage = this.adjustDamageByArmorSet(target, amount, damageType);
     if (adjustedDamage <= 0) {
       return;
+    }
+
+    // Source parity: Body::applyDamageScalar — multiply by battle plan armor scalar.
+    if (target.battlePlanDamageScalar !== 1.0) {
+      adjustedDamage = Math.max(0, adjustedDamage * target.battlePlanDamageScalar);
     }
 
     target.health = Math.max(0, target.health - adjustedDamage);
@@ -16757,6 +16908,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.sellingEntities.delete(entityId);
     this.disabledHackedStatusByEntityId.delete(entityId);
     this.disabledEmpStatusByEntityId.delete(entityId);
+    this.battlePlanParalyzedUntilFrame.delete(entityId);
+    // Source parity: if a Strategy Center is destroyed while a battle plan is active,
+    // remove its bonuses from all entities on the side.
+    if (entity.battlePlanState?.activePlan !== 'NONE' && entity.battlePlanState?.transitionStatus === 'ACTIVE') {
+      this.applyBattlePlanBonuses(entity, entity.battlePlanState.activePlan, false);
+    }
     for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
       if (pendingAction.targetObjectId === entityId) {
         this.pendingEnterObjectActions.delete(sourceId);
@@ -17491,6 +17648,259 @@ export class GameLogicSubsystem implements Subsystem {
       entity.x = container.x;
       entity.z = container.z;
       entity.y = container.y;
+    }
+  }
+
+  // ── BattlePlanUpdate implementation ──────────────────────────────────────
+
+  /**
+   * Source parity: BattlePlanUpdate::update — per-frame state machine for each
+   * Strategy Center's battle plan transition (IDLE → UNPACKING → ACTIVE → PACKING → IDLE).
+   */
+  private updateBattlePlan(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.battlePlanProfile;
+      const state = entity.battlePlanState;
+      if (!profile || !state) continue;
+
+      switch (state.transitionStatus) {
+        case 'IDLE':
+          // Waiting for cooldown after previous plan change.
+          if (state.desiredPlan !== 'NONE' && this.frameCounter >= state.idleCooldownFinishFrame) {
+            state.transitionStatus = 'UNPACKING';
+            state.transitionFinishFrame = this.frameCounter
+              + this.getBattlePlanAnimationFrames(profile, state.desiredPlan);
+          }
+          break;
+
+        case 'UNPACKING':
+          if (this.frameCounter >= state.transitionFinishFrame) {
+            // Transition to ACTIVE — apply bonuses.
+            state.transitionStatus = 'ACTIVE';
+            state.activePlan = state.desiredPlan;
+            this.applyBattlePlanBonuses(entity, state.activePlan, true);
+          }
+          break;
+
+        case 'ACTIVE':
+          // If desired plan changed, begin packing.
+          // Source parity: BattlePlanUpdate::setStatus(TRANSITIONSTATUS_PACKING) immediately
+          // calls setBattlePlan(PLANSTATUS_NONE) which removes bonuses and paralyzes troops.
+          if (state.desiredPlan !== state.activePlan) {
+            // Remove bonuses immediately at packing start (C++ parity).
+            this.applyBattlePlanBonuses(entity, state.activePlan, false);
+            this.paralyzeBattlePlanTroops(entity, profile);
+            state.activePlan = 'NONE';
+            state.transitionStatus = 'PACKING';
+            state.transitionFinishFrame = this.frameCounter
+              + this.getBattlePlanAnimationFrames(profile, state.desiredPlan);
+          }
+          break;
+
+        case 'PACKING':
+          if (this.frameCounter >= state.transitionFinishFrame) {
+            // Packing animation complete → idle cooldown.
+            state.transitionStatus = 'IDLE';
+            state.idleCooldownFinishFrame = this.frameCounter + profile.transitionIdleFrames;
+          }
+          break;
+      }
+    }
+  }
+
+  private requestBattlePlanChange(entity: MapEntity, desiredPlan: BattlePlanType): void {
+    const state = entity.battlePlanState;
+    if (!state) return;
+
+    if (state.activePlan === desiredPlan && state.transitionStatus === 'ACTIVE') {
+      return; // Already active on requested plan.
+    }
+
+    // Just set desired plan. The state machine in updateBattlePlan handles ACTIVE→PACKING
+    // transition, including immediate bonus removal and paralysis (C++ parity).
+    state.desiredPlan = desiredPlan;
+  }
+
+  private getBattlePlanAnimationFrames(profile: BattlePlanProfile, plan: BattlePlanType): number {
+    switch (plan) {
+      case 'BOMBARDMENT': return profile.bombardmentAnimationFrames;
+      case 'HOLDTHELINE': return profile.holdTheLineAnimationFrames;
+      case 'SEARCHANDDESTROY': return profile.searchAndDestroyAnimationFrames;
+      default: return 0;
+    }
+  }
+
+  /**
+   * Source parity: Player::changeBattlePlan + localApplyBattlePlanBonusesToObject —
+   * Apply or remove battle plan bonuses to all entities on the same side.
+   * @param apply true = apply bonuses, false = remove (invert)
+   */
+  private applyBattlePlanBonuses(source: MapEntity, plan: BattlePlanType, apply: boolean): void {
+    const side = this.normalizeSide(source.side);
+    if (!side) return;
+
+    const profile = source.battlePlanProfile;
+    if (!profile) return;
+
+    // Track per-side counts.
+    let bonuses = this.sideBattlePlanBonuses.get(side);
+    if (!bonuses) {
+      bonuses = { bombardmentCount: 0, holdTheLineCount: 0, searchAndDestroyCount: 0 };
+      this.sideBattlePlanBonuses.set(side, bonuses);
+    }
+
+    const delta = apply ? 1 : -1;
+    let weaponBonusFlag = 0;
+    // Source parity: Player::changeBattlePlan — only apply/remove when count transitions
+    // through 1/0 (first plan of type enables, last plan of type disables). Multiple Strategy
+    // Centers with the same plan don't stack army bonuses; they add redundancy.
+    let shouldModifyArmy = false;
+
+    switch (plan) {
+      case 'BOMBARDMENT':
+        bonuses.bombardmentCount = Math.max(0, bonuses.bombardmentCount + delta);
+        weaponBonusFlag = WEAPON_BONUS_BOMBARDMENT;
+        shouldModifyArmy = (apply && bonuses.bombardmentCount === 1)
+          || (!apply && bonuses.bombardmentCount === 0);
+        break;
+      case 'HOLDTHELINE':
+        bonuses.holdTheLineCount = Math.max(0, bonuses.holdTheLineCount + delta);
+        weaponBonusFlag = WEAPON_BONUS_HOLDTHELINE;
+        shouldModifyArmy = (apply && bonuses.holdTheLineCount === 1)
+          || (!apply && bonuses.holdTheLineCount === 0);
+        break;
+      case 'SEARCHANDDESTROY':
+        bonuses.searchAndDestroyCount = Math.max(0, bonuses.searchAndDestroyCount + delta);
+        weaponBonusFlag = WEAPON_BONUS_SEARCHANDDESTROY;
+        shouldModifyArmy = (apply && bonuses.searchAndDestroyCount === 1)
+          || (!apply && bonuses.searchAndDestroyCount === 0);
+        break;
+    }
+
+    // Source parity: only modify army bonuses on count transitions (0→1 or 1→0).
+    if (shouldModifyArmy) {
+      const armorScalar = plan === 'HOLDTHELINE' ? profile.holdTheLineArmorDamageScalar : 1.0;
+      const sightScalar = plan === 'SEARCHANDDESTROY' ? profile.searchAndDestroySightRangeScalar : 1.0;
+
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed) continue;
+        if (this.normalizeSide(entity.side) !== side) continue;
+        if (!this.isBattlePlanMember(entity, profile)) continue;
+
+        // Weapon bonus condition flag.
+        if (apply) {
+          entity.weaponBonusConditionFlags |= weaponBonusFlag;
+        } else {
+          entity.weaponBonusConditionFlags &= ~weaponBonusFlag;
+        }
+
+        // Armor damage scalar.
+        if (apply && armorScalar !== 1.0) {
+          entity.battlePlanDamageScalar = Math.max(0.01, entity.battlePlanDamageScalar * armorScalar);
+        } else if (!apply && plan === 'HOLDTHELINE') {
+          // Restore to 1.0 (undo the armor scalar).
+          entity.battlePlanDamageScalar = 1.0;
+        }
+
+        // Sight range scalar — always use absolute computation from baseVisionRange.
+        if (apply && sightScalar !== 1.0) {
+          entity.visionRange = Math.max(0, entity.baseVisionRange * sightScalar);
+        } else if (!apply && plan === 'SEARCHANDDESTROY') {
+          entity.visionRange = entity.baseVisionRange;
+        }
+      }
+    }
+
+    // Strategy Center building-specific bonuses.
+    if (plan === 'HOLDTHELINE') {
+      // Building health scalar — apply to Strategy Center itself.
+      if (profile.strategyCenterHoldTheLineMaxHealthScalar !== 1.0) {
+        const scalar = apply
+          ? profile.strategyCenterHoldTheLineMaxHealthScalar
+          : (1.0 / Math.max(0.01, profile.strategyCenterHoldTheLineMaxHealthScalar));
+        const newMaxHealth = Math.max(1, Math.round(source.maxHealth * scalar));
+        const ratio = source.maxHealth > 0 ? source.health / source.maxHealth : 1;
+        source.maxHealth = newMaxHealth;
+        source.health = Math.round(newMaxHealth * ratio);
+      }
+    }
+
+    if (plan === 'SEARCHANDDESTROY') {
+      // Building sight range bonus + stealth detection.
+      if (apply && profile.strategyCenterSearchAndDestroySightRangeScalar !== 1.0) {
+        source.visionRange = Math.max(0, source.baseVisionRange * profile.strategyCenterSearchAndDestroySightRangeScalar);
+      } else if (!apply) {
+        source.visionRange = source.baseVisionRange;
+      }
+      // Stealth detection toggling on the building.
+      if (profile.strategyCenterSearchAndDestroyDetectsStealth) {
+        if (apply && !source.detectorProfile) {
+          // Enable stealth detection on the building.
+          source.detectorProfile = {
+            detectionRange: source.visionRange,
+            detectionRate: 10,
+            canDetectWhileGarrisoned: true,
+            canDetectWhileContained: false,
+            extraRequiredKindOf: new Set(),
+            extraForbiddenKindOf: new Set(),
+          };
+        } else if (!apply) {
+          source.detectorProfile = null;
+        }
+      }
+    }
+  }
+
+  private isBattlePlanMember(entity: MapEntity, profile: BattlePlanProfile): boolean {
+    const kindOf = this.resolveEntityKindOfSet(entity);
+    // If ValidMemberKindOf is non-empty, entity must have at least one matching kind.
+    if (profile.validMemberKindOf.size > 0) {
+      let hasValid = false;
+      for (const k of profile.validMemberKindOf) {
+        if (kindOf.has(k)) { hasValid = true; break; }
+      }
+      if (!hasValid) return false;
+    }
+    // If InvalidMemberKindOf is non-empty, entity must NOT have any matching kind.
+    for (const k of profile.invalidMemberKindOf) {
+      if (kindOf.has(k)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: BattlePlanUpdate — paralyze all troops on the side when packing completes.
+   */
+  private paralyzeBattlePlanTroops(source: MapEntity, profile: BattlePlanProfile): void {
+    if (profile.battlePlanParalyzeFrames <= 0) return;
+    const side = this.normalizeSide(source.side);
+    if (!side) return;
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== side) continue;
+      if (entity.id === source.id) continue; // Don't paralyze the building itself.
+      if (!this.isBattlePlanMember(entity, profile)) continue;
+
+      // Source parity: paralyzeTroop uses a time-limited disable.
+      // We reuse DISABLED_SUBDUED which blocks movement and actions.
+      entity.objectStatusFlags.add('DISABLED_SUBDUED');
+      this.battlePlanParalyzedUntilFrame.set(entity.id, this.frameCounter + profile.battlePlanParalyzeFrames);
+    }
+  }
+
+  /**
+   * Clear battle plan paralysis when duration expires.
+   */
+  private updateBattlePlanParalysis(): void {
+    for (const [entityId, untilFrame] of this.battlePlanParalyzedUntilFrame.entries()) {
+      if (this.frameCounter < untilFrame) continue;
+      const entity = this.spawnedEntities.get(entityId);
+      if (entity && !entity.destroyed) {
+        entity.objectStatusFlags.delete('DISABLED_SUBDUED');
+      }
+      this.battlePlanParalyzedUntilFrame.delete(entityId);
     }
   }
 

@@ -12096,3 +12096,272 @@ describe('salvage crate system', () => {
     expect(creditsAfter - creditsBefore).toBe(100);
   });
 });
+
+// ── BattlePlanUpdate system ──────────────────────────────────────────────────
+
+describe('BattlePlanUpdate', () => {
+  // C++ source parity: each battle plan has its own SpecialPower template.
+  const PLAN_POWERS = {
+    BOMBARDMENT: 'SpecialPowerChangeBombardmentBattlePlan',
+    HOLDTHELINE: 'SpecialPowerChangeHoldTheLineBattlePlan',
+    SEARCHANDDESTROY: 'SpecialPowerChangeSearchAndDestroyBattlePlan',
+  } as const;
+
+  // Helper: issue battle plan special power command.
+  function issueBattlePlan(
+    logic: GameLogicSubsystem,
+    sourceEntityId: number,
+    plan: 'BOMBARDMENT' | 'HOLDTHELINE' | 'SEARCHANDDESTROY',
+  ): void {
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: `CMD_${plan}`,
+      specialPowerName: PLAN_POWERS[plan],
+      commandOption: 0,
+      issuingEntityIds: [sourceEntityId],
+      sourceEntityId,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+  }
+
+  // Helper: build a Strategy Center with BattlePlanUpdate + infantry on the same side.
+  function makeBattlePlanSetup(opts?: {
+    animationMs?: number;
+    paralyzeMs?: number;
+    transitionIdleMs?: number;
+    armorDamageScalar?: number;
+    sightRangeScalar?: number;
+    validMemberKindOf?: string;
+    invalidMemberKindOf?: string;
+    strategyCenterSightRangeScalar?: number;
+    strategyCenterDetectsStealth?: boolean;
+    strategyCenterHealthScalar?: number;
+  }) {
+    const animMs = opts?.animationMs ?? 300;
+    const paraMs = opts?.paralyzeMs ?? 300;
+    const idleMs = opts?.transitionIdleMs ?? 300;
+    const armorScalar = opts?.armorDamageScalar ?? 0.5;
+    const sightScalar = opts?.sightRangeScalar ?? 1.5;
+
+    // C++ source parity: BattlePlanUpdate module registers separate SpecialPowerTemplate
+    // for each plan type. We register via three SpecialPowerModule behavior blocks.
+    const strategyCenterDef = makeObjectDef('StrategyCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'BattlePlanUpdate ModuleTag_BattlePlan', {
+        BombardmentPlanAnimationTime: animMs,
+        HoldTheLinePlanAnimationTime: animMs,
+        SearchAndDestroyPlanAnimationTime: animMs,
+        TransitionIdleTime: idleMs,
+        BattlePlanChangeParalyzeTime: paraMs,
+        HoldTheLinePlanArmorDamageScalar: armorScalar,
+        SearchAndDestroyPlanSightRangeScalar: sightScalar,
+        StrategyCenterSearchAndDestroySightRangeScalar: opts?.strategyCenterSightRangeScalar ?? 2.0,
+        StrategyCenterSearchAndDestroyDetectsStealth: opts?.strategyCenterDetectsStealth ?? false,
+        StrategyCenterHoldTheLineMaxHealthScalar: opts?.strategyCenterHealthScalar ?? 1.0,
+        ValidMemberKindOf: opts?.validMemberKindOf ?? '',
+        InvalidMemberKindOf: opts?.invalidMemberKindOf ?? '',
+      }),
+      makeBlock('Behavior', 'SpecialPowerModule BattlePlanBombardment', {
+        SpecialPowerTemplate: PLAN_POWERS.BOMBARDMENT,
+      }),
+      makeBlock('Behavior', 'SpecialPowerModule BattlePlanHoldTheLine', {
+        SpecialPowerTemplate: PLAN_POWERS.HOLDTHELINE,
+      }),
+      makeBlock('Behavior', 'SpecialPowerModule BattlePlanSearchAndDestroy', {
+        SpecialPowerTemplate: PLAN_POWERS.SEARCHANDDESTROY,
+      }),
+    ]);
+
+    const infantryDef = makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'RangerGun'] }),
+    ], { VisionRange: 150 });
+
+    const enemyDef = makeObjectDef('Enemy', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'EnemyGun'] }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [strategyCenterDef, infantryDef, enemyDef],
+      specialPowers: [
+        makeSpecialPowerDef(PLAN_POWERS.BOMBARDMENT, { ReloadTime: 0 }),
+        makeSpecialPowerDef(PLAN_POWERS.HOLDTHELINE, { ReloadTime: 0 }),
+        makeSpecialPowerDef(PLAN_POWERS.SEARCHANDDESTROY, { ReloadTime: 0 }),
+      ],
+      weapons: [
+        makeWeaponDef('RangerGun', {
+          AttackRange: 120,
+          PrimaryDamage: 50,
+          DamageType: 'ARMOR_PIERCING',
+          DelayBetweenShots: 100,
+          DeliveryType: 'DIRECT',
+        }),
+        makeWeaponDef('EnemyGun', {
+          AttackRange: 120,
+          PrimaryDamage: 100,
+          DamageType: 'ARMOR_PIERCING',
+          DelayBetweenShots: 100,
+          DeliveryType: 'DIRECT',
+        }),
+      ],
+    }));
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Entity 1: StrategyCenter at (55,55).  Entity 2: Ranger at (505,55) (far from enemy).
+    // Entity 3: Enemy at (75,55).
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('StrategyCenter', 55, 55),
+        makeMapObject('Ranger', 505, 55),
+        makeMapObject('Enemy', 75, 55),
+      ], 1024, 1024),
+      registry,
+      makeHeightmap(1024, 1024),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    return { logic, scene };
+  }
+
+  // At 30 FPS, 300ms → ceil(300/33.33) = 9 frames.
+  const ANIM_FRAMES = 9;
+  const PARALYZE_FRAMES = 9;
+  const IDLE_FRAMES = 9;
+
+  it('activates Bombardment plan and sets WEAPON_BONUS_BOMBARDMENT on allied troops', () => {
+    const { logic } = makeBattlePlanSetup();
+
+    // Before: no weapon bonus flags.
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 12)).toBe(0);
+
+    // Issue Bombardment.
+    issueBattlePlan(logic, 1, 'BOMBARDMENT');
+    logic.update(0);
+
+    // Still UNPACKING — no bonus yet.
+    for (let i = 0; i < ANIM_FRAMES - 1; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 12)).toBe(0);
+
+    // One more frame → becomes ACTIVE.
+    logic.update(1 / 30);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 12)).toBe(1 << 12);
+
+    // Enemy should NOT have the flag.
+    expect(logic.getEntityState(3)!.weaponBonusConditionFlags & (1 << 12)).toBe(0);
+  });
+
+  it('activates Hold the Line plan and reduces damage taken via armor scalar', () => {
+    const { logic } = makeBattlePlanSetup({ armorDamageScalar: 0.5 });
+
+    // Activate Hold the Line.
+    issueBattlePlan(logic, 1, 'HOLDTHELINE');
+    logic.update(0);
+    for (let i = 0; i < ANIM_FRAMES; i++) logic.update(1 / 30);
+
+    // Check damage scalar on ranger.
+    const rangerState = logic.getEntityState(2)!;
+    expect(rangerState.weaponBonusConditionFlags & (1 << 13)).toBe(1 << 13);
+    expect(rangerState.battlePlanDamageScalar).toBeCloseTo(0.5, 5);
+  });
+
+  it('activates Search and Destroy plan and increases vision range', () => {
+    const { logic } = makeBattlePlanSetup({ sightRangeScalar: 1.5 });
+
+    // Before: base vision range.
+    expect(logic.getEntityState(2)!.visionRange).toBe(150);
+
+    // Activate Search and Destroy.
+    issueBattlePlan(logic, 1, 'SEARCHANDDESTROY');
+    logic.update(0);
+    for (let i = 0; i < ANIM_FRAMES; i++) logic.update(1 / 30);
+
+    // After: vision range scaled.
+    const rangerState = logic.getEntityState(2)!;
+    expect(rangerState.weaponBonusConditionFlags & (1 << 14)).toBe(1 << 14);
+    expect(rangerState.visionRange).toBeCloseTo(225, 0); // 150 * 1.5
+  });
+
+  it('paralyzes troops when switching between active plans', () => {
+    const { logic } = makeBattlePlanSetup();
+
+    // Activate Bombardment.
+    issueBattlePlan(logic, 1, 'BOMBARDMENT');
+    logic.update(0);
+    for (let i = 0; i < ANIM_FRAMES; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 12)).toBe(1 << 12);
+
+    // Switch to Hold the Line — C++ parity: bonuses removed and troops paralyzed
+    // immediately at packing start (not at end of packing animation).
+    issueBattlePlan(logic, 1, 'HOLDTHELINE');
+    logic.update(0);
+
+    // Ranger should be paralyzed immediately (DISABLED_SUBDUED).
+    expect(logic.getEntityState(2)!.statusFlags).toContain('DISABLED_SUBDUED');
+
+    // Bombardment bonus should be removed immediately.
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 12)).toBe(0);
+
+    // Wait for paralysis to wear off.
+    for (let i = 0; i < PARALYZE_FRAMES; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(2)!.statusFlags).not.toContain('DISABLED_SUBDUED');
+
+    // Wait for idle cooldown then UNPACKING → eventually Hold the Line becomes ACTIVE.
+    for (let i = 0; i < IDLE_FRAMES + ANIM_FRAMES; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 13)).toBe(1 << 13);
+  });
+
+  it('removes bonuses when Strategy Center is destroyed', () => {
+    const { logic } = makeBattlePlanSetup();
+
+    // Activate Search and Destroy.
+    issueBattlePlan(logic, 1, 'SEARCHANDDESTROY');
+    logic.update(0);
+    for (let i = 0; i < ANIM_FRAMES; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 14)).toBe(1 << 14);
+    expect(logic.getEntityState(2)!.visionRange).toBeCloseTo(225, 0);
+
+    // Destroy Strategy Center: have enemy attack it.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 200; i++) logic.update(1 / 30);
+
+    // Strategy Center should be dead.
+    expect(logic.getEntityState(1)).toBeNull();
+
+    // Bonuses should be removed from ranger (which is far from enemy, still alive).
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 14)).toBe(0);
+    expect(logic.getEntityState(2)!.visionRange).toBe(150);
+  });
+
+  it('does not apply bonuses to entities matching InvalidMemberKindOf', () => {
+    const { logic } = makeBattlePlanSetup({ invalidMemberKindOf: 'INFANTRY' });
+
+    // Activate Bombardment.
+    issueBattlePlan(logic, 1, 'BOMBARDMENT');
+    logic.update(0);
+    for (let i = 0; i < ANIM_FRAMES; i++) logic.update(1 / 30);
+
+    // Ranger (INFANTRY) should be excluded by InvalidMemberKindOf.
+    expect(logic.getEntityState(2)!.weaponBonusConditionFlags & (1 << 12)).toBe(0);
+  });
+
+  it('does not paralyze the Strategy Center building itself', () => {
+    const { logic } = makeBattlePlanSetup();
+
+    // Activate Bombardment, then switch to Hold the Line.
+    issueBattlePlan(logic, 1, 'BOMBARDMENT');
+    logic.update(0);
+    for (let i = 0; i < ANIM_FRAMES; i++) logic.update(1 / 30);
+
+    issueBattlePlan(logic, 1, 'HOLDTHELINE');
+    logic.update(0);
+    for (let i = 0; i < ANIM_FRAMES; i++) logic.update(1 / 30);
+
+    // Strategy Center itself should NOT be paralyzed.
+    expect(logic.getEntityState(1)!.statusFlags).not.toContain('DISABLED_SUBDUED');
+  });
+});
