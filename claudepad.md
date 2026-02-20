@@ -1,5 +1,34 @@
 # Session Summaries
 
+## 2026-02-20T17:50Z — INI-Driven Stealth/Detection System + Code Review Fixes (Tasks #85-87)
+- Tasks #85-87: INI-driven stealth and detection system upgrade with full C++ StealthUpdate/StealthDetectorUpdate parity
+  - StealthProfile: INI parsing of StealthDelay, InnateStealth, StealthForbiddenConditions (9 tokens matching TheStealthLevelNames), MoveThresholdSpeed
+  - Bitmask values match C++ enum ordering: ATTACKING(0), MOVING(1), USING_ABILITY(2), FIRING_PRIMARY(3), FIRING_SECONDARY(4), FIRING_TERTIARY(5), NO_BLACK_MARKET(6), TAKING_DAMAGE(7), RIDERS_ATTACKING(8)
+  - Both short-form (ATTACKING) and long-form (STEALTH_NOT_WHILE_ATTACKING) token parsing
+  - FIRING_WEAPON composite maps to PRIMARY|SECONDARY|TERTIARY
+  - DetectorProfile: DetectionRange, DetectionRate throttle, CanDetectWhileGarrisoned/Contained, ExtraRequiredKindOf/ExtraForbiddenKindOf
+  - Detection includes ENEMIES and NEUTRAL (C++ PartitionFilterRelationship parity)
+  - SOLD status check on detectors, garrisonCapacity-based garrison check (not isEnclosingContainer)
+  - Contained-in-non-garrisonable prevents stealth (allowedToStealth parity)
+  - TAKING_DAMAGE frame window <= 1 (matching C++ getLastDamageTimestamp >= now - 1)
+  - Healing damage excluded from lastDamageFrame tracking (C++ DAMAGE_HEALING exception)
+  - Staggered initial detectorNextScanFrame with gameRandom offset
+  - 12 tests: innate stealth, damage breaks stealth, detector reveals enemy, ally immunity, range check, detection expiration, non-innate, extraRequired/ForbiddenKindOf, movement break, re-entry delay, short-form tokens
+- All 1091 tests pass, clean build
+
+## 2026-02-20T16:00Z — Crush/Squish Damage During Movement (Task #95)
+- Task #95: Crush collision system with C++ PhysicsUpdate::checkForOverlapCollision + SquishCollide parity — committed 926c982
+  - updateCrushCollisions(): moving entities with crusherLevel > crushableLevel crush overlapping enemies
+  - Direction check via dot product (moveDirX*dx + moveDirZ*dz > 0) — approaching targets only
+  - canBeSquished (SquishCollide module) uses radius 1.0 per C++ source
+  - CRUSH damage type with HUGE_DAMAGE_AMOUNT (1B) for guaranteed kill
+  - Extended needsGeometry to include crusherLevel > 0 for proper obstacleGeometry resolution
+  - moverRadius fallback changed to 1.0 (code review fix from MAP_XY_FACTOR/2)
+  - TODO: Vehicle crush point system (front/back/center), hijacker/TNT-hunter immunity
+  - 4 new tests: crush kill, ally immunity, crushable level resistance, direction rejection
+  - Tests use cell-center positions (x%10=5) for straight-line A* pathfinding reliability
+- All 1079 tests pass, clean build
+
 ## 2026-02-20T15:20Z — 3D Damage Distance + Bounding Sphere Subtraction (Tasks #93-94)
 - Task #93: 3D damage distance for radius damage victim gathering — committed b6a67fd
   - Changed distance calc from XZ-only to full 3D (dx² + dy² + dz²)
@@ -57,39 +86,6 @@
   - Refactored evaluatePower to use shared issueConstructCommand helper
   - 4 new tests: dozer replacement, upgrade research, rally points, parallel construction
 - All 1037 tests pass, clean build
-
-## 2026-02-20T08:15Z — Construction Progress System + Tunnel Code Review Fixes
-- Task #73 code review fixes: immediate tunnel unregister on sell (double-sell race), non-movable scatter positioning — committed 141cd5b
-- Task #74: Construction Progress/Duration System with full C++ DozerAIUpdate parity:
-  - constructionPercent field (0..100 during build, -1 = CONSTRUCTION_COMPLETE)
-  - builderId field for builder exclusivity, buildTotalFrames from INI BuildTime
-  - UNDER_CONSTRUCTION status flag: blocks attack, energy, XP, cash bounty
-  - Per-frame progress: percent += 100/totalFrames, health += maxHealth/totalFrames
-  - Starting health = 1 HP, completes at maxHealth
-  - completeConstruction: clears flags, registers energy, emits EVA event
-  - Dozer interruption: building stays partially built, builderId cleared
-  - Resume construction: repair command on UNDER_CONSTRUCTION building resumes build
-  - Cancel construction: full cost refund, building destroyed
-  - pendingConstructionActions map with cleanup in cancelEntityCommandPathActions
-  - RenderableEntityState.constructionPercent for UI display
-  - 7 new tests: initial state, completion timing, energy delay, attack block, interruption, cancel/refund, resume
-- All 1033 tests pass, clean build
-
-## 2026-02-20T08:00Z — Tunnel Network Transport System + Mine onDamage
-- Task #72: Mine onDamage sympathetic detonation handler — committed d503474
-- Task #73: Tunnel Network Transport System with full C++ TunnelTracker parity:
-  - Per-side shared TunnelTrackerState (tunnelIds, passengerIds, healFrames)
-  - TUNNELCONTAIN INI parsing with TimeForFullHeal → msToLogicFrames
-  - Enter tunnel: DISABLED_HELD + MASKED + UNSELECTABLE, shared capacity check
-  - Exit tunnel: scatter to random position (1.0-1.5× bounding radius), clear flags
-  - Cave-in: last tunnel destroyed → kill all passengers
-  - Reassign: non-last tunnel destroyed → passengers reference surviving tunnel
-  - Sell: last tunnel sold → eject passengers safely before destruction
-  - Healing: linear maxHealth/framesForFullHeal per frame, full heal after timer
-  - No aircraft filter, maxTunnelCapacity from GameLogicConfig (default 10)
-  - Integration: collectContainedEntityIds, releaseEntityFromContainer, resolveEntityContainingObject, isEnclosingContainer, handleExitContainerCommand, handleEvacuateCommand, combat-containment firecheck
-  - 9 new tests: enter/exit flags, aircraft block, shared capacity, cave-in, reassign, evacuate, healing, sell eject
-- All 1026 tests pass, clean build
 
 # Key Findings
 

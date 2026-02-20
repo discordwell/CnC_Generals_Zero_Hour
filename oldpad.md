@@ -1,5 +1,38 @@
 # Old Session Summaries
 
+## 2026-02-20T08:15Z — Construction Progress System + Tunnel Code Review Fixes
+- Task #73 code review fixes: immediate tunnel unregister on sell (double-sell race), non-movable scatter positioning — committed 141cd5b
+- Task #74: Construction Progress/Duration System with full C++ DozerAIUpdate parity:
+  - constructionPercent field (0..100 during build, -1 = CONSTRUCTION_COMPLETE)
+  - builderId field for builder exclusivity, buildTotalFrames from INI BuildTime
+  - UNDER_CONSTRUCTION status flag: blocks attack, energy, XP, cash bounty
+  - Per-frame progress: percent += 100/totalFrames, health += maxHealth/totalFrames
+  - Starting health = 1 HP, completes at maxHealth
+  - completeConstruction: clears flags, registers energy, emits EVA event
+  - Dozer interruption: building stays partially built, builderId cleared
+  - Resume construction: repair command on UNDER_CONSTRUCTION building resumes build
+  - Cancel construction: full cost refund, building destroyed
+  - pendingConstructionActions map with cleanup in cancelEntityCommandPathActions
+  - RenderableEntityState.constructionPercent for UI display
+  - 7 new tests: initial state, completion timing, energy delay, attack block, interruption, cancel/refund, resume
+- All 1033 tests pass, clean build
+
+## 2026-02-20T08:00Z — Tunnel Network Transport System + Mine onDamage
+- Task #72: Mine onDamage sympathetic detonation handler — committed d503474
+- Task #73: Tunnel Network Transport System with full C++ TunnelTracker parity:
+  - Per-side shared TunnelTrackerState (tunnelIds, passengerIds, healFrames)
+  - TUNNELCONTAIN INI parsing with TimeForFullHeal → msToLogicFrames
+  - Enter tunnel: DISABLED_HELD + MASKED + UNSELECTABLE, shared capacity check
+  - Exit tunnel: scatter to random position (1.0-1.5× bounding radius), clear flags
+  - Cave-in: last tunnel destroyed → kill all passengers
+  - Reassign: non-last tunnel destroyed → passengers reference surviving tunnel
+  - Sell: last tunnel sold → eject passengers safely before destruction
+  - Healing: linear maxHealth/framesForFullHeal per frame, full heal after timer
+  - No aircraft filter, maxTunnelCapacity from GameLogicConfig (default 10)
+  - Integration: collectContainedEntityIds, releaseEntityFromContainer, resolveEntityContainingObject, isEnclosingContainer, handleExitContainerCommand, handleEvacuateCommand, combat-containment firecheck
+  - 9 new tests: enter/exit flags, aircraft block, shared capacity, cave-in, reassign, evacuate, healing, sell eject
+- All 1026 tests pass, clean build
+
 ## 2026-02-20T07:12Z — Fog of War targeting/render + Mine collision detonation system
 - Task #70: Fog-of-war targeting gate in canAttackerTargetEntity(), resolveEntityShroudStatusForLocalPlayer(), shroudStatus on RenderableEntityState — committed d6c87a1
 - Task #71: Collision-based mine detonation system with full C++ MinefieldBehavior parity:

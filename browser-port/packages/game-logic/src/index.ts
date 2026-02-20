@@ -1270,10 +1270,18 @@ interface MapEntity {
   experienceState: ExperienceState;
   visionRange: number;
   visionState: EntityVisionState;
+  /** Source parity: StealthUpdate — parsed stealth module profile. */
+  stealthProfile: StealthProfile | null;
   /** Frames remaining before CAN_STEALTH entity re-enters stealth. 0 = ready to stealth. */
   stealthDelayRemaining: number;
   /** Frame at which DETECTED expires. 0 = not detected. */
   detectedUntilFrame: number;
+  /** Frame at which entity last took damage (for STEALTH_NOT_WHILE_TAKING_DAMAGE). */
+  lastDamageFrame: number;
+  /** Source parity: StealthDetectorUpdate — parsed detector module profile. */
+  detectorProfile: DetectorProfile | null;
+  /** Frame at which next detection scan is allowed (rate throttle). */
+  detectorNextScanFrame: number;
   /** Source parity: AutoHealBehavior — self-heal state. */
   autoHealProfile: AutoHealProfile | null;
   autoHealNextFrame: number;
@@ -1450,6 +1458,54 @@ interface FlammableProfile {
   aflameDamageDelayFrames: number;
   /** Damage per fire tick. */
   aflameDamageAmount: number;
+}
+
+/**
+ * Source parity: StealthUpdate module parsed from INI.
+ * Controls when entities can enter/exit stealth.
+ */
+interface StealthProfile {
+  /** Frames to wait before entering stealth (and re-stealth delay after break). */
+  stealthDelayFrames: number;
+  /** Entity has innate stealth ability — sets CAN_STEALTH on creation. */
+  innateStealth: boolean;
+  /** Bitmask: conditions that break/prevent stealth. */
+  forbiddenConditions: number;
+  /** Speed threshold — stealth breaks when velocity > this. 0 = any movement breaks stealth. */
+  moveThresholdSpeed: number;
+}
+
+/** StealthForbiddenConditions bitmask values — matches C++ TheStealthLevelNames array ordering. */
+const STEALTH_FORBIDDEN_ATTACKING        = 1 << 0; // ATTACKING
+const STEALTH_FORBIDDEN_MOVING           = 1 << 1; // MOVING
+const STEALTH_FORBIDDEN_USING_ABILITY    = 1 << 2; // USING_ABILITY
+const STEALTH_FORBIDDEN_FIRING_PRIMARY   = 1 << 3; // FIRING_PRIMARY
+const STEALTH_FORBIDDEN_FIRING_SECONDARY = 1 << 4; // FIRING_SECONDARY
+const STEALTH_FORBIDDEN_FIRING_TERTIARY  = 1 << 5; // FIRING_TERTIARY
+const STEALTH_FORBIDDEN_NO_BLACK_MARKET  = 1 << 6; // NO_BLACK_MARKET
+const STEALTH_FORBIDDEN_TAKING_DAMAGE    = 1 << 7; // TAKING_DAMAGE
+const STEALTH_FORBIDDEN_RIDERS_ATTACKING = 1 << 8; // RIDERS_ATTACKING
+
+/** Source parity: default forbidden conditions — attacking and any movement. */
+const STEALTH_FORBIDDEN_DEFAULT = STEALTH_FORBIDDEN_ATTACKING | STEALTH_FORBIDDEN_MOVING;
+
+/**
+ * Source parity: StealthDetectorUpdate module parsed from INI.
+ * Range-based detection of stealthed enemy entities.
+ */
+interface DetectorProfile {
+  /** Detection range override. 0 = use entity's visionRange. */
+  detectionRange: number;
+  /** Frames between detection scans (throttle). */
+  detectionRate: number;
+  /** Can detect while garrisoned inside a building. */
+  canDetectWhileGarrisoned: boolean;
+  /** Can detect while contained in a transport. */
+  canDetectWhileContained: boolean;
+  /** Only detect entities with these KindOf flags. Empty = all. */
+  extraRequiredKindOf: Set<string>;
+  /** Don't detect entities with these KindOf flags. Empty = no filter. */
+  extraForbiddenKindOf: Set<string>;
 }
 
 /**
@@ -3592,7 +3648,7 @@ export class GameLogicSubsystem implements Subsystem {
       ? Array.from({ length: attackWeapon.scatterTargets.length }, (_entry, index) => index)
       : [];
 
-    return {
+    const entity: MapEntity = {
       id: objectId,
       templateName: mapObject.templateName,
       category,
@@ -3710,8 +3766,12 @@ export class GameLogicSubsystem implements Subsystem {
       experienceState: createExperienceStateImpl(),
       visionRange: readNumericField(objectDef?.fields ?? {}, ['VisionRange', 'ShroudClearingRange']) ?? 0,
       visionState: createEntityVisionStateImpl(),
+      stealthProfile: this.extractStealthProfile(objectDef),
       stealthDelayRemaining: 0,
       detectedUntilFrame: 0,
+      lastDamageFrame: 0,
+      detectorProfile: this.extractDetectorProfile(objectDef),
+      detectorNextScanFrame: 0,
       autoHealProfile: this.extractAutoHealProfile(objectDef),
       autoHealNextFrame: 0,
       autoHealDamageDelayUntilFrame: 0,
@@ -3783,6 +3843,19 @@ export class GameLogicSubsystem implements Subsystem {
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
     };
+
+    // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
+    if (entity.stealthProfile?.innateStealth) {
+      entity.objectStatusFlags.add('CAN_STEALTH');
+    }
+
+    // Source parity: StealthDetectorUpdate init — stagger initial scan with random offset.
+    if (entity.detectorProfile) {
+      entity.detectorNextScanFrame = this.frameCounter
+        + this.gameRandom.nextRange(1, entity.detectorProfile.detectionRate);
+    }
+
+    return entity;
   }
 
   private resolveRenderAssetProfile(objectDef: ObjectDef | undefined): {
@@ -5509,6 +5582,140 @@ export class GameLogicSubsystem implements Subsystem {
             healPercentPerSecond: readNumericField(block.fields, ['HealPercentEachSecond']) ?? 0.01,
             upgradedHealPercentPerSecond: readNumericField(block.fields, ['UpgradedHealPercentEachSecond']) ?? 0.02,
             upgradeRequired: readStringField(block.fields, ['UpgradeRequired']) ?? null,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: StealthUpdate module — parse stealth behavior from INI.
+   */
+  private extractStealthProfile(objectDef: ObjectDef | undefined): StealthProfile | null {
+    if (!objectDef) return null;
+    let profile: StealthProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'STEALTHUPDATE') {
+          const innateStealth = readBooleanField(block.fields, ['InnateStealth']) ?? true;
+          const stealthDelayMs = readNumericField(block.fields, ['StealthDelay']) ?? 2000;
+          const stealthDelayFrames = this.msToLogicFrames(stealthDelayMs);
+          const moveThresholdSpeed = readNumericField(block.fields, ['MoveThresholdSpeed']) ?? 0;
+
+          // Parse StealthForbiddenConditions — space-separated tokens.
+          let forbiddenConditions = 0;
+          const forbiddenStr = readStringField(block.fields, ['StealthForbiddenConditions']) ?? '';
+          for (const token of forbiddenStr.split(/\s+/)) {
+            switch (token.toUpperCase()) {
+              case 'ATTACKING':
+              case 'STEALTH_NOT_WHILE_ATTACKING':
+                forbiddenConditions |= STEALTH_FORBIDDEN_ATTACKING;
+                break;
+              case 'MOVING':
+              case 'STEALTH_NOT_WHILE_MOVING':
+                forbiddenConditions |= STEALTH_FORBIDDEN_MOVING;
+                break;
+              case 'USING_ABILITY':
+              case 'STEALTH_NOT_WHILE_USING_ABILITY':
+                forbiddenConditions |= STEALTH_FORBIDDEN_USING_ABILITY;
+                break;
+              case 'FIRING_PRIMARY':
+              case 'STEALTH_NOT_WHILE_FIRING_PRIMARY':
+                forbiddenConditions |= STEALTH_FORBIDDEN_FIRING_PRIMARY;
+                break;
+              case 'FIRING_SECONDARY':
+                forbiddenConditions |= STEALTH_FORBIDDEN_FIRING_SECONDARY;
+                break;
+              case 'FIRING_TERTIARY':
+                forbiddenConditions |= STEALTH_FORBIDDEN_FIRING_TERTIARY;
+                break;
+              case 'FIRING_WEAPON':
+              case 'STEALTH_NOT_WHILE_FIRING_WEAPON':
+                // Composite: all weapon slots.
+                forbiddenConditions |= STEALTH_FORBIDDEN_FIRING_PRIMARY
+                  | STEALTH_FORBIDDEN_FIRING_SECONDARY | STEALTH_FORBIDDEN_FIRING_TERTIARY;
+                break;
+              case 'NO_BLACK_MARKET':
+                forbiddenConditions |= STEALTH_FORBIDDEN_NO_BLACK_MARKET;
+                break;
+              case 'TAKING_DAMAGE':
+              case 'STEALTH_NOT_WHILE_TAKING_DAMAGE':
+                forbiddenConditions |= STEALTH_FORBIDDEN_TAKING_DAMAGE;
+                break;
+              case 'RIDERS_ATTACKING':
+                forbiddenConditions |= STEALTH_FORBIDDEN_RIDERS_ATTACKING;
+                break;
+            }
+          }
+
+          // If no explicit conditions, use default (attacking + moving).
+          if (forbiddenConditions === 0 && forbiddenStr.trim() === '') {
+            forbiddenConditions = STEALTH_FORBIDDEN_DEFAULT;
+          }
+
+          profile = {
+            stealthDelayFrames,
+            innateStealth,
+            forbiddenConditions,
+            moveThresholdSpeed,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: StealthDetectorUpdate module — parse detector profile from INI.
+   */
+  private extractDetectorProfile(objectDef: ObjectDef | undefined): DetectorProfile | null {
+    if (!objectDef) return null;
+    let profile: DetectorProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'STEALTHDETECTORUPDATE') {
+          const detectionRange = readNumericField(block.fields, ['DetectionRange']) ?? 0;
+          const detectionRateMs = readNumericField(block.fields, ['DetectionRate']) ?? 33;
+          const detectionRate = Math.max(1, this.msToLogicFrames(detectionRateMs));
+          const canDetectWhileGarrisoned = readBooleanField(block.fields, ['CanDetectWhileGarrisoned']) ?? false;
+          const canDetectWhileContained = readBooleanField(block.fields, ['CanDetectWhileContained']) ?? false;
+
+          const extraRequiredKindOf = new Set<string>();
+          const requiredStr = readStringField(block.fields, ['ExtraRequiredKindOf']) ?? '';
+          for (const token of requiredStr.split(/\s+/)) {
+            if (token) extraRequiredKindOf.add(token.toUpperCase());
+          }
+
+          const extraForbiddenKindOf = new Set<string>();
+          const forbiddenStr = readStringField(block.fields, ['ExtraForbiddenKindOf']) ?? '';
+          for (const token of forbiddenStr.split(/\s+/)) {
+            if (token) extraForbiddenKindOf.add(token.toUpperCase());
+          }
+
+          profile = {
+            detectionRange,
+            detectionRate,
+            canDetectWhileGarrisoned,
+            canDetectWhileContained,
+            extraRequiredKindOf,
+            extraForbiddenKindOf,
           };
         }
       }
@@ -10337,11 +10544,13 @@ export class GameLogicSubsystem implements Subsystem {
    * Updates each entity's vision contribution to the fog of war grid.
    */
   /**
-   * Source parity: StealthUpdate — auto-stealth entities with CAN_STEALTH,
-   * break stealth on attack/move, count down stealth delay.
+   * Source parity: StealthUpdate::allowedToStealth + update — auto-stealth entities
+   * with CAN_STEALTH, break stealth based on INI-driven forbidden conditions, count
+   * down per-entity stealth delay. Fallback to default 60-frame delay for entities
+   * without an explicit StealthUpdate module.
    */
   private updateStealth(): void {
-    const STEALTH_DELAY_FRAMES = 60; // ~2s at 30fps
+    const DEFAULT_STEALTH_DELAY_FRAMES = 60; // ~2s at 30fps
 
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) continue;
@@ -10354,15 +10563,69 @@ export class GameLogicSubsystem implements Subsystem {
 
       if (!entity.objectStatusFlags.has('CAN_STEALTH')) continue;
 
-      // Break stealth while attacking or moving.
-      const isAttacking = entity.attackTargetEntityId !== null;
-      const isMoving = entity.moving;
+      const profile = entity.stealthProfile;
+      const delayFrames = profile ? profile.stealthDelayFrames : DEFAULT_STEALTH_DELAY_FRAMES;
+      const forbidden = profile ? profile.forbiddenConditions : STEALTH_FORBIDDEN_DEFAULT;
 
-      if (isAttacking || isMoving) {
+      // Source parity: StealthUpdate::allowedToStealth — contained in non-garrisonable = no stealth.
+      const stealthContainer = this.resolveEntityContainingObject(entity);
+      if (stealthContainer) {
+        const isGarrisonable = stealthContainer.containProfile !== null
+          && stealthContainer.containProfile.garrisonCapacity > 0;
+        if (!isGarrisonable) {
+          if (entity.objectStatusFlags.has('STEALTHED')) {
+            entity.objectStatusFlags.delete('STEALTHED');
+          }
+          entity.stealthDelayRemaining = delayFrames;
+          continue;
+        }
+      }
+
+      // Source parity: StealthUpdate::allowedToStealth — check forbidden conditions.
+      let breakStealth = false;
+
+      if ((forbidden & STEALTH_FORBIDDEN_ATTACKING) !== 0) {
+        if (entity.attackTargetEntityId !== null) {
+          breakStealth = true;
+        }
+      }
+
+      if ((forbidden & STEALTH_FORBIDDEN_FIRING_PRIMARY) !== 0) {
+        if (entity.objectStatusFlags.has('IS_FIRING_WEAPON')) {
+          breakStealth = true;
+        }
+      }
+
+      if ((forbidden & STEALTH_FORBIDDEN_MOVING) !== 0) {
+        if (profile && profile.moveThresholdSpeed > 0) {
+          // Source parity: break stealth only if speed exceeds threshold.
+          if (entity.moving && entity.speed > profile.moveThresholdSpeed) {
+            breakStealth = true;
+          }
+        } else if (entity.moving) {
+          breakStealth = true;
+        }
+      }
+
+      if ((forbidden & STEALTH_FORBIDDEN_TAKING_DAMAGE) !== 0) {
+        // Source parity: getLastDamageTimestamp >= now - 1 — stealth breaks if damaged this frame or last.
+        // Healing damage does not break stealth (C++ checks m_damageType != DAMAGE_HEALING).
+        if (entity.lastDamageFrame > 0 && (this.frameCounter - entity.lastDamageFrame) <= 1) {
+          breakStealth = true;
+        }
+      }
+
+      if ((forbidden & STEALTH_FORBIDDEN_USING_ABILITY) !== 0) {
+        if (entity.objectStatusFlags.has('IS_USING_ABILITY')) {
+          breakStealth = true;
+        }
+      }
+
+      if (breakStealth) {
         if (entity.objectStatusFlags.has('STEALTHED')) {
           entity.objectStatusFlags.delete('STEALTHED');
         }
-        entity.stealthDelayRemaining = STEALTH_DELAY_FRAMES;
+        entity.stealthDelayRemaining = delayFrames;
         continue;
       }
 
@@ -10381,30 +10644,81 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: StealthDetectorUpdate — detector units reveal stealthed enemies.
+   * Uses per-entity DetectorProfile for range, rate, and KindOf filters when available.
+   * Falls back to KINDOF_DETECTOR + visionRange for entities without explicit module.
    */
   private updateDetection(): void {
-    const DETECTION_DURATION_FRAMES = 30; // ~1s at 30fps — long enough to avoid flicker
+    const DEFAULT_DETECTION_DURATION_FRAMES = 30; // ~1s at 30fps
 
     for (const detector of this.spawnedEntities.values()) {
       if (detector.destroyed) continue;
-      if (!detector.kindOf.has('DETECTOR')) continue;
 
-      const detectionRange = detector.visionRange > 0 ? detector.visionRange : 150;
+      // Source parity: detector needs either KINDOF_DETECTOR or a StealthDetectorUpdate module.
+      const profile = detector.detectorProfile;
+      if (!detector.kindOf.has('DETECTOR') && !profile) continue;
+
+      // Source parity: detector must be fully constructed and not sold.
+      if (detector.constructionPercent !== CONSTRUCTION_COMPLETE) continue;
+      if (detector.objectStatusFlags.has('SOLD')) continue;
+
+      // Source parity: DetectionRate throttle — skip scan if not yet due.
+      if (profile) {
+        if (this.frameCounter < detector.detectorNextScanFrame) continue;
+        detector.detectorNextScanFrame = this.frameCounter + profile.detectionRate;
+      }
+
+      // Source parity: contained/garrisoned detector checks.
+      // C++ uses isGarrisonable() — garrison buildings allow fire; transports enclose passengers.
+      if (profile) {
+        const containingObject = this.resolveEntityContainingObject(detector);
+        if (containingObject) {
+          const isGarrison = containingObject.containProfile !== null
+            && containingObject.containProfile.garrisonCapacity > 0;
+          if (isGarrison && !profile.canDetectWhileGarrisoned) continue;
+          if (!isGarrison && !profile.canDetectWhileContained) continue;
+        }
+      }
+
+      // Detection range: profile override > visionRange > fallback 150.
+      const detectionRange = (profile && profile.detectionRange > 0)
+        ? profile.detectionRange
+        : (detector.visionRange > 0 ? detector.visionRange : 150);
       const detRangeSq = detectionRange * detectionRange;
+
+      // Detection duration matches the scan interval (+ 1 frame) to prevent flicker.
+      const detectionDuration = profile
+        ? profile.detectionRate + 1
+        : DEFAULT_DETECTION_DURATION_FRAMES;
 
       for (const target of this.spawnedEntities.values()) {
         if (target.destroyed || target === detector) continue;
         if (!target.objectStatusFlags.has('STEALTHED')) continue;
 
-        // Only detect enemies.
-        if (this.getTeamRelationship(detector, target) !== RELATIONSHIP_ENEMIES) continue;
+        // Source parity: detect enemies and neutrals (PartitionFilterRelationship::ALLOW_ENEMIES | ALLOW_NEUTRAL).
+        const detRel = this.getTeamRelationship(detector, target);
+        if (detRel !== RELATIONSHIP_ENEMIES && detRel !== RELATIONSHIP_NEUTRAL) continue;
+
+        // Source parity: ExtraRequiredKindOf / ExtraForbiddenKindOf filters.
+        if (profile && profile.extraRequiredKindOf.size > 0) {
+          let hasRequired = false;
+          for (const kind of profile.extraRequiredKindOf) {
+            if (target.kindOf.has(kind)) { hasRequired = true; break; }
+          }
+          if (!hasRequired) continue;
+        }
+        if (profile && profile.extraForbiddenKindOf.size > 0) {
+          let hasForbidden = false;
+          for (const kind of profile.extraForbiddenKindOf) {
+            if (target.kindOf.has(kind)) { hasForbidden = true; break; }
+          }
+          if (hasForbidden) continue;
+        }
 
         const dx = target.x - detector.x;
         const dz = target.z - detector.z;
         if (dx * dx + dz * dz <= detRangeSq) {
           target.objectStatusFlags.add('DETECTED');
-          // Refresh detection timer while target stays in range (prevents flicker).
-          target.detectedUntilFrame = this.frameCounter + DETECTION_DURATION_FRAMES;
+          target.detectedUntilFrame = this.frameCounter + detectionDuration;
         }
       }
     }
@@ -15668,6 +15982,12 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     target.health = Math.max(0, target.health - adjustedDamage);
+
+    // Source parity: ActiveBody::getLastDamageTimestamp — track last damage frame for stealth.
+    // Healing damage does not update the timestamp (C++ checks m_damageType != DAMAGE_HEALING).
+    if (damageType !== 'HEALING') {
+      target.lastDamageFrame = this.frameCounter;
+    }
 
     // Source parity: onDamage resets heal timers for AutoHeal and BaseRegen.
     if (target.autoHealProfile && target.autoHealProfile.startHealingDelayFrames > 0) {
