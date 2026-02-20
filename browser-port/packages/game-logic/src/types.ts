@@ -39,6 +39,12 @@ export interface RenderableEntityState {
   shroudStatus: 'CLEAR' | 'FOGGED' | 'SHROUDED';
   /** Source parity: Object::m_constructionPercent — 0..100 during build, -1 when complete. */
   constructionPercent: number;
+  /** Source parity: ToppleUpdate — angular tilt in radians (0 = upright, PI/2 = fallen). */
+  toppleAngle: number;
+  /** Source parity: ToppleUpdate — topple direction X component (unit vector). */
+  toppleDirX: number;
+  /** Source parity: ToppleUpdate — topple direction Z component (unit vector). */
+  toppleDirZ: number;
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';

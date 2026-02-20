@@ -1524,6 +1524,19 @@ interface MapEntity {
   pilotFindVehicleDidMoveToBase: boolean;
   /** Target vehicle entity ID the pilot is navigating toward. */
   pilotFindVehicleTargetId: number | null;
+
+  // ── Source parity: ToppleUpdate — trees/poles fall when damaged/crushed ──
+  toppleProfile: ToppleProfile | null;
+  toppleState: ToppleState;
+  /** Topple direction in XZ (normalized). */
+  toppleDirX: number;
+  toppleDirZ: number;
+  /** Current angular velocity (radians/frame). */
+  toppleAngularVelocity: number;
+  /** Accumulated angular rotation (0..PI/2). */
+  toppleAngularAccumulation: number;
+  /** Topple speed used to compute acceleration. */
+  toppleSpeed: number;
 }
 
 /**
@@ -1935,6 +1948,27 @@ interface CountermeasuresState {
 }
 
 /**
+ * Source parity: ToppleUpdateModuleData — tree/pole toppling on damage/crush.
+ * (Generals/Code/GameEngine/Include/GameLogic/Module/ToppleUpdate.h)
+ */
+interface ToppleProfile {
+  /** Initial angular velocity multiplier (fraction of topple speed). */
+  initialVelocityPercent: number;
+  /** Angular acceleration multiplier (fraction of topple speed). */
+  initialAccelPercent: number;
+  /** Velocity retained after bounce (fraction). */
+  bounceVelocityPercent: number;
+  /** Kill entity when topple completes (default true). */
+  killWhenFinishedToppling: boolean;
+  /** Kill entity instantly when topple starts. */
+  killWhenStartToppling: boolean;
+  /** Constrain topple to left/right only (fences). */
+  toppleLeftOrRightOnly: boolean;
+}
+
+type ToppleState = 'NONE' | 'TOPPLING' | 'BOUNCING' | 'DONE';
+
+/**
  * Source parity: PilotFindVehicleUpdateModuleData — AI pilot auto-enter vehicle behavior.
  * (Generals/Code/GameEngine/Include/GameLogic/Module/PilotFindVehicleUpdate.h)
  */
@@ -2283,6 +2317,9 @@ export class GameLogicSubsystem implements Subsystem {
       isDetected: entity.objectStatusFlags.has('DETECTED'),
       shroudStatus: this.resolveEntityShroudStatusForLocalPlayer(entity),
       constructionPercent: entity.constructionPercent,
+      toppleAngle: entity.toppleAngularAccumulation,
+      toppleDirX: entity.toppleDirX,
+      toppleDirZ: entity.toppleDirZ,
     };
   }
 
@@ -2529,6 +2566,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateRebuildHoles();
     this.updateAutoDeposit();
     this.updatePilotFindVehicle();
+    this.updateToppleEntities();
     this.updateRenderStates();
     this.updateLifetimeEntities();
     this.updateSlowDeathEntities();
@@ -4285,6 +4323,14 @@ export class GameLogicSubsystem implements Subsystem {
       pilotFindVehicleNextScanFrame: 0,
       pilotFindVehicleDidMoveToBase: false,
       pilotFindVehicleTargetId: null,
+      // Topple
+      toppleProfile: this.extractToppleProfile(objectDef),
+      toppleState: 'NONE' as ToppleState,
+      toppleDirX: 0,
+      toppleDirZ: 0,
+      toppleAngularVelocity: 0,
+      toppleAngularAccumulation: 0,
+      toppleSpeed: 0,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -6666,6 +6712,41 @@ export class GameLogicSubsystem implements Subsystem {
             scanFrames: this.msToLogicFrames(readNumericField(block.fields, ['ScanRate']) ?? 0),
             scanRange: readNumericField(block.fields, ['ScanRange']) ?? 0,
             minHealth: readNumericField(block.fields, ['MinHealth']) ?? 0.5,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: ToppleUpdate — extract topple config from INI.
+   * (Generals/Code/GameEngine/Source/GameLogic/Object/Update/ToppleUpdate.cpp)
+   */
+  private extractToppleProfile(objectDef: ObjectDef | undefined): ToppleProfile | null {
+    if (!objectDef) return null;
+    let profile: ToppleProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'TOPPLEUPDATE') {
+          const parsePercent = (raw: number | null | undefined): number =>
+            raw != null ? raw / 100 : 0;
+          profile = {
+            initialVelocityPercent: parsePercent(readNumericField(block.fields, ['InitialVelocityPercent'])) || 0.20,
+            initialAccelPercent: parsePercent(readNumericField(block.fields, ['InitialAccelPercent'])) || 0.01,
+            bounceVelocityPercent: parsePercent(readNumericField(block.fields, ['BounceVelocityPercent'])) || 0.30,
+            killWhenFinishedToppling: readBooleanField(block.fields, ['KillWhenFinishedToppling']) ?? true,
+            killWhenStartToppling: readBooleanField(block.fields, ['KillWhenStartToppling']) ?? false,
+            toppleLeftOrRightOnly: readBooleanField(block.fields, ['ToppleLeftOrRightOnly']) ?? false,
           };
         }
       }
@@ -18455,20 +18536,20 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: if already navigating to a target, check arrival.
       if (entity.pilotFindVehicleTargetId !== null) {
         const target = this.spawnedEntities.get(entity.pilotFindVehicleTargetId);
-        if (!target || target.destroyed) {
+        // Re-validate target: must still be alive, same side, and unoccupied.
+        if (!target || target.destroyed
+          || (target.side ? this.normalizeSide(target.side) : null) !== side
+          || this.collectContainedEntityIds(target.id).length > 0) {
           entity.pilotFindVehicleTargetId = null;
         } else {
           const dx = entity.x - target.x;
           const dz = entity.z - target.z;
           const dist = Math.sqrt(dx * dx + dz * dz);
           if (dist <= 15) {
-            // Source parity: pilot enters vehicle — hide pilot inside vehicle.
-            entity.garrisonContainerId = target.id;
-            this.cancelEntityCommandPathActions(entity.id);
-            entity.objectStatusFlags.add('DISABLED_HELD');
-            entity.objectStatusFlags.add('MASKED');
-            entity.objectStatusFlags.add('UNSELECTABLE');
-            this.removeEntityFromSelection(entity.id);
+            // Source parity: pilot enters vehicle — use transport containment.
+            // TODO(C++ parity): C++ gates this through wouldLikeToCollideWith()
+            // collide modules; currently we accept any vehicle that passes health/side checks.
+            this.enterTransport(entity, target);
             entity.pilotFindVehicleTargetId = null;
             continue;
           }
@@ -18507,7 +18588,9 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
 
-        // Check if vehicle is already occupied (has passengers or is being used).
+        // Source parity: C++ uses DONT_CHECK_CAPACITY and gates via wouldLikeToCollideWith()
+        // collide modules. We approximate by rejecting occupied vehicles.
+        // TODO(C++ parity): C++ allows entering occupied vehicles (pilot "takes over").
         if (this.collectContainedEntityIds(candidate.id).length > 0) continue;
 
         const dx = candidate.x - entity.x;
@@ -18537,19 +18620,106 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: Resolve the AI base center for a given side.
-   * Returns the first structure's position as a proxy for base center.
+   * Source parity: AIPlayer::computeCenterAndRadiusOfBase — computes the centroid
+   * of all buildings owned by the given side.
    */
   private resolveAiBaseCenter(side: string | null): { x: number; z: number } | null {
     if (!side) return null;
+    let totalX = 0;
+    let totalZ = 0;
+    let count = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed || entity.slowDeathState) continue;
       if (entity.category !== 'building') continue;
       const entitySide = entity.side ? this.normalizeSide(entity.side) : null;
       if (entitySide !== side) continue;
-      return { x: entity.x, z: entity.z };
+      totalX += entity.x;
+      totalZ += entity.z;
+      count++;
     }
-    return null;
+    if (count === 0) return null;
+    return { x: totalX / count, z: totalZ / count };
+  }
+
+  // ── Source parity: ToppleUpdate ──
+
+  /** Angular limit before bounce/stop (~88.9 degrees). */
+  private static readonly TOPPLE_ANGULAR_LIMIT = Math.PI / 2 - Math.PI / 64;
+  /** Below this velocity, stop bouncing. */
+  private static readonly TOPPLE_VELOCITY_BOUNCE_LIMIT = 0.01;
+
+  /**
+   * Source parity: ToppleUpdate::applyTopplingForce() — initiate topple on an entity.
+   * Called from crush collisions or damage application for topple-enabled entities.
+   */
+  private applyTopplingForce(entity: MapEntity, dirX: number, dirZ: number, speed: number): void {
+    const profile = entity.toppleProfile;
+    if (!profile) return;
+    if (entity.toppleState !== 'NONE') return; // already toppling
+
+    // Normalize direction.
+    const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+    if (len < 0.001) return;
+    entity.toppleDirX = dirX / len;
+    entity.toppleDirZ = dirZ / len;
+    entity.toppleSpeed = speed;
+    entity.toppleAngularVelocity = speed * profile.initialVelocityPercent;
+    entity.toppleAngularAccumulation = 0;
+    entity.toppleState = 'TOPPLING';
+
+    // Source parity: KillWhenStartToppling — instant death.
+    if (profile.killWhenStartToppling) {
+      this.markEntityDestroyed(entity.id, -1);
+      return;
+    }
+
+    // Source parity: remove from pathfinder on topple start.
+    entity.blocksPath = false;
+  }
+
+  /**
+   * Source parity: ToppleUpdate::update() — per-frame angular rotation and bounce.
+   */
+  private updateToppleEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.toppleState === 'NONE' || entity.toppleState === 'DONE') continue;
+      const profile = entity.toppleProfile;
+      if (!profile) continue;
+
+      const ANGULAR_LIMIT = GameLogicSubsystem.TOPPLE_ANGULAR_LIMIT;
+      const BOUNCE_LIMIT = GameLogicSubsystem.TOPPLE_VELOCITY_BOUNCE_LIMIT;
+
+      // Source parity: cap velocity at limit to prevent overshoot.
+      let curVelToUse = entity.toppleAngularVelocity;
+      if (entity.toppleAngularAccumulation + curVelToUse > ANGULAR_LIMIT) {
+        curVelToUse = ANGULAR_LIMIT - entity.toppleAngularAccumulation;
+      }
+
+      entity.toppleAngularAccumulation += curVelToUse;
+
+      // Source parity: bounce/stop only when hitting limit with positive velocity.
+      if (entity.toppleAngularAccumulation >= ANGULAR_LIMIT && entity.toppleAngularVelocity > 0) {
+        entity.toppleAngularAccumulation = ANGULAR_LIMIT;
+
+        // Source parity: reverse velocity and apply bounce damping.
+        entity.toppleAngularVelocity *= -profile.bounceVelocityPercent;
+
+        if (Math.abs(entity.toppleAngularVelocity) < BOUNCE_LIMIT) {
+          // Source parity: topple complete — velocity too small to bounce.
+          entity.toppleAngularVelocity = 0;
+          entity.toppleState = 'DONE';
+          if (profile.killWhenFinishedToppling) {
+            this.markEntityDestroyed(entity.id, -1);
+          }
+        } else {
+          entity.toppleState = 'BOUNCING';
+        }
+      } else {
+        // Source parity: acceleration only applied during falling, not during bouncing.
+        entity.toppleAngularVelocity += entity.toppleSpeed * profile.initialAccelPercent;
+      }
+    }
   }
 
   /**
@@ -20070,6 +20240,12 @@ export class GameLogicSubsystem implements Subsystem {
 
         // Source parity: CRUSH damage uses HUGE_DAMAGE_AMOUNT (guaranteed kill).
         this.applyWeaponDamageAmount(mover.id, target, HUGE_DAMAGE_AMOUNT, 'CRUSH');
+
+        // Source parity: ToppleUpdate — if target has topple profile, apply topple force.
+        if (target.toppleProfile && target.toppleState === 'NONE') {
+          const moverSpeed = mover.speed > 0 ? mover.speed : 1.0;
+          this.applyTopplingForce(target, dx, dz, moverSpeed);
+        }
       }
     }
   }

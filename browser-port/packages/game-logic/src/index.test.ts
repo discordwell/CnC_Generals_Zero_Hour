@@ -14461,7 +14461,7 @@ describe('PilotFindVehicleUpdate', () => {
         pilotFindVehicleProfile: unknown;
         pilotFindVehicleDidMoveToBase: boolean;
         pilotFindVehicleTargetId: number | null;
-        garrisonContainerId: number | null;
+        transportContainerId: number | null;
         category: string;
       }>;
     }).spawnedEntities;
@@ -14492,7 +14492,7 @@ describe('PilotFindVehicleUpdate', () => {
     // The pilot should have entered the vehicle (MASKED inside it) or be en route.
     const hasTarget = pilot.pilotFindVehicleTargetId === vehicle.id;
     const isMoving = pilot.moveTarget !== null || pilot.moving;
-    const hasEntered = pilot.garrisonContainerId === vehicle.id;
+    const hasEntered = pilot.transportContainerId === vehicle.id;
     expect(hasTarget || isMoving || hasEntered).toBe(true);
   });
 
@@ -14586,5 +14586,171 @@ describe('PilotFindVehicleUpdate', () => {
 
     // After scan finds no vehicle, pilot should move to base once.
     expect(pilot!.pilotFindVehicleDidMoveToBase).toBe(true);
+  });
+});
+
+// ── ToppleUpdate ──────────────────────────────────────────────────────────────
+
+describe('ToppleUpdate', () => {
+  function makeToppleBundle(opts: {
+    killWhenFinished?: boolean;
+    killWhenStart?: boolean;
+    initialVelocityPercent?: number;
+    initialAccelPercent?: number | null;
+    bounceVelocityPercent?: number;
+  } = {}) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('Tree', 'Neutral', ['SHRUBBERY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'ToppleUpdate ModuleTag_Topple', {
+            InitialVelocityPercent: opts.initialVelocityPercent ?? 20,
+            ...(opts.initialAccelPercent !== null ? { InitialAccelPercent: opts.initialAccelPercent ?? 1 } : {}),
+            BounceVelocityPercent: opts.bounceVelocityPercent ?? 30,
+            KillWhenFinishedToppling: opts.killWhenFinished ?? true,
+            KillWhenStartToppling: opts.killWhenStart ?? false,
+          }),
+        ]),
+      ],
+    });
+  }
+
+  function makeToppleSetup(opts: Parameters<typeof makeToppleBundle>[0] = {}) {
+    const bundle = makeToppleBundle(opts);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Tree', 5, 5)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number;
+        templateName: string;
+        destroyed: boolean;
+        toppleProfile: unknown;
+        toppleState: string;
+        toppleDirX: number;
+        toppleDirZ: number;
+        toppleAngularVelocity: number;
+        toppleAngularAccumulation: number;
+        toppleSpeed: number;
+        blocksPath: boolean;
+      }>;
+      applyTopplingForce(entity: unknown, dirX: number, dirZ: number, speed: number): void;
+    }).spawnedEntities;
+
+    let tree: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
+    for (const [, e] of entities) {
+      if (e.templateName === 'Tree') tree = e;
+    }
+
+    const applyTopple = (logic as unknown as {
+      applyTopplingForce(entity: unknown, dirX: number, dirZ: number, speed: number): void;
+    }).applyTopplingForce.bind(logic);
+
+    return { logic, tree: tree!, entities, applyTopple };
+  }
+
+  it('initializes ToppleProfile from INI', () => {
+    const { tree } = makeToppleSetup();
+    expect(tree.toppleProfile).not.toBeNull();
+    expect(tree.toppleState).toBe('NONE');
+  });
+
+  it('applies toppling force and transitions to TOPPLING state', () => {
+    const { logic, tree, applyTopple } = makeToppleSetup();
+    applyTopple(tree, 1, 0, 5.0);
+
+    expect(tree.toppleState).toBe('TOPPLING');
+    expect(tree.toppleDirX).toBeCloseTo(1.0);
+    expect(tree.toppleDirZ).toBeCloseTo(0.0);
+    expect(tree.toppleAngularVelocity).toBeGreaterThan(0);
+    // Source parity: blocksPath cleared on topple start.
+    expect(tree.blocksPath).toBe(false);
+  });
+
+  it('ignores second topple force while already toppling', () => {
+    const { tree, applyTopple } = makeToppleSetup();
+    applyTopple(tree, 1, 0, 5.0);
+    const firstVelocity = tree.toppleAngularVelocity;
+
+    // Second topple should be ignored.
+    applyTopple(tree, 0, 1, 10.0);
+    expect(tree.toppleAngularVelocity).toBe(firstVelocity);
+    expect(tree.toppleDirX).toBeCloseTo(1.0);
+  });
+
+  it('progresses angular accumulation toward PI/2 over frames', () => {
+    const { logic, tree, applyTopple } = makeToppleSetup();
+    applyTopple(tree, 1, 0, 5.0);
+
+    // Run a few frames — angular accumulation should increase.
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(tree.toppleAngularAccumulation).toBeGreaterThan(0);
+  });
+
+  it('kills entity when finished toppling with KillWhenFinishedToppling=true', () => {
+    const { logic, tree, applyTopple } = makeToppleSetup({ killWhenFinished: true });
+    // Source parity: typical crusher speed is ~1.0 units/frame (tank at 30 units/sec, 30fps).
+    applyTopple(tree, 1, 0, 1.0);
+
+    // Run many frames until topple completes.
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      if (tree.destroyed) break;
+    }
+
+    expect(tree.destroyed).toBe(true);
+  });
+
+  it('kills entity immediately when KillWhenStartToppling=true', () => {
+    const { tree, applyTopple } = makeToppleSetup({ killWhenStart: true });
+    applyTopple(tree, 0, 1, 5.0);
+
+    expect(tree.destroyed).toBe(true);
+  });
+
+  it('bounces at angular limit and eventually stops', () => {
+    // Use high bounce to ensure at least one visible bounce, with realistic speed.
+    const { logic, tree, applyTopple } = makeToppleSetup({
+      killWhenFinished: false,
+      bounceVelocityPercent: 60,
+      initialVelocityPercent: 80,
+      initialAccelPercent: 0,
+    });
+    applyTopple(tree, 1, 0, 1.0);
+
+    let sawBouncing = false;
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      if (tree.toppleState === 'BOUNCING') sawBouncing = true;
+      if (tree.toppleState === 'DONE') break;
+    }
+
+    expect(sawBouncing).toBe(true);
+    expect(tree.toppleState).toBe('DONE');
+  });
+
+  it('exposes topple angle on RenderableEntityState', () => {
+    const { logic, tree, applyTopple } = makeToppleSetup();
+    applyTopple(tree, 1, 0, 5.0);
+
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Source parity: topple data exposed via makeRenderableEntityState for renderer.
+    const states = logic.getRenderableEntityStates();
+    const treeState = states.find((s) => s.id === tree.id);
+    expect(treeState).toBeDefined();
+    expect(treeState!.toppleAngle).toBeGreaterThan(0);
+    expect(treeState!.toppleDirX).toBeCloseTo(1.0);
+    expect(treeState!.toppleDirZ).toBeCloseTo(0.0);
   });
 });
