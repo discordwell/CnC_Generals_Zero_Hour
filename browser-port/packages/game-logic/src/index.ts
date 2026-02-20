@@ -14,7 +14,6 @@ import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
   IniDataRegistry,
   type ArmorDef,
-  type GameDataConfig,
   type SpecialPowerDef,
   type ObjectDef,
   type ScienceDef,
@@ -160,6 +159,9 @@ import {
   createExperienceState as createExperienceStateImpl,
   DEFAULT_VETERANCY_CONFIG,
   getExperienceValue as getExperienceValueImpl,
+  LEVEL_ELITE,
+  LEVEL_HEROIC,
+  LEVEL_VETERAN,
   resolveArmorSetFlagsForLevel as resolveArmorSetFlagsForLevelImpl,
   type ExperienceProfile,
   type ExperienceState,
@@ -412,7 +414,6 @@ const WEAPON_BONUS_FIELD_RADIUS = 1;
 const WEAPON_BONUS_FIELD_RANGE = 2;
 const WEAPON_BONUS_FIELD_RATE_OF_FIRE = 3;
 const WEAPON_BONUS_FIELD_PRE_ATTACK = 4;
-const WEAPON_BONUS_FIELD_COUNT = 5;
 
 const WEAPON_BONUS_FIELD_BY_NAME = new Map<string, number>([
   ['DAMAGE', WEAPON_BONUS_FIELD_DAMAGE],
@@ -2081,7 +2082,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (normalizedPlayerIndex === null) {
       return null;
     }
-    const localSide = this.playerSideByIndex.get(normalizedPlayerIndex);
+    const localSide = this.playerSideByIndex.get(normalizedPlayerIndex) ?? this.resolveLocalPlayerSide();
     if (!localSide) {
       return null;
     }
@@ -2680,7 +2681,7 @@ export class GameLogicSubsystem implements Subsystem {
     return next;
   }
 
-  getSidePlayerType(side: string): SidePlayerType {
+  getSidePlayerType(side: string | undefined): SidePlayerType {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
       return 'HUMAN';
@@ -10066,7 +10067,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Check immunity list (must always update collideTime first).
     for (const immune of mine.mineImmunes) {
       if (immune.entityId === other.id) {
-        immune.collideFrame = this.currentFrame;
+        immune.collideFrame = this.frameCounter;
         return;
       }
     }
@@ -10092,19 +10093,19 @@ export class GameLogicSubsystem implements Subsystem {
       let granted = false;
       for (const immune of mine.mineImmunes) {
         if (immune.entityId === other.id) {
-          immune.collideFrame = this.currentFrame;
+          immune.collideFrame = this.frameCounter;
           granted = true;
           break;
         }
       }
       if (!granted && mine.mineImmunes.length < MINE_MAX_IMMUNITY) {
-        mine.mineImmunes.push({ entityId: other.id, collideFrame: this.currentFrame });
+        mine.mineImmunes.push({ entityId: other.id, collideFrame: this.frameCounter });
       } else if (!granted) {
         // Replace oldest slot.
         for (const immune of mine.mineImmunes) {
           if (immune.entityId === 0) {
             immune.entityId = other.id;
-            immune.collideFrame = this.currentFrame;
+            immune.collideFrame = this.frameCounter;
             granted = true;
             break;
           }
@@ -10192,13 +10193,13 @@ export class GameLogicSubsystem implements Subsystem {
       mine.mineImmunes = mine.mineImmunes.filter(immune => {
         const entity = this.spawnedEntities.get(immune.entityId);
         if (!entity || entity.destroyed) return false;
-        return this.currentFrame <= immune.collideFrame + 2;
+        return this.frameCounter <= immune.collideFrame + 2;
       });
 
       // Source parity: MinefieldBehavior creator death check.
       // When the creator dies and stopsRegenAfterCreatorDies is set, stop regen and start draining.
-      if (mine.mineRegenerates && prof.stopsRegenAfterCreatorDies && this.currentFrame >= mine.mineNextDeathCheckFrame) {
-        mine.mineNextDeathCheckFrame = this.currentFrame + LOGIC_FRAME_RATE; // Check every second.
+      if (mine.mineRegenerates && prof.stopsRegenAfterCreatorDies && this.frameCounter >= mine.mineNextDeathCheckFrame) {
+        mine.mineNextDeathCheckFrame = this.frameCounter + LOGIC_FRAME_RATE; // Check every second.
         if (mine.mineCreatorId > 0) {
           const creator = this.spawnedEntities.get(mine.mineCreatorId);
           if (!creator || creator.destroyed) {
@@ -12634,19 +12635,6 @@ export class GameLogicSubsystem implements Subsystem {
       entity.weaponLockStatus = 'NOT_LOCKED';
       entity.forcedWeaponSlot = null;
       this.refreshEntityCombatProfiles(entity);
-    }
-  }
-
-  /**
-   * Source parity: TurretAI::setTurretEnabled — enable/disable a specific turret on an entity.
-   * Turret index corresponds to the order of TurretAIUpdate modules in the object definition.
-   * When disabled, weapons on that turret cannot fire (checked in canEntityAttackFromStatus).
-   * (GeneralsMD/Code/GameEngine/Source/GameLogic/AI/TurretAI.cpp:761)
-   */
-  private setEntityTurretEnabled(entity: MapEntity, turretIndex: number, enabled: boolean): void {
-    const turret = entity.turretProfiles[turretIndex];
-    if (turret) {
-      turret.enabled = enabled;
     }
   }
 
@@ -15289,12 +15277,10 @@ export class GameLogicSubsystem implements Subsystem {
     // Parse Offset as Coord3D (X Y Z in source).
     const offsetRaw = readStringField(nugget.fields, ['Offset']);
     let offsetX = 0;
-    let offsetY = 0;
     let offsetZ = 0;
     if (offsetRaw) {
       const parts = offsetRaw.trim().split(/\s+/);
       if (parts.length >= 1) offsetX = parseFloat(parts[0]!) || 0;
-      if (parts.length >= 2) offsetY = parseFloat(parts[1]!) || 0;
       if (parts.length >= 3) offsetZ = parseFloat(parts[2]!) || 0;
     }
 
@@ -15530,11 +15516,11 @@ export class GameLogicSubsystem implements Subsystem {
     // Veterancy levels are mutually exclusive: only one of VETERAN/ELITE/HERO is active.
     const vetBonusMask = WEAPON_BONUS_VETERAN | WEAPON_BONUS_ELITE | WEAPON_BONUS_HERO;
     entity.weaponBonusConditionFlags &= ~vetBonusMask;
-    if (newLevel === 'VETERAN') {
+    if (newLevel === LEVEL_VETERAN) {
       entity.weaponBonusConditionFlags |= WEAPON_BONUS_VETERAN;
-    } else if (newLevel === 'ELITE') {
+    } else if (newLevel === LEVEL_ELITE) {
       entity.weaponBonusConditionFlags |= WEAPON_BONUS_ELITE;
-    } else if (newLevel === 'HEROIC') {
+    } else if (newLevel === LEVEL_HEROIC) {
       entity.weaponBonusConditionFlags |= WEAPON_BONUS_HERO;
     }
 
@@ -15542,11 +15528,11 @@ export class GameLogicSubsystem implements Subsystem {
     // flags and recompute combat profiles (applies RANGE bonus from new veterancy level).
     const vetWeaponMask = WEAPON_SET_FLAG_VETERAN | WEAPON_SET_FLAG_ELITE | WEAPON_SET_FLAG_HERO;
     entity.weaponSetFlagsMask &= ~vetWeaponMask;
-    if (newLevel === 'VETERAN') {
+    if (newLevel === LEVEL_VETERAN) {
       entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_VETERAN;
-    } else if (newLevel === 'ELITE') {
+    } else if (newLevel === LEVEL_ELITE) {
       entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_ELITE;
-    } else if (newLevel === 'HEROIC') {
+    } else if (newLevel === LEVEL_HEROIC) {
       entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_HERO;
     }
     this.refreshEntityCombatProfiles(entity);

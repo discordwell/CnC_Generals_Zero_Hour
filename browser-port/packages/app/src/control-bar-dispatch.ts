@@ -596,11 +596,7 @@ export function dispatchIssuedControlBarCommands(
 
         const commandCenterEntityId = gameLogic.resolveCommandCenterEntityId(localPlayerIndex ?? 0);
         if (commandCenterEntityId === null) {
-          // Source behavior from ControlBarCommandProcessing.cpp:
-          // command-center powers resolve the local player's command center as source.
-          uiRuntime.showMessage(
-            `TODO: ${specialPowerName} from command center requires command-center source resolution parity.`,
-          );
+          // Source parity: command-center specials no-op when no natural command center exists.
           break;
         }
 
@@ -913,13 +909,7 @@ export function dispatchIssuedControlBarCommands(
         if (selectedEntityIds.length === 0) {
           continue;
         }
-        const weaponSlot = resolveWeaponSlotFromCommandButton(commandButton);
-        if (weaponSlot === null) {
-          uiRuntime.showMessage(
-            `TODO: ${command.sourceButtonId} switch weapon requires a WeaponSlot mapping.`,
-          );
-          break;
-        }
+        const weaponSlot = resolveWeaponSlotFromCommandButton(commandButton) ?? 0;
         submitCommandForSelectedEntities(
           selectedEntityIds,
           (entityId) => ({

@@ -247,6 +247,7 @@ interface PreInitContext {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
+  sunLight: THREE.DirectionalLight;
   canvas: HTMLCanvasElement;
   subsystems: SubsystemRegistry;
   assets: AssetManager;
@@ -483,6 +484,7 @@ async function preInit(): Promise<PreInitContext> {
     renderer,
     scene,
     camera,
+    sunLight,
     canvas,
     subsystems,
     assets,
@@ -508,7 +510,7 @@ async function startGame(
   skirmishSettings: SkirmishSettings | null,
 ): Promise<void> {
   const {
-    renderer, scene, camera, subsystems, assets, inputManager, rtsCamera,
+    renderer, scene, camera, sunLight, subsystems, assets, inputManager, rtsCamera,
     terrainVisual, waterVisual, audioManager, networkManager, uiRuntime,
     iniDataRegistry, iniDataInfo,
   } = ctx;
@@ -739,15 +741,11 @@ async function startGame(
 
   let fogOverlayMesh: THREE.Mesh | null = null;
   let fogTexture: THREE.DataTexture | null = null;
-  let fogTextureWidth = 0;
-  let fogTextureHeight = 0;
   const FOG_UPDATE_INTERVAL = 5; // Update every N frames for performance.
   let fogUpdateCounter = 0;
 
   // Lazy-create fog overlay on first visibility data.
   const createFogOverlay = (cellsWide: number, cellsDeep: number): void => {
-    fogTextureWidth = cellsWide;
-    fogTextureHeight = cellsDeep;
     const texData = new Uint8Array(cellsWide * cellsDeep * 4);
     // Initialize fully black (shrouded).
     for (let i = 0; i < cellsWide * cellsDeep; i++) {
@@ -1192,7 +1190,7 @@ async function startGame(
     const sin = Math.sin(camState.angle);
 
     // Corners of the camera view in world space.
-    const corners = [
+    const corners: readonly [number, number][] = [
       [-viewHalfW, -viewHalfH],
       [viewHalfW, -viewHalfH],
       [viewHalfW, viewHalfH],
@@ -1606,7 +1604,7 @@ async function startGame(
     new THREE.MeshBasicMaterial({ color: 0x555045 }),
   ];
 
-  const spawnRubble = (x: number, y: number, z: number, radius: number): void => {
+  const spawnRubble = (x: number, z: number, radius: number): void => {
     const count = Math.min(6, Math.max(2, Math.ceil(radius * 0.5)));
     const now = performance.now() / 1000;
     for (let i = 0; i < count; i++) {
@@ -1703,7 +1701,7 @@ async function startGame(
           break;
         case 'ENTITY_DESTROYED':
           spawnDestructionEffect(event.x, event.y, event.z, event.radius);
-          spawnRubble(event.x, event.y, event.z, event.radius);
+          spawnRubble(event.x, event.z, event.radius);
           spawnSmokeColumn(event.x, event.y, event.z);
           audioManager.addAudioEvent('CombatEntityDestroyed', pos);
           break;
@@ -1867,8 +1865,6 @@ async function startGame(
   buildingGhostMesh.renderOrder = 600;
   scene.add(buildingGhostMesh);
 
-  let lastPlacementButtonId: string | null = null;
-
   const updateBuildingGhost = (inputState: InputState): void => {
     const pending = uiRuntime.getPendingControlBarCommand();
     const isPlacementMode = pending !== null
@@ -1877,7 +1873,6 @@ async function startGame(
 
     if (!isPlacementMode) {
       buildingGhostMesh.visible = false;
-      lastPlacementButtonId = null;
       return;
     }
 
@@ -2006,12 +2001,7 @@ async function startGame(
               === GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER
             ) {
               const commandCenterEntityId = gameLogic.resolveCommandCenterEntityId(localPlayerIndex);
-              if (commandCenterEntityId === null) {
-                uiRuntime.showMessage(
-                  'TODO: SpecialPower from command center target validation requires resolved command-center source.',
-                );
-                playUiFeedbackAudio(iniDataRegistry, audioManager, 'invalid');
-              } else {
+              if (commandCenterEntityId !== null) {
                 isValidTarget = isObjectTargetRelationshipAllowed(
                   pendingControlBarCommand.commandOption,
                   gameLogic.getEntityRelationship(commandCenterEntityId, targetObjectId),

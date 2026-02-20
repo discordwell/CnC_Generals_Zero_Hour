@@ -852,9 +852,6 @@ export class ObjectVisualManager {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh || !mesh.material) return;
 
-      // Handle material arrays (multi-material meshes).
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-
       // Clone materials on first stealth mutation to avoid mutating shared GLTF cache.
       if (!visual.stealthMaterialClones.has(mesh)) {
         if (Array.isArray(mesh.material)) {

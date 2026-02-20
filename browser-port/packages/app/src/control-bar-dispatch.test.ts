@@ -1553,9 +1553,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     );
 
     expect(gameLogic.submittedCommands).toEqual([]);
-    expect(uiRuntime.messages).toEqual([
-      'TODO: SpecialPowerDozerDrop from command center requires command-center source resolution parity.',
-    ]);
+    expect(uiRuntime.messages).toEqual([]);
   });
 
   it('dispatches GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER with command-center source when available', () => {
@@ -1721,9 +1719,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     );
 
     expect(gameLogic.submittedCommands).toEqual([]);
-    expect(uiRuntime.messages).toEqual([
-      'TODO: SpecialPowerNapalmAirstrike from command center requires command-center source resolution parity.',
-    ]);
+    expect(uiRuntime.messages).toEqual([]);
   });
 
   it('requires world targets for position-targeted GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER', () => {
@@ -2427,6 +2423,40 @@ describe('dispatchIssuedControlBarCommands', () => {
       {
         type: 'placeBeacon',
         targetPosition: [5, 0, 6],
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('defaults SWITCH_WEAPON to primary slot when WeaponSlot metadata is missing', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_SwitchWeaponDefault', {
+        Command: 'SWITCH_WEAPON',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_SwitchWeaponDefault', GUICommandType.GUI_COMMAND_SWITCH_WEAPON, {
+          selectedObjectIds: [71],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'switchWeapon',
+        entityId: 71,
+        weaponSlot: 0,
       },
     ]);
     expect(uiRuntime.messages).toEqual([]);
