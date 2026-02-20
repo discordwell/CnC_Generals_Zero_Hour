@@ -10929,3 +10929,151 @@ describe('3D damage distance with terrain elevation', () => {
     expect(largeHealth).toBe(100);
   });
 });
+
+describe('crush damage during movement', () => {
+  // Shared bundle for most crush tests: tank (CrusherLevel=2) + crushable infantry.
+  function makeCrushBundle(infantrySide: string = 'China') {
+    return makeBundle({
+      objects: [
+        makeObjectDef('CrusherTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TankLocomotor', {}),
+        ], { CrusherLevel: 2, GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('CrushableInfantry', infantrySide, ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Collide', 'SquishCollide ModuleTag_Squish', {}),
+        ], { CrushableLevel: 0 }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TankLocomotor', 180),
+      ],
+    });
+  }
+
+  it('tank crushes infantry when moving through them', () => {
+    // Source parity: SquishCollide::onCollide — moving entity with CrusherLevel > 0
+    // kills crushable enemies on bounding circle overlap + moving-toward-target check.
+    // Place at cell centers (PATHFIND_CELL_SIZE=10, so centers at x%10=5) for straight-line A*.
+    const bundle = makeCrushBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrusherTank', 205, 205),
+        makeMapObject('CrushableInfantry', 220, 205),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    expect(logic.getEntityState(2)?.health).toBe(100);
+
+    // Move tank straight through infantry in +X at same Z level.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 255, targetZ: 205 });
+
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Infantry should be dead and removed from CRUSH damage (HUGE_DAMAGE_AMOUNT).
+    const infantryAfter = logic.getEntityState(2);
+    expect(infantryAfter === null || infantryAfter.health === 0).toBe(true);
+  });
+
+  it('allies are not crushed', () => {
+    // Same side — canCrushOrSquish rejects allies.
+    const bundle = makeCrushBundle('America');
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrusherTank', 205, 205),
+        makeMapObject('CrushableInfantry', 220, 205),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 255, targetZ: 205 });
+
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+    }
+
+    const allyHealth = logic.getEntityState(2)?.health ?? -1;
+    expect(allyHealth).toBe(100);
+  });
+
+  it('vehicle with higher crushableLevel resists crush from lower crusherLevel', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('LightTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TankLocomotor', {}),
+        ], { CrusherLevel: 1, GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('HeavyVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], { CrushableLevel: 2, GeometryMajorRadius: 4, GeometryMinorRadius: 4 }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TankLocomotor', 180),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('LightTank', 205, 205),
+        makeMapObject('HeavyVehicle', 220, 205),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 255, targetZ: 205 });
+
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+    }
+
+    // CrushableLevel=2 >= CrusherLevel=1 — not crushed.
+    const heavyHealth = logic.getEntityState(2)?.health ?? -1;
+    expect(heavyHealth).toBe(300);
+  });
+
+  it('tank moving away from infantry does not crush', () => {
+    // Dot product direction check: crusher moving away from victim should not crush.
+    const bundle = makeCrushBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Infantry behind the tank: tank at cell center, infantry behind in -X.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrusherTank', 215, 205),
+        makeMapObject('CrushableInfantry', 205, 205),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Tank moves in +X direction, away from infantry at -X.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 255, targetZ: 205 });
+
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Infantry should be alive — tank moved away, dot product was <= 0.
+    const infHealth = logic.getEntityState(2)?.health ?? -1;
+    expect(infHealth).toBe(100);
+  });
+});

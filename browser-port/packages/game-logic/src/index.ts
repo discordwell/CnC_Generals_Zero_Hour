@@ -2072,6 +2072,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
     this.updateEntityMovement(dt);
+    this.updateCrushCollisions();
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
     this.updatePendingGarrisonActions();
@@ -3570,8 +3571,8 @@ export class GameLogicSubsystem implements Subsystem {
     const isImmobile = normalizedKindOf.has('IMMOBILE');
     const blocksPath = this.shouldPathfindObstacle(objectDef);
     // Source parity: mines don't block pathfinding but still need collision geometry
-    // for MinefieldBehavior::onCollide. Resolve geometry whenever blocksPath OR MINE.
-    const needsGeometry = blocksPath || normalizedKindOf.has('MINE');
+    // for MinefieldBehavior::onCollide. Crushers need geometry for crush overlap detection.
+    const needsGeometry = blocksPath || normalizedKindOf.has('MINE') || combatProfile.crusherLevel > 0;
     const obstacleGeometry = needsGeometry ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
     const { pathDiameter, pathfindCenterInCell } = this.resolvePathRadiusAndCenter(category, objectDef, obstacleGeometry);
@@ -16898,6 +16899,74 @@ export class GameLogicSubsystem implements Subsystem {
       entity.x = container.x;
       entity.z = container.z;
       entity.y = container.y;
+    }
+  }
+
+  /**
+   * Source parity: PhysicsUpdate::checkForOverlapCollision + SquishCollide::onCollide —
+   * moving entities with crusherLevel > 0 crush overlapping enemies whose crushableLevel
+   * is lower. Applies CRUSH damage (HUGE_DAMAGE_AMOUNT = guaranteed kill).
+   *
+   * TODO(C&C source parity): Vehicle-on-vehicle crush uses a front/back/center crush
+   * point system in C++ (dot < 0 past-target check) rather than the SquishCollide-style
+   * approach check (dot > 0) used here. Currently simplified for all targets.
+   * TODO(C&C source parity): Hijacker/TNT-hunter immunity — infantry targeting a vehicle
+   * for hijacking or TNT placement should be immune to crush by that specific vehicle.
+   */
+  private updateCrushCollisions(): void {
+    for (const mover of this.spawnedEntities.values()) {
+      if (mover.destroyed || !mover.canMove || !mover.moving) {
+        continue;
+      }
+      if (mover.crusherLevel <= 0) {
+        continue;
+      }
+
+      // Source parity: rotationY = atan2(dz, dx) + PI/2; reverse to get movement direction.
+      const moveDirX = Math.sin(mover.rotationY);
+      const moveDirZ = -Math.cos(mover.rotationY);
+
+      // Source parity: use obstacleGeometry majorRadius for bounding circle collision.
+      // Crushers always get obstacleGeometry resolved (needsGeometry includes crusherLevel > 0).
+      const moverRadius = mover.obstacleGeometry
+        ? mover.obstacleGeometry.majorRadius
+        : 1.0;
+
+      for (const target of this.spawnedEntities.values()) {
+        if (target.destroyed || !target.canTakeDamage || target.id === mover.id) {
+          continue;
+        }
+        if (!this.canCrushOrSquish(mover, target)) {
+          continue;
+        }
+
+        // Source parity: SquishCollide::onCollide uses radius 1.0 for infantry collision.
+        const targetRadius = target.canBeSquished
+          ? 1.0
+          : (target.obstacleGeometry ? target.obstacleGeometry.majorRadius : 1.0);
+
+        const combinedRadius = moverRadius + targetRadius;
+        const dx = target.x - mover.x;
+        const dz = target.z - mover.z;
+        const distSqr = dx * dx + dz * dz;
+
+        if (distSqr > combinedRadius * combinedRadius) {
+          continue;
+        }
+
+        // Source parity: SquishCollide::onCollide — dot product check ensures
+        // crusher is moving toward the victim, not away. Skip if moving away.
+        // For zero-distance overlap, always crush (entities directly on top).
+        if (distSqr > 0.001) {
+          const dot = moveDirX * dx + moveDirZ * dz;
+          if (dot <= 0) {
+            continue;
+          }
+        }
+
+        // Source parity: CRUSH damage uses HUGE_DAMAGE_AMOUNT (guaranteed kill).
+        this.applyWeaponDamageAmount(mover.id, target, HUGE_DAMAGE_AMOUNT, 'CRUSH');
+      }
     }
   }
 
