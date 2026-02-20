@@ -14384,3 +14384,207 @@ describe('CountermeasuresBehavior', () => {
     expect(target!.health).toBeLessThan(initialHealth);
   });
 });
+
+// ── PilotFindVehicleUpdate ──────────────────────────────────────────────────
+
+describe('PilotFindVehicleUpdate', () => {
+  function makePilotSetup(opts: {
+    pilotSide?: string;
+    vehicleSide?: string;
+    playerType?: 'HUMAN' | 'COMPUTER';
+    vehicleHealth?: number;
+    vehicleMaxHealth?: number;
+    scanRange?: number;
+    minHealth?: number;
+    vehicleOccupied?: boolean;
+  } = {}) {
+    const pilotSide = opts.pilotSide ?? 'America';
+    const vehicleSide = opts.vehicleSide ?? 'America';
+    const playerType = opts.playerType ?? 'COMPUTER';
+    const vehicleHealth = opts.vehicleHealth ?? 200;
+    const vehicleMaxHealth = opts.vehicleMaxHealth ?? 200;
+    const scanRange = opts.scanRange ?? 300;
+    const minHealth = opts.minHealth ?? 0.5;
+
+    const objects: ObjectDef[] = [
+      makeObjectDef('Pilot', pilotSide, ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        makeBlock('Behavior', 'PilotFindVehicleUpdate ModuleTag_PFV', {
+          ScanRate: 100,
+          ScanRange: scanRange,
+          MinHealth: minHealth,
+        }),
+      ]),
+      makeObjectDef('EmptyTank', vehicleSide, ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: vehicleMaxHealth, InitialHealth: vehicleHealth }),
+      ]),
+    ];
+
+    if (opts.vehicleOccupied) {
+      objects.push(
+        makeObjectDef('Occupant', vehicleSide, ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        ]),
+      );
+    }
+
+    const bundle = makeBundle({ objects });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const mapObjects = [
+      makeMapObject('Pilot', 5, 5),
+      makeMapObject('EmptyTank', 5, 8),
+    ];
+    if (opts.vehicleOccupied) {
+      mapObjects.push(makeMapObject('Occupant', 5, 8));
+    }
+
+    logic.loadMapObjects(
+      makeMap(mapObjects, 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    if (playerType === 'COMPUTER') {
+      logic.submitCommand({ type: 'setSidePlayerType', side: pilotSide, playerType: 'COMPUTER' });
+    }
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number;
+        templateName: string;
+        x: number;
+        z: number;
+        moving: boolean;
+        moveTarget: { x: number; z: number } | null;
+        pilotFindVehicleProfile: unknown;
+        pilotFindVehicleDidMoveToBase: boolean;
+        pilotFindVehicleTargetId: number | null;
+        garrisonContainerId: number | null;
+        category: string;
+      }>;
+    }).spawnedEntities;
+
+    let pilot: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
+    let vehicle: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
+    for (const [, e] of entities) {
+      if (e.templateName === 'Pilot') pilot = e;
+      if (e.templateName === 'EmptyTank') vehicle = e;
+    }
+
+    return { logic, pilot: pilot!, vehicle: vehicle!, entities };
+  }
+
+  it('initializes PilotFindVehicleProfile from INI', () => {
+    const { pilot } = makePilotSetup();
+    expect(pilot.pilotFindVehicleProfile).not.toBeNull();
+  });
+
+  it('AI pilot moves toward empty same-side vehicle', () => {
+    const { logic, pilot, vehicle } = makePilotSetup();
+
+    // Run enough frames for the scan to trigger and pilot to reach vehicle.
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    // The pilot should have entered the vehicle (MASKED inside it) or be en route.
+    const hasTarget = pilot.pilotFindVehicleTargetId === vehicle.id;
+    const isMoving = pilot.moveTarget !== null || pilot.moving;
+    const hasEntered = pilot.garrisonContainerId === vehicle.id;
+    expect(hasTarget || isMoving || hasEntered).toBe(true);
+  });
+
+  it('does not activate for human-controlled pilots', () => {
+    const { logic, pilot } = makePilotSetup({ playerType: 'HUMAN' });
+
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Human-controlled pilots should not auto-seek vehicles.
+    expect(pilot.pilotFindVehicleTargetId).toBeNull();
+  });
+
+  it('rejects vehicles below minHealth threshold', () => {
+    // Vehicle at 40% health (80/200), minHealth=0.5 → below 50%, should be rejected.
+    const { logic, pilot } = makePilotSetup({
+      vehicleHealth: 80,
+      vehicleMaxHealth: 200,
+      minHealth: 0.5,
+    });
+
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Pilot should NOT target the damaged vehicle.
+    expect(pilot.pilotFindVehicleTargetId).toBeNull();
+  });
+
+  it('does not target vehicles of different side', () => {
+    const { logic, pilot } = makePilotSetup({ vehicleSide: 'GLA' });
+
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(pilot.pilotFindVehicleTargetId).toBeNull();
+  });
+
+  it('moves to base when no vehicle found', () => {
+    // Create setup with a building for base center + vehicle out of scan range.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Pilot', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'PilotFindVehicleUpdate ModuleTag_PFV', {
+            ScanRate: 100,
+            ScanRange: 1,
+            MinHealth: 0.5,
+          }),
+        ]),
+        makeObjectDef('EmptyTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('BaseBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Pilot', 5, 5),
+        makeMapObject('EmptyTank', 60, 60),  // Far away, out of scan range (1)
+        makeMapObject('BaseBuilding', 10, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, {
+        templateName: string;
+        pilotFindVehicleDidMoveToBase: boolean;
+      }>;
+    }).spawnedEntities;
+
+    let pilot: { templateName: string; pilotFindVehicleDidMoveToBase: boolean } | undefined;
+    for (const [, e] of entities) {
+      if (e.templateName === 'Pilot') pilot = e;
+    }
+
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After scan finds no vehicle, pilot should move to base once.
+    expect(pilot!.pilotFindVehicleDidMoveToBase).toBe(true);
+  });
+});

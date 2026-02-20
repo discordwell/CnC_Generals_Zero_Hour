@@ -1517,6 +1517,13 @@ interface MapEntity {
   // ── Source parity: CountermeasuresBehavior (aircraft flare defense) ──
   countermeasuresProfile: CountermeasuresProfile | null;
   countermeasuresState: CountermeasuresState | null;
+
+  // ── Source parity: PilotFindVehicleUpdate — ejected pilot seeks vehicle ──
+  pilotFindVehicleProfile: PilotFindVehicleProfile | null;
+  pilotFindVehicleNextScanFrame: number;
+  pilotFindVehicleDidMoveToBase: boolean;
+  /** Target vehicle entity ID the pilot is navigating toward. */
+  pilotFindVehicleTargetId: number | null;
 }
 
 /**
@@ -1925,6 +1932,19 @@ interface CountermeasuresState {
   incomingMissiles: number;
   /** Source parity: lifetime count of missiles marked for diversion. */
   divertedMissiles: number;
+}
+
+/**
+ * Source parity: PilotFindVehicleUpdateModuleData — AI pilot auto-enter vehicle behavior.
+ * (Generals/Code/GameEngine/Include/GameLogic/Module/PilotFindVehicleUpdate.h)
+ */
+interface PilotFindVehicleProfile {
+  /** Frames between scan attempts. */
+  scanFrames: number;
+  /** Search radius around the pilot. */
+  scanRange: number;
+  /** Min health ratio (0..1) — vehicles below this ratio are rejected as too damaged. */
+  minHealth: number;
 }
 
 /** Source parity: SlavedUpdate constants. */
@@ -2508,6 +2528,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSellingEntities();
     this.updateRebuildHoles();
     this.updateAutoDeposit();
+    this.updatePilotFindVehicle();
     this.updateRenderStates();
     this.updateLifetimeEntities();
     this.updateSlowDeathEntities();
@@ -4259,6 +4280,11 @@ export class GameLogicSubsystem implements Subsystem {
       // Countermeasures (aircraft flare defense)
       countermeasuresProfile: this.extractCountermeasuresProfile(objectDef),
       countermeasuresState: null,
+      // Pilot find vehicle
+      pilotFindVehicleProfile: this.extractPilotFindVehicleProfile(objectDef),
+      pilotFindVehicleNextScanFrame: 0,
+      pilotFindVehicleDidMoveToBase: false,
+      pilotFindVehicleTargetId: null,
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -6610,6 +6636,36 @@ export class GameLogicSubsystem implements Subsystem {
             evasionRate: evasionRaw != null ? evasionRaw / 100 : 0,
             missileDecoyFrames: this.msToLogicFrames(readNumericField(block.fields, ['MissileDecoyDelay']) ?? 0),
             reactionFrames: this.msToLogicFrames(readNumericField(block.fields, ['ReactionLaunchLatency']) ?? 0),
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: PilotFindVehicleUpdate — extract pilot-seek-vehicle config from INI.
+   * (Generals/Code/GameEngine/Source/GameLogic/Object/Update/PilotFindVehicleUpdate.cpp)
+   */
+  private extractPilotFindVehicleProfile(objectDef: ObjectDef | undefined): PilotFindVehicleProfile | null {
+    if (!objectDef) return null;
+    let profile: PilotFindVehicleProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'PILOTFINDVEHICLEUPDATE') {
+          profile = {
+            scanFrames: this.msToLogicFrames(readNumericField(block.fields, ['ScanRate']) ?? 0),
+            scanRange: readNumericField(block.fields, ['ScanRange']) ?? 0,
+            minHealth: readNumericField(block.fields, ['MinHealth']) ?? 0.5,
           };
         }
       }
@@ -18376,6 +18432,124 @@ export class GameLogicSubsystem implements Subsystem {
         event.primaryVictimEntityId = closestFlareId;
       }
     }
+  }
+
+  /**
+   * Source parity: PilotFindVehicleUpdate::update() — AI-only pilot vehicle-seeking behavior.
+   * Scans for nearest same-side VEHICLE within range, auto-enters if found.
+   * Falls back to moving toward base center once if no vehicle found.
+   */
+  private updatePilotFindVehicle(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.pilotFindVehicleProfile;
+      if (!profile) continue;
+
+      // Source parity: AI-only behavior — human-controlled pilots don't auto-seek vehicles.
+      const side = entity.side ? this.normalizeSide(entity.side) : null;
+      if (side) {
+        const playerType = this.sidePlayerTypes.get(side);
+        if (!playerType || playerType === 'HUMAN') continue;
+      }
+
+      // Source parity: if already navigating to a target, check arrival.
+      if (entity.pilotFindVehicleTargetId !== null) {
+        const target = this.spawnedEntities.get(entity.pilotFindVehicleTargetId);
+        if (!target || target.destroyed) {
+          entity.pilotFindVehicleTargetId = null;
+        } else {
+          const dx = entity.x - target.x;
+          const dz = entity.z - target.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          if (dist <= 15) {
+            // Source parity: pilot enters vehicle — hide pilot inside vehicle.
+            entity.garrisonContainerId = target.id;
+            this.cancelEntityCommandPathActions(entity.id);
+            entity.objectStatusFlags.add('DISABLED_HELD');
+            entity.objectStatusFlags.add('MASKED');
+            entity.objectStatusFlags.add('UNSELECTABLE');
+            this.removeEntityFromSelection(entity.id);
+            entity.pilotFindVehicleTargetId = null;
+            continue;
+          }
+          // Still en route — don't re-scan.
+          continue;
+        }
+      }
+
+      // Source parity: only scan when idle (not moving, not attacking).
+      if (entity.moving || entity.moveTarget !== null ||
+          entity.attackTargetEntityId !== null || entity.attackTargetPosition !== null) {
+        continue;
+      }
+
+      // Source parity: scan rate throttle.
+      if (this.frameCounter < entity.pilotFindVehicleNextScanFrame) continue;
+      entity.pilotFindVehicleNextScanFrame = this.frameCounter + Math.max(1, profile.scanFrames);
+
+      // Scan for nearest same-side vehicle within range.
+      const scanRangeSq = profile.scanRange * profile.scanRange;
+      let closestVehicle: MapEntity | null = null;
+      let closestDistSq = Infinity;
+
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate.destroyed || candidate.slowDeathState) continue;
+        if (candidate.id === entity.id) continue;
+        if (candidate.category !== 'vehicle') continue;
+
+        // Source parity: must be same side.
+        const candidateSide = candidate.side ? this.normalizeSide(candidate.side) : null;
+        if (candidateSide !== side) continue;
+
+        // Source parity: health check — reject vehicles below minHealth ratio.
+        if (candidate.maxHealth > 0 &&
+            candidate.health < candidate.maxHealth * profile.minHealth) {
+          continue;
+        }
+
+        // Check if vehicle is already occupied (has passengers or is being used).
+        if (this.collectContainedEntityIds(candidate.id).length > 0) continue;
+
+        const dx = candidate.x - entity.x;
+        const dz = candidate.z - entity.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq > scanRangeSq) continue;
+        if (distSq < closestDistSq) {
+          closestDistSq = distSq;
+          closestVehicle = candidate;
+        }
+      }
+
+      if (closestVehicle) {
+        // Source parity: ai->aiEnter(upgradeUnit, CMD_FROM_AI) — navigate to vehicle.
+        this.issueMoveTo(entity.id, closestVehicle.x, closestVehicle.z);
+        entity.pilotFindVehicleTargetId = closestVehicle.id;
+        entity.pilotFindVehicleDidMoveToBase = false;
+      } else if (!entity.pilotFindVehicleDidMoveToBase) {
+        // Source parity: move to base center one time when no vehicle found.
+        const baseCenter = this.resolveAiBaseCenter(side);
+        if (baseCenter) {
+          this.issueMoveTo(entity.id, baseCenter.x, baseCenter.z);
+          entity.pilotFindVehicleDidMoveToBase = true;
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: Resolve the AI base center for a given side.
+   * Returns the first structure's position as a proxy for base center.
+   */
+  private resolveAiBaseCenter(side: string | null): { x: number; z: number } | null {
+    if (!side) return null;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.category !== 'building') continue;
+      const entitySide = entity.side ? this.normalizeSide(entity.side) : null;
+      if (entitySide !== side) continue;
+      return { x: entity.x, z: entity.z };
+    }
+    return null;
   }
 
   /**
