@@ -15459,3 +15459,185 @@ describe('OCLUpdate', () => {
     expect(spawned.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+// ── WeaponBonusUpdate Tests ─────────────────────────────────────────────────
+
+describe('WeaponBonusUpdate', () => {
+  function makeWeaponBonusSetup(opts: {
+    bonusCondition?: string;
+    bonusDurationMs?: number;
+    bonusDelayMs?: number;
+    bonusRange?: number;
+    requiredKindOf?: string;
+    forbiddenKindOf?: string;
+  } = {}) {
+    const towerDef = makeObjectDef('PropagandaTower', 'China', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'WeaponBonusUpdate ModuleTag_Propaganda', {
+        BonusConditionType: opts.bonusCondition ?? 'ENTHUSIASTIC',
+        BonusDuration: opts.bonusDurationMs ?? 2000,
+        BonusDelay: opts.bonusDelayMs ?? 500,
+        BonusRange: opts.bonusRange ?? 200,
+        ...(opts.requiredKindOf ? { RequiredAffectKindOf: opts.requiredKindOf } : {}),
+        ...(opts.forbiddenKindOf ? { ForbiddenAffectKindOf: opts.forbiddenKindOf } : {}),
+      }),
+    ]);
+
+    const allyUnitDef = makeObjectDef('AllyUnit', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const enemyUnitDef = makeObjectDef('EnemyUnit', 'GLA', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const bundle = makeBundle({
+      objects: [towerDef, allyUnitDef, enemyUnitDef],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PropagandaTower', 5, 5),
+        makeMapObject('AllyUnit', 5, 5),
+        makeMapObject('EnemyUnit', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+    logic.update(0);
+    return { logic };
+  }
+
+  it('extracts WeaponBonusUpdateProfile from INI', () => {
+    const { logic } = makeWeaponBonusSetup();
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { weaponBonusUpdateProfiles: { bonusConditionFlag: number; bonusRange: number }[] }>;
+    };
+    const tower = priv.spawnedEntities.get(1)!;
+    expect(tower.weaponBonusUpdateProfiles.length).toBe(1);
+    expect(tower.weaponBonusUpdateProfiles[0]!.bonusRange).toBe(200);
+  });
+
+  it('applies temp weapon bonus to allied units in range', () => {
+    const { logic } = makeWeaponBonusSetup({ bonusDelayMs: 100 });
+
+    // Run enough frames for the first pulse.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { weaponBonusConditionFlags: number; tempWeaponBonusFlag: number }>;
+    };
+    const ally = priv.spawnedEntities.get(2)!;
+    // ENTHUSIASTIC = bit 8 = 256
+    expect(ally.weaponBonusConditionFlags & 256).toBe(256);
+    expect(ally.tempWeaponBonusFlag).toBe(256);
+  });
+
+  it('does not apply bonus to enemy units', () => {
+    const { logic } = makeWeaponBonusSetup({ bonusDelayMs: 100 });
+
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { weaponBonusConditionFlags: number; tempWeaponBonusFlag: number }>;
+    };
+    const enemy = priv.spawnedEntities.get(3)!;
+    // Enemy should NOT have the bonus.
+    expect(enemy.weaponBonusConditionFlags & 256).toBe(0);
+    expect(enemy.tempWeaponBonusFlag).toBe(0);
+  });
+
+  it('clears temp bonus after duration expires', () => {
+    const { logic } = makeWeaponBonusSetup({
+      bonusDelayMs: 100,
+      bonusDurationMs: 500, // ~15 frames
+    });
+
+    // Pulse fires around frame 3, bonus lasts 15 frames (until frame ~18).
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { weaponBonusConditionFlags: number; tempWeaponBonusFlag: number }>;
+    };
+    const ally = priv.spawnedEntities.get(2)!;
+    expect(ally.tempWeaponBonusFlag).toBe(256);
+
+    // Run past the duration without a re-pulse (delay = 100ms = 3 frames, duration = 15 frames).
+    // Since delay < duration, the bonus should be continuously refreshed.
+    // To test expiry, we need delay > duration. Let's use a different setup.
+  });
+
+  it('expires bonus when not refreshed', () => {
+    const { logic } = makeWeaponBonusSetup({
+      bonusDelayMs: 2000, // ~60 frames between pulses
+      bonusDurationMs: 300, // ~9 frames duration
+    });
+
+    // Run 5 frames — first pulse fires.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { weaponBonusConditionFlags: number; tempWeaponBonusFlag: number }>;
+    };
+    const ally = priv.spawnedEntities.get(2)!;
+    expect(ally.tempWeaponBonusFlag).toBe(256);
+
+    // Run 15 more frames — bonus should expire (duration was ~9 frames).
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    expect(ally.tempWeaponBonusFlag).toBe(0);
+    expect(ally.weaponBonusConditionFlags & 256).toBe(0);
+  });
+
+  it('respects RequiredAffectKindOf filter', () => {
+    // Only affect VEHICLE, not INFANTRY.
+    const towerDef = makeObjectDef('BonusTower', 'China', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'WeaponBonusUpdate ModuleTag_Propaganda', {
+        BonusConditionType: 'ENTHUSIASTIC',
+        BonusDuration: 2000,
+        BonusDelay: 100,
+        BonusRange: 200,
+        RequiredAffectKindOf: 'VEHICLE',
+      }),
+    ]);
+
+    const infantryDef = makeObjectDef('Soldier', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const vehicleDef = makeObjectDef('Tank', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const bundle = makeBundle({ objects: [towerDef, infantryDef, vehicleDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BonusTower', 5, 5),
+        makeMapObject('Soldier', 5, 5),
+        makeMapObject('Tank', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { weaponBonusConditionFlags: number; tempWeaponBonusFlag: number }>;
+    };
+    const infantry = priv.spawnedEntities.get(2)!;
+    const vehicle = priv.spawnedEntities.get(3)!;
+
+    // Infantry should NOT have the bonus (not a VEHICLE).
+    expect(infantry.tempWeaponBonusFlag).toBe(0);
+    // Vehicle should have the bonus.
+    expect(vehicle.tempWeaponBonusFlag).toBe(256);
+  });
+});

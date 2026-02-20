@@ -1525,6 +1525,18 @@ interface MapEntity {
   /** Per-profile flag: true once the initial timer has been set (first shouldCreate skips). */
   oclUpdateTimerStarted: boolean[];
 
+  // ── Source parity: WeaponBonusUpdate — aura-based weapon bonus application ──
+  /** Parsed WeaponBonusUpdate modules from INI (aura source). */
+  weaponBonusUpdateProfiles: WeaponBonusUpdateProfile[];
+  /** Per-profile next-pulse-frame tracker. */
+  weaponBonusUpdateNextPulseFrames: number[];
+
+  // ── Source parity: TempWeaponBonusHelper — temporary weapon bonus on this entity ──
+  /** Active temp bonus condition flag (0 = none). Only one active at a time per C++. */
+  tempWeaponBonusFlag: number;
+  /** Frame when the current temp bonus expires. */
+  tempWeaponBonusExpiryFrame: number;
+
   // ── Source parity: SlowDeathBehavior — phased death sequences ──
   /** Parsed SlowDeathBehavior modules from INI (multiple per entity, one selected on death). */
   slowDeathProfiles: SlowDeathProfile[];
@@ -1856,6 +1868,26 @@ interface OCLUpdateProfile {
   minDelayFrames: number;
   /** Maximum delay in logic frames between OCL spawns. */
   maxDelayFrames: number;
+}
+
+/**
+ * Source parity: WeaponBonusUpdate module parsed from INI.
+ * Periodically applies a temporary weapon bonus condition to nearby allied units.
+ * Used by Propaganda Towers, Frenzy generals ability, etc.
+ */
+interface WeaponBonusUpdateProfile {
+  /** KindOf flags that must be present on target. Empty = match all. */
+  requiredKindOf: Set<string>;
+  /** KindOf flags that must NOT be present on target. Empty = no exclusion. */
+  forbiddenKindOf: Set<string>;
+  /** How long the bonus lasts on each target (logic frames). */
+  bonusDurationFrames: number;
+  /** How often to pulse/scan (logic frames). */
+  bonusDelayFrames: number;
+  /** Range to scan for allied targets (world units). */
+  bonusRange: number;
+  /** Bitmask flag to apply (from WEAPON_BONUS_CONDITION_BY_NAME). */
+  bonusConditionFlag: number;
 }
 
 /**
@@ -2652,6 +2684,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateFireWhenDamagedContinuous();
     this.updateFireWeaponUpdate();
     this.updateOCLUpdate();
+    this.updateWeaponBonusUpdate();
+    this.updateTempWeaponBonusExpiry();
     this.updateSellingEntities();
     this.updateRebuildHoles();
     this.updateAutoDeposit();
@@ -4383,6 +4417,12 @@ export class GameLogicSubsystem implements Subsystem {
       oclUpdateProfiles: this.extractOCLUpdateProfiles(objectDef),
       oclUpdateNextCreationFrames: [],
       oclUpdateTimerStarted: [],
+      // Weapon bonus update (aura-based weapon bonus)
+      weaponBonusUpdateProfiles: this.extractWeaponBonusUpdateProfiles(objectDef),
+      weaponBonusUpdateNextPulseFrames: [],
+      // Temp weapon bonus (target side)
+      tempWeaponBonusFlag: 0,
+      tempWeaponBonusExpiryFrame: 0,
       // Slow death
       slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
       slowDeathState: null,
@@ -4520,6 +4560,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.oclUpdateProfiles.length > 0) {
       entity.oclUpdateNextCreationFrames = entity.oclUpdateProfiles.map(() => 0);
       entity.oclUpdateTimerStarted = entity.oclUpdateProfiles.map(() => false);
+    }
+
+    // Source parity: WeaponBonusUpdate — initialize per-module pulse timers.
+    if (entity.weaponBonusUpdateProfiles.length > 0) {
+      entity.weaponBonusUpdateNextPulseFrames = entity.weaponBonusUpdateProfiles.map(() => 0);
     }
 
     return entity;
@@ -6552,6 +6597,53 @@ export class GameLogicSubsystem implements Subsystem {
             oclName,
             minDelayFrames: this.msToLogicFrames(minDelayMs),
             maxDelayFrames: this.msToLogicFrames(maxDelayMs),
+          });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: WeaponBonusUpdate — extract weapon bonus aura config from INI.
+   * INI fields: RequiredAffectKindOf, ForbiddenAffectKindOf, BonusDuration (ms),
+   * BonusDelay (ms), BonusRange, BonusConditionType.
+   */
+  private extractWeaponBonusUpdateProfiles(objectDef: ObjectDef | undefined): WeaponBonusUpdateProfile[] {
+    if (!objectDef) return [];
+    const profiles: WeaponBonusUpdateProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'WEAPONBONUSUPDATE') {
+          const conditionName = readStringField(block.fields, ['BonusConditionType'])?.toUpperCase();
+          if (!conditionName) return;
+          const bonusFlag = WEAPON_BONUS_CONDITION_BY_NAME.get(conditionName);
+          if (bonusFlag === undefined) return;
+
+          const requiredKindOf = new Set<string>();
+          const forbiddenKindOf = new Set<string>();
+          for (const tokens of this.extractIniValueTokens(block.fields['RequiredAffectKindOf'])) {
+            for (const t of tokens) { if (t) requiredKindOf.add(t.toUpperCase()); }
+          }
+          for (const tokens of this.extractIniValueTokens(block.fields['ForbiddenAffectKindOf'])) {
+            for (const t of tokens) { if (t) forbiddenKindOf.add(t.toUpperCase()); }
+          }
+
+          profiles.push({
+            requiredKindOf,
+            forbiddenKindOf,
+            bonusDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['BonusDuration']) ?? 0),
+            bonusDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['BonusDelay']) ?? 0),
+            bonusRange: readNumericField(block.fields, ['BonusRange']) ?? 0,
+            bonusConditionFlag: bonusFlag,
           });
         }
       }
@@ -17753,6 +17845,114 @@ export class GameLogicSubsystem implements Subsystem {
         this.executeOCL(profile.oclName, entity);
       }
     }
+  }
+
+  // ── WeaponBonusUpdate implementation ────────────────────────────────────
+
+  /**
+   * Source parity: WeaponBonusUpdate::update() — aura-based weapon bonus application.
+   * Scans for allied entities within range and applies a temporary weapon bonus condition.
+   * Also applies to passengers inside containers (garrisons, transports).
+   */
+  private updateWeaponBonusUpdate(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      if (entity.weaponBonusUpdateProfiles.length === 0) continue;
+
+      for (let i = 0; i < entity.weaponBonusUpdateProfiles.length; i++) {
+        const profile = entity.weaponBonusUpdateProfiles[i]!;
+        const nextPulseFrame = entity.weaponBonusUpdateNextPulseFrames[i] ?? 0;
+        if (this.frameCounter < nextPulseFrame) continue;
+
+        // Set next pulse.
+        entity.weaponBonusUpdateNextPulseFrames[i] = this.frameCounter + profile.bonusDelayFrames;
+
+        const rangeSqr = profile.bonusRange * profile.bonusRange;
+
+        // Scan all allies in range.
+        for (const target of this.spawnedEntities.values()) {
+          if (target.destroyed || target.slowDeathState) continue;
+          // Source parity: PartitionFilterRelationship ALLOW_ALLIES.
+          if (!this.areEntitiesAllied(entity, target)) continue;
+          // Source parity: PartitionFilterAlive.
+          if (target.health <= 0) continue;
+
+          // Range check (FROM_CENTER_2D).
+          const dx = target.x - entity.x;
+          const dz = target.z - entity.z;
+          if (dx * dx + dz * dz > rangeSqr) continue;
+
+          // Source parity: individual kindOf check (not in partition query to reach container contents).
+          if (this.matchesKindOfFilter(target, profile.requiredKindOf, profile.forbiddenKindOf)) {
+            this.applyTempWeaponBonus(target, profile.bonusConditionFlag, profile.bonusDurationFrames);
+          }
+
+          // Source parity: also apply to contained passengers (garrisons, transports).
+          if (target.containProfile) {
+            for (const pid of this.collectContainedEntityIds(target.id)) {
+              const passenger = this.spawnedEntities.get(pid);
+              if (!passenger || passenger.destroyed) continue;
+              if (this.matchesKindOfFilter(passenger, profile.requiredKindOf, profile.forbiddenKindOf)) {
+                this.applyTempWeaponBonus(passenger, profile.bonusConditionFlag, profile.bonusDurationFrames);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: isKindOfMulti — check required ALL match and forbidden NONE match.
+   */
+  private matchesKindOfFilter(entity: MapEntity, required: Set<string>, forbidden: Set<string>): boolean {
+    // ALL required flags must be present.
+    for (const k of required) {
+      if (!entity.kindOf.has(k)) return false;
+    }
+    // NO forbidden flags may be present.
+    for (const k of forbidden) {
+      if (entity.kindOf.has(k)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: TempWeaponBonusHelper::doTempWeaponBonus — apply or refresh a temp bonus.
+   * If the entity has a different temp bonus, clears it first.
+   */
+  private applyTempWeaponBonus(target: MapEntity, flag: number, durationFrames: number): void {
+    // Clear any different bonus first.
+    if (target.tempWeaponBonusFlag !== 0 && target.tempWeaponBonusFlag !== flag) {
+      target.weaponBonusConditionFlags &= ~target.tempWeaponBonusFlag;
+      target.tempWeaponBonusFlag = 0;
+    }
+    // Set or refresh.
+    target.weaponBonusConditionFlags |= flag;
+    target.tempWeaponBonusFlag = flag;
+    target.tempWeaponBonusExpiryFrame = this.frameCounter + durationFrames;
+  }
+
+  /**
+   * Source parity: TempWeaponBonusHelper::update — clear expired temp weapon bonuses.
+   */
+  private updateTempWeaponBonusExpiry(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.tempWeaponBonusFlag === 0) continue;
+      if (this.frameCounter >= entity.tempWeaponBonusExpiryFrame) {
+        entity.weaponBonusConditionFlags &= ~entity.tempWeaponBonusFlag;
+        entity.tempWeaponBonusFlag = 0;
+        entity.tempWeaponBonusExpiryFrame = 0;
+      }
+    }
+  }
+
+  /**
+   * Source parity: Check if two entities are allied (same side or allies relationship).
+   */
+  private areEntitiesAllied(a: MapEntity, b: MapEntity): boolean {
+    if (a === b) return true;
+    return this.getTeamRelationship(a, b) === RELATIONSHIP_ALLIES;
   }
 
   // ── PointDefenseLaserUpdate implementation ──────────────────────────────
