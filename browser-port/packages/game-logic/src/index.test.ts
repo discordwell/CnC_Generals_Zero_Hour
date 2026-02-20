@@ -13297,3 +13297,352 @@ describe('DemoTrapUpdate', () => {
     expect(trapState === null || !trapState.alive).toBe(true);
   });
 });
+
+// ── RebuildHoleBehavior tests ────────────────────────────────────────────────
+
+describe('RebuildHoleBehavior', () => {
+  /** Build the GLA building + hole + worker INI templates and a test scenario. */
+  function makeRebuildHoleSetup(opts?: {
+    workerRespawnDelay?: number;
+    holeHealthRegenPercent?: number;
+    holeMaxHealth?: number;
+    buildingBuildTime?: number;
+    transferAttackers?: boolean;
+  }) {
+    const respawnDelayMs = opts?.workerRespawnDelay ?? 100; // ~3 frames at 30fps
+    const regenPercent = opts?.holeHealthRegenPercent ?? 10; // INI value: 10 = 10%/sec
+    const holeMaxHp = opts?.holeMaxHealth ?? 50;
+    const buildTime = opts?.buildingBuildTime ?? 5; // 5 seconds = 150 frames
+    const transfer = opts?.transferAttackers ?? true;
+    const sz = 64;
+
+    const objects = [
+      // 1: GLA building with RebuildHoleExposeDie die module.
+      makeObjectDef('GLABarracks', 'GLA', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('Die', 'RebuildHoleExposeDie ModuleTag_RebuildDie', {
+          HoleName: 'GLAHole',
+          HoleMaxHealth: holeMaxHp,
+          TransferAttackers: transfer ? 'Yes' : 'No',
+        }),
+      ], { BuildTime: buildTime }),
+      // 2: The hole object with RebuildHoleBehavior.
+      makeObjectDef('GLAHole', 'GLA', ['REBUILD_HOLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: holeMaxHp, InitialHealth: holeMaxHp }),
+        makeBlock('Behavior', 'RebuildHoleBehavior ModuleTag_RebuildHole', {
+          WorkerObjectName: 'GLAWorker',
+          WorkerRespawnDelay: respawnDelayMs,
+          'HoleHealthRegen%PerSecond': regenPercent,
+        }),
+      ]),
+      // 3: The worker unit.
+      makeObjectDef('GLAWorker', 'GLA', ['INFANTRY', 'DOZER'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ]),
+      // 4: Enemy attacker.
+      makeObjectDef('EnemyTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankGun'] }),
+      ]),
+    ];
+
+    const mapObjects: MapObjectJSON[] = [
+      makeMapObject('GLABarracks', 30, 30),
+      makeMapObject('EnemyTank', 30, 32),
+    ];
+
+    const bundle = makeBundle({
+      objects,
+      weapons: [
+        makeWeaponDef('TankGun', {
+          AttackRange: 100,
+          PrimaryDamage: 50,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('gla', 'HUMAN');
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('america', 'COMPUTER');
+
+    return { logic, sz };
+  }
+
+  it('creates a rebuild hole when building is destroyed', () => {
+    const { logic } = makeRebuildHoleSetup();
+    logic.update(0);
+
+    // Building is entity 1, enemy is entity 2.
+    const buildingBefore = logic.getEntityState(1)!;
+    expect(buildingBefore.alive).toBe(true);
+
+    // Kill the building by dealing massive damage.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building, 9999, 'EXPLOSION');
+
+    // Building should be destroyed.
+    const buildingAfter = logic.getEntityState(1);
+    expect(buildingAfter === null || !buildingAfter.alive).toBe(true);
+
+    // A hole entity should have been spawned (entity 3).
+    logic.update(1 / 30);
+    const holeState = logic.getEntityState(3);
+    expect(holeState).not.toBeNull();
+    expect(holeState!.alive).toBe(true);
+    expect(holeState!.templateName).toBe('GLAHole');
+  });
+
+  it('spawns worker after respawn delay and begins reconstruction', () => {
+    const { logic } = makeRebuildHoleSetup({ workerRespawnDelay: 100 }); // ~3 frames
+    logic.update(0);
+
+    // Kill the building.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building, 9999, 'EXPLOSION');
+
+    // Run for a few frames to let the worker spawn timer tick down.
+    // WorkerRespawnDelay=100ms → ~3 frames at 30fps.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Worker should exist (entity 4 — after hole=3).
+    const workerState = logic.getEntityState(4);
+    expect(workerState).not.toBeNull();
+    expect(workerState!.alive).toBe(true);
+    expect(workerState!.templateName).toBe('GLAWorker');
+
+    // A reconstruction building should exist (entity 5).
+    const reconState = logic.getEntityState(5);
+    expect(reconState).not.toBeNull();
+    expect(reconState!.alive).toBe(true);
+    expect(reconState!.templateName).toBe('GLABarracks');
+    // Should be under construction.
+    expect(reconState!.constructionPercent).toBeGreaterThanOrEqual(0);
+  });
+
+  it('completes reconstruction and destroys hole and worker', () => {
+    const { logic } = makeRebuildHoleSetup({
+      workerRespawnDelay: 100,
+      buildingBuildTime: 1, // 1 second → 30 frames
+    });
+    logic.update(0);
+
+    // Kill the building.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building, 9999, 'EXPLOSION');
+
+    // Run enough frames for worker spawn (~3 frames) + full construction (30 frames).
+    for (let i = 0; i < 50; i++) logic.update(1 / 30);
+
+    // Hole should be destroyed (reconstruction complete).
+    const holeState = logic.getEntityState(3);
+    expect(holeState === null || !holeState.alive).toBe(true);
+
+    // Worker should be destroyed.
+    const workerState = logic.getEntityState(4);
+    expect(workerState === null || !workerState.alive).toBe(true);
+
+    // Reconstructed building should be alive and complete.
+    const reconState = logic.getEntityState(5);
+    expect(reconState).not.toBeNull();
+    expect(reconState!.alive).toBe(true);
+    expect(reconState!.constructionPercent).toBe(-1); // CONSTRUCTION_COMPLETE
+    expect(reconState!.health).toBe(500);
+  });
+
+  it('respawns worker if worker dies during reconstruction', () => {
+    const { logic } = makeRebuildHoleSetup({
+      workerRespawnDelay: 100,
+      buildingBuildTime: 100, // 100 seconds — long enough to kill worker mid-build
+    });
+    logic.update(0);
+
+    // Kill the building.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+      markEntityDestroyed: (id: number, attackerId: number) => void;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building, 9999, 'EXPLOSION');
+
+    // Let worker spawn.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    const firstWorkerState = logic.getEntityState(4);
+    expect(firstWorkerState).not.toBeNull();
+    expect(firstWorkerState!.alive).toBe(true);
+
+    // Kill the worker.
+    privateApi.markEntityDestroyed(4, -1);
+    const deadWorker = logic.getEntityState(4);
+    expect(deadWorker === null || !deadWorker.alive).toBe(true);
+
+    // Run more frames to let replacement worker spawn.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // New worker should be spawned (entity 6 — after recon=5).
+    const newWorkerState = logic.getEntityState(6);
+    expect(newWorkerState).not.toBeNull();
+    expect(newWorkerState!.alive).toBe(true);
+    expect(newWorkerState!.templateName).toBe('GLAWorker');
+  });
+
+  it('restarts construction if reconstructing building is destroyed', () => {
+    const { logic } = makeRebuildHoleSetup({
+      workerRespawnDelay: 100,
+      buildingBuildTime: 10000,
+    });
+    logic.update(0);
+
+    // Kill the building.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+      markEntityDestroyed: (id: number, attackerId: number) => void;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building, 9999, 'EXPLOSION');
+
+    // Let worker spawn and reconstruction start.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(5)).not.toBeNull(); // Reconstruction exists.
+
+    // Kill the reconstruction building.
+    privateApi.markEntityDestroyed(5, -1);
+
+    // Run more frames — should restart the cycle.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Hole should still be alive.
+    const holeState = logic.getEntityState(3);
+    expect(holeState).not.toBeNull();
+    expect(holeState!.alive).toBe(true);
+
+    // A new worker and reconstruction should exist.
+    // Worker 4 was killed when recon died, new worker is 6, new recon is 7.
+    const newRecon = logic.getEntityState(7);
+    expect(newRecon).not.toBeNull();
+    expect(newRecon!.alive).toBe(true);
+    expect(newRecon!.templateName).toBe('GLABarracks');
+  });
+
+  it('destroys worker when hole is killed', () => {
+    const { logic } = makeRebuildHoleSetup({
+      workerRespawnDelay: 100,
+      buildingBuildTime: 10000,
+    });
+    logic.update(0);
+
+    // Kill the building.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+      markEntityDestroyed: (id: number, attackerId: number) => void;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building, 9999, 'EXPLOSION');
+
+    // Let worker spawn.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(4)!.alive).toBe(true); // Worker alive.
+
+    // Kill the hole.
+    privateApi.markEntityDestroyed(3, -1);
+
+    // Worker should also be destroyed.
+    const workerState = logic.getEntityState(4);
+    expect(workerState === null || !workerState.alive).toBe(true);
+  });
+
+  it('does not create hole for buildings under construction', () => {
+    const { logic } = makeRebuildHoleSetup();
+    logic.update(0);
+
+    // Mark building as under construction.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    building.objectStatusFlags.add('UNDER_CONSTRUCTION');
+
+    // Kill the building.
+    privateApi.applyWeaponDamageAmount(2, building as unknown as never, 9999, 'EXPLOSION');
+
+    logic.update(1 / 30);
+
+    // No hole should exist — entity 3 should not be a hole.
+    const entity3 = logic.getEntityState(3);
+    expect(entity3).toBeNull();
+  });
+
+  it('heals hole passively over time', () => {
+    const { logic } = makeRebuildHoleSetup({
+      workerRespawnDelay: 30000, // Long delay so worker doesn't spawn.
+      holeHealthRegenPercent: 50, // INI value: 50 = 50%/sec → heals fast.
+      holeMaxHealth: 100,
+    });
+    logic.update(0);
+
+    // Kill the building.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building, 9999, 'EXPLOSION');
+
+    logic.update(1 / 30);
+
+    // Damage the hole.
+    const hole = privateApi.spawnedEntities.get(3) as { health: number; maxHealth: number };
+    expect(hole).toBeTruthy();
+    hole.health = 50; // Half health.
+
+    // Run 30 frames (1 second) at 50% regen/sec → should heal ~50 HP.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    const holeState = logic.getEntityState(3)!;
+    expect(holeState.health).toBeGreaterThan(90); // Should be near max.
+  });
+
+  it('transfers attackers from dead building to hole', () => {
+    const { logic } = makeRebuildHoleSetup({ transferAttackers: true });
+    logic.update(0);
+
+    // Make enemy attack the building.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    logic.update(1 / 30);
+
+    // Kill the building.
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { attackTargetEntityId: number | null }>;
+    };
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building as unknown as never, 9999, 'EXPLOSION');
+
+    // After building death, enemy's target should be redirected to hole (entity 3).
+    const enemy = privateApi.spawnedEntities.get(2)!;
+    expect(enemy.attackTargetEntityId).toBe(3);
+  });
+});

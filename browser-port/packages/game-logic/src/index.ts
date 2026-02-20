@@ -1396,6 +1396,26 @@ interface MapEntity {
   /** Whether the trap is currently in proximity (auto-scan) mode. */
   demoTrapProximityMode: boolean;
 
+  // ── Source parity: RebuildHoleExposeDie — creates hole on building death ──
+  /** Die module profile (null = no hole on death). Only on buildings. */
+  rebuildHoleExposeDieProfile: RebuildHoleExposeDieProfile | null;
+
+  // ── Source parity: RebuildHoleBehavior — hole lifecycle management ──
+  /** Behavior module profile (null = not a rebuild hole). Only on hole objects. */
+  rebuildHoleProfile: RebuildHoleBehaviorProfile | null;
+  /** ID of the worker unit spawned by this hole (0 = none). */
+  rebuildHoleWorkerEntityId: number;
+  /** ID of the building being reconstructed (0 = none). */
+  rebuildHoleReconstructingEntityId: number;
+  /** ID of the original building that died and created this hole. */
+  rebuildHoleSpawnerEntityId: number;
+  /** Countdown frames until worker spawns (0 = not waiting). */
+  rebuildHoleWorkerWaitCounter: number;
+  /** Template name of the building to reconstruct. Empty = not initialized. */
+  rebuildHoleRebuildTemplateName: string;
+  /** Whether the hole is currently masked (hidden during active reconstruction). */
+  rebuildHoleMasked: boolean;
+
   // ── Source parity: CreateObjectDie / SlowDeathBehavior — OCL on death ──
   /** OCL names to execute when entity is destroyed. */
   deathOCLNames: string[];
@@ -1767,6 +1787,32 @@ interface DemoTrapProfile {
   detonationWeaponName: string | null;
   /** Whether the trap detonates when killed. */
   detonateWhenKilled: boolean;
+}
+
+/**
+ * Source parity: RebuildHoleExposeDieModuleData — die module on buildings that
+ * creates a rebuild hole when the building is destroyed.
+ */
+interface RebuildHoleExposeDieProfile {
+  /** Template name of the hole object to create on building death. */
+  holeName: string;
+  /** Max health for the created hole object. */
+  holeMaxHealth: number;
+  /** Whether to redirect attackers from dead building to hole. */
+  transferAttackers: boolean;
+}
+
+/**
+ * Source parity: RebuildHoleBehaviorModuleData — update module on hole objects
+ * that manages the worker-spawn → reconstruct → complete lifecycle.
+ */
+interface RebuildHoleBehaviorProfile {
+  /** Template name of the worker unit that performs reconstruction. */
+  workerObjectName: string;
+  /** Delay frames before worker respawns after death. */
+  workerRespawnDelay: number;
+  /** Hole health regeneration as fraction of maxHealth per second (e.g. 0.1 = 10%). */
+  holeHealthRegenPercentPerSecond: number;
 }
 
 // Body damage state thresholds (source parity: GlobalData defaults).
@@ -2342,6 +2388,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProneEntities();
     this.updateFireWhenDamagedContinuous();
     this.updateSellingEntities();
+    this.updateRebuildHoles();
     this.updateRenderStates();
     this.updateLifetimeEntities();
     this.updateSlowDeathEntities();
@@ -4027,6 +4074,16 @@ export class GameLogicSubsystem implements Subsystem {
       demoTrapNextScanFrame: 0,
       demoTrapDetonated: false,
       demoTrapProximityMode: false,
+      // Rebuild hole expose die (buildings)
+      rebuildHoleExposeDieProfile: this.extractRebuildHoleExposeDieProfile(objectDef),
+      // Rebuild hole behavior (holes)
+      rebuildHoleProfile: this.extractRebuildHoleBehaviorProfile(objectDef),
+      rebuildHoleWorkerEntityId: 0,
+      rebuildHoleReconstructingEntityId: 0,
+      rebuildHoleSpawnerEntityId: 0,
+      rebuildHoleWorkerWaitCounter: 0,
+      rebuildHoleRebuildTemplateName: '',
+      rebuildHoleMasked: false,
       // Death OCLs
       deathOCLNames: this.extractDeathOCLNames(objectDef),
       // Deploy state machine
@@ -6225,6 +6282,76 @@ export class GameLogicSubsystem implements Subsystem {
             friendlyDetonation: readBooleanField(block.fields, ['AutoDetonationWithFriendsInvolved']) ?? false,
             detonationWeaponName: readStringField(block.fields, ['DetonationWeapon']),
             detonateWhenKilled: readBooleanField(block.fields, ['DetonateWhenKilled']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: RebuildHoleExposeDie — extract die module config from INI.
+   * Present on buildings that should create a hole when destroyed.
+   */
+  private extractRebuildHoleExposeDieProfile(objectDef: ObjectDef | undefined): RebuildHoleExposeDieProfile | null {
+    if (!objectDef) return null;
+    let profile: RebuildHoleExposeDieProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'DIE' || blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'REBUILDHOLEEXPOSEDIE') {
+          const holeName = readStringField(block.fields, ['HoleName']);
+          if (!holeName) return;
+          profile = {
+            holeName,
+            holeMaxHealth: readNumericField(block.fields, ['HoleMaxHealth']) ?? 50,
+            transferAttackers: readBooleanField(block.fields, ['TransferAttackers']) ?? true,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: RebuildHoleBehavior — extract behavior module config from INI.
+   * Present on hole objects that manage the worker-spawn → reconstruct lifecycle.
+   */
+  private extractRebuildHoleBehaviorProfile(objectDef: ObjectDef | undefined): RebuildHoleBehaviorProfile | null {
+    if (!objectDef) return null;
+    let profile: RebuildHoleBehaviorProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'REBUILDHOLEBEHAVIOR') {
+          const workerName = readStringField(block.fields, ['WorkerObjectName']);
+          if (!workerName) return;
+          // Source parity: WorkerRespawnDelay is in milliseconds → convert to frames.
+          const respawnDelayMs = readNumericField(block.fields, ['WorkerRespawnDelay']) ?? 5000;
+          // Source parity: HoleHealthRegen%PerSecond uses INI::parsePercentToReal
+          // which divides by 100. E.g., INI value "10" → 0.1 (10%). Default = 0.1.
+          const regenRaw = readNumericField(block.fields, ['HoleHealthRegen%PerSecond']);
+          const regenPercent = regenRaw !== undefined ? regenRaw / 100 : 0.1;
+          profile = {
+            workerObjectName: workerName,
+            workerRespawnDelay: this.msToLogicFrames(respawnDelayMs),
+            holeHealthRegenPercentPerSecond: regenPercent,
           };
         }
       }
@@ -17302,6 +17429,218 @@ export class GameLogicSubsystem implements Subsystem {
     this.markEntityDestroyed(entity.id, entity.id);
   }
 
+  // ── RebuildHoleBehavior implementation ──────────────────────────────────────
+
+  /**
+   * Source parity: RebuildHoleExposeDie::onDie — create a rebuild hole when a building
+   * with the RebuildHoleExposeDie module is destroyed.
+   */
+  private tryCreateRebuildHoleOnDeath(entity: MapEntity, attackerId: number): void {
+    const profile = entity.rebuildHoleExposeDieProfile;
+    if (!profile) return;
+
+    // Source parity: no hole if building was still under construction.
+    if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) return;
+    // Source parity: no hole if player is neutral or inactive.
+    if (!entity.side) return;
+    const playerType = this.sidePlayerTypes.get(this.normalizeSide(entity.side) ?? '');
+    if (!playerType) return;
+
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+
+    // Spawn the hole object at the building's position with the building's orientation.
+    const hole = this.spawnEntityFromTemplate(
+      profile.holeName,
+      entity.x,
+      entity.z,
+      entity.rotationY,
+      entity.side,
+    );
+    if (!hole) return;
+
+    // Source parity: set hole max health from profile.
+    if (profile.holeMaxHealth > 0) {
+      hole.maxHealth = profile.holeMaxHealth;
+      hole.health = profile.holeMaxHealth;
+      hole.canTakeDamage = true;
+    }
+
+    // Source parity: copy geometry info from building to hole (preserves pathfinding footprint).
+    if (entity.obstacleGeometry) {
+      hole.obstacleGeometry = { ...entity.obstacleGeometry };
+    }
+
+    // Source parity: RebuildHoleBehavior::startRebuildProcess — store rebuild template
+    // and start the worker respawn timer.
+    if (hole.rebuildHoleProfile) {
+      hole.rebuildHoleSpawnerEntityId = entity.id;
+      hole.rebuildHoleRebuildTemplateName = entity.templateName;
+      // Start worker respawn countdown.
+      hole.rebuildHoleWorkerWaitCounter = hole.rebuildHoleProfile.workerRespawnDelay;
+    }
+
+    // Source parity: TransferAttackers — redirect all AI attacks from building to hole.
+    if (profile.transferAttackers) {
+      for (const other of this.spawnedEntities.values()) {
+        if (other.destroyed || other.id === entity.id) continue;
+        if (other.attackTargetEntityId === entity.id) {
+          other.attackTargetEntityId = hole.id;
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: RebuildHoleBehavior::update() — per-frame lifecycle management
+   * for rebuild holes. Manages worker spawn timer, health regen, worker/reconstruction
+   * death detection, and reconstruction completion.
+   */
+  private updateRebuildHoles(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const profile = entity.rebuildHoleProfile;
+      if (!profile) continue;
+      // Only holes with an active rebuild template participate.
+      if (!entity.rebuildHoleRebuildTemplateName) continue;
+
+      const worker = entity.rebuildHoleWorkerEntityId !== 0
+        ? this.spawnedEntities.get(entity.rebuildHoleWorkerEntityId)
+        : null;
+      const reconstructing = entity.rebuildHoleReconstructingEntityId !== 0
+        ? this.spawnedEntities.get(entity.rebuildHoleReconstructingEntityId)
+        : null;
+
+      // Source parity: C++ update() checks deaths FIRST, then spawn/regen, completion LAST.
+
+      // ── Check for worker death — respawn (C++ line 195-205) ──
+      if (entity.rebuildHoleWorkerEntityId !== 0
+        && (!worker || worker.destroyed)) {
+        entity.rebuildHoleWorkerEntityId = 0;
+        entity.rebuildHoleWorkerWaitCounter = profile.workerRespawnDelay;
+        // Source parity: newWorkerRespawnProcess always unmasks unconditionally.
+        entity.rebuildHoleMasked = false;
+        entity.objectStatusFlags.delete('MASKED');
+        entity.objectStatusFlags.delete('UNSELECTABLE');
+      }
+
+      // ── Check for reconstruction death — restart cycle (C++ line 208-226) ──
+      if (entity.rebuildHoleReconstructingEntityId !== 0
+        && (!reconstructing || reconstructing.destroyed)) {
+        // Reconstruction building died — destroy worker and restart.
+        const currentWorker = entity.rebuildHoleWorkerEntityId !== 0
+          ? this.spawnedEntities.get(entity.rebuildHoleWorkerEntityId)
+          : null;
+        if (currentWorker && !currentWorker.destroyed) {
+          this.markEntityDestroyed(currentWorker.id, -1);
+        }
+        entity.rebuildHoleWorkerEntityId = 0;
+        entity.rebuildHoleReconstructingEntityId = 0;
+        entity.rebuildHoleWorkerWaitCounter = profile.workerRespawnDelay;
+        // Source parity: newWorkerRespawnProcess always unmasks unconditionally.
+        entity.rebuildHoleMasked = false;
+        entity.objectStatusFlags.delete('MASKED');
+        entity.objectStatusFlags.delete('UNSELECTABLE');
+      }
+
+      // ── Worker spawn countdown (C++ line 228-298) ──
+      if (entity.rebuildHoleWorkerWaitCounter > 0) {
+        entity.rebuildHoleWorkerWaitCounter--;
+        if (entity.rebuildHoleWorkerWaitCounter <= 0) {
+          this.rebuildHoleSpawnWorker(entity, profile);
+        }
+      }
+
+      // ── Hole passive health regeneration (C++ line 300-316) ──
+      if (entity.health < entity.maxHealth && profile.holeHealthRegenPercentPerSecond > 0) {
+        // Source parity: (regenPercent / 30fps) * maxHealth per frame.
+        const healPerFrame = (profile.holeHealthRegenPercentPerSecond / 30) * entity.maxHealth;
+        entity.health = Math.min(entity.maxHealth, entity.health + healPerFrame);
+      }
+
+      // ── Check for reconstruction completion (C++ line 319-336 — checked LAST) ──
+      const reconFinal = entity.rebuildHoleReconstructingEntityId !== 0
+        ? this.spawnedEntities.get(entity.rebuildHoleReconstructingEntityId)
+        : null;
+      if (reconFinal && !reconFinal.destroyed
+        && reconFinal.constructionPercent === CONSTRUCTION_COMPLETE) {
+        // Reconstruction is done — destroy worker and hole.
+        const finalWorker = entity.rebuildHoleWorkerEntityId !== 0
+          ? this.spawnedEntities.get(entity.rebuildHoleWorkerEntityId)
+          : null;
+        if (finalWorker && !finalWorker.destroyed) {
+          this.markEntityDestroyed(finalWorker.id, -1);
+        }
+        entity.rebuildHoleWorkerEntityId = 0;
+        entity.rebuildHoleReconstructingEntityId = 0;
+        this.markEntityDestroyed(entity.id, -1);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Source parity: RebuildHoleBehavior::update() — spawn worker and start/resume construction.
+   */
+  private rebuildHoleSpawnWorker(hole: MapEntity, profile: RebuildHoleBehaviorProfile): void {
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+
+    // Spawn worker at hole position.
+    const worker = this.spawnEntityFromTemplate(
+      profile.workerObjectName,
+      hole.x,
+      hole.z,
+      hole.rotationY,
+      hole.side,
+    );
+    if (!worker) return;
+
+    hole.rebuildHoleWorkerEntityId = worker.id;
+    // Source parity: worker is unselectable.
+    worker.objectStatusFlags.add('UNSELECTABLE');
+
+    // Resolve the rebuild template.
+    const rebuildDef = findObjectDefByName(registry, hole.rebuildHoleRebuildTemplateName);
+    if (!rebuildDef) return;
+
+    let reconstructing = hole.rebuildHoleReconstructingEntityId !== 0
+      ? this.spawnedEntities.get(hole.rebuildHoleReconstructingEntityId)
+      : null;
+
+    if (!reconstructing || reconstructing.destroyed) {
+      // Start new construction at hole position.
+      reconstructing = this.spawnConstructedObject(
+        worker,
+        rebuildDef,
+        [hole.x, 0, hole.z],
+        hole.rotationY,
+      );
+      if (!reconstructing) return;
+
+      // Source parity: mark as RECONSTRUCTING (no cost refund on cancel).
+      reconstructing.objectStatusFlags.add('RECONSTRUCTING');
+      hole.rebuildHoleReconstructingEntityId = reconstructing.id;
+    } else {
+      // Resume existing construction with the new worker.
+      reconstructing.builderId = worker.id;
+      this.pendingConstructionActions.set(worker.id, reconstructing.id);
+    }
+
+    // Source parity: mask hole during active reconstruction (invisible to UI/AI).
+    hole.rebuildHoleMasked = true;
+    hole.objectStatusFlags.add('MASKED');
+    hole.objectStatusFlags.add('UNSELECTABLE');
+
+    // Source parity: transfer attacks from hole to reconstruction building.
+    for (const other of this.spawnedEntities.values()) {
+      if (other.destroyed || other.id === hole.id) continue;
+      if (other.attackTargetEntityId === hole.id) {
+        other.attackTargetEntityId = reconstructing.id;
+      }
+    }
+  }
+
   /**
    * Source parity: DeployStyleAIUpdate::update() — per-frame deploy state machine.
    * Transitions: READY_TO_MOVE ↔ DEPLOY ↔ READY_TO_ATTACK ↔ UNDEPLOY ↔ READY_TO_MOVE.
@@ -17716,6 +18055,9 @@ export class GameLogicSubsystem implements Subsystem {
     // award a percentage of the victim's build cost as credits.
     this.awardCashBountyOnKill(entity, attackerId);
 
+    // Source parity: RebuildHoleExposeDie::onDie — create rebuild hole on building death.
+    this.tryCreateRebuildHoleOnDeath(entity, attackerId);
+
     // Source parity: EjectPilotDie — eject pilot unit for VETERAN+ vehicles on death.
     this.tryEjectPilotOnDeath(entity);
 
@@ -17732,6 +18074,15 @@ export class GameLogicSubsystem implements Subsystem {
     this.onSlaverDeath(entity);
     // Source parity: Object::onDie → SpawnBehavior::onSpawnDeath — notify slaver of slave death.
     this.onSlaveDeath(entity);
+
+    // Source parity: RebuildHoleBehavior::onDie — if a hole dies, destroy its worker.
+    if (entity.rebuildHoleProfile && entity.rebuildHoleWorkerEntityId !== 0) {
+      const worker = this.spawnedEntities.get(entity.rebuildHoleWorkerEntityId);
+      if (worker && !worker.destroyed) {
+        this.markEntityDestroyed(worker.id, -1);
+      }
+      entity.rebuildHoleWorkerEntityId = 0;
+    }
 
     this.cancelEntityCommandPathActions(entityId);
     this.railedTransportStateByEntityId.delete(entityId);
