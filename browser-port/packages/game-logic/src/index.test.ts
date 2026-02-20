@@ -19313,3 +19313,621 @@ describe('StructureCollapseUpdate', () => {
     }
   });
 });
+
+describe('EMPUpdate', () => {
+  it('disables nearby vehicles after fade frame and self-destructs at lifetime end', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EMPPulse', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'EMPUpdate ModuleTag_EMP', {
+            Lifetime: 300,          // 9 frames
+            StartFadeTime: 100,     // 3 frames — disable attack fires here
+            DisabledDuration: 3000, // 90 frames
+            EffectRadius: 200,
+          }),
+        ]),
+        makeObjectDef('Tank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('EMPPulse', 50, 50),
+        makeMapObject('Tank', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Frame 0-2: before fade frame — tank should not be disabled.
+    for (let i = 0; i < 2; i++) logic.update(1 / 30);
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+
+    // Frame 3+: after fade frame — tank should become disabled.
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+
+    // After lifetime (9 frames total), EMP pulse entity should be destroyed.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    expect(logic.getEntityState(1)).toBeNull();
+
+    // Tank should still exist (was disabled, not killed).
+    expect(logic.getEntityState(2)).not.toBeNull();
+    expect(logic.getEntityState(2)!.health).toBe(500);
+  });
+
+  it('skips infantry targets (unless SPAWNS_ARE_THE_WEAPONS)', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EMPPulse', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'EMPUpdate ModuleTag_EMP', {
+            Lifetime: 300,
+            StartFadeTime: 0,
+            DisabledDuration: 3000,
+            EffectRadius: 200,
+          }),
+        ]),
+        makeObjectDef('Soldier', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('SpawnMaster', 'China', ['VEHICLE', 'SPAWNS_ARE_THE_WEAPONS'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('EMPPulse', 50, 50),
+        makeMapObject('Soldier', 55, 50),
+        makeMapObject('SpawnMaster', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Run past StartFadeTime (0 = immediate).
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    // Infantry should NOT be disabled.
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+    // SPAWNS_ARE_THE_WEAPONS vehicle should be disabled (it's a vehicle, not filtered).
+    expect(priv.spawnedEntities.get(3)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+  });
+
+  it('kills airborne aircraft instead of disabling them', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EMPPulse', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'EMPUpdate ModuleTag_EMP', {
+            Lifetime: 300,
+            StartFadeTime: 0,
+            DisabledDuration: 3000,
+            EffectRadius: 200,
+          }),
+        ]),
+        makeObjectDef('Jet', 'China', ['AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('EMPPulse', 50, 50),
+        makeMapObject('Jet', 55, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Set the jet as airborne.
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    priv.spawnedEntities.get(2)!.objectStatusFlags.add('AIRBORNE_TARGET');
+
+    // Run past StartFadeTime.
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    // Airborne aircraft should be killed, not just disabled.
+    expect(logic.getEntityState(2)).toBeNull();
+  });
+
+  it('EMP_HARDENED ground vehicles are still disabled but airborne EMP_HARDENED aircraft survive', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EMPPulse', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'EMPUpdate ModuleTag_EMP', {
+            Lifetime: 300,
+            StartFadeTime: 0,
+            DisabledDuration: 3000,
+            EffectRadius: 200,
+          }),
+        ]),
+        makeObjectDef('HardenedTank', 'China', ['VEHICLE', 'EMP_HARDENED'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('HardenedJet', 'China', ['VEHICLE', 'AIRCRAFT', 'EMP_HARDENED'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('EMPPulse', 50, 50),
+        makeMapObject('HardenedTank', 55, 50),
+        makeMapObject('HardenedJet', 52, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string>; health: number }>;
+    };
+    // Make the jet airborne.
+    priv.spawnedEntities.get(3)!.objectStatusFlags.add('AIRBORNE_TARGET');
+
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    // Ground EMP_HARDENED vehicle SHOULD still be disabled (C++ parity: EMP_HARDENED only protects airborne aircraft).
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+    // Airborne EMP_HARDENED aircraft should NOT be killed.
+    expect(priv.spawnedEntities.get(3)!.health).toBe(300);
+  });
+
+  it('doesNotAffectMyOwnBuildings skips friendly structures', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EMPPulse', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'EMPUpdate ModuleTag_EMP', {
+            Lifetime: 300,
+            StartFadeTime: 0,
+            DisabledDuration: 3000,
+            EffectRadius: 200,
+            DoesNotAffectMyOwnBuildings: 'Yes',
+          }),
+        ]),
+        makeObjectDef('FriendlyPower', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+        makeObjectDef('EnemyPower', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('EMPPulse', 50, 50),
+        makeMapObject('FriendlyPower', 55, 50),
+        makeMapObject('EnemyPower', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    // Friendly structure should NOT be disabled (DoesNotAffectMyOwnBuildings).
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+    // Enemy structure should be disabled.
+    expect(priv.spawnedEntities.get(3)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+  });
+
+  it('DISABLED_EMP expires after configured duration', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('EMPPulse', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'EMPUpdate ModuleTag_EMP', {
+            Lifetime: 300,
+            StartFadeTime: 0,
+            DisabledDuration: 500,  // 15 frames
+            EffectRadius: 200,
+          }),
+        ]),
+        makeObjectDef('Tank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('EMPPulse', 50, 50),
+        makeMapObject('Tank', 55, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Trigger the EMP (StartFadeTime = 0 → immediate).
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+
+    // Run past the 15-frame disable duration + some buffer.
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // DISABLED_EMP should have expired.
+    const tank = priv.spawnedEntities.get(2);
+    if (tank) {
+      expect(tank.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+    }
+  });
+});
+
+describe('HijackerUpdate', () => {
+  it('hides hijacker in vehicle and ejects when vehicle is destroyed', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+          makeBlock('Behavior', 'HijackerUpdate ModuleTag_HijackerUpdate', {
+            ParachuteName: 'GLA_Parachute',
+          }),
+        ]),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HijackTestGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('HijackTestGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hijacker', 8, 8),
+        makeMapObject('EnemyVehicle', 10, 8),
+        makeMapObject('Attacker', 30, 8),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Issue hijack command.
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+
+    // Hijacker should still exist (hidden inside vehicle), not destroyed.
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        objectStatusFlags: Set<string>;
+        hijackerState: { isInVehicle: boolean; targetId: number } | null;
+        x: number; z: number;
+      }>;
+    };
+    const hijacker = priv.spawnedEntities.get(1);
+    expect(hijacker).toBeDefined();
+    expect(hijacker!.objectStatusFlags.has('MASKED')).toBe(true);
+    expect(hijacker!.objectStatusFlags.has('UNSELECTABLE')).toBe(true);
+    expect(hijacker!.objectStatusFlags.has('NO_COLLISIONS')).toBe(true);
+    expect(hijacker!.hijackerState).not.toBeNull();
+    expect(hijacker!.hijackerState!.isInVehicle).toBe(true);
+    expect(hijacker!.hijackerState!.targetId).toBe(2);
+
+    // Vehicle should be captured (now America's).
+    expect(logic.getEntityIdsByTemplateAndSide('EnemyVehicle', 'America')).toEqual([2]);
+
+    // Now have the attacker destroy the vehicle.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+
+    // Vehicle should be destroyed.
+    expect(logic.getEntityState(2)).toBeNull();
+
+    // Hijacker should be ejected and active again.
+    const ejectedHijacker = priv.spawnedEntities.get(1);
+    if (ejectedHijacker) {
+      expect(ejectedHijacker.objectStatusFlags.has('MASKED')).toBe(false);
+      expect(ejectedHijacker.objectStatusFlags.has('UNSELECTABLE')).toBe(false);
+      expect(ejectedHijacker.objectStatusFlags.has('NO_COLLISIONS')).toBe(false);
+      expect(ejectedHijacker.hijackerState).toBeNull();
+    }
+  });
+
+  it('syncs veterancy between hijacker and vehicle', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+          makeBlock('Behavior', 'HijackerUpdate ModuleTag_HijackerUpdate', {}),
+        ]),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hijacker', 8, 8),
+        makeMapObject('EnemyVehicle', 10, 8),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Give the vehicle veteran status before hijack.
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        experienceState: { currentLevel: number };
+        hijackerState: { isInVehicle: boolean } | null;
+      }>;
+    };
+    priv.spawnedEntities.get(2)!.experienceState.currentLevel = 2;
+
+    // Issue hijack command.
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+
+    // Both should now have veterancy level 2 (the higher of the two).
+    expect(priv.spawnedEntities.get(1)!.experienceState.currentLevel).toBe(2);
+    expect(priv.spawnedEntities.get(2)!.experienceState.currentLevel).toBe(2);
+
+    // Run a few more frames to ensure sync continues.
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+    expect(priv.spawnedEntities.get(1)!.experienceState.currentLevel).toBe(2);
+  });
+
+  it('positions hijacker at vehicle location each frame', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+          makeBlock('Behavior', 'HijackerUpdate ModuleTag_HijackerUpdate', {}),
+        ]),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hijacker', 8, 8),
+        makeMapObject('EnemyVehicle', 10, 8),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Issue hijack (entities are close enough for immediate resolution).
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number; hijackerState: { isInVehicle: boolean } | null }>;
+    };
+
+    // Verify hijacker is inside vehicle.
+    expect(priv.spawnedEntities.get(1)!.hijackerState?.isInVehicle).toBe(true);
+
+    // After another frame, hijacker position should match vehicle position.
+    logic.update(1 / 30);
+    const hijacker = priv.spawnedEntities.get(1)!;
+    const vehicle = priv.spawnedEntities.get(2)!;
+    expect(hijacker.x).toBe(vehicle.x);
+    expect(hijacker.z).toBe(vehicle.z);
+  });
+
+  it('without HijackerUpdate, hijacker is destroyed on hijack (legacy behavior)', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OldHijacker', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+          // No HijackerUpdate module!
+        ]),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('OldHijacker', 8, 8),
+        makeMapObject('EnemyVehicle', 10, 8),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+
+    // Hijacker should be destroyed (no HijackerUpdate profile).
+    expect(logic.getEntityState(1)).toBeNull();
+    // Vehicle should be captured.
+    expect(logic.getEntityIdsByTemplateAndSide('EnemyVehicle', 'America')).toEqual([2]);
+  });
+});
+
+describe('LeafletDropBehavior', () => {
+  it('disables enemy infantry and vehicles after delay, but not structures', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('LeafletBomb', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'LeafletDropBehavior ModuleTag_Leaflet', {
+            Delay: 200,           // 6 frames
+            DisabledDuration: 3000, // 90 frames
+            AffectRadius: 200,
+          }),
+        ]),
+        makeObjectDef('EnemySoldier', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('EnemyTank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('EnemyBase', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('LeafletBomb', 50, 50),
+        makeMapObject('EnemySoldier', 55, 50),
+        makeMapObject('EnemyTank', 60, 50),
+        makeMapObject('EnemyBase', 45, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+
+    // Before delay (6 frames), nothing should be disabled.
+    for (let i = 0; i < 4; i++) logic.update(1 / 30);
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+    expect(priv.spawnedEntities.get(3)!.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+
+    // After delay, infantry and vehicle should be disabled.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+    expect(priv.spawnedEntities.get(3)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+
+    // Structure should NOT be disabled (leaflet only affects infantry+vehicle).
+    expect(priv.spawnedEntities.get(4)!.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+  });
+
+  it('only affects enemies, not allies', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('LeafletBomb', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'LeafletDropBehavior ModuleTag_Leaflet', {
+            Delay: 0,
+            DisabledDuration: 3000,
+            AffectRadius: 200,
+          }),
+        ]),
+        makeObjectDef('FriendlyTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('EnemyTank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('LeafletBomb', 50, 50),
+        makeMapObject('FriendlyTank', 55, 50),
+        makeMapObject('EnemyTank', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Trigger (Delay = 0 → fires after first frame check).
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    // Friendly vehicle should NOT be disabled.
+    expect(priv.spawnedEntities.get(2)!.objectStatusFlags.has('DISABLED_EMP')).toBe(false);
+    // Enemy vehicle should be disabled.
+    expect(priv.spawnedEntities.get(3)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
+  });
+});

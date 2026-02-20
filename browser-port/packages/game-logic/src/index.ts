@@ -1599,6 +1599,18 @@ interface MapEntity {
   /** Active collapse state (null = not collapsing). Entity persists during collapse. */
   structureCollapseState: StructureCollapseRuntimeState | null;
 
+  // ── Source parity: EMPUpdate — EMP pulse field that disables nearby entities ──
+  empUpdateProfile: EMPUpdateProfile | null;
+  empUpdateState: EMPUpdateRuntimeState | null;
+
+  // ── Source parity: HijackerUpdate — hijacker hides in vehicle, ejects on death ──
+  hijackerUpdateProfile: HijackerUpdateProfile | null;
+  hijackerState: HijackerRuntimeState | null;
+
+  // ── Source parity: LeafletDropBehavior — delayed radius disable for infantry+vehicles ──
+  leafletDropProfile: LeafletDropProfile | null;
+  leafletDropState: LeafletDropRuntimeState | null;
+
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
@@ -2621,6 +2633,79 @@ interface StructureCollapseRuntimeState {
 /** Source parity: GlobalData::m_gravity = -1.0f */
 const STRUCTURE_COLLAPSE_GRAVITY = -1.0;
 
+/**
+ * Source parity: EMPUpdate — electromagnetic pulse field that grows, disables nearby entities,
+ * and fades. C++ file: EMPUpdate.h/cpp. Attached to the EMP pulse object spawned by OCL/special power.
+ */
+interface EMPUpdateProfile {
+  /** Lifetime in logic frames — entity self-destructs at this frame offset from creation. */
+  lifetimeFrames: number;
+  /** Frame offset from creation when the fade begins and the disable attack fires. */
+  startFadeFrame: number;
+  /** Duration in frames that affected objects remain DISABLED_EMP. */
+  disabledDurationFrames: number;
+  /** Radius in which objects are disabled. */
+  effectRadius: number;
+  /** If true, the EMP does not affect the owner's own STRUCTURE entities. */
+  doesNotAffectMyOwnBuildings: boolean;
+  /** Required kindOf flags for targets (empty = all). */
+  victimRequiredKindOf: Set<string>;
+  /** Forbidden kindOf flags for targets. */
+  victimForbiddenKindOf: Set<string>;
+}
+
+interface EMPUpdateRuntimeState {
+  /** Frame at which the EMP pulse self-destructs. */
+  dieFrame: number;
+  /** Frame at which the disable attack fires (= creation + startFadeFrame). */
+  fadeFrame: number;
+  /** Whether the disable attack has already fired. */
+  disableAttackFired: boolean;
+}
+
+/**
+ * Source parity: LeafletDropBehavior — delayed radius-based disable that only affects enemy
+ * infantry and vehicles. C++ file: EMPUpdate.h/cpp (same file as EMPUpdate).
+ */
+interface LeafletDropProfile {
+  /** Delay in frames before the disable attack fires. */
+  delayFrames: number;
+  /** Duration in frames that affected objects remain DISABLED_EMP. */
+  disabledDurationFrames: number;
+  /** Radius for scanning victims. */
+  affectRadius: number;
+}
+
+interface LeafletDropRuntimeState {
+  /** Frame when the disable attack fires. */
+  startFrame: number;
+  /** Whether the disable attack has already fired. */
+  fired: boolean;
+}
+
+/**
+ * Source parity: HijackerUpdate — allows a hijacker unit to hide inside a hijacked vehicle,
+ * sync position+veterancy, and eject when the vehicle is destroyed.
+ * C++ file: HijackerUpdate.h/cpp.
+ */
+interface HijackerUpdateProfile {
+  /** Template name for the parachute container to create when ejecting while airborne. */
+  parachuteName: string | null;
+}
+
+interface HijackerRuntimeState {
+  /** Entity ID of the hijacked vehicle. */
+  targetId: number;
+  /** Whether the hijacker is currently hidden inside the vehicle. */
+  isInVehicle: boolean;
+  /** Whether the vehicle was airborne at last check (for parachute eject). */
+  wasTargetAirborne: boolean;
+  /** Eject position (vehicle's position when last seen alive). */
+  ejectX: number;
+  ejectY: number;
+  ejectZ: number;
+}
+
 /** Source parity: PoisonedBehavior default INI values. */
 const DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES = 10; // ~0.33s at 30fps
 const DEFAULT_POISON_DURATION_FRAMES = 90; // ~3s at 30fps
@@ -3175,6 +3260,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSellingEntities();
     this.updateRebuildHoles();
     this.updateWanderAI();
+    this.updateHijackerEntities();
     this.updateFloatEntities();
     this.updateAutoDeposit();
     this.updateDynamicShroud();
@@ -3189,6 +3275,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateStickyBombs();
     this.updateSlowDeathEntities();
     this.updateStructureCollapseEntities();
+    this.updateEmpEntities();
+    this.updateLeafletDropEntities();
     this.updateWeaponIdleAutoReload();
     this.updatePointDefenseLaser();
     this.updateCountermeasures();
@@ -4963,6 +5051,15 @@ export class GameLogicSubsystem implements Subsystem {
       // Structure collapse
       structureCollapseProfile: this.extractStructureCollapseProfile(objectDef),
       structureCollapseState: null,
+      // EMP update (pulse field that disables nearby entities)
+      empUpdateProfile: this.extractEmpUpdateProfile(objectDef),
+      empUpdateState: null,
+      // Hijacker update (hide in vehicle, eject on death)
+      hijackerUpdateProfile: this.extractHijackerUpdateProfile(objectDef),
+      hijackerState: null,
+      // Leaflet drop (delayed radius disable)
+      leafletDropProfile: this.extractLeafletDropProfile(objectDef),
+      leafletDropState: null,
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -8767,6 +8864,99 @@ export class GameLogicSubsystem implements Subsystem {
     };
     if (objectDef.blocks) {
       for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: EMPUpdate — extract EMP pulse configuration from INI.
+   * C++ file: EMPUpdate.h/cpp. Attached to the EMP pulse object.
+   */
+  private extractEmpUpdateProfile(objectDef: ObjectDef | undefined): EMPUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: EMPUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'EMPUPDATE') return;
+
+      const victimRequiredKindOf = new Set<string>();
+      const victimForbiddenKindOf = new Set<string>();
+      const victimReqRaw = readStringField(block.fields, ['VictimRequiredKindOf']);
+      if (victimReqRaw) {
+        for (const token of victimReqRaw.trim().split(/\s+/)) {
+          if (token) victimRequiredKindOf.add(token.toUpperCase());
+        }
+      }
+      const victimForbidRaw = readStringField(block.fields, ['VictimForbiddenKindOf']);
+      if (victimForbidRaw) {
+        for (const token of victimForbidRaw.trim().split(/\s+/)) {
+          if (token) victimForbiddenKindOf.add(token.toUpperCase());
+        }
+      }
+
+      profile = {
+        lifetimeFrames: this.msToLogicFrames(readNumericField(block.fields, ['Lifetime']) ?? 33),
+        startFadeFrame: this.msToLogicFrames(readNumericField(block.fields, ['StartFadeTime']) ?? 0),
+        disabledDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['DisabledDuration']) ?? 0),
+        effectRadius: readNumericField(block.fields, ['EffectRadius']) ?? 200.0,
+        doesNotAffectMyOwnBuildings: readStringField(block.fields, ['DoesNotAffectMyOwnBuildings'])?.toUpperCase() === 'YES',
+        victimRequiredKindOf,
+        victimForbiddenKindOf,
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: HijackerUpdate — extract hijacker profile from INI.
+   * C++ file: HijackerUpdate.h/cpp.
+   */
+  private extractHijackerUpdateProfile(objectDef: ObjectDef | undefined): HijackerUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: HijackerUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'HIJACKERUPDATE') return;
+      profile = {
+        parachuteName: readStringField(block.fields, ['ParachuteName']) ?? null,
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: LeafletDropBehavior — extract leaflet drop profile from INI.
+   * C++ file: EMPUpdate.h (same header). Delays before disabling enemy infantry+vehicles in radius.
+   */
+  private extractLeafletDropProfile(objectDef: ObjectDef | undefined): LeafletDropProfile | null {
+    if (!objectDef) return null;
+    let profile: LeafletDropProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'LEAFLETDROPBEHAVIOR') return;
+      profile = {
+        delayFrames: this.msToLogicFrames(readNumericField(block.fields, ['Delay']) ?? 33),
+        disabledDurationFrames: this.msToLogicFrames(readNumericField(block.fields, ['DisabledDuration']) ?? 0),
+        affectRadius: readNumericField(block.fields, ['AffectRadius']) ?? 60.0,
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
     }
     return profile;
   }
@@ -13052,7 +13242,33 @@ export class GameLogicSubsystem implements Subsystem {
     target.objectStatusFlags.add('HIJACKED');
     target.weaponSetFlagsMask |= WEAPON_SET_FLAG_VEHICLE_HIJACK;
     this.refreshEntityCombatProfiles(target);
-    this.markEntityDestroyed(source.id, target.id);
+
+    // Source parity: if hijacker has HijackerUpdate, hide inside vehicle instead of destroying.
+    if (source.hijackerUpdateProfile) {
+      // Hide the hijacker: invisible, non-interactive, non-collidable.
+      source.objectStatusFlags.add('NO_COLLISIONS');
+      source.objectStatusFlags.add('MASKED');
+      source.objectStatusFlags.add('UNSELECTABLE');
+      // Sync veterancy: take the higher of both.
+      const hijackerVet = source.experienceState.currentLevel;
+      const vehicleVet = target.experienceState.currentLevel;
+      const highestVet = Math.max(hijackerVet, vehicleVet);
+      source.experienceState.currentLevel = highestVet;
+      target.experienceState.currentLevel = highestVet;
+      // Activate hijacker state.
+      source.hijackerState = {
+        targetId: target.id,
+        isInVehicle: true,
+        wasTargetAirborne: false,
+        ejectX: target.x,
+        ejectY: target.y,
+        ejectZ: target.z,
+      };
+      // Clear any pending commands.
+      this.cancelEntityCommandPathActions(source.id);
+    } else {
+      this.markEntityDestroyed(source.id, target.id);
+    }
   }
 
   private canExecuteHijackVehicleEnterAction(source: MapEntity, target: MapEntity): boolean {
@@ -22593,6 +22809,212 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: C++ defaults oclCount[phase] = 1 — execute one random OCL per phase.
     const idx = oclList.length === 1 ? 0 : this.gameRandom.nextRange(0, oclList.length - 1);
     this.executeOCL(oclList[idx]!, entity);
+  }
+
+  /**
+   * Source parity: EMPUpdate::update — grow EMP pulse, fire disable attack at fade frame,
+   * self-destruct at end of lifetime. C++ file: EMPUpdate.cpp.
+   */
+  private updateEmpEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.empUpdateProfile;
+      if (!profile) continue;
+
+      // Lazy-initialize runtime state on first update.
+      if (!entity.empUpdateState) {
+        entity.empUpdateState = {
+          dieFrame: this.frameCounter + profile.lifetimeFrames,
+          fadeFrame: this.frameCounter + profile.startFadeFrame,
+          disableAttackFired: false,
+        };
+        // Source parity: random orientation at creation.
+        entity.rotationY = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
+      }
+
+      const state = entity.empUpdateState;
+
+      // Source parity: at fade frame, fire the disable attack once.
+      if (!state.disableAttackFired && this.frameCounter >= state.fadeFrame) {
+        state.disableAttackFired = true;
+        this.doEmpDisableAttack(entity, profile);
+      }
+
+      // Source parity: at die frame, self-destruct the EMP pulse object.
+      if (this.frameCounter >= state.dieFrame) {
+        this.markEntityDestroyed(entity.id, -1);
+      }
+    }
+  }
+
+  /**
+   * Source parity: EMPUpdate::doDisableAttack — scan nearby entities and apply DISABLED_EMP.
+   * Filters: skip self, skip infantry (unless SPAWNS_ARE_THE_WEAPONS), skip EMP_HARDENED,
+   * skip own buildings if doesNotAffectMyOwnBuildings, kill airborne aircraft.
+   */
+  private doEmpDisableAttack(empEntity: MapEntity, profile: EMPUpdateProfile): void {
+    const radiusSq = profile.effectRadius * profile.effectRadius;
+
+    for (const victim of this.spawnedEntities.values()) {
+      if (victim.id === empEntity.id) continue;
+      if (victim.destroyed || victim.slowDeathState || victim.structureCollapseState) continue;
+      if (victim.health <= 0) continue;
+
+      // Distance check (2D).
+      const dx = victim.x - empEntity.x;
+      const dz = victim.z - empEntity.z;
+      if (dx * dx + dz * dz > radiusSq) continue;
+
+      const kindOf = victim.kindOf;
+
+      // Source parity: skip infantry (unless SPAWNS_ARE_THE_WEAPONS like Overlord).
+      if (kindOf.has('INFANTRY') && !kindOf.has('SPAWNS_ARE_THE_WEAPONS')) continue;
+
+      // Source parity: VictimRequiredKindOf / VictimForbiddenKindOf filtering.
+      if (profile.victimRequiredKindOf.size > 0) {
+        let hasRequired = false;
+        for (const req of profile.victimRequiredKindOf) {
+          if (kindOf.has(req)) { hasRequired = true; break; }
+        }
+        if (!hasRequired) continue;
+      }
+      if (profile.victimForbiddenKindOf.size > 0) {
+        let hasForbidden = false;
+        for (const forbid of profile.victimForbiddenKindOf) {
+          if (kindOf.has(forbid)) { hasForbidden = true; break; }
+        }
+        if (hasForbidden) continue;
+      }
+
+      // Source parity: doesNotAffectMyOwnBuildings — skip own structures.
+      if (profile.doesNotAffectMyOwnBuildings && kindOf.has('STRUCTURE')) {
+        if (empEntity.side && victim.side === empEntity.side) continue;
+      }
+
+      // Source parity: skip non-faction structures (neutral buildings like tech buildings).
+      if (kindOf.has('STRUCTURE') && !victim.side) continue;
+
+      // Source parity: aircraft that are airborne → kill them (not just disable).
+      // EMP_HARDENED only protects airborne aircraft from the kill effect (C++ line 264).
+      if (kindOf.has('AIRCRAFT') && victim.objectStatusFlags.has('AIRBORNE_TARGET')) {
+        if (kindOf.has('EMP_HARDENED')) continue;
+        this.applyWeaponDamageAmount(null, victim, victim.maxHealth, 'UNRESISTABLE');
+        continue;
+      }
+
+      // Apply DISABLED_EMP for the configured duration.
+      if (profile.disabledDurationFrames > 0) {
+        this.applyEmpDisable(victim, profile.disabledDurationFrames);
+      }
+    }
+  }
+
+  /**
+   * Source parity: LeafletDropBehavior::update — delayed radius-based disable that only affects
+   * enemy infantry and vehicles. C++ fires on first update after delay, then also fires on death.
+   */
+  private updateLeafletDropEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.leafletDropProfile;
+      if (!profile) continue;
+
+      // Lazy-initialize runtime state.
+      if (!entity.leafletDropState) {
+        entity.leafletDropState = {
+          startFrame: this.frameCounter + profile.delayFrames,
+          fired: false,
+        };
+      }
+
+      const state = entity.leafletDropState;
+      if (state.fired) continue;
+      if (this.frameCounter < state.startFrame) continue;
+
+      // Fire the disable attack.
+      state.fired = true;
+      this.doLeafletDisableAttack(entity, profile);
+    }
+  }
+
+  /**
+   * Source parity: LeafletDropBehavior::doDisableAttack — scan nearby enemy infantry+vehicles
+   * and apply DISABLED_EMP for the configured duration.
+   */
+  private doLeafletDisableAttack(source: MapEntity, profile: LeafletDropProfile): void {
+    const radiusSq = profile.affectRadius * profile.affectRadius;
+
+    for (const victim of this.spawnedEntities.values()) {
+      if (victim.id === source.id) continue;
+      if (victim.destroyed || victim.slowDeathState || victim.structureCollapseState) continue;
+      if (victim.health <= 0) continue;
+
+      // Source parity: only INFANTRY or VEHICLE.
+      if (!victim.kindOf.has('INFANTRY') && !victim.kindOf.has('VEHICLE')) continue;
+
+      // Source parity: only ENEMIES.
+      if (this.getTeamRelationship(source, victim) !== RELATIONSHIP_ENEMIES) continue;
+
+      // Distance check.
+      const dx = victim.x - source.x;
+      const dz = victim.z - source.z;
+      if (dx * dx + dz * dz > radiusSq) continue;
+
+      if (profile.disabledDurationFrames > 0) {
+        this.applyEmpDisable(victim, profile.disabledDurationFrames);
+      }
+    }
+  }
+
+  /**
+   * Source parity: HijackerUpdate::update — per-frame position/veterancy sync for hijackers
+   * hidden inside vehicles. Ejects hijacker when vehicle is destroyed.
+   */
+  private updateHijackerEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const state = entity.hijackerState;
+      if (!state || !state.isInVehicle) continue;
+
+      const vehicle = this.spawnedEntities.get(state.targetId);
+
+      if (vehicle && !vehicle.destroyed) {
+        // Vehicle alive — sync position and veterancy.
+        entity.x = vehicle.x;
+        entity.y = vehicle.y;
+        entity.z = vehicle.z;
+        state.ejectX = vehicle.x;
+        state.ejectY = vehicle.y;
+        state.ejectZ = vehicle.z;
+
+        // Source parity: isSignificantlyAboveTerrain — height > 9.0 above terrain.
+        const terrainY = this.mapHeightmap?.getInterpolatedHeight(vehicle.x, vehicle.z) ?? 0;
+        state.wasTargetAirborne = (vehicle.y - terrainY) > 9.0;
+
+        // Bidirectional veterancy sync (always use higher).
+        const hijackerVet = entity.experienceState.currentLevel;
+        const vehicleVet = vehicle.experienceState.currentLevel;
+        if (hijackerVet !== vehicleVet) {
+          const highestVet = Math.max(hijackerVet, vehicleVet);
+          entity.experienceState.currentLevel = highestVet;
+          vehicle.experienceState.currentLevel = highestVet;
+        }
+      } else {
+        // Vehicle destroyed — eject hijacker.
+        entity.x = state.ejectX;
+        entity.y = state.ejectY;
+        entity.z = state.ejectZ;
+        entity.objectStatusFlags.delete('NO_COLLISIONS');
+        entity.objectStatusFlags.delete('MASKED');
+        entity.objectStatusFlags.delete('UNSELECTABLE');
+
+        // Reset state.
+        entity.hijackerState = null;
+
+        // Cancel any stale movement targets.
+        this.cancelEntityCommandPathActions(entity.id);
+      }
+    }
   }
 
   /**
