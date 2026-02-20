@@ -120,6 +120,7 @@ interface SidePowerStateLike {
 interface SideRadarStateLike {
   radarCount: number;
   disableProofRadarCount: number;
+  radarDisabled: boolean;
 }
 
 interface GameLogicConfigLike {
@@ -627,6 +628,7 @@ function writeSideRadarStateCrc(
     crc.addAsciiString(side);
     crc.addUnsignedInt(state.radarCount >>> 0);
     crc.addUnsignedInt(state.disableProofRadarCount >>> 0);
+    crc.addUnsignedInt(state.radarDisabled ? 1 : 0);
   }
 }
 

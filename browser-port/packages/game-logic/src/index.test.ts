@@ -6655,6 +6655,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideRadarState('America')).toEqual({
       radarCount: 0,
       disableProofRadarCount: 0,
+      radarDisabled: false,
     });
   });
 
@@ -6698,6 +6699,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideRadarState('America')).toEqual({
       radarCount: 1,
       disableProofRadarCount: 1,
+      radarDisabled: false,
     });
 
     const logicWithPrivateAccess = logic as unknown as {
@@ -6715,11 +6717,13 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideRadarState('America')).toEqual({
       radarCount: 1,
       disableProofRadarCount: 1,
+      radarDisabled: false,
     });
     expect(logic.getSidePowerState('China').powerBonus).toBe(0);
     expect(logic.getSideRadarState('China')).toEqual({
       radarCount: 0,
       disableProofRadarCount: 0,
+      radarDisabled: false,
     });
   });
 
@@ -10623,5 +10627,140 @@ describe('DISABLED_UNDERPOWERED power brown-out', () => {
     // Power should be restored.
     expect(logic.getEntityState(1)!.statusFlags).not.toContain('DISABLED_UNDERPOWERED');
     expect(logic.getEntityState(2)!.statusFlags).not.toContain('DISABLED_UNDERPOWERED');
+  });
+});
+
+describe('radar disable during power brown-out', () => {
+  function makeRadarSetup() {
+    // Power plant: produces 5 energy.
+    const powerPlantDef = makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'POWERED'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], { EnergyBonus: 5 });
+
+    // Command center with radar upgrade: consumes 3 energy, has radar.
+    const commandCenterDef = makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'POWERED'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'RadarUpgrade ModuleTag_Radar', {
+        TriggeredBy: 'Upgrade_Radar',
+        DisableProof: false,
+      }),
+    ], { EnergyBonus: -3 });
+
+    // Command center with disable-proof radar.
+    const hardCommandCenterDef = makeObjectDef('HardCommandCenter', 'America', ['STRUCTURE', 'POWERED'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'RadarUpgrade ModuleTag_DisableProofRadar', {
+        TriggeredBy: 'Upgrade_Radar',
+        DisableProof: true,
+      }),
+    ], { EnergyBonus: -3 });
+
+    // Barracks: consumes 3 energy.
+    const barracksDef = makeObjectDef('Barracks', 'America', ['STRUCTURE', 'POWERED'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], { EnergyBonus: -3 });
+
+    const bundle = makeBundle({
+      objects: [powerPlantDef, commandCenterDef, hardCommandCenterDef, barracksDef],
+      weapons: [],
+      upgrades: [makeUpgradeDef('Upgrade_Radar', { Type: 'OBJECT', BuildTime: 0.1, BuildCost: 0 })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    return { logic, bundle };
+  }
+
+  it('disables radar when power brown-out occurs', () => {
+    const { logic, bundle } = makeRadarSetup();
+    // Power plant (5), CommandCenter (-3), Barracks (-3) → 5 < 6 → brownout.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 50, 50),
+        makeMapObject('CommandCenter', 80, 50),
+        makeMapObject('Barracks', 110, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    // Grant the radar upgrade to the command center.
+    logic.applyUpgradeToEntity(2, 'Upgrade_Radar');
+    logic.update(1 / 30);
+
+    // Should have radar disabled due to brown-out.
+    expect(logic.hasRadar('America')).toBe(false);
+    const radarState = logic.getSideRadarState('America');
+    expect(radarState.radarCount).toBe(1);
+    expect(radarState.radarDisabled).toBe(true);
+  });
+
+  it('radar works when power is sufficient', () => {
+    const { logic, bundle } = makeRadarSetup();
+    // Power plant (5), CommandCenter (-3) → 5 >= 3 → no brownout.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 50, 50),
+        makeMapObject('CommandCenter', 80, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.applyUpgradeToEntity(2, 'Upgrade_Radar');
+    logic.update(1 / 30);
+
+    expect(logic.hasRadar('America')).toBe(true);
+    const radarState = logic.getSideRadarState('America');
+    expect(radarState.radarCount).toBe(1);
+    expect(radarState.radarDisabled).toBe(false);
+  });
+
+  it('disable-proof radar survives brown-out', () => {
+    const { logic, bundle } = makeRadarSetup();
+    // Power plant (5), HardCommandCenter (-3), Barracks (-3) → brownout.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 50, 50),
+        makeMapObject('HardCommandCenter', 80, 50),
+        makeMapObject('Barracks', 110, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.applyUpgradeToEntity(2, 'Upgrade_Radar');
+    logic.update(1 / 30);
+
+    // Brown-out should be active, but disable-proof radar still works.
+    const radarState = logic.getSideRadarState('America');
+    expect(radarState.radarDisabled).toBe(true);
+    expect(radarState.disableProofRadarCount).toBe(1);
+    expect(logic.hasRadar('America')).toBe(true);
+  });
+
+  it('restores radar when power is recovered', () => {
+    const { logic, bundle } = makeRadarSetup();
+    // Power plant (5), CommandCenter (-3), Barracks (-3) → brownout.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 50, 50),
+        makeMapObject('CommandCenter', 80, 50),
+        makeMapObject('Barracks', 110, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.applyUpgradeToEntity(2, 'Upgrade_Radar');
+    logic.update(1 / 30);
+    expect(logic.hasRadar('America')).toBe(false);
+
+    // Destroy barracks to restore power: 5 production, 3 consumption → sufficient.
+    const priv = logic as unknown as { markEntityDestroyed: (id: number, attackerId: number) => void };
+    priv.markEntityDestroyed(3, -1);
+    logic.update(1 / 30);
+
+    expect(logic.hasRadar('America')).toBe(true);
+    expect(logic.getSideRadarState('America').radarDisabled).toBe(false);
   });
 });

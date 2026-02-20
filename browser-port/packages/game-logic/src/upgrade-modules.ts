@@ -64,6 +64,8 @@ export interface SidePowerState {
 export interface SideRadarState {
   radarCount: number;
   disableProofRadarCount: number;
+  /** Source parity: Player::m_radarDisabled — set during power brown-out. */
+  radarDisabled: boolean;
 }
 
 function asSupportedUpgradeModuleType(

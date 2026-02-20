@@ -856,6 +856,8 @@ interface KindOfProductionCostModifier {
 interface SideRadarState {
   radarCount: number;
   disableProofRadarCount: number;
+  /** Source parity: Player::m_radarDisabled — set during power brown-out. */
+  radarDisabled: boolean;
 }
 
 interface SidePowerState {
@@ -2921,10 +2923,27 @@ export class GameLogicSubsystem implements Subsystem {
   getSideRadarState(side: string): SideRadarState {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
-      return { radarCount: 0, disableProofRadarCount: 0 };
+      return { radarCount: 0, disableProofRadarCount: 0, radarDisabled: false };
     }
     const state = this.getSideRadarStateMap(normalizedSide);
-    return { radarCount: state.radarCount, disableProofRadarCount: state.disableProofRadarCount };
+    return { radarCount: state.radarCount, disableProofRadarCount: state.disableProofRadarCount, radarDisabled: state.radarDisabled };
+  }
+
+  /**
+   * Source parity: Player::hasRadar — returns true when radarCount > 0
+   * and radar is not disabled (or has disable-proof radar).
+   * C++ Player.cpp:3239-3246.
+   */
+  hasRadar(side: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const state = this.getSideRadarStateMap(normalizedSide);
+    if (state.radarDisabled && state.disableProofRadarCount === 0) {
+      return false;
+    }
+    return state.radarCount > 0;
   }
 
   grantSideScience(side: string, scienceName: string): boolean {
@@ -3092,6 +3111,7 @@ export class GameLogicSubsystem implements Subsystem {
     const created: SideRadarState = {
       radarCount: 0,
       disableProofRadarCount: 0,
+      radarDisabled: false,
     };
     this.sideRadarState.set(normalizedSide, created);
     return created;
@@ -6386,9 +6406,10 @@ export class GameLogicSubsystem implements Subsystem {
 
       powerState.brownedOut = isNowBrownedOut;
 
-      // TODO(C&C source parity): Player::onPowerBrownOutChange also calls
-      // disableRadar()/enableRadar() to toggle radar availability during brown-out.
-      // Wire radar disable/enable when the radar subsystem is fully implemented.
+      // Source parity: Player::onPowerBrownOutChange (Player.cpp:3250-3273) calls
+      // disableRadar()/enableRadar() alongside the entity disable iteration.
+      const radarState = this.getSideRadarStateMap(side);
+      radarState.radarDisabled = isNowBrownedOut;
 
       // Apply or clear DISABLED_UNDERPOWERED on all KINDOF_POWERED entities.
       for (const entity of this.spawnedEntities.values()) {
