@@ -1419,6 +1419,12 @@ interface MapEntity {
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
+
+  // ── Source parity: CreateCrateDie — crate spawning on death ──
+  createCrateDieProfile: CreateCrateDieProfile | null;
+
+  // ── Source parity: SalvageCrateCollide — crate collection ──
+  salvageCrateProfile: SalvageCrateProfile | null;
 }
 
 /**
@@ -1506,6 +1512,30 @@ interface DetectorProfile {
   extraRequiredKindOf: Set<string>;
   /** Don't detect entities with these KindOf flags. Empty = no filter. */
   extraForbiddenKindOf: Set<string>;
+}
+
+/**
+ * Source parity: CreateCrateDie — spawns a crate object on unit death.
+ * C++ uses CrateSystem templates, but we simplify to a direct template name.
+ */
+interface CreateCrateDieProfile {
+  /** Object template name of the crate to spawn. */
+  crateTemplateName: string;
+}
+
+/**
+ * Source parity: SalvageCrateCollide — collide handler that grants weapon upgrades,
+ * veterancy, or money when a KINDOF_SALVAGER unit collects the crate.
+ */
+interface SalvageCrateProfile {
+  /** Probability weapon upgrade succeeds (default 1.0). */
+  weaponChance: number;
+  /** Probability level gain succeeds if weapon fails (default 0.25). */
+  levelChance: number;
+  /** Minimum money if both weapon and level fail (default 25). */
+  minMoney: number;
+  /** Maximum money if both weapon and level fail (default 75). */
+  maxMoney: number;
 }
 
 /**
@@ -2147,6 +2177,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHealing();
     this.updateMineBehavior();
     this.updateMineCollisions();
+    this.updateCrateCollisions();
     this.updateTunnelHealing();
     this.updateFogOfWar();
     this.updateSupplyChain();
@@ -3628,7 +3659,8 @@ export class GameLogicSubsystem implements Subsystem {
     const blocksPath = this.shouldPathfindObstacle(objectDef);
     // Source parity: mines don't block pathfinding but still need collision geometry
     // for MinefieldBehavior::onCollide. Crushers need geometry for crush overlap detection.
-    const needsGeometry = blocksPath || normalizedKindOf.has('MINE') || combatProfile.crusherLevel > 0;
+    // Crates need geometry for CrateCollide::onCollide collection radius.
+    const needsGeometry = blocksPath || normalizedKindOf.has('MINE') || normalizedKindOf.has('CRATE') || combatProfile.crusherLevel > 0;
     const obstacleGeometry = needsGeometry ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
     const { pathDiameter, pathfindCenterInCell } = this.resolvePathRadiusAndCenter(category, objectDef, obstacleGeometry);
@@ -3842,6 +3874,10 @@ export class GameLogicSubsystem implements Subsystem {
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
+      // Crate spawning on death
+      createCrateDieProfile: this.extractCreateCrateDieProfile(objectDef),
+      // Salvage crate collection
+      salvageCrateProfile: this.extractSalvageCrateProfile(objectDef),
     };
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
@@ -5845,6 +5881,69 @@ export class GameLogicSubsystem implements Subsystem {
             borderOnly: readBooleanField(block.fields, ['BorderOnly']) ?? true,
             alwaysCircular: readBooleanField(block.fields, ['AlwaysCircular']) ?? false,
             generateOnlyOnDeath: readBooleanField(block.fields, ['GenerateOnlyOnDeath']) ?? false,
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: CreateCrateDie — extract crate spawning config from INI.
+   * Parses CrateData field which references a crate object template name.
+   * In C++, CreateCrateDie uses CrateSystem to resolve templates with weighted chance
+   * selection, veterancy conditions, etc. We simplify: take the first CrateData entry
+   * directly as the object template to spawn.
+   */
+  private extractCreateCrateDieProfile(objectDef: ObjectDef | undefined): CreateCrateDieProfile | null {
+    if (!objectDef) return null;
+    let profile: CreateCrateDieProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'CREATECRATEDIE') {
+          const crateTemplateName = readStringField(block.fields, ['CrateData']);
+          if (crateTemplateName) {
+            profile = { crateTemplateName };
+          }
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide — extract salvage crate behavior from INI.
+   * Parsed from a Behavior block on the crate object template itself.
+   */
+  private extractSalvageCrateProfile(objectDef: ObjectDef | undefined): SalvageCrateProfile | null {
+    if (!objectDef) return null;
+    let profile: SalvageCrateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SALVAGECRATECOLLIDE') {
+          profile = {
+            weaponChance: this.parsePercent(this.readIniFieldValue(block.fields, 'WeaponChance')) ?? 1.0,
+            levelChance: this.parsePercent(this.readIniFieldValue(block.fields, 'LevelChance')) ?? 0.25,
+            minMoney: readNumericField(block.fields, ['MinMoney']) ?? 25,
+            maxMoney: readNumericField(block.fields, ['MaxMoney']) ?? 75,
           };
         }
       }
@@ -11185,6 +11284,147 @@ export class GameLogicSubsystem implements Subsystem {
     return (weapon.antiMask & WEAPON_ANTI_MINE) !== 0;
   }
 
+  // ──── Salvage Crate Collision System ─────────────────────────────────────
+
+  /**
+   * Source parity: CrateCollide::onCollide + SalvageCrateCollide.
+   * Checks all crate entities against moving KINDOF_SALVAGER entities for
+   * geometry overlap. On collision, executes the salvage behavior chain:
+   * weapon upgrade → veterancy → money fallback.
+   */
+  private updateCrateCollisions(): void {
+    for (const crate of this.spawnedEntities.values()) {
+      if (!crate.salvageCrateProfile || crate.destroyed) continue;
+
+      const crateGeom = crate.obstacleGeometry;
+      const crateRadius = crateGeom
+        ? Math.max(crateGeom.majorRadius, crateGeom.minorRadius)
+        : 1.0;
+
+      for (const other of this.spawnedEntities.values()) {
+        if (other.id === crate.id || other.destroyed) continue;
+        if (!other.kindOf.has('SALVAGER')) continue;
+
+        const otherRadius = other.obstacleGeometry
+          ? Math.max(other.obstacleGeometry.majorRadius, other.obstacleGeometry.minorRadius)
+          : 1.0;
+        const dx = other.x - crate.x;
+        const dz = other.z - crate.z;
+        const combinedRadius = crateRadius + otherRadius;
+        if (dx * dx + dz * dz > combinedRadius * combinedRadius) continue;
+
+        // Collision detected — execute salvage behavior.
+        this.executeSalvageCrateBehavior(crate, other);
+        break; // Crate consumed.
+      }
+    }
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::executeCrateBehavior.
+   * Priority chain: weapon upgrade → veterancy gain → money fallback.
+   */
+  private executeSalvageCrateBehavior(crate: MapEntity, collector: MapEntity): void {
+    const prof = crate.salvageCrateProfile!;
+
+    if (this.isSalvageEligibleForWeaponSet(collector) && this.testSalvageChance(prof.weaponChance)) {
+      this.doSalvageWeaponSet(collector);
+    } else if (this.isSalvageEligibleForLevel(collector) && this.testSalvageChance(prof.levelChance)) {
+      this.doSalvageLevelGain(collector);
+    } else {
+      this.doSalvageMoney(collector, prof);
+    }
+
+    // Destroy the crate after collection.
+    this.markEntityDestroyed(crate.id, collector.id);
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::eligibleForWeaponSet.
+   * Must be KINDOF_WEAPON_SALVAGER and not already at CRATEUPGRADE_TWO.
+   */
+  private isSalvageEligibleForWeaponSet(collector: MapEntity): boolean {
+    if (!collector.kindOf.has('WEAPON_SALVAGER')) return false;
+    if ((collector.weaponSetFlagsMask & WEAPON_SET_FLAG_CRATEUPGRADE_TWO) !== 0) return false;
+    return true;
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::eligibleForLevel.
+   * Must not be HEROIC and must have an experience profile (trainable).
+   */
+  private isSalvageEligibleForLevel(collector: MapEntity): boolean {
+    if (collector.experienceState.currentLevel === LEVEL_HEROIC) return false;
+    if (!collector.experienceProfile) return false;
+    return true;
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::testWeaponChance / testLevelChance.
+   */
+  private testSalvageChance(chance: number): boolean {
+    if (chance >= 1.0) return true;
+    return this.gameRandom.nextFloat() < chance;
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::doWeaponSet.
+   * Upgrades: none → CRATEUPGRADE_ONE, ONE → clear ONE + set TWO.
+   */
+  private doSalvageWeaponSet(collector: MapEntity): void {
+    if ((collector.weaponSetFlagsMask & WEAPON_SET_FLAG_CRATEUPGRADE_ONE) !== 0) {
+      collector.weaponSetFlagsMask &= ~WEAPON_SET_FLAG_CRATEUPGRADE_ONE;
+      collector.weaponSetFlagsMask |= WEAPON_SET_FLAG_CRATEUPGRADE_TWO;
+    } else {
+      collector.weaponSetFlagsMask |= WEAPON_SET_FLAG_CRATEUPGRADE_ONE;
+    }
+    this.refreshEntityCombatProfiles(collector);
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::doLevelGain → ExperienceTracker::gainExpForLevel(1).
+   * Awards exactly enough XP to gain one veterancy level.
+   */
+  private doSalvageLevelGain(collector: MapEntity): void {
+    const profile = collector.experienceProfile;
+    if (!profile) return;
+
+    const currentLevel = collector.experienceState.currentLevel;
+    const targetLevel = Math.min(currentLevel + 1, LEVEL_HEROIC) as VeterancyLevel;
+    if (targetLevel <= currentLevel) return;
+
+    const xpNeeded = (profile.experienceRequired[targetLevel] ?? 0) - collector.experienceState.currentExperience;
+    if (xpNeeded <= 0) return;
+
+    const result = addExperiencePointsImpl(
+      collector.experienceState,
+      profile,
+      xpNeeded,
+      true, // C++: gainExpForLevel calls addExperiencePoints with canScaleForBonus=TRUE by default
+    );
+
+    if (result.didLevelUp) {
+      this.onEntityLevelUp(collector, result.oldLevel, result.newLevel);
+    }
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::doMoney.
+   * Deposits random money in [minMoney, maxMoney] to the collector's side.
+   */
+  private doSalvageMoney(collector: MapEntity, prof: SalvageCrateProfile): void {
+    let money: number;
+    if (prof.minMoney !== prof.maxMoney) {
+      money = this.gameRandom.nextRange(prof.minMoney, prof.maxMoney);
+    } else {
+      money = prof.minMoney;
+    }
+
+    if (money > 0 && collector.side) {
+      depositSideCreditsImpl(this.sideCredits, this.normalizeSide(collector.side), money);
+    }
+  }
+
   /**
    * Source parity: MinefieldBehavior::onDamage (MinefieldBehavior.cpp line 453).
    * Recalculates virtual mines from health ratio. When mines > expected, detonate
@@ -16223,6 +16463,35 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: CreateCrateDie::onDie — spawn a salvage crate near the dying entity.
+   * C++ uses CrateSystem template lookup with weighted chance selection; we simplify
+   * to spawning the CrateData template directly within 5 units of the death location.
+   */
+  private trySpawnCrateOnDeath(entity: MapEntity, attackerId: number): void {
+    const profile = entity.createCrateDieProfile;
+    if (!profile) return;
+
+    // Source parity: no crate for killing allies.
+    if (attackerId >= 0) {
+      const attacker = this.spawnedEntities.get(attackerId);
+      if (attacker && this.getEntityRelationship(attacker.id, entity.id) === 'allies') {
+        return;
+      }
+    }
+
+    // Source parity: findPositionAround with maxRadius=5 (circular distribution).
+    const angle = this.gameRandom.nextFloat() * Math.PI * 2;
+    const radius = this.gameRandom.nextFloat() * 5;
+    const offsetX = Math.cos(angle) * radius;
+    const offsetZ = Math.sin(angle) * radius;
+    const crateX = entity.x + offsetX;
+    const crateZ = entity.z + offsetZ;
+    const rotation = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
+
+    this.spawnEntityFromTemplate(profile.crateTemplateName, crateX, crateZ, rotation, entity.side);
+  }
+
   private fireDeathWeapons(entity: MapEntity): void {
     if (entity.deathWeaponNames.length === 0) return;
     for (const weaponName of entity.deathWeaponNames) {
@@ -16471,6 +16740,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: CreateObjectDie / SlowDeathBehavior — execute death OCLs.
     this.executeDeathOCLs(entity);
+
+    // Source parity: CreateCrateDie::onDie — spawn salvage crate on death.
+    this.trySpawnCrateOnDeath(entity, attackerId);
 
     // Source parity: SpawnBehavior::onDie — handle slaver death (orphan/kill slaves).
     this.onSlaverDeath(entity);

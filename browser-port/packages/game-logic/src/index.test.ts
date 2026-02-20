@@ -11529,3 +11529,500 @@ describe('INI-driven stealth and detection', () => {
     expect(logic.getEntityState(1)?.statusFlags ?? []).toContain('STEALTHED');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Salvage Crate System
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('salvage crate system', () => {
+  /** Destroyed entities are cleaned up from spawnedEntities, so getEntityState returns null. */
+  function isEntityDead(logic: GameLogicSubsystem, entityId: number): boolean {
+    const state = logic.getEntityState(entityId);
+    return state === null || state.alive === false;
+  }
+  function makeSalvageBundle(opts: {
+    salvagerKindOf?: string[];
+    crateWeaponChance?: string;
+    crateLevelChance?: string;
+    crateMinMoney?: number;
+    crateMaxMoney?: number;
+    salvagerExpRequired?: string;
+    salvagerExpValue?: string;
+    victimHealth?: number;
+    attackDamage?: number;
+  } = {}) {
+    // Victim spawns a crate on death.
+    const victimDef = makeObjectDef('CrateVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+        MaxHealth: opts.victimHealth ?? 10,
+        InitialHealth: opts.victimHealth ?? 10,
+      }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', {
+        CrateData: 'SalvageCrate',
+      }),
+    ]);
+
+    // Crate object with SalvageCrateCollide behavior.
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+        MaxHealth: 100,
+        InitialHealth: 100,
+      }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SalvageCrate', {
+        ...(opts.crateWeaponChance !== undefined ? { WeaponChance: opts.crateWeaponChance } : {}),
+        ...(opts.crateLevelChance !== undefined ? { LevelChance: opts.crateLevelChance } : {}),
+        ...(opts.crateMinMoney !== undefined ? { MinMoney: opts.crateMinMoney } : {}),
+        ...(opts.crateMaxMoney !== undefined ? { MaxMoney: opts.crateMaxMoney } : {}),
+      }),
+    ], {
+      Geometry: 'CYLINDER',
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+    });
+
+    // Salvager unit with weapon.
+    const salvagerDef = makeObjectDef(
+      'Salvager',
+      'America',
+      opts.salvagerKindOf ?? ['VEHICLE', 'SALVAGER', 'WEAPON_SALVAGER'],
+      [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+          MaxHealth: 200,
+          InitialHealth: 200,
+        }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SalvagerGun'] }),
+        makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+      ],
+      {
+        ...(opts.salvagerExpRequired ? { ExperienceRequired: opts.salvagerExpRequired } : {}),
+        ...(opts.salvagerExpValue ? { ExperienceValue: opts.salvagerExpValue } : {}),
+      },
+    );
+
+    const bundle = makeBundle({
+      objects: [victimDef, crateDef, salvagerDef],
+      weapons: [
+        makeWeaponDef('SalvagerGun', {
+          AttackRange: 120,
+          PrimaryDamage: opts.attackDamage ?? 50,
+          DamageType: 'ARMOR_PIERCING',
+          DelayBetweenShots: 100,
+          DeliveryType: 'DIRECT',
+        }),
+      ],
+      locomotors: [makeLocomotorDef('LocomotorFast', 180)],
+    });
+
+    return bundle;
+  }
+
+  it('spawns crate on enemy death and salvager collects for weapon upgrade', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const bundle = makeSalvageBundle();
+    const registry = makeRegistry(bundle);
+
+    // Place victim at (55,55), salvager at (55,65) — within attack range.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('Salvager', 55, 65),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+
+    // Attack and kill the victim.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Victim should be dead.
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // A crate entity should have spawned (entity 3).
+    const crateState = logic.getEntityState(3);
+    expect(crateState).not.toBeNull();
+    expect(crateState!.alive).toBe(true);
+
+    // Move salvager to collect the crate.
+    logic.submitCommand({ type: 'moveTo', entityId: 2, targetX: crateState!.x, targetZ: crateState!.z });
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+
+    // Crate should be consumed (destroyed).
+    expect(isEntityDead(logic, 3)).toBe(true);
+  });
+
+  it('grants CRATEUPGRADE_ONE on first crate, CRATEUPGRADE_TWO on second', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    // Two victims at same position as salvager for auto-collection.
+    const victimDef = makeObjectDef('CrateVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', { CrateData: 'SalvageCrate' }),
+    ]);
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SC', {}),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    // Target with high health to verify upgraded weapon damage.
+    const targetDef = makeObjectDef('DamageTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50000, InitialHealth: 50000 }),
+    ]);
+
+    // Salvager with three weapon sets: base, CRATEUPGRADE_ONE, CRATEUPGRADE_TWO.
+    // Explicit geometry radius 3 ensures overlap with crate (combined 3+5=8 > max offset ~7.07).
+    const salvagerDef = makeObjectDef('Salvager', 'America', ['VEHICLE', 'SALVAGER', 'WEAPON_SALVAGER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Gun'] }),
+      makeBlock('WeaponSet', 'WeaponSet', {
+        Conditions: 'CRATEUPGRADE_ONE',
+        Weapon: ['PRIMARY', 'GunUpgraded1'],
+      }),
+      makeBlock('WeaponSet', 'WeaponSet', {
+        Conditions: 'CRATEUPGRADE_TWO',
+        Weapon: ['PRIMARY', 'GunUpgraded2'],
+      }),
+      makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 3, GeometryMinorRadius: 3 });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [victimDef, crateDef, salvagerDef, targetDef],
+      weapons: [
+        makeWeaponDef('Gun', { AttackRange: 120, PrimaryDamage: 50, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+        makeWeaponDef('GunUpgraded1', { AttackRange: 120, PrimaryDamage: 80, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+        makeWeaponDef('GunUpgraded2', { AttackRange: 120, PrimaryDamage: 120, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+      ],
+      locomotors: [makeLocomotorDef('LocomotorFast', 180)],
+    }));
+
+    // Place: victim1@(55,55), victim2@(55,55), salvager@(55,55), target@(55,115)
+    // Overlapping positions ensure crate auto-collection on spawn.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('Salvager', 55, 55),
+        makeMapObject('DamageTarget', 55, 115),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Kill victim1 → crate spawns nearby and auto-collects → CRATEUPGRADE_ONE.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // Attack target for 30 frames — damage should come from GunUpgraded1 (80/shot).
+    const health1 = logic.getEntityState(4)!.health;
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 4 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    const damage1 = health1 - logic.getEntityState(4)!.health;
+    // GunUpgraded1 does 80/shot. Multiple shots fired — verify damage is a multiple of 80.
+    expect(damage1).toBeGreaterThan(0);
+    expect(damage1 % 80).toBe(0);
+
+    // Kill victim2 → crate spawns nearby and auto-collects → CRATEUPGRADE_TWO.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 2)).toBe(true);
+
+    // Attack target for 30 frames — damage should come from GunUpgraded2 (120/shot).
+    const health2 = logic.getEntityState(4)!.health;
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 4 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    const damage2 = health2 - logic.getEntityState(4)!.health;
+    expect(damage2).toBeGreaterThan(0);
+    expect(damage2 % 120).toBe(0);
+  });
+
+  it('non-SALVAGER units cannot collect crates', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const victimDef = makeObjectDef('CrateVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', { CrateData: 'SalvageCrate' }),
+    ]);
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SC', {}),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    // Non-salvager — no SALVAGER kindOf.
+    const normalUnit = makeObjectDef('NormalUnit', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Gun'] }),
+      makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [victimDef, crateDef, normalUnit],
+      weapons: [
+        makeWeaponDef('Gun', { AttackRange: 120, PrimaryDamage: 50, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+      ],
+      locomotors: [makeLocomotorDef('LocomotorFast', 180)],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('NormalUnit', 55, 55),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Kill victim — crate spawns.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // Move non-salvager to crate.
+    const crate = logic.getEntityState(3);
+    expect(crate).not.toBeNull();
+    logic.submitCommand({ type: 'moveTo', entityId: 2, targetX: crate!.x, targetZ: crate!.z });
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+
+    // Crate should still be alive — non-salvager cannot collect.
+    expect(logic.getEntityState(3)?.alive).toBe(true);
+  });
+
+  it('no crate spawns when killed by ally via area damage', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    // Victim (America) gets hit by friendly area damage — crate should NOT spawn.
+    const victimDef = makeObjectDef('CrateVictim', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', { CrateData: 'SalvageCrate' }),
+    ]);
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SC', {}),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    // Enemy target that the attacker is actually aiming at.
+    const enemyDef = makeObjectDef('Enemy', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    // Attacker has area-damage weapon that will splash the ally victim.
+    const attackerDef = makeObjectDef('AreaAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'AreaGun'] }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [victimDef, crateDef, enemyDef, attackerDef],
+      weapons: [
+        makeWeaponDef('AreaGun', {
+          AttackRange: 120,
+          PrimaryDamage: 50,
+          PrimaryDamageRadius: 20,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 100,
+          DeliveryType: 'DIRECT',
+        }),
+      ],
+    }));
+
+    // Place: victim@(55,55), enemy@(55,57) — within splash, attacker@(55,75).
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('Enemy', 55, 57),
+        makeMapObject('AreaAttacker', 55, 75),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Attack enemy — splash hits both enemy and ally victim.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Victim (10HP) should be dead from splash.
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // No crate should have spawned — ally killed it.
+    // Entity 4 would be the crate if spawned (entities 1=victim, 2=enemy, 3=attacker).
+    expect(logic.getEntityState(4)).toBeNull();
+  });
+
+  it('grants veterancy level when weapon upgrade not eligible', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const victimDef = makeObjectDef('CrateVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', { CrateData: 'SalvageCrate' }),
+    ]);
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SC', {
+        WeaponChance: '100%',
+        LevelChance: '100%',
+      }),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    // SALVAGER but NOT WEAPON_SALVAGER — weapon upgrade ineligible, falls through to level.
+    const salvagerDef = makeObjectDef('Salvager', 'America', ['VEHICLE', 'SALVAGER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Gun'] }),
+    ], {
+      ExperienceRequired: '0 50 200 500',
+      ExperienceValue: '10 20 40 80',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [victimDef, crateDef, salvagerDef],
+      weapons: [
+        makeWeaponDef('Gun', { AttackRange: 120, PrimaryDamage: 50, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('Salvager', 55, 55),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Check initial veterancy.
+    expect(logic.getEntityState(2)?.veterancyLevel).toBe(0); // REGULAR
+
+    // Kill victim — crate spawns nearby and salvager auto-collects (overlapping positions).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // Crate was auto-collected: should have leveled up to VETERAN.
+    expect(logic.getEntityState(2)?.veterancyLevel).toBe(1); // VETERAN
+  });
+
+  it('grants money when both weapon and level are ineligible', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const victimDef = makeObjectDef('CrateVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', { CrateData: 'SalvageCrate' }),
+    ]);
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SC', {
+        MinMoney: 50,
+        MaxMoney: 50,
+      }),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    // No WEAPON_SALVAGER and no experience profile — money fallback.
+    const salvagerDef = makeObjectDef('Salvager', 'America', ['VEHICLE', 'SALVAGER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Gun'] }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [victimDef, crateDef, salvagerDef],
+      weapons: [
+        makeWeaponDef('Gun', { AttackRange: 120, PrimaryDamage: 50, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('Salvager', 55, 55),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    const initialCredits = logic.getSideCredits('America');
+
+    // Kill victim — crate spawns nearby and salvager auto-collects (overlapping positions).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // Credits should have increased by exactly 50 (money fallback from auto-collected crate).
+    const finalCredits = logic.getSideCredits('America');
+    expect(finalCredits - initialCredits).toBe(50);
+  });
+
+  it('fully upgraded WEAPON_SALVAGER falls through to level then money', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const victimDef = makeObjectDef('CrateVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', { CrateData: 'SalvageCrate' }),
+    ]);
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SC', {
+        MinMoney: 100,
+        MaxMoney: 100,
+      }),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    // Three victims at same position as salvager for auto-collection.
+    // Explicit geometry radius 3 ensures overlap with crate (combined 3+5=8 > max offset ~7.07).
+    const salvagerDef = makeObjectDef('Salvager', 'America', ['VEHICLE', 'SALVAGER', 'WEAPON_SALVAGER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Gun'] }),
+      makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 3, GeometryMinorRadius: 3 });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [victimDef, crateDef, salvagerDef],
+      weapons: [
+        makeWeaponDef('Gun', { AttackRange: 120, PrimaryDamage: 50, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+      ],
+      locomotors: [makeLocomotorDef('LocomotorFast', 180)],
+    }));
+
+    // All victims at (55,55) overlapping salvager for auto-collection.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('Salvager', 55, 55),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Kill first victim → crate auto-collects → CRATEUPGRADE_ONE.
+    logic.submitCommand({ type: 'attackEntity', entityId: 4, targetEntityId: 1 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // Kill second victim → crate auto-collects → CRATEUPGRADE_TWO.
+    logic.submitCommand({ type: 'attackEntity', entityId: 4, targetEntityId: 2 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 2)).toBe(true);
+
+    // Now fully upgraded. Kill third victim — crate should fall through to money.
+    const creditsBefore = logic.getSideCredits('America');
+    logic.submitCommand({ type: 'attackEntity', entityId: 4, targetEntityId: 3 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 3)).toBe(true);
+
+    // Credits should have increased by 100 (money fallback from auto-collected crate).
+    const creditsAfter = logic.getSideCredits('America');
+    expect(creditsAfter - creditsBefore).toBe(100);
+  });
+});
