@@ -1229,8 +1229,12 @@ interface MapEntity {
   isImmobile: boolean;
   noCollisions: boolean;
   isIndestructible: boolean;
+  /** Source parity: KeepObjectDie — prevents entity removal on death, keeps as rubble. */
+  keepObjectOnDeath: boolean;
   /** Source parity: Body module type determines damage behavior (HighlanderBody caps at 1HP, ImmortalBody never dies). */
   bodyType: BodyModuleType;
+  /** Source parity: HiveStructureBody — damage redirection config for tunnel-like structures. */
+  hiveStructureProfile: HiveStructureBodyProfile | null;
   canTakeDamage: boolean;
   maxHealth: number;
   health: number;
@@ -1521,6 +1525,12 @@ interface MapEntity {
   /** Frame at which this entity should self-destruct (null = no lifetime limit). */
   lifetimeDieFrame: number | null;
 
+  // ── Source parity: HeightDieUpdate — aircraft height-based death ──
+  /** Height die profile (null = no height-based death). */
+  heightDieProfile: HeightDieProfile | null;
+  /** Frame after which height checks begin (accounts for InitialDelay). */
+  heightDieActiveFrame: number;
+
   // ── Source parity: DeletionUpdate — timed silent removal (no death pipeline) ──
   /** Frame at which this entity should be silently destroyed (null = no deletion timer). */
   deletionDieFrame: number | null;
@@ -1739,6 +1749,35 @@ interface PoisonedBehaviorProfile {
   poisonDamageIntervalFrames: number;
   /** Total poison duration in frames after last dose. C++ field: m_poisonDurationData. */
   poisonDurationFrames: number;
+}
+
+/**
+ * Source parity: HeightDieUpdate module parsed from INI.
+ * C++ file: HeightDieUpdate.cpp — kills entities that fall below a target height above terrain.
+ * Used for aircraft death when disabled/out of fuel, projectile cleanup, etc.
+ */
+interface HeightDieProfile {
+  /** Height above terrain below which entity dies (C++ m_targetHeightAboveTerrain). */
+  targetHeight: number;
+  /** Only trigger death when entity is moving downward (C++ m_onlyWhenMovingDown). */
+  onlyWhenMovingDown: boolean;
+  /** Whether to include structure heights in target height calculation. */
+  targetHeightIncludesStructures: boolean;
+  /** Snap entity to ground on death. */
+  snapToGroundOnDeath: boolean;
+  /** Initial delay frames before height checks begin. */
+  initialDelayFrames: number;
+}
+
+/**
+ * Source parity: HiveStructureBody — damage redirection to spawn slaves.
+ * C++ file: HiveStructureBody.h — GLA Tunnel Networks redirect damage to units inside.
+ */
+interface HiveStructureBodyProfile {
+  /** Damage type names that get redirected to closest slave when slaves exist. */
+  propagateDamageTypes: Set<string>;
+  /** Subset of propagate types that are silently ignored when no slaves exist. */
+  swallowDamageTypes: Set<string>;
 }
 
 /**
@@ -2259,8 +2298,9 @@ type BodyDamageState = 0 | 1 | 2 | 3; // PRISTINE=0, DAMAGED=1, REALLYDAMAGED=2,
  *   HighlanderBody — caps damage at health-1 for non-UNRESISTABLE damage (can only die from UNRESISTABLE)
  *   ImmortalBody — health never drops below 1 (cannot die from any damage)
  *   InactiveBody — no health, ignores all damage (except UNRESISTABLE triggers death)
+ *   HiveStructureBody — redirects specified damage types to spawn slaves when they exist
  */
-type BodyModuleType = 'ACTIVE' | 'STRUCTURE' | 'HIGHLANDER' | 'IMMORTAL' | 'INACTIVE';
+type BodyModuleType = 'ACTIVE' | 'STRUCTURE' | 'HIGHLANDER' | 'IMMORTAL' | 'INACTIVE' | 'HIVE_STRUCTURE';
 
 function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState {
   if (maxHealth <= 0) return 0;
@@ -2938,6 +2978,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateRenderStates();
     this.updateLifetimeEntities();
     this.updateDeletionEntities();
+    this.updateHeightDieEntities();
     this.updateStickyBombs();
     this.updateSlowDeathEntities();
     this.updateWeaponIdleAutoReload();
@@ -4477,6 +4518,7 @@ export class GameLogicSubsystem implements Subsystem {
       isImmobile,
       noCollisions: false,
       isIndestructible: false,
+      keepObjectOnDeath: this.hasKeepObjectDie(objectDef),
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
       locomotorSets: locomotorSetProfiles,
       completedUpgrades: new Set<string>(),
@@ -4492,6 +4534,7 @@ export class GameLogicSubsystem implements Subsystem {
       locomotorSurfaceMask: locomotorProfile.surfaceMask,
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
       bodyType: bodyStats.bodyType,
+      hiveStructureProfile: this.extractHiveStructureProfile(objectDef, bodyStats.bodyType),
       canTakeDamage: bodyStats.bodyType !== 'INACTIVE' && bodyStats.maxHealth > 0,
       maxHealth: bodyStats.maxHealth,
       health: bodyStats.bodyType === 'INACTIVE' ? 0 : bodyStats.initialHealth,
@@ -4660,6 +4703,9 @@ export class GameLogicSubsystem implements Subsystem {
       pendingDeathType: 'NORMAL',
       // Lifetime
       lifetimeDieFrame: this.resolveLifetimeDieFrame(objectDef),
+      // Height die
+      heightDieProfile: this.extractHeightDieProfile(objectDef),
+      heightDieActiveFrame: 0, // Set after first update.
       // Deletion
       deletionDieFrame: this.resolveDeletionDieFrame(objectDef),
       // Sticky bomb
@@ -5851,8 +5897,10 @@ export class GameLogicSubsystem implements Subsystem {
           bodyType = 'IMMORTAL';
         } else if (moduleName === 'INACTIVEBODY') {
           bodyType = 'INACTIVE';
-        } else if (moduleName === 'STRUCTUREBODY' || moduleName === 'HIVESTRUCTUREBODY') {
+        } else if (moduleName === 'STRUCTUREBODY') {
           bodyType = 'STRUCTURE';
+        } else if (moduleName === 'HIVESTRUCTUREBODY') {
+          bodyType = 'HIVE_STRUCTURE';
         }
       }
       for (const child of block.blocks) {
@@ -5876,6 +5924,42 @@ export class GameLogicSubsystem implements Subsystem {
       initialHealth: resolvedInitial,
       bodyType,
     };
+  }
+
+  /**
+   * Source parity: HiveStructureBody — extract damage redirection config from INI.
+   * Parses PropagateDamageTypesToSlavesWhenExisting and SwallowDamageTypesIfSlavesNotExisting.
+   */
+  private extractHiveStructureProfile(
+    objectDef: ObjectDef | undefined,
+    bodyType: BodyModuleType,
+  ): HiveStructureBodyProfile | null {
+    if (!objectDef || bodyType !== 'HIVE_STRUCTURE') return null;
+
+    const propagateTypes = new Set<string>();
+    const swallowTypes = new Set<string>();
+
+    for (const block of objectDef.blocks) {
+      if (block.type.toUpperCase() !== 'BODY') continue;
+      const moduleName = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleName !== 'HIVESTRUCTUREBODY') continue;
+
+      const propagateRaw = readStringField(block.fields, ['PropagateDamageTypesToSlavesWhenExisting']);
+      if (propagateRaw) {
+        for (const token of propagateRaw.trim().split(/\s+/)) {
+          if (token) propagateTypes.add(token.toUpperCase());
+        }
+      }
+      const swallowRaw = readStringField(block.fields, ['SwallowDamageTypesIfSlavesNotExisting']);
+      if (swallowRaw) {
+        for (const token of swallowRaw.trim().split(/\s+/)) {
+          if (token) swallowTypes.add(token.toUpperCase());
+        }
+      }
+      break;
+    }
+
+    return { propagateDamageTypes: propagateTypes, swallowDamageTypes: swallowTypes };
   }
 
   private parseUpgradeNames(value: IniValue | undefined): string[] {
@@ -7842,6 +7926,37 @@ export class GameLogicSubsystem implements Subsystem {
     const delay = Math.max(1, minFrames === maxFrames
       ? minFrames : this.gameRandom.nextRange(minFrames, maxFrames));
     return this.frameCounter + delay;
+  }
+
+  /**
+   * Source parity: HeightDieUpdate — extract height-based death profile from INI.
+   * C++ file: HeightDieUpdate.cpp — kills entities below target height above terrain.
+   */
+  private extractHeightDieProfile(objectDef: ObjectDef | undefined): HeightDieProfile | null {
+    if (!objectDef) return null;
+    let profile: HeightDieProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'HEIGHTDIEUPDATE') {
+          profile = {
+            targetHeight: readNumericField(block.fields, ['TargetHeight']) ?? 0,
+            onlyWhenMovingDown: (readStringField(block.fields, ['OnlyWhenMovingDown'])?.toUpperCase() === 'YES'),
+            targetHeightIncludesStructures: (readStringField(block.fields, ['TargetHeightIncludesStructures'])?.toUpperCase() === 'YES'),
+            snapToGroundOnDeath: (readStringField(block.fields, ['SnapToGroundOnDeath'])?.toUpperCase() === 'YES'),
+            initialDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['InitialDelay']) ?? 0),
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
   }
 
   /**
@@ -13018,8 +13133,10 @@ export class GameLogicSubsystem implements Subsystem {
         if (candidate.flameStatus !== 'NORMAL') continue;
 
         const dx = candidate.x - entity.x;
+        // Source parity: FireSpreadUpdate.cpp:147 uses FROM_CENTER_3D for distance.
+        const dy = candidate.y - entity.y;
         const dz = candidate.z - entity.z;
-        const distSqr = dx * dx + dz * dz;
+        const distSqr = dx * dx + dy * dy + dz * dz;
         if (distSqr < rangeSqr && distSqr < closestDistSqr) {
           closestDistSqr = distSqr;
           closestTarget = candidate;
@@ -14236,10 +14353,13 @@ export class GameLogicSubsystem implements Subsystem {
       const healthRatio = entity.health / Math.max(1, entity.maxHealth);
       if (healthRatio >= prof.neverHeal) continue;
 
-      // Source parity: if busy (moving/attacking), only seek healing if critically wounded.
+      // Source parity: AutoFindHealingUpdate.cpp:130 — ai->isIdle() checks all activity states.
+      // Approximation: check movement, attack, guard, special ability, and enter-transport states.
       const isIdle = !entity.moving
         && entity.attackTargetEntityId === null
-        && entity.guardState === 'NONE';
+        && entity.guardState === 'NONE'
+        && (!entity.specialAbilityState || entity.specialAbilityState.packState === 'NONE')
+        && entity.transportContainerId === null;
       if (!isIdle && healthRatio > prof.alwaysHeal) continue;
 
       // Source parity: scan for closest HEAL_PAD entity in range.
@@ -18866,6 +18986,44 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    // Source parity: HiveStructureBody::attemptDamage — redirect certain damage types to slaves.
+    // If PropagateDamageTypesToSlavesWhenExisting matches and slaves exist, redirect to closest.
+    // If no slaves and SwallowDamageTypesIfSlavesNotExisting matches, silently ignore damage.
+    if (target.bodyType === 'HIVE_STRUCTURE' && target.hiveStructureProfile) {
+      const hiveProf = target.hiveStructureProfile;
+      const upperDamageType = damageType.toUpperCase();
+      if (hiveProf.propagateDamageTypes.has(upperDamageType)) {
+        const state = target.spawnBehaviorState;
+        const aliveSlaveIds = state?.slaveIds.filter((id) => {
+          const slave = this.spawnedEntities.get(id);
+          return slave && !slave.destroyed;
+        }) ?? [];
+        if (aliveSlaveIds.length > 0) {
+          // Redirect to closest slave.
+          let closestSlave: MapEntity | null = null;
+          let closestDistSqr = Infinity;
+          for (const slaveId of aliveSlaveIds) {
+            const slave = this.spawnedEntities.get(slaveId)!;
+            const dx = slave.x - target.x;
+            const dz = slave.z - target.z;
+            const distSqr = dx * dx + dz * dz;
+            if (distSqr < closestDistSqr) {
+              closestDistSqr = distSqr;
+              closestSlave = slave;
+            }
+          }
+          if (closestSlave) {
+            this.applyWeaponDamageAmount(sourceEntityId, closestSlave, amount, damageType, weaponDeathType);
+            return;
+          }
+        } else if (hiveProf.swallowDamageTypes.has(upperDamageType)) {
+          // No slaves and damage type is swallowed — silently ignore.
+          return;
+        }
+        // Fall through to normal StructureBody damage if not redirected or swallowed.
+      }
+    }
+
     // Source parity: HighlanderBody::attemptDamage — cap raw damage before armor adjustment
     // so health doesn't drop below 1, UNLESS damage type is UNRESISTABLE.
     // C++ caps damageInfo->in.m_amount (pre-armor) then calls ActiveBody::attemptDamage.
@@ -21318,6 +21476,41 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: HeightDieUpdate::update — kill entities that fall below
+   * targetHeight above terrain. Used for aircraft crashing, projectile cleanup.
+   * C++ checks object.z < terrainHeight + targetHeightAboveTerrain.
+   */
+  private updateHeightDieEntities(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState) continue;
+      const prof = entity.heightDieProfile;
+      if (!prof) continue;
+
+      // Source parity: skip if contained (inside transport).
+      if (this.isEntityContained(entity)) continue;
+
+      // Source parity: InitialDelay — don't check until delay expires.
+      if (entity.heightDieActiveFrame === 0) {
+        entity.heightDieActiveFrame = this.frameCounter + prof.initialDelayFrames;
+      }
+      if (this.frameCounter < entity.heightDieActiveFrame) continue;
+
+      // Source parity: calculate height above terrain.
+      const terrainY = this.resolveGroundHeight(entity.x, entity.z);
+      const entityHeightAboveTerrain = entity.y - entity.baseHeight - terrainY;
+
+      if (entityHeightAboveTerrain < prof.targetHeight) {
+        // Source parity: snap to ground if configured.
+        if (prof.snapToGroundOnDeath) {
+          entity.y = terrainY + entity.baseHeight;
+        }
+        // Source parity: kill via UNRESISTABLE damage (same as LifetimeUpdate).
+        this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
+      }
+    }
+  }
+
+  /**
    * Source parity: StickyBombUpdate::update — track sticky bomb positions and handle
    * target death. C++ file: StickyBombUpdate.cpp lines 166-216.
    */
@@ -21787,6 +21980,21 @@ export class GameLogicSubsystem implements Subsystem {
    * ObjectCreationList definitions. Each entry includes DieMuxData fields for filtering.
    * C++ file: CreateObjectDie.cpp + DieModule.cpp (DieMuxData).
    */
+  /**
+   * Source parity: KeepObjectDie — check if object has a KeepObjectDie module.
+   * When present, the object persists as wreckage after death instead of being removed.
+   */
+  private hasKeepObjectDie(objectDef: ObjectDef | undefined): boolean {
+    if (!objectDef) return false;
+    for (const block of objectDef.blocks) {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleName = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleName === 'KEEPOBJECTDIE') return true;
+      }
+    }
+    return false;
+  }
+
   private extractDeathOCLEntries(objectDef: ObjectDef | undefined): DeathOCLEntry[] {
     if (!objectDef) return [];
     const entries: DeathOCLEntry[] = [];
@@ -22270,7 +22478,7 @@ export class GameLogicSubsystem implements Subsystem {
   private finalizeDestroyedEntities(): void {
     const destroyedEntityIds: number[] = [];
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
+      if (entity.destroyed && !entity.keepObjectOnDeath) {
         destroyedEntityIds.push(entity.id);
       }
     }

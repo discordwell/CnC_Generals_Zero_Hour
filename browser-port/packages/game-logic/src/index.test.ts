@@ -16014,6 +16014,370 @@ describe('FireSpreadUpdate', () => {
   });
 });
 
+// ── HeightDieUpdate Tests ───────────────────────────────────────────────────
+
+describe('HeightDieUpdate', () => {
+  it('kills entity when it falls below target height above terrain', () => {
+    const objectDef = makeObjectDef('FallingAircraft', 'America', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Behavior', 'HeightDieUpdate ModuleTag_HeightDie', {
+        TargetHeight: 5,
+        SnapToGroundOnDeath: 'Yes',
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('FallingAircraft', 50, 50)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    // Grab entity reference before update — finalizeDestroyedEntities removes dead entities.
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const aircraft = priv.spawnedEntities.get(1)!;
+    expect(aircraft).toBeDefined();
+
+    // Entity spawns at ground level. Height above terrain = 0, which is < 5.
+    // After the HeightDieUpdate runs, entity should die.
+    logic.update(0);
+    expect(aircraft.destroyed || aircraft.slowDeathState !== null || aircraft.health <= 0).toBe(true);
+  });
+
+  it('does not kill entity when above target height', () => {
+    const objectDef = makeObjectDef('FlyingAircraft', 'America', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Behavior', 'HeightDieUpdate ModuleTag_HeightDie', {
+        TargetHeight: 5,
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('FlyingAircraft', 50, 50)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    // Grab entity and elevate before first update — otherwise HeightDie kills it at ground level.
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const aircraft = priv.spawnedEntities.get(1)!;
+    aircraft.y += 50;
+
+    logic.update(0);
+
+    // Run frames — entity should survive above target height.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    expect(aircraft.destroyed).toBe(false);
+    expect(aircraft.health).toBe(200);
+  });
+
+  it('respects InitialDelay before checking height', () => {
+    const objectDef = makeObjectDef('DelayedAircraft', 'America', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Behavior', 'HeightDieUpdate ModuleTag_HeightDie', {
+        TargetHeight: 5,
+        InitialDelay: 1000, // ~30 frames delay
+      }),
+    ]);
+
+    const bundle = makeBundle({ objects: [objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('DelayedAircraft', 50, 50)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const aircraft = priv.spawnedEntities.get(1)!;
+
+    // Entity is at ground level (below target height) but delay hasn't expired.
+    // Run a few frames — should survive because of InitialDelay.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    expect(aircraft.destroyed).toBe(false);
+    expect(aircraft.health).toBe(200);
+
+    // Run past the delay (30 frames total).
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    // Now the height check should fire and kill the entity.
+    expect(aircraft.destroyed || aircraft.slowDeathState !== null || aircraft.health <= 0).toBe(true);
+  });
+});
+
+// ── HiveStructureBody Tests ─────────────────────────────────────────────────
+
+describe('HiveStructureBody', () => {
+  it('redirects matching damage types to closest spawn slave', () => {
+    const hiveDef = makeObjectDef('GlaTunnel', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'HiveStructureBody ModuleTag_Body', {
+        MaxHealth: 500,
+        InitialHealth: 500,
+        PropagateDamageTypesToSlavesWhenExisting: 'EXPLOSION ARMOR_PIERCING',
+      }),
+      makeBlock('Behavior', 'SpawnBehavior ModuleTag_Spawn', {
+        SpawnNumber: 2,
+        SpawnReplaceDelay: 100,
+        SpawnTemplateName: 'TunnelDefender',
+        InitialBurst: 2,
+      }),
+    ]);
+    const defenderDef = makeObjectDef('TunnelDefender', 'GLA', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const attackerDef = makeObjectDef('Tank', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankGun'] }),
+    ]);
+    const tankGun = makeWeaponDef('TankGun', {
+      PrimaryDamage: 30,
+      PrimaryDamageRadius: 0,
+      DamageType: 'EXPLOSION',
+      AttackRange: 150,
+      DelayBetweenShots: 500,
+    });
+
+    const bundle = makeBundle({ objects: [hiveDef, defenderDef, attackerDef], weapons: [tankGun] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GlaTunnel', 5, 5),
+        makeMapObject('Tank', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const tunnel = priv.spawnedEntities.get(1)!;
+    expect(tunnel).toBeDefined();
+    expect(tunnel.hiveStructureProfile).not.toBeNull();
+
+    // Spawn behavior should have created 2 defenders.
+    const state = tunnel.spawnBehaviorState!;
+    expect(state.slaveIds.length).toBe(2);
+
+    const slave1 = priv.spawnedEntities.get(state.slaveIds[0]!)!;
+    const tunnelHealthBefore = tunnel.health;
+
+    // Attack the tunnel with EXPLOSION damage (should redirect to slave).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 90; i++) logic.update(1 / 30);
+
+    // Tunnel should not have taken damage — slave should have.
+    expect(tunnel.health).toBe(tunnelHealthBefore);
+    expect(slave1.health).toBeLessThan(100);
+  });
+
+  it('swallows damage when no slaves exist and damage type matches swallow list', () => {
+    const hiveDef = makeObjectDef('GlaTunnel2', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'HiveStructureBody ModuleTag_Body', {
+        MaxHealth: 500,
+        InitialHealth: 500,
+        PropagateDamageTypesToSlavesWhenExisting: 'EXPLOSION',
+        SwallowDamageTypesIfSlavesNotExisting: 'EXPLOSION',
+      }),
+      // No SpawnBehavior — no slaves exist.
+    ]);
+    const attackerDef = makeObjectDef('Tank2', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankGun2'] }),
+    ]);
+    const tankGun = makeWeaponDef('TankGun2', {
+      PrimaryDamage: 50,
+      PrimaryDamageRadius: 0,
+      DamageType: 'EXPLOSION',
+      AttackRange: 150,
+      DelayBetweenShots: 500,
+    });
+
+    const bundle = makeBundle({ objects: [hiveDef, attackerDef], weapons: [tankGun] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GlaTunnel2', 5, 5),
+        makeMapObject('Tank2', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const tunnel = priv.spawnedEntities.get(1)!;
+    const healthBefore = tunnel.health;
+
+    // Attack the tunnel with EXPLOSION — should be swallowed since no slaves.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 90; i++) logic.update(1 / 30);
+
+    // Tunnel health should be unchanged — EXPLOSION damage swallowed.
+    expect(tunnel.health).toBe(healthBefore);
+  });
+
+  it('applies non-propagated damage types directly to hive structure', () => {
+    const hiveDef = makeObjectDef('GlaTunnel3', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'HiveStructureBody ModuleTag_Body', {
+        MaxHealth: 500,
+        InitialHealth: 500,
+        PropagateDamageTypesToSlavesWhenExisting: 'EXPLOSION',
+      }),
+      makeBlock('Behavior', 'SpawnBehavior ModuleTag_Spawn', {
+        SpawnNumber: 1,
+        SpawnReplaceDelay: 100,
+        SpawnTemplateName: 'TunnelDefender3',
+        InitialBurst: 1,
+      }),
+    ]);
+    const defenderDef = makeObjectDef('TunnelDefender3', 'GLA', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const attackerDef = makeObjectDef('Sniper', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SniperRifle'] }),
+    ]);
+    const sniperRifle = makeWeaponDef('SniperRifle', {
+      PrimaryDamage: 40,
+      PrimaryDamageRadius: 0,
+      DamageType: 'SMALL_ARMS',
+      AttackRange: 150,
+      DelayBetweenShots: 1000,
+    });
+
+    const bundle = makeBundle({ objects: [hiveDef, defenderDef, attackerDef], weapons: [sniperRifle] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GlaTunnel3', 5, 5),
+        makeMapObject('Sniper', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const tunnel = priv.spawnedEntities.get(1)!;
+    const slave = priv.spawnedEntities.get(tunnel.spawnBehaviorState!.slaveIds[0]!)!;
+
+    // Attack tunnel with SMALL_ARMS (not in propagate list) — should hit tunnel directly.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 90; i++) logic.update(1 / 30);
+
+    // Tunnel should have taken damage, slave should be untouched.
+    expect(tunnel.health).toBeLessThan(500);
+    expect(slave.health).toBe(100);
+  });
+});
+
+// ── KeepObjectDie Tests ─────────────────────────────────────────────────────
+
+describe('KeepObjectDie', () => {
+  it('keeps destroyed entity in world as rubble instead of removing it', () => {
+    const buildingDef = makeObjectDef('CivBuilding', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'KeepObjectDie ModuleTag_Keep', {}),
+    ]);
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun'] }),
+    ]);
+    const bigGun = makeWeaponDef('BigGun', {
+      PrimaryDamage: 200,
+      PrimaryDamageRadius: 0,
+      DamageType: 'EXPLOSION',
+      AttackRange: 150,
+      DelayBetweenShots: 500,
+    });
+
+    const bundle = makeBundle({ objects: [buildingDef, attackerDef], weapons: [bigGun] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CivBuilding', 5, 5),
+        makeMapObject('Attacker', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('Civilian', 'America', 0);
+    logic.setTeamRelationship('America', 'Civilian', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const building = priv.spawnedEntities.get(1)!;
+    expect(building.keepObjectOnDeath).toBe(true);
+
+    // Kill the building.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 90; i++) logic.update(1 / 30);
+
+    // Building should be destroyed but still in spawnedEntities (kept as rubble).
+    expect(building.destroyed).toBe(true);
+    expect(priv.spawnedEntities.has(1)).toBe(true);
+  });
+
+  it('removes destroyed entity normally when KeepObjectDie is absent', () => {
+    const buildingDef = makeObjectDef('NormalBuilding', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const attackerDef = makeObjectDef('Attacker2', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun2'] }),
+    ]);
+    const bigGun = makeWeaponDef('BigGun2', {
+      PrimaryDamage: 200,
+      PrimaryDamageRadius: 0,
+      DamageType: 'EXPLOSION',
+      AttackRange: 150,
+      DelayBetweenShots: 500,
+    });
+
+    const bundle = makeBundle({ objects: [buildingDef, attackerDef], weapons: [bigGun] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NormalBuilding', 5, 5),
+        makeMapObject('Attacker2', 5, 5),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('Civilian', 'America', 0);
+    logic.setTeamRelationship('America', 'Civilian', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const building = priv.spawnedEntities.get(1)!;
+    expect(building.keepObjectOnDeath).toBe(false);
+
+    // Kill the building.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 90; i++) logic.update(1 / 30);
+
+    // Building should be removed from spawnedEntities (no KeepObjectDie).
+    expect(priv.spawnedEntities.has(1)).toBe(false);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DeletionUpdate — silent timed removal (no death pipeline)
 // ═══════════════════════════════════════════════════════════════════════════
