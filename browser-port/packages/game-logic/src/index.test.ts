@@ -27421,6 +27421,68 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates all-destroyed, all-build-facilities-destroyed, and named-owned-by-player', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenterA', 'America', ['STRUCTURE', 'COMMANDCENTER', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+        makeObjectDef('FactoryA', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', { MaxQueueEntries: 3 }),
+        ]),
+        makeObjectDef('InfantryA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('TankA', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          Prerequisites: 'OBJECT FactoryA',
+        }),
+        makeObjectDef('EnemyB', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CommandCenterA', 10, 10), // id 1
+        makeMapObject('FactoryA', 20, 10),       // id 2
+        makeMapObject('InfantryA', 30, 10),      // id 3
+        makeMapObject('EnemyB', 40, 10),         // id 4
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptAllDestroyed({ side: 'America' })).toBe(false);
+    expect(logic.evaluateScriptAllDestroyed({ side: 'UnknownSide' })).toBe(true);
+    expect(logic.evaluateScriptAllBuildFacilitiesDestroyed({ side: 'America' })).toBe(false);
+    expect(logic.evaluateScriptAllBuildFacilitiesDestroyed({ side: 'UnknownSide' })).toBe(true);
+
+    expect(logic.evaluateScriptNamedOwnedByPlayer({ entityId: 4, side: 'China' })).toBe(true);
+    expect(logic.evaluateScriptNamedOwnedByPlayer({ entityId: 4, side: 'America' })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    // No facilities left, but side still has infantry.
+    expect(logic.evaluateScriptAllBuildFacilitiesDestroyed({ side: 'America' })).toBe(true);
+    expect(logic.evaluateScriptAllDestroyed({ side: 'America' })).toBe(false);
+
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(3), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptAllDestroyed({ side: 'America' })).toBe(true);
+  });
+
   it('evaluates named-area existence and in-area type/kind conditions', () => {
     const bundle = makeBundle({
       objects: [

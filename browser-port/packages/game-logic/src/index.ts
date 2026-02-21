@@ -3765,6 +3765,9 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly overchargeStateByEntityId = new Map<number, OverchargeRuntimeState>();
   private readonly disabledHackedStatusByEntityId = new Map<number, number>();
   private readonly disabledEmpStatusByEntityId = new Map<number, number>();
+  /** Source parity: ThingTemplate::m_isBuildFacility derived set from production prerequisites. */
+  private buildFacilityTemplateNamesCache: Set<string> | null = null;
+  private buildFacilityTemplateNamesRegistry: IniDataRegistry | null = null;
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
   private readonly pendingRepairDockActions = new Map<number, PendingRepairDockActionState>();
   private readonly pendingGarrisonActions = new Map<number, number>();
@@ -5268,6 +5271,80 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return count;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateAllDestroyed.
+   * Non-existent side/player resolves to true.
+   */
+  evaluateScriptAllDestroyed(filter: {
+    side: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return true;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (this.isScriptEntityEffectivelyDead(entity) || entity.health <= 0) continue;
+      if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('INERT') || entity.kindOf.has('MINE')) {
+        continue;
+      }
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateAllBuildFacilitiesDestroyed.
+   * Non-existent side/player resolves to true.
+   */
+  evaluateScriptAllBuildFacilitiesDestroyed(filter: {
+    side: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return true;
+    }
+
+    const buildFacilityNames = this.getBuildFacilityTemplateNames();
+    if (buildFacilityNames.size === 0) {
+      return true;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (!buildFacilityNames.has(entity.templateName.trim().toUpperCase())) continue;
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedOwnedByPlayer.
+   */
+  evaluateScriptNamedOwnedByPlayer(filter: {
+    entityId: number;
+    side: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+
+    return this.normalizeSide(entity.side) === normalizedSide;
   }
 
   /**
@@ -22929,6 +23006,33 @@ export class GameLogicSubsystem implements Subsystem {
 
   private extractProductionPrerequisiteGroups(objectDef: ObjectDef): ProductionPrerequisiteGroup[] {
     return extractProductionPrerequisiteGroupsImpl(objectDef, (value) => this.extractIniValueTokens(value));
+  }
+
+  private getBuildFacilityTemplateNames(): Set<string> {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return new Set<string>();
+    }
+    if (this.buildFacilityTemplateNamesCache && this.buildFacilityTemplateNamesRegistry === registry) {
+      return this.buildFacilityTemplateNamesCache;
+    }
+
+    const names = new Set<string>();
+    for (const objectDef of registry.objects.values()) {
+      for (const prereqGroup of this.extractProductionPrerequisiteGroups(objectDef)) {
+        for (const alternativeName of prereqGroup.objectAlternatives) {
+          names.add(alternativeName.trim().toUpperCase());
+        }
+      }
+      const kindOf = this.normalizeKindOf(objectDef.kindOf);
+      if (kindOf.has('COMMANDCENTER')) {
+        names.add(objectDef.name.trim().toUpperCase());
+      }
+    }
+
+    this.buildFacilityTemplateNamesCache = names;
+    this.buildFacilityTemplateNamesRegistry = registry;
+    return names;
   }
 
   private cancelUnitProduction(entityId: number, productionId: number): boolean {
