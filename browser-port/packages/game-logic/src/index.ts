@@ -5553,6 +5553,73 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateSkirmishCommandButtonIsReady.
+   * TODO(source-parity): team-level iteration is pending ScriptEngine team tracking; this
+   * currently scans side-owned entities.
+   */
+  evaluateScriptSkirmishCommandButtonIsReady(filter: {
+    side: string;
+    commandButtonName: string;
+    allReady: boolean;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const commandButtonDef = findCommandButtonDefByName(registry, filter.commandButtonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
+    const specialPowerName = this.normalizeShortcutSpecialPowerName(
+      readStringField(commandButtonDef.fields, ['SpecialPower'])
+      ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
+      ?? '',
+    );
+    const upgradeName = readStringField(commandButtonDef.fields, ['Upgrade'])?.trim().toUpperCase() ?? '';
+    const upgradeDef = upgradeName ? findUpgradeDefByName(registry, upgradeName) ?? null : null;
+
+    if (!specialPowerName && !upgradeDef) {
+      return false;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+
+      let ready: boolean | null = null;
+      if (specialPowerName) {
+        ready = this.evaluateScriptCommandButtonSpecialPowerReady(entity, specialPowerName);
+      } else if (upgradeDef) {
+        ready = this.evaluateScriptCommandButtonUpgradeReady(entity, upgradeDef);
+      }
+
+      if (ready === null) {
+        continue;
+      }
+
+      if (ready) {
+        if (!filter.allReady) {
+          return true;
+        }
+      } else if (filter.allReady) {
+        return false;
+      }
+    }
+
+    return filter.allReady;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateSkirmishUnownedFactionUnitComparison.
    * Counts neutral-controlled unmanned faction units.
    */
@@ -14246,6 +14313,63 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return false;
+  }
+
+  private evaluateScriptCommandButtonSpecialPowerReady(
+    entity: MapEntity,
+    normalizedSpecialPowerName: string,
+  ): boolean | null {
+    if (!entity.specialPowerModules.has(normalizedSpecialPowerName)) {
+      return null;
+    }
+    if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.isEntityScriptSpecialPowerDisabled(entity)) {
+      return false;
+    }
+    return this.resolveSpecialPowerReadyFrameForSourceEntity(normalizedSpecialPowerName, entity.id) <= this.frameCounter;
+  }
+
+  private evaluateScriptCommandButtonUpgradeReady(
+    entity: MapEntity,
+    upgradeDef: UpgradeDef,
+  ): boolean | null {
+    if (!this.canEntityProduceUpgrade(entity, upgradeDef)) {
+      return null;
+    }
+
+    const ownerSide = this.resolveEntityOwnerSide(entity);
+    if (!ownerSide) {
+      return false;
+    }
+
+    const normalizedUpgradeName = upgradeDef.name.trim().toUpperCase();
+    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
+      return false;
+    }
+
+    const upgradeType = resolveUpgradeType(upgradeDef);
+    if (upgradeType === 'PLAYER') {
+      if (this.hasSideUpgradeCompleted(ownerSide, normalizedUpgradeName)) {
+        return false;
+      }
+      if (this.hasSideUpgradeInProduction(ownerSide, normalizedUpgradeName)) {
+        return false;
+      }
+    } else {
+      if (entity.completedUpgrades.has(normalizedUpgradeName)) {
+        return false;
+      }
+      if (entity.productionQueue.some(
+        (entry) => entry.type === 'UPGRADE' && entry.upgradeName === normalizedUpgradeName,
+      )) {
+        return false;
+      }
+    }
+
+    const buildCost = resolveUpgradeBuildCost(upgradeDef);
+    return this.canAffordUpgrade(ownerSide, buildCost);
   }
 
   private resolveSpecialPowerReadyFrameForSourceEntity(

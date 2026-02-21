@@ -27946,6 +27946,112 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates skirmish command-button readiness for special-power buttons', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SuperweaponA', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'SpecialPowerCreate ModuleTag_SPC', {}),
+          makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SuperWeapon', {
+            SpecialPowerTemplate: 'SuperweaponParticleCannon',
+          }),
+        ]),
+        makeObjectDef('SuperweaponB', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'SpecialPowerCreate ModuleTag_SPC', {}),
+          makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SuperWeapon', {
+            SpecialPowerTemplate: 'SuperweaponParticleCannon',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SuperweaponParticleCannon', { ReloadTime: 0 }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ParticleCannon', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'SuperweaponParticleCannon',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SuperweaponA', 30, 30),
+        makeMapObject('SuperweaponB', 40, 30),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.add('DISABLED_EMP');
+
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: true,
+    })).toBe(false);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: false,
+    })).toBe(true);
+
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.delete('DISABLED_EMP');
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: true,
+    })).toBe(true);
+  });
+
+  it('evaluates skirmish command-button readiness for upgrade buttons', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UpgradeLab', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ], { CommandSet: 'CommandSet_UpgradeLab' }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_A', { BuildCost: 500, Type: 'PLAYER' }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_UpgradeA', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_A',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_UpgradeLab', { '1': 'Command_UpgradeA' }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('UpgradeLab', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setSideCredits('America', 0);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      commandButtonName: 'Command_UpgradeA',
+      allReady: false,
+    })).toBe(false);
+
+    logic.setSideCredits('America', 1000);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      commandButtonName: 'Command_UpgradeA',
+      allReady: false,
+    })).toBe(true);
+  });
+
   it('evaluates skirmish value-in-area and tech-building distance conditions', () => {
     const bundle = makeBundle({
       objects: [
