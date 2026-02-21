@@ -19770,8 +19770,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (!candidate.kindOf.has('FS_AIRFIELD')) continue;
       // Source parity: C++ uses PartitionFilterRelationship(jet, ALLOW_ALLIES).
       if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ALLIES) continue;
-      // Skip airfields that are under construction.
+      // Skip airfields that are under construction or being sold.
       if (candidate.constructionPercent !== CONSTRUCTION_COMPLETE) continue;
+      if (candidate.objectStatusFlags.has('SOLD')) continue;
       const dx = candidate.x - entity.x;
       const dz = candidate.z - entity.z;
       const dist = dx * dx + dz * dz;
@@ -19814,7 +19815,9 @@ export class GameLogicSubsystem implements Subsystem {
         case 'PARKED': {
           // Airfield heals parked aircraft.
           if (entity.health < entity.maxHealth && entity.maxHealth > 0) {
-            const healRate = entity.maxHealth * 0.02; // 2% per frame
+            // Source parity: C++ uses ParkingPlaceBehavior with data-driven HealAmountPerSecond.
+            // Simplified: ~15% max health/sec (0.5%/frame at 30fps) ≈ 6.7s full heal.
+            const healRate = entity.maxHealth * 0.005;
             entity.health = Math.min(entity.maxHealth, entity.health + healRate);
           }
 
@@ -26706,17 +26709,22 @@ export class GameLogicSubsystem implements Subsystem {
         b.z += nz * correction * bFraction;
 
         // Source parity: when both are idle and very close (< cell size / 4),
-        // issue a move-away command to one of them to resolve permanent overlap.
+        // issue move-away commands to resolve permanent overlap.
+        // C++ AIUpdate.cpp:1575-1585: nudge BOTH idle units in opposite directions.
         // C++ AIUpdate.cpp:1567-1571: skip if busy or using ability.
         if (aIdle && bIdle && !aImmobile && !bImmobile
           && distSqr < PATHFIND_CELL_SIZE * PATHFIND_CELL_SIZE * 0.25) {
-          // Nudge the lower-ID entity away to break the tie.
-          const nudgeTarget = a.id < b.id ? a : b;
-          if (nudgeTarget.moveTarget === null
-            && !nudgeTarget.objectStatusFlags.has('IS_USING_ABILITY')) {
-            const awayX = nudgeTarget.x + (nudgeTarget === a ? -nx : nx) * PATHFIND_CELL_SIZE;
-            const awayZ = nudgeTarget.z + (nudgeTarget === a ? -nz : nz) * PATHFIND_CELL_SIZE;
-            this.issueMoveTo(nudgeTarget.id, awayX, awayZ);
+          if (a.moveTarget === null
+            && !a.objectStatusFlags.has('IS_USING_ABILITY')) {
+            const awayX = a.x - nx * PATHFIND_CELL_SIZE;
+            const awayZ = a.z - nz * PATHFIND_CELL_SIZE;
+            this.issueMoveTo(a.id, awayX, awayZ);
+          }
+          if (b.moveTarget === null
+            && !b.objectStatusFlags.has('IS_USING_ABILITY')) {
+            const awayX = b.x + nx * PATHFIND_CELL_SIZE;
+            const awayZ = b.z + nz * PATHFIND_CELL_SIZE;
+            this.issueMoveTo(b.id, awayX, awayZ);
           }
         }
       }
