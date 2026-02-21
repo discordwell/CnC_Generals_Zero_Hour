@@ -75,6 +75,8 @@ interface CombatUpdateContext<TEntity extends CombatUpdateEntityLike> {
   isAttackLineOfSightBlocked(attackerX: number, attackerZ: number, targetX: number, targetZ: number): boolean;
   /** Clear the attacker's combat state when maxShotsToFire limit is reached. */
   clearMaxShotsAttackState(attacker: TEntity): void;
+  /** Source parity: TurretAI alignment check — is the turret aligned enough to fire? */
+  isTurretAlignedForFiring(attacker: TEntity): boolean;
 }
 
 function clearImmediateCombatState<TEntity extends CombatUpdateEntityLike>(
@@ -217,6 +219,11 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
           continue;
         }
       }
+    }
+
+    // Source parity: TurretAI — weapon cannot fire until turret is aligned.
+    if (!context.isTurretAlignedForFiring(attacker)) {
+      continue;
     }
 
     context.setEntityAimingWeaponStatus(attacker, false);

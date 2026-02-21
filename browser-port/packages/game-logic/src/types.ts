@@ -45,6 +45,8 @@ export interface RenderableEntityState {
   toppleDirX: number;
   /** Source parity: ToppleUpdate — topple direction Z component (unit vector). */
   toppleDirZ: number;
+  /** Source parity: TurretAI — turret rotation angles in radians (relative to body), one per turret. */
+  turretAngles: number[];
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';

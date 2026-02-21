@@ -1040,6 +1040,31 @@ interface TurretProfile {
   initiallyDisabled: boolean;
   /** Runtime enabled state. Toggled by deploy actions, mode changes, upgrades. */
   enabled: boolean;
+  /**
+   * Source parity: TurretAIData::m_turnRate — radians per logic frame.
+   * C++ INI field "TurretTurnRate" is parsed as angular velocity (degrees/sec → rad/frame).
+   * 0 means instant rotation (fallback).
+   */
+  turnRate: number;
+  /** Source parity: TurretAIData::m_naturalTurretAngle — resting angle in radians. */
+  naturalAngle: number;
+  /** Source parity: TurretAIData::m_firesWhileTurning — can fire before fully aligned. */
+  firesWhileTurning: boolean;
+  /**
+   * Source parity: TurretAIData::m_recenterTime — frames before returning to natural angle
+   * after losing target. Default: 2 * LOGIC_FRAME_RATE (60 frames = 2 seconds).
+   */
+  recenterTimeFrames: number;
+}
+
+/** Source parity: TurretAI runtime state per turret per entity. */
+interface TurretRuntimeState {
+  /** Current turret angle in radians (relative to owner body rotation). */
+  currentAngle: number;
+  /** Turret AI state machine state. */
+  state: 'IDLE' | 'AIM' | 'RECENTER' | 'HOLD';
+  /** Frame at which the turret should begin recentering (hold→recenter transition). */
+  holdUntilFrame: number;
 }
 
 interface JetAISneakyProfile {
@@ -1293,6 +1318,8 @@ interface MapEntity {
   maxShotsRemaining: number;
   /** Source parity: TurretAI modules controlling weapon slot availability. */
   turretProfiles: TurretProfile[];
+  /** Source parity: TurretAI runtime state — one per turret profile. */
+  turretStates: TurretRuntimeState[];
   attackScatterTargetsUnused: number[];
   preAttackFinishFrame: number;
   consecutiveShotsTargetEntityId: number | null;
@@ -3238,6 +3265,8 @@ export class GameLogicSubsystem implements Subsystem {
       toppleAngle: entity.toppleAngularAccumulation,
       toppleDirX: entity.toppleDirX,
       toppleDirZ: entity.toppleDirZ,
+      /** Turret rotation angles (one per turret module), in radians relative to body. */
+      turretAngles: entity.turretStates.map(ts => ts.currentAngle),
     };
   }
 
@@ -3445,6 +3474,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSpawnBehaviors();
     this.updateSlavedEntities();
     this.updateDeployStyleEntities();
+    this.updateTurretAI();
     this.updateCombat();
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
@@ -5095,6 +5125,7 @@ export class GameLogicSubsystem implements Subsystem {
       weaponLockStatus: 'NOT_LOCKED' as const,
       maxShotsRemaining: 0,
       turretProfiles: this.extractTurretProfiles(objectDef),
+      turretStates: [], // Initialized after entity creation below.
       armorTemplateSets,
       armorSetFlagsMask: 0,
       armorDamageCoefficients,
@@ -5406,6 +5437,13 @@ export class GameLogicSubsystem implements Subsystem {
       dynamicShroudNativeClearingRange: 0,
       dynamicShroudCurrentClearingRange: 0,
     };
+
+    // Source parity: TurretAI init — create runtime state for each turret.
+    entity.turretStates = entity.turretProfiles.map((tp) => ({
+      currentAngle: tp.naturalAngle,
+      state: 'IDLE' as const,
+      holdUntilFrame: 0,
+    }));
 
     // Source parity: StealthUpdate::init — InnateStealth sets CAN_STEALTH on creation.
     if (entity.stealthProfile?.innateStealth) {
@@ -7075,11 +7113,35 @@ export class GameLogicSubsystem implements Subsystem {
             }
           }
 
+          // Source parity: TurretTurnRate is parsed as AngularVelocity (degrees/sec in INI).
+          // C++ parseAngularVelocityReal converts to rad/frame: value * (PI/180) / LOGICFRAMES_PER_SECOND.
+          const turnRateDegPerSec = readNumericField(block.fields, ['TurretTurnRate']) ?? 0;
+          const turnRate = turnRateDegPerSec > 0
+            ? turnRateDegPerSec * (Math.PI / 180) / LOGIC_FRAME_RATE
+            : 0;
+
+          // Source parity: NaturalTurretAngle is an angle (degrees in INI → radians).
+          const naturalAngleDeg = readNumericField(block.fields, ['NaturalTurretAngle']) ?? 0;
+          const naturalAngle = naturalAngleDeg * (Math.PI / 180);
+
+          const firesWhileTurning = readBooleanField(block.fields, ['FiresWhileTurning']) === true;
+
+          // Source parity: RecenterTime defaults to 2 * LOGICFRAMES_PER_SECOND (60 frames).
+          // INI value is in milliseconds.
+          const recenterTimeMs = readNumericField(block.fields, ['RecenterTime']) ?? 0;
+          const recenterTimeFrames = recenterTimeMs > 0
+            ? Math.round(recenterTimeMs / 1000 * LOGIC_FRAME_RATE)
+            : 2 * LOGIC_FRAME_RATE;
+
           if (controlledWeaponSlotsMask !== 0) {
             profiles.push({
               controlledWeaponSlotsMask,
               initiallyDisabled,
               enabled: !initiallyDisabled,
+              turnRate,
+              naturalAngle,
+              firesWhileTurning,
+              recenterTimeFrames,
             });
           }
         }
@@ -19050,6 +19112,143 @@ export class GameLogicSubsystem implements Subsystem {
     return new THREE.Vector2(x, y);
   }
 
+  // ── TurretAI implementation ──────────────────────────────────────────────
+
+  /** Source parity: Alignment threshold ~2 degrees (0.035 radians) for turret firing. */
+  private static readonly TURRET_ALIGN_THRESHOLD = 0.035;
+
+  /**
+   * Source parity: TurretAI::updateTurretAI — per-frame turret rotation.
+   * Each turret tracks its current angle and smoothly rotates toward:
+   *   - Attack target (if entity is attacking)
+   *   - Natural angle (when idle, after recenter delay)
+   */
+  private updateTurretAI(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.turretProfiles.length === 0) continue;
+
+      for (let ti = 0; ti < entity.turretProfiles.length; ti++) {
+        const tp = entity.turretProfiles[ti]!;
+        const ts = entity.turretStates[ti];
+        if (!ts) continue;
+        if (!tp.enabled) continue;
+
+        // Determine if we have a target to aim at.
+        let targetAngle: number | null = null;
+        if (entity.attackTargetEntityId !== null) {
+          const target = this.spawnedEntities.get(entity.attackTargetEntityId);
+          if (target && !target.destroyed) {
+            // Compute relative angle from entity to target in entity-local space.
+            const dx = target.x - entity.x;
+            const dz = target.z - entity.z;
+            // World angle to target.
+            const worldAngle = Math.atan2(dz, dx) + Math.PI / 2;
+            // Turret angle is relative to body rotation.
+            targetAngle = this.normalizeAngle(worldAngle - entity.rotationY);
+          }
+        } else if (entity.attackTargetPosition !== null) {
+          const dx = entity.attackTargetPosition.x - entity.x;
+          const dz = entity.attackTargetPosition.z - entity.z;
+          const worldAngle = Math.atan2(dz, dx) + Math.PI / 2;
+          targetAngle = this.normalizeAngle(worldAngle - entity.rotationY);
+        }
+
+        if (targetAngle !== null) {
+          // AIM state — rotate toward target.
+          ts.state = 'AIM';
+          ts.holdUntilFrame = 0;
+          if (tp.turnRate > 0) {
+            const angleDiff = this.normalizeAngle(targetAngle - ts.currentAngle);
+            if (Math.abs(angleDiff) <= tp.turnRate) {
+              ts.currentAngle = targetAngle;
+            } else {
+              ts.currentAngle = this.normalizeAngle(
+                ts.currentAngle + Math.sign(angleDiff) * tp.turnRate,
+              );
+            }
+          } else {
+            // Instant rotation.
+            ts.currentAngle = targetAngle;
+          }
+        } else {
+          // No target — transition through HOLD → RECENTER → IDLE.
+          if (ts.state === 'AIM') {
+            // Just lost target — enter hold.
+            ts.state = 'HOLD';
+            ts.holdUntilFrame = this.frameCounter + tp.recenterTimeFrames;
+          }
+
+          if (ts.state === 'HOLD') {
+            if (this.frameCounter >= ts.holdUntilFrame) {
+              ts.state = 'RECENTER';
+            }
+          }
+
+          if (ts.state === 'RECENTER') {
+            const angleDiff = this.normalizeAngle(tp.naturalAngle - ts.currentAngle);
+            // Source parity: recenter at half turn rate (rateModifier = 0.5f).
+            const recenterRate = tp.turnRate > 0 ? tp.turnRate * 0.5 : 999;
+            if (Math.abs(angleDiff) <= recenterRate) {
+              ts.currentAngle = tp.naturalAngle;
+              ts.state = 'IDLE';
+            } else {
+              ts.currentAngle = this.normalizeAngle(
+                ts.currentAngle + Math.sign(angleDiff) * recenterRate,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Check whether an entity's turret(s) are aligned enough to fire the given weapon slot.
+   * Returns true if no turret controls this slot, or if the controlling turret is aligned.
+   */
+  private isTurretAlignedForWeaponSlot(entity: MapEntity, weaponSlotIndex: number): boolean {
+    for (let ti = 0; ti < entity.turretProfiles.length; ti++) {
+      const tp = entity.turretProfiles[ti]!;
+      if ((tp.controlledWeaponSlotsMask & (1 << weaponSlotIndex)) === 0) continue;
+      // This turret controls this weapon slot.
+      if (!tp.enabled) return false;
+      if (tp.firesWhileTurning) return true;
+      const ts = entity.turretStates[ti];
+      if (!ts) return false;
+      // Check alignment: turret must be in AIM state and angle must be close to target.
+      if (ts.state !== 'AIM') return false;
+      // Compute target angle for comparison.
+      let targetAngle: number | null = null;
+      if (entity.attackTargetEntityId !== null) {
+        const target = this.spawnedEntities.get(entity.attackTargetEntityId);
+        if (target && !target.destroyed) {
+          const dx = target.x - entity.x;
+          const dz = target.z - entity.z;
+          const worldAngle = Math.atan2(dz, dx) + Math.PI / 2;
+          targetAngle = this.normalizeAngle(worldAngle - entity.rotationY);
+        }
+      } else if (entity.attackTargetPosition !== null) {
+        const dx = entity.attackTargetPosition.x - entity.x;
+        const dz = entity.attackTargetPosition.z - entity.z;
+        const worldAngle = Math.atan2(dz, dx) + Math.PI / 2;
+        targetAngle = this.normalizeAngle(worldAngle - entity.rotationY);
+      }
+      if (targetAngle === null) return false;
+      const angleDiff = Math.abs(this.normalizeAngle(targetAngle - ts.currentAngle));
+      return angleDiff <= GameLogicSubsystem.TURRET_ALIGN_THRESHOLD;
+    }
+    // No turret controls this slot — firing is unrestricted.
+    return true;
+  }
+
+  /** Normalize angle to [-PI, PI]. */
+  private normalizeAngle(angle: number): number {
+    while (angle > Math.PI) angle -= 2 * Math.PI;
+    while (angle < -Math.PI) angle += 2 * Math.PI;
+    return angle;
+  }
+
   private updateCombat(): void {
     updateCombatImpl({
       entities: this.spawnedEntities.values(),
@@ -19090,6 +19289,8 @@ export class GameLogicSubsystem implements Subsystem {
         this.isTerrainLineOfSightBlocked(attackerX, attackerZ, targetX, targetZ),
       clearMaxShotsAttackState: (attacker) =>
         this.clearMaxShotsAttackState(attacker),
+      isTurretAlignedForFiring: (attacker) =>
+        this.isTurretAlignedForWeaponSlot(attacker, 0), // Primary weapon slot.
     });
   }
 
