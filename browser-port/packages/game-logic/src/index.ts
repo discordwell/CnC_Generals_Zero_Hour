@@ -3479,6 +3479,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
     this.updateEntityMovement(dt);
+    this.updateUnitCollisionSeparation();
     this.updateCrushCollisions();
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
@@ -26087,6 +26088,153 @@ export class GameLogicSubsystem implements Subsystem {
       entity.x = container.x;
       entity.z = container.z;
       entity.y = container.y;
+    }
+  }
+
+  // ── Source parity: Unit collision separation ──────────────────────────────
+
+  /**
+   * Source parity: AIUpdateInterface::processCollision + PhysicsBehavior::applyCollideForce —
+   * prevents movable ground units from overlapping by pushing them apart.
+   *
+   * In C++, the PartitionManager detects overlaps and AIUpdate::processCollision decides
+   * whether to apply a physics bounce or just mark the unit as blocked. For idle units that
+   * end up co-located, pathfinder::adjustToPossibleDestination nudges them to a safe position.
+   *
+   * Our approach: after movement, iterate all ground unit pairs and apply position separation
+   * when bounding circles overlap. Priority: stationary units don't get pushed; both-idle
+   * overlaps split the separation equally.
+   */
+  private updateUnitCollisionSeparation(): void {
+    // Build a compact array of ground entities eligible for collision.
+    const groundEntities: MapEntity[] = [];
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (!entity.canMove) continue;
+      if (entity.category === 'air') continue;
+      if (entity.noCollisions) continue;
+      if (entity.objectStatusFlags.has('AIRBORNE_TARGET')) continue;
+      // Source parity: C++ processCollision requires a locomotor to apply forces.
+      // Entities without locomotors (e.g. crate victims, static objects) don't participate.
+      if (entity.locomotorSets.size === 0) continue;
+      // Skip contained/transported entities.
+      if (entity.transportContainerId !== null
+        || entity.helixCarrierId !== null
+        || entity.garrisonContainerId !== null
+        || entity.tunnelContainerId !== null) continue;
+      groundEntities.push(entity);
+    }
+
+    const len = groundEntities.length;
+    if (len < 2) return;
+
+    // Source parity: minimum separation is PATHFIND_CELL_SIZE / 2 to prevent co-location.
+    const MIN_SEPARATION = PATHFIND_CELL_SIZE * 0.5;
+    // Source parity: separation strength — fraction of overlap corrected per frame.
+    // C++ uses a force-based approach; we use direct position correction.
+    const SEPARATION_STRENGTH = 0.4;
+
+    for (let i = 0; i < len; i++) {
+      const a = groundEntities[i]!;
+      for (let j = i + 1; j < len; j++) {
+        const b = groundEntities[j]!;
+
+        // Source parity: C++ processCollision primarily handles same-team blocking.
+        // Enemy units are handled by combat engagement and crush collisions, not separation.
+        if (this.getTeamRelationship(a, b) !== RELATIONSHIP_ALLIES) continue;
+
+        // Source parity: C++ canPathThroughUnits skips collision for certain units.
+        // We approximate: skip if either entity has an ignored obstacle ID pointing at the other.
+        if (a.ignoredMovementObstacleId === b.id || b.ignoredMovementObstacleId === a.id) continue;
+
+        // Bounding circle radii from obstacle geometry.
+        const radiusA = a.obstacleGeometry ? a.obstacleGeometry.majorRadius : MIN_SEPARATION;
+        const radiusB = b.obstacleGeometry ? b.obstacleGeometry.majorRadius : MIN_SEPARATION;
+        const combinedRadius = Math.max(radiusA + radiusB, MIN_SEPARATION * 2);
+
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const distSqr = dx * dx + dz * dz;
+        const combinedRadiusSqr = combinedRadius * combinedRadius;
+
+        if (distSqr >= combinedRadiusSqr) continue;
+
+        // Overlap detected.
+        const dist = Math.sqrt(distSqr);
+        const overlap = combinedRadius - dist;
+
+        // Direction from A to B (or random if coincident).
+        let nx: number;
+        let nz: number;
+        if (dist > 0.01) {
+          nx = dx / dist;
+          nz = dz / dist;
+        } else {
+          // Source parity: C++ caps dist at 1.0 for coincident objects.
+          // Use a deterministic pseudo-random direction based on entity IDs.
+          const angle = ((a.id * 7 + b.id * 13) % 360) * (Math.PI / 180);
+          nx = Math.cos(angle);
+          nz = Math.sin(angle);
+        }
+
+        const correction = overlap * SEPARATION_STRENGTH;
+
+        // Determine who moves: moving entities yield to stationary ones.
+        const aMoving = a.moving;
+        const bMoving = b.moving;
+        const aIdle = !aMoving && a.attackTargetEntityId === null;
+        const bIdle = !bMoving && b.attackTargetEntityId === null;
+
+        // Source parity: immobile structures never get pushed.
+        const aImmobile = a.isImmobile;
+        const bImmobile = b.isImmobile;
+
+        if (aImmobile && bImmobile) continue;
+
+        let aFraction: number;
+        let bFraction: number;
+
+        if (aImmobile) {
+          // Only push B.
+          aFraction = 0;
+          bFraction = 1;
+        } else if (bImmobile) {
+          // Only push A.
+          aFraction = 1;
+          bFraction = 0;
+        } else if (aMoving && !bMoving) {
+          // Moving A yields to stationary B.
+          aFraction = 0.8;
+          bFraction = 0.2;
+        } else if (bMoving && !aMoving) {
+          // Moving B yields to stationary A.
+          aFraction = 0.2;
+          bFraction = 0.8;
+        } else {
+          // Both moving or both idle — split evenly.
+          aFraction = 0.5;
+          bFraction = 0.5;
+        }
+
+        // Push A away from B (negative direction) and B away from A (positive direction).
+        a.x -= nx * correction * aFraction;
+        a.z -= nz * correction * aFraction;
+        b.x += nx * correction * bFraction;
+        b.z += nz * correction * bFraction;
+
+        // Source parity: when both are idle and very close (< cell size / 4),
+        // issue a move-away command to one of them to resolve permanent overlap.
+        if (aIdle && bIdle && !aImmobile && !bImmobile
+          && distSqr < PATHFIND_CELL_SIZE * PATHFIND_CELL_SIZE * 0.25) {
+          // Nudge the lower-ID entity away to break the tie.
+          const nudgeTarget = a.id < b.id ? a : b;
+          if (nudgeTarget.moveTarget === null) {
+            const awayX = nudgeTarget.x + (nudgeTarget === a ? -nx : nx) * PATHFIND_CELL_SIZE;
+            const awayZ = nudgeTarget.z + (nudgeTarget === a ? -nz : nz) * PATHFIND_CELL_SIZE;
+            this.issueMoveTo(nudgeTarget.id, awayX, awayZ);
+          }
+        }
+      }
     }
   }
 
