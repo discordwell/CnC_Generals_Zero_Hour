@@ -374,6 +374,9 @@ const ARMOR_SET_FLAG_ELITE = 1 << 1;
 const ARMOR_SET_FLAG_HERO = 1 << 2;
 const ARMOR_SET_FLAG_PLAYER_UPGRADE = 1 << 3;
 const ARMOR_SET_FLAG_WEAK_VERSUS_BASEDEFENSES = 1 << 4;
+const ARMOR_SET_FLAG_SECOND_LIFE = 1 << 5;
+const ARMOR_SET_FLAG_CRATE_UPGRADE_ONE = 1 << 6;
+const ARMOR_SET_FLAG_CRATE_UPGRADE_TWO = 1 << 7;
 
 // Source parity: WeaponBonusConditionType — bitmask flags for active weapon bonus conditions.
 const WEAPON_BONUS_GARRISONED       = 1 << 0;
@@ -519,6 +522,9 @@ const ARMOR_SET_FLAG_MASK_BY_NAME = new Map<string, number>([
   ['HERO', ARMOR_SET_FLAG_HERO],
   ['PLAYER_UPGRADE', ARMOR_SET_FLAG_PLAYER_UPGRADE],
   ['WEAK_VERSUS_BASEDEFENSES', ARMOR_SET_FLAG_WEAK_VERSUS_BASEDEFENSES],
+  ['SECOND_LIFE', ARMOR_SET_FLAG_SECOND_LIFE],
+  ['CRATE_UPGRADE_ONE', ARMOR_SET_FLAG_CRATE_UPGRADE_ONE],
+  ['CRATE_UPGRADE_TWO', ARMOR_SET_FLAG_CRATE_UPGRADE_TWO],
 ]);
 
 const SOURCE_DAMAGE_TYPE_NAMES: readonly string[] = [
@@ -2673,8 +2679,9 @@ type BodyDamageState = 0 | 1 | 2 | 3; // PRISTINE=0, DAMAGED=1, REALLYDAMAGED=2,
  *   ImmortalBody — health never drops below 1 (cannot die from any damage)
  *   InactiveBody — no health, ignores all damage (except UNRESISTABLE triggers death)
  *   HiveStructureBody — redirects specified damage types to spawn slaves when they exist
+ *   UndeadBody — first fatal hit caps damage to 1HP, triggers second life with reduced max health
  */
-type BodyModuleType = 'ACTIVE' | 'STRUCTURE' | 'HIGHLANDER' | 'IMMORTAL' | 'INACTIVE' | 'HIVE_STRUCTURE';
+type BodyModuleType = 'ACTIVE' | 'STRUCTURE' | 'HIGHLANDER' | 'IMMORTAL' | 'INACTIVE' | 'HIVE_STRUCTURE' | 'UNDEAD';
 
 function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState {
   if (maxHealth <= 0) return 0;
@@ -5450,6 +5457,9 @@ export class GameLogicSubsystem implements Subsystem {
       locomotorDownhillOnly: locomotorProfile.downhillOnly,
       bodyType: bodyStats.bodyType,
       hiveStructureProfile: this.extractHiveStructureProfile(objectDef, bodyStats.bodyType),
+      // Source parity: UndeadBody — second life config and runtime state.
+      undeadSecondLifeMaxHealth: bodyStats.secondLifeMaxHealth,
+      undeadIsSecondLife: false,
       canTakeDamage: bodyStats.bodyType !== 'INACTIVE' && bodyStats.maxHealth > 0,
       maxHealth: bodyStats.maxHealth,
       health: bodyStats.bodyType === 'INACTIVE' ? 0 : bodyStats.initialHealth,
@@ -5772,6 +5782,8 @@ export class GameLogicSubsystem implements Subsystem {
       fxListDieProfiles: this.extractFXListDieProfiles(objectDef),
       // GrantUpgradeCreate
       grantUpgradeCreateProfiles: this.extractGrantUpgradeCreateProfiles(objectDef),
+      // LockWeaponCreate
+      lockWeaponCreateSlot: this.extractLockWeaponCreateSlot(objectDef),
       // UpgradeDie
       upgradeDieProfiles: this.extractUpgradeDieProfiles(objectDef),
       producerEntityId: 0,
@@ -5973,6 +5985,13 @@ export class GameLogicSubsystem implements Subsystem {
       if (prof.scienceRequired === null || this.hasSideScience(entity.side ?? '', prof.scienceRequired)) {
         this.setMinVeterancyLevel(entity, prof.startingLevel);
       }
+    }
+
+    // Source parity: LockWeaponCreate::onBuildComplete — lock weapon slot permanently.
+    // For non-building entities this fires immediately at creation.
+    if (entity.lockWeaponCreateSlot !== null && !entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+      entity.forcedWeaponSlot = entity.lockWeaponCreateSlot;
+      entity.weaponLockStatus = 'LOCKED_PERMANENTLY';
     }
 
     // Source parity: FireWeaponUpdate — initialize per-module fire timers with initial delay.
@@ -6986,14 +7005,16 @@ export class GameLogicSubsystem implements Subsystem {
     maxHealth: number;
     initialHealth: number;
     bodyType: BodyModuleType;
+    secondLifeMaxHealth: number;
   } {
     if (!objectDef) {
-      return { maxHealth: 0, initialHealth: 0, bodyType: 'ACTIVE' };
+      return { maxHealth: 0, initialHealth: 0, bodyType: 'ACTIVE', secondLifeMaxHealth: 0 };
     }
 
     let maxHealth: number | null = null;
     let initialHealth: number | null = null;
     let bodyType: BodyModuleType = 'ACTIVE';
+    let secondLifeMaxHealth = 0;
 
     const visitBlock = (block: IniBlock): void => {
       if (block.type.toUpperCase() === 'BODY') {
@@ -7017,6 +7038,11 @@ export class GameLogicSubsystem implements Subsystem {
           bodyType = 'STRUCTURE';
         } else if (moduleName === 'HIVESTRUCTUREBODY') {
           bodyType = 'HIVE_STRUCTURE';
+        } else if (moduleName === 'UNDEADBODY') {
+          bodyType = 'UNDEAD';
+          // Source parity: UndeadBody.cpp — SecondLifeMaxHealth defaults to 1.
+          const slmh = readNumericField(block.fields, ['SecondLifeMaxHealth']);
+          secondLifeMaxHealth = (slmh !== null && Number.isFinite(slmh) && slmh > 0) ? slmh : 1;
         }
       }
       for (const child of block.blocks) {
@@ -7039,6 +7065,7 @@ export class GameLogicSubsystem implements Subsystem {
       maxHealth: resolvedMax,
       initialHealth: resolvedInitial,
       bodyType,
+      secondLifeMaxHealth,
     };
   }
 
@@ -8638,6 +8665,39 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profiles;
+  }
+
+  /**
+   * Source parity: LockWeaponCreate — extract weapon slot to lock from INI.
+   * C++ file: LockWeaponCreate.cpp — locks weapon choice to specified slot on build complete.
+   */
+  private extractLockWeaponCreateSlot(objectDef: ObjectDef | undefined): number | null {
+    if (!objectDef) return null;
+    let slot: number | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (slot !== null) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'LOCKWEAPONCREATE') {
+          const slotName = readStringField(block.fields, ['SlotToLock'])?.trim().toUpperCase() ?? '';
+          if (slotName === 'SECONDARY_WEAPON') {
+            slot = 1;
+          } else if (slotName === 'TERTIARY_WEAPON') {
+            slot = 2;
+          } else {
+            // PRIMARY_WEAPON or default.
+            slot = 0;
+          }
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return slot;
   }
 
   /**
@@ -14817,6 +14877,12 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: GrantUpgradeCreate::onBuildComplete — grant upgrades when construction finishes.
     for (const prof of building.grantUpgradeCreateProfiles) {
       this.applyGrantUpgradeCreate(building, prof);
+    }
+
+    // Source parity: LockWeaponCreate::onBuildComplete — lock weapon slot for buildings.
+    if (building.lockWeaponCreateSlot !== null) {
+      building.forcedWeaponSlot = building.lockWeaponCreateSlot;
+      building.weaponLockStatus = 'LOCKED_PERMANENTLY';
     }
   }
 
@@ -22509,10 +22575,26 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
+    // Source parity: UndeadBody::attemptDamage — on first life, if damage would kill,
+    // cap pre-armor amount to (health - 1). After damage applied, trigger second life.
+    // C++ file: UndeadBody.cpp:76-97.
+    let shouldStartSecondLife = false;
+    let inputAmount = amount;
+    if (
+      target.bodyType === 'UNDEAD'
+      && !target.undeadIsSecondLife
+      && damageType.toUpperCase() !== 'UNRESISTABLE'
+      && damageType.toUpperCase() !== 'HEALING'
+      && amount >= target.health
+    ) {
+      inputAmount = Math.min(amount, target.health - 1);
+      if (inputAmount <= 0) inputAmount = 0;
+      shouldStartSecondLife = true;
+    }
+
     // Source parity: HighlanderBody::attemptDamage — cap raw damage before armor adjustment
     // so health doesn't drop below 1, UNLESS damage type is UNRESISTABLE.
     // C++ caps damageInfo->in.m_amount (pre-armor) then calls ActiveBody::attemptDamage.
-    let inputAmount = amount;
     if (target.bodyType === 'HIGHLANDER' && damageType.toUpperCase() !== 'UNRESISTABLE') {
       inputAmount = Math.min(inputAmount, target.health - 1);
       if (inputAmount <= 0) {
@@ -22552,6 +22634,21 @@ export class GameLogicSubsystem implements Subsystem {
       if (oldDamageState !== newDamageState) {
         this.supplyWarehouseCripplingOnStateChange(target, oldDamageState, newDamageState);
       }
+    }
+
+    // Source parity: UndeadBody::startSecondLife — after damage applied, transition to second life.
+    // Sets new max health (full heal), SECOND_LIFE armor flag, and model condition.
+    // C++ file: UndeadBody.cpp:101-143.
+    if (shouldStartSecondLife && target.bodyType === 'UNDEAD' && !target.undeadIsSecondLife) {
+      target.undeadIsSecondLife = true;
+      target.maxHealth = target.undeadSecondLifeMaxHealth;
+      target.health = target.maxHealth; // FULLY_HEAL
+      target.armorSetFlagsMask |= ARMOR_SET_FLAG_SECOND_LIFE;
+      target.modelConditionFlags.add('SECOND_LIFE');
+      // Source parity: UndeadBody fires a SlowDeathBehavior for the transformation visual.
+      // In C++ this runs the slow death animation while the entity stays alive.
+      // Our tryBeginSlowDeath marks entity as dead, so we skip it here — the model condition
+      // provides the visual transformation. A full parity slow-death-while-alive can be added later.
     }
 
     // Source parity: ActiveBody::getLastDamageTimestamp — track last damage frame for stealth.

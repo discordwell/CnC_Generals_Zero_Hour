@@ -24416,3 +24416,212 @@ describe('PowerPlantUpdate', () => {
     expect(entity.powerPlantUpdateState.extended).toBe(false);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UndeadBody
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('UndeadBody', () => {
+  it('extracts UNDEAD body type and SecondLifeMaxHealth from INI', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UndeadUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'UndeadBody ModuleTag_Body', {
+            MaxHealth: 200,
+            InitialHealth: 200,
+            SecondLifeMaxHealth: 50,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('UndeadUnit', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        bodyType: string;
+        undeadSecondLifeMaxHealth: number;
+        undeadIsSecondLife: boolean;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.bodyType).toBe('UNDEAD');
+    expect(entity.undeadSecondLifeMaxHealth).toBe(50);
+    expect(entity.undeadIsSecondLife).toBe(false);
+  });
+
+  it('caps fatal damage on first life and transitions to second life', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UndeadUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'UndeadBody ModuleTag_Body', {
+            MaxHealth: 200,
+            InitialHealth: 200,
+            SecondLifeMaxHealth: 50,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('UndeadUnit', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        maxHealth: number;
+        destroyed: boolean;
+        bodyType: string;
+        undeadIsSecondLife: boolean;
+        armorSetFlagsMask: number;
+        modelConditionFlags: Set<string>;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Apply fatal damage — should NOT kill, should trigger second life.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, entity, 9999, 'EXPLOSION');
+
+    expect(entity.destroyed).toBe(false);
+    expect(entity.undeadIsSecondLife).toBe(true);
+    expect(entity.maxHealth).toBe(50);
+    expect(entity.health).toBe(50); // FULLY_HEAL at new max health
+    expect(entity.armorSetFlagsMask & (1 << 5)).not.toBe(0); // ARMOR_SET_FLAG_SECOND_LIFE
+    expect(entity.modelConditionFlags.has('SECOND_LIFE')).toBe(true);
+  });
+
+  it('takes normal damage on second life and dies normally', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UndeadUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'UndeadBody ModuleTag_Body', {
+            MaxHealth: 200,
+            InitialHealth: 200,
+            SecondLifeMaxHealth: 50,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('UndeadUnit', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        maxHealth: number;
+        destroyed: boolean;
+        undeadIsSecondLife: boolean;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    const applyDmg = (d: number, dt: string) =>
+      (logic as unknown as {
+        applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+      }).applyWeaponDamageAmount(null, entity, d, dt);
+
+    // First: trigger second life.
+    applyDmg(9999, 'EXPLOSION');
+    expect(entity.undeadIsSecondLife).toBe(true);
+    expect(entity.health).toBe(50);
+
+    // Second: apply fatal damage on second life — should die normally.
+    applyDmg(9999, 'EXPLOSION');
+    logic.update(1 / 30);
+    expect(entity.health).toBe(0);
+    expect(entity.destroyed).toBe(true);
+  });
+
+  it('UNRESISTABLE damage kills on first life without second life', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UndeadUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'UndeadBody ModuleTag_Body', {
+            MaxHealth: 200,
+            InitialHealth: 200,
+            SecondLifeMaxHealth: 50,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('UndeadUnit', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        destroyed: boolean;
+        undeadIsSecondLife: boolean;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // UNRESISTABLE should bypass the second life mechanic.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, entity, 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(entity.undeadIsSecondLife).toBe(false);
+    expect(entity.health).toBe(0);
+    expect(entity.destroyed).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LockWeaponCreate
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('LockWeaponCreate', () => {
+  it('extracts weapon slot lock from INI and applies on creation', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('LockedUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'LockWeaponCreate ModuleTag_LWC', {
+            SlotToLock: 'SECONDARY_WEAPON',
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('LockedUnit', 50, 50)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        lockWeaponCreateSlot: number | null;
+        forcedWeaponSlot: number | null;
+        weaponLockStatus: string;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.lockWeaponCreateSlot).toBe(1); // SECONDARY_WEAPON
+    expect(entity.forcedWeaponSlot).toBe(1);
+    expect(entity.weaponLockStatus).toBe('LOCKED_PERMANENTLY');
+  });
+
+  it('locks PRIMARY_WEAPON by default', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('LockedUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'LockWeaponCreate ModuleTag_LWC', {
+            SlotToLock: 'PRIMARY_WEAPON',
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('LockedUnit', 50, 50)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        forcedWeaponSlot: number | null;
+        weaponLockStatus: string;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.forcedWeaponSlot).toBe(0); // PRIMARY_WEAPON
+    expect(entity.weaponLockStatus).toBe('LOCKED_PERMANENTLY');
+  });
+});
