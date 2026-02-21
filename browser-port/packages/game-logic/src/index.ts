@@ -11776,17 +11776,38 @@ export class GameLogicSubsystem implements Subsystem {
       case 'moveTo': {
         const moveEntity = this.spawnedEntities.get(command.entityId);
         const moveJs = moveEntity?.jetAIState;
-        if (moveJs && (moveJs.state === 'PARKED' || moveJs.state === 'RELOAD_AMMO')) {
-          // Aircraft is parked/reloading — store as pending, takeoff will execute it.
-          moveJs.pendingCommand = { type: 'moveTo', x: command.targetX, z: command.targetZ };
-          return;
+        if (moveJs) {
+          const s = moveJs.state;
+          if (s === 'TAKING_OFF' || s === 'LANDING' || s === 'RETURNING_FOR_LANDING') {
+            // Source parity: C++ JetAIUpdate::aiDoCommand lines 2415-2420 — queue during takeoff/landing.
+            moveJs.pendingCommand = { type: 'moveTo', x: command.targetX, z: command.targetZ };
+            return;
+          }
+          if (s === 'PARKED' || s === 'RELOAD_AMMO') {
+            // Aircraft is parked/reloading — store as pending, takeoff will execute it.
+            moveJs.pendingCommand = { type: 'moveTo', x: command.targetX, z: command.targetZ };
+            return;
+          }
         }
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
         return;
       }
-      case 'attackMoveTo':
+      case 'attackMoveTo': {
+        const amEntity = this.spawnedEntities.get(command.entityId);
+        const amJs = amEntity?.jetAIState;
+        if (amJs) {
+          const s = amJs.state;
+          if (s === 'TAKING_OFF' || s === 'LANDING' || s === 'RETURNING_FOR_LANDING') {
+            amJs.pendingCommand = { type: 'moveTo', x: command.targetX, z: command.targetZ };
+            return;
+          }
+          if (s === 'PARKED' || s === 'RELOAD_AMMO') {
+            amJs.pendingCommand = { type: 'moveTo', x: command.targetX, z: command.targetZ };
+            return;
+          }
+        }
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(
@@ -11796,6 +11817,7 @@ export class GameLogicSubsystem implements Subsystem {
           command.attackDistance,
         );
         return;
+      }
       case 'guardPosition':
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
@@ -11812,10 +11834,18 @@ export class GameLogicSubsystem implements Subsystem {
       case 'attackEntity': {
         const atkEntity = this.spawnedEntities.get(command.entityId);
         const atkJs = atkEntity?.jetAIState;
-        if (atkJs && (atkJs.state === 'PARKED' || atkJs.state === 'RELOAD_AMMO')) {
-          // Aircraft is parked/reloading — store as pending, takeoff will execute it.
-          atkJs.pendingCommand = { type: 'attackEntity', targetId: command.targetEntityId };
-          return;
+        if (atkJs) {
+          const s = atkJs.state;
+          if (s === 'TAKING_OFF' || s === 'LANDING' || s === 'RETURNING_FOR_LANDING') {
+            // Source parity: C++ JetAIUpdate::aiDoCommand lines 2415-2420 — queue during takeoff/landing.
+            atkJs.pendingCommand = { type: 'attackEntity', targetId: command.targetEntityId };
+            return;
+          }
+          if (s === 'PARKED' || s === 'RELOAD_AMMO') {
+            // Aircraft is parked/reloading — store as pending, takeoff will execute it.
+            atkJs.pendingCommand = { type: 'attackEntity', targetId: command.targetEntityId };
+            return;
+          }
         }
         this.cancelEntityCommandPathActions(command.entityId);
         this.issueAttackEntity(
@@ -19484,6 +19514,14 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      // Source parity: parked/reloading aircraft should not auto-acquire targets.
+      // C++ JetAI state machine controls command dispatch; grounded jets are inert.
+      const autoTargetJs = entity.jetAIState;
+      if (autoTargetJs && (autoTargetJs.state === 'PARKED' || autoTargetJs.state === 'RELOAD_AMMO'
+        || autoTargetJs.state === 'TAKING_OFF' || autoTargetJs.state === 'LANDING')) {
+        continue;
+      }
+
       // Source parity: ActiveBody::shouldRetaliate — skip if using a special ability.
       if (entity.objectStatusFlags.has('IS_USING_ABILITY')) {
         continue;
@@ -19730,7 +19768,8 @@ export class GameLogicSubsystem implements Subsystem {
     for (const candidate of this.spawnedEntities.values()) {
       if (candidate.destroyed) continue;
       if (!candidate.kindOf.has('FS_AIRFIELD')) continue;
-      if (candidate.side !== entity.side) continue;
+      // Source parity: C++ uses PartitionFilterRelationship(jet, ALLOW_ALLIES).
+      if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ALLIES) continue;
       // Skip airfields that are under construction.
       if (candidate.constructionPercent !== CONSTRUCTION_COMPLETE) continue;
       const dx = candidate.x - entity.x;
