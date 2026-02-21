@@ -1031,6 +1031,12 @@ interface ContainProfile {
   transportCapacity: number;
   /** Source parity: TunnelContainModuleData::m_framesForFullHeal — frames for 0→100% heal. 0 = no heal. */
   timeForFullHealFrames: number;
+  /** Source parity: OpenContainModuleData::m_damagePercentageToUnits — fraction (0-1) of each passenger's
+   *  maxHealth applied as UNRESISTABLE damage when container dies. 0 = no damage. Default: 0. */
+  damagePercentToUnits: number;
+  /** Source parity: OpenContainModuleData::m_isBurnedDeathToUnits — death type for damage-to-contained.
+   *  TRUE = BURNED, FALSE = NORMAL. Default: true (C++ default). */
+  burnedDeathToUnits: boolean;
 }
 
 /**
@@ -7336,6 +7342,12 @@ export class GameLogicSubsystem implements Subsystem {
       const payloadTemplateNames = readStringList(block.fields, ['PayloadTemplateName']).map((templateName) =>
         templateName.toUpperCase(),
       );
+      // Source parity: OpenContainModuleData — parsePercentToReal (INI percentage → 0-1 fraction).
+      const damagePercentRaw = readNumericField(block.fields, ['DamagePercentToUnits']);
+      const damagePercentToUnits = damagePercentRaw != null ? damagePercentRaw / 100 : 0;
+      // Source parity: OpenContainModuleData::m_isBurnedDeathToUnits — default TRUE.
+      const burnedDeathRaw = readBooleanField(block.fields, ['BurnedDeathToUnits']);
+      const burnedDeathToUnits = burnedDeathRaw !== false;
 
       if (moduleType === 'OPENCONTAIN') {
         profile = {
@@ -7345,6 +7357,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       } else if (moduleType === 'TRANSPORTCONTAIN') {
         profile = {
@@ -7354,6 +7368,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       } else if (moduleType === 'OVERLORDCONTAIN') {
         profile = {
@@ -7363,6 +7379,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       } else if (moduleType === 'HELIXCONTAIN') {
         // HELIXCONTAIN is a Zero Hour-specific container module name used by data INIs;
@@ -7375,6 +7393,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       } else if (moduleType === 'GARRISONCONTAIN') {
         // GarrisonContain is OpenContain-derived in source but always returns TRUE from
@@ -7386,6 +7406,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: containMax > 0 ? containMax : 10,
           transportCapacity: 0,
           timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       } else if (moduleType === 'TUNNELCONTAIN') {
         // Source parity: TunnelContain — per-player shared tunnel network.
@@ -7398,6 +7420,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: 0,
           timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       } else if (moduleType === 'HEALCONTAIN') {
         // Source parity: HealContain — passengers healed inside, auto-ejected when full health.
@@ -7410,6 +7434,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       } else if (moduleType === 'INTERNETHACKCONTAIN') {
         // Source parity: InternetHackContain — extends TransportContain, auto-issues
@@ -7421,6 +7447,8 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
         };
       }
 
@@ -26842,6 +26870,13 @@ export class GameLogicSubsystem implements Subsystem {
       this.handleTunnelDestroyed(entity);
     }
 
+    // Source parity: OpenContain::onDie — apply damage to contained units before releasing (C++ line 862-866).
+    // processDamageToContained: percentDamage * maxHealth as UNRESISTABLE, deathType BURNED or NORMAL.
+    if (entity.containProfile && entity.containProfile.moduleType !== 'TUNNEL'
+        && entity.containProfile.damagePercentToUnits > 0) {
+      this.processDamageToContained(entity);
+    }
+
     // Source parity: Contain::onDie — release contained entities on container death.
     // Garrison, transport, helix, and overlord passengers are ejected at the container position.
     if (entity.containProfile && entity.containProfile.moduleType !== 'TUNNEL') {
@@ -27353,6 +27388,30 @@ export class GameLogicSubsystem implements Subsystem {
    *   - Otherwise: kill all contained outright
    * - Fires ShockwaveWeaponTemplate at victim position
    */
+  /**
+   * Source parity: OpenContain::processDamageToContained (C++ OpenContain.cpp line 1441).
+   * Applies percentDamage * maxHealth as UNRESISTABLE damage to each contained unit.
+   * If percentDamage == 1.0 and the unit survives (e.g., fireproof), force-kill it.
+   * Death type: BURNED if burnedDeathToUnits, else NORMAL.
+   */
+  private processDamageToContained(container: MapEntity): void {
+    const profile = container.containProfile;
+    if (!profile || profile.damagePercentToUnits <= 0) return;
+    const percentDamage = profile.damagePercentToUnits;
+    const deathType = profile.burnedDeathToUnits ? 'BURNED' : undefined;
+    const passengerIds = this.collectContainedEntityIds(container.id);
+    for (const passengerId of passengerIds) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) continue;
+      const damage = passenger.maxHealth * percentDamage;
+      this.applyWeaponDamageAmount(container.id, passenger, damage, 'UNRESISTABLE', deathType);
+      // Source parity: if percentDamage == 1.0 and unit survived (fireproof), force kill (C++ line 1470-1471).
+      if (percentDamage >= 1.0 && !passenger.destroyed && passenger.health > 0) {
+        this.applyWeaponDamageAmount(container.id, passenger, passenger.health, 'UNRESISTABLE', deathType);
+      }
+    }
+  }
+
   private executeBunkerBuster(entity: MapEntity): void {
     const profile = entity.bunkerBusterProfile;
     if (!profile) return;
@@ -27365,60 +27424,65 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const victimId = entity.bunkerBusterVictimId;
-    if (victimId === null) return;
-    const victim = this.spawnedEntities.get(victimId);
-    if (!victim) return;
+    const victim = victimId !== null ? this.spawnedEntities.get(victimId) : undefined;
 
     // Source parity: check if victim has a bustable contain module (C++ line 207).
     // GarrisonContain, TunnelContain, and CaveContain return isBustable()=TRUE.
     // TransportContain, OverlordContain return FALSE.
-    const isBustable = victim.containProfile?.moduleType === 'GARRISON'
-      || victim.containProfile?.moduleType === 'TUNNEL';
-    if (isBustable) {
-      // Collect passengers in this bustable container.
-      const passengerIds: number[] = [];
-      for (const candidate of this.spawnedEntities.values()) {
-        if (candidate.destroyed) continue;
-        if (candidate.garrisonContainerId === victimId
-          || candidate.tunnelContainerId === victimId) {
-          passengerIds.push(candidate.id);
+    if (victim && !victim.destroyed) {
+      const isBustable = victim.containProfile?.moduleType === 'GARRISON'
+        || victim.containProfile?.moduleType === 'TUNNEL'
+        || victim.containProfile?.moduleType === 'CAVE';
+      if (isBustable) {
+        // Collect passengers in this bustable container.
+        const passengerIds: number[] = [];
+        for (const candidate of this.spawnedEntities.values()) {
+          if (candidate.destroyed) continue;
+          if (candidate.garrisonContainerId === victimId
+            || candidate.tunnelContainerId === victimId) {
+            passengerIds.push(candidate.id);
+          }
         }
-      }
 
-      if (profile.occupantDamageWeaponName) {
-        // Source parity: harmAndForceExitAllContained — release then damage each occupant (C++ line 211-218).
-        const weaponDef = this.iniDataRegistry?.getWeapon(profile.occupantDamageWeaponName);
-        const damageType = weaponDef
-          ? (readStringField(weaponDef.fields, ['DamageType'])?.toUpperCase() ?? 'EXPLOSION')
-          : 'EXPLOSION';
-        const deathType = weaponDef
-          ? (readStringField(weaponDef.fields, ['DeathType'])?.toUpperCase() || undefined)
-          : undefined;
-        for (const passengerId of passengerIds) {
-          const passenger = this.spawnedEntities.get(passengerId);
-          if (!passenger || passenger.destroyed) continue;
-          // Source parity: removeFromContain(rider, true) — force exit.
-          this.releaseEntityFromContainer(passenger);
-          // Source parity: rider->attemptDamage(&damageInfo) with m_amount=100 (C++ line 217).
-          this.applyWeaponDamageAmount(entity.id, passenger, 100, damageType, deathType);
-        }
-      } else {
-        // Source parity: killAllContained() — kill outright (C++ line 221).
-        for (const passengerId of passengerIds) {
-          const passenger = this.spawnedEntities.get(passengerId);
-          if (!passenger || passenger.destroyed) continue;
-          this.applyWeaponDamageAmount(entity.id, passenger, passenger.maxHealth, 'UNRESISTABLE');
+        if (profile.occupantDamageWeaponName) {
+          // Source parity: harmAndForceExitAllContained — release then damage each occupant (C++ line 211-218).
+          const weaponDef = this.iniDataRegistry?.getWeapon(profile.occupantDamageWeaponName);
+          const damageType = weaponDef
+            ? (readStringField(weaponDef.fields, ['DamageType'])?.toUpperCase() ?? 'EXPLOSION')
+            : 'EXPLOSION';
+          const deathType = weaponDef
+            ? (readStringField(weaponDef.fields, ['DeathType'])?.toUpperCase() || undefined)
+            : undefined;
+          for (const passengerId of passengerIds) {
+            const passenger = this.spawnedEntities.get(passengerId);
+            if (!passenger || passenger.destroyed) continue;
+            // Source parity: removeFromContain(rider, true) — force exit.
+            this.releaseEntityFromContainer(passenger);
+            // Source parity: rider->attemptDamage(&damageInfo) with m_amount=100 (C++ line 217).
+            this.applyWeaponDamageAmount(entity.id, passenger, 100, damageType, deathType);
+          }
+        } else {
+          // Source parity: killAllContained() — release then kill outright (C++ line 221).
+          for (const passengerId of passengerIds) {
+            const passenger = this.spawnedEntities.get(passengerId);
+            if (!passenger || passenger.destroyed) continue;
+            this.releaseEntityFromContainer(passenger);
+            this.applyWeaponDamageAmount(entity.id, passenger, passenger.maxHealth, 'UNRESISTABLE');
+          }
         }
       }
     }
 
     // Source parity: fire shockwave weapon at victim position (C++ line 244-245).
+    // C++: objectForFX = victim building (determines side for relationship filtering).
+    // Shockwave fires even if victim was already destroyed — fall back to bomb position.
     if (profile.shockwaveWeaponName) {
       const shockwaveWeaponDef = this.iniDataRegistry?.getWeapon(profile.shockwaveWeaponName);
       if (shockwaveWeaponDef) {
-        // Source parity: TheWeaponStore->createAndFireTempWeapon(m_shockwaveWeaponTemplate, objectForFX, objectForFX->getPosition()).
-        // objectForFX is the victim building when target exists.
-        this.fireTemporaryWeaponAtPosition(entity, shockwaveWeaponDef, victim.x, victim.z);
+        const shockwaveSource = (victim && !victim.destroyed) ? victim : entity;
+        const shockwaveX = victim ? victim.x : entity.x;
+        const shockwaveZ = victim ? victim.z : entity.z;
+        this.fireTemporaryWeaponAtPosition(shockwaveSource, shockwaveWeaponDef, shockwaveX, shockwaveZ);
       }
     }
   }

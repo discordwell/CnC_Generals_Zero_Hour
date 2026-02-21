@@ -20657,6 +20657,163 @@ describe('NeutronBlastBehavior', () => {
   });
 });
 
+// ─── processDamageToContained ────────────────────────────────────────────────
+describe('processDamageToContained', () => {
+  it('applies percentage damage to contained units when container dies', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DamageTransport', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_TC', {
+            ContainMax: 5,
+            DamagePercentToUnits: 50, // 50% → 0.5 fraction
+          }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 5 }),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('DamageTransport', 50, 50),
+        makeMapObject('Passenger', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; maxHealth: number;
+        transportContainerId: number | null;
+      }>;
+      applyWeaponDamageAmount(a: number | null, t: unknown, amount: number, dt: string): void;
+    };
+
+    // Put passenger inside transport.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    const passenger = priv.spawnedEntities.get(2)!;
+    expect(passenger.transportContainerId).toBe(1);
+
+    // Kill the transport.
+    const transport = priv.spawnedEntities.get(1)!;
+    priv.applyWeaponDamageAmount(null, transport, 1000, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    // Passenger should have taken 50% of maxHealth (200 * 0.5 = 100) as UNRESISTABLE damage.
+    // Passenger started at 200 health → should now be at 100.
+    expect(transport.destroyed).toBe(true);
+    expect(passenger.destroyed).toBe(false);
+    expect(passenger.health).toBe(100);
+  });
+
+  it('force-kills fireproof units when damagePercent is 100%', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DeathTransport', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_TC', {
+            ContainMax: 5,
+            DamagePercentToUnits: 100, // 100% → 1.0 fraction
+          }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 5 }),
+        makeObjectDef('ToughPassenger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('DeathTransport', 50, 50),
+        makeMapObject('ToughPassenger', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; maxHealth: number;
+        transportContainerId: number | null;
+      }>;
+      applyWeaponDamageAmount(a: number | null, t: unknown, amount: number, dt: string): void;
+    };
+
+    // Put passenger inside transport.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    const passenger = priv.spawnedEntities.get(2)!;
+    expect(passenger.transportContainerId).toBe(1);
+
+    // Kill the transport.
+    const transport = priv.spawnedEntities.get(1)!;
+    priv.applyWeaponDamageAmount(null, transport, 1000, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    // With 100% damage, passenger gets full maxHealth as damage.
+    // Even if first damage doesn't kill (due to armor), the force-kill should ensure death.
+    expect(transport.destroyed).toBe(true);
+    expect(passenger.destroyed).toBe(true);
+  });
+
+  it('does not damage contained units when damagePercentToUnits is 0', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SafeTransport', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_TC', {
+            ContainMax: 5,
+            // No DamagePercentToUnits — defaults to 0
+          }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 5 }),
+        makeObjectDef('SafePassenger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SafeTransport', 50, 50),
+        makeMapObject('SafePassenger', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; maxHealth: number;
+        transportContainerId: number | null;
+      }>;
+      applyWeaponDamageAmount(a: number | null, t: unknown, amount: number, dt: string): void;
+    };
+
+    // Put passenger inside transport.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    const passenger = priv.spawnedEntities.get(2)!;
+    expect(passenger.transportContainerId).toBe(1);
+
+    // Kill the transport.
+    const transport = priv.spawnedEntities.get(1)!;
+    priv.applyWeaponDamageAmount(null, transport, 1000, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    // No damage to passenger — default 0%.
+    expect(transport.destroyed).toBe(true);
+    expect(passenger.destroyed).toBe(false);
+    expect(passenger.health).toBe(200);
+  });
+});
+
 // ─── BunkerBusterBehavior ────────────────────────────────────────────────────
 describe('BunkerBusterBehavior', () => {
   it('kills garrisoned units on bomb death with occupant damage weapon', () => {
