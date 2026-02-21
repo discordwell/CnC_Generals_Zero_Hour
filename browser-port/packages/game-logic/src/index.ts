@@ -11894,7 +11894,8 @@ export class GameLogicSubsystem implements Subsystem {
         let commandOption = 0;
         const upperCat = effectCategory.toUpperCase();
         if (upperCat === 'AREA_DAMAGE' || upperCat === 'EMP_PULSE'
-            || upperCat === 'SPY_VISION' || upperCat === 'AREA_HEAL') {
+            || upperCat === 'SPY_VISION' || upperCat === 'AREA_HEAL'
+            || upperCat === 'OCL_SPAWN') {
           commandOption = NEED_TARGET_POS;
         } else if (upperCat === 'CASH_HACK' || upperCat === 'DEFECTOR') {
           commandOption = NEED_TARGET_ENEMY;
@@ -15623,24 +15624,62 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Fire a temporary weapon at a world position (source parity: createAndFireTempWeapon).
-   * Used by mine detonation to fire the DetonationWeapon.
+   * Used by mine detonation, death weapons, FireWeaponUpdate, and OCL FireWeapon nuggets.
+   *
+   * Source parity: Weapon.cpp dealDamageInternal — primary damage to targets within
+   * PrimaryDamageRadius, secondary damage to targets within SecondaryDamageRadius,
+   * filtered by RadiusDamageAffects mask (self/allies/enemies/neutrals).
    */
   private fireTemporaryWeaponAtPosition(source: MapEntity, weaponDef: WeaponDef, targetX: number, targetZ: number): void {
-    // Build a temporary weapon profile to queue damage events.
     const primaryDamage = readNumericField(weaponDef.fields, ['PrimaryDamage']) ?? 0;
     const primaryDamageRadius = readNumericField(weaponDef.fields, ['PrimaryDamageRadius', 'AttackRange']) ?? 0;
+    const secondaryDamage = readNumericField(weaponDef.fields, ['SecondaryDamage']) ?? 0;
+    const secondaryDamageRadius = readNumericField(weaponDef.fields, ['SecondaryDamageRadius']) ?? 0;
     const damageType = readStringField(weaponDef.fields, ['DamageType'])?.toUpperCase() ?? 'EXPLOSION';
     const deathType = readStringField(weaponDef.fields, ['DeathType'])?.toUpperCase() || undefined;
+    const affectsMask = this.resolveWeaponRadiusAffectsMask(weaponDef);
 
-    // Apply area damage centered at the detonation point.
-    if (primaryDamage > 0 && primaryDamageRadius > 0) {
+    const effectRadius = Math.max(primaryDamageRadius, secondaryDamageRadius);
+
+    if (effectRadius > 0 && (primaryDamage > 0 || secondaryDamage > 0)) {
+      const effectRadiusSq = effectRadius * effectRadius;
+      const primaryRadiusSq = primaryDamageRadius * primaryDamageRadius;
+      const sourceSide = this.normalizeSide(source.side);
+
       for (const target of this.spawnedEntities.values()) {
-        if (target.destroyed || target.id === source.id) continue;
+        if (target.destroyed) continue;
+
+        // Source parity: RadiusDamageAffects mask filtering.
+        if (target.id === source.id) {
+          if ((affectsMask & WEAPON_KILLS_SELF) !== 0) {
+            this.applyWeaponDamageAmount(source.id, target, HUGE_DAMAGE_AMOUNT, damageType, deathType);
+            continue;
+          }
+          if ((affectsMask & WEAPON_AFFECTS_SELF) === 0) continue;
+        } else {
+          const targetSide = this.normalizeSide(target.side);
+          const relationship = this.getTeamRelationshipBySides(sourceSide ?? '', targetSide ?? '');
+          let requiredMask = WEAPON_AFFECTS_NEUTRALS;
+          if (relationship === RELATIONSHIP_ALLIES) {
+            requiredMask = WEAPON_AFFECTS_ALLIES;
+          } else if (relationship === RELATIONSHIP_ENEMIES) {
+            requiredMask = WEAPON_AFFECTS_ENEMIES;
+          }
+          if ((affectsMask & requiredMask) === 0) continue;
+        }
+
         const tdx = target.x - targetX;
         const tdz = target.z - targetZ;
-        const dist = Math.sqrt(tdx * tdx + tdz * tdz);
-        if (dist > primaryDamageRadius) continue;
-        this.applyWeaponDamageAmount(source.id, target, primaryDamage, damageType, deathType);
+        const distSq = tdx * tdx + tdz * tdz;
+        if (distSq > effectRadiusSq) continue;
+
+        // Source parity: primary damage within PrimaryDamageRadius,
+        // secondary damage within SecondaryDamageRadius (but outside primary).
+        if (distSq <= primaryRadiusSq && primaryDamage > 0) {
+          this.applyWeaponDamageAmount(source.id, target, primaryDamage, damageType, deathType);
+        } else if (secondaryDamage > 0) {
+          this.applyWeaponDamageAmount(source.id, target, secondaryDamage, damageType, deathType);
+        }
       }
     }
 
@@ -15650,7 +15689,7 @@ export class GameLogicSubsystem implements Subsystem {
       x: targetX,
       y: source.y,
       z: targetZ,
-      radius: primaryDamageRadius,
+      radius: effectRadius,
       sourceEntityId: source.id,
       projectileType: 'ARTILLERY',
     });
