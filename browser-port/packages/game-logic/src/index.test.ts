@@ -27822,6 +27822,129 @@ describe('Script condition groundwork', () => {
       count: 0,
     })).toBe(true);
   });
+
+  it('evaluates skirmish player faction and discovery conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScoutA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 40 }),
+        makeObjectDef('ScoutC', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 40 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScoutA', 10, 10),
+        makeMapObject('ScoutC', 15, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptSkirmishPlayerIsFaction({
+      side: 'America',
+      factionName: 'America',
+    })).toBe(true);
+    expect(logic.evaluateScriptSkirmishPlayerIsFaction({
+      side: 'America',
+      factionName: 'China',
+    })).toBe(false);
+
+    expect(logic.evaluateScriptSkirmishPlayerHasDiscoveredPlayer({
+      side: 'America',
+      discoveredBySide: 'China',
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('STEALTHED');
+
+    // Source parity: stealthed and not detected/disguised objects do not count.
+    expect(logic.evaluateScriptSkirmishPlayerHasDiscoveredPlayer({
+      side: 'America',
+      discoveredBySide: 'China',
+    })).toBe(false);
+  });
+
+  it('evaluates skirmish special power ready condition with cached retry frames', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SuperweaponBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'SpecialPowerCreate ModuleTag_SPC', {}),
+          makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SuperWeapon', {
+            SpecialPowerTemplate: 'SuperweaponParticleCannon',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SuperweaponParticleCannon', { ReloadTime: 6000 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SuperweaponBuilding', 100, 100)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    // ReloadTime 6000ms => power is not ready on frame 0.
+    expect(logic.evaluateScriptSkirmishSpecialPowerIsReady({
+      side: 'America',
+      specialPowerName: 'SuperweaponParticleCannon',
+      conditionCacheId: 'sp-ready',
+    })).toBe(false);
+
+    for (let i = 0; i < 181; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.evaluateScriptSkirmishSpecialPowerIsReady({
+      side: 'America',
+      specialPowerName: 'SuperweaponParticleCannon',
+      conditionCacheId: 'sp-ready',
+    })).toBe(true);
+  });
+
+  it('returns false forever for unknown skirmish special power names', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CommandCenter', 50, 50)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    expect(logic.evaluateScriptSkirmishSpecialPowerIsReady({
+      side: 'America',
+      specialPowerName: 'MissingPower',
+      conditionCacheId: 'sp-missing',
+    })).toBe(false);
+
+    for (let i = 0; i < 60; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.evaluateScriptSkirmishSpecialPowerIsReady({
+      side: 'America',
+      specialPowerName: 'MissingPower',
+      conditionCacheId: 'sp-missing',
+    })).toBe(false);
+  });
 });
 
 describe('SubdualDamageHelper', () => {

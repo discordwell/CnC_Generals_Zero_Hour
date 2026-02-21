@@ -5250,6 +5250,121 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerIsFaction.
+   */
+  evaluateScriptSkirmishPlayerIsFaction(filter: {
+    side: string;
+    factionName: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedFaction = this.normalizeSide(filter.factionName);
+    if (!normalizedSide || !normalizedFaction) {
+      return false;
+    }
+    return normalizedSide === normalizedFaction;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerHasDiscoveredPlayer.
+   */
+  evaluateScriptSkirmishPlayerHasDiscoveredPlayer(filter: {
+    side: string;
+    discoveredBySide: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedDiscoveredBySide = this.normalizeSide(filter.discoveredBySide);
+    if (!normalizedSide || !normalizedDiscoveredBySide) {
+      return false;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      // Source parity: held objects do not count as discovered.
+      if (entity.objectStatusFlags.has('DISABLED_HELD')) continue;
+      // Source parity: stealthed + not detected/disguised objects are not visible.
+      if (entity.objectStatusFlags.has('STEALTHED')
+        && !entity.objectStatusFlags.has('DETECTED')
+        && !entity.objectStatusFlags.has('DISGUISED')) {
+        continue;
+      }
+
+      const shroudStatus = this.resolveEntityShroudStatusForSide(entity, normalizedDiscoveredBySide);
+      if (shroudStatus === 'CLEAR' || shroudStatus === 'FOGGED') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishSpecialPowerIsReady.
+   * Uses condition cache id to mirror Parameter::friend_setInt(nextFrame) short-circuiting.
+   */
+  evaluateScriptSkirmishSpecialPowerIsReady(filter: {
+    side: string;
+    specialPowerName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    if (cache && cache.customData === -1 && this.frameCounter < cache.customFrame) {
+      return false;
+    }
+
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(filter.specialPowerName);
+    if (!normalizedSide || !normalizedSpecialPowerName) {
+      if (cache) {
+        cache.customData = -1;
+        cache.customFrame = this.frameCounter;
+      }
+      return false;
+    }
+
+    const specialPowerDef = this.resolveSpecialPowerDefByName(normalizedSpecialPowerName);
+    if (!specialPowerDef) {
+      // Source parity: friend_setInt(-1) marks as never true.
+      if (cache) {
+        cache.customData = -1;
+        cache.customFrame = Number.MAX_SAFE_INTEGER;
+      }
+      return false;
+    }
+
+    let nextFrame = this.frameCounter + this.msToLogicFrames(10000);
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) continue;
+      if (this.isEntityScriptSpecialPowerDisabled(entity)) continue;
+
+      const module = entity.specialPowerModules.get(normalizedSpecialPowerName);
+      if (!module) continue;
+
+      const readyFrame = this.resolveSpecialPowerReadyFrameForSourceEntity(
+        normalizedSpecialPowerName,
+        entity.id,
+      );
+      if (readyFrame <= this.frameCounter) {
+        if (cache) {
+          cache.customData = 1;
+          cache.customFrame = this.frameCounter;
+        }
+        return true;
+      }
+      if (readyFrame < nextFrame) {
+        nextFrame = readyFrame;
+      }
+    }
+
+    if (cache) {
+      cache.customData = -1;
+      cache.customFrame = nextFrame;
+    }
+    return false;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerHasCredits.
    * Note: source compares (requestedCredits [cmp] currentMoney), not the reverse.
    */
@@ -13762,6 +13877,33 @@ export class GameLogicSubsystem implements Subsystem {
     return this.compareScriptNumeric(comparison, normalizedCurrentCount, normalizedTargetCount);
   }
 
+  private isEntityScriptSpecialPowerDisabled(entity: MapEntity): boolean {
+    if (entity.objectStatusFlags.has('DISABLED') || entity.objectStatusFlags.has('SCRIPT_DISABLED')) {
+      return true;
+    }
+    for (const status of entity.objectStatusFlags) {
+      if (status.startsWith('DISABLED_')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private resolveSpecialPowerReadyFrameForSourceEntity(
+    normalizedSpecialPowerName: string,
+    sourceEntityId: number,
+  ): number {
+    const sourcesForPower = this.shortcutSpecialPowerSourceByName.get(normalizedSpecialPowerName);
+    if (!sourcesForPower) {
+      return this.frameCounter;
+    }
+    const readyFrame = sourcesForPower.get(sourceEntityId);
+    if (!Number.isFinite(readyFrame)) {
+      return this.frameCounter;
+    }
+    return Math.max(0, Math.trunc(readyFrame!));
+  }
+
   private normalizeSide(side?: string): string {
     return side ? side.trim().toLowerCase() : '';
   }
@@ -20015,17 +20157,25 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private resolveEntityShroudStatusForLocalPlayer(entity: MapEntity): 'CLEAR' | 'FOGGED' | 'SHROUDED' {
     const localSide = this.playerSideByIndex.get(this.localPlayerIndex);
-    if (!localSide) return 'CLEAR';
+    return this.resolveEntityShroudStatusForSide(entity, localSide ?? null);
+  }
+
+  private resolveEntityShroudStatusForSide(
+    entity: MapEntity,
+    viewerSide: string | null | undefined,
+  ): 'CLEAR' | 'FOGGED' | 'SHROUDED' {
+    const normalizedViewerSide = this.normalizeSide(viewerSide ?? '');
+    if (!normalizedViewerSide) return 'CLEAR';
     // Source parity: KINDOF_ALWAYS_VISIBLE bypasses all shroud (Object.cpp line 1804).
     if (entity.kindOf.has('ALWAYS_VISIBLE')) return 'CLEAR';
     // Own entities always visible.
     const entitySide = this.normalizeSide(entity.side);
-    if (entitySide && entitySide === localSide) return 'CLEAR';
+    if (entitySide && entitySide === normalizedViewerSide) return 'CLEAR';
     // Allied entities always visible (source parity: allied shroud is shared).
-    if (entitySide && this.getTeamRelationshipBySides(localSide, entitySide) === RELATIONSHIP_ALLIES) {
+    if (entitySide && this.getTeamRelationshipBySides(normalizedViewerSide, entitySide) === RELATIONSHIP_ALLIES) {
       return 'CLEAR';
     }
-    const vis = this.getCellVisibility(localSide, entity.x, entity.z);
+    const vis = this.getCellVisibility(normalizedViewerSide, entity.x, entity.z);
     if (vis === CELL_CLEAR) return 'CLEAR';
     if (vis === CELL_FOGGED) {
       // Source parity: PartitionManager.cpp lines 1659-1676 — mobile enemies and
