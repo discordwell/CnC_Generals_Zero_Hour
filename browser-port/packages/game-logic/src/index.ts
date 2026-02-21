@@ -5413,6 +5413,40 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateMultiplayerAlliedVictory.
+   */
+  evaluateScriptMultiplayerAlliedVictory(): boolean {
+    const localSide = this.resolveLocalPlayerSide();
+    if (!localSide) {
+      return false;
+    }
+    return this.gameEndFrame !== null && !this.defeatedSides.has(localSide);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateMultiplayerAlliedDefeat.
+   */
+  evaluateScriptMultiplayerAlliedDefeat(): boolean {
+    const localSide = this.resolveLocalPlayerSide();
+    if (!localSide) {
+      // Source parity: observers treat "single alliance remaining" as allied defeat.
+      return this.gameEndFrame !== null;
+    }
+    return this.gameEndFrame !== null && this.defeatedSides.has(localSide);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateMultiplayerPlayerDefeat.
+   */
+  evaluateScriptMultiplayerPlayerDefeat(): boolean {
+    const localSide = this.resolveLocalPlayerSide();
+    if (!localSide) {
+      return false;
+    }
+    return this.defeatedSides.has(localSide) && !this.evaluateScriptMultiplayerAlliedDefeat();
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateSkirmishNamedAreaExists.
    */
   evaluateScriptSkirmishNamedAreaExists(triggerName: string): boolean {

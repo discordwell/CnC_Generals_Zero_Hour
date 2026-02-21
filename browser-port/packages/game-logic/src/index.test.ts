@@ -27729,6 +27729,85 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedSelected({ entityId: 1 })).toBe(false);
   });
 
+  it('evaluates multiplayer allied-victory/allied-defeat/player-defeat conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('UnitC', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('UnitG', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const victoryLogic = new GameLogicSubsystem(new THREE.Scene());
+    victoryLogic.loadMapObjects(
+      makeMap([
+        makeMapObject('UnitA', 10, 10), // id 1
+        makeMapObject('UnitC', 20, 10), // id 2
+        makeMapObject('UnitG', 30, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    victoryLogic.setPlayerSide(0, 'America');
+    victoryLogic.setPlayerSide(1, 'China');
+    victoryLogic.setPlayerSide(2, 'GLA');
+    victoryLogic.setTeamRelationship('America', 'China', 2);
+    victoryLogic.setTeamRelationship('China', 'America', 2);
+
+    const victoryApi = victoryLogic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    victoryApi.applyWeaponDamageAmount(null, victoryApi.spawnedEntities.get(3), 9999, 'UNRESISTABLE');
+    victoryLogic.update(1 / 30);
+
+    expect(victoryLogic.evaluateScriptMultiplayerAlliedVictory()).toBe(true);
+    expect(victoryLogic.evaluateScriptMultiplayerAlliedDefeat()).toBe(false);
+    expect(victoryLogic.evaluateScriptMultiplayerPlayerDefeat()).toBe(false);
+
+    const defeatLogic = new GameLogicSubsystem(new THREE.Scene());
+    defeatLogic.loadMapObjects(
+      makeMap([
+        makeMapObject('UnitA', 10, 10), // id 1
+        makeMapObject('UnitC', 20, 10), // id 2
+        makeMapObject('UnitG', 30, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    defeatLogic.setPlayerSide(0, 'America');
+    defeatLogic.setPlayerSide(1, 'China');
+    defeatLogic.setPlayerSide(2, 'GLA');
+    defeatLogic.setTeamRelationship('America', 'China', 2);
+    defeatLogic.setTeamRelationship('China', 'America', 2);
+
+    const defeatApi = defeatLogic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+
+    // Local side (America) is defeated first while ally China is still alive.
+    defeatApi.applyWeaponDamageAmount(null, defeatApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    defeatLogic.update(1 / 30);
+
+    expect(defeatLogic.evaluateScriptMultiplayerAlliedVictory()).toBe(false);
+    expect(defeatLogic.evaluateScriptMultiplayerAlliedDefeat()).toBe(false);
+    expect(defeatLogic.evaluateScriptMultiplayerPlayerDefeat()).toBe(true);
+
+    // Allies lose once China is also eliminated and only GLA remains.
+    defeatApi.applyWeaponDamageAmount(null, defeatApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    defeatLogic.update(1 / 30);
+
+    expect(defeatLogic.evaluateScriptMultiplayerAlliedDefeat()).toBe(true);
+    expect(defeatLogic.evaluateScriptMultiplayerPlayerDefeat()).toBe(false);
+  });
+
   it('keeps mission-attempt and player-destroyed-N-buildings conditions at source TODO behavior', () => {
     const bundle = makeBundle({
       objects: [
