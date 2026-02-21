@@ -1,5 +1,43 @@
 # Session Summaries
 
+## 2026-02-21T13:20Z — JetAIUpdate Flight State Machine
+- Implemented 7-state JetAI state machine: PARKED → TAKING_OFF → AIRBORNE → RETURNING_FOR_LANDING → LANDING → RELOAD_AMMO → PARKED + CIRCLING_DEAD_AIRFIELD
+- Replaced JetAISneakyProfile with full JetAIProfile (13 fields from INI)
+- JetAIRuntimeState tracks state, altitude, pending commands, producer cache, timers
+- Map-placed aircraft start AIRBORNE; produced aircraft start PARKED (set by applyQueueProductionExitPath)
+- Movement: airborne aircraft skip A* pathfinding (direct waypoint), terrain snap manages cruise altitude
+- Command interception: moveTo/attackEntity to PARKED aircraft stored as pendingCommand → takeoff
+- Out-of-ammo damage, idle return timer, airfield search when producer destroyed
+- 13 new tests, all 1345 tests pass
+
+## 2026-02-21T12:15Z — Turret AI + Locomotor Physics Code Reviews + Collision Avoidance (IN PROGRESS)
+- Turret AI committed as 482376e, pushed. Code review agent (ac60639) running in background.
+- Locomotor physics code review (aea83bb) completed: 3 MEDIUM findings (braking formula, turn-alignment, heading blending are deliberate simplifications). 0 HIGH.
+- **Collision avoidance (Task #100) — IN PROGRESS, 4 TESTS FAILING**:
+  - Added `updateUnitCollisionSeparation()` after `updateEntityMovement` in tick loop (line ~3482)
+  - Implementation: O(n²) ground entity pair check, bounding circle overlap, position separation
+  - 4 tests fail because entities placed at same position intentionally (salvage crate, hive spawn slaves, sticky bomb). Need to add exclusions for:
+    - Sticky bomb entities (`stickyBombTargetId !== 0`)
+    - Spawn behavior slaves (entities where a parent's `spawnBehaviorState.slaveIds` includes them)
+    - Entities with pending enter-object actions
+  - Fix approach: skip entities that have `stickyBombTargetId !== 0` and add a `spawnBehaviorOwnerId` or check via `spawnBehaviorState.slaveIds`
+
+## 2026-02-21T08:00Z — Damage Retaliation + Locomotor Physics + Turret AI
+- Damage retaliation: committed 6d70308, code review fixes in 4590aba
+  - lastAttackerEntityId tracking, immediate retaliation in idle auto-targeting
+  - Fixes: stealth DETECTED exception, IS_USING_ABILITY skip, death cleanup
+- Locomotor physics: committed 8b79702
+  - LocomotorSetProfile extended: minSpeed, acceleration, braking, turnRate, appearance
+  - currentSpeed field, rate-limited turning, braking distance lookahead
+  - Split heading-based (turnRate > 0) vs direct waypoint (turnRate = 0) movement
+- Turret AI: committed 482376e
+  - TurretProfile + TurretRuntimeState, turretStates[] on MapEntity
+  - State machine: IDLE → AIM → HOLD → RECENTER → IDLE
+  - INI: TurretTurnRate (deg/s → rad/frame), NaturalTurretAngle, FiresWhileTurning, RecenterTime
+  - isTurretAlignedForFiring callback wired into combat-update.ts
+  - turretAngles[] exported in renderable state
+- All 1332 tests passing before collision avoidance work began
+
 ## 2026-02-21T06:50Z — AutoDeposit + DynamicShroud + Code Review Fixes
 - AutoDepositUpdate: C++ parity rewrite
   - Constructor-based timer init (not lazy), 3-field state (nextFrame, initialized, captureBonusPending)
@@ -54,40 +92,6 @@
   - revealFogOfWar now accepts durationMs parameter, defaults to 30s
   - updateTemporaryVisionReveals() removes expired lookers each frame
   - 1 test — All 1211 tests pass
-
-## 2026-02-20T23:00Z — SpecialAbilityUpdate State Machine
-- SpecialAbilityUpdate: unit-based special ability system (Black Lotus, Hackers, Burton, Jarmen Kell)
-  - SpecialAbilityProfile INI: SpecialPowerTemplate, StartAbilityRange, PreparationTime, PackTime, UnpackTime, SkipPackingWithNoTarget, PersistentPrepTime, FlipOwnerAfterPacking/Unpacking, LoseStealthOnTrigger, AwardXPForTriggering
-  - 5-state packing machine: NONE → PACKED → UNPACKING → UNPACKED → prep → trigger → PACKING → PACKED
-  - Dispatch intercepts in all three special power callbacks (NoTarget, TargetPosition, TargetObject)
-  - Target approach with range check, abort on target death, stop command cancellation
-  - Persistent mode for multi-trigger abilities, flip rotation, flee after completion
-  - XP award via addExperiencePointsImpl, stealth loss via preTriggerUnstealthFrames
-  - 9 tests — All 1183 tests pass
-
-## 2026-02-20T22:00Z — RebuildHoleBehavior
-- RebuildHoleBehavior: GLA building reconstruction system — committed 9efcdca
-  - Two-module system: RebuildHoleExposeDieProfile (buildings) + RebuildHoleBehaviorProfile (holes)
-  - Full lifecycle: building dies → hole created → worker spawns → construction → completion
-  - INI extractors for HoleName, HoleMaxHealth, TransferAttackers, WorkerObjectName, WorkerRespawnDelay, HoleHealthRegen%PerSecond
-  - Death hook in markEntityDestroyed, per-frame updateRebuildHoles, rebuildHoleSpawnWorker
-  - Worker/reconstruction death detection with respawn, passive hole health regen, attacker transfer
-  - Code review fixes: C++ update order parity, unconditional unmask, geometry transfer, parsePercentToReal
-  - 9 tests — All 1140 tests pass
-
-## 2026-02-20T21:30Z — ProneUpdate + DemoTrapUpdate
-- ProneUpdate: infantry prone behavior — committed 7b02c75
-  - proneDamageToFramesRatio INI extraction, proneFramesRemaining countdown
-  - Damage trigger in applyWeaponDamageAmount with NO_ATTACK status flag
-  - PRONE added to RenderAnimationState, integrated into deriveRenderAnimationState priority
-  - Code review fixes: C++ double-truncation parity, removed redundant animationState assignment
-  - 4 tests — All 1124 tests pass
-- DemoTrapUpdate: GLA proximity detonation trap — committed b34b25b
-  - DemoTrapProfile INI: DefaultProximityMode, TriggerDetonationRange, ScanRate, IgnoreTargetTypes, DetonationWeapon, DetonateWhenKilled, AutoDetonationWithFriendsInvolved
-  - Proximity scan with friendly blocking (non-enemy in range prevents detonation)
-  - Manual/proximity mode toggle, manual detonation command, DetonateWhenKilled in death path
-  - Code review fixes: distance pre-filter before relationship check, construction/sold guard on manual detonate
-  - 7 tests — All 1131 tests pass
 
 # Key Findings
 

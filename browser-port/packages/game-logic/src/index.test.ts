@@ -21520,3 +21520,450 @@ describe('FireWeaponWhenDeadBehavior', () => {
     expect(bystander.health).toBe(100);
   });
 });
+
+// ── JetAIUpdate — aircraft flight state machine tests ──
+
+describe('JetAIUpdate flight state machine', () => {
+  function makeJetBundle(jetAIFields: Record<string, unknown> = {}) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('TestJet', 'America', ['AIRCRAFT', 'VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'JetGun'] }),
+          makeBlock('LocomotorSet', 'SET_NORMAL JetLoco', {}),
+          makeBlock('Behavior', 'JetAIUpdate ModuleTag_JetAI', {
+            SneakyOffsetWhenAttacking: 0,
+            AttackersMissPersistTime: 0,
+            MinHeight: 80,
+            OutOfAmmoDamagePerSecond: 10,
+            ReturnToBaseIdleTime: 5000,
+            NeedsRunway: true,
+            TakeoffPause: 0,
+            TakeoffDistForMaxLift: 0,
+            ...jetAIFields,
+          }),
+        ]),
+        makeObjectDef('TestAirfield', 'America', ['STRUCTURE', 'FS_AIRFIELD'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Prod', {}),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_QExit', {}),
+        ]),
+        makeObjectDef('EnemyTank', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('JetGun', {
+          AttackRange: 300,
+          PrimaryDamage: 20,
+          PrimaryDamageRadius: 0,
+          SecondaryDamage: 0,
+          SecondaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+          ClipSize: 4,
+          ClipReloadTime: 3000,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('JetLoco', 300),
+      ],
+    });
+  }
+
+  it('parses all JetAIProfile fields from INI', () => {
+    const bundle = makeJetBundle({
+      MinHeight: 120,
+      OutOfAmmoDamagePerSecond: 25,
+      ReturnToBaseIdleTime: 8000,
+      NeedsRunway: false,
+      KeepsParkingSpaceWhenAirborne: false,
+      ParkingOffset: 15,
+      TakeoffPause: 500,
+      TakeoffDistForMaxLift: 0.5,
+      AttackLocomotorType: 'SET_NORMAL',
+      AttackLocomotorPersistTime: 2000,
+      ReturnForAmmoLocomotorType: 'SET_NORMAL',
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestJet', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    expect(jet.jetAIProfile).not.toBeNull();
+    expect(jet.jetAIProfile.minHeight).toBe(120);
+    expect(jet.jetAIProfile.outOfAmmoDamagePerSecond).toBeCloseTo(0.25);
+    expect(jet.jetAIProfile.needsRunway).toBe(false);
+    expect(jet.jetAIProfile.keepsParkingSpaceWhenAirborne).toBe(false);
+    expect(jet.jetAIProfile.parkingOffset).toBe(15);
+    expect(jet.jetAIProfile.attackLocomotorSet).toBe('SET_NORMAL');
+    expect(jet.jetAIProfile.returnLocomotorSet).toBe('SET_NORMAL');
+    expect(jet.jetAIState).not.toBeNull();
+    expect(jet.jetAIState.cruiseHeight).toBe(120);
+  });
+
+  it('map-placed aircraft start AIRBORNE with AIRBORNE_TARGET status', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestJet', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    expect(jet.jetAIState.state).toBe('AIRBORNE');
+    expect(jet.jetAIState.allowAirLoco).toBe(true);
+    expect(jet.objectStatusFlags.has('AIRBORNE_TARGET')).toBe(true);
+  });
+
+  it('transitions PARKED → TAKING_OFF → AIRBORNE on move command', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestJet', 50, 50),
+        makeMapObject('TestAirfield', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    const airfield = priv.spawnedEntities.get(2)!;
+
+    // Manually set to PARKED (simulating a produced aircraft).
+    jet.jetAIState.state = 'PARKED';
+    jet.jetAIState.allowAirLoco = false;
+    jet.jetAIState.producerX = airfield.x;
+    jet.jetAIState.producerZ = airfield.z;
+    jet.producerEntityId = airfield.id;
+    jet.objectStatusFlags.delete('AIRBORNE_TARGET');
+
+    // Issue move command — should store as pending and trigger takeoff.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 100, targetZ: 100 });
+    logic.update(1 / 30);
+
+    expect(jet.jetAIState.state).toBe('TAKING_OFF');
+    expect(jet.objectStatusFlags.has('AIRBORNE_TARGET')).toBe(true);
+    // Pending command is kept until AIRBORNE entry clears it.
+    expect(jet.jetAIState.pendingCommand).toEqual({ type: 'moveTo', x: 100, z: 100 });
+
+    // Run through takeoff (30 frames).
+    for (let i = 0; i < 35; i++) logic.update(1 / 30);
+
+    expect(jet.jetAIState.state).toBe('AIRBORNE');
+    expect(jet.jetAIState.allowAirLoco).toBe(true);
+    expect(jet.jetAIState.pendingCommand).toBeNull(); // cleared on AIRBORNE entry
+    expect(jet.moving).toBe(true);
+  });
+
+  it('returns to base when out of ammo', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestJet', 30, 30),
+        makeMapObject('TestAirfield', 90, 90),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    const airfield = priv.spawnedEntities.get(2)!;
+
+    // Start airborne with producer set.
+    jet.jetAIState.producerX = airfield.x;
+    jet.jetAIState.producerZ = airfield.z;
+    jet.producerEntityId = airfield.id;
+
+    // Deplete ammo.
+    jet.attackAmmoInClip = 0;
+
+    logic.update(1 / 30);
+
+    expect(jet.jetAIState.state).toBe('RETURNING_FOR_LANDING');
+    expect(jet.moving).toBe(true);
+  });
+
+  it('lands, reloads ammo, then parks after returning to airfield', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestJet', 50, 50),
+        makeMapObject('TestAirfield', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    const airfield = priv.spawnedEntities.get(2)!;
+
+    jet.jetAIState.producerX = airfield.x;
+    jet.jetAIState.producerZ = airfield.z;
+    jet.producerEntityId = airfield.id;
+
+    // Set to RETURNING close to the airfield.
+    jet.jetAIState.state = 'RETURNING_FOR_LANDING';
+    jet.jetAIState.stateEnteredFrame = priv.frameCounter;
+    jet.x = airfield.x + 5; // within NEAR_AIRFIELD_DIST_SQ (400 = 20^2)
+    jet.z = airfield.z + 5;
+    jet.attackAmmoInClip = 0;
+
+    logic.update(1 / 30);
+
+    // Should transition to LANDING since within 20 units.
+    expect(jet.jetAIState.state).toBe('LANDING');
+
+    // Run through landing (30 frames).
+    for (let i = 0; i < 35; i++) logic.update(1 / 30);
+
+    // Should be reloading now.
+    expect(jet.jetAIState.state).toBe('RELOAD_AMMO');
+    expect(jet.objectStatusFlags.has('AIRBORNE_TARGET')).toBe(false);
+
+    // Run reload frames (clipReloadTime = 3000ms = 90 frames, proportional for full clip).
+    for (let i = 0; i < 100; i++) logic.update(1 / 30);
+
+    // Should be PARKED with full ammo.
+    expect(jet.jetAIState.state).toBe('PARKED');
+    expect(jet.attackAmmoInClip).toBe(4); // clipSize
+  });
+
+  it('enters CIRCLING_DEAD_AIRFIELD when producer destroyed while returning', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestJet', 50, 50),
+        makeMapObject('TestAirfield', 80, 80),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    const airfield = priv.spawnedEntities.get(2)!;
+
+    jet.jetAIState.producerX = airfield.x;
+    jet.jetAIState.producerZ = airfield.z;
+    jet.producerEntityId = airfield.id;
+
+    // Set to RETURNING.
+    jet.jetAIState.state = 'RETURNING_FOR_LANDING';
+    jet.jetAIState.stateEnteredFrame = priv.frameCounter;
+
+    // Destroy the airfield.
+    airfield.destroyed = true;
+
+    logic.update(1 / 30);
+
+    // No other airfield exists, should circle.
+    expect(jet.jetAIState.state).toBe('CIRCLING_DEAD_AIRFIELD');
+  });
+
+  it('applies out-of-ammo damage while circling dead airfield', () => {
+    const bundle = makeJetBundle({ OutOfAmmoDamagePerSecond: 50 }); // 50% per 100 / sec → 0.5
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestJet', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+
+    // Manually set to CIRCLING state.
+    jet.jetAIState.state = 'CIRCLING_DEAD_AIRFIELD';
+    jet.jetAIState.stateEnteredFrame = priv.frameCounter;
+    jet.jetAIState.circlingNextCheckFrame = priv.frameCounter + 30;
+    jet.producerEntityId = 0; // no producer
+
+    const healthBefore = jet.health;
+
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // OutOfAmmoDamagePerSecond = 50 → 0.5 (per second ratio of max health).
+    // 30 frames = 1 second. Expected damage = maxHealth * 0.5 * 1 = 100.
+    expect(jet.health).toBeLessThan(healthBefore);
+    expect(jet.health).toBeCloseTo(healthBefore - 100, 0);
+  });
+
+  it('returns to base after idle timer expires', () => {
+    const bundle = makeJetBundle({ ReturnToBaseIdleTime: 1000 }); // 30 frames
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestJet', 30, 30),
+        makeMapObject('TestAirfield', 90, 90),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    const airfield = priv.spawnedEntities.get(2)!;
+    jet.jetAIState.producerX = airfield.x;
+    jet.jetAIState.producerZ = airfield.z;
+    jet.producerEntityId = airfield.id;
+
+    // Set idle timer to expire shortly.
+    jet.jetAIState.returnToBaseFrame = priv.frameCounter + 5;
+    jet.moving = false;
+    jet.attackTargetEntityId = null;
+
+    // Run for 10 frames — idle timer should expire and trigger return.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Should be returning to base (or already landing if very close).
+    expect(['RETURNING_FOR_LANDING', 'LANDING']).toContain(jet.jetAIState.state);
+  });
+
+  it('airborne aircraft use direct-path movement (skip pathfinding)', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestJet', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+
+    // Issue move command to airborne jet.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 100, targetZ: 100 });
+    logic.update(1 / 30);
+
+    expect(jet.moving).toBe(true);
+    expect(jet.movePath.length).toBe(1);
+    expect(jet.movePath[0]).toEqual({ x: 100, z: 100 });
+  });
+
+  it('airborne aircraft maintain cruise altitude above terrain', () => {
+    const bundle = makeJetBundle({ MinHeight: 80 });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestJet', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+
+    // Give it a destination so movement update runs.
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 80, targetZ: 80 });
+    logic.update(1 / 30);
+
+    // Y should be approximately terrainHeight + baseHeight + cruiseHeight.
+    // Terrain is flat at 0, baseHeight is nominalHeight/2 for air category.
+    expect(jet.y).toBeGreaterThan(50);
+  });
+
+  it('AIRBORNE_TARGET enables anti-air weapon targeting', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestJet', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const state = logic.getEntityState(1);
+    expect(state?.statusFlags).toContain('AIRBORNE_TARGET');
+  });
+
+  it('airborne aircraft excluded from ground collision separation', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestJet', 50, 50),
+        makeMapObject('TestJet', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const jet1 = priv.spawnedEntities.get(1)!;
+    const jet2 = priv.spawnedEntities.get(2)!;
+
+    const x1Before = jet1.x;
+    const x2Before = jet2.x;
+
+    // Run a few frames — collision separation should not push them apart.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Airborne aircraft should not be separated (AIRBORNE_TARGET exclusion).
+    expect(jet1.x).toBeCloseTo(x1Before, 1);
+    expect(jet2.x).toBeCloseTo(x2Before, 1);
+  });
+
+  it('commands while PARKED queue as pending and trigger takeoff', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestJet', 50, 50),
+        makeMapObject('TestAirfield', 50, 50),
+        makeMapObject('EnemyTank', 100, 100),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(1)!;
+    const airfield = priv.spawnedEntities.get(2)!;
+
+    // Set to PARKED state.
+    jet.jetAIState.state = 'PARKED';
+    jet.jetAIState.allowAirLoco = false;
+    jet.jetAIState.producerX = airfield.x;
+    jet.jetAIState.producerZ = airfield.z;
+    jet.producerEntityId = airfield.id;
+    jet.objectStatusFlags.delete('AIRBORNE_TARGET');
+
+    // Issue attack command — queued until next update.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3 });
+
+    // After update: command is intercepted (stored as pending), then updateJetAI transitions to TAKING_OFF.
+    logic.update(1 / 30);
+    expect(jet.jetAIState.state).toBe('TAKING_OFF');
+    // Pending command is kept until AIRBORNE entry.
+    expect(jet.jetAIState.pendingCommand).toEqual({ type: 'attackEntity', targetId: 3 });
+  });
+});

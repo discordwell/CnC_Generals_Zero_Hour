@@ -1067,9 +1067,49 @@ interface TurretRuntimeState {
   holdUntilFrame: number;
 }
 
-interface JetAISneakyProfile {
+/**
+ * Source parity: JetAIUpdate module data — parsed from INI.
+ * (GeneralsMD/Code/GameEngine/Source/GameLogic/AI/AIUpdate/JetAIUpdate.cpp)
+ */
+interface JetAIProfile {
   sneakyOffsetWhenAttacking: number;
   attackersMissPersistFrames: number;
+  needsRunway: boolean;
+  keepsParkingSpaceWhenAirborne: boolean;
+  outOfAmmoDamagePerSecond: number;
+  returnToBaseIdleFrames: number;
+  minHeight: number;
+  parkingOffset: number;
+  takeoffPauseFrames: number;
+  takeoffDistForMaxLift: number;
+  attackLocomotorSet: string;
+  attackLocoPersistFrames: number;
+  returnLocomotorSet: string;
+}
+
+type JetAIState =
+  | 'PARKED'
+  | 'TAKING_OFF'
+  | 'AIRBORNE'
+  | 'RETURNING_FOR_LANDING'
+  | 'LANDING'
+  | 'RELOAD_AMMO'
+  | 'CIRCLING_DEAD_AIRFIELD';
+
+interface JetAIRuntimeState {
+  state: JetAIState;
+  stateEnteredFrame: number;
+  allowAirLoco: boolean;
+  pendingCommand: { type: 'moveTo'; x: number; z: number } | { type: 'attackEntity'; targetId: number } | null;
+  producerX: number;
+  producerZ: number;
+  returnToBaseFrame: number;
+  attackLocoExpireFrame: number;
+  useReturnLoco: boolean;
+  reloadDoneFrame: number;
+  reloadTotalFrames: number;
+  circlingNextCheckFrame: number;
+  cruiseHeight: number;
 }
 
 /**
@@ -1826,6 +1866,12 @@ interface MapEntity {
   dynamicShroudChangeIntervalCountdown: number;
   dynamicShroudNativeClearingRange: number;
   dynamicShroudCurrentClearingRange: number;
+
+  // ── Source parity: JetAIUpdate — aircraft flight state machine ──
+  /** JetAI profile (null = not an aircraft with JetAIUpdate). */
+  jetAIProfile: JetAIProfile | null;
+  /** JetAI runtime state (null = not an aircraft with JetAIUpdate). */
+  jetAIState: JetAIRuntimeState | null;
 }
 
 /**
@@ -3478,6 +3524,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateCombat();
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
+    this.updateJetAI();
     this.updateEntityMovement(dt);
     this.updateUnitCollisionSeparation();
     this.updateCrushCollisions();
@@ -5018,7 +5065,7 @@ export class GameLogicSubsystem implements Subsystem {
     const supplyTruckProfile = this.extractSupplyTruckProfile(objectDef);
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
     const experienceProfile = this.extractExperienceProfile(objectDef);
-    const jetAISneakyProfile = this.extractJetAISneakyProfile(objectDef);
+    const jetAIProfile = this.extractJetAIProfile(objectDef);
     const weaponTemplateSets = this.extractWeaponTemplateSets(objectDef);
     const armorTemplateSets = this.extractArmorTemplateSets(objectDef);
     const attackWeapon = this.resolveAttackWeaponProfile(objectDef, iniDataRegistry);
@@ -5145,8 +5192,8 @@ export class GameLogicSubsystem implements Subsystem {
       consecutiveShotsAtTarget: 0,
       continuousFireState: 'NONE',
       continuousFireCooldownFrame: 0,
-      sneakyOffsetWhenAttacking: jetAISneakyProfile?.sneakyOffsetWhenAttacking ?? 0,
-      attackersMissPersistFrames: jetAISneakyProfile?.attackersMissPersistFrames ?? 0,
+      sneakyOffsetWhenAttacking: jetAIProfile?.sneakyOffsetWhenAttacking ?? 0,
+      attackersMissPersistFrames: jetAIProfile?.attackersMissPersistFrames ?? 0,
       attackersMissExpireFrame: 0,
       productionProfile,
       productionQueue: [],
@@ -5437,6 +5484,9 @@ export class GameLogicSubsystem implements Subsystem {
       dynamicShroudChangeIntervalCountdown: 0,
       dynamicShroudNativeClearingRange: 0,
       dynamicShroudCurrentClearingRange: 0,
+      // JetAI
+      jetAIProfile,
+      jetAIState: null,
     };
 
     // Source parity: TurretAI init — create runtime state for each turret.
@@ -5561,6 +5611,32 @@ export class GameLogicSubsystem implements Subsystem {
       entity.dynamicShroudCurrentClearingRange = 0;
       entity.dynamicShroudState = 'NOT_STARTED';
       entity.dynamicShroudChangeIntervalCountdown = 0;
+    }
+
+    // Source parity: JetAIUpdate::onObjectCreated — init flight state machine.
+    // Map-placed aircraft start AIRBORNE (already flying). Produced aircraft are set
+    // to PARKED by applyQueueProductionExitPath.
+    if (jetAIProfile) {
+      // Source parity: cruise height from MinHeight INI field, fallback to 100.
+      // C++ uses locomotor preferredHeight as middle fallback but we don't parse that yet.
+      const cruiseHeight = jetAIProfile.minHeight > 0 ? jetAIProfile.minHeight : 100;
+      entity.jetAIState = {
+        state: 'AIRBORNE',
+        stateEnteredFrame: this.frameCounter,
+        allowAirLoco: true,
+        pendingCommand: null,
+        producerX: entity.x,
+        producerZ: entity.z,
+        returnToBaseFrame: 0,
+        attackLocoExpireFrame: 0,
+        useReturnLoco: false,
+        reloadDoneFrame: 0,
+        reloadTotalFrames: 0,
+        circlingNextCheckFrame: 0,
+        cruiseHeight,
+      };
+      // Map-placed aircraft are airborne.
+      entity.objectStatusFlags.add('AIRBORNE_TARGET');
     }
 
     // Source parity: GrantUpgradeCreate::onCreate — grant upgrades on entity creation.
@@ -7034,7 +7110,7 @@ export class GameLogicSubsystem implements Subsystem {
     return profile;
   }
 
-  private extractJetAISneakyProfile(objectDef: ObjectDef | undefined): JetAISneakyProfile | null {
+  private extractJetAIProfile(objectDef: ObjectDef | undefined): JetAIProfile | null {
     if (!objectDef) {
       return null;
     }
@@ -7042,6 +7118,17 @@ export class GameLogicSubsystem implements Subsystem {
     let foundModule = false;
     let sneakyOffsetWhenAttacking = 0;
     let attackersMissPersistFrames = 0;
+    let needsRunway = true;
+    let keepsParkingSpaceWhenAirborne = true;
+    let outOfAmmoDamagePerSecond = 0;
+    let returnToBaseIdleFrames = 0;
+    let minHeight = 0;
+    let parkingOffset = 0;
+    let takeoffPauseFrames = 0;
+    let takeoffDistForMaxLift = 0;
+    let attackLocomotorSet = '';
+    let attackLocoPersistFrames = 0;
+    let returnLocomotorSet = '';
 
     const visitBlock = (block: IniBlock): void => {
       if (block.type.toUpperCase() === 'BEHAVIOR') {
@@ -7054,6 +7141,21 @@ export class GameLogicSubsystem implements Subsystem {
           }
           const persistMsRaw = readNumericField(block.fields, ['AttackersMissPersistTime']) ?? 0;
           attackersMissPersistFrames = this.msToLogicFrames(persistMsRaw);
+          needsRunway = readBooleanField(block.fields, ['NeedsRunway']) ?? true;
+          keepsParkingSpaceWhenAirborne = readBooleanField(block.fields, ['KeepsParkingSpaceWhenAirborne']) ?? true;
+          const outOfAmmoDmgRaw = readNumericField(block.fields, ['OutOfAmmoDamagePerSecond']) ?? 0;
+          outOfAmmoDamagePerSecond = outOfAmmoDmgRaw / 100;
+          const returnIdleMsRaw = readNumericField(block.fields, ['ReturnToBaseIdleTime']) ?? 0;
+          returnToBaseIdleFrames = this.msToLogicFrames(returnIdleMsRaw);
+          minHeight = readNumericField(block.fields, ['MinHeight']) ?? 0;
+          parkingOffset = readNumericField(block.fields, ['ParkingOffset']) ?? 0;
+          const takeoffPauseMsRaw = readNumericField(block.fields, ['TakeoffPause']) ?? 0;
+          takeoffPauseFrames = this.msToLogicFrames(takeoffPauseMsRaw);
+          takeoffDistForMaxLift = readNumericField(block.fields, ['TakeoffDistForMaxLift']) ?? 0;
+          attackLocomotorSet = readStringField(block.fields, ['AttackLocomotorType'])?.trim().toUpperCase() ?? '';
+          const attackLocoPersistMsRaw = readNumericField(block.fields, ['AttackLocomotorPersistTime']) ?? 0;
+          attackLocoPersistFrames = this.msToLogicFrames(attackLocoPersistMsRaw);
+          returnLocomotorSet = readStringField(block.fields, ['ReturnForAmmoLocomotorType'])?.trim().toUpperCase() ?? '';
         }
       }
 
@@ -7073,6 +7175,17 @@ export class GameLogicSubsystem implements Subsystem {
     return {
       sneakyOffsetWhenAttacking,
       attackersMissPersistFrames,
+      needsRunway,
+      keepsParkingSpaceWhenAirborne,
+      outOfAmmoDamagePerSecond,
+      returnToBaseIdleFrames,
+      minHeight,
+      parkingOffset,
+      takeoffPauseFrames,
+      takeoffDistForMaxLift,
+      attackLocomotorSet,
+      attackLocoPersistFrames,
+      returnLocomotorSet,
     };
   }
 
@@ -11660,11 +11773,19 @@ export class GameLogicSubsystem implements Subsystem {
         this.updateSelectionHighlight();
         return;
       }
-      case 'moveTo':
+      case 'moveTo': {
+        const moveEntity = this.spawnedEntities.get(command.entityId);
+        const moveJs = moveEntity?.jetAIState;
+        if (moveJs && (moveJs.state === 'PARKED' || moveJs.state === 'RELOAD_AMMO')) {
+          // Aircraft is parked/reloading — store as pending, takeoff will execute it.
+          moveJs.pendingCommand = { type: 'moveTo', x: command.targetX, z: command.targetZ };
+          return;
+        }
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
         return;
+      }
       case 'attackMoveTo':
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
@@ -11688,7 +11809,14 @@ export class GameLogicSubsystem implements Subsystem {
       case 'setRallyPoint':
         this.setEntityRallyPoint(command.entityId, command.targetX, command.targetZ);
         return;
-      case 'attackEntity':
+      case 'attackEntity': {
+        const atkEntity = this.spawnedEntities.get(command.entityId);
+        const atkJs = atkEntity?.jetAIState;
+        if (atkJs && (atkJs.state === 'PARKED' || atkJs.state === 'RELOAD_AMMO')) {
+          // Aircraft is parked/reloading — store as pending, takeoff will execute it.
+          atkJs.pendingCommand = { type: 'attackEntity', targetId: command.targetEntityId };
+          return;
+        }
         this.cancelEntityCommandPathActions(command.entityId);
         this.issueAttackEntity(
           command.entityId,
@@ -11696,6 +11824,7 @@ export class GameLogicSubsystem implements Subsystem {
           command.commandSource ?? 'PLAYER',
         );
         return;
+      }
       case 'fireWeapon':
         this.cancelEntityCommandPathActions(command.entityId);
         this.issueFireWeapon(
@@ -18049,6 +18178,18 @@ export class GameLogicSubsystem implements Subsystem {
    * point.  The produced unit follows the full path in order.
    */
   private applyQueueProductionExitPath(producer: MapEntity, producedUnit: MapEntity): void {
+    // Source parity: aircraft with JetAIUpdate skip normal exit pathing.
+    // They stay PARKED at the airfield and await commands.
+    if (producedUnit.jetAIProfile && producedUnit.jetAIState) {
+      producedUnit.jetAIState.state = 'PARKED';
+      producedUnit.jetAIState.allowAirLoco = false;
+      producedUnit.jetAIState.producerX = producer.x;
+      producedUnit.jetAIState.producerZ = producer.z;
+      producedUnit.producerEntityId = producer.id;
+      producedUnit.objectStatusFlags.delete('AIRBORNE_TARGET');
+      return;
+    }
+
     // Source parity: C++ only appends player rally point for ground-moving
     // units (ai->isDoingGroundMovement()).  Aircraft skip the rally point.
     const isGroundMover = !producedUnit.kindOf.has('AIRCRAFT');
@@ -18093,6 +18234,20 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: Object::isMobile — KINDOF_IMMOBILE or any DISABLED state blocks movement.
     // C++ Object.cpp:2902 — isMobile() returns false when isDisabled() is true (any flag set).
     if (entity.isImmobile || this.isEntityDisabledForMovement(entity)) {
+      return;
+    }
+
+    // Source parity: airborne aircraft fly point-to-point, skip A* pathfinding.
+    const js = entity.jetAIState;
+    if (js && js.allowAirLoco) {
+      entity.moving = true;
+      entity.movePath = [{ x: targetX, z: targetZ }];
+      entity.pathIndex = 0;
+      entity.moveTarget = { x: targetX, z: targetZ };
+      entity.pathfindGoalCell = {
+        x: Math.floor(targetX / PATHFIND_CELL_SIZE),
+        z: Math.floor(targetZ / PATHFIND_CELL_SIZE),
+      };
       return;
     }
 
@@ -19551,6 +19706,279 @@ export class GameLogicSubsystem implements Subsystem {
       entity.guardPositionZ = guarded.z;
     }
     return { x: entity.guardPositionX, z: entity.guardPositionZ };
+  }
+
+  // ── JetAI helpers ──
+
+  /**
+   * Source parity: check if entity has a clip-based weapon and is out of ammo.
+   * C++ JetAIUpdate checks hasSpecialPowerClipAmmo / getSpecialPowerClipAmmo.
+   */
+  private isEntityOutOfClipAmmo(entity: MapEntity): boolean {
+    const weapon = entity.attackWeapon;
+    if (!weapon || weapon.clipSize <= 0) return false;
+    return entity.attackAmmoInClip <= 0;
+  }
+
+  /**
+   * Find the closest allied airfield (FS_AIRFIELD kindOf) with this entity's side.
+   * Returns the entity or null if no suitable airfield exists.
+   */
+  private findSuitableAirfield(entity: MapEntity): MapEntity | null {
+    let bestDist = Infinity;
+    let bestAirfield: MapEntity | null = null;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) continue;
+      if (!candidate.kindOf.has('FS_AIRFIELD')) continue;
+      if (candidate.side !== entity.side) continue;
+      // Skip airfields that are under construction.
+      if (candidate.constructionPercent !== CONSTRUCTION_COMPLETE) continue;
+      const dx = candidate.x - entity.x;
+      const dz = candidate.z - entity.z;
+      const dist = dx * dx + dz * dz;
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestAirfield = candidate;
+      }
+    }
+    return bestAirfield;
+  }
+
+  /**
+   * Transition a JetAI entity to a new state.
+   */
+  private jetAITransition(entity: MapEntity, js: JetAIRuntimeState, newState: JetAIState): void {
+    js.state = newState;
+    js.stateEnteredFrame = this.frameCounter;
+  }
+
+  /**
+   * Source parity: JetAIUpdate::update — runs the flight state machine for all
+   * aircraft with a JetAIUpdate behavior module.
+   * States: PARKED → TAKING_OFF → AIRBORNE → RETURNING_FOR_LANDING → LANDING → RELOAD_AMMO → PARKED
+   *         CIRCLING_DEAD_AIRFIELD (when producer destroyed while returning)
+   */
+  private updateJetAI(): void {
+    const TAKEOFF_FRAMES = 30;
+    const LANDING_FRAMES = 30;
+    const NEAR_AIRFIELD_DIST_SQ = 400; // 20 world units squared
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const js = entity.jetAIState;
+      const profile = entity.jetAIProfile;
+      if (!js || !profile) continue;
+
+      const framesInState = this.frameCounter - js.stateEnteredFrame;
+
+      switch (js.state) {
+        case 'PARKED': {
+          // Airfield heals parked aircraft.
+          if (entity.health < entity.maxHealth && entity.maxHealth > 0) {
+            const healRate = entity.maxHealth * 0.02; // 2% per frame
+            entity.health = Math.min(entity.maxHealth, entity.health + healRate);
+          }
+
+          // If there's a pending command, take off.
+          if (js.pendingCommand) {
+            this.jetAITransition(entity, js, 'TAKING_OFF');
+            entity.objectStatusFlags.add('AIRBORNE_TARGET');
+            js.allowAirLoco = false; // not yet airborne for movement
+            entity.moving = false;
+          }
+          break;
+        }
+
+        case 'TAKING_OFF': {
+          // Interpolate altitude from ground to cruise over TAKEOFF_FRAMES.
+          const progress = Math.min(1, framesInState / TAKEOFF_FRAMES);
+          if (this.mapHeightmap) {
+            const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
+            const groundY = terrainHeight + entity.baseHeight;
+            entity.y = groundY + js.cruiseHeight * progress;
+          }
+
+          if (framesInState >= TAKEOFF_FRAMES) {
+            js.allowAirLoco = true;
+            this.jetAITransition(entity, js, 'AIRBORNE');
+
+            // Execute pending command.
+            if (js.pendingCommand) {
+              const cmd = js.pendingCommand;
+              js.pendingCommand = null;
+              if (cmd.type === 'moveTo') {
+                this.issueMoveTo(entity.id, cmd.x, cmd.z);
+              } else if (cmd.type === 'attackEntity') {
+                this.issueAttackEntity(entity.id, cmd.targetId, 'PLAYER');
+              }
+            }
+
+            // Start idle return timer if configured.
+            if (profile.returnToBaseIdleFrames > 0) {
+              js.returnToBaseFrame = this.frameCounter + profile.returnToBaseIdleFrames;
+            }
+          }
+          break;
+        }
+
+        case 'AIRBORNE': {
+          // Check ammo depletion → return to base.
+          if (this.isEntityOutOfClipAmmo(entity)) {
+            this.jetAITransition(entity, js, 'RETURNING_FOR_LANDING');
+            js.useReturnLoco = profile.returnLocomotorSet !== '';
+            this.clearAttackTarget(entity.id);
+            entity.moving = false;
+            // Issue moveTo toward producer/airfield.
+            this.issueMoveTo(entity.id, js.producerX, js.producerZ);
+            break;
+          }
+
+          // Check idle return timer.
+          if (profile.returnToBaseIdleFrames > 0
+            && js.returnToBaseFrame > 0
+            && this.frameCounter >= js.returnToBaseFrame
+            && !entity.moving
+            && entity.attackTargetEntityId === null) {
+            this.jetAITransition(entity, js, 'RETURNING_FOR_LANDING');
+            js.useReturnLoco = profile.returnLocomotorSet !== '';
+            this.issueMoveTo(entity.id, js.producerX, js.producerZ);
+            break;
+          }
+
+          // Reset idle timer when given a new command.
+          if (entity.moving || entity.attackTargetEntityId !== null) {
+            if (profile.returnToBaseIdleFrames > 0) {
+              js.returnToBaseFrame = this.frameCounter + profile.returnToBaseIdleFrames;
+            }
+          }
+
+          // Manage attack locomotor switching.
+          if (profile.attackLocomotorSet !== '' && entity.attackTargetEntityId !== null) {
+            if (js.attackLocoExpireFrame === 0) {
+              js.attackLocoExpireFrame = this.frameCounter + profile.attackLocoPersistFrames;
+            }
+          }
+          if (js.attackLocoExpireFrame > 0 && this.frameCounter >= js.attackLocoExpireFrame
+            && entity.attackTargetEntityId === null) {
+            js.attackLocoExpireFrame = 0;
+          }
+
+          break;
+        }
+
+        case 'RETURNING_FOR_LANDING': {
+          // Check if producer/airfield is dead.
+          const producer = this.spawnedEntities.get(entity.producerEntityId);
+          if (!producer || producer.destroyed) {
+            // Try to find a new airfield.
+            const newAirfield = this.findSuitableAirfield(entity);
+            if (newAirfield) {
+              js.producerX = newAirfield.x;
+              js.producerZ = newAirfield.z;
+              entity.producerEntityId = newAirfield.id;
+              this.issueMoveTo(entity.id, js.producerX, js.producerZ);
+            } else {
+              this.jetAITransition(entity, js, 'CIRCLING_DEAD_AIRFIELD');
+              js.circlingNextCheckFrame = this.frameCounter + 30;
+              break;
+            }
+          }
+
+          // Check if near airfield.
+          const dxR = entity.x - js.producerX;
+          const dzR = entity.z - js.producerZ;
+          if (dxR * dxR + dzR * dzR <= NEAR_AIRFIELD_DIST_SQ) {
+            this.jetAITransition(entity, js, 'LANDING');
+            entity.moving = false;
+            // Snap XZ to airfield.
+            entity.x = js.producerX;
+            entity.z = js.producerZ;
+          }
+          break;
+        }
+
+        case 'LANDING': {
+          // Interpolate altitude from cruise to ground over LANDING_FRAMES.
+          const landProgress = Math.min(1, framesInState / LANDING_FRAMES);
+          if (this.mapHeightmap) {
+            const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
+            const groundY = terrainHeight + entity.baseHeight;
+            entity.y = groundY + js.cruiseHeight * (1 - landProgress);
+          }
+
+          if (framesInState >= LANDING_FRAMES) {
+            js.allowAirLoco = false;
+            entity.objectStatusFlags.delete('AIRBORNE_TARGET');
+
+            // Determine if reload is needed.
+            const weapon = entity.attackWeapon;
+            if (weapon && weapon.clipSize > 0 && entity.attackAmmoInClip < weapon.clipSize) {
+              this.jetAITransition(entity, js, 'RELOAD_AMMO');
+              // Compute reload time proportional to ammo missing.
+              const missingRatio = 1 - (entity.attackAmmoInClip / weapon.clipSize);
+              const fullReloadFrames = weapon.clipReloadFrames > 0 ? weapon.clipReloadFrames : 30;
+              js.reloadTotalFrames = Math.max(1, Math.trunc(fullReloadFrames * missingRatio));
+              js.reloadDoneFrame = this.frameCounter + js.reloadTotalFrames;
+            } else {
+              this.jetAITransition(entity, js, 'PARKED');
+            }
+          }
+          break;
+        }
+
+        case 'RELOAD_AMMO': {
+          const weapon = entity.attackWeapon;
+          if (weapon && weapon.clipSize > 0 && js.reloadTotalFrames > 0) {
+            // Proportional clip refill: linearly restore ammo over reloadTotalFrames.
+            const elapsed = this.frameCounter - js.stateEnteredFrame;
+            const progress = Math.min(1, elapsed / js.reloadTotalFrames);
+            const ammoAtStart = weapon.clipSize - Math.trunc(js.reloadTotalFrames * weapon.clipSize / Math.max(1, weapon.clipReloadFrames > 0 ? weapon.clipReloadFrames : 30));
+            entity.attackAmmoInClip = Math.min(weapon.clipSize,
+              Math.trunc(ammoAtStart + (weapon.clipSize - ammoAtStart) * progress));
+          }
+
+          if (this.frameCounter >= js.reloadDoneFrame) {
+            // Fully refill.
+            if (weapon && weapon.clipSize > 0) {
+              entity.attackAmmoInClip = weapon.clipSize;
+            }
+            // If a command is pending, go straight to takeoff.
+            if (js.pendingCommand) {
+              this.jetAITransition(entity, js, 'TAKING_OFF');
+              entity.objectStatusFlags.add('AIRBORNE_TARGET');
+              js.allowAirLoco = false;
+              entity.moving = false;
+            } else {
+              this.jetAITransition(entity, js, 'PARKED');
+            }
+          }
+          break;
+        }
+
+        case 'CIRCLING_DEAD_AIRFIELD': {
+          // Apply out-of-ammo damage per second.
+          if (profile.outOfAmmoDamagePerSecond > 0) {
+            const dmgPerFrame = entity.maxHealth * profile.outOfAmmoDamagePerSecond / LOGIC_FRAME_RATE;
+            this.applyWeaponDamageAmount(null, entity, dmgPerFrame, 'UNRESISTABLE');
+            if (entity.destroyed) continue;
+          }
+
+          // Check for new airfield every 30 frames.
+          if (this.frameCounter >= js.circlingNextCheckFrame) {
+            js.circlingNextCheckFrame = this.frameCounter + 30;
+            const newAirfield = this.findSuitableAirfield(entity);
+            if (newAirfield) {
+              js.producerX = newAirfield.x;
+              js.producerZ = newAirfield.z;
+              entity.producerEntityId = newAirfield.id;
+              this.jetAITransition(entity, js, 'RETURNING_FOR_LANDING');
+              this.issueMoveTo(entity.id, js.producerX, js.producerZ);
+            }
+          }
+          break;
+        }
+      }
+    }
   }
 
   /**
@@ -26058,18 +26486,32 @@ export class GameLogicSubsystem implements Subsystem {
         entity.z += dz * inv * step;
       }
 
-      if (this.mapHeightmap) {
-        const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
-        const targetY = terrainHeight + entity.baseHeight;
-        const snapAlpha = 1 - Math.exp(-this.config.terrainSnapSpeed * dt);
-        entity.y += (targetY - entity.y) * snapAlpha;
-      }
+      // Source parity: JetAI airborne entities have their Y managed by the JetAI state machine.
+      // TAKING_OFF and LANDING interpolation happens in updateJetAI. Airborne aircraft
+      // track terrain + cruiseHeight here.
+      const jetState = entity.jetAIState;
+      if (jetState && jetState.allowAirLoco) {
+        // Airborne: maintain cruise altitude over terrain.
+        if (this.mapHeightmap) {
+          const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
+          entity.y = terrainHeight + entity.baseHeight + jetState.cruiseHeight;
+        }
+      } else if (!jetState || (jetState.state !== 'TAKING_OFF' && jetState.state !== 'LANDING')) {
+        // Ground snap for non-aircraft or parked/reloading aircraft.
+        if (this.mapHeightmap) {
+          const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
+          const targetY = terrainHeight + entity.baseHeight;
+          const snapAlpha = 1 - Math.exp(-this.config.terrainSnapSpeed * dt);
+          entity.y += (targetY - entity.y) * snapAlpha;
+        }
 
-      // Subtle bob for unresolved movers (e.g., placeholders not in registry)
-      if (!entity.resolved) {
-        const bob = (Math.sin(this.animationTime * this.config.terrainSnapSpeed + entity.id) + 1) * 0.04;
-        entity.y += bob;
+        // Subtle bob for unresolved movers (e.g., placeholders not in registry)
+        if (!entity.resolved) {
+          const bob = (Math.sin(this.animationTime * this.config.terrainSnapSpeed + entity.id) + 1) * 0.04;
+          entity.y += bob;
+        }
       }
+      // TAKING_OFF and LANDING: Y is set in updateJetAI, don't override here.
 
       this.updatePathfindPosCell(entity);
     }
