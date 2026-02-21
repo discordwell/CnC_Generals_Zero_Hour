@@ -26161,7 +26161,9 @@ export class GameLogicSubsystem implements Subsystem {
 
         // Overlap detected.
         const dist = Math.sqrt(distSqr);
-        const overlap = combinedRadius - dist;
+        // Source parity: C++ caps overlap at 5.0 to prevent explosive separation
+        // when deeply interpenetrating objects (PhysicsUpdate.cpp:1412).
+        const overlap = Math.min(combinedRadius - dist, 5.0);
 
         // Direction from A to B (or random if coincident).
         let nx: number;
@@ -26224,11 +26226,13 @@ export class GameLogicSubsystem implements Subsystem {
 
         // Source parity: when both are idle and very close (< cell size / 4),
         // issue a move-away command to one of them to resolve permanent overlap.
+        // C++ AIUpdate.cpp:1567-1571: skip if busy or using ability.
         if (aIdle && bIdle && !aImmobile && !bImmobile
           && distSqr < PATHFIND_CELL_SIZE * PATHFIND_CELL_SIZE * 0.25) {
           // Nudge the lower-ID entity away to break the tie.
           const nudgeTarget = a.id < b.id ? a : b;
-          if (nudgeTarget.moveTarget === null) {
+          if (nudgeTarget.moveTarget === null
+            && !nudgeTarget.objectStatusFlags.has('IS_USING_ABILITY')) {
             const awayX = nudgeTarget.x + (nudgeTarget === a ? -nx : nx) * PATHFIND_CELL_SIZE;
             const awayZ = nudgeTarget.z + (nudgeTarget === a ? -nz : nz) * PATHFIND_CELL_SIZE;
             this.issueMoveTo(nudgeTarget.id, awayX, awayZ);
