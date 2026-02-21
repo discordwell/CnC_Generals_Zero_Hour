@@ -3632,6 +3632,11 @@ interface ScriptConditionCacheState {
   customFrame: number;
 }
 
+interface ScriptNamedEvent {
+  name: string;
+  sourceEntityId: number;
+}
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -3668,6 +3673,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSciences = new Map<string, Set<string>>();
   /** Source parity: ScriptEngine::m_acquiredSciences (consumed by evaluateScienceAcquired). */
   private readonly sideScriptAcquiredSciences = new Map<string, Set<string>>();
+  /** Source parity: ScriptEngine::m_completedUpgrades script event list. */
+  private readonly sideScriptCompletedUpgradeEvents = new Map<string, ScriptNamedEvent[]>();
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
@@ -5855,6 +5862,58 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateUpgradeFromUnitComplete.
+   * Consumes the completed-upgrade script event when a match is found.
+   */
+  evaluateScriptUpgradeFromUnitComplete(filter: {
+    side: string;
+    upgradeName: string;
+    sourceEntityId?: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const normalizedUpgradeName = filter.upgradeName.trim().toUpperCase();
+    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
+      return false;
+    }
+
+    let sourceEntityId: number | null = null;
+    if (filter.sourceEntityId !== undefined) {
+      if (!Number.isFinite(filter.sourceEntityId)) {
+        return false;
+      }
+      sourceEntityId = Math.trunc(filter.sourceEntityId);
+      const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+      if (!sourceEntity || sourceEntity.destroyed) {
+        return false;
+      }
+    }
+
+    const events = this.sideScriptCompletedUpgradeEvents.get(normalizedSide);
+    if (!events || events.length === 0) {
+      return false;
+    }
+
+    for (let index = 0; index < events.length; index += 1) {
+      const event = events[index]!;
+      if (event.name !== normalizedUpgradeName) {
+        continue;
+      }
+      if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
+        continue;
+      }
+
+      events.splice(index, 1);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerHasNOrFewerBuildings.
    */
   evaluateScriptPlayerHasNOrFewerBuildings(filter: {
@@ -6345,6 +6404,29 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private recordScriptCompletedUpgradeEvent(
+    normalizedSide: string,
+    upgradeName: string,
+    sourceEntityId: number,
+  ): void {
+    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
+      return;
+    }
+    if (!Number.isFinite(sourceEntityId)) {
+      return;
+    }
+    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
+    if (normalizedSourceEntityId <= 0) {
+      return;
+    }
+
+    this.getScriptCompletedUpgradeEvents(normalizedSide).push({
+      name: normalizedUpgradeName,
+      sourceEntityId: normalizedSourceEntityId,
+    });
+  }
+
   private getSciencePurchaseCost(scienceDef: ScienceDef): number {
     const costRaw = readNumericField(scienceDef.fields, ['SciencePurchasePointCost']);
     if (costRaw === null || !Number.isFinite(costRaw)) {
@@ -6465,6 +6547,16 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const created = new Set<string>();
     this.sideScriptAcquiredSciences.set(normalizedSide, created);
+    return created;
+  }
+
+  private getScriptCompletedUpgradeEvents(normalizedSide: string): ScriptNamedEvent[] {
+    const existing = this.sideScriptCompletedUpgradeEvents.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+    const created: ScriptNamedEvent[] = [];
+    this.sideScriptCompletedUpgradeEvents.set(normalizedSide, created);
     return created;
   }
 
@@ -6913,6 +7005,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideKindOfProductionCostModifiers.clear();
     this.sideSciences.clear();
     this.sideScriptAcquiredSciences.clear();
+    this.sideScriptCompletedUpgradeEvents.clear();
     this.localPlayerScienceAvailability.clear();
     this.sidePowerBonus.clear();
     this.sideRadarState.clear();
@@ -22467,6 +22560,10 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyUpgradeToEntity(producer.id, production.upgradeName);
     }
 
+    if (producerSide) {
+      this.recordScriptCompletedUpgradeEvent(producerSide, production.upgradeName, producer.id);
+    }
+
     // Source parity: Eva UPGRADE_COMPLETE fires when an upgrade finishes research.
     const upgradeSide = producerSide ?? producer.side;
     if (upgradeSide) {
@@ -33596,6 +33693,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideAttackedFrame.clear();
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
+    this.sideScriptAcquiredSciences.clear();
+    this.sideScriptCompletedUpgradeEvents.clear();
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();

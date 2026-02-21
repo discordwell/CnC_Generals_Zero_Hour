@@ -27785,6 +27785,90 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates upgrade-from-unit-complete with source filtering and event consumption', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UpgradeLab', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'CommandSetUpgrade ModuleTag_UpgradeObjectA', {
+            TriggeredBy: 'Upgrade_ObjectA',
+            CommandSet: 'CommandSet_UpgradeLab',
+          }),
+        ], { CommandSet: 'CommandSet_UpgradeLab' }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_ObjectA', {
+          Type: 'OBJECT',
+          BuildTime: 0.1,
+          BuildCost: 50,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_UpgradeObjectA', {
+          Command: 'UNIT_BUILD',
+          Upgrade: 'Upgrade_ObjectA',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_UpgradeLab', { '1': 'Command_UpgradeObjectA' }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('UpgradeLab', 20, 20),
+        makeMapObject('UpgradeLab', 30, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setSideCredits('America', 1000);
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 1, upgradeName: 'Upgrade_ObjectA' });
+    logic.submitCommand({ type: 'queueUpgradeProduction', entityId: 2, upgradeName: 'Upgrade_ObjectA' });
+    for (let i = 0; i < 4; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.evaluateScriptUpgradeFromUnitComplete({
+      side: 'America',
+      upgradeName: 'Upgrade_ObjectA',
+      sourceEntityId: 1,
+    })).toBe(true);
+    expect(logic.evaluateScriptUpgradeFromUnitComplete({
+      side: 'America',
+      upgradeName: 'Upgrade_ObjectA',
+      sourceEntityId: 1,
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    // Source parity: with explicit source unit, dead source resolves to false and does not consume.
+    expect(logic.evaluateScriptUpgradeFromUnitComplete({
+      side: 'America',
+      upgradeName: 'Upgrade_ObjectA',
+      sourceEntityId: 2,
+    })).toBe(false);
+
+    expect(logic.evaluateScriptUpgradeFromUnitComplete({
+      side: 'America',
+      upgradeName: 'Upgrade_ObjectA',
+    })).toBe(true);
+    expect(logic.evaluateScriptUpgradeFromUnitComplete({
+      side: 'America',
+      upgradeName: 'Upgrade_ObjectA',
+    })).toBe(false);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [
