@@ -27521,6 +27521,33 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedDiscovered({ entityId: 1, side: 'China' })).toBe(false);
   });
 
+  it('evaluates named-selected from current selection state', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Scout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Scout', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptNamedSelected({ entityId: 1 })).toBe(false);
+
+    logic.submitCommand({ type: 'select', entityId: 1 });
+    logic.update(0);
+    expect(logic.evaluateScriptNamedSelected({ entityId: 1 })).toBe(true);
+
+    logic.submitCommand({ type: 'clearSelection' });
+    logic.update(0);
+    expect(logic.evaluateScriptNamedSelected({ entityId: 1 })).toBe(false);
+  });
+
   it('keeps mission-attempt and player-destroyed-N-buildings conditions at source TODO behavior', () => {
     const bundle = makeBundle({
       objects: [

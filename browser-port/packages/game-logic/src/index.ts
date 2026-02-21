@@ -5383,6 +5383,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptConditions::evaluateNamedSelected.
+   * TODO(source-parity): condition cache invalidation by UI selection-change frame.
+   */
+  evaluateScriptNamedSelected(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+    return entity.selected;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateSkirmishNamedAreaExists.
    */
   evaluateScriptSkirmishNamedAreaExists(triggerName: string): boolean {
