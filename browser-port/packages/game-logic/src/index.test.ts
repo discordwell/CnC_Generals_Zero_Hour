@@ -25331,6 +25331,228 @@ describe('PowerPlantUpdate', () => {
   });
 });
 
+describe('AnimationSteeringUpdate', () => {
+  it('extracts MinTransitionTime into transitionFrames', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SteeringUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'AnimationSteeringUpdate ModuleTag_AnimSteer', {
+            MinTransitionTime: 100, // 100ms -> 3 frames
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SteeringUnit', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        animationSteeringProfile: { transitionFrames: number } | null;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.animationSteeringProfile).toBeTruthy();
+    expect(entity.animationSteeringProfile?.transitionFrames).toBe(3);
+  });
+
+  it('transitions turn model conditions with transition-frame gating', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SteeringUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'AnimationSteeringUpdate ModuleTag_AnimSteer', {
+            MinTransitionTime: 100, // 3 frames
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SteeringUnit', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      frameCounter: number;
+      spawnedEntities: Map<number, {
+        rotationY: number;
+        modelConditionFlags: Set<string>;
+        animationSteeringCurrentTurnAnim: string | null;
+        animationSteeringNextTransitionFrame: number;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Frame 1: negative turn delta => CENTER_TO_RIGHT.
+    entity.rotationY -= 0.5;
+    logic.update(1 / 30);
+    expect(entity.animationSteeringCurrentTurnAnim).toBe('CENTER_TO_RIGHT');
+    expect(entity.modelConditionFlags.has('CENTER_TO_RIGHT')).toBe(true);
+    const firstTransitionFrame = entity.animationSteeringNextTransitionFrame;
+    expect(firstTransitionFrame).toBeGreaterThan(priv.frameCounter);
+
+    // Frames 2-3: no turn, but still in transition lock window.
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+    expect(priv.frameCounter).toBeLessThan(firstTransitionFrame);
+    expect(entity.animationSteeringCurrentTurnAnim).toBe('CENTER_TO_RIGHT');
+    expect(entity.modelConditionFlags.has('CENTER_TO_RIGHT')).toBe(true);
+
+    // Frame 4: transition window elapsed, recenter to RIGHT_TO_CENTER.
+    logic.update(1 / 30);
+    expect(entity.animationSteeringCurrentTurnAnim).toBe('RIGHT_TO_CENTER');
+    expect(entity.modelConditionFlags.has('CENTER_TO_RIGHT')).toBe(false);
+    expect(entity.modelConditionFlags.has('RIGHT_TO_CENTER')).toBe(true);
+
+    // Hold recenter animation until its own transition time expires.
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+    expect(entity.animationSteeringCurrentTurnAnim).toBe('RIGHT_TO_CENTER');
+    expect(entity.modelConditionFlags.has('RIGHT_TO_CENTER')).toBe(true);
+
+    // Next eligible frame with TURN_NONE clears recenter flags and returns to INVALID.
+    logic.update(1 / 30);
+    expect(entity.animationSteeringCurrentTurnAnim).toBeNull();
+    expect(entity.modelConditionFlags.has('LEFT_TO_CENTER')).toBe(false);
+    expect(entity.modelConditionFlags.has('RIGHT_TO_CENTER')).toBe(false);
+  });
+});
+
+describe('TensileFormationUpdate', () => {
+  it('extracts Enabled and CrackSound from INI', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CollapseChunk', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'TensileFormationUpdate ModuleTag_Tensile', {
+            Enabled: true,
+            CrackSound: 'BuildingCollapseCrack',
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CollapseChunk', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        tensileFormationProfile: { enabled: boolean; crackSound: string } | null;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.tensileFormationProfile).toBeTruthy();
+    expect(entity.tensileFormationProfile?.enabled).toBe(true);
+    expect(entity.tensileFormationProfile?.crackSound).toBe('BuildingCollapseCrack');
+  });
+
+  it('enables on damaged state, sets collapse flags, and propagates BODY_DAMAGED', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CollapseChunk', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'TensileFormationUpdate ModuleTag_Tensile', {
+            Enabled: false,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CollapseChunk', 20, 20), // id 1
+        makeMapObject('CollapseChunk', 26, 20), // id 2, within 100 range
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        modelConditionFlags: Set<string>;
+      }>;
+    };
+    const first = priv.spawnedEntities.get(1)!;
+    const second = priv.spawnedEntities.get(2)!;
+
+    // Make the first member BODY_DAMAGED (health <= 49).
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, first, 60, 'CRUSH');
+    expect(first.health).toBe(40);
+    expect(second.health).toBe(100);
+
+    // At life 29, propagateDislodgement should set nearby members to BODY_DAMAGED.
+    for (let i = 0; i < 29; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(first.modelConditionFlags.has('POST_COLLAPSE')).toBe(true);
+    expect(first.modelConditionFlags.has('MOVING')).toBe(true);
+    expect(second.health).toBe(49); // ActiveBody::setDamageState(BODY_DAMAGED): max*0.5 - 1
+  });
+
+  it('enters rubble state after life exceeds 300 frames', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CollapseChunk', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'TensileFormationUpdate ModuleTag_Tensile', {
+            Enabled: true,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CollapseChunk', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        destroyed: boolean;
+        modelConditionFlags: Set<string>;
+        tensileFormationState: { done: boolean } | null;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    for (let i = 0; i < 301; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(entity.tensileFormationState?.done).toBe(true);
+    expect(entity.health).toBe(0);
+    expect(entity.destroyed).toBe(false);
+    expect(entity.modelConditionFlags.has('POST_COLLAPSE')).toBe(false);
+    expect(entity.modelConditionFlags.has('MOVING')).toBe(false);
+    expect(entity.modelConditionFlags.has('FREEFALL')).toBe(false);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // UndeadBody
 // ═══════════════════════════════════════════════════════════════════════════

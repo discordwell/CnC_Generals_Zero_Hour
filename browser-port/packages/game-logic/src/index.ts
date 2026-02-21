@@ -1138,6 +1138,44 @@ interface JetAIRuntimeState {
   cruiseHeight: number;
 }
 
+type AnimationSteeringTurnAnim =
+  'CENTER_TO_RIGHT'
+  | 'CENTER_TO_LEFT'
+  | 'RIGHT_TO_CENTER'
+  | 'LEFT_TO_CENTER';
+
+/**
+ * Source parity: AnimationSteeringUpdateModuleData.
+ * C++ file: AnimationSteeringUpdate.h/cpp.
+ */
+interface AnimationSteeringProfile {
+  transitionFrames: number;
+}
+
+interface TensileFormationProfile {
+  enabled: boolean;
+  crackSound: string;
+}
+
+interface TensileFormationLinkState {
+  id: number;
+  tensorX: number;
+  tensorZ: number;
+}
+
+interface TensileFormationRuntimeState {
+  enabled: boolean;
+  linksInited: boolean;
+  links: TensileFormationLinkState[];
+  inertiaX: number;
+  inertiaZ: number;
+  motionlessCounter: number;
+  life: number;
+  lowestSlideElevation: number;
+  nextWakeFrame: number;
+  done: boolean;
+}
+
 /**
  * Source parity: SpawnBehaviorModuleData — spawner module parsed from INI.
  * (GeneralsMD/Code/GameEngine/Include/GameLogic/Module/SpawnBehavior.h)
@@ -2068,6 +2106,16 @@ interface MapEntity {
   jetAIProfile: JetAIProfile | null;
   /** JetAI runtime state (null = not an aircraft with JetAIUpdate). */
   jetAIState: JetAIRuntimeState | null;
+
+  // ── Source parity: AnimationSteeringUpdate — turn animation model conditions ──
+  animationSteeringProfile: AnimationSteeringProfile | null;
+  animationSteeringCurrentTurnAnim: AnimationSteeringTurnAnim | null;
+  animationSteeringNextTransitionFrame: number;
+  animationSteeringLastRotationY: number;
+
+  // ── Source parity: TensileFormationUpdate — avalanche-style group collapse physics ──
+  tensileFormationProfile: TensileFormationProfile | null;
+  tensileFormationState: TensileFormationRuntimeState | null;
 
   // ── Source parity: AssaultTransportAIUpdate — auto-deploy/recall passengers ──
   /** AssaultTransport profile (null = not an assault transport). */
@@ -4023,6 +4071,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateGuardBehavior();
     this.updateJetAI();
     this.updateEntityMovement(dt);
+    this.updateAnimationSteering();
     this.updateUnitCollisionSeparation();
     this.updateCrushCollisions();
     this.updateRailedTransport();
@@ -4079,6 +4128,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateDynamicShroud();
     this.updatePilotFindVehicle();
     this.updateToppleEntities();
+    this.updateTensileFormation();
     this.updateSupplyWarehouseCrippling();
     this.updateRadarExtension();
     this.updatePowerPlantUpdate();
@@ -5612,6 +5662,8 @@ export class GameLogicSubsystem implements Subsystem {
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
     const experienceProfile = this.extractExperienceProfile(objectDef);
     const jetAIProfile = this.extractJetAIProfile(objectDef);
+    const animationSteeringProfile = this.extractAnimationSteeringProfile(objectDef);
+    const tensileFormationProfile = this.extractTensileFormationProfile(objectDef);
     const weaponTemplateSets = this.extractWeaponTemplateSets(objectDef);
     const armorTemplateSets = this.extractArmorTemplateSets(objectDef);
     const attackWeapon = this.resolveAttackWeaponProfile(objectDef, iniDataRegistry);
@@ -6070,6 +6122,29 @@ export class GameLogicSubsystem implements Subsystem {
       // JetAI
       jetAIProfile,
       jetAIState: null,
+      // AnimationSteeringUpdate
+      animationSteeringProfile,
+      animationSteeringCurrentTurnAnim: null,
+      animationSteeringNextTransitionFrame: 0,
+      animationSteeringLastRotationY: rotationY,
+      tensileFormationProfile,
+      tensileFormationState: tensileFormationProfile ? {
+        enabled: tensileFormationProfile.enabled,
+        linksInited: false,
+        links: [
+          { id: 0, tensorX: 0, tensorZ: 0 },
+          { id: 0, tensorX: 0, tensorZ: 0 },
+          { id: 0, tensorX: 0, tensorZ: 0 },
+          { id: 0, tensorX: 0, tensorZ: 0 },
+        ],
+        inertiaX: 0,
+        inertiaZ: 0,
+        motionlessCounter: 0,
+        life: 0,
+        lowestSlideElevation: 255,
+        nextWakeFrame: 0,
+        done: false,
+      } : null,
       // AssaultTransport
       assaultTransportProfile: this.extractAssaultTransportProfile(objectDef),
       // PowerPlantUpdate
@@ -7926,6 +8001,84 @@ export class GameLogicSubsystem implements Subsystem {
       attackLocoPersistFrames,
       returnLocomotorSet,
     };
+  }
+
+  /**
+   * Source parity: AnimationSteeringUpdateModuleData::m_transitionFrames.
+   * C++ parse field: MinTransitionTime (duration).
+   */
+  private extractAnimationSteeringProfile(objectDef: ObjectDef | undefined): AnimationSteeringProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let transitionFrames: number | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (transitionFrames !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'ANIMATIONSTEERINGUPDATE') {
+          const transitionMs = readNumericField(block.fields, ['MinTransitionTime']) ?? 0;
+          transitionFrames = this.msToLogicFrames(transitionMs);
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    if (transitionFrames === null) {
+      return null;
+    }
+
+    return {
+      transitionFrames,
+    };
+  }
+
+  /**
+   * Source parity: TensileFormationUpdateModuleData.
+   * C++ parse fields: Enabled, CrackSound.
+   */
+  private extractTensileFormationProfile(objectDef: ObjectDef | undefined): TensileFormationProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: TensileFormationProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) {
+        return;
+      }
+
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'TENSILEFORMATIONUPDATE') {
+          profile = {
+            enabled: readBooleanField(block.fields, ['Enabled']) === true,
+            crackSound: readStringField(block.fields, ['CrackSound'])?.trim() ?? '',
+          };
+          return;
+        }
+      }
+
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
   }
 
   /**
@@ -26612,6 +26765,222 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ActiveBody::setDamageState — force a body damage state by
+   * mutating health thresholds (ratio * maxHealth - 1).
+   */
+  private setEntityBodyDamageState(entity: MapEntity, newState: BodyDamageState): void {
+    if (entity.maxHealth <= 0) {
+      return;
+    }
+
+    const oldState = calcBodyDamageState(entity.health, entity.maxHealth);
+    let ratio = 1.0;
+    if (newState === 1) {
+      ratio = UNIT_DAMAGED_THRESH;
+    } else if (newState === 2) {
+      ratio = UNIT_REALLY_DAMAGED_THRESH;
+    } else if (newState === 3) {
+      ratio = 0.0;
+    }
+
+    let desiredHealth = entity.maxHealth * ratio - 1;
+    if (desiredHealth < 0) {
+      desiredHealth = 0;
+    }
+    entity.health = Math.min(entity.maxHealth, desiredHealth);
+
+    const nextState = calcBodyDamageState(entity.health, entity.maxHealth);
+    if (entity.supplyWarehouseCripplingProfile && entity.health > 0 && oldState !== nextState) {
+      this.supplyWarehouseCripplingOnStateChange(entity, oldState, nextState);
+    }
+
+    // Source parity: structures in BODY_RUBBLE disable collisions.
+    if (nextState === 3 && entity.kindOf.has('STRUCTURE')) {
+      entity.noCollisions = true;
+    }
+  }
+
+  /**
+   * Source parity: TensileFormationUpdate::initLinks — initialize up to 4
+   * nearest tensile members and cache their relative tensors.
+   */
+  private initTensileFormationLinks(entity: MapEntity, state: TensileFormationRuntimeState): void {
+    state.linksInited = true;
+
+    let closestDistance = 99999.9;
+    for (const other of this.spawnedEntities.values()) {
+      if (other.id === entity.id) continue;
+      if (other.destroyed) continue;
+      if (!other.tensileFormationProfile || !other.tensileFormationState) continue;
+
+      const dx = other.x - entity.x;
+      const dz = other.z - entity.z;
+      const distance = Math.hypot(dx, dz);
+      if (distance > 1000.0) continue;
+
+      // Source parity: keep only monotonically closer entries while iterating.
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        for (let i = 3; i > 0; i--) {
+          state.links[i] = state.links[i - 1]!;
+        }
+        state.links[0] = { id: other.id, tensorX: dx, tensorZ: dz };
+      }
+    }
+
+    entity.rotationY = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
+  }
+
+  /**
+   * Source parity: TensileFormationUpdate::propagateDislodgement — set nearby and linked
+   * members to BODY_DAMAGED.
+   */
+  private propagateTensileDislodgement(entity: MapEntity, state: TensileFormationRuntimeState): void {
+    for (const other of this.spawnedEntities.values()) {
+      if (other.destroyed) continue;
+      if (!other.tensileFormationProfile || !other.tensileFormationState) continue;
+      const dx = other.x - entity.x;
+      const dz = other.z - entity.z;
+      if (dx * dx + dz * dz > 100.0 * 100.0) continue;
+      this.setEntityBodyDamageState(other, 1);
+    }
+
+    for (const link of state.links) {
+      if (!link || link.id === 0) continue;
+      const other = this.spawnedEntities.get(link.id);
+      if (!other || other.destroyed) continue;
+      this.setEntityBodyDamageState(other, 1);
+    }
+  }
+
+  /**
+   * Source parity: TerrainLogic::getGroundHeight(..., normal) equivalent used by
+   * TensileFormationUpdate to compute slope.
+   */
+  private sampleGroundNormal(x: number, z: number): { x: number; z: number; up: number } {
+    const hm = this.mapHeightmap;
+    if (!hm) {
+      return { x: 0, z: 0, up: 1 };
+    }
+    const e = 1.0;
+    const hL = hm.getInterpolatedHeight(x - e, z);
+    const hR = hm.getInterpolatedHeight(x + e, z);
+    const hD = hm.getInterpolatedHeight(x, z - e);
+    const hU = hm.getInterpolatedHeight(x, z + e);
+
+    const dHx = (hR - hL) / (2 * e);
+    const dHz = (hU - hD) / (2 * e);
+
+    // Parametric surface normal for y = h(x,z): (-dh/dx, -dh/dz, 1)
+    let nx = -dHx;
+    let nz = -dHz;
+    let ny = 1.0;
+    const len = Math.hypot(nx, nz, ny);
+    if (len > 1e-6) {
+      nx /= len;
+      nz /= len;
+      ny /= len;
+    } else {
+      nx = 0;
+      nz = 0;
+      ny = 1;
+    }
+    return { x: nx, z: nz, up: ny };
+  }
+
+  /**
+   * Source parity: TensileFormationUpdate::update — avalanche-style sliding and
+   * tensor coupling between nearby formation members.
+   */
+  private updateTensileFormation(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.tensileFormationProfile;
+      const state = entity.tensileFormationState;
+      if (!profile || !state) continue;
+      if (state.done) continue;
+
+      if (!state.linksInited) {
+        this.initTensileFormationLinks(entity, state);
+      }
+
+      if (!state.enabled) {
+        const bodyState = calcBodyDamageState(entity.health, entity.maxHealth);
+        if (bodyState >= 1) {
+          state.enabled = true;
+          // TODO(C&C source parity): pathfinder removeWallFromMyFootprint + CrackSound audio event.
+        } else {
+          if (this.frameCounter < state.nextWakeFrame) {
+            continue;
+          }
+          state.nextWakeFrame = this.frameCounter + 30;
+          continue;
+        }
+      }
+
+      state.life += 1;
+      if (state.life > 300) {
+        entity.modelConditionFlags.delete('MOVING');
+        entity.modelConditionFlags.delete('FREEFALL');
+        entity.modelConditionFlags.delete('POST_COLLAPSE');
+        this.setEntityBodyDamageState(entity, 3);
+        // TODO(C&C source parity): pathfinder createWallFromMyFootprint and module sleep forever.
+        state.done = true;
+        continue;
+      }
+
+      if (state.life % 30 === 29) {
+        this.propagateTensileDislodgement(entity, state);
+      }
+
+      const prevSurfaceY = entity.y - entity.baseHeight;
+      const normal = this.sampleGroundNormal(entity.x, entity.z);
+      const steepness = 1.0 - normal.up;
+      const slopeScale = 0.3 + steepness;
+      state.inertiaX += normal.x * slopeScale;
+      state.inertiaZ += normal.z * slopeScale;
+      state.inertiaX *= 0.95;
+      state.inertiaZ *= 0.95;
+
+      let newX = entity.x + state.inertiaX;
+      let newZ = entity.z + state.inertiaZ;
+      let newSurfaceY = Math.min(state.lowestSlideElevation, this.resolveGroundHeight(newX, newZ));
+
+      for (const link of state.links) {
+        if (!link || link.id === 0) continue;
+        const other = this.spawnedEntities.get(link.id);
+        if (!other || other.destroyed) continue;
+
+        const desiredX = other.x - link.tensorX;
+        const desiredZ = other.z - link.tensorZ;
+
+        newX = newX * 0.93 + desiredX * 0.07;
+        newZ = newZ * 0.93 + desiredZ * 0.07;
+        newSurfaceY = Math.min(state.lowestSlideElevation, this.resolveGroundHeight(newX, newZ));
+      }
+
+      entity.modelConditionFlags.add('POST_COLLAPSE');
+      if (state.life < 200) {
+        entity.modelConditionFlags.add('MOVING');
+      } else {
+        entity.modelConditionFlags.delete('MOVING');
+      }
+
+      if (Math.abs(prevSurfaceY - newSurfaceY) > 0.2 && state.life < 100) {
+        entity.modelConditionFlags.add('FREEFALL');
+      } else {
+        entity.modelConditionFlags.delete('FREEFALL');
+      }
+
+      state.lowestSlideElevation = newSurfaceY;
+      entity.x = newX;
+      entity.z = newZ;
+      entity.y = newSurfaceY + entity.baseHeight;
+      this.updatePathfindPosCell(entity);
+    }
+  }
+
+  /**
    * Source parity: DeployStyleAIUpdate::update() — per-frame deploy state machine.
    * Transitions: READY_TO_MOVE ↔ DEPLOY ↔ READY_TO_ATTACK ↔ UNDEPLOY ↔ READY_TO_MOVE.
    * Timer-based: DEPLOY finishes after unpackTime, UNDEPLOY finishes after packTime.
@@ -29996,6 +30365,85 @@ export class GameLogicSubsystem implements Subsystem {
       entity.x = container.x;
       entity.z = container.z;
       entity.y = container.y;
+    }
+  }
+
+  /**
+   * Source parity: AnimationSteeringUpdate::update — drive turn-in-place model
+   * condition transitions from PhysicsBehavior::getTurning().
+   *
+   * C++ module transitions:
+   * INVALID -> CENTER_TO_RIGHT / CENTER_TO_LEFT
+   * CENTER_TO_RIGHT -> RIGHT_TO_CENTER
+   * CENTER_TO_LEFT -> LEFT_TO_CENTER
+   * LEFT_TO_CENTER / RIGHT_TO_CENTER -> INVALID (when TURN_NONE)
+   */
+  private updateAnimationSteering(): void {
+    const now = this.frameCounter;
+    const TURN_EPSILON = 1e-4;
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.animationSteeringProfile;
+      if (!profile) continue;
+
+      // Source parity approximation: derive PhysicsTurningType from body yaw delta.
+      const turnDelta = this.normalizeAngle(entity.rotationY - entity.animationSteeringLastRotationY);
+      entity.animationSteeringLastRotationY = entity.rotationY;
+
+      if (now < entity.animationSteeringNextTransitionFrame) {
+        continue;
+      }
+
+      let currentTurn: 'TURN_NONE' | 'TURN_NEGATIVE' | 'TURN_POSITIVE' = 'TURN_NONE';
+      if (turnDelta < -TURN_EPSILON) {
+        currentTurn = 'TURN_NEGATIVE';
+      } else if (turnDelta > TURN_EPSILON) {
+        currentTurn = 'TURN_POSITIVE';
+      }
+
+      switch (entity.animationSteeringCurrentTurnAnim) {
+        case null: {
+          if (currentTurn === 'TURN_NEGATIVE') {
+            entity.modelConditionFlags.add('CENTER_TO_RIGHT');
+            entity.animationSteeringNextTransitionFrame = now + profile.transitionFrames;
+            entity.animationSteeringCurrentTurnAnim = 'CENTER_TO_RIGHT';
+          } else if (currentTurn === 'TURN_POSITIVE') {
+            entity.modelConditionFlags.add('CENTER_TO_LEFT');
+            entity.animationSteeringNextTransitionFrame = now + profile.transitionFrames;
+            entity.animationSteeringCurrentTurnAnim = 'CENTER_TO_LEFT';
+          }
+          break;
+        }
+        case 'CENTER_TO_RIGHT': {
+          if (currentTurn !== 'TURN_NEGATIVE') {
+            entity.modelConditionFlags.delete('CENTER_TO_RIGHT');
+            entity.modelConditionFlags.add('RIGHT_TO_CENTER');
+            entity.animationSteeringNextTransitionFrame = now + profile.transitionFrames;
+            entity.animationSteeringCurrentTurnAnim = 'RIGHT_TO_CENTER';
+          }
+          break;
+        }
+        case 'CENTER_TO_LEFT': {
+          if (currentTurn !== 'TURN_POSITIVE') {
+            entity.modelConditionFlags.delete('CENTER_TO_LEFT');
+            entity.modelConditionFlags.add('LEFT_TO_CENTER');
+            entity.animationSteeringNextTransitionFrame = now + profile.transitionFrames;
+            entity.animationSteeringCurrentTurnAnim = 'LEFT_TO_CENTER';
+          }
+          break;
+        }
+        case 'LEFT_TO_CENTER':
+        case 'RIGHT_TO_CENTER': {
+          if (currentTurn === 'TURN_NONE') {
+            entity.modelConditionFlags.delete('LEFT_TO_CENTER');
+            entity.modelConditionFlags.delete('RIGHT_TO_CENTER');
+            entity.animationSteeringNextTransitionFrame = now;
+            entity.animationSteeringCurrentTurnAnim = null;
+          }
+          break;
+        }
+      }
     }
   }
 
