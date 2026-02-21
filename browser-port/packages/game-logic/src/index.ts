@@ -3732,6 +3732,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptTriggerExitedByEntityId = new Map<number, Set<number>>();
   /** Source parity: Object::m_enteredOrExitedFrame keyed by entity id. */
   private readonly scriptTriggerEnterExitFrameByEntityId = new Map<number, number>();
+  /** Source parity: evaluateUnitHasEmptied transport-status cache keyed by entity id. */
+  private readonly scriptTransportStatusByEntityId = new Map<number, { frameNumber: number; unitCount: number }>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
   private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
@@ -6257,6 +6259,49 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return this.scriptTriggerExitedByEntityId.get(entityId)?.has(triggerIndex) ?? false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateUnitHasEmptied.
+   * True when contain count transitions from >0 to 0 between previous frame and current frame.
+   */
+  evaluateScriptUnitHasEmptied(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const currentContainedCount = entity.containProfile
+      ? this.collectContainedEntityIds(entityId).length
+      : 0;
+
+    const previous = this.scriptTransportStatusByEntityId.get(entityId);
+    if (!previous) {
+      this.scriptTransportStatusByEntityId.set(entityId, {
+        frameNumber: this.frameCounter,
+        unitCount: currentContainedCount,
+      });
+      return false;
+    }
+
+    if (
+      previous.frameNumber === this.frameCounter - 1
+      && previous.unitCount > 0
+      && currentContainedCount === 0
+    ) {
+      // Source parity: do not update status here so repeated checks this frame remain true.
+      return true;
+    }
+
+    previous.frameNumber = this.frameCounter;
+    previous.unitCount = currentContainedCount;
+    return false;
   }
 
   /**
@@ -18079,6 +18124,7 @@ export class GameLogicSubsystem implements Subsystem {
   private removeEntityFromWorld(entityId: number): void {
     if (this.spawnedEntities.delete(entityId)) {
       this.clearScriptTriggerTrackingForEntity(entityId);
+      this.scriptTransportStatusByEntityId.delete(entityId);
       this.notifyScriptObjectCreationOrDestruction();
     }
   }
@@ -34323,6 +34369,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptTriggerEnteredByEntityId.clear();
     this.scriptTriggerExitedByEntityId.clear();
     this.scriptTriggerEnterExitFrameByEntityId.clear();
+    this.scriptTransportStatusByEntityId.clear();
     this.loadedMapData = null;
     this.navigationGrid = null;
     this.bridgeSegments.clear();

@@ -28154,6 +28154,46 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
   });
 
+  it('evaluates unit-has-emptied with previous-frame transport count parity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Transport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { Slots: 2 }),
+        ]),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Transport', 10, 10), // id 1
+        makeMapObject('Passenger', 12, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+    };
+
+    privateApi.spawnedEntities.get(2)!.transportContainerId = 1;
+    expect(logic.evaluateScriptUnitHasEmptied({ entityId: 1 })).toBe(false);
+
+    logic.update(0);
+    privateApi.spawnedEntities.get(2)!.transportContainerId = null;
+
+    expect(logic.evaluateScriptUnitHasEmptied({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptUnitHasEmptied({ entityId: 1 })).toBe(true);
+
+    logic.update(0);
+    expect(logic.evaluateScriptUnitHasEmptied({ entityId: 1 })).toBe(false);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [
