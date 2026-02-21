@@ -26886,6 +26886,90 @@ describe('SpecialPowerCreate', () => {
   });
 });
 
+describe('onStructureConstructionComplete parity hooks', () => {
+  it('tracks structure score and script topology notifications on completion', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('ScoreBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ], { BuildCost: 500, BuildTime: 0.5 }),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Dozer', 100, 100)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setSideCredits('America', 5000);
+
+    expect(logic.getSideScoreState('America')).toEqual({ structuresBuilt: 0, moneySpent: 0 });
+    expect(logic.getScriptObjectTopologyVersion()).toBe(0);
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'ScoreBuilding',
+      targetPosition: [100, 0, 100] as const,
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(1 / 30);
+
+    for (let i = 0; i < 25; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getSideScoreState('America')).toEqual({ structuresBuilt: 1, moneySpent: 500 });
+    expect(logic.getScriptObjectTopologyVersion()).toBe(1);
+  });
+
+  it('notifies skirmish AI on produced structure completion', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('PatriotBattery', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], { BuildCost: 800, BuildTime: 0.5 }),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Dozer', 80, 80)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setSideCredits('America', 5000);
+    logic.enableSkirmishAI('America');
+
+    const priv = logic as unknown as {
+      skirmishAIStates: Map<string, { builtStructureKeywords: Set<string> }>;
+    };
+    expect(priv.skirmishAIStates.get('america')?.builtStructureKeywords.has('PATRIOT')).toBe(false);
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PatriotBattery',
+      targetPosition: [80, 0, 80] as const,
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(1 / 30);
+
+    for (let i = 0; i < 25; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(priv.skirmishAIStates.get('america')?.builtStructureKeywords.has('PATRIOT')).toBe(true);
+  });
+});
+
 describe('SubdualDamageHelper', () => {
   it('accumulates subdual damage instead of reducing health', () => {
     const bundle = makeBundle({

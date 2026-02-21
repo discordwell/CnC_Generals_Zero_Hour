@@ -200,6 +200,26 @@ export function createSkirmishAIState(side: string): SkirmishAIState {
   };
 }
 
+/**
+ * Source parity hook: AIPlayer::onStructureProduced callback.
+ * Marks matching build-order keywords as produced so rebuild heuristics
+ * are immediately aware of newly completed structures.
+ */
+export function notifyStructureProduced(
+  state: SkirmishAIState,
+  structureTemplateName: string,
+): void {
+  const upperTemplate = structureTemplateName.trim().toUpperCase();
+  if (!upperTemplate) {
+    return;
+  }
+  for (const keyword of BUILD_ORDER_KEYWORDS) {
+    if (upperTemplate.includes(keyword)) {
+      state.builtStructureKeywords.add(keyword);
+    }
+  }
+}
+
 // ──── Helper: collect entities by side and criteria ──────────────────────────
 
 function collectEntitiesBySide<TEntity extends AIEntity>(

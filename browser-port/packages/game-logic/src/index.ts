@@ -200,6 +200,7 @@ import {
 } from './special-power-effects.js';
 import {
   createSkirmishAIState as createSkirmishAIStateImpl,
+  notifyStructureProduced as notifySkirmishAIStructureProducedImpl,
   updateSkirmishAI as updateSkirmishAIImpl,
   type SkirmishAIContext,
   type SkirmishAIState,
@@ -3601,6 +3602,11 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
 
+interface SideScoreState {
+  structuresBuilt: number;
+  moneySpent: number;
+}
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -3638,6 +3644,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
+  private readonly sideScoreState = new Map<string, SideScoreState>();
   private readonly sideBattlePlanBonuses = new Map<string, SideBattlePlanBonuses>();
   private readonly battlePlanParalyzedUntilFrame = new Map<number, number>();
   private readonly playerSideByIndex = new Map<number, string>();
@@ -3645,6 +3652,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly shortcutSpecialPowerSourceByName = new Map<string, Map<number, number>>();
   private readonly shortcutSpecialPowerNamesByEntityId = new Map<number, Set<string>>();
   private readonly sharedShortcutSpecialPowerReadyFrames = new Map<string, number>();
+  /** Source parity: ScriptEngine::notifyOfObjectCreationOrDestruction dirty version. */
+  private scriptObjectTopologyVersion = 0;
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
   private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
@@ -4989,6 +4998,28 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.sidePlayerTypes.set(normalizedSide, normalizedType);
     return true;
+  }
+
+  getSideScoreState(side: string): {
+    structuresBuilt: number;
+    moneySpent: number;
+  } {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return { structuresBuilt: 0, moneySpent: 0 };
+    }
+    const score = this.sideScoreState.get(normalizedSide);
+    if (!score) {
+      return { structuresBuilt: 0, moneySpent: 0 };
+    }
+    return {
+      structuresBuilt: score.structuresBuilt,
+      moneySpent: score.moneySpent,
+    };
+  }
+
+  getScriptObjectTopologyVersion(): number {
+    return this.scriptObjectTopologyVersion;
   }
 
   getSideUpgradeState(side: string): {
@@ -16003,19 +16034,76 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity hook: Player::onStructureConstructionComplete.
-   * Current implementation refreshes pathfinding footprint from current entity topology.
-   * TODO(PARITY): Add scorekeeper, AI callback, and script-engine notifications.
+   * Performs script notifications, pathfind refresh, scorekeeper accounting,
+   * AI callback, and EVA superweapon detection.
    */
   private onStructureConstructionComplete(
-    _builder: MapEntity | null,
+    builder: MapEntity | null,
     structure: MapEntity,
-    _isRebuild: boolean,
+    isRebuild: boolean,
   ): void {
     if (!structure.kindOf.has('STRUCTURE')) {
       return;
     }
+    // Source parity: ScriptEngine is notified when completed structures become "real".
+    this.notifyScriptObjectCreationOrDestruction();
     this.refreshNavigationGridFromCurrentMap();
+    this.addStructureCompletionScore(structure, isRebuild);
+    this.notifySkirmishAIStructureProduced(builder, structure);
     this.emitSuperweaponDetectedOnStructureComplete(structure);
+  }
+
+  private notifyScriptObjectCreationOrDestruction(): void {
+    this.scriptObjectTopologyVersion += 1;
+  }
+
+  private getOrCreateSideScoreState(side: string): SideScoreState {
+    const existing = this.sideScoreState.get(side);
+    if (existing) {
+      return existing;
+    }
+    const created: SideScoreState = { structuresBuilt: 0, moneySpent: 0 };
+    this.sideScoreState.set(side, created);
+    return created;
+  }
+
+  /**
+   * Source parity: Player::onStructureConstructionComplete scorekeeper increments.
+   * C++: addObjectBuilt + addMoneySpent(calcCostToBuild).
+   */
+  private addStructureCompletionScore(structure: MapEntity, isRebuild: boolean): void {
+    if (isRebuild) {
+      return;
+    }
+    const side = this.normalizeSide(structure.side);
+    if (!side) {
+      return;
+    }
+    const score = this.getOrCreateSideScoreState(side);
+    score.structuresBuilt += 1;
+    const objectDef = this.resolveObjectDefByTemplateName(structure.templateName);
+    if (objectDef) {
+      score.moneySpent += this.resolveObjectBuildCost(objectDef, side);
+    }
+  }
+
+  /**
+   * Source parity: Player::onStructureConstructionComplete ai callback.
+   * C++: m_ai->onStructureProduced(builder, structure).
+   */
+  private notifySkirmishAIStructureProduced(
+    _builder: MapEntity | null,
+    structure: MapEntity,
+  ): void {
+    const side = this.normalizeSide(structure.side);
+    if (!side) {
+      return;
+    }
+    const aiState = this.skirmishAIStates.get(side);
+    if (!aiState) {
+      return;
+    }
+    notifySkirmishAIStructureProducedImpl(aiState, structure.templateName);
   }
 
   private resolveEvaRelationshipForSides(
@@ -31547,6 +31635,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sidePlayerIndex.clear();
     this.nextPlayerIndex = 0;
     this.skirmishAIStates.clear();
+    this.sideScoreState.clear();
+    this.scriptObjectTopologyVersion = 0;
     this.loadedMapData = null;
     this.navigationGrid = null;
     this.bridgeSegments.clear();
