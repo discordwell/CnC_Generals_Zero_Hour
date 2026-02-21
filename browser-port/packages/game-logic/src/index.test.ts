@@ -24730,3 +24730,175 @@ describe('LockWeaponCreate', () => {
     expect(entity.weaponLockStatus).toBe('LOCKED_PERMANENTLY');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ExperienceScalarUpgrade
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ExperienceScalarUpgrade', () => {
+  it('adds XP scalar on upgrade application', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScalarUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'ExperienceScalarUpgrade ModuleTag_XPScalar', {
+            TriggeredBy: 'Upgrade_XPBoost',
+            AddXPScalar: 0.5,
+          }),
+        ], {
+          ExperienceRequired: '100 200 400',
+          ExperienceValue: 50,
+        }),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_XPBoost', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('ScalarUnit', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        experienceState: { experienceScalar: number };
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Before upgrade: scalar should be 1.0 (default).
+    expect(entity.experienceState.experienceScalar).toBe(1.0);
+
+    // Apply upgrade.
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_XPBoost' });
+    logic.update(1 / 30);
+
+    // After upgrade: scalar should be 1.0 + 0.5 = 1.5.
+    expect(entity.experienceState.experienceScalar).toBe(1.5);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ModelConditionUpgrade
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ModelConditionUpgrade', () => {
+  it('sets model condition flag on upgrade application', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CondUnit', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ModelConditionUpgrade ModuleTag_MCU', {
+            TriggeredBy: 'Upgrade_Visual',
+            ConditionFlag: 'UPGRADE',
+          }),
+        ]),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_Visual', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('CondUnit', 50, 50)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    expect(entity.modelConditionFlags.has('UPGRADE')).toBe(false);
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Visual' });
+    logic.update(1 / 30);
+
+    expect(entity.modelConditionFlags.has('UPGRADE')).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ObjectCreationUpgrade
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ObjectCreationUpgrade', () => {
+  it('spawns OCL entities on upgrade application', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OCLUpgradeBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ObjectCreationUpgrade ModuleTag_OCU', {
+            TriggeredBy: 'Upgrade_SpawnDrone',
+            UpgradeObject: 'OCL_SpawnDrone',
+          }),
+        ]),
+        makeObjectDef('DroneUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        ]),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_SpawnDrone', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 })],
+    });
+    // Add OCL definition to bundle.
+    (bundle as Record<string, unknown>).objectCreationLists = [
+      {
+        name: 'OCL_SpawnDrone',
+        fields: {},
+        blocks: [{
+          type: 'CreateObject',
+          name: 'CreateObject',
+          fields: { ObjectNames: 'DroneUnit', Count: '1' },
+          blocks: [],
+        }],
+      },
+    ];
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('OCLUpgradeBuilding', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+
+    // Before upgrade: only 1 entity.
+    expect(logic.getEntityState(1)).toBeDefined();
+    expect(logic.getEntityState(2)).toBeNull();
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_SpawnDrone' });
+    logic.update(1 / 30);
+
+    // After upgrade: OCL should have spawned a DroneUnit.
+    const droneState = logic.getEntityState(2);
+    expect(droneState).toBeDefined();
+    expect(droneState!.templateName).toBe('DroneUnit');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ActiveShroudUpgrade
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ActiveShroudUpgrade', () => {
+  it('sets entity vision range on upgrade application', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ShroudUnit', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Behavior', 'ActiveShroudUpgrade ModuleTag_ASU', {
+            TriggeredBy: 'Upgrade_Shroud',
+            NewShroudRange: 500,
+          }),
+        ], { VisionRange: 200 }),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_Shroud', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('ShroudUnit', 80, 80)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        visionRange: number;
+        baseVisionRange: number;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    expect(entity.visionRange).toBe(200);
+    expect(entity.baseVisionRange).toBe(200);
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Shroud' });
+    logic.update(1 / 30);
+
+    expect(entity.visionRange).toBe(500);
+    expect(entity.baseVisionRange).toBe(200); // base unchanged
+  });
+});

@@ -916,7 +916,11 @@ interface UpgradeModuleProfile {
     | 'POWERPLANTUPGRADE'
     | 'RADARUPGRADE'
     | 'PASSENGERSFIREUPGRADE'
-    | 'UNPAUSESPECIALPOWERUPGRADE';
+    | 'UNPAUSESPECIALPOWERUPGRADE'
+    | 'EXPERIENCESCALARUPGRADE'
+    | 'MODELCONDITIONUPGRADE'
+    | 'OBJECTCREATIONUPGRADE'
+    | 'ACTIVESHROUDUPGRADE';
   triggeredBy: Set<string>;
   conflictsWith: Set<string>;
   removesUpgrades: Set<string>;
@@ -934,6 +938,10 @@ interface UpgradeModuleProfile {
   grantScienceName: string;
   radarIsDisableProof: boolean;
   specialPowerTemplateName: string;
+  addXPScalar: number;
+  conditionFlag: string;
+  upgradeObjectOCLName: string;
+  newShroudRange: number;
 }
 
 interface KindOfProductionCostModifier {
@@ -5301,6 +5309,18 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (module.moduleType === 'UNPAUSESPECIALPOWERUPGRADE') {
         // Source parity: UnpauseSpecialPowerUpgrade clears the associated special power pause.
         appliedThisModule = this.applyUnpauseSpecialPowerUpgradeModule(entity, module);
+      } else if (module.moduleType === 'EXPERIENCESCALARUPGRADE') {
+        // Source parity: ExperienceScalarUpgrade.cpp line 85 — adds scalar to XP tracker.
+        appliedThisModule = this.applyExperienceScalarUpgrade(entity, module);
+      } else if (module.moduleType === 'MODELCONDITIONUPGRADE') {
+        // Source parity: ModelConditionUpgrade.cpp line 78 — sets model condition flag.
+        appliedThisModule = this.applyModelConditionUpgrade(entity, module);
+      } else if (module.moduleType === 'OBJECTCREATIONUPGRADE') {
+        // Source parity: ObjectCreationUpgrade.cpp line 97 — spawns OCL on upgrade.
+        appliedThisModule = this.applyObjectCreationUpgrade(entity, module);
+      } else if (module.moduleType === 'ACTIVESHROUDUPGRADE') {
+        // Source parity: ActiveShroudUpgrade.cpp line 87 — sets entity's shroud range.
+        appliedThisModule = this.applyActiveShroudUpgrade(entity, module);
       }
 
       if (!appliedThisModule) {
@@ -10783,6 +10803,78 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  /**
+   * Source parity: ExperienceScalarUpgrade.cpp line 85 — adds XP scalar to experience tracker.
+   */
+  private applyExperienceScalarUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    if (!entity.experienceProfile || module.addXPScalar === 0) {
+      return false;
+    }
+    entity.experienceState.experienceScalar += module.addXPScalar;
+    return true;
+  }
+
+  private removeExperienceScalarUpgrade(entity: MapEntity, module: UpgradeModuleProfile): void {
+    if (!entity.experienceProfile) {
+      return;
+    }
+    entity.experienceState.experienceScalar -= module.addXPScalar;
+  }
+
+  /**
+   * Source parity: ModelConditionUpgrade.cpp line 78 — sets a model condition flag.
+   */
+  private applyModelConditionUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    if (!module.conditionFlag) {
+      return false;
+    }
+    entity.modelConditionFlags.add(module.conditionFlag);
+    return true;
+  }
+
+  private removeModelConditionUpgrade(entity: MapEntity, module: UpgradeModuleProfile): void {
+    if (!module.conditionFlag) {
+      return;
+    }
+    // Only remove if no other active ModelConditionUpgrade also sets this flag.
+    const hasOtherSource = entity.upgradeModules.some(
+      (other) => other.moduleType === 'MODELCONDITIONUPGRADE'
+        && other.conditionFlag === module.conditionFlag
+        && other.id !== module.id
+        && entity.executedUpgradeModules.has(other.id),
+    );
+    if (!hasOtherSource) {
+      entity.modelConditionFlags.delete(module.conditionFlag);
+    }
+  }
+
+  /**
+   * Source parity: ObjectCreationUpgrade.cpp line 97 — executes OCL on upgrade application.
+   */
+  private applyObjectCreationUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    if (!module.upgradeObjectOCLName) {
+      return false;
+    }
+    this.executeOCL(module.upgradeObjectOCLName, entity);
+    return true;
+  }
+
+  /**
+   * Source parity: ActiveShroudUpgrade.cpp line 87 — sets entity's shroud clearing range.
+   */
+  private applyActiveShroudUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    if (module.newShroudRange <= 0) {
+      return false;
+    }
+    entity.visionRange = module.newShroudRange;
+    return true;
+  }
+
+  private removeActiveShroudUpgrade(entity: MapEntity, _module: UpgradeModuleProfile): void {
+    // Restore base vision range when the upgrade is removed.
+    entity.visionRange = entity.baseVisionRange;
+  }
+
   private applyCostModifierUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
     const side = this.normalizeSide(entity.side);
     if (!side) {
@@ -11615,6 +11707,14 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (module.moduleType === 'UNPAUSESPECIALPOWERUPGRADE') {
         // Source parity: UnpauseSpecialPowerUpgrade is an instantaneous cooldown-release action,
         // so no persistent entity-side state needs removal here.
+      } else if (module.moduleType === 'EXPERIENCESCALARUPGRADE') {
+        this.removeExperienceScalarUpgrade(entity, module);
+      } else if (module.moduleType === 'MODELCONDITIONUPGRADE') {
+        this.removeModelConditionUpgrade(entity, module);
+      } else if (module.moduleType === 'OBJECTCREATIONUPGRADE') {
+        // ObjectCreationUpgrade is instantaneous (spawns OCL), no persistent state to remove.
+      } else if (module.moduleType === 'ACTIVESHROUDUPGRADE') {
+        this.removeActiveShroudUpgrade(entity, module);
       }
     }
 
@@ -16581,7 +16681,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: CrateCollide::onCollide + SalvageCrateCollide.
    * Checks all crate entities against moving KINDOF_SALVAGER entities for
    * geometry overlap. On collision, executes the salvage behavior chain:
-   * weapon upgrade → veterancy → money fallback.
+   * armor upgrade → weapon upgrade → veterancy → money fallback.
    */
   private updateCrateCollisions(): void {
     for (const crate of this.spawnedEntities.values()) {

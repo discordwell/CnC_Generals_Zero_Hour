@@ -24,7 +24,11 @@ export interface ParsedUpgradeModuleProfile {
     | 'POWERPLANTUPGRADE'
     | 'RADARUPGRADE'
     | 'PASSENGERSFIREUPGRADE'
-    | 'UNPAUSESPECIALPOWERUPGRADE';
+    | 'UNPAUSESPECIALPOWERUPGRADE'
+    | 'EXPERIENCESCALARUPGRADE'
+    | 'MODELCONDITIONUPGRADE'
+    | 'OBJECTCREATIONUPGRADE'
+    | 'ACTIVESHROUDUPGRADE';
   triggeredBy: Set<string>;
   conflictsWith: Set<string>;
   removesUpgrades: Set<string>;
@@ -42,6 +46,10 @@ export interface ParsedUpgradeModuleProfile {
   grantScienceName: string;
   radarIsDisableProof: boolean;
   specialPowerTemplateName: string;
+  addXPScalar: number;
+  conditionFlag: string;
+  upgradeObjectOCLName: string;
+  newShroudRange: number;
 }
 
 export interface UpgradeModuleParsingHelpers {
@@ -86,6 +94,10 @@ function asSupportedUpgradeModuleType(
     || moduleType === 'RADARUPGRADE'
     || moduleType === 'PASSENGERSFIREUPGRADE'
     || moduleType === 'UNPAUSESPECIALPOWERUPGRADE'
+    || moduleType === 'EXPERIENCESCALARUPGRADE'
+    || moduleType === 'MODELCONDITIONUPGRADE'
+    || moduleType === 'OBJECTCREATIONUPGRADE'
+    || moduleType === 'ACTIVESHROUDUPGRADE'
   ) {
     return moduleType;
   }
@@ -150,6 +162,18 @@ export function extractUpgradeModulesFromBlocks(
         const specialPowerTemplateName = moduleType === 'UNPAUSESPECIALPOWERUPGRADE'
           ? (readStringField(block.fields, ['SpecialPowerTemplate'])?.trim().toUpperCase() ?? '')
           : '';
+        const addXPScalar = moduleType === 'EXPERIENCESCALARUPGRADE'
+          ? (readNumericField(block.fields, ['AddXPScalar']) ?? 0)
+          : 0;
+        const conditionFlag = moduleType === 'MODELCONDITIONUPGRADE'
+          ? (readStringField(block.fields, ['ConditionFlag'])?.trim().toUpperCase() ?? '')
+          : '';
+        const upgradeObjectOCLName = moduleType === 'OBJECTCREATIONUPGRADE'
+          ? (readStringField(block.fields, ['UpgradeObject'])?.trim() ?? '')
+          : '';
+        const newShroudRange = moduleType === 'ACTIVESHROUDUPGRADE'
+          ? (readNumericField(block.fields, ['NewShroudRange']) ?? 0)
+          : 0;
         const moduleId = sourceUpgradeName === null
           ? `${moduleType}:${block.name}:${index}`
           : `${moduleType}:${block.name}:${index}:${sourceUpgradeName}`;
@@ -174,6 +198,10 @@ export function extractUpgradeModulesFromBlocks(
           grantScienceName,
           radarIsDisableProof,
           specialPowerTemplateName,
+          addXPScalar,
+          conditionFlag,
+          upgradeObjectOCLName,
+          newShroudRange,
         });
       }
     }
