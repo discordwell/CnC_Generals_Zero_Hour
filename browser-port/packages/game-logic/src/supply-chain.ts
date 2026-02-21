@@ -39,6 +39,8 @@ export interface SupplyTruckProfile {
   supplyCenterActionDelayFrames: number;
   supplyWarehouseActionDelayFrames: number;
   supplyWarehouseScanDistance: number;
+  /** Source parity: ChinookAIUpdate::m_upgradedSupplyBoost. */
+  upgradedSupplyBoost: number;
 }
 
 // ──── Per-entity runtime state ─────────────────────────────────────────────
@@ -89,6 +91,8 @@ export interface SupplyChainContext<TEntity extends SupplyChainEntity> {
 
   /** Deposit credits to a side. */
   depositCredits(side: string, amount: number): void;
+  /** Source parity: SupplyCenterDockUpdate adds truck-specific boost on deposit. */
+  getSupplyTruckDepositBoost(truck: TEntity, profile: SupplyTruckProfile): number;
 
   /** Issue a move-to command for an entity. */
   moveEntityTo(entityId: number, targetX: number, targetZ: number): void;
@@ -426,7 +430,9 @@ function tickDepositing<TEntity extends SupplyChainEntity>(
   // SupplyCenterDockUpdate::action() loops loseOneBox() and accumulates value.
   if (state.currentBoxes > 0) {
     const side = context.normalizeSide(truck.side);
-    const totalValue = state.currentBoxes * context.supplyBoxValue;
+    const baseValue = state.currentBoxes * context.supplyBoxValue;
+    const boostValue = context.getSupplyTruckDepositBoost(truck, truckProfile);
+    const totalValue = baseValue + boostValue;
     state.currentBoxes = 0;
     context.depositCredits(side, totalValue);
   }

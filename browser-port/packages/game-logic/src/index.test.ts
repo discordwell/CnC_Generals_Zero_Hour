@@ -7991,6 +7991,75 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideCredits('GLA')).toBeGreaterThanOrEqual(300);
   });
 
+  it('applies ChinookAIUpdate UpgradedSupplyBoost when Upgrade_AmericaSupplyLines is completed', () => {
+    const runScenario = (withUpgrade: boolean): number => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+
+      const warehouseDef = makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+          StartingBoxes: 10,
+          DeleteWhenEmpty: false,
+        }),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      ]);
+
+      const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      ]);
+
+      const chinookDef = makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'HARVESTER'], [
+        makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+          MaxBoxes: 3,
+          SupplyCenterActionDelay: 0,
+          SupplyWarehouseActionDelay: 0,
+          SupplyWarehouseScanDistance: 500,
+          UpgradedSupplyBoost: 45,
+        }),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+      ]);
+
+      const registry = makeRegistry(makeBundle({
+        objects: [warehouseDef, supplyCenterDef, chinookDef],
+      }));
+
+      const map = makeMap([
+        makeMapObject('SupplyWarehouse', 10, 10),
+        makeMapObject('SupplyCenter', 35, 10),
+        makeMapObject('SupplyChinook', 10, 10),
+      ], 64, 64);
+
+      logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+      logic.update(0);
+
+      const priv = logic as unknown as {
+        spawnedEntities: Map<number, { templateName: string; supplyTruckProfile: { upgradedSupplyBoost: number } | null }>;
+        setSideUpgradeCompleted: (side: string, upgradeName: string, enabled: boolean) => void;
+      };
+      const chinook = [...priv.spawnedEntities.values()].find((e) => e.templateName === 'SupplyChinook');
+      expect(chinook?.supplyTruckProfile?.upgradedSupplyBoost).toBe(45);
+
+      if (withUpgrade) {
+        priv.setSideUpgradeCompleted('America', 'Upgrade_AmericaSupplyLines', true);
+      }
+
+      for (let i = 0; i < 300; i++) {
+        logic.update(0.033);
+      }
+
+      return logic.getSideCredits('America');
+    };
+
+    const withoutUpgrade = runScenario(false);
+    const withUpgrade = runScenario(true);
+    const boostDelta = withUpgrade - withoutUpgrade;
+
+    expect(withUpgrade).toBeGreaterThan(withoutUpgrade);
+    expect(boostDelta).toBeGreaterThanOrEqual(45);
+    expect(boostDelta % 45).toBe(0);
+  });
+
   it('uses DozerAIUpdate RepairHealthPercentPerSecond during repair', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

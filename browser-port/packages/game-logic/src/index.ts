@@ -8163,16 +8163,18 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (block.type.toUpperCase() === 'BEHAVIOR') {
         const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-        if (moduleType === 'SUPPLYTRUCKAIUPDATE' || moduleType === 'WORKERAIUPDATE') {
+        if (moduleType === 'SUPPLYTRUCKAIUPDATE' || moduleType === 'WORKERAIUPDATE' || moduleType === 'CHINOOKAIUPDATE') {
           const maxBoxes = Math.max(1, Math.trunc(readNumericField(block.fields, ['MaxBoxes']) ?? 3));
           const supplyCenterActionDelayMs = readNumericField(block.fields, ['SupplyCenterActionDelay']) ?? 0;
           const supplyWarehouseActionDelayMs = readNumericField(block.fields, ['SupplyWarehouseActionDelay']) ?? 0;
           const scanDistance = readNumericField(block.fields, ['SupplyWarehouseScanDistance']) ?? 200;
+          const upgradedSupplyBoost = Math.trunc(readNumericField(block.fields, ['UpgradedSupplyBoost']) ?? 0);
           profile = {
             maxBoxes,
             supplyCenterActionDelayFrames: this.msToLogicFrames(supplyCenterActionDelayMs),
             supplyWarehouseActionDelayFrames: this.msToLogicFrames(supplyWarehouseActionDelayMs),
             supplyWarehouseScanDistance: Math.max(0, scanDistance),
+            upgradedSupplyBoost,
           };
           return;
         }
@@ -18808,6 +18810,18 @@ export class GameLogicSubsystem implements Subsystem {
       },
       depositCredits: (side: string, amount: number) => {
         this.depositSideCredits(side, amount);
+      },
+      getSupplyTruckDepositBoost: (truck: MapEntity, profile: SupplyTruckProfile) => {
+        if (profile.upgradedSupplyBoost <= 0) {
+          return 0;
+        }
+        const side = this.normalizeSide(truck.side);
+        if (!side) {
+          return 0;
+        }
+        return this.hasSideUpgradeCompleted(side, 'UPGRADE_AMERICASUPPLYLINES')
+          ? profile.upgradedSupplyBoost
+          : 0;
       },
       moveEntityTo: (entityId: number, targetX: number, targetZ: number) => {
         this.submitCommand({ type: 'moveTo', entityId, targetX, targetZ });
