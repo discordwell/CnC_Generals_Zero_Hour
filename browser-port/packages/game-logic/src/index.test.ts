@@ -28194,6 +28194,41 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptUnitHasEmptied({ entityId: 1 })).toBe(false);
   });
 
+  it('evaluates unit-has-object-status with any-bit semantics', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('StatusUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('StatusUnit', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('DISABLED_HACKED');
+
+    expect(logic.evaluateScriptUnitHasObjectStatus({
+      entityId: 1,
+      objectStatus: 'DISABLED_HACKED',
+    })).toBe(true);
+    expect(logic.evaluateScriptUnitHasObjectStatus({
+      entityId: 1,
+      objectStatus: 'DISABLED_EMP DISABLED_HACKED',
+    })).toBe(true);
+    expect(logic.evaluateScriptUnitHasObjectStatus({
+      entityId: 1,
+      objectStatus: 'DISABLED_EMP',
+    })).toBe(false);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [

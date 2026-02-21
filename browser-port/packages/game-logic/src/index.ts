@@ -6305,6 +6305,34 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateUnitHasObjectStatus.
+   * Returns true when the object has any requested status bit.
+   */
+  evaluateScriptUnitHasObjectStatus(filter: {
+    entityId: number;
+    objectStatus: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const requestedStatuses = filter.objectStatus
+      .trim()
+      .split(/\s+/)
+      .filter((status) => status.length > 0);
+    if (requestedStatuses.length === 0) {
+      return false;
+    }
+
+    return requestedStatuses.some((status) => this.entityHasObjectStatus(entity, status));
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerHasNOrFewerBuildings.
    */
   evaluateScriptPlayerHasNOrFewerBuildings(filter: {
