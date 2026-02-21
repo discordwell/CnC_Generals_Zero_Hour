@@ -23675,6 +23675,10 @@ describe('AssaultTransportAIUpdate', () => {
       member.isNew = true;
     }
 
+    // Source parity: isAttackPointless requires IS_ATTACKING to be set on the transport.
+    const transport = priv.spawnedEntities.get(1)!;
+    transport.objectStatusFlags.add('IS_ATTACKING');
+
     // Update should detect all-new members and abort.
     logic.update(1 / 30);
 

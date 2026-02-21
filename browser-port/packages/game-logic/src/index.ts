@@ -15362,9 +15362,17 @@ export class GameLogicSubsystem implements Subsystem {
       // After first sync, all future occupants are new members.
       state.newOccupantsAreNewMembers = true;
 
-      // Source parity: C++ isAttackPointless() (lines 386-408) — abort if all members are new.
-      // No troops can be deployed until a fresh attack command resets isNew flags.
-      if (state.members.length > 0 && state.members.every((m) => m.isNew)) {
+      // Source parity: C++ isAttackPointless() (lines 386-408) — abort if all members are
+      // new AND the transport is currently attacking. Calls aiIdle → retrieveMembers + reset.
+      if (this.entityHasObjectStatus(transport, 'IS_ATTACKING')
+        && state.members.length > 0 && state.members.every((m) => m.isNew)) {
+        // Source parity: aiIdle(CMD_FROM_AI) → retrieveMembers + reset.
+        for (const member of state.members) {
+          const memberEntity = this.spawnedEntities.get(member.entityId);
+          if (memberEntity && !memberEntity.destroyed && !this.isEntityContained(memberEntity)) {
+            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+          }
+        }
         state.designatedTargetId = null;
         state.isAttackObject = false;
         state.isAttackMove = false;
