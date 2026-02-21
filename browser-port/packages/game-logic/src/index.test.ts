@@ -20429,3 +20429,167 @@ describe('NeutronBlastBehavior', () => {
     expect(building.destroyed).toBe(false);
   });
 });
+
+// ─── GrantStealthBehavior ─────────────────────────────────────────────────────
+describe('GrantStealthBehavior', () => {
+  it('grants stealth to allied units within expanding radius and self-destructs', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GPSScrambler', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'GrantStealthBehavior ModuleTag_GS', {
+            StartRadius: 0,
+            FinalRadius: 30,
+            RadiusGrowRate: 15,
+          }),
+        ]),
+        makeObjectDef('FriendlyTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('EnemyTank', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    // Map: place scrambler at (50,50), friend at (70,50) = dist 20, enemy at (60,50) = dist 10.
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GPSScrambler', 50, 50),
+        makeMapObject('FriendlyTank', 70, 50),
+        makeMapObject('EnemyTank', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; objectStatusFlags: Set<string>;
+        grantStealthCurrentRadius: number;
+      }>;
+    };
+
+    // Init frame.
+    logic.update(1 / 30);
+
+    const friend = priv.spawnedEntities.get(2)!;
+    const enemy = priv.spawnedEntities.get(3)!;
+
+    // Before second update: friend should NOT yet have stealth (radius was 15 after first frame, friend at dist 20).
+    expect(friend.objectStatusFlags.has('CAN_STEALTH')).toBe(false);
+
+    // Frame 2: radius grows from 15 to 30 (final). Friend at 20 is within range.
+    logic.update(1 / 30);
+    expect(friend.objectStatusFlags.has('CAN_STEALTH')).toBe(true);
+    expect(friend.objectStatusFlags.has('STEALTHED')).toBe(true);
+
+    // Enemy should NOT get stealth (not allied).
+    expect(enemy.objectStatusFlags.has('CAN_STEALTH')).toBe(false);
+
+    // Scrambler should self-destruct after reaching final radius.
+    const scrambler = priv.spawnedEntities.get(1);
+    expect(scrambler === undefined || scrambler.destroyed === true).toBe(true);
+  });
+
+  it('filters by KindOf when specified', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GPSScrambler', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'GrantStealthBehavior ModuleTag_GS', {
+            StartRadius: 100,
+            FinalRadius: 100,
+            RadiusGrowRate: 100,
+            KindOf: 'INFANTRY',
+          }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Crusader', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GPSScrambler', 50, 50),
+        makeMapObject('Ranger', 55, 50),
+        makeMapObject('Crusader', 55, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; objectStatusFlags: Set<string>;
+      }>;
+    };
+
+    logic.update(1 / 30);
+
+    const ranger = priv.spawnedEntities.get(2)!;
+    const crusader = priv.spawnedEntities.get(3)!;
+
+    // Infantry matches KindOf filter — should get stealth.
+    expect(ranger.objectStatusFlags.has('CAN_STEALTH')).toBe(true);
+    // Vehicle does not match — should NOT get stealth.
+    expect(crusader.objectStatusFlags.has('CAN_STEALTH')).toBe(false);
+  });
+
+  it('grants stealth incrementally as radius grows', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GPSScrambler', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'GrantStealthBehavior ModuleTag_GS', {
+            StartRadius: 0,
+            FinalRadius: 100,
+            RadiusGrowRate: 10,
+          }),
+        ]),
+        makeObjectDef('CloseUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('FarUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GPSScrambler', 50, 50),
+        makeMapObject('CloseUnit', 55, 50),   // Distance 5 — within radius early.
+        makeMapObject('FarUnit', 100, 50),     // Distance 50 — within radius later.
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; objectStatusFlags: Set<string>;
+      }>;
+    };
+
+    // After 1 frame: radius = 10, close unit at 5 is in range, far at 50 is not.
+    logic.update(1 / 30);
+    const close = priv.spawnedEntities.get(2)!;
+    const far = priv.spawnedEntities.get(3)!;
+    expect(close.objectStatusFlags.has('CAN_STEALTH')).toBe(true);
+    expect(far.objectStatusFlags.has('CAN_STEALTH')).toBe(false);
+
+    // After 5 more frames (radius = 60), far unit at 50 is now in range.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    expect(far.objectStatusFlags.has('CAN_STEALTH')).toBe(true);
+  });
+});

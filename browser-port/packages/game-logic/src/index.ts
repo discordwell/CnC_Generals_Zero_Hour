@@ -1626,6 +1626,10 @@ interface MapEntity {
   // ── Source parity: NeutronBlastBehavior — death-triggered radius neutron blast ──
   neutronBlastProfile: NeutronBlastProfile | null;
 
+  // ── Source parity: GrantStealthBehavior — expanding radius stealth grant ──
+  grantStealthProfile: GrantStealthProfile | null;
+  grantStealthCurrentRadius: number;
+
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
@@ -2809,6 +2813,20 @@ interface NeutronBlastProfile {
   affectAllies: boolean;
 }
 
+/**
+ * Source parity: GrantStealthBehavior — expanding radius stealth grant.
+ * Created by GPS Scrambler OCL. Each frame grows scan radius, grants stealth
+ * to allied units with matching KindOf, then self-destructs at finalRadius.
+ * C++ file: GrantStealthBehavior.cpp.
+ */
+interface GrantStealthProfile {
+  startRadius: number;
+  finalRadius: number;
+  radiusGrowRate: number;
+  /** KindOf filter for targets. null = all types. */
+  kindOf: Set<string> | null;
+}
+
 /** Source parity: PoisonedBehavior default INI values. */
 const DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES = 10; // ~0.33s at 30fps
 const DEFAULT_POISON_DURATION_FRAMES = 90; // ~3s at 30fps
@@ -3331,6 +3349,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
     this.updateOvercharge();
+    this.updateGrantStealth();
     this.updateStealth();
     this.updateDetection();
     this.updateBattlePlan();
@@ -5177,6 +5196,9 @@ export class GameLogicSubsystem implements Subsystem {
       fireOCLAfterCooldownStates: [],
       // Neutron blast (death-triggered radius effect)
       neutronBlastProfile: this.extractNeutronBlastProfile(objectDef),
+      // Grant stealth (GPS Scrambler expanding radius)
+      grantStealthProfile: this.extractGrantStealthProfile(objectDef),
+      grantStealthCurrentRadius: 0,
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -5416,6 +5438,11 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: WeaponBonusUpdate — initialize per-module pulse timers.
     if (entity.weaponBonusUpdateProfiles.length > 0) {
       entity.weaponBonusUpdateNextPulseFrames = entity.weaponBonusUpdateProfiles.map(() => 0);
+    }
+
+    // Source parity: GrantStealthBehavior — initialize scan radius from profile.
+    if (entity.grantStealthProfile) {
+      entity.grantStealthCurrentRadius = entity.grantStealthProfile.startRadius;
     }
 
     return entity;
@@ -9179,6 +9206,34 @@ export class GameLogicSubsystem implements Subsystem {
         blastRadius: readNumericField(block.fields, ['BlastRadius']) ?? 10.0,
         affectAirborne: (readStringField(block.fields, ['AffectAirborne']) ?? 'Yes').toUpperCase() !== 'NO',
         affectAllies: (readStringField(block.fields, ['AffectAllies']) ?? 'Yes').toUpperCase() !== 'NO',
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (!profile && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: GrantStealthBehavior — extract expanding stealth grant profile from INI.
+   * C++ file: GrantStealthBehavior.h (buildFieldParse).
+   */
+  private extractGrantStealthProfile(objectDef: ObjectDef | undefined): GrantStealthProfile | null {
+    if (!objectDef) return null;
+    let profile: GrantStealthProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'GRANTSTEALTHBEHAVIOR') return;
+      const kindOfStr = readStringField(block.fields, ['KindOf']);
+      profile = {
+        startRadius: readNumericField(block.fields, ['StartRadius']) ?? 0,
+        finalRadius: readNumericField(block.fields, ['FinalRadius']) ?? 200,
+        radiusGrowRate: readNumericField(block.fields, ['RadiusGrowRate']) ?? 10,
+        kindOf: kindOfStr ? new Set(kindOfStr.split(/\s+/).map(s => s.toUpperCase())) : null,
       };
     };
     for (const block of objectDef.blocks) visitBlock(block);
@@ -14066,6 +14121,79 @@ export class GameLogicSubsystem implements Subsystem {
         entity.objectStatusFlags.add('STEALTHED');
       }
     }
+  }
+
+  /**
+   * Source parity: GrantStealthBehavior::update — expanding radius stealth grant.
+   * Each frame grows scan radius, scans allied entities in range with KindOf filtering,
+   * grants permanent stealth to matching units, then self-destructs at finalRadius.
+   * C++ file: GrantStealthBehavior.cpp lines 139-179.
+   */
+  private updateGrantStealth(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
+      const profile = entity.grantStealthProfile;
+      if (!profile) continue;
+
+      // Source parity: grow radius each frame.
+      entity.grantStealthCurrentRadius += profile.radiusGrowRate;
+
+      let isFinalScan = false;
+      if (entity.grantStealthCurrentRadius >= profile.finalRadius) {
+        entity.grantStealthCurrentRadius = profile.finalRadius;
+        isFinalScan = true;
+      }
+
+      const radiusSqr = entity.grantStealthCurrentRadius * entity.grantStealthCurrentRadius;
+
+      // Source parity: scan allies in range.
+      for (const target of this.spawnedEntities.values()) {
+        if (target.destroyed || target.id === entity.id) continue;
+        if (target.slowDeathState || target.structureCollapseState) continue;
+
+        // Source parity: PartitionFilterRelationship(ALLOW_ALLIES).
+        const rel = this.getEntityRelationship(entity.id, target.id);
+        if (rel !== 'allies') continue;
+
+        // Source parity: FROM_CENTER_2D distance check.
+        const dx = target.x - entity.x;
+        const dz = target.z - entity.z;
+        if (dx * dx + dz * dz > radiusSqr) continue;
+
+        this.grantStealthToEntity(target, profile);
+      }
+
+      // Source parity: self-destruct when final radius reached.
+      if (isFinalScan) {
+        this.silentDestroyEntity(entity.id);
+      }
+    }
+  }
+
+  /**
+   * Source parity: GrantStealthBehavior::grantStealthToObject — grant permanent stealth.
+   * Checks KindOf filter, then sets CAN_STEALTH + STEALTHED on the target entity.
+   * C++ calls StealthUpdate::receiveGrant() which sets m_enabled=true.
+   */
+  private grantStealthToEntity(target: MapEntity, profile: GrantStealthProfile): void {
+    // Source parity: KindOf filter — null means all types accepted.
+    if (profile.kindOf) {
+      const targetKindOf = this.resolveEntityKindOfSet(target);
+      let matches = false;
+      for (const kind of profile.kindOf) {
+        if (targetKindOf.has(kind)) {
+          matches = true;
+          break;
+        }
+      }
+      if (!matches) return;
+    }
+
+    // Source parity: StealthUpdate::receiveGrant(TRUE, 0) — permanent stealth grant.
+    // Sets CAN_STEALTH + STEALTHED flags, clears stealth delay.
+    target.objectStatusFlags.add('CAN_STEALTH');
+    target.objectStatusFlags.add('STEALTHED');
+    target.stealthDelayRemaining = 0;
   }
 
   /**
@@ -23170,8 +23298,6 @@ export class GameLogicSubsystem implements Subsystem {
   setSmartBombTarget(entityId: number, targetX: number, targetZ: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.smartBombProfile) return;
-    // Source parity: C++ SetTargetPosition guards against zero-vector targets.
-    if (targetX === 0 && targetZ === 0) return;
     entity.smartBombState = {
       targetReceived: true,
       targetX,
@@ -23315,9 +23441,8 @@ export class GameLogicSubsystem implements Subsystem {
     const firingSeconds = firingDurationFrames / LOGIC_FRAME_RATE;
     const scaledSeconds = firingSeconds * profile.oclLifetimePerSecond * 0.001;
     let oclFrames = Math.trunc(scaledSeconds * LOGIC_FRAME_RATE);
-    if (profile.oclMaxFrames > 0) {
-      oclFrames = Math.min(oclFrames, profile.oclMaxFrames);
-    }
+    // Source parity: C++ unconditionally clamps with MIN(oclFrames, m_oclMaxFrames).
+    oclFrames = Math.min(oclFrames, profile.oclMaxFrames);
 
     this.executeOCL(profile.oclName, entity, oclFrames > 0 ? oclFrames : undefined);
 
