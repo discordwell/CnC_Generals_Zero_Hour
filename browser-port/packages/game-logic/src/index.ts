@@ -2693,6 +2693,27 @@ function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState
 }
 
 /**
+ * Source parity: IsHealthDamagingDamage — does this damage type affect health?
+ * C++ file: Damage.h:134-151. Returns false for non-health damage types
+ * (STATUS, SUBDUAL_*, KILLPILOT, KILL_GARRISONED) which cause special effects
+ * instead of reducing health.
+ */
+function isHealthDamagingDamage(damageType: string): boolean {
+  switch (damageType.toUpperCase()) {
+    case 'STATUS':
+    case 'SUBDUAL_MISSILE':
+    case 'SUBDUAL_VEHICLE':
+    case 'SUBDUAL_BUILDING':
+    case 'SUBDUAL_UNRESISTABLE':
+    case 'KILLPILOT':
+    case 'KILL_GARRISONED':
+      return false;
+    default:
+      return true;
+  }
+}
+
+/**
  * Source parity: DamageInfo.in.m_deathType — fallback mapping from damage type.
  * C++ weapons carry their own DeathType field (Weapon.h m_deathType, default DEATH_NORMAL).
  * This function is used as a fallback for non-weapon damage sources (crush, topple, etc.).
@@ -16812,12 +16833,16 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: SalvageCrateCollide::executeCrateBehavior.
-   * Priority chain: weapon upgrade → veterancy gain → money fallback.
+   * Priority chain: armor upgrade (no chance) → weapon upgrade → veterancy gain → money fallback.
+   * C++ file: SalvageCrateCollide.cpp:75-119.
    */
   private executeSalvageCrateBehavior(crate: MapEntity, collector: MapEntity): void {
     const prof = crate.salvageCrateProfile!;
 
-    if (this.isSalvageEligibleForWeaponSet(collector) && this.testSalvageChance(prof.weaponChance)) {
+    // Source parity: armor set upgrade is first priority with no chance roll.
+    if (this.isSalvageEligibleForArmorSet(collector)) {
+      this.doSalvageArmorSet(collector);
+    } else if (this.isSalvageEligibleForWeaponSet(collector) && this.testSalvageChance(prof.weaponChance)) {
       this.doSalvageWeaponSet(collector);
     } else if (this.isSalvageEligibleForLevel(collector) && this.testSalvageChance(prof.levelChance)) {
       this.doSalvageLevelGain(collector);
@@ -16827,6 +16852,17 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Destroy the crate after collection.
     this.markEntityDestroyed(crate.id, collector.id);
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::eligibleForArmorSet.
+   * Must be KINDOF_ARMOR_SALVAGER and not already at CRATE_UPGRADE_TWO.
+   * C++ file: SalvageCrateCollide.cpp:138-150.
+   */
+  private isSalvageEligibleForArmorSet(collector: MapEntity): boolean {
+    if (!collector.kindOf.has('ARMOR_SALVAGER')) return false;
+    if ((collector.armorSetFlagsMask & ARMOR_SET_FLAG_CRATE_UPGRADE_TWO) !== 0) return false;
+    return true;
   }
 
   /**
@@ -16855,6 +16891,25 @@ export class GameLogicSubsystem implements Subsystem {
   private testSalvageChance(chance: number): boolean {
     if (chance >= 1.0) return true;
     return this.gameRandom.nextFloat() < chance;
+  }
+
+  /**
+   * Source parity: SalvageCrateCollide::doArmorSet.
+   * Upgrades: none → CRATE_UPGRADE_ONE, ONE → clear ONE + set TWO.
+   * Also sets model conditions for visual armor upgrade appearance.
+   * C++ file: SalvageCrateCollide.cpp:212-227.
+   */
+  private doSalvageArmorSet(collector: MapEntity): void {
+    if ((collector.armorSetFlagsMask & ARMOR_SET_FLAG_CRATE_UPGRADE_ONE) !== 0) {
+      collector.armorSetFlagsMask &= ~ARMOR_SET_FLAG_CRATE_UPGRADE_ONE;
+      collector.armorSetFlagsMask |= ARMOR_SET_FLAG_CRATE_UPGRADE_TWO;
+      collector.modelConditionFlags.delete('ARMORSET_CRATEUPGRADE_ONE');
+      collector.modelConditionFlags.add('ARMORSET_CRATEUPGRADE_TWO');
+    } else {
+      collector.armorSetFlagsMask |= ARMOR_SET_FLAG_CRATE_UPGRADE_ONE;
+      collector.modelConditionFlags.add('ARMORSET_CRATEUPGRADE_ONE');
+    }
+    this.refreshEntityCombatProfiles(collector);
   }
 
   /**
@@ -22577,14 +22632,15 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: UndeadBody::attemptDamage — on first life, if damage would kill,
     // cap pre-armor amount to (health - 1). After damage applied, trigger second life.
-    // C++ file: UndeadBody.cpp:76-97.
+    // C++ file: UndeadBody.cpp:76-97. Conditions: not UNRESISTABLE, not second life,
+    // amount >= health, and IsHealthDamagingDamage (excludes STATUS/SUBDUAL/KILLPILOT etc).
     let shouldStartSecondLife = false;
     let inputAmount = amount;
     if (
       target.bodyType === 'UNDEAD'
       && !target.undeadIsSecondLife
       && damageType.toUpperCase() !== 'UNRESISTABLE'
-      && damageType.toUpperCase() !== 'HEALING'
+      && isHealthDamagingDamage(damageType)
       && amount >= target.health
     ) {
       inputAmount = Math.min(amount, target.health - 1);
@@ -22645,10 +22701,11 @@ export class GameLogicSubsystem implements Subsystem {
       target.health = target.maxHealth; // FULLY_HEAL
       target.armorSetFlagsMask |= ARMOR_SET_FLAG_SECOND_LIFE;
       target.modelConditionFlags.add('SECOND_LIFE');
-      // Source parity: UndeadBody fires a SlowDeathBehavior for the transformation visual.
-      // In C++ this runs the slow death animation while the entity stays alive.
-      // Our tryBeginSlowDeath marks entity as dead, so we skip it here — the model condition
-      // provides the visual transformation. A full parity slow-death-while-alive can be added later.
+      // TODO(PARITY): C++ startSecondLife fires a SlowDeathBehavior for transformation visual.
+      // In C++ the slow death runs while the entity stays alive (model swap animation).
+      // Our tryBeginSlowDeath marks entity as dead, so we skip it here. The SECOND_LIFE
+      // model condition provides basic visual differentiation. Full parity requires a
+      // "slow-death-while-alive" system for proper model transition animations.
     }
 
     // Source parity: ActiveBody::getLastDamageTimestamp — track last damage frame for stealth.

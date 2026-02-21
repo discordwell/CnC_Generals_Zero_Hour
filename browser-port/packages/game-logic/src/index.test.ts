@@ -12322,6 +12322,75 @@ describe('salvage crate system', () => {
     const creditsAfter = logic.getSideCredits('America');
     expect(creditsAfter - creditsBefore).toBe(100);
   });
+
+  it('ARMOR_SALVAGER gets armor crate upgrade with model conditions', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const victimDef = makeObjectDef('CrateVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+      makeBlock('Behavior', 'CreateCrateDie ModuleTag_CrateDie', { CrateData: 'SalvageCrate' }),
+    ]);
+    const crateDef = makeObjectDef('SalvageCrate', '', ['CRATE', 'UNATTACKABLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'SalvageCrateCollide ModuleTag_SC', {}),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    // Salvager with ARMOR_SALVAGER kindOf.
+    const salvagerDef = makeObjectDef('ArmorSalvager', 'America', ['VEHICLE', 'SALVAGER', 'ARMOR_SALVAGER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Gun'] }),
+      makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+    ], { Geometry: 'CYLINDER', GeometryMajorRadius: 3, GeometryMinorRadius: 3 });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [victimDef, crateDef, salvagerDef],
+      weapons: [
+        makeWeaponDef('Gun', { AttackRange: 120, PrimaryDamage: 50, DamageType: 'ARMOR_PIERCING', DelayBetweenShots: 100, DeliveryType: 'DIRECT' }),
+      ],
+      locomotors: [makeLocomotorDef('LocomotorFast', 180)],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('CrateVictim', 55, 55),
+        makeMapObject('ArmorSalvager', 55, 55),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        armorSetFlagsMask: number;
+        modelConditionFlags: Set<string>;
+      }>;
+    };
+    const salvager = priv.spawnedEntities.get(3)!;
+
+    // Kill first victim → armor upgrade ONE.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    expect(isEntityDead(logic, 1)).toBe(true);
+
+    // Auto-collect: should have CRATE_UPGRADE_ONE armor flag and model condition.
+    // Wait for crate collision.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    expect(salvager.armorSetFlagsMask & (1 << 6)).not.toBe(0); // ARMOR_SET_FLAG_CRATE_UPGRADE_ONE
+    expect(salvager.modelConditionFlags.has('ARMORSET_CRATEUPGRADE_ONE')).toBe(true);
+
+    // Kill second victim → armor upgrade TWO.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 2 });
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    expect(salvager.armorSetFlagsMask & (1 << 6)).toBe(0); // CRATE_UPGRADE_ONE cleared
+    expect(salvager.armorSetFlagsMask & (1 << 7)).not.toBe(0); // CRATE_UPGRADE_TWO set
+    expect(salvager.modelConditionFlags.has('ARMORSET_CRATEUPGRADE_ONE')).toBe(false);
+    expect(salvager.modelConditionFlags.has('ARMORSET_CRATEUPGRADE_TWO')).toBe(true);
+  });
 });
 
 // ── BattlePlanUpdate system ──────────────────────────────────────────────────
@@ -24530,6 +24599,42 @@ describe('UndeadBody', () => {
     logic.update(1 / 30);
     expect(entity.health).toBe(0);
     expect(entity.destroyed).toBe(true);
+  });
+
+  it('non-fatal damage on first life does not trigger second life', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UndeadUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'UndeadBody ModuleTag_Body', {
+            MaxHealth: 200,
+            InitialHealth: 200,
+            SecondLifeMaxHealth: 50,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('UndeadUnit', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        maxHealth: number;
+        destroyed: boolean;
+        undeadIsSecondLife: boolean;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Apply non-fatal damage (100 out of 200 HP) — should NOT trigger second life.
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, entity, 100, 'EXPLOSION');
+
+    expect(entity.destroyed).toBe(false);
+    expect(entity.undeadIsSecondLife).toBe(false);
+    expect(entity.maxHealth).toBe(200); // unchanged
+    expect(entity.health).toBe(100); // took normal damage
   });
 
   it('UNRESISTABLE damage kills on first life without second life', () => {
