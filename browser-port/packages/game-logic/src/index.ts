@@ -1983,6 +1983,18 @@ interface MapEntity {
    * Different from visionRange (sight distance) — this is the GPS Scrambler-style active shrouding.
    */
   shroudRange: number;
+
+  // ── Source parity: SubdualDamageHelper + ActiveBody subdual fields ──
+  /** INI: SubdualDamageCap — max subdual damage. 0 = entity cannot be subdued. */
+  subdualDamageCap: number;
+  /** INI: SubdualDamageHealRate — frames between heal ticks (parseDurationUnsignedInt). */
+  subdualDamageHealRate: number;
+  /** INI: SubdualDamageHealAmount — HP healed per tick. */
+  subdualDamageHealAmount: number;
+  /** Runtime: accumulated subdual damage, capped at subdualDamageCap. */
+  currentSubdualDamage: number;
+  /** Runtime: SubdualDamageHelper countdown timer. 0 = time to heal. */
+  subdualHealingCountdown: number;
 }
 
 /**
@@ -2706,6 +2718,23 @@ function calcBodyDamageState(health: number, maxHealth: number): BodyDamageState
   if (ratio > UNIT_REALLY_DAMAGED_THRESH) return 1;
   if (ratio > 0) return 2;
   return 3;
+}
+
+/**
+ * Source parity: IsSubdualDamage — does this damage type deal subdual (stun) damage?
+ * C++ file: Damage.h:119-131. These damage types accumulate subdual damage on the
+ * target body instead of reducing health.
+ */
+function isSubdualDamage(damageType: string): boolean {
+  switch (damageType.toUpperCase()) {
+    case 'SUBDUAL_MISSILE':
+    case 'SUBDUAL_VEHICLE':
+    case 'SUBDUAL_BUILDING':
+    case 'SUBDUAL_UNRESISTABLE':
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -3876,6 +3905,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateBattlePlanParalysis();
     this.updateSpecialAbility();
     this.updatePoisonedEntities();
+    this.updateSubdualDamageHelpers();
     this.updateFlammableEntities();
     this.updateFireSpread();
     this.updateHealing();
@@ -5874,6 +5904,12 @@ export class GameLogicSubsystem implements Subsystem {
       // SpecialPowerCreate
       hasSpecialPowerCreate: this.hasModuleType(objectDef, 'SPECIALPOWERCREATE'),
       shroudRange: 0,
+      // SubdualDamageHelper
+      subdualDamageCap: bodyStats.subdualDamageCap,
+      subdualDamageHealRate: bodyStats.subdualDamageHealRate,
+      subdualDamageHealAmount: bodyStats.subdualDamageHealAmount,
+      currentSubdualDamage: 0,
+      subdualHealingCountdown: 0,
     };
 
     // Source parity: PowerPlantUpdate init — extended=false, sleeping forever.
@@ -7067,15 +7103,22 @@ export class GameLogicSubsystem implements Subsystem {
     initialHealth: number;
     bodyType: BodyModuleType;
     secondLifeMaxHealth: number;
+    subdualDamageCap: number;
+    subdualDamageHealRate: number;
+    subdualDamageHealAmount: number;
   } {
     if (!objectDef) {
-      return { maxHealth: 0, initialHealth: 0, bodyType: 'ACTIVE', secondLifeMaxHealth: 0 };
+      return { maxHealth: 0, initialHealth: 0, bodyType: 'ACTIVE', secondLifeMaxHealth: 0,
+        subdualDamageCap: 0, subdualDamageHealRate: 0, subdualDamageHealAmount: 0 };
     }
 
     let maxHealth: number | null = null;
     let initialHealth: number | null = null;
     let bodyType: BodyModuleType = 'ACTIVE';
     let secondLifeMaxHealth = 0;
+    let subdualDamageCap = 0;
+    let subdualDamageHealRate = 0;
+    let subdualDamageHealAmount = 0;
 
     const visitBlock = (block: IniBlock): void => {
       if (block.type.toUpperCase() === 'BODY') {
@@ -7086,6 +7129,20 @@ export class GameLogicSubsystem implements Subsystem {
         }
         if (blockInitialHealth !== null) {
           initialHealth = blockInitialHealth;
+        }
+        // Source parity: ActiveBody subdual damage fields (ActiveBody.cpp:152-154).
+        const cap = readNumericField(block.fields, ['SubdualDamageCap']);
+        if (cap !== null && Number.isFinite(cap) && cap > 0) {
+          subdualDamageCap = cap;
+        }
+        const healRate = readNumericField(block.fields, ['SubdualDamageHealRate']);
+        if (healRate !== null && Number.isFinite(healRate) && healRate > 0) {
+          // C++ uses parseDurationUnsignedInt → milliseconds → frames.
+          subdualDamageHealRate = Math.max(1, Math.round(healRate / (1000 / LOGIC_FRAME_RATE)));
+        }
+        const healAmount = readNumericField(block.fields, ['SubdualDamageHealAmount']);
+        if (healAmount !== null && Number.isFinite(healAmount) && healAmount > 0) {
+          subdualDamageHealAmount = healAmount;
         }
         // Source parity: detect body module type from block name.
         const moduleName = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
@@ -7127,6 +7184,9 @@ export class GameLogicSubsystem implements Subsystem {
       initialHealth: resolvedInitial,
       bodyType,
       secondLifeMaxHealth,
+      subdualDamageCap,
+      subdualDamageHealRate,
+      subdualDamageHealAmount,
     };
   }
 
@@ -16159,6 +16219,36 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: PoisonedBehavior — tick poison DoT on all poisoned entities.
    * Each poison tick applies UNRESISTABLE damage so it can't be re-poisoned recursively.
    */
+  /**
+   * Source parity: SubdualDamageHelper::update (SubdualDamageHelper.cpp:56-75).
+   * Heals subdual damage over time. When no subdual damage remains, the helper sleeps.
+   */
+  private updateSubdualDamageHelpers(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.currentSubdualDamage <= 0 || entity.subdualDamageCap <= 0) continue;
+      if (entity.subdualDamageHealRate <= 0 || entity.subdualDamageHealAmount <= 0) continue;
+
+      // Source parity: SubdualDamageHelper::update — decrement countdown each frame.
+      entity.subdualHealingCountdown--;
+      if (entity.subdualHealingCountdown > 0) continue;
+
+      // Reset countdown for next heal tick.
+      entity.subdualHealingCountdown = entity.subdualDamageHealRate;
+
+      // Source parity: heal subdual damage by SubdualDamageHealAmount via SUBDUAL_UNRESISTABLE.
+      // C++ calls attemptDamage with negative amount, but we can directly adjust since the
+      // negative path would just subtract from currentSubdualDamage anyway.
+      const wasSubdued = entity.currentSubdualDamage >= entity.maxHealth;
+      entity.currentSubdualDamage = Math.max(0, entity.currentSubdualDamage - entity.subdualDamageHealAmount);
+      const nowSubdued = entity.currentSubdualDamage >= entity.maxHealth;
+
+      // Source parity: onSubdualChange — clear DISABLED_SUBDUED when un-subdued.
+      if (wasSubdued && !nowSubdued) {
+        entity.objectStatusFlags.delete('DISABLED_SUBDUED');
+      }
+    }
+  }
+
   private updatePoisonedEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed || entity.poisonDamageAmount <= 0) continue;
@@ -22847,6 +22937,37 @@ export class GameLogicSubsystem implements Subsystem {
 
     let adjustedDamage = this.adjustDamageByArmorSet(target, inputAmount, damageType);
     if (adjustedDamage <= 0) {
+      return;
+    }
+
+    // Source parity: ActiveBody::attemptDamage line 495-512 — subdual damage handling.
+    // Subdual damage accumulates separately from health, is armor-adjusted but NOT
+    // affected by battle plan scalar, and does NOT reduce health.
+    if (isSubdualDamage(damageType)) {
+      if (target.subdualDamageCap <= 0) {
+        // Source parity: canBeSubdued() returns false when subdualDamageCap == 0.
+        return;
+      }
+      const wasSubdued = target.currentSubdualDamage >= target.maxHealth;
+      target.currentSubdualDamage = Math.min(
+        target.currentSubdualDamage + adjustedDamage,
+        target.subdualDamageCap,
+      );
+      target.currentSubdualDamage = Math.max(0, target.currentSubdualDamage);
+      const nowSubdued = target.currentSubdualDamage >= target.maxHealth;
+      // Source parity: onSubdualChange — set/clear DISABLED_SUBDUED status.
+      if (wasSubdued !== nowSubdued) {
+        if (nowSubdued && !target.kindOf.has('PROJECTILE')) {
+          target.objectStatusFlags.add('DISABLED_SUBDUED');
+        } else {
+          target.objectStatusFlags.delete('DISABLED_SUBDUED');
+        }
+      }
+      // Source parity: Object::notifySubdualDamage → SubdualDamageHelper::notifySubdualDamage.
+      // Reset heal countdown and wake the helper when positive damage is applied.
+      if (adjustedDamage > 0 && target.subdualDamageHealRate > 0) {
+        target.subdualHealingCountdown = target.subdualDamageHealRate;
+      }
       return;
     }
 

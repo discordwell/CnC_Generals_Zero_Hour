@@ -25034,3 +25034,203 @@ describe('SpecialPowerCreate', () => {
     expect(sharedReady).toBe(0);
   });
 });
+
+describe('SubdualDamageHelper', () => {
+  it('accumulates subdual damage instead of reducing health', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SubdualTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+            SubdualDamageCap: 200,
+            SubdualDamageHealRate: 1000,
+            SubdualDamageHealAmount: 5,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SubdualTarget', 10, 10),
+        makeMapObject('Attacker', 20, 20),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { health: number; currentSubdualDamage: number; objectStatusFlags: Set<string> }>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+    expect(target.health).toBe(100);
+    expect(target.currentSubdualDamage).toBe(0);
+
+    // Apply subdual damage — health should NOT change, subdual damage should accumulate.
+    privateApi.applyWeaponDamageAmount(2, target, 50, 'SUBDUAL_MISSILE');
+    expect(target.health).toBe(100);
+    expect(target.currentSubdualDamage).toBe(50);
+
+    // Not yet subdued (50 < 100 maxHealth).
+    expect(target.objectStatusFlags.has('DISABLED_SUBDUED')).toBe(false);
+  });
+
+  it('sets DISABLED_SUBDUED when subdual damage reaches maxHealth', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SubdualTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+            SubdualDamageCap: 200,
+            SubdualDamageHealRate: 1000,
+            SubdualDamageHealAmount: 5,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SubdualTarget', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { health: number; maxHealth: number; currentSubdualDamage: number; objectStatusFlags: Set<string> }>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+
+    // Apply enough subdual damage to subdue (>= maxHealth = 100).
+    privateApi.applyWeaponDamageAmount(null, target, 100, 'SUBDUAL_VEHICLE');
+    expect(target.health).toBe(100);
+    expect(target.currentSubdualDamage).toBe(100);
+    expect(target.objectStatusFlags.has('DISABLED_SUBDUED')).toBe(true);
+  });
+
+  it('caps subdual damage at SubdualDamageCap', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SubdualTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+            SubdualDamageCap: 150,
+            SubdualDamageHealRate: 1000,
+            SubdualDamageHealAmount: 5,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SubdualTarget', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { currentSubdualDamage: number }>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+
+    // Apply 300 subdual damage — should cap at 150.
+    privateApi.applyWeaponDamageAmount(null, target, 300, 'SUBDUAL_BUILDING');
+    expect(target.currentSubdualDamage).toBe(150);
+  });
+
+  it('heals subdual damage over time via SubdualDamageHelper', () => {
+    // SubdualDamageHealRate = 100ms = 3 frames, SubdualDamageHealAmount = 20.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SubdualTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+            SubdualDamageCap: 200,
+            SubdualDamageHealRate: 100,
+            SubdualDamageHealAmount: 20,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SubdualTarget', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { health: number; currentSubdualDamage: number; subdualHealingCountdown: number; objectStatusFlags: Set<string> }>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+
+    // Apply 120 subdual damage (subdued: 120 >= 100 maxHealth).
+    privateApi.applyWeaponDamageAmount(null, target, 120, 'SUBDUAL_UNRESISTABLE');
+    expect(target.currentSubdualDamage).toBe(120);
+    expect(target.objectStatusFlags.has('DISABLED_SUBDUED')).toBe(true);
+
+    // Tick 3 frames (healRate = 100ms = 3 frames). After countdown expires, heals 20.
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+    expect(target.currentSubdualDamage).toBe(100);
+    expect(target.objectStatusFlags.has('DISABLED_SUBDUED')).toBe(true);
+
+    // Another 3 frames → heals 20 → currentSubdualDamage = 80 (< maxHealth).
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+    expect(target.currentSubdualDamage).toBe(80);
+    expect(target.objectStatusFlags.has('DISABLED_SUBDUED')).toBe(false);
+
+    // Health should never have been reduced.
+    expect(target.health).toBe(100);
+  });
+
+  it('ignores subdual damage on entities with SubdualDamageCap = 0', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NoSubdual', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+            // No SubdualDamageCap — defaults to 0.
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('NoSubdual', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { health: number; currentSubdualDamage: number }>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+
+    // Subdual damage should be silently ignored.
+    privateApi.applyWeaponDamageAmount(null, target, 500, 'SUBDUAL_MISSILE');
+    expect(target.health).toBe(100);
+    expect(target.currentSubdualDamage).toBe(0);
+  });
+});
