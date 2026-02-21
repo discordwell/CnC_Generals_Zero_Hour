@@ -22252,6 +22252,279 @@ describe('HelicopterSlowDeathBehavior', () => {
   });
 });
 
+describe('JetSlowDeathBehavior', () => {
+  function makeJetBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('FighterJet', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SD', {
+            DeathTypes: 'ALL',
+            DestructionDelay: 5000,
+            SinkRate: 0,
+            ProbabilityModifier: 100,
+          }),
+          makeBlock('Behavior', 'JetSlowDeathBehavior ModuleTag_JSD', {
+            DeathTypes: 'ALL',
+            RollRate: 5,                         // 5 degrees per frame
+            RollRateDelta: 95,                   // 0.95 multiplier (parsePercentToReal)
+            PitchRate: 3,                        // 3 degrees per frame after ground
+            FallHowFast: 60,                     // 60% gravity (parsePercentToReal)
+            DelaySecondaryFromInitialDeath: 500, // 500ms → 15 frames
+            DelayFinalBlowUpFromHitGround: 300,  // 300ms → 9 frames
+          }),
+        ]),
+        makeObjectDef('AAGun', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'AAAGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('AAAGun', {
+          AttackRange: 300,
+          PrimaryDamage: 9999,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+          AntiAirborneVehicle: true,
+        }),
+      ],
+    });
+  }
+
+  it('extracts jet slow death profiles from INI', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('FighterJet', 128, 128)], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        jetSlowDeathProfiles: { rollRate: number; fallHowFast: number; rollRateDelta: number; deathTypes: Set<string> }[];
+      }>;
+    };
+
+    const jet = [...priv.spawnedEntities.values()][0]!;
+    expect(jet.jetSlowDeathProfiles.length).toBe(1);
+    const p = jet.jetSlowDeathProfiles[0]!;
+    // RollRate: 5 degrees → radians
+    expect(p.rollRate).toBeCloseTo(5 * Math.PI / 180, 4);
+    // RollRateDelta: 95% → 0.95
+    expect(p.rollRateDelta).toBeCloseTo(0.95, 4);
+    // FallHowFast: 60% → 0.6
+    expect(p.fallHowFast).toBeCloseTo(0.6, 4);
+  });
+
+  it('initializes jet death state when killed airborne', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FighterJet', 10, 10),
+        makeMapObject('AAGun', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number;
+        jetSlowDeathState: {
+          deathFrame: number; groundFrame: number; rollRate: number;
+          forwardSpeed: number; profileIndex: number;
+        } | null;
+        jetSlowDeathProfiles: unknown[];
+        slowDeathState: unknown;
+      }>;
+    };
+
+    const jet = [...priv.spawnedEntities.values()].find(e =>
+      (e as { jetSlowDeathProfiles: unknown[] }).jetSlowDeathProfiles.length > 0)!;
+    expect(jet).toBeDefined();
+    // Elevate jet so it dies airborne (above isSignificantlyAboveTerrain threshold of 9.0).
+    jet.y = 150;
+
+    // Kill the jet.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (jet.health <= 0) break;
+    }
+
+    expect(jet.health).toBeLessThanOrEqual(0);
+    expect(jet.destroyed).toBe(false);
+    expect(jet.slowDeathState).not.toBeNull();
+    expect(jet.jetSlowDeathState).not.toBeNull();
+    expect(jet.jetSlowDeathState!.profileIndex).toBe(0);
+    expect(jet.jetSlowDeathState!.groundFrame).toBe(0); // Still airborne.
+    expect(jet.jetSlowDeathState!.forwardSpeed).toBeGreaterThan(0);
+  });
+
+  it('flies forward and descends while airborne', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FighterJet', 10, 10),
+        makeMapObject('AAGun', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number; x: number; z: number;
+        jetSlowDeathState: {
+          rollAngle: number; verticalVelocity: number; groundFrame: number;
+        } | null;
+        jetSlowDeathProfiles: unknown[];
+      }>;
+    };
+
+    const jet = [...priv.spawnedEntities.values()].find(e =>
+      (e as { jetSlowDeathProfiles: unknown[] }).jetSlowDeathProfiles.length > 0)!;
+    jet.y = 300; // Start very high.
+
+    // Kill it.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (jet.health <= 0) break;
+    }
+
+    const js = jet.jetSlowDeathState!;
+    expect(js).not.toBeNull();
+    const initX = jet.x;
+    const initZ = jet.z;
+    const initY = jet.y;
+
+    // Run several frames of jet death.
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Jet should have moved forward (straight line, not spiral).
+    expect(Math.abs(jet.x - initX) + Math.abs(jet.z - initZ)).toBeGreaterThan(0.1);
+    // Should be descending.
+    expect(jet.y).toBeLessThan(initY);
+    // Roll angle should have accumulated.
+    expect(Math.abs(js.rollAngle)).toBeGreaterThan(0);
+    // Vertical velocity should be negative.
+    expect(js.verticalVelocity).toBeLessThan(0);
+  });
+
+  it('hits ground and destroys after final delay', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FighterJet', 10, 10),
+        makeMapObject('AAGun', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number;
+        jetSlowDeathState: { groundFrame: number; pitchAngle: number } | null;
+        jetSlowDeathProfiles: unknown[];
+      }>;
+    };
+
+    const jet = [...priv.spawnedEntities.values()].find(e =>
+      (e as { jetSlowDeathProfiles: unknown[] }).jetSlowDeathProfiles.length > 0)!;
+    jet.y = 30; // Start low — will hit ground quickly.
+
+    // Kill it.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (jet.health <= 0) break;
+    }
+
+    expect(jet.jetSlowDeathState).not.toBeNull();
+
+    // Run frames until it hits the ground.
+    let hitGround = false;
+    for (let i = 0; i < 200; i++) {
+      logic.update(1 / 30);
+      if (jet.jetSlowDeathState?.groundFrame && jet.jetSlowDeathState.groundFrame > 0) {
+        hitGround = true;
+        break;
+      }
+      if (jet.destroyed) break;
+    }
+    expect(hitGround || jet.destroyed).toBe(true);
+
+    // If it hit ground but isn't destroyed yet, pitch should be accumulating
+    // and it should destroy after delay (300ms → 9 frames).
+    if (!jet.destroyed) {
+      expect(jet.jetSlowDeathState!.pitchAngle).not.toBe(0);
+      for (let i = 0; i < 15; i++) {
+        logic.update(1 / 30);
+        if (jet.destroyed) break;
+      }
+      expect(jet.destroyed).toBe(true);
+    }
+  });
+
+  it('skips jet slow death if killed on ground', () => {
+    const bundle = makeJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FighterJet', 10, 10),
+        makeMapObject('AAGun', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number; baseHeight: number;
+        jetSlowDeathState: unknown | null;
+        jetSlowDeathProfiles: unknown[];
+      }>;
+    };
+
+    const jet = [...priv.spawnedEntities.values()].find(e =>
+      (e as { jetSlowDeathProfiles: unknown[] }).jetSlowDeathProfiles.length > 0)!;
+    // Keep jet at ground level (not significantly above terrain).
+    // Don't elevate — let it stay at spawn height.
+
+    // Kill it.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (jet.health <= 0) break;
+    }
+
+    // Jet slow death state should NOT be initialized (killed on ground).
+    expect(jet.jetSlowDeathState).toBeNull();
+  });
+});
+
 describe('CleanupHazardUpdate', () => {
   function makeCleanupBundle() {
     return makeBundle({

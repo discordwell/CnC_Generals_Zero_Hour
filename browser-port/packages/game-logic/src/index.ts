@@ -1746,6 +1746,10 @@ interface MapEntity {
   helicopterSlowDeathProfiles: HelicopterSlowDeathProfile[];
   helicopterSlowDeathState: HelicopterSlowDeathState | null;
 
+  // ── Source parity: JetSlowDeathBehavior — jet crash death with roll and FX timeline ──
+  jetSlowDeathProfiles: JetSlowDeathProfile[];
+  jetSlowDeathState: JetSlowDeathState | null;
+
   // ── Source parity: CleanupHazardUpdate — passive hazard cleanup scanning ──
   cleanupHazardProfile: CleanupHazardProfile | null;
   cleanupHazardState: CleanupHazardState | null;
@@ -2816,6 +2820,65 @@ interface HelicopterSlowDeathState {
 }
 
 /**
+ * Source parity: JetSlowDeathBehavior — jet-specific death animation with roll, forward
+ * motion, multi-stage FX timeline. C++ file: JetSlowDeathBehavior.cpp.
+ * Extends SlowDeathBehavior: if jet dies on ground, instant destroy. If airborne,
+ * keeps flying straight with roll decay, descends via gravity, hits ground, final explosion.
+ */
+interface JetSlowDeathProfile {
+  /** DieMuxData filtering. */
+  deathTypes: Set<string>;
+  veterancyLevels: Set<string>;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
+  /** OCL names to execute if jet dies on ground (instant destroy). */
+  oclOnGroundDeath: string[];
+  /** OCL names to execute at start of airborne death. */
+  oclInitialDeath: string[];
+  /** Frames after initial death before secondary OCL fires. */
+  delaySecondaryFromInitialDeath: number;
+  /** OCL names for secondary effect (mid-descent). */
+  oclSecondary: string[];
+  /** OCL names when jet hits the ground. */
+  oclHitGround: string[];
+  /** Frames after ground impact before final explosion. */
+  delayFinalBlowUpFromHitGround: number;
+  /** OCL names for final explosion. */
+  oclFinalBlowUp: string[];
+  /** Initial roll rate (rad/frame). */
+  rollRate: number;
+  /** Multiplier applied to roll rate each frame (1.0 = constant, <1 = damping). */
+  rollRateDelta: number;
+  /** Pitch rate applied after hitting ground (rad/frame). */
+  pitchRate: number;
+  /** Fall speed fraction: 0 = slow fall (full lift), 1 = fast fall (no lift). */
+  fallHowFast: number;
+}
+
+interface JetSlowDeathState {
+  /** Frame when death sequence began. */
+  deathFrame: number;
+  /** Frame when jet hit ground (0 = still airborne). */
+  groundFrame: number;
+  /** Current roll rate (decays each frame by rollRateDelta). */
+  rollRate: number;
+  /** Accumulated roll angle for visual rendering. */
+  rollAngle: number;
+  /** Accumulated pitch angle (after ground impact). */
+  pitchAngle: number;
+  /** Forward speed at time of death (units/frame). */
+  forwardSpeed: number;
+  /** Heading at time of death (radians). */
+  forwardAngle: number;
+  /** Current vertical velocity (negative = falling). */
+  verticalVelocity: number;
+  /** Whether secondary OCL has been executed. */
+  secondaryExecuted: boolean;
+  /** Index into jetSlowDeathProfiles. */
+  profileIndex: number;
+}
+
+/**
  * Source parity: CleanupHazardUpdate — workers passively scan for nearby CLEANUP_HAZARD
  * entities and auto-attack them. C++ file: CleanupHazardUpdate.cpp.
  */
@@ -2835,6 +2898,8 @@ interface CleanupHazardState {
   nextScanFrame: number;
   /** Whether target was in firing range last check. */
   inRange: boolean;
+  /** C++ parity: m_nextShotAvailableInFrames — per-shot cooldown counter. */
+  nextShotAvailableFrame: number;
 }
 
 /**
@@ -3697,6 +3762,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateStickyBombs();
     this.updateSlowDeathEntities();
     this.updateHelicopterSlowDeath();
+    this.updateJetSlowDeath();
     this.updateStructureCollapseEntities();
     this.updateSmartBombHoming();
     this.updateDynamicGeometry();
@@ -5510,6 +5576,9 @@ export class GameLogicSubsystem implements Subsystem {
       // Helicopter slow death (spiral crash)
       helicopterSlowDeathProfiles: this.extractHelicopterSlowDeathProfiles(objectDef),
       helicopterSlowDeathState: null,
+      // Jet slow death (roll + forward motion + FX timeline)
+      jetSlowDeathProfiles: this.extractJetSlowDeathProfiles(objectDef),
+      jetSlowDeathState: null,
       // Cleanup hazard (workers scan and clean hazards)
       cleanupHazardProfile: this.extractCleanupHazardProfile(objectDef),
       cleanupHazardState: null,
@@ -9403,6 +9472,93 @@ export class GameLogicSubsystem implements Subsystem {
         oclHitGround,
         oclFinalBlowUp,
         finalRubbleObject,
+      });
+    };
+
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (profiles.length === 0 && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: JetSlowDeathBehavior — extract jet-specific slow death profiles.
+   * C++ file: JetSlowDeathBehavior.cpp — roll, FX timeline, forward descent.
+   */
+  private extractJetSlowDeathProfiles(objectDef: ObjectDef | undefined): JetSlowDeathProfile[] {
+    if (!objectDef) return [];
+    const profiles: JetSlowDeathProfile[] = [];
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'DIE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'JETSLOWDEATHBEHAVIOR') return;
+
+      // DieMuxData fields.
+      const deathTypes = new Set<string>();
+      const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
+      if (deathTypesStr) {
+        for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
+          if (token) deathTypes.add(token);
+        }
+      }
+      const veterancyLevels = new Set<string>();
+      const vetStr = readStringField(block.fields, ['VeterancyLevels']);
+      if (vetStr) {
+        for (const token of vetStr.toUpperCase().split(/\s+/)) {
+          if (token) veterancyLevels.add(token);
+        }
+      }
+      const exemptStatus = new Set<string>();
+      const exemptStr = readStringField(block.fields, ['ExemptStatus']);
+      if (exemptStr) {
+        for (const token of exemptStr.toUpperCase().split(/\s+/)) {
+          if (token) exemptStatus.add(token);
+        }
+      }
+      const requiredStatus = new Set<string>();
+      const reqStr = readStringField(block.fields, ['RequiredStatus']);
+      if (reqStr) {
+        for (const token of reqStr.toUpperCase().split(/\s+/)) {
+          if (token) requiredStatus.add(token);
+        }
+      }
+
+      // C++ parseReal: RollRate is degrees (seems to be degrees/frame or degrees/sec).
+      // C++ parsePercentToReal: RollRateDelta, FallHowFast → 0-1.
+      const rollRate = (readNumericField(block.fields, ['RollRate']) ?? 0) * Math.PI / 180;
+      const rollRateDelta = (readNumericField(block.fields, ['RollRateDelta']) ?? 100) / 100;
+      const pitchRate = (readNumericField(block.fields, ['PitchRate']) ?? 0) * Math.PI / 180;
+      const fallHowFast = (readNumericField(block.fields, ['FallHowFast']) ?? 50) / 100;
+
+      // FX/OCL timeline.
+      const oclOnGroundDeath: string[] = [];
+      const ogStr = readStringField(block.fields, ['OCLOnGroundDeath']);
+      if (ogStr) oclOnGroundDeath.push(ogStr);
+      const oclInitialDeath: string[] = [];
+      const idStr = readStringField(block.fields, ['OCLInitialDeath']);
+      if (idStr) oclInitialDeath.push(idStr);
+      const delaySecondaryFromInitialDeath = this.msToLogicFrames(
+        readNumericField(block.fields, ['DelaySecondaryFromInitialDeath']) ?? 0);
+      const oclSecondary: string[] = [];
+      const secStr = readStringField(block.fields, ['OCLSecondary']);
+      if (secStr) oclSecondary.push(secStr);
+      const oclHitGround: string[] = [];
+      const hgStr = readStringField(block.fields, ['OCLHitGround']);
+      if (hgStr) oclHitGround.push(hgStr);
+      const delayFinalBlowUpFromHitGround = this.msToLogicFrames(
+        readNumericField(block.fields, ['DelayFinalBlowUpFromHitGround']) ?? 0);
+      const oclFinalBlowUp: string[] = [];
+      const fbStr = readStringField(block.fields, ['OCLFinalBlowUp']);
+      if (fbStr) oclFinalBlowUp.push(fbStr);
+
+      profiles.push({
+        deathTypes, veterancyLevels, exemptStatus, requiredStatus,
+        oclOnGroundDeath, oclInitialDeath, delaySecondaryFromInitialDeath,
+        oclSecondary, oclHitGround, delayFinalBlowUpFromHitGround, oclFinalBlowUp,
+        rollRate, rollRateDelta, pitchRate, fallHowFast,
       });
     };
 
@@ -24434,6 +24590,47 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
+    // Source parity: JetSlowDeathBehavior — initialize jet crash state.
+    // C++ onDie: if on ground → instant destroy with ground OCL; if airborne → slow death.
+    if (entity.jetSlowDeathProfiles.length > 0) {
+      for (let jpi = 0; jpi < entity.jetSlowDeathProfiles.length; jpi++) {
+        const jetProfile = entity.jetSlowDeathProfiles[jpi]!;
+        if (!this.isDieModuleApplicable(entity, jetProfile)) continue;
+
+        // C++ parity: isSignificantlyAboveTerrain check (height > 9.0).
+        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
+        const heightAbove = entity.y - terrainY;
+
+        if (heightAbove <= 9.0) {
+          // On ground: instant destroy with ground OCL (C++ line 157-169).
+          for (const oclName of jetProfile.oclOnGroundDeath) {
+            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
+          }
+          // Jet is already in slow death — destruction will happen via slow death timer.
+        } else {
+          // Airborne: initialize jet slow death state (C++ beginSlowDeath lines 185-221).
+          entity.jetSlowDeathState = {
+            deathFrame: this.frameCounter,
+            groundFrame: 0,
+            rollRate: jetProfile.rollRate,
+            rollAngle: 0,
+            pitchAngle: 0,
+            forwardSpeed: entity.currentSpeed > 0 ? entity.currentSpeed / LOGIC_FRAME_RATE : entity.speed / LOGIC_FRAME_RATE,
+            forwardAngle: entity.rotationY,
+            verticalVelocity: 0,
+            secondaryExecuted: false,
+            profileIndex: jpi,
+          };
+
+          // Execute initial death OCLs (C++ line 193-194).
+          for (const oclName of jetProfile.oclInitialDeath) {
+            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
+          }
+        }
+        break;
+      }
+    }
+
     return true;
   }
 
@@ -25374,7 +25571,11 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       // Source parity: destruction frame — execute final phase and destroy.
-      if (this.frameCounter >= state.destructionFrame) {
+      // C++ parity: helicopter/jet slow death behaviors call base SlowDeathBehavior::update() for
+      // FX/OCL phases but override the destruction timing with their own ground-hit + delay logic.
+      // Skip the base timer destruction when these sub-behaviors are actively managing the death.
+      if (this.frameCounter >= state.destructionFrame
+        && !entity.helicopterSlowDeathState && !entity.jetSlowDeathState) {
         this.executeSlowDeathPhase(entity, profile, 2); // FINAL
         entity.slowDeathState = null;
         this.markEntityDestroyed(entity.id, -1);
@@ -25534,10 +25735,11 @@ export class GameLogicSubsystem implements Subsystem {
             this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
           }
 
-          // Hold the helicopter in place.
+          // C++ parity: copter->setDisabled(DISABLED_HELD) — freeze the entity on ground.
           entity.moving = false;
           entity.moveTarget = null;
           entity.movePath = [];
+          entity.objectStatusFlags.add('DISABLED_HELD');
         }
       }
 
@@ -25564,6 +25766,83 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: JetSlowDeathBehavior::update — jet crash with roll, forward motion,
+   * multi-stage FX timeline. C++ file: JetSlowDeathBehavior.cpp lines 226-310.
+   */
+  private updateJetSlowDeath(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const js = entity.jetSlowDeathState;
+      if (!js) continue;
+
+      const profile = entity.jetSlowDeathProfiles[js.profileIndex];
+      if (!profile) continue;
+
+      // ── Still airborne ──
+      if (js.groundFrame === 0) {
+        // Apply roll rate to visual rotation (C++ physics->setRollRate).
+        js.rollAngle += js.rollRate;
+        // Decay roll rate (C++ m_rollRate *= m_rollRateDelta).
+        js.rollRate *= profile.rollRateDelta;
+
+        // Forward motion: jet keeps flying in the direction it was headed at death.
+        entity.x += Math.cos(js.forwardAngle) * js.forwardSpeed;
+        entity.z += Math.sin(js.forwardAngle) * js.forwardSpeed;
+
+        // Gravity descent (C++ setMaxLift(-gravity * (1 - fallHowFast))).
+        // fallHowFast=1 → full fall, fallHowFast=0 → slow fall.
+        js.verticalVelocity += HELICOPTER_GRAVITY * profile.fallHowFast;
+        entity.y += js.verticalVelocity;
+
+        // Secondary OCL timer (C++ line 292-301).
+        if (!js.secondaryExecuted && profile.delaySecondaryFromInitialDeath > 0
+          && this.frameCounter - js.deathFrame >= profile.delaySecondaryFromInitialDeath) {
+          for (const oclName of profile.oclSecondary) {
+            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
+          }
+          js.secondaryExecuted = true;
+        }
+
+        // Ground hit detection.
+        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
+        if (entity.y <= terrainY + 1.0) {
+          entity.y = terrainY;
+          js.groundFrame = this.frameCounter;
+
+          // Execute ground hit OCLs (C++ line 276-277).
+          for (const oclName of profile.oclHitGround) {
+            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
+          }
+
+          // C++ parity: freeze the entity on ground (DISABLED_HELD).
+          entity.moving = false;
+          entity.moveTarget = null;
+          entity.movePath = [];
+          entity.objectStatusFlags.add('DISABLED_HELD');
+        }
+      }
+
+      // ── On the ground: wait for final explosion ──
+      if (js.groundFrame > 0) {
+        // Apply pitch rotation after ground impact (C++ physics->setPitchRate).
+        js.pitchAngle += profile.pitchRate;
+
+        if (this.frameCounter - js.groundFrame >= profile.delayFinalBlowUpFromHitGround) {
+          // Execute final explosion OCLs (C++ line 306-307).
+          for (const oclName of profile.oclFinalBlowUp) {
+            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
+          }
+
+          // Destroy the jet.
+          entity.jetSlowDeathState = null;
+          entity.slowDeathState = null;
+          this.markEntityDestroyed(entity.id, -1);
+        }
+      }
+    }
+  }
+
+  /**
    * Source parity: CleanupHazardUpdate::update — passive scan for CLEANUP_HAZARD entities
    * and auto-attack them. C++ file: CleanupHazardUpdate.cpp lines 131-293.
    */
@@ -25578,6 +25857,7 @@ export class GameLogicSubsystem implements Subsystem {
           bestTargetId: 0,
           nextScanFrame: 0,
           inRange: false,
+          nextShotAvailableFrame: 0,
         };
       }
       const state = entity.cleanupHazardState;
@@ -25660,6 +25940,9 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    // C++ parity: m_nextShotAvailableInFrames cooldown check (line 241-246).
+    if (state.nextShotAvailableFrame > this.frameCounter) return;
+
     // Fire if entity is idle (not already attacking something from player) and in range.
     if (state.inRange && (entity.attackTargetEntityId === null || entity.attackCommandSource === 'AI')) {
       // Source parity: CleanupHazardUpdate bypasses normal enemy relationship checks.
@@ -25667,6 +25950,8 @@ export class GameLogicSubsystem implements Subsystem {
       const weapon = entity.attackWeapon;
       if (weapon && weapon.primaryDamage > 0) {
         this.applyWeaponDamageAmount(entity.id, target, weapon.primaryDamage, weapon.damageType);
+        // C++ parity: apply weapon's DelayBetweenShots as per-shot cooldown.
+        state.nextShotAvailableFrame = this.frameCounter + Math.max(1, weapon.minDelayFrames);
       }
     }
   }
