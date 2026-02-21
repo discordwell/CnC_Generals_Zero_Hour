@@ -1465,6 +1465,7 @@ interface PendingCombatDropActionState {
   targetObjectId: number | null;
   targetX: number;
   targetZ: number;
+  nextDropFrame: number;
 }
 
 interface RepairDockProfile {
@@ -1479,6 +1480,20 @@ interface DozerAIProfile {
   boredTimeFrames: number;
   /** Source parity: DozerAIUpdateModuleData::m_boredRange. */
   boredRange: number;
+}
+
+/**
+ * Source parity subset: ChinookAIUpdate module data used by gameplay systems
+ * currently implemented in this port (supply availability + combat-drop timing).
+ */
+interface ChinookAIProfile {
+  numRopes: number;
+  perRopeDelayMinFrames: number;
+  perRopeDelayMaxFrames: number;
+  minDropHeight: number;
+  waitForRopesToDrop: boolean;
+  ropeDropSpeed: number;
+  ropeFinalHeight: number;
 }
 
 interface MapEntity {
@@ -1624,6 +1639,7 @@ interface MapEntity {
   pathfindPosCell: { x: number; z: number } | null;
   supplyWarehouseProfile: SupplyWarehouseProfile | null;
   supplyTruckProfile: SupplyTruckProfile | null;
+  chinookAIProfile: ChinookAIProfile | null;
   repairDockProfile: RepairDockProfile | null;
   dozerAIProfile: DozerAIProfile | null;
   /** Source parity: DozerPrimaryIdleState::m_idleTooLongTimestamp. */
@@ -5657,6 +5673,7 @@ export class GameLogicSubsystem implements Subsystem {
     const containProfile = this.extractContainProfile(objectDef);
     const supplyWarehouseProfile = this.extractSupplyWarehouseProfile(objectDef);
     const supplyTruckProfile = this.extractSupplyTruckProfile(objectDef);
+    const chinookAIProfile = this.extractChinookAIProfile(objectDef);
     const repairDockProfile = this.extractRepairDockProfile(objectDef);
     const dozerAIProfile = this.extractDozerAIProfile(objectDef);
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
@@ -5835,6 +5852,7 @@ export class GameLogicSubsystem implements Subsystem {
       pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
       supplyWarehouseProfile,
       supplyTruckProfile,
+      chinookAIProfile,
       repairDockProfile,
       dozerAIProfile,
       dozerIdleTooLongTimestamp: this.frameCounter,
@@ -8332,6 +8350,51 @@ export class GameLogicSubsystem implements Subsystem {
           return;
         }
       }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Source parity subset: ChinookAIUpdate module data used by current systems.
+   * C++ defaults from ChinookAIUpdateModuleData constructor.
+   */
+  private extractChinookAIProfile(objectDef: ObjectDef | undefined): ChinookAIProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: ChinookAIProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'CHINOOKAIUPDATE') {
+          const perRopeDelayMinMs = readNumericField(block.fields, ['PerRopeDelayMin']) ?? 0x7fffffff;
+          const perRopeDelayMaxMs = readNumericField(block.fields, ['PerRopeDelayMax']) ?? 0x7fffffff;
+          profile = {
+            numRopes: Math.max(1, Math.trunc(readNumericField(block.fields, ['NumRopes']) ?? 4)),
+            perRopeDelayMinFrames: this.msToLogicFrames(perRopeDelayMinMs),
+            perRopeDelayMaxFrames: this.msToLogicFrames(perRopeDelayMaxMs),
+            minDropHeight: readNumericField(block.fields, ['MinDropHeight']) ?? 30.0,
+            waitForRopesToDrop: readBooleanField(block.fields, ['WaitForRopesToDrop']) ?? true,
+            ropeDropSpeed: readNumericField(block.fields, ['RopeDropSpeed']) ?? 1e10,
+            ropeFinalHeight: readNumericField(block.fields, ['RopeFinalHeight']) ?? 0.0,
+          };
+          return;
+        }
+      }
+
       for (const child of block.blocks) {
         visitBlock(child);
       }
@@ -14566,6 +14629,7 @@ export class GameLogicSubsystem implements Subsystem {
       targetObjectId,
       targetX,
       targetZ,
+      nextDropFrame: 0,
     });
   }
 
@@ -16574,6 +16638,35 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      if (source.chinookAIProfile) {
+        // Source parity subset: ChinookCombatDropState rappels CAN_RAPPEL passengers over time.
+        const profile = source.chinookAIProfile;
+        if (pending.nextDropFrame === 0) {
+          pending.nextDropFrame = this.frameCounter + this.resolveChinookCombatDropInitialDelayFrames(source);
+        }
+        if (this.frameCounter < pending.nextDropFrame) {
+          continue;
+        }
+
+        let droppedAny = false;
+        const dropsThisTick = Math.max(1, profile.numRopes);
+        for (let i = 0; i < dropsThisTick; i++) {
+          if (!this.evacuateOneContainedRappeller(source, pending.targetX, pending.targetZ, pending.targetObjectId)) {
+            break;
+          }
+          droppedAny = true;
+        }
+
+        if (!droppedAny || this.countContainedRappellers(source.id) <= 0) {
+          this.pendingCombatDropActions.delete(sourceId);
+          continue;
+        }
+
+        pending.nextDropFrame = this.frameCounter + this.resolveChinookCombatDropIntervalFrames(profile);
+        continue;
+      }
+
+      // Non-Chinook combat-drop carriers: immediate evac at destination.
       this.evacuateContainedEntities(source, pending.targetX, pending.targetZ, pending.targetObjectId);
       this.pendingCombatDropActions.delete(sourceId);
     }
@@ -18944,6 +19037,38 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: SupplyTruckAIUpdate / SupplyWarehouseDockUpdate / SupplyCenterDockUpdate
    * Runs the supply truck AI state machine for all trucks each frame.
    */
+  private hasPendingTransportEntryForContainer(containerId: number): boolean {
+    for (const targetTransportId of this.pendingTransportActions.values()) {
+      if (targetTransportId === containerId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity: ChinookAIUpdate::isAvailableForSupplying.
+   * Chinooks cannot gather while handling transport enter/exit or carrying passengers.
+   */
+  private isChinookAvailableForSupplying(entity: MapEntity): boolean {
+    if (!entity.chinookAIProfile) {
+      return true;
+    }
+    if (this.pendingCombatDropActions.has(entity.id)) {
+      return false;
+    }
+    if (this.collectContainedEntityIds(entity.id).length > 0) {
+      return false;
+    }
+    if (this.hasPendingTransportEntryForContainer(entity.id)) {
+      return false;
+    }
+    if (entity.containProfile?.moduleType === 'OVERLORD') {
+      return false;
+    }
+    return true;
+  }
+
   private updateSupplyChain(): void {
     const supplyChainContext: SupplyChainContext<MapEntity> = {
       frameCounter: this.frameCounter,
@@ -18993,6 +19118,9 @@ export class GameLogicSubsystem implements Subsystem {
         // Source parity: WorkerAIUpdate runs supply-truck logic only while not in dozer tasks.
         if (entity.dozerAIProfile
           && (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id))) {
+          continue;
+        }
+        if (!this.isChinookAvailableForSupplying(entity)) {
           continue;
         }
         updateSupplyTruckImpl(entity, entity.supplyTruckProfile, supplyChainContext);
@@ -19446,6 +19574,38 @@ export class GameLogicSubsystem implements Subsystem {
     return count;
   }
 
+  private resolveChinookCombatDropInitialDelayFrames(source: MapEntity): number {
+    const profile = source.chinookAIProfile;
+    if (!profile || !profile.waitForRopesToDrop) {
+      return 0;
+    }
+    if (!Number.isFinite(profile.ropeDropSpeed) || profile.ropeDropSpeed <= 0) {
+      return 0;
+    }
+
+    const groundY = this.resolveGroundHeight(source.x, source.z);
+    const dropHeight = Math.max(0, (source.y - source.baseHeight) - groundY - profile.ropeFinalHeight);
+    if (dropHeight <= 0) {
+      return 0;
+    }
+
+    // Source parity approximation: rope speed is world-units/sec.
+    const dropSpeedPerFrame = profile.ropeDropSpeed / LOGIC_FRAME_RATE;
+    if (dropSpeedPerFrame <= 0) {
+      return 0;
+    }
+    return Math.max(0, Math.ceil(dropHeight / dropSpeedPerFrame));
+  }
+
+  private resolveChinookCombatDropIntervalFrames(profile: ChinookAIProfile): number {
+    const minFrames = Math.max(0, profile.perRopeDelayMinFrames);
+    const maxFrames = Math.max(minFrames, profile.perRopeDelayMaxFrames);
+    if (maxFrames <= minFrames) {
+      return minFrames;
+    }
+    return this.gameRandom.nextRange(minFrames, maxFrames);
+  }
+
   private releaseEntityFromContainer(entity: MapEntity): void {
     if (entity.parkingSpaceProducerId !== null) {
       const parkingProducer = this.spawnedEntities.get(entity.parkingSpaceProducerId);
@@ -19490,6 +19650,41 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: Object::onRemovedFrom — clear MASKED and UNSELECTABLE on release.
     entity.objectStatusFlags.delete('MASKED');
     entity.objectStatusFlags.delete('UNSELECTABLE');
+  }
+
+  private evacuateOneContainedRappeller(
+    container: MapEntity,
+    targetX: number,
+    targetZ: number,
+    targetObjectId: number | null,
+  ): boolean {
+    const target = targetObjectId !== null ? this.spawnedEntities.get(targetObjectId) : null;
+    for (const passengerId of this.collectContainedEntityIds(container.id)) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) continue;
+      if (!this.resolveEntityKindOfSet(passenger).has('CAN_RAPPEL')) continue;
+
+      this.releaseEntityFromContainer(passenger);
+      passenger.x = container.x;
+      passenger.z = container.z;
+      passenger.y = this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
+      this.updatePathfindPosCell(passenger);
+
+      if (
+        target
+        && !target.destroyed
+        && this.getTeamRelationship(passenger, target) === RELATIONSHIP_ENEMIES
+      ) {
+        this.issueAttackEntity(passenger.id, target.id, 'PLAYER');
+        if (passenger.attackTargetEntityId === null && passenger.canMove) {
+          this.issueMoveTo(passenger.id, targetX, targetZ);
+        }
+      } else if (passenger.canMove) {
+        this.issueMoveTo(passenger.id, targetX, targetZ);
+      }
+      return true;
+    }
+    return false;
   }
 
   private evacuateContainedEntities(

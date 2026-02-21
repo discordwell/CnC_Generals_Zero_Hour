@@ -7690,6 +7690,82 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(passengerState?.attackTargetEntityId).toBe(2);
   });
 
+  it('uses ChinookAIUpdate staged combat drop and only rappels CAN_RAPPEL passengers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 100,
+            PerRopeDelayMax: 100,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 0,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+        ]),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], []),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8), // id 1
+        makeMapObject('Rappeller', 8, 8),     // id 2
+        makeMapObject('Passenger', 8, 8),     // id 3
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        chinookAIProfile: {
+          numRopes: number;
+          perRopeDelayMinFrames: number;
+          perRopeDelayMaxFrames: number;
+          waitForRopesToDrop: boolean;
+        } | null;
+        transportContainerId: number | null;
+      }>;
+    };
+
+    const chinook = priv.spawnedEntities.get(1)!;
+    expect(chinook.chinookAIProfile).toBeTruthy();
+    expect(chinook.chinookAIProfile?.numRopes).toBe(1);
+    expect(chinook.chinookAIProfile?.perRopeDelayMinFrames).toBe(3);
+    expect(chinook.chinookAIProfile?.perRopeDelayMaxFrames).toBe(3);
+    expect(chinook.chinookAIProfile?.waitForRopesToDrop).toBe(false);
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let frame = 0; frame < 4; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(priv.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: null,
+      targetPosition: [8, 0, 8],
+    });
+    for (let frame = 0; frame < 12; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    // Only CAN_RAPPEL passenger should exit during Chinook combat drop.
+    expect(priv.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+  });
+
   it('records no-target special power dispatch on source entity module', () => {
     const bundle = makeBundle({
       objects: [
@@ -8058,6 +8134,79 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(withUpgrade).toBeGreaterThan(withoutUpgrade);
     expect(boostDelta).toBeGreaterThanOrEqual(45);
     expect(boostDelta % 45).toBe(0);
+  });
+
+  it('pauses Chinook supply gathering while carrying passengers', () => {
+    const runScenario = (withPassenger: boolean): number => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+
+      const warehouseDef = makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+          StartingBoxes: 10,
+          DeleteWhenEmpty: false,
+        }),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      ]);
+
+      const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      ]);
+
+      const chinookDef = makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT', 'HARVESTER'], [
+        makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+          MaxBoxes: 3,
+          SupplyCenterActionDelay: 0,
+          SupplyWarehouseActionDelay: 0,
+          SupplyWarehouseScanDistance: 500,
+        }),
+        makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+          Slots: 5,
+          InitialPayload: 0,
+        }),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+      ]);
+
+      const passengerDef = makeObjectDef('Passenger', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ]);
+
+      const registry = makeRegistry(makeBundle({
+        objects: [warehouseDef, supplyCenterDef, chinookDef, passengerDef],
+      }));
+
+      logic.loadMapObjects(
+        makeMap([
+          makeMapObject('SupplyWarehouse', 10, 10), // id 1
+          makeMapObject('SupplyCenter', 35, 10),    // id 2
+          makeMapObject('SupplyChinook', 10, 10),   // id 3
+          makeMapObject('Passenger', 10, 10),       // id 4
+        ], 64, 64),
+        registry,
+        makeHeightmap(64, 64),
+      );
+
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+      logic.update(0);
+
+      if (withPassenger) {
+        logic.submitCommand({ type: 'enterTransport', entityId: 4, targetTransportId: 3 });
+        for (let frame = 0; frame < 5; frame += 1) {
+          logic.update(1 / 30);
+        }
+      }
+
+      for (let i = 0; i < 300; i++) {
+        logic.update(0.033);
+      }
+      return logic.getSideCredits('America');
+    };
+
+    const baselineCredits = runScenario(false);
+    const withPassengerCredits = runScenario(true);
+
+    expect(baselineCredits).toBeGreaterThanOrEqual(300);
+    expect(withPassengerCredits).toBe(0);
   });
 
   it('uses DozerAIUpdate RepairHealthPercentPerSecond during repair', () => {
