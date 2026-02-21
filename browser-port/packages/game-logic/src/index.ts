@@ -1554,6 +1554,8 @@ interface MapEntity {
   hiveStructureProfile: HiveStructureBodyProfile | null;
   canTakeDamage: boolean;
   maxHealth: number;
+  /** Source parity: BodyModule::m_initialHealth (used by script unit-health condition). */
+  initialHealth: number;
   health: number;
   attackWeapon: AttackWeaponProfile | null;
   weaponTemplateSets: WeaponTemplateSetProfile[];
@@ -6408,6 +6410,35 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateUnitHealth.
+   * Uses body initial health as denominator and rounds to nearest integer percent.
+   */
+  evaluateScriptUnitHealth(filter: {
+    entityId: number;
+    comparison: ScriptComparisonInput;
+    healthPercent: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+
+    const initialHealth = entity.initialHealth;
+    if (!Number.isFinite(initialHealth) || initialHealth <= 0) {
+      return false;
+    }
+
+    // C++: Int curPercent = (curHealth*100 + initialHealth/2)/initialHealth;
+    const curPercent = Math.trunc((entity.health * 100 + initialHealth / 2) / initialHealth);
+    const targetPercent = Number.isFinite(filter.healthPercent) ? Math.trunc(filter.healthPercent) : 0;
+    return this.compareScriptNumeric(filter.comparison, curPercent, targetPercent);
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateUnitHasEmptied.
    * True when contain count transitions from >0 to 0 between previous frame and current frame.
    */
@@ -7799,6 +7830,7 @@ export class GameLogicSubsystem implements Subsystem {
       undeadIsSecondLife: false,
       canTakeDamage: bodyStats.bodyType !== 'INACTIVE' && bodyStats.maxHealth > 0,
       maxHealth: bodyStats.maxHealth,
+      initialHealth: bodyStats.initialHealth,
       health: bodyStats.bodyType === 'INACTIVE' ? 0 : bodyStats.initialHealth,
       energyBonus,
       attackWeapon,
@@ -14336,6 +14368,7 @@ export class GameLogicSubsystem implements Subsystem {
     const previousMaxHealth = entity.maxHealth;
     const nextMaxHealth = Math.max(0, previousMaxHealth + addMaxHealth);
     entity.maxHealth = nextMaxHealth;
+    entity.initialHealth = nextMaxHealth;
 
     switch (changeType) {
       case 'PRESERVE_RATIO': {
@@ -27345,6 +27378,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (shouldStartSecondLife && target.bodyType === 'UNDEAD' && !target.undeadIsSecondLife) {
       target.undeadIsSecondLife = true;
       target.maxHealth = target.undeadSecondLifeMaxHealth;
+      target.initialHealth = target.undeadSecondLifeMaxHealth;
       target.health = target.maxHealth; // FULLY_HEAL
       target.armorSetFlagsMask |= ARMOR_SET_FLAG_SECOND_LIFE;
       target.modelConditionFlags.add('SECOND_LIFE');
@@ -28463,6 +28497,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: set hole max health from profile.
     if (profile.holeMaxHealth > 0) {
       hole.maxHealth = profile.holeMaxHealth;
+      hole.initialHealth = profile.holeMaxHealth;
       hole.health = profile.holeMaxHealth;
       hole.canTakeDamage = true;
     }
@@ -33249,6 +33284,7 @@ export class GameLogicSubsystem implements Subsystem {
       config,
     );
     entity.maxHealth = newMaxHealth;
+    entity.initialHealth = newMaxHealth;
     entity.health = newHealth;
 
     // Source parity: update armor set flags for veterancy level (ActiveBody.cpp:1139-1159).
@@ -34162,6 +34198,7 @@ export class GameLogicSubsystem implements Subsystem {
         const newMaxHealth = Math.max(1, Math.round(source.maxHealth * scalar));
         const ratio = source.maxHealth > 0 ? source.health / source.maxHealth : 1;
         source.maxHealth = newMaxHealth;
+        source.initialHealth = newMaxHealth;
         source.health = Math.round(newMaxHealth * ratio);
       }
     }

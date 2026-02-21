@@ -28402,6 +28402,52 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates unit-health from initial health with source-parity rounding', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DamagedSpawnUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 200,
+            InitialHealth: 150,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('DamagedSpawnUnit', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    // Source parity: denominator is InitialHealth, not MaxHealth.
+    expect(logic.evaluateScriptUnitHealth({
+      entityId: 1,
+      comparison: 'EQUAL',
+      healthPercent: 100,
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 52, 'SMALL_ARMS');
+
+    // C++ rounding formula: (health*100 + initial/2) / initial.
+    // (98*100 + 150/2) / 150 = 65 (integer).
+    expect(logic.evaluateScriptUnitHealth({
+      entityId: 1,
+      comparison: 'EQUAL',
+      healthPercent: 65,
+    })).toBe(true);
+    expect(logic.evaluateScriptUnitHealth({
+      entityId: 1,
+      comparison: 'GREATER_EQUAL',
+      healthPercent: 66,
+    })).toBe(false);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [
