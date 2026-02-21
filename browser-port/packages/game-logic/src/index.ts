@@ -3653,6 +3653,18 @@ type ScriptComparisonType =
 
 type ScriptComparisonInput = ScriptComparisonType | number;
 
+type ScriptRelationshipInput =
+  | EntityRelationship
+  | 'REL_ENEMY'
+  | 'REL_NEUTRAL'
+  | 'REL_FRIEND'
+  | 'ENEMY'
+  | 'NEUTRAL'
+  | 'FRIEND'
+  | 'ALLY'
+  | 'ALLIES'
+  | number;
+
 interface ScriptConditionCacheState {
   /** Source parity: Condition::m_customData (-1=false, 0=unknown, 1=true). */
   customData: -1 | 0 | 1;
@@ -6443,6 +6455,123 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.collectContainedEntityIds(entityId).length === 0;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateEnemySighted.
+   */
+  evaluateScriptEnemySighted(filter: {
+    entityId: number;
+    alliance: ScriptRelationshipInput;
+    side: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const relation = this.resolveScriptRelationshipInput(filter.alliance);
+    if (relation === null) {
+      return false;
+    }
+
+    const entityId = Math.trunc(filter.entityId);
+    const source = this.spawnedEntities.get(entityId);
+    if (!source) {
+      return false;
+    }
+
+    const visionRange = Math.max(0, source.visionRange);
+    const visionRangeSq = visionRange * visionRange;
+    const sourceOffMap = this.isEntityOffMap(source);
+    for (const candidate of this.spawnedEntities.values()) {
+      if (this.normalizeSide(candidate.side) !== normalizedSide) {
+        continue;
+      }
+      if (this.isScriptEntityEffectivelyDead(candidate)) {
+        continue;
+      }
+      if (this.isEntityStealthedAndUndetected(candidate)) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (this.getTeamRelationship(source, candidate) !== relation) {
+        continue;
+      }
+
+      const dx = candidate.x - source.x;
+      const dz = candidate.z - source.z;
+      if (dx * dx + dz * dz > visionRangeSq) {
+        continue;
+      }
+
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTypeSighted.
+   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
+   */
+  evaluateScriptTypeSighted(filter: {
+    entityId: number;
+    objectType: string;
+    side: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const normalizedObjectType = filter.objectType.trim().toUpperCase();
+    if (!normalizedObjectType) {
+      return false;
+    }
+
+    const entityId = Math.trunc(filter.entityId);
+    const source = this.spawnedEntities.get(entityId);
+    if (!source) {
+      return false;
+    }
+
+    const visionRange = Math.max(0, source.visionRange);
+    const visionRangeSq = visionRange * visionRange;
+    const sourceOffMap = this.isEntityOffMap(source);
+    for (const candidate of this.spawnedEntities.values()) {
+      if (this.normalizeSide(candidate.side) !== normalizedSide) {
+        continue;
+      }
+      if (this.isScriptEntityEffectivelyDead(candidate)) {
+        continue;
+      }
+      if (this.isEntityStealthedAndUndetected(candidate)) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (!this.areEquivalentTemplateNames(candidate.templateName, normalizedObjectType)) {
+        continue;
+      }
+
+      const dx = candidate.x - source.x;
+      const dz = candidate.z - source.z;
+      if (dx * dx + dz * dz > visionRangeSq) {
+        continue;
+      }
+
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -15433,6 +15562,39 @@ export class GameLogicSubsystem implements Subsystem {
     const normalizedCurrentCount = Number.isFinite(currentCount) ? Math.trunc(currentCount) : 0;
     const normalizedTargetCount = Number.isFinite(targetCount) ? Math.trunc(targetCount) : 0;
     return this.compareScriptNumeric(comparison, normalizedCurrentCount, normalizedTargetCount);
+  }
+
+  private resolveScriptRelationshipInput(input: ScriptRelationshipInput): RelationshipValue | null {
+    if (typeof input === 'number') {
+      const value = Math.trunc(input);
+      if (
+        value === RELATIONSHIP_ENEMIES
+        || value === RELATIONSHIP_NEUTRAL
+        || value === RELATIONSHIP_ALLIES
+      ) {
+        return value;
+      }
+      return null;
+    }
+
+    const normalized = input.trim().toUpperCase();
+    switch (normalized) {
+      case 'ENEMY':
+      case 'ENEMIES':
+      case 'REL_ENEMY':
+        return RELATIONSHIP_ENEMIES;
+      case 'NEUTRAL':
+      case 'REL_NEUTRAL':
+        return RELATIONSHIP_NEUTRAL;
+      case 'FRIEND':
+      case 'FRIENDS':
+      case 'ALLY':
+      case 'ALLIES':
+      case 'REL_FRIEND':
+        return RELATIONSHIP_ALLIES;
+      default:
+        return null;
+    }
   }
 
   private isScriptEntityEffectivelyDead(entity: MapEntity): boolean {

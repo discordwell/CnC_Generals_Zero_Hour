@@ -27471,6 +27471,137 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates enemy-sighted with relation, range, stealth, and same-map filters', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScoutA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 60 }),
+        makeObjectDef('EnemyB', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('NeutralC', 'Civilian', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScoutA', 10, 10),   // id 1
+        makeMapObject('EnemyB', 20, 10),   // id 2
+        makeMapObject('NeutralC', 24, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0); // enemies
+    logic.setTeamRelationship('China', 'America', 0); // enemies
+    logic.setTeamRelationship('America', 'Civilian', 1); // neutral
+    logic.setTeamRelationship('Civilian', 'America', 1); // neutral
+
+    expect(logic.evaluateScriptEnemySighted({
+      entityId: 1,
+      alliance: 'ENEMY',
+      side: 'China',
+    })).toBe(true);
+    expect(logic.evaluateScriptEnemySighted({
+      entityId: 1,
+      alliance: 'NEUTRAL',
+      side: 'Civilian',
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number; objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.add('STEALTHED');
+    expect(logic.evaluateScriptEnemySighted({
+      entityId: 1,
+      alliance: 'ENEMY',
+      side: 'China',
+    })).toBe(false);
+
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.add('DETECTED');
+    expect(logic.evaluateScriptEnemySighted({
+      entityId: 1,
+      alliance: 'ENEMY',
+      side: 'China',
+    })).toBe(true);
+
+    privateApi.spawnedEntities.get(2)!.x = -5;
+    privateApi.spawnedEntities.get(2)!.z = -5;
+    expect(logic.evaluateScriptEnemySighted({
+      entityId: 1,
+      alliance: 'ENEMY',
+      side: 'China',
+    })).toBe(false);
+  });
+
+  it('evaluates type-sighted as template subset with range, stealth, and same-map filters', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScoutA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 60 }),
+        makeObjectDef('TankA', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+        makeObjectDef('TankB', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScoutA', 10, 10), // id 1
+        makeMapObject('TankA', 20, 10),  // id 2
+        makeMapObject('TankB', 90, 10),  // id 3 (out of range)
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptTypeSighted({
+      entityId: 1,
+      objectType: 'TankA',
+      side: 'China',
+    })).toBe(true);
+    expect(logic.evaluateScriptTypeSighted({
+      entityId: 1,
+      objectType: 'TankB',
+      side: 'China',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number; objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.add('STEALTHED');
+    expect(logic.evaluateScriptTypeSighted({
+      entityId: 1,
+      objectType: 'TankA',
+      side: 'China',
+    })).toBe(false);
+
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.add('DETECTED');
+    expect(logic.evaluateScriptTypeSighted({
+      entityId: 1,
+      objectType: 'TankA',
+      side: 'China',
+    })).toBe(true);
+
+    privateApi.spawnedEntities.get(2)!.x = -4;
+    privateApi.spawnedEntities.get(2)!.z = -4;
+    expect(logic.evaluateScriptTypeSighted({
+      entityId: 1,
+      objectType: 'TankA',
+      side: 'China',
+    })).toBe(false);
+  });
+
   it('evaluates all-destroyed, all-build-facilities-destroyed, and named-owned-by-player', () => {
     const bundle = makeBundle({
       objects: [
