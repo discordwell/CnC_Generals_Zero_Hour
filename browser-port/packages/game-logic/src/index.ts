@@ -5246,6 +5246,109 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluatePlayerHasCredits.
+   * Note: source compares (requestedCredits [cmp] currentMoney), not the reverse.
+   */
+  evaluateScriptPlayerHasCredits(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    credits: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const requestedCredits = Number.isFinite(filter.credits) ? Math.trunc(filter.credits) : 0;
+    const currentCredits = this.getSideCredits(normalizedSide);
+    return this.compareScriptCount(filter.comparison, requestedCredits, currentCredits);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerHasNOrFewerBuildings.
+   */
+  evaluateScriptPlayerHasNOrFewerBuildings(filter: {
+    side: string;
+    buildingCount: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const desiredMax = Number.isFinite(filter.buildingCount) ? Math.trunc(filter.buildingCount) : 0;
+    return desiredMax >= this.countScriptStructuresForSide(normalizedSide, false);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerHasNOrFewerFactionBuildings.
+   * Counts only STRUCTURE + MP_COUNT_FOR_VICTORY objects.
+   */
+  evaluateScriptPlayerHasNOrFewerFactionBuildings(filter: {
+    side: string;
+    buildingCount: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const desiredMax = Number.isFinite(filter.buildingCount) ? Math.trunc(filter.buildingCount) : 0;
+    return desiredMax >= this.countScriptStructuresForSide(normalizedSide, true);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerHasPower.
+   */
+  evaluateScriptPlayerHasPower(filter: { side: string }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    return this.hasSufficientPower(normalizedSide);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerHasComparisonPercentPower.
+   */
+  evaluateScriptPlayerHasComparisonPercentPower(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    percent: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const powerState = this.getSidePowerState(normalizedSide);
+    const totalProduction = powerState.energyProduction + powerState.powerBonus;
+    const supplyRatio = powerState.energyConsumption > 0
+      ? totalProduction / powerState.energyConsumption
+      : 1.0;
+    const testRatio = (Number.isFinite(filter.percent) ? filter.percent : 0) / 100.0;
+    return this.compareScriptNumeric(filter.comparison, supplyRatio, testRatio);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerHasComparisonValueExcessPower.
+   */
+  evaluateScriptPlayerHasComparisonValueExcessPower(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    kilowatts: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const powerState = this.getSidePowerState(normalizedSide);
+    const actualExcessKilowatts =
+      powerState.energyProduction + powerState.powerBonus - powerState.energyConsumption;
+    const desiredExcessKilowatts = Number.isFinite(filter.kilowatts) ? Math.trunc(filter.kilowatts) : 0;
+    return this.compareScriptNumeric(filter.comparison, actualExcessKilowatts, desiredExcessKilowatts);
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerUnitCondition
    * (Condition::PLAYER_HAS_OBJECT_COMPARISON).
    */
@@ -13517,6 +13620,29 @@ export class GameLogicSubsystem implements Subsystem {
     return count;
   }
 
+  private countScriptStructuresForSide(
+    normalizedSide: string,
+    requireVictoryFlag: boolean,
+  ): number {
+    let count = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (!entity.kindOf.has('STRUCTURE')) {
+        continue;
+      }
+      if (requireVictoryFlag && !entity.kindOf.has('MP_COUNT_FOR_VICTORY')) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
   private resolveScriptComparisonCode(comparison: ScriptComparisonInput): number | null {
     if (typeof comparison === 'number') {
       if (!Number.isFinite(comparison)) {
@@ -13544,33 +13670,38 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private compareScriptCount(
-    comparison: ScriptComparisonInput,
-    currentCount: number,
-    targetCount: number,
-  ): boolean {
+  private compareScriptNumeric(comparison: ScriptComparisonInput, left: number, right: number): boolean {
     const comparisonCode = this.resolveScriptComparisonCode(comparison);
     if (comparisonCode === null) {
       return false;
     }
 
-    const normalizedTargetCount = Number.isFinite(targetCount) ? Math.trunc(targetCount) : 0;
     switch (comparisonCode) {
       case 0:
-        return currentCount < normalizedTargetCount;
+        return left < right;
       case 1:
-        return currentCount <= normalizedTargetCount;
+        return left <= right;
       case 2:
-        return currentCount === normalizedTargetCount;
+        return left === right;
       case 3:
-        return currentCount >= normalizedTargetCount;
+        return left >= right;
       case 4:
-        return currentCount > normalizedTargetCount;
+        return left > right;
       case 5:
-        return currentCount !== normalizedTargetCount;
+        return left !== right;
       default:
         return false;
     }
+  }
+
+  private compareScriptCount(
+    comparison: ScriptComparisonInput,
+    currentCount: number,
+    targetCount: number,
+  ): boolean {
+    const normalizedCurrentCount = Number.isFinite(currentCount) ? Math.trunc(currentCount) : 0;
+    const normalizedTargetCount = Number.isFinite(targetCount) ? Math.trunc(targetCount) : 0;
+    return this.compareScriptNumeric(comparison, normalizedCurrentCount, normalizedTargetCount);
   }
 
   private normalizeSide(side?: string): string {

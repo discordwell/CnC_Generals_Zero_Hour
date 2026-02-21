@@ -27636,6 +27636,135 @@ describe('Script condition groundwork', () => {
       attackedBySide: 'China',
     })).toBe(true);
   });
+
+  it('evaluates player credits and building-count script conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+        makeObjectDef('Bunker', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 600, InitialHealth: 600 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CommandCenter', 10, 10),
+        makeMapObject('Bunker', 20, 10),
+        makeMapObject('Ranger', 30, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setSideCredits('America', 1000);
+
+    // Source parity: compare requested credits against current money.
+    expect(logic.evaluateScriptPlayerHasCredits({
+      side: 'America',
+      comparison: 'LESS_THAN',
+      credits: 900,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerHasCredits({
+      side: 'America',
+      comparison: 'GREATER',
+      credits: 1100,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerHasCredits({
+      side: 'America',
+      comparison: 'EQUAL',
+      credits: 1000,
+    })).toBe(true);
+
+    expect(logic.evaluateScriptPlayerHasNOrFewerBuildings({
+      side: 'America',
+      buildingCount: 2,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerHasNOrFewerBuildings({
+      side: 'America',
+      buildingCount: 1,
+    })).toBe(false);
+
+    expect(logic.evaluateScriptPlayerHasNOrFewerFactionBuildings({
+      side: 'America',
+      buildingCount: 1,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerHasNOrFewerFactionBuildings({
+      side: 'America',
+      buildingCount: 0,
+    })).toBe(false);
+  });
+
+  it('evaluates player power percentage and excess-power comparisons', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'PowerPlantA',
+          'America',
+          ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 })],
+          { EnergyBonus: 100 },
+        ),
+        makeObjectDef(
+          'BarracksA',
+          'America',
+          ['STRUCTURE'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 })],
+          { EnergyBonus: -80 },
+        ),
+        makeObjectDef(
+          'ConsumerC',
+          'China',
+          ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 })],
+          { EnergyBonus: -120 },
+        ),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlantA', 10, 10),
+        makeMapObject('BarracksA', 20, 10),
+        makeMapObject('ConsumerC', 30, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptPlayerHasPower({ side: 'America' })).toBe(true);
+    expect(logic.evaluateScriptPlayerHasPower({ side: 'China' })).toBe(false);
+
+    // America power ratio: 100 / 80 = 1.25 (125%).
+    expect(logic.evaluateScriptPlayerHasComparisonPercentPower({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      percent: 125,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerHasComparisonPercentPower({
+      side: 'America',
+      comparison: 'GREATER',
+      percent: 130,
+    })).toBe(false);
+
+    // America excess power: 100 - 80 = 20.
+    expect(logic.evaluateScriptPlayerHasComparisonValueExcessPower({
+      side: 'America',
+      comparison: 'EQUAL',
+      kilowatts: 20,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerHasComparisonValueExcessPower({
+      side: 'America',
+      comparison: 'LESS_THAN',
+      kilowatts: 0,
+    })).toBe(false);
+  });
 });
 
 describe('SubdualDamageHelper', () => {
