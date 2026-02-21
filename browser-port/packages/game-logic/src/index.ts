@@ -3673,6 +3673,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSciences = new Map<string, Set<string>>();
   /** Source parity: ScriptEngine::m_acquiredSciences (consumed by evaluateScienceAcquired). */
   private readonly sideScriptAcquiredSciences = new Map<string, Set<string>>();
+  /** Source parity: ScriptEngine::m_triggeredSpecialPowers script event list. */
+  private readonly sideScriptTriggeredSpecialPowerEvents = new Map<string, ScriptNamedEvent[]>();
   /** Source parity: ScriptEngine::m_completedUpgrades script event list. */
   private readonly sideScriptCompletedUpgradeEvents = new Map<string, ScriptNamedEvent[]>();
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
@@ -5807,6 +5809,54 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluatePlayerSpecialPowerFromUnitTriggered.
+   * Consumes the triggered-special-power script event when a match is found.
+   */
+  evaluateScriptPlayerSpecialPowerFromUnitTriggered(filter: {
+    side: string;
+    specialPowerName: string;
+    sourceEntityId?: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(filter.specialPowerName);
+    if (!normalizedSide || !normalizedSpecialPowerName) {
+      return false;
+    }
+
+    let sourceEntityId: number | null = null;
+    if (filter.sourceEntityId !== undefined) {
+      if (!Number.isFinite(filter.sourceEntityId)) {
+        return false;
+      }
+      sourceEntityId = Math.trunc(filter.sourceEntityId);
+      const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+      if (!sourceEntity || sourceEntity.destroyed) {
+        return false;
+      }
+    }
+
+    const events = this.sideScriptTriggeredSpecialPowerEvents.get(normalizedSide);
+    if (!events || events.length === 0) {
+      return false;
+    }
+
+    for (let index = 0; index < events.length; index += 1) {
+      const event = events[index]!;
+      if (event.name !== normalizedSpecialPowerName) {
+        continue;
+      }
+      if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
+        continue;
+      }
+
+      events.splice(index, 1);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateScienceAcquired.
    * Consumes the acquired-science script event when the condition is true.
    */
@@ -6404,6 +6454,27 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private recordScriptTriggeredSpecialPowerEvent(
+    normalizedSide: string,
+    specialPowerName: string,
+    sourceEntityId: number,
+  ): void {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName || !Number.isFinite(sourceEntityId)) {
+      return;
+    }
+
+    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
+    if (normalizedSourceEntityId <= 0) {
+      return;
+    }
+
+    this.getScriptTriggeredSpecialPowerEvents(normalizedSide).push({
+      name: normalizedSpecialPowerName,
+      sourceEntityId: normalizedSourceEntityId,
+    });
+  }
+
   private recordScriptCompletedUpgradeEvent(
     normalizedSide: string,
     upgradeName: string,
@@ -6547,6 +6618,16 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const created = new Set<string>();
     this.sideScriptAcquiredSciences.set(normalizedSide, created);
+    return created;
+  }
+
+  private getScriptTriggeredSpecialPowerEvents(normalizedSide: string): ScriptNamedEvent[] {
+    const existing = this.sideScriptTriggeredSpecialPowerEvents.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+    const created: ScriptNamedEvent[] = [];
+    this.sideScriptTriggeredSpecialPowerEvents.set(normalizedSide, created);
     return created;
   }
 
@@ -7005,6 +7086,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideKindOfProductionCostModifiers.clear();
     this.sideSciences.clear();
     this.sideScriptAcquiredSciences.clear();
+    this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptCompletedUpgradeEvents.clear();
     this.localPlayerScienceAvailability.clear();
     this.sidePowerBonus.clear();
@@ -15929,6 +16011,15 @@ export class GameLogicSubsystem implements Subsystem {
       targetX,
       targetZ,
     };
+
+    const normalizedSide = this.normalizeSide(sourceEntity.side);
+    if (normalizedSide) {
+      this.recordScriptTriggeredSpecialPowerEvent(
+        normalizedSide,
+        module.specialPowerTemplateName,
+        sourceEntityId,
+      );
+    }
 
     // Source parity: Eva SUPERWEAPON_LAUNCHED fires for FS_SUPERWEAPON entities.
     if (sourceEntity.kindOf.has('FS_SUPERWEAPON') && sourceEntity.side) {
@@ -33694,6 +33785,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
     this.sideScriptAcquiredSciences.clear();
+    this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptCompletedUpgradeEvents.clear();
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;

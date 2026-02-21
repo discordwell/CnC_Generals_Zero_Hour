@@ -27869,6 +27869,92 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates player-special-power-triggered with source filtering and event consumption', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceNoTarget', {
+            SpecialPowerTemplate: 'SpecialPowerTrigger',
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerTrigger', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_TRIGGER',
+      specialPowerName: 'SpecialPowerTrigger',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(false);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_TRIGGER',
+      specialPowerName: 'SpecialPowerTrigger',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    // Source parity: explicit source lookup fails if source object no longer exists.
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(false);
+
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+    })).toBe(false);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [
