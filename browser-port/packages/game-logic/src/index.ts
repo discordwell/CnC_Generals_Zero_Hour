@@ -1975,6 +1975,14 @@ interface MapEntity {
   // ── Source parity: PowerPlantUpdate — rod extension animation state machine ──
   powerPlantUpdateProfile: PowerPlantUpdateProfile | null;
   powerPlantUpdateState: PowerPlantUpdateState | null;
+
+  // ── Source parity: SpecialPowerCreate — starts special power timers on build complete ──
+  hasSpecialPowerCreate: boolean;
+  /**
+   * Source parity: Object::m_shroudRange — distance this entity actively shrouds enemy vision.
+   * Different from visionRange (sight distance) — this is the GPS Scrambler-style active shrouding.
+   */
+  shroudRange: number;
 }
 
 /**
@@ -3531,6 +3539,13 @@ export class GameLogicSubsystem implements Subsystem {
         );
       }
 
+      // Source parity: SpecialPowerCreate::onBuildComplete — start special power timers.
+      // Map-placed buildings are born complete, so fire immediately after entity creation.
+      // Dozer-built buildings fire from completeConstruction() when construction finishes.
+      if (mapEntity.hasSpecialPowerCreate && !mapEntity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+        this.onBuildCompleteSpecialPowerCreate(mapEntity);
+      }
+
       this.placementSummary.spawnedObjects++;
       if (resolved) {
         this.placementSummary.resolvedObjects++;
@@ -4375,6 +4390,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     weaponBonusConditionFlags: number;
     visionRange: number;
+    shroudRange: number;
     battlePlanDamageScalar: number;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
@@ -4419,6 +4435,7 @@ export class GameLogicSubsystem implements Subsystem {
       side: entity.side ?? '',
       weaponBonusConditionFlags: entity.weaponBonusConditionFlags,
       visionRange: entity.visionRange,
+      shroudRange: entity.shroudRange,
       battlePlanDamageScalar: entity.battlePlanDamageScalar,
     };
   }
@@ -5854,6 +5871,9 @@ export class GameLogicSubsystem implements Subsystem {
       // PowerPlantUpdate
       powerPlantUpdateProfile: this.extractPowerPlantUpdateProfile(objectDef),
       powerPlantUpdateState: null,
+      // SpecialPowerCreate
+      hasSpecialPowerCreate: this.hasModuleType(objectDef, 'SPECIALPOWERCREATE'),
+      shroudRange: 0,
     };
 
     // Source parity: PowerPlantUpdate init — extended=false, sleeping forever.
@@ -10789,12 +10809,9 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     let isSharedSynced = false;
-    const registry = this.iniDataRegistry;
-    if (registry !== null) {
-      const specialPowerDef = registry.getSpecialPower(specialPowerTemplateName);
-      if (specialPowerDef) {
-        isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
-      }
+    const specialPowerDef = this.resolveSpecialPowerDefByName(specialPowerTemplateName);
+    if (specialPowerDef) {
+      isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
     }
 
     // Source parity: UnpauseSpecialPowerUpgrade::upgradeImplementation() calls
@@ -10807,7 +10824,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ExperienceScalarUpgrade.cpp line 85 — adds XP scalar to experience tracker.
    */
   private applyExperienceScalarUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
-    if (!entity.experienceProfile || module.addXPScalar === 0) {
+    if (!entity.experienceProfile) {
       return false;
     }
     entity.experienceState.experienceScalar += module.addXPScalar;
@@ -10860,19 +10877,21 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: ActiveShroudUpgrade.cpp line 87 — sets entity's shroud clearing range.
+   * Source parity: ActiveShroudUpgrade.cpp line 87 — sets entity's active shroud range.
+   * C++ calls Object::setShroudRange() (m_shroudRange), NOT visionRange.
+   * This is the GPS Scrambler-style active shrouding distance, not sight distance.
    */
   private applyActiveShroudUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
-    if (module.newShroudRange <= 0) {
-      return false;
-    }
-    entity.visionRange = module.newShroudRange;
+    // Source parity: C++ does not guard against zero — it always applies.
+    entity.shroudRange = module.newShroudRange;
     return true;
   }
 
+  // DEVIATION: C++ does not override processUpgradeRemoval for ActiveShroudUpgrade.
+  // Upgrade removal only processes RemovesUpgrades in the base class. This removal
+  // method is a conservative addition for completeness.
   private removeActiveShroudUpgrade(entity: MapEntity, _module: UpgradeModuleProfile): void {
-    // Restore base vision range when the upgrade is removed.
-    entity.visionRange = entity.baseVisionRange;
+    entity.shroudRange = 0;
   }
 
   private applyCostModifierUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
@@ -15005,6 +15024,13 @@ export class GameLogicSubsystem implements Subsystem {
       building.forcedWeaponSlot = building.lockWeaponCreateSlot;
       building.weaponLockStatus = 'LOCKED_PERMANENTLY';
     }
+
+    // Source parity: SpecialPowerCreate::onBuildComplete — start special power timers.
+    // C++ file: SpecialPowerCreate.cpp line 58-72. Iterates all SpecialPowerModules on
+    // the object and calls onSpecialPowerCreation() which starts the recharge timer.
+    if (building.hasSpecialPowerCreate) {
+      this.onBuildCompleteSpecialPowerCreate(building);
+    }
   }
 
   private updatePendingEnterObjectActions(): void {
@@ -15247,12 +15273,67 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Look up a SpecialPowerDef by normalized (uppercased) name. The module stores names
+   * uppercased but the registry may store them in original case, so we try exact match
+   * first, then fall back to case-insensitive iteration.
+   */
+  private resolveSpecialPowerDefByName(normalizedName: string): ReturnType<IniDataRegistry['getSpecialPower']> {
+    const registry = this.iniDataRegistry;
+    if (!registry) return undefined;
+    // Fast path: exact match.
+    const exact = registry.getSpecialPower(normalizedName);
+    if (exact) return exact;
+    // Slow path: case-insensitive scan.
+    for (const [key, value] of registry.specialPowers) {
+      if (key.toUpperCase() === normalizedName) return value;
+    }
+    return undefined;
+  }
+
+  /**
+   * Source parity: SpecialPowerCreate::onBuildComplete (SpecialPowerCreate.cpp line 58-72).
+   * On building construction completion, iterates all SpecialPowerModules and calls
+   * onSpecialPowerCreation() which starts the recharge timer.
+   *
+   * C++ flow per SpecialPowerModule::onSpecialPowerCreation (line 202-236):
+   * 1. startPowerRecharge() — sets readyFrame = currentFrame + reloadTime
+   * 2. SharedNSync powers: expressSpecialPowerReadyFrame(currentFrame) → ready immediately
+   * 3. startsPaused modules: pauseCountdown(TRUE) — timer doesn't tick
+   */
+  private onBuildCompleteSpecialPowerCreate(entity: MapEntity): void {
+    for (const [, module] of entity.specialPowerModules) {
+      const specialPowerDef = this.resolveSpecialPowerDefByName(module.specialPowerTemplateName);
+      if (!specialPowerDef) continue;
+      const reloadFrames = this.msToLogicFrames(readNumericField(specialPowerDef.fields, ['ReloadTime']) ?? 0);
+      if (reloadFrames <= 0) continue;
+      const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
+
+      if (isSharedSynced) {
+        // Source parity: SharedNSync powers are ready immediately on build completion.
+        // C++ calls startPowerRecharge (sets timer), then expressSpecialPowerReadyFrame
+        // (overrides timer to current frame = ready now).
+        this.setSpecialPowerReadyFrame(module.specialPowerTemplateName, entity.id, true, this.frameCounter);
+      } else {
+        // Source parity: Non-shared powers start counting down from build completion.
+        // readyFrame = currentFrame + reloadTime.
+        const newReadyFrame = this.frameCounter + reloadFrames;
+        this.setSpecialPowerReadyFrame(module.specialPowerTemplateName, entity.id, false, newReadyFrame);
+      }
+
+      // Source parity: SpecialPowerModuleData::m_startsPaused — countdown is paused
+      // until activated by an upgrade (UnpauseSpecialPowerUpgrade). We don't currently
+      // model pause state, but the timer won't be visible until UI is wired up, so the
+      // ready frame value is still correct and will be overridden by unpause.
+    }
+  }
+
+  /**
    * Source parity: SabotageCommandCenterCrateCollide::executeCrateBehavior (line 142-150).
    * Resets all special power cooldowns on an entity to their full ReloadTime.
    */
   private resetEntitySpecialPowerCooldowns(entity: MapEntity): void {
     for (const [, module] of entity.specialPowerModules) {
-      const specialPowerDef = this.iniDataRegistry?.getSpecialPower(module.specialPowerTemplateName);
+      const specialPowerDef = this.resolveSpecialPowerDefByName(module.specialPowerTemplateName);
       if (!specialPowerDef) continue;
       const reloadFrames = this.msToLogicFrames(readNumericField(specialPowerDef.fields, ['ReloadTime']) ?? 0);
       if (reloadFrames <= 0) continue;
@@ -18136,6 +18217,12 @@ export class GameLogicSubsystem implements Subsystem {
     // not when the building is first placed.
     if (buildTimeFrames <= 0 && created.side) {
       this.emitEvaEvent('CONSTRUCTION_COMPLETE', created.side, 'own', created.id, objectDef.name);
+    }
+
+    // Source parity: SpecialPowerCreate::onBuildComplete — for instant-build buildings.
+    // Normal dozer-built buildings fire this from completeConstruction().
+    if (buildTimeFrames <= 0 && created.hasSpecialPowerCreate) {
+      this.onBuildCompleteSpecialPowerCreate(created);
     }
 
     return created;

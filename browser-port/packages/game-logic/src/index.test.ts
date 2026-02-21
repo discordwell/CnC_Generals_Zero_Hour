@@ -24868,7 +24868,7 @@ describe('ObjectCreationUpgrade', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('ActiveShroudUpgrade', () => {
-  it('sets entity vision range on upgrade application', () => {
+  it('sets entity shroud range (not vision range) on upgrade application', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('ShroudUnit', 'America', ['STRUCTURE'], [
@@ -24887,18 +24887,150 @@ describe('ActiveShroudUpgrade', () => {
     const priv = logic as unknown as {
       spawnedEntities: Map<number, {
         visionRange: number;
-        baseVisionRange: number;
+        shroudRange: number;
       }>;
     };
     const entity = priv.spawnedEntities.get(1)!;
 
+    // Source parity: ActiveShroudUpgrade sets shroudRange, NOT visionRange.
+    expect(entity.shroudRange).toBe(0);
     expect(entity.visionRange).toBe(200);
-    expect(entity.baseVisionRange).toBe(200);
 
     logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Shroud' });
     logic.update(1 / 30);
 
-    expect(entity.visionRange).toBe(500);
-    expect(entity.baseVisionRange).toBe(200); // base unchanged
+    expect(entity.shroudRange).toBe(500);
+    expect(entity.visionRange).toBe(200); // visionRange unchanged
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SpecialPowerCreate
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('SpecialPowerCreate', () => {
+  it('starts non-shared special power countdown when building completes construction', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SuperweaponBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'SpecialPowerCreate ModuleTag_SPC', {}),
+          makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SuperWeapon', {
+            SpecialPowerTemplate: 'SuperweaponParticleCannon',
+          }),
+        ], { BuildTime: 0.5 }),
+        makeObjectDef('Dozer', 'America', ['DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SuperweaponParticleCannon', { ReloadTime: 6000 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Place dozer right at the build site so it doesn't need to walk.
+    logic.loadMapObjects(makeMap([makeMapObject('Dozer', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+
+    // Place a building via dozer.
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'SuperweaponBuilding',
+      targetPosition: [100, 0, 100] as const,
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      shortcutSpecialPowerSourceByName: Map<string, Map<number, number>>;
+      frameCounter: number;
+    };
+
+    // Before construction completes: no special power timer set.
+    const beforeSources = priv.shortcutSpecialPowerSourceByName.get('SUPERWEAPONPARTICLECANNON');
+    expect(beforeSources?.size ?? 0).toBe(0);
+
+    // Fast-forward construction to completion (0.5s = 15 frames + margin).
+    for (let i = 0; i < 25; i++) {
+      logic.update(1 / 30);
+    }
+
+    // After construction completes: special power timer should be set.
+    const afterSources = priv.shortcutSpecialPowerSourceByName.get('SUPERWEAPONPARTICLECANNON');
+    expect(afterSources).toBeDefined();
+    expect(afterSources!.size).toBe(1);
+
+    // Non-shared power: readyFrame = completionFrame + reloadFrames.
+    // ReloadTime 6000ms = 180 frames. Ready frame should be ~completionFrame + 180.
+    const readyFrame = afterSources!.values().next().value;
+    expect(readyFrame).toBeGreaterThan(priv.frameCounter);
+  });
+
+  it('map-placed building with SpecialPowerCreate starts timer immediately', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SuperweaponBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'SpecialPowerCreate ModuleTag_SPC', {}),
+          makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SuperWeapon', {
+            SpecialPowerTemplate: 'SuperweaponParticleCannon',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SuperweaponParticleCannon', { ReloadTime: 6000 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('SuperweaponBuilding', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+
+    const priv = logic as unknown as {
+      shortcutSpecialPowerSourceByName: Map<string, Map<number, number>>;
+      frameCounter: number;
+    };
+
+    // Map-placed building born complete: timer starts immediately at creation.
+    const sources = priv.shortcutSpecialPowerSourceByName.get('SUPERWEAPONPARTICLECANNON');
+    expect(sources).toBeDefined();
+    expect(sources!.size).toBe(1);
+    const readyFrame = sources!.values().next().value;
+    // ReloadTime 6000ms = 180 frames. Ready at frame 0 + 180 = 180.
+    expect(readyFrame).toBe(180);
+  });
+
+  it('shared synced power is ready immediately on build complete', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+          makeBlock('Behavior', 'SpecialPowerCreate ModuleTag_SPC', {}),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_GenPower', {
+            SpecialPowerTemplate: 'GeneralsPower_Paladin',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('GeneralsPower_Paladin', {
+          ReloadTime: 3000,
+          SharedSyncedTimer: true,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('CommandCenter', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+
+    const priv = logic as unknown as {
+      shortcutSpecialPowerSourceByName: Map<string, Map<number, number>>;
+      sharedShortcutSpecialPowerReadyFrames: Map<string, number>;
+      frameCounter: number;
+    };
+
+    // SharedNSync power: ready immediately (readyFrame = currentFrame = 0).
+    const sharedReady = priv.sharedShortcutSpecialPowerReadyFrames.get('GENERALSPOWER_PALADIN');
+    expect(sharedReady).toBe(0);
   });
 });
