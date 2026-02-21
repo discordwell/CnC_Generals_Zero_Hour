@@ -1352,10 +1352,27 @@ interface PendingEnterObjectActionState {
   action: EnterObjectCommand['action'];
 }
 
+interface PendingRepairDockActionState {
+  dockObjectId: number;
+  /**
+   * Source parity: RepairDockUpdate::m_lastRepair per-dock cache.
+   * We cache the dock object id that initialized healthToAddPerFrame.
+   * 0 = not initialized.
+   */
+  lastRepairDockObjectId: number;
+  /** Source parity: RepairDockUpdate::m_healthToAddPerFrame. */
+  healthToAddPerFrame: number;
+}
+
 interface PendingCombatDropActionState {
   targetObjectId: number | null;
   targetX: number;
   targetZ: number;
+}
+
+interface RepairDockProfile {
+  /** Source parity: RepairDockUpdateModuleData::m_framesForFullHeal (duration real in frames). */
+  timeForFullHealFrames: number;
 }
 
 interface MapEntity {
@@ -1501,6 +1518,7 @@ interface MapEntity {
   pathfindPosCell: { x: number; z: number } | null;
   supplyWarehouseProfile: SupplyWarehouseProfile | null;
   supplyTruckProfile: SupplyTruckProfile | null;
+  repairDockProfile: RepairDockProfile | null;
   isSupplyCenter: boolean;
   experienceProfile: ExperienceProfile | null;
   experienceState: ExperienceState;
@@ -3495,6 +3513,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly disabledHackedStatusByEntityId = new Map<number, number>();
   private readonly disabledEmpStatusByEntityId = new Map<number, number>();
   private readonly pendingEnterObjectActions = new Map<number, PendingEnterObjectActionState>();
+  private readonly pendingRepairDockActions = new Map<number, PendingRepairDockActionState>();
   private readonly pendingGarrisonActions = new Map<number, number>();
   /** Source parity: TransportContain — passenger ID → transport ID for deferred enter. */
   private readonly pendingTransportActions = new Map<number, number>();
@@ -3936,6 +3955,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateCrushCollisions();
     this.updateRailedTransport();
     this.updatePendingEnterObjectActions();
+    this.updatePendingRepairDockActions();
     this.updatePendingGarrisonActions();
     this.updatePendingTransportActions();
     this.updatePendingTunnelActions();
@@ -5503,6 +5523,7 @@ export class GameLogicSubsystem implements Subsystem {
     const containProfile = this.extractContainProfile(objectDef);
     const supplyWarehouseProfile = this.extractSupplyWarehouseProfile(objectDef);
     const supplyTruckProfile = this.extractSupplyTruckProfile(objectDef);
+    const repairDockProfile = this.extractRepairDockProfile(objectDef);
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
     const experienceProfile = this.extractExperienceProfile(objectDef);
     const jetAIProfile = this.extractJetAIProfile(objectDef);
@@ -5677,6 +5698,7 @@ export class GameLogicSubsystem implements Subsystem {
       pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
       supplyWarehouseProfile,
       supplyTruckProfile,
+      repairDockProfile,
       isSupplyCenter,
       experienceProfile,
       experienceState: createExperienceStateImpl(),
@@ -8001,6 +8023,46 @@ export class GameLogicSubsystem implements Subsystem {
             supplyCenterActionDelayFrames: this.msToLogicFrames(supplyCenterActionDelayMs),
             supplyWarehouseActionDelayFrames: this.msToLogicFrames(supplyWarehouseActionDelayMs),
             supplyWarehouseScanDistance: Math.max(0, scanDistance),
+          };
+          return;
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Source parity: RepairDockUpdateModuleData::m_framesForFullHeal.
+   * INI field: TimeForFullHeal (duration real, milliseconds -> frames).
+   */
+  private extractRepairDockProfile(objectDef: ObjectDef | undefined): RepairDockProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: RepairDockProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'REPAIRDOCKUPDATE') {
+          const timeForFullHealMs = readNumericField(block.fields, ['TimeForFullHeal']) ?? 0;
+          // Source parity: INI::parseDurationReal stores fractional frame values.
+          const framesForFullHeal = timeForFullHealMs > 0
+            ? this.msToLogicFramesReal(timeForFullHealMs)
+            : 1;
+          profile = {
+            timeForFullHealFrames: Math.max(1, framesForFullHeal),
           };
           return;
         }
@@ -12398,6 +12460,13 @@ export class GameLogicSubsystem implements Subsystem {
     return Math.max(1, Math.ceil(milliseconds / LOGIC_FRAME_MS));
   }
 
+  private msToLogicFramesReal(milliseconds: number): number {
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+      return 0;
+    }
+    return milliseconds / LOGIC_FRAME_MS;
+  }
+
   private isMobileObject(objectDef: ObjectDef, kinds: Set<string>): boolean {
     const explicit = readBooleanField(objectDef.fields, ['IsMobile', 'CanMove', 'Mobile']);
     if (explicit !== null) {
@@ -13839,6 +13908,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.hackInternetStateByEntityId.delete(entityId);
     this.hackInternetPendingCommandByEntityId.delete(entityId);
     this.pendingEnterObjectActions.delete(entityId);
+    this.pendingRepairDockActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
@@ -14259,6 +14329,8 @@ export class GameLogicSubsystem implements Subsystem {
         return this.canExecuteConvertToCarBombEnterAction(source, target);
       case 'sabotageBuilding':
         return this.resolveSabotageBuildingProfile(source, target) !== null;
+      case 'repairVehicle':
+        return this.canExecuteRepairVehicleEnterAction(source, target);
       default:
         return false;
     }
@@ -15411,6 +15483,85 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: AIDockProcessDockState + RepairDockUpdate::action.
+   * While docked, heal docker each frame by precomputed amount, and fully heal its drone.
+   */
+  private updatePendingRepairDockActions(): void {
+    for (const [dockerId, pending] of this.pendingRepairDockActions.entries()) {
+      const docker = this.spawnedEntities.get(dockerId);
+      const dock = this.spawnedEntities.get(pending.dockObjectId);
+      if (!docker || !dock || docker.destroyed || dock.destroyed) {
+        this.pendingRepairDockActions.delete(dockerId);
+        continue;
+      }
+
+      if (!this.canExecuteRepairVehicleEnterAction(docker, dock)) {
+        this.pendingRepairDockActions.delete(dockerId);
+        continue;
+      }
+
+      const distance = Math.hypot(dock.x - docker.x, dock.z - docker.z);
+      const reachDistance = this.resolveEntityInteractionDistance(docker, dock);
+      if (distance > reachDistance) {
+        if (!docker.moving) {
+          this.issueMoveTo(docker.id, dock.x, dock.z);
+        }
+        continue;
+      }
+
+      if (docker.moving) {
+        this.stopEntity(docker.id);
+      }
+
+      if (docker.health >= docker.maxHealth) {
+        this.pendingRepairDockActions.delete(dockerId);
+        continue;
+      }
+
+      const profile = dock.repairDockProfile;
+      if (!profile) {
+        this.pendingRepairDockActions.delete(dockerId);
+        continue;
+      }
+
+      if (pending.lastRepairDockObjectId !== dock.id) {
+        pending.lastRepairDockObjectId = dock.id;
+        pending.healthToAddPerFrame = (docker.maxHealth - docker.health) / profile.timeForFullHealFrames;
+      }
+
+      if (pending.healthToAddPerFrame > 0) {
+        docker.health = Math.min(docker.maxHealth, docker.health + pending.healthToAddPerFrame);
+        this.clearPoisonFromEntity(docker);
+      }
+
+      const drone = this.findProducedDroneForDocker(docker.id);
+      if (drone && drone.health < drone.maxHealth) {
+        drone.health = drone.maxHealth;
+        this.clearPoisonFromEntity(drone);
+      }
+
+      if (docker.health >= docker.maxHealth) {
+        this.pendingRepairDockActions.delete(dockerId);
+      }
+    }
+  }
+
+  private findProducedDroneForDocker(dockerId: number): MapEntity | null {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (!entity.kindOf.has('DRONE')) {
+        continue;
+      }
+      if (entity.producerEntityId === dockerId) {
+        return entity;
+      }
+    }
+    return null;
+  }
+
   private resolvePendingEnterObjectAction(
     source: MapEntity,
     target: MapEntity,
@@ -15432,7 +15583,64 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (action === 'sabotageBuilding') {
       this.resolveSabotageBuildingEnterAction(source, target);
+      return;
     }
+
+    if (action === 'repairVehicle') {
+      this.resolveRepairVehicleEnterAction(source, target);
+    }
+  }
+
+  private canExecuteRepairVehicleEnterAction(source: MapEntity, target: MapEntity): boolean {
+    const targetProfile = target.repairDockProfile;
+    if (!targetProfile) {
+      return false;
+    }
+    if (this.isEntityContained(source)) {
+      return false;
+    }
+
+    // Source parity: repair docks are side-owned service structures.
+    const sourceSide = this.normalizeSide(source.side);
+    const targetSide = this.normalizeSide(target.side);
+    if (!sourceSide || sourceSide !== targetSide) {
+      return false;
+    }
+
+    // Source parity subset: repair docks service ground vehicles.
+    const sourceKindOf = this.resolveEntityKindOfSet(source);
+    if (!sourceKindOf.has('VEHICLE')) {
+      return false;
+    }
+
+    // Source parity: each dock services one docker at a time.
+    for (const [otherDockerId, pending] of this.pendingRepairDockActions.entries()) {
+      if (pending.dockObjectId !== target.id || otherDockerId === source.id) {
+        continue;
+      }
+      const otherDocker = this.spawnedEntities.get(otherDockerId);
+      if (otherDocker && !otherDocker.destroyed) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private resolveRepairVehicleEnterAction(source: MapEntity, target: MapEntity): void {
+    if (!this.canExecuteRepairVehicleEnterAction(source, target)) {
+      return;
+    }
+
+    // Source parity: entering process-dock state halts movement while action runs.
+    this.stopEntity(source.id);
+    this.clearAttackTarget(source.id);
+
+    this.pendingRepairDockActions.set(source.id, {
+      dockObjectId: target.id,
+      lastRepairDockObjectId: 0,
+      healthToAddPerFrame: 0,
+    });
   }
 
   private resolveHijackVehicleEnterAction(source: MapEntity, target: MapEntity): void {
@@ -27005,6 +27213,11 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingEnterObjectActions.delete(sourceId);
       }
     }
+    for (const [dockerId, pendingAction] of this.pendingRepairDockActions.entries()) {
+      if (pendingAction.dockObjectId === entityId || dockerId === entityId) {
+        this.pendingRepairDockActions.delete(dockerId);
+      }
+    }
     for (const [sourceId, targetBuildingId] of this.pendingGarrisonActions.entries()) {
       if (targetBuildingId === entityId) {
         this.pendingGarrisonActions.delete(sourceId);
@@ -27644,6 +27857,11 @@ export class GameLogicSubsystem implements Subsystem {
     for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
       if (pendingAction.targetObjectId === entityId) {
         this.pendingEnterObjectActions.delete(sourceId);
+      }
+    }
+    for (const [dockerId, pendingAction] of this.pendingRepairDockActions.entries()) {
+      if (pendingAction.dockObjectId === entityId || dockerId === entityId) {
+        this.pendingRepairDockActions.delete(dockerId);
       }
     }
     for (const [sourceId, targetBuildingId] of this.pendingGarrisonActions.entries()) {
@@ -29757,6 +29975,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.hackInternetStateByEntityId.clear();
     this.hackInternetPendingCommandByEntityId.clear();
     this.pendingEnterObjectActions.clear();
+    this.pendingRepairDockActions.clear();
     this.pendingCombatDropActions.clear();
     this.pendingGarrisonActions.clear();
     this.pendingTransportActions.clear();

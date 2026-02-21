@@ -23620,6 +23620,193 @@ describe('AssistedTargetingUpdate', () => {
   });
 });
 
+describe('RepairDockUpdate', () => {
+  function makeRepairDockBundle(timeForFullHealMs = 3000) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('RepairDock', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+          makeBlock('Behavior', 'RepairDockUpdate ModuleTag_Repair', {
+            TimeForFullHeal: timeForFullHealMs,
+          }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+        makeObjectDef('DamagedVehicle', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 150 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL VehicleLocomotor', {}),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 4,
+          GeometryMinorRadius: 4,
+        }),
+        makeObjectDef('SupportDrone', 'America', ['DRONE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 25 }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 150 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL VehicleLocomotor', {}),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 4,
+          GeometryMinorRadius: 4,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('VehicleLocomotor', 180),
+      ],
+    });
+  }
+
+  it('extracts RepairDockUpdate profile from INI', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('RepairDock', 55, 55)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        repairDockProfile: { timeForFullHealFrames: number } | null;
+      }>;
+    };
+
+    const dock = priv.spawnedEntities.get(1)!;
+    expect(dock.repairDockProfile).not.toBeNull();
+    // Source parity: parseDurationReal converts 3000ms to 90.0 frames at 30fps.
+    expect(dock.repairDockProfile!.timeForFullHealFrames).toBeCloseTo(90, 5);
+  });
+
+  it('heals docked vehicle over configured full-heal duration then completes docking', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepairDock', 55, 55),     // id 1
+        makeMapObject('DamagedVehicle', 55, 55), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        maxHealth: number;
+      }>;
+      pendingRepairDockActions: Map<number, {
+        dockObjectId: number;
+        healthToAddPerFrame: number;
+        lastRepairDockObjectId: number;
+      }>;
+    };
+
+    const vehicle = priv.spawnedEntities.get(2)!;
+    expect(vehicle.health).toBe(150);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+
+    // First update should resolve enter action and apply first repair tick.
+    logic.update(1 / 30);
+    expect(vehicle.health).toBeGreaterThan(150);
+    expect(priv.pendingRepairDockActions.get(2)?.dockObjectId).toBe(1);
+
+    // 3000ms -> 90 frames to full heal from initial health.
+    for (let i = 0; i < 120; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(vehicle.health).toBeCloseTo(vehicle.maxHealth, 5);
+    expect(priv.pendingRepairDockActions.has(2)).toBe(false);
+  });
+
+  it('fully heals associated drone each dock action tick', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepairDock', 55, 55),     // id 1
+        makeMapObject('DamagedVehicle', 55, 55), // id 2
+        makeMapObject('SupportDrone', 65, 55),   // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        maxHealth: number;
+        producerEntityId: number;
+      }>;
+    };
+    const drone = priv.spawnedEntities.get(3)!;
+    drone.producerEntityId = 2;
+    expect(drone.health).toBe(25);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+
+    logic.update(1 / 30);
+    expect(drone.health).toBe(drone.maxHealth);
+  });
+
+  it('rejects repairVehicle enter actions from enemy units', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepairDock', 55, 55),    // id 1
+        makeMapObject('EnemyVehicle', 75, 55),  // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number }>;
+      pendingRepairDockActions: Map<number, unknown>;
+    };
+
+    const enemy = priv.spawnedEntities.get(2)!;
+    expect(enemy.health).toBe(150);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(enemy.health).toBe(150);
+    expect(priv.pendingRepairDockActions.has(2)).toBe(false);
+  });
+});
+
 describe('SupplyWarehouseCripplingBehavior', () => {
   function makeCripplingBundle() {
     return makeBundle({
