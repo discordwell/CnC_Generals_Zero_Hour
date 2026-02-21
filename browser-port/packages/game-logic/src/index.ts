@@ -9493,7 +9493,8 @@ export class GameLogicSubsystem implements Subsystem {
           }
 
           const deathWeaponName = readStringField(block.fields, ['DeathWeapon']) ?? '';
-          const startsActive = readBooleanField(block.fields, ['StartsActive']) ?? true;
+          // Source parity: C++ UpgradeMuxData::m_initiallyActive defaults to false.
+          const startsActive = readBooleanField(block.fields, ['StartsActive']) ?? false;
 
           const triggeredBy: string[] = [];
           const triggeredByStr = readStringField(block.fields, ['TriggeredBy']);

@@ -9697,6 +9697,7 @@ describe('fire weapon when dead behavior', () => {
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('Behavior', 'FireWeaponWhenDeadBehavior ModuleTag_FWWD', {
             DeathWeapon: 'DeathExplosion',
+            StartsActive: 'Yes',
           }),
         ]),
         makeObjectDef('Bystander', 'China', ['VEHICLE'], [
