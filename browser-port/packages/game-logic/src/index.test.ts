@@ -20445,9 +20445,11 @@ describe('GrantStealthBehavior', () => {
         ]),
         makeObjectDef('FriendlyTank', 'America', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', { InnateStealth: 'No' }),
         ]),
         makeObjectDef('EnemyTank', 'GLA', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', { InnateStealth: 'No' }),
         ]),
       ],
     });
@@ -20509,9 +20511,11 @@ describe('GrantStealthBehavior', () => {
         ]),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', { InnateStealth: 'No' }),
         ]),
         makeObjectDef('Crusader', 'America', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', { InnateStealth: 'No' }),
         ]),
       ],
     });
@@ -20557,9 +20561,11 @@ describe('GrantStealthBehavior', () => {
         ]),
         makeObjectDef('CloseUnit', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', { InnateStealth: 'No' }),
         ]),
         makeObjectDef('FarUnit', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', { InnateStealth: 'No' }),
         ]),
       ],
     });
@@ -20591,5 +20597,266 @@ describe('GrantStealthBehavior', () => {
     // After 5 more frames (radius = 60), far unit at 50 is now in range.
     for (let i = 0; i < 5; i++) logic.update(1 / 30);
     expect(far.objectStatusFlags.has('CAN_STEALTH')).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// NeutronMissileSlowDeathUpdate
+// ────────────────────────────────────────────────────────────────────────────
+describe('NeutronMissileSlowDeathUpdate', () => {
+  function makeNeutronMissileBundle(blastFields: Record<string, unknown> = {}) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('NeutronMissile', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'NeutronMissileSlowDeathBehavior ModuleTag_NM', {
+            DestructionDelay: 3000, // 90 frames — missile persists this long
+            SinkRate: 0,
+            ProbabilityModifier: 10,
+            Blast1Enabled: 'Yes',
+            Blast1Delay: 0, // 0ms = fires immediately on activation
+            Blast1ScorchDelay: 0,
+            Blast1InnerRadius: 20,
+            Blast1OuterRadius: 100,
+            Blast1MaxDamage: 200,
+            Blast1MinDamage: 50,
+            Blast1ToppleSpeed: 0.3,
+            Blast2Enabled: 'Yes',
+            Blast2Delay: 300, // 300ms = 9 frames after activation
+            Blast2ScorchDelay: 300,
+            Blast2InnerRadius: 50,
+            Blast2OuterRadius: 200,
+            Blast2MaxDamage: 150,
+            Blast2MinDamage: 30,
+            Blast2ToppleSpeed: 0,
+            ...blastFields,
+          }),
+        ]),
+        makeObjectDef('Target', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('FarTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('Tree', 'Neutral', ['SHRUBBERY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        ]),
+        makeObjectDef('Killer', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'NukeKill'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('NukeKill', {
+          AttackRange: 300,
+          PrimaryDamage: 9999,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+  }
+
+  it('fires sequential blast waves with radius damage after slow death activation', () => {
+    const bundle = makeNeutronMissileBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronMissile', 50, 50),
+        makeMapObject('Target', 65, 50), // 15 units away — inside inner radius of blast 1
+        makeMapObject('Killer', 100, 100),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; maxHealth: number;
+        slowDeathState: unknown; neutronMissileSlowDeathState: unknown;
+        slowDeathProfiles: unknown[];
+      }>;
+    };
+
+    // Kill the missile to trigger slow death.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+
+    // Advance enough frames for the attacker to fire and kill the missile.
+    let enteredSlowDeath = false;
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      const missile = priv.spawnedEntities.get(1);
+      if (missile && missile.slowDeathState) {
+        enteredSlowDeath = true;
+        break;
+      }
+    }
+    expect(enteredSlowDeath).toBe(true);
+
+    const missile = priv.spawnedEntities.get(1)!;
+    expect(missile.neutronMissileSlowDeathState).not.toBeNull();
+
+    // Capture target reference and health.
+    const target = priv.spawnedEntities.get(2)!;
+    const healthBefore = target.health;
+
+    // Advance frames until blast 1 fires.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const healthAfterBlast1 = target.health;
+    expect(healthAfterBlast1).toBeLessThan(healthBefore);
+    // Target at 15 units is inside innerRadius=20, so takes full maxDamage=200.
+    expect(healthBefore - healthAfterBlast1).toBe(200);
+  });
+
+  it('applies damage falloff based on inner/outer radius', () => {
+    const bundle = makeNeutronMissileBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronMissile', 50, 50),
+        makeMapObject('Target', 110, 50), // 60 units away — between inner (20) and outer (100)
+        makeMapObject('Killer', 200, 200),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+        slowDeathState: unknown;
+      }>;
+    };
+
+    // Kill missile — loop until slow death activates.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(1)?.slowDeathState) break;
+    }
+    expect(priv.spawnedEntities.get(1)!.slowDeathState).not.toBeNull();
+
+    const target = priv.spawnedEntities.get(2)!;
+    const healthBefore = target.health;
+    // Advance until blast 1 fires.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const damage = healthBefore - target.health;
+    // Distance 60, innerRadius=20, outerRadius=100: percent = 1 - (40/80.01) ≈ 0.5
+    // damage = 200 * 0.5 = 100, clamped above minDamage=50.
+    expect(damage).toBeGreaterThan(50);
+    expect(damage).toBeLessThan(200);
+  });
+
+  it('fires second blast wave after configured delay', () => {
+    const bundle = makeNeutronMissileBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronMissile', 50, 50),
+        makeMapObject('Target', 80, 50), // 30 units away — inside blast2 innerRadius=50
+        makeMapObject('Killer', 200, 200),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+        slowDeathState: unknown; neutronMissileSlowDeathState: { activationFrame: number } | null;
+      }>;
+    };
+
+    // Kill missile — loop until slow death activates.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    let activationFrameCount = 0;
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      activationFrameCount++;
+      if (priv.spawnedEntities.get(1)?.slowDeathState) break;
+    }
+    expect(priv.spawnedEntities.get(1)!.slowDeathState).not.toBeNull();
+
+    const target = priv.spawnedEntities.get(2)!;
+    // Wait for blast 1 to fire (needs 2 frames after activation: set frame + elapsed > 0).
+    for (let i = 0; i < 3; i++) logic.update(1 / 30);
+    const healthAfterBlast1 = target.health;
+    expect(healthAfterBlast1).toBeLessThan(500); // Blast 1 should have fired.
+
+    // Now wait for blast 2 delay = 300ms = 9 frames from activation.
+    // We need the elapsed count from activationFrame to exceed 9.
+    // Advance frames carefully: we already ran 3 frames after slow death.
+    // Blast 2 fires when elapsed > 9.
+    // Run 7 more frames to reach elapsed ~10 or so.
+    for (let i = 0; i < 7; i++) logic.update(1 / 30);
+    const healthBeforeLastFrame = target.health;
+
+    // By now blast 2 should have fired (elapsed = 10+ > 9).
+    // Check that blast 2 dealt additional damage.
+    expect(target.health).toBeLessThan(healthAfterBlast1);
+  });
+
+  it('scorch blast sets BURNED status on entities in range', () => {
+    // Use a high-HP target so blast damage doesn't kill it before we can check scorch.
+    const bundle = makeNeutronMissileBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronMissile', 50, 50),
+        makeMapObject('Target', 70, 50), // 20 units away — inside outerRadius, has 500 HP
+        makeMapObject('Killer', 200, 200),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; objectStatusFlags: Set<string>;
+        slowDeathState: unknown;
+      }>;
+    };
+
+    // Kill missile — loop until slow death activates.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(1)?.slowDeathState) break;
+    }
+    expect(priv.spawnedEntities.get(1)!.slowDeathState).not.toBeNull();
+
+    const target = priv.spawnedEntities.get(2)!;
+    // Advance until scorch blast fires (scorchDelay=0, fires after activation frame).
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    expect(target.objectStatusFlags.has('BURNED')).toBe(true);
   });
 });

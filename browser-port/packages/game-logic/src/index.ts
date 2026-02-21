@@ -1630,6 +1630,10 @@ interface MapEntity {
   grantStealthProfile: GrantStealthProfile | null;
   grantStealthCurrentRadius: number;
 
+  // ── Source parity: NeutronMissileSlowDeathBehavior — timed blast wave sequence ──
+  neutronMissileSlowDeathProfile: NeutronMissileSlowDeathProfile | null;
+  neutronMissileSlowDeathState: NeutronMissileSlowDeathState | null;
+
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
@@ -2811,6 +2815,36 @@ interface NeutronBlastProfile {
   affectAirborne: boolean;
   /** Whether allied units are affected. Default true. */
   affectAllies: boolean;
+}
+
+/**
+ * Source parity: NeutronMissileSlowDeathBehavior — extends SlowDeathBehavior with
+ * sequential timed blast waves for the China Nuke superweapon missile object.
+ * Up to 9 blast rings with configurable delay, radius, damage falloff, and topple.
+ * Also fires "scorch blasts" at separate delays (visual BURNED model condition).
+ * C++ file: NeutronMissileSlowDeathUpdate.h/cpp.
+ */
+interface NeutronMissileBlastInfo {
+  enabled: boolean;
+  /** Frames after activation before this blast fires. */
+  delay: number;
+  /** Frames after activation before this scorch blast fires. */
+  scorchDelay: number;
+  innerRadius: number;
+  outerRadius: number;
+  maxDamage: number;
+  minDamage: number;
+  toppleSpeed: number;
+}
+
+interface NeutronMissileSlowDeathProfile {
+  blasts: NeutronMissileBlastInfo[];
+}
+
+interface NeutronMissileSlowDeathState {
+  activationFrame: number;
+  completedBlasts: boolean[];
+  completedScorchBlasts: boolean[];
 }
 
 /**
@@ -5199,6 +5233,9 @@ export class GameLogicSubsystem implements Subsystem {
       // Grant stealth (GPS Scrambler expanding radius)
       grantStealthProfile: this.extractGrantStealthProfile(objectDef),
       grantStealthCurrentRadius: 0,
+      // Neutron missile slow death (timed blast waves)
+      neutronMissileSlowDeathProfile: this.extractNeutronMissileSlowDeathProfile(objectDef),
+      neutronMissileSlowDeathState: null,
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -9235,6 +9272,45 @@ export class GameLogicSubsystem implements Subsystem {
         radiusGrowRate: readNumericField(block.fields, ['RadiusGrowRate']) ?? 10,
         kindOf: kindOfStr ? new Set(kindOfStr.split(/\s+/).map(s => s.toUpperCase())) : null,
       };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (!profile && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: NeutronMissileSlowDeathBehavior — extract blast wave profile from INI.
+   * C++ file: NeutronMissileSlowDeathUpdate.h (buildFieldParse).
+   * Up to 9 blast waves with independent delay/radius/damage/topple.
+   */
+  private extractNeutronMissileSlowDeathProfile(objectDef: ObjectDef | undefined): NeutronMissileSlowDeathProfile | null {
+    if (!objectDef) return null;
+    let profile: NeutronMissileSlowDeathProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'DIE' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'NEUTRONMISSILESLOWDEATHBEHAVIOR') return;
+      const blasts: NeutronMissileBlastInfo[] = [];
+      // Source parity: MAX_NEUTRON_BLASTS = 9 (indices 1-9 in INI).
+      for (let i = 1; i <= 9; i++) {
+        const prefix = `Blast${i}`;
+        const enabled = (readStringField(block.fields, [`${prefix}Enabled`]) ?? 'No').toUpperCase() === 'YES';
+        blasts.push({
+          enabled,
+          delay: this.msToLogicFrames(readNumericField(block.fields, [`${prefix}Delay`]) ?? 0),
+          scorchDelay: this.msToLogicFrames(readNumericField(block.fields, [`${prefix}ScorchDelay`]) ?? 0),
+          innerRadius: readNumericField(block.fields, [`${prefix}InnerRadius`]) ?? 0,
+          outerRadius: readNumericField(block.fields, [`${prefix}OuterRadius`]) ?? 0,
+          maxDamage: readNumericField(block.fields, [`${prefix}MaxDamage`]) ?? 0,
+          minDamage: readNumericField(block.fields, [`${prefix}MinDamage`]) ?? 0,
+          toppleSpeed: readNumericField(block.fields, [`${prefix}ToppleSpeed`]) ?? 0,
+        });
+      }
+      profile = { blasts };
     };
     for (const block of objectDef.blocks) visitBlock(block);
     if (!profile && objectDef.parentDef) {
@@ -14176,6 +14252,9 @@ export class GameLogicSubsystem implements Subsystem {
    * C++ calls StealthUpdate::receiveGrant() which sets m_enabled=true.
    */
   private grantStealthToEntity(target: MapEntity, profile: GrantStealthProfile): void {
+    // Source parity: C++ checks obj->getStealth() != null — only entities with StealthUpdate can receive stealth.
+    if (!target.stealthProfile) return;
+
     // Source parity: KindOf filter — null means all types accepted.
     if (profile.kindOf) {
       const targetKindOf = this.resolveEntityKindOfSet(target);
@@ -22994,6 +23073,16 @@ export class GameLogicSubsystem implements Subsystem {
     // Execute INITIAL phase.
     this.executeSlowDeathPhase(entity, profile, 0);
 
+    // Source parity: NeutronMissileSlowDeathBehavior — initialize blast state when slow death activates.
+    if (entity.neutronMissileSlowDeathProfile) {
+      const nmProfile = entity.neutronMissileSlowDeathProfile;
+      entity.neutronMissileSlowDeathState = {
+        activationFrame: 0, // Will be set to actual frame on first update tick.
+        completedBlasts: nmProfile.blasts.map(() => false),
+        completedScorchBlasts: nmProfile.blasts.map(() => false),
+      };
+    }
+
     return true;
   }
 
@@ -23939,6 +24028,86 @@ export class GameLogicSubsystem implements Subsystem {
         this.markEntityDestroyed(entity.id, -1);
         continue;
       }
+
+      // Source parity: NeutronMissileSlowDeathBehavior::update — timed blast waves.
+      // Runs after base SlowDeathBehavior logic, only while slow death is activated.
+      const nmState = entity.neutronMissileSlowDeathState;
+      const nmProfile = entity.neutronMissileSlowDeathProfile;
+      if (nmState && nmProfile) {
+        // Record activation frame on first tick (C++ m_activationFrame set once).
+        if (nmState.activationFrame === 0) {
+          nmState.activationFrame = this.frameCounter;
+        }
+        const elapsed = this.frameCounter - nmState.activationFrame;
+        for (let bi = 0; bi < nmProfile.blasts.length; bi++) {
+          const blast = nmProfile.blasts[bi]!;
+          if (!blast.enabled) continue;
+          // Fire damage blast if delay has elapsed.
+          if (!nmState.completedBlasts[bi] && elapsed > blast.delay) {
+            this.doNeutronMissileBlast(entity, blast);
+            nmState.completedBlasts[bi] = true;
+          }
+          // Fire scorch blast (visual burned condition) if scorch delay has elapsed.
+          if (!nmState.completedScorchBlasts[bi] && elapsed > blast.scorchDelay) {
+            this.doNeutronMissileScorchBlast(entity, blast);
+            nmState.completedScorchBlasts[bi] = true;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: NeutronMissileSlowDeathBehavior::doBlast — fire a single blast wave.
+   * Scans entities in outerRadius, applies damage with inner/outer falloff, and topples.
+   */
+  private doNeutronMissileBlast(missile: MapEntity, blast: NeutronMissileBlastInfo): void {
+    if (blast.outerRadius <= 0) return;
+    const outerSqr = blast.outerRadius * blast.outerRadius;
+    for (const other of this.spawnedEntities.values()) {
+      if (other.destroyed || other.id === missile.id) continue;
+      const dx = other.x - missile.x;
+      const dz = other.z - missile.z;
+      const distSqr = dx * dx + dz * dz;
+      if (distSqr > outerSqr) continue;
+      const dist = Math.sqrt(distSqr);
+
+      // Source parity: topple with NO_BOUNCE | NO_FX (simplified — our topple doesn't have options).
+      if (blast.toppleSpeed > 0) {
+        this.applyTopplingForce(other, dx, dz, blast.toppleSpeed);
+      }
+
+      // Source parity: damage falloff — full maxDamage inside innerRadius,
+      // linear interpolation to minDamage at outerRadius.
+      let damage: number;
+      if (dist <= blast.innerRadius) {
+        damage = blast.maxDamage;
+      } else {
+        const percent = 1.0 - ((dist - blast.innerRadius) / (blast.outerRadius - blast.innerRadius + 0.01));
+        damage = blast.maxDamage * percent;
+        if (damage < blast.minDamage) damage = blast.minDamage;
+      }
+      if (damage > 0) {
+        this.applyWeaponDamageAmount(missile.id, other, damage, 'EXPLOSION', 'EXPLODED');
+      }
+    }
+  }
+
+  /**
+   * Source parity: NeutronMissileSlowDeathBehavior::doScorchBlast — visual burning effect.
+   * Scans entities in outerRadius and sets MODELCONDITION_BURNED (visual only in our port).
+   */
+  private doNeutronMissileScorchBlast(missile: MapEntity, blast: NeutronMissileBlastInfo): void {
+    if (blast.outerRadius <= 0) return;
+    const outerSqr = blast.outerRadius * blast.outerRadius;
+    for (const other of this.spawnedEntities.values()) {
+      if (other.destroyed || other.id === missile.id) continue;
+      const dx = other.x - missile.x;
+      const dz = other.z - missile.z;
+      if (dx * dx + dz * dz > outerSqr) continue;
+      // Source parity: set MODELCONDITION_BURNED on affected entities.
+      // In the original, this visually chars trees/structures.
+      other.objectStatusFlags.add('BURNED');
     }
   }
 
