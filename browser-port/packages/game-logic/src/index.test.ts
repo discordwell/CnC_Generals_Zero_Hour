@@ -22266,9 +22266,9 @@ describe('JetSlowDeathBehavior', () => {
           }),
           makeBlock('Behavior', 'JetSlowDeathBehavior ModuleTag_JSD', {
             DeathTypes: 'ALL',
-            RollRate: 5,                         // 5 degrees per frame
+            RollRate: 5,                         // 5 raw float (C++ parseReal, not degrees)
             RollRateDelta: 95,                   // 0.95 multiplier (parsePercentToReal)
-            PitchRate: 3,                        // 3 degrees per frame after ground
+            PitchRate: 3,                        // 3 raw float (C++ parseReal, not degrees)
             FallHowFast: 60,                     // 60% gravity (parsePercentToReal)
             DelaySecondaryFromInitialDeath: 500, // 500ms → 15 frames
             DelayFinalBlowUpFromHitGround: 300,  // 300ms → 9 frames
@@ -22311,8 +22311,8 @@ describe('JetSlowDeathBehavior', () => {
     const jet = [...priv.spawnedEntities.values()][0]!;
     expect(jet.jetSlowDeathProfiles.length).toBe(1);
     const p = jet.jetSlowDeathProfiles[0]!;
-    // RollRate: 5 degrees → radians
-    expect(p.rollRate).toBeCloseTo(5 * Math.PI / 180, 4);
+    // RollRate: 5 raw float (C++ parseReal — no degree conversion).
+    expect(p.rollRate).toBeCloseTo(5, 4);
     // RollRateDelta: 95% → 0.95
     expect(p.rollRateDelta).toBeCloseTo(0.95, 4);
     // FallHowFast: 60% → 0.6
@@ -22473,10 +22473,14 @@ describe('JetSlowDeathBehavior', () => {
     }
     expect(hitGround || jet.destroyed).toBe(true);
 
-    // If it hit ground but isn't destroyed yet, pitch should be accumulating
-    // and it should destroy after delay (300ms → 9 frames).
+    // If it hit ground but isn't destroyed yet, run a frame so the else branch
+    // (ground phase) executes, then check pitch accumulation.
+    // C++ parity: ground-hit frame sets groundFrame; pitch starts next frame.
     if (!jet.destroyed) {
-      expect(jet.jetSlowDeathState!.pitchAngle).not.toBe(0);
+      logic.update(1 / 30);
+      if (!jet.destroyed) {
+        expect(jet.jetSlowDeathState!.pitchAngle).not.toBe(0);
+      }
       for (let i = 0; i < 15; i++) {
         logic.update(1 / 30);
         if (jet.destroyed) break;

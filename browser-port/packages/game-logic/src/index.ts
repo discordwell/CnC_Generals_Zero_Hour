@@ -9526,11 +9526,12 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
 
-      // C++ parseReal: RollRate is degrees (seems to be degrees/frame or degrees/sec).
+      // C++ parseReal: RollRate and PitchRate are raw floats (not degrees).
+      // C++ TODO comment confirms they should use parseAngularVelocityReal but don't.
       // C++ parsePercentToReal: RollRateDelta, FallHowFast → 0-1.
-      const rollRate = (readNumericField(block.fields, ['RollRate']) ?? 0) * Math.PI / 180;
+      const rollRate = readNumericField(block.fields, ['RollRate']) ?? 0;
       const rollRateDelta = (readNumericField(block.fields, ['RollRateDelta']) ?? 100) / 100;
-      const pitchRate = (readNumericField(block.fields, ['PitchRate']) ?? 0) * Math.PI / 180;
+      const pitchRate = readNumericField(block.fields, ['PitchRate']) ?? 0;
       const fallHowFast = (readNumericField(block.fields, ['FallHowFast']) ?? 50) / 100;
 
       // FX/OCL timeline.
@@ -24603,10 +24604,13 @@ export class GameLogicSubsystem implements Subsystem {
 
         if (heightAbove <= 9.0) {
           // On ground: instant destroy with ground OCL (C++ line 157-169).
+          // C++ calls destroyObject directly — does NOT go through SlowDeathBehavior.
           for (const oclName of jetProfile.oclOnGroundDeath) {
             this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
           }
-          // Jet is already in slow death — destruction will happen via slow death timer.
+          // Immediate destruction — C++ parity: TheGameLogic->destroyObject(us).
+          entity.slowDeathState = null;
+          this.markEntityDestroyed(entity.id, -1);
         } else {
           // Airborne: initialize jet slow death state (C++ beginSlowDeath lines 185-221).
           entity.jetSlowDeathState = {
@@ -25778,13 +25782,13 @@ export class GameLogicSubsystem implements Subsystem {
       const profile = entity.jetSlowDeathProfiles[js.profileIndex];
       if (!profile) continue;
 
+      // C++ parity: roll rate application and decay happen unconditionally (outside if/else).
+      // Roll continues even after ground impact, creating a tumbling effect.
+      js.rollAngle += js.rollRate;
+      js.rollRate *= profile.rollRateDelta;
+
       // ── Still airborne ──
       if (js.groundFrame === 0) {
-        // Apply roll rate to visual rotation (C++ physics->setRollRate).
-        js.rollAngle += js.rollRate;
-        // Decay roll rate (C++ m_rollRate *= m_rollRateDelta).
-        js.rollRate *= profile.rollRateDelta;
-
         // Forward motion: jet keeps flying in the direction it was headed at death.
         entity.x += Math.cos(js.forwardAngle) * js.forwardSpeed;
         entity.z += Math.sin(js.forwardAngle) * js.forwardSpeed;
@@ -25794,8 +25798,8 @@ export class GameLogicSubsystem implements Subsystem {
         js.verticalVelocity += HELICOPTER_GRAVITY * profile.fallHowFast;
         entity.y += js.verticalVelocity;
 
-        // Secondary OCL timer (C++ line 292-301).
-        if (!js.secondaryExecuted && profile.delaySecondaryFromInitialDeath > 0
+        // Secondary OCL timer (C++ line 292-301). Delay of 0 fires on first frame.
+        if (!js.secondaryExecuted
           && this.frameCounter - js.deathFrame >= profile.delaySecondaryFromInitialDeath) {
           for (const oclName of profile.oclSecondary) {
             this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
@@ -25820,10 +25824,8 @@ export class GameLogicSubsystem implements Subsystem {
           entity.movePath = [];
           entity.objectStatusFlags.add('DISABLED_HELD');
         }
-      }
-
-      // ── On the ground: wait for final explosion ──
-      if (js.groundFrame > 0) {
+      } else {
+        // ── On the ground: wait for final explosion (C++ if/else with airborne) ──
         // Apply pitch rotation after ground impact (C++ physics->setPitchRate).
         js.pitchAngle += profile.pitchRate;
 
