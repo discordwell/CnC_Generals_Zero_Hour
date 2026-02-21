@@ -28155,6 +28155,39 @@ describe('Script condition groundwork', () => {
       side: 'America',
     })).toBe(false);
   });
+
+  it('evaluates skirmish start-position condition from explicit side start slot', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CommandCenter', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setSkirmishPlayerStartPosition('America', 2)).toBe(true);
+    expect(logic.getSkirmishPlayerStartPosition('America')).toBe(2);
+
+    expect(logic.evaluateScriptSkirmishStartPosition({
+      side: 'America',
+      startPosition: 2,
+    })).toBe(true);
+    expect(logic.evaluateScriptSkirmishStartPosition({
+      side: 'America',
+      startPosition: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptSkirmishStartPosition({
+      side: 'China',
+      startPosition: 2,
+    })).toBe(false);
+  });
 });
 
 describe('SubdualDamageHelper', () => {

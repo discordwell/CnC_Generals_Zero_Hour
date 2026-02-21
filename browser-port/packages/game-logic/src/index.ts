@@ -3760,6 +3760,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sidePlayerIndex = new Map<string, number>();
   private nextPlayerIndex = 0;
   private readonly skirmishAIStates = new Map<string, SkirmishAIState>();
+  /** Source parity: Player::m_mpStartIndex (0-based start slot per side). */
+  private readonly sideSkirmishStartIndex = new Map<string, number>();
   private readonly railedTransportStateByEntityId = new Map<number, RailedTransportRuntimeState>();
   private railedTransportWaypointIndex: RailedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
   // localPlayerSciencePurchasePoints removed — now lives in sideRankState.
@@ -4359,6 +4361,36 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
     return this.playerSideByIndex.get(normalizedPlayerIndex) ?? null;
+  }
+
+  setSkirmishPlayerStartPosition(side: string, startPositionOneBased: number): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const normalizedStartPosition = Number.isFinite(startPositionOneBased)
+      ? Math.trunc(startPositionOneBased)
+      : 0;
+    if (normalizedStartPosition <= 0) {
+      return false;
+    }
+
+    // Source parity: Player::getMpStartIndex is 0-based internally.
+    this.sideSkirmishStartIndex.set(normalizedSide, normalizedStartPosition - 1);
+    return true;
+  }
+
+  getSkirmishPlayerStartPosition(side: string): number | null {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return null;
+    }
+    const startIndex = this.sideSkirmishStartIndex.get(normalizedSide);
+    if (startIndex === undefined) {
+      return null;
+    }
+    return startIndex + 1;
   }
 
   getPlayerRelationshipByIndex(
@@ -5593,6 +5625,33 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishStartPosition.
+   */
+  evaluateScriptSkirmishStartPosition(filter: {
+    side: string;
+    startPosition: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const expectedStartIndex = Number.isFinite(filter.startPosition)
+      ? Math.trunc(filter.startPosition) - 1
+      : -1;
+    if (expectedStartIndex < 0) {
+      return false;
+    }
+
+    const actualStartIndex = this.sideSkirmishStartIndex.get(normalizedSide);
+    if (actualStartIndex === undefined) {
+      return false;
+    }
+
+    return actualStartIndex === expectedStartIndex;
   }
 
   /**
@@ -33121,6 +33180,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sidePlayerIndex.clear();
     this.nextPlayerIndex = 0;
     this.skirmishAIStates.clear();
+    this.sideSkirmishStartIndex.clear();
     this.sideScoreState.clear();
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
