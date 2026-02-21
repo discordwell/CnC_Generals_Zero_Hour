@@ -951,6 +951,8 @@ interface SidePowerState {
   energyConsumption: number;
   /** Source parity: Player::m_energy — tracks whether side is currently in brown-out. */
   brownedOut: boolean;
+  /** Source parity: SabotagePowerPlantCrateCollide — forced brownout until this frame. */
+  powerSabotagedUntilFrame: number;
 }
 
 /**
@@ -1290,6 +1292,20 @@ interface AssaultTransportState {
   newOccupantsAreNewMembers: boolean;
 }
 
+/**
+ * Source parity: PowerPlantUpdateModuleData — rod extension animation timing.
+ * C++ PowerPlantUpdate.h: m_rodsExtendTime.
+ */
+interface PowerPlantUpdateProfile {
+  rodsExtendTimeFrames: number;
+}
+
+interface PowerPlantUpdateState {
+  extended: boolean;
+  /** Frame when the UPGRADING→UPGRADED transition occurs. 0 = not pending. */
+  upgradeFinishFrame: number;
+}
+
 interface OverchargeBehaviorProfile {
   healthPercentToDrainPerSecond: number;
   notAllowedWhenHealthBelowPercent: number;
@@ -1305,6 +1321,8 @@ interface SabotageBuildingProfile {
   stealsCashAmount: number;
   destroysTarget: boolean;
   powerSabotageDurationFrames: number;
+  /** Source parity: SabotageCommandCenter/SabotageSuperweapon — resets all special power cooldowns. */
+  resetsSpecialPowers: boolean;
 }
 
 interface PendingEnterObjectActionState {
@@ -1431,6 +1449,8 @@ interface MapEntity {
   executedUpgradeModules: Set<string>;
   upgradeModules: UpgradeModuleProfile[];
   objectStatusFlags: Set<string>;
+  /** Source parity: ModelConditionFlags — visual state flags for drawable/animation system. */
+  modelConditionFlags: Set<string>;
   commandSetStringOverride: string | null;
   locomotorUpgradeEnabled: boolean;
   activeLocomotorSet: string;
@@ -1927,6 +1947,10 @@ interface MapEntity {
   // ── Source parity: AssaultTransportAIUpdate — auto-deploy/recall passengers ──
   /** AssaultTransport profile (null = not an assault transport). */
   assaultTransportProfile: AssaultTransportProfile | null;
+
+  // ── Source parity: PowerPlantUpdate — rod extension animation state machine ──
+  powerPlantUpdateProfile: PowerPlantUpdateProfile | null;
+  powerPlantUpdateState: PowerPlantUpdateState | null;
 }
 
 /**
@@ -3810,6 +3834,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateToppleEntities();
     this.updateSupplyWarehouseCrippling();
     this.updateRadarExtension();
+    this.updatePowerPlantUpdate();
     this.updateTemporaryVisionReveals();
     this.updateRenderStates();
     this.updateLifetimeEntities();
@@ -3882,6 +3907,7 @@ export class GameLogicSubsystem implements Subsystem {
       isMoving: selected.moving,
       appliedUpgradeNames: Array.from(selected.completedUpgrades.values()).sort(),
       objectStatusFlags: Array.from(selected.objectStatusFlags.values()).sort(),
+      modelConditionFlags: Array.from(selected.modelConditionFlags.values()).sort(),
     };
   }
 
@@ -4650,13 +4676,15 @@ export class GameLogicSubsystem implements Subsystem {
   getSidePowerState(side: string): SidePowerState {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
-      return { powerBonus: 0, energyProduction: 0, energyConsumption: 0, brownedOut: false };
+      return { powerBonus: 0, energyProduction: 0, energyConsumption: 0, brownedOut: false, powerSabotagedUntilFrame: 0 };
     }
     const state = this.getSidePowerStateMap(normalizedSide);
     return {
       powerBonus: state.powerBonus,
       energyProduction: state.energyProduction,
       energyConsumption: state.energyConsumption,
+      brownedOut: state.brownedOut,
+      powerSabotagedUntilFrame: state.powerSabotagedUntilFrame,
     };
   }
 
@@ -4847,7 +4875,7 @@ export class GameLogicSubsystem implements Subsystem {
       return existing;
     }
 
-    const created: SidePowerState = { powerBonus: 0, energyProduction: 0, energyConsumption: 0, brownedOut: false };
+    const created: SidePowerState = { powerBonus: 0, energyProduction: 0, energyConsumption: 0, brownedOut: false, powerSabotagedUntilFrame: 0 };
     this.sidePowerBonus.set(normalizedSide, created);
     return created;
   }
@@ -5386,6 +5414,7 @@ export class GameLogicSubsystem implements Subsystem {
       executedUpgradeModules: new Set<string>(),
       upgradeModules,
       objectStatusFlags: new Set<string>(),
+      modelConditionFlags: new Set<string>(),
       commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,
       specialPowerModules,
@@ -5740,7 +5769,15 @@ export class GameLogicSubsystem implements Subsystem {
       jetAIState: null,
       // AssaultTransport
       assaultTransportProfile: this.extractAssaultTransportProfile(objectDef),
+      // PowerPlantUpdate
+      powerPlantUpdateProfile: this.extractPowerPlantUpdateProfile(objectDef),
+      powerPlantUpdateState: null,
     };
+
+    // Source parity: PowerPlantUpdate init — extended=false, sleeping forever.
+    if (entity.powerPlantUpdateProfile) {
+      entity.powerPlantUpdateState = { extended: false, upgradeFinishFrame: 0 };
+    }
 
     // Source parity: TurretAI init — create runtime state for each turret.
     entity.turretStates = entity.turretProfiles.map((tp) => ({
@@ -10470,6 +10507,25 @@ export class GameLogicSubsystem implements Subsystem {
     return profile;
   }
 
+  /**
+   * Source parity: PowerPlantUpdateModuleData::buildFieldParse — RodsExtendTime field.
+   */
+  private extractPowerPlantUpdateProfile(objectDef: ObjectDef | undefined): PowerPlantUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: PowerPlantUpdateProfile | null = null;
+    for (const block of objectDef.blocks) {
+      if (profile) break;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR') continue;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'POWERPLANTUPDATE') continue;
+      profile = {
+        rodsExtendTimeFrames: this.msToLogicFrames(readNumericField(block.fields, ['RodsExtendTime']) ?? 0),
+      };
+    }
+    return profile;
+  }
+
   private extractUpgradeModules(objectDef: ObjectDef | undefined): UpgradeModuleProfile[] {
     if (!objectDef) {
       return [];
@@ -10764,7 +10820,35 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     this.applyPowerPlantUpgradeToSide(side, module, entity);
+    // Source parity: PowerPlantUpgrade.cpp line 120-125 — call extendRods(TRUE) on PowerPlantUpdateInterface.
+    this.extendPowerPlantRods(entity, true);
     return true;
+  }
+
+  /**
+   * Source parity: PowerPlantUpdate::extendRods — manage rod extension animation.
+   * C++ PowerPlantUpdate.cpp lines 80-107.
+   */
+  private extendPowerPlantRods(entity: MapEntity, extend: boolean): void {
+    const state = entity.powerPlantUpdateState;
+    if (!state) return;
+    const profile = entity.powerPlantUpdateProfile;
+    if (!profile) return;
+
+    if (extend) {
+      if (!state.extended) {
+        // Set UPGRADING model condition. Timer will transition to UPGRADED.
+        entity.modelConditionFlags.add('POWER_PLANT_UPGRADING');
+        state.extended = true;
+        state.upgradeFinishFrame = this.frameCounter + profile.rodsExtendTimeFrames;
+      }
+    } else {
+      // De-extend instantly: clear both conditions.
+      entity.modelConditionFlags.delete('POWER_PLANT_UPGRADING');
+      entity.modelConditionFlags.delete('POWER_PLANT_UPGRADED');
+      state.extended = false;
+      state.upgradeFinishFrame = 0;
+    }
   }
 
   private applyPowerPlantUpgradeToSide(
@@ -10825,6 +10909,8 @@ export class GameLogicSubsystem implements Subsystem {
       healthPercentToDrainPerSecond: Math.max(0, profile.healthPercentToDrainPerSecond),
       notAllowedWhenHealthBelowPercent: clamp(profile.notAllowedWhenHealthBelowPercent, 0, 1),
     });
+    // Source parity: OverchargeBehavior.cpp line 218-223 — extendRods(TRUE) on overcharge enable.
+    this.extendPowerPlantRods(entity, true);
   }
 
   private disableOverchargeForEntity(entity: MapEntity): void {
@@ -10841,6 +10927,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.overchargeStateByEntityId.delete(entity.id);
+    // Source parity: OverchargeBehavior.cpp line 189-194 — extendRods(FALSE) on overcharge disable.
+    this.extendPowerPlantRods(entity, false);
   }
 
   /**
@@ -10882,8 +10970,10 @@ export class GameLogicSubsystem implements Subsystem {
   private updatePowerBrownOut(): void {
     for (const [side, powerState] of this.sidePowerBonus.entries()) {
       const totalProduction = powerState.energyProduction + powerState.powerBonus;
-      const isNowBrownedOut = powerState.energyConsumption > 0
-        && totalProduction < powerState.energyConsumption;
+      // Source parity: SabotagePowerPlantCrateCollide forces brownout until timer expires.
+      const isSabotaged = powerState.powerSabotagedUntilFrame > this.frameCounter;
+      const isNowBrownedOut = isSabotaged
+        || (powerState.energyConsumption > 0 && totalProduction < powerState.energyConsumption);
 
       if (isNowBrownedOut === powerState.brownedOut) {
         // No change in power state for this side.
@@ -14874,11 +14964,38 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (sabotageProfile.powerSabotageDurationFrames > 0) {
-      // Source parity: SabotagePowerPlantCrateCollide drives side-level brownout state.
-      // That player-energy outage timer is not represented in this simulation yet.
+      // Source parity: SabotagePowerPlantCrateCollide::executeCrateBehavior (line 140-146).
+      // Sets a timed power outage on the victim's controlling player.
+      const targetSide = this.normalizeSide(target.side);
+      if (targetSide) {
+        const powerState = this.getSidePowerStateMap(targetSide);
+        powerState.powerSabotagedUntilFrame = this.frameCounter + sabotageProfile.powerSabotageDurationFrames;
+      }
+    }
+
+    if (sabotageProfile.resetsSpecialPowers) {
+      // Source parity: SabotageCommandCenterCrateCollide / SabotageSuperweaponCrateCollide
+      // iterates all SpecialPowerModules on the target and calls startPowerRecharge().
+      this.resetEntitySpecialPowerCooldowns(target);
     }
 
     this.markEntityDestroyed(source.id, target.id);
+  }
+
+  /**
+   * Source parity: SabotageCommandCenterCrateCollide::executeCrateBehavior (line 142-150).
+   * Resets all special power cooldowns on an entity to their full ReloadTime.
+   */
+  private resetEntitySpecialPowerCooldowns(entity: MapEntity): void {
+    for (const [, module] of entity.specialPowerModules) {
+      const specialPowerDef = this.iniDataRegistry?.getSpecialPower(module.specialPowerTemplateName);
+      if (!specialPowerDef) continue;
+      const reloadFrames = this.msToLogicFrames(readNumericField(specialPowerDef.fields, ['ReloadTime']) ?? 0);
+      if (reloadFrames <= 0) continue;
+      const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
+      const newReadyFrame = this.frameCounter + reloadFrames;
+      this.setSpecialPowerReadyFrame(module.specialPowerTemplateName, entity.id, isSharedSynced, newReadyFrame);
+    }
   }
 
   private setDisabledHackedStatusUntil(entity: MapEntity, disableUntilFrame: number): void {
@@ -14925,6 +15042,7 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: 0,
             destroysTarget: false,
             powerSabotageDurationFrames: 0,
+            resetsSpecialPowers: false,
           };
           return;
         }
@@ -14940,6 +15058,7 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: 0,
             destroysTarget: false,
             powerSabotageDurationFrames: 0,
+            resetsSpecialPowers: false,
           };
           return;
         }
@@ -14955,6 +15074,7 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: stealCashAmount,
             destroysTarget: false,
             powerSabotageDurationFrames: 0,
+            resetsSpecialPowers: false,
           };
           return;
         }
@@ -14970,6 +15090,7 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: stealCashAmount,
             destroysTarget: false,
             powerSabotageDurationFrames: 0,
+            resetsSpecialPowers: false,
           };
           return;
         }
@@ -14985,6 +15106,7 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: 0,
             destroysTarget: true,
             powerSabotageDurationFrames: 0,
+            resetsSpecialPowers: false,
           };
           return;
         }
@@ -15000,6 +15122,7 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: 0,
             destroysTarget: false,
             powerSabotageDurationFrames: sabotagePowerDurationFrames,
+            resetsSpecialPowers: false,
           };
           return;
         }
@@ -15015,13 +15138,15 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: 0,
             destroysTarget: false,
             powerSabotageDurationFrames: 0,
+            resetsSpecialPowers: true,
           };
           return;
         }
 
+        // Source parity: SabotageSuperweaponCrateCollide.cpp:99 — targets FS_SUPERWEAPON and FS_STRATEGY_CENTER.
         if (
           moduleType === 'SABOTAGESUPERWEAPONCRATECOLLIDE'
-          && targetKindOf.has('FS_SUPERWEAPON')
+          && (targetKindOf.has('FS_SUPERWEAPON') || targetKindOf.has('FS_STRATEGY_CENTER'))
         ) {
           profile = {
             moduleType,
@@ -15030,6 +15155,7 @@ export class GameLogicSubsystem implements Subsystem {
             stealsCashAmount: 0,
             destroysTarget: false,
             powerSabotageDurationFrames: 0,
+            resetsSpecialPowers: true,
           };
           return;
         }
@@ -15236,6 +15362,15 @@ export class GameLogicSubsystem implements Subsystem {
       // After first sync, all future occupants are new members.
       state.newOccupantsAreNewMembers = true;
 
+      // Source parity: C++ isAttackPointless() (lines 386-408) — abort if all members are new.
+      // No troops can be deployed until a fresh attack command resets isNew flags.
+      if (state.members.length > 0 && state.members.every((m) => m.isNew)) {
+        state.designatedTargetId = null;
+        state.isAttackObject = false;
+        state.isAttackMove = false;
+        continue;
+      }
+
       // Resolve designated target.
       let target = state.designatedTargetId !== null
         ? this.spawnedEntities.get(state.designatedTargetId) ?? null
@@ -15269,6 +15404,27 @@ export class GameLogicSubsystem implements Subsystem {
               this.commandQueue.push({ type: 'attackEntity', entityId: member.entityId, targetEntityId: target.id, commandSource: 'AI' });
             }
           }
+        }
+      } else if (state.isAttackMove) {
+        // Source parity: C++ lines 322-327 — re-issue attackMoveTo to continue advancing.
+        // Target died during attack-move: recall members and keep transport moving.
+        for (const member of state.members) {
+          const memberEntity = this.spawnedEntities.get(member.entityId);
+          if (!memberEntity || memberEntity.destroyed) continue;
+          if (!this.isEntityContained(memberEntity)) {
+            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+          }
+        }
+        state.designatedTargetId = null;
+        // Re-issue attack-move to the transport itself.
+        if (!transport.moving) {
+          this.commandQueue.push({
+            type: 'attackMoveTo',
+            entityId: transportId,
+            targetX: state.attackMoveGoalX,
+            targetZ: state.attackMoveGoalZ,
+            attackDistance: 0,
+          });
         }
       } else if (state.isAttackObject) {
         // Target died — retrieve members.
@@ -25696,6 +25852,23 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.frameCounter > entity.radarExtendDoneFrame) {
         entity.radarExtendComplete = true;
         entity.radarExtendDoneFrame = 0;
+      }
+    }
+  }
+
+  /**
+   * Source parity: PowerPlantUpdate::update — transitions UPGRADING → UPGRADED when timer expires.
+   * C++ PowerPlantUpdate.cpp lines 111-121.
+   */
+  private updatePowerPlantUpdate(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const state = entity.powerPlantUpdateState;
+      if (!state || state.upgradeFinishFrame === 0) continue;
+      if (this.frameCounter >= state.upgradeFinishFrame) {
+        entity.modelConditionFlags.delete('POWER_PLANT_UPGRADING');
+        entity.modelConditionFlags.add('POWER_PLANT_UPGRADED');
+        state.upgradeFinishFrame = 0;
       }
     }
   }

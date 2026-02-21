@@ -474,6 +474,7 @@ export interface SelectedEntityInfo {
   isMoving: boolean;
   appliedUpgradeNames: string[];
   objectStatusFlags: string[];
+  modelConditionFlags: string[];
 }
 
 export type EntityRelationship = 'enemies' | 'neutral' | 'allies';

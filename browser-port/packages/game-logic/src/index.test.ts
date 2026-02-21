@@ -23601,4 +23601,312 @@ describe('AssaultTransportAIUpdate', () => {
     expect(priv.assaultTransportStateByEntityId.has(1)).toBe(false);
     expect(guard.transportContainerId).toBe(1);
   });
+
+  it('continues attack-move when designated target dies', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeAssaultTransportBundle());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopCrawler', 50, 50),   // id 1
+        makeMapObject('RedGuard', 50, 50),         // id 2
+        makeMapObject('EnemyTank', 80, 50),        // id 3
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    // Load passenger.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    // Issue attack-move to far position.
+    logic.submitCommand({
+      type: 'attackMoveTo', entityId: 1, targetX: 200, targetZ: 50, attackDistance: 0,
+    });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const priv = logic as any;
+    const state = priv.assaultTransportStateByEntityId.get(1);
+    expect(state).toBeTruthy();
+    expect(state.isAttackMove).toBe(true);
+
+    // Kill the enemy while assault transport has it targeted.
+    state.designatedTargetId = 3;
+    (priv as { markEntityDestroyed: (id: number, a: number) => void }).markEntityDestroyed(3, -1);
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Transport should still be in attack-move mode (not cleared).
+    expect(state.isAttackMove).toBe(true);
+    // Target should be cleared.
+    expect(state.designatedTargetId).toBeNull();
+  });
+
+  it('aborts attack when all members are new (isAttackPointless)', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeAssaultTransportBundle());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopCrawler', 50, 50),   // id 1
+        makeMapObject('RedGuard', 50, 50),         // id 2
+        makeMapObject('EnemyTank', 100, 50),       // id 3
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    // Load passenger, then attack to start assault transport state.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'PLAYER' });
+    logic.update(1 / 30);
+
+    const priv = logic as any;
+    const state = priv.assaultTransportStateByEntityId.get(1);
+    expect(state).toBeTruthy();
+
+    // Mark all members as new — simulates all troops loaded after attack was issued.
+    for (const member of state.members) {
+      member.isNew = true;
+    }
+
+    // Update should detect all-new members and abort.
+    logic.update(1 / 30);
+
+    // Attack state should be cleared.
+    expect(state.isAttackObject).toBe(false);
+    expect(state.isAttackMove).toBe(false);
+  });
+});
+
+describe('Sabotage building effects', () => {
+  it('sabotage power plant forces timed brownout on victim side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BlackLotus', 'China', ['INFANTRY'], [
+          makeBlock('Behavior', 'SabotagePowerPlantCrateCollide ModuleTag_SabotagePP', {
+            SabotagePowerDuration: 3000, // 3 seconds = ~90 frames
+          }),
+        ]),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], { EnergyBonus: 5 }),
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE', 'FS_WARFACTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ], { EnergyBonus: -3 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BlackLotus', 10, 10),   // id 1
+        makeMapObject('PowerPlant', 20, 10),    // id 2
+        makeMapObject('WarFactory', 30, 10),    // id 3
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Verify side is NOT browned out initially (5 production > 3 consumption).
+    expect(logic.getSidePowerState('America').brownedOut).toBe(false);
+
+    // Sabotage the power plant.
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'sabotageBuilding',
+    });
+    logic.update(1 / 30); // Frame 1: command processed, sabotage resolves (entity within range).
+    logic.update(1 / 30); // Frame 2: updatePowerBrownOut picks up the sabotaged-until-frame.
+
+    // Should be browned out now due to sabotage.
+    expect(logic.getSidePowerState('America').brownedOut).toBe(true);
+
+    // Black Lotus is consumed (destroyed as part of sabotage action).
+    expect(logic.getEntityState(1)).toBeNull();
+
+    // After sabotage duration expires, brownout should clear.
+    for (let i = 0; i < 100; i++) logic.update(1 / 30);
+    expect(logic.getSidePowerState('America').brownedOut).toBe(false);
+  });
+
+  it('sabotage command center resets special power cooldowns', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BlackLotus', 'China', ['INFANTRY'], [
+          makeBlock('Behavior', 'SabotageCommandCenterCrateCollide ModuleTag_SabotageCC', {}),
+        ]),
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'COMMANDCENTER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SP', { SpecialPowerTemplate: 'SuperweaponParticleCannon' }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(bundle);
+    // Add a special power definition with 60s reload time.
+    registry.specialPowers.set('SUPERWEAPONPARTICLECANNON', {
+      type: 'SpecialPower',
+      name: 'SuperweaponParticleCannon',
+      fields: { ReloadTime: '60000' },
+      blocks: [],
+    });
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BlackLotus', 10, 10),     // id 1
+        makeMapObject('CommandCenter', 20, 10),   // id 2
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    const priv = logic as any;
+
+    // Sabotage the command center.
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'sabotageBuilding',
+    });
+    logic.update(1 / 30);
+
+    // The command center's special power should have its cooldown reset.
+    // Check the source entity tracking map for the ready frame.
+    const sourcesMap = priv.shortcutSpecialPowerSourceByName as Map<string, Map<number, number>>;
+    const cannonSources = sourcesMap?.get('SUPERWEAPONPARTICLECANNON');
+    if (cannonSources) {
+      const readyFrame = cannonSources.get(2);
+      // The ready frame should be in the future (frameCounter + reloadFrames).
+      expect(readyFrame).toBeGreaterThan(priv.frameCounter);
+    }
+
+    // Black Lotus consumed.
+    expect(logic.getEntityState(1)).toBeNull();
+  });
+});
+
+describe('PowerPlantUpdate', () => {
+  it('extracts PowerPlantUpdateProfile from INI', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ChinaPowerPlant', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'PowerPlantUpdate ModuleTag_PPUpdate', {
+            RodsExtendTime: 2000,
+          }),
+        ], { EnergyBonus: 5 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ChinaPowerPlant', 30, 30)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as any;
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.powerPlantUpdateProfile).toBeTruthy();
+    // 2000ms → ~60 frames at 30 fps.
+    expect(entity.powerPlantUpdateProfile.rodsExtendTimeFrames).toBe(60);
+    expect(entity.powerPlantUpdateState).toBeTruthy();
+    expect(entity.powerPlantUpdateState.extended).toBe(false);
+  });
+
+  it('transitions UPGRADING → UPGRADED after RodsExtendTime', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ChinaPowerPlant', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'PowerPlantUpdate ModuleTag_PPUpdate', {
+            RodsExtendTime: 300, // 300ms → 9 frames
+          }),
+          makeBlock('Behavior', 'PowerPlantUpgrade ModuleTag_PPUpgrade', {
+            TriggeredBy: 'Upgrade_ChinaOvercharge',
+          }),
+        ], { EnergyBonus: 5 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ChinaPowerPlant', 30, 30)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as any;
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Simulate upgrade application by calling extendRods directly.
+    (priv as { extendPowerPlantRods: (e: any, extend: boolean) => void }).extendPowerPlantRods(entity, true);
+
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADING')).toBe(true);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADED')).toBe(false);
+    expect(entity.powerPlantUpdateState.extended).toBe(true);
+
+    // Run for 8 frames (not yet done — need 9 frames).
+    for (let i = 0; i < 8; i++) logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADING')).toBe(true);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADED')).toBe(false);
+
+    // Frame 9+ should transition.
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADING')).toBe(false);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADED')).toBe(true);
+  });
+
+  it('de-extends instantly when extendRods(false) is called', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ChinaPowerPlant', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'PowerPlantUpdate ModuleTag_PPUpdate', {
+            RodsExtendTime: 1000,
+          }),
+        ], { EnergyBonus: 5 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ChinaPowerPlant', 30, 30)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as any;
+    const entity = priv.spawnedEntities.get(1)!;
+    const fn = priv as { extendPowerPlantRods: (e: any, extend: boolean) => void };
+
+    // Extend rods and let it finish.
+    fn.extendPowerPlantRods(entity, true);
+    for (let i = 0; i < 40; i++) logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADED')).toBe(true);
+
+    // De-extend: both flags cleared instantly.
+    fn.extendPowerPlantRods(entity, false);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADING')).toBe(false);
+    expect(entity.modelConditionFlags.has('POWER_PLANT_UPGRADED')).toBe(false);
+    expect(entity.powerPlantUpdateState.extended).toBe(false);
+  });
 });
