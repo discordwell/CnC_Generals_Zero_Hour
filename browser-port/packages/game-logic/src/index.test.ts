@@ -10310,7 +10310,7 @@ describe('garrison firing', () => {
       makeMap([
         makeMapObject('CivBuilding', 50, 50),
         makeMapObject('USARanger', 51, 50),
-        makeMapObject('EnemyTank', 80, 50),
+        makeMapObject('EnemyTank', 60, 50),
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
@@ -22983,5 +22983,174 @@ describe('SupplyWarehouseCripplingBehavior', () => {
       logic.update(1 / 30);
     }
     expect(warehouse.health).toBeGreaterThan(500); // Healing has started.
+  });
+});
+
+describe('TransportAI attack delegation', () => {
+  function makeTransportBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('Humvee', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HumveeMG'] }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            PassengersAllowedToFire: 'Yes',
+            ContainMax: 5,
+          }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'RangerGun'] }),
+        ]),
+        makeObjectDef('EnemyTank', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('HumveeMG', {
+          PrimaryDamage: 10, AttackRange: 100, DelayBetweenShots: 100, DamageType: 'SMALL_ARMS',
+        }),
+        makeWeaponDef('RangerGun', {
+          PrimaryDamage: 5, AttackRange: 80, DelayBetweenShots: 100, DamageType: 'SMALL_ARMS',
+        }),
+      ],
+    });
+  }
+
+  it('player attack command on transport propagates to contained passengers', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeTransportBundle());
+
+    const map = makeMap([
+      makeMapObject('Humvee', 50, 50),    // id 1
+      makeMapObject('Ranger', 50, 50),     // id 2 — adjacent to Humvee
+      makeMapObject('EnemyTank', 60, 50),  // id 3 — within range
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    // Enter transport.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    // Verify passenger is inside.
+    const priv = logic as any;
+    const passenger = priv.spawnedEntities.get(2)!;
+    expect(passenger.transportContainerId).toBe(1);
+
+    // Issue attack command on the transport.
+    logic.submitCommand({
+      type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'PLAYER',
+    });
+    logic.update(1 / 30);
+
+    // Passenger should also target the enemy.
+    expect(passenger.attackTargetEntityId).toBe(3);
+  });
+
+  it('AI auto-target attack does NOT propagate to passengers', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeTransportBundle());
+
+    const map = makeMap([
+      makeMapObject('Humvee', 50, 50),
+      makeMapObject('Ranger', 50, 50),
+      makeMapObject('EnemyTank', 60, 50),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    const priv = logic as any;
+    const passenger = priv.spawnedEntities.get(2)!;
+
+    // Issue AI-sourced attack (e.g., auto-retaliation) — should NOT propagate.
+    logic.submitCommand({
+      type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'AI',
+    });
+    logic.update(1 / 30);
+
+    // Passenger should NOT have the target set by transport delegation.
+    // (It may acquire its own target via auto-targeting, but not from this delegation.)
+    expect(passenger.attackTargetEntityId).not.toBe(3);
+  });
+
+  it('skips disabled PORTABLE_STRUCTURE passengers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Overlord', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'OverlordCannon'] }),
+          makeBlock('Behavior', 'OverlordContain ModuleTag_Contain', {
+            PassengersAllowedToFire: 'Yes',
+            ContainMax: 5,
+          }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 15,
+          GeometryMinorRadius: 15,
+        }),
+        makeObjectDef('GattlingUpgrade', 'China', ['PORTABLE_STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'GattlingGun'] }),
+        ]),
+        makeObjectDef('EnemyUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('OverlordCannon', {
+          PrimaryDamage: 50, AttackRange: 150, DelayBetweenShots: 200, DamageType: 'ARMOR_PIERCING',
+        }),
+        makeWeaponDef('GattlingGun', {
+          PrimaryDamage: 10, AttackRange: 100, DelayBetweenShots: 50, DamageType: 'SMALL_ARMS',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(bundle);
+
+    const map = makeMap([
+      makeMapObject('Overlord', 50, 50),        // id 1
+      makeMapObject('GattlingUpgrade', 50, 50),  // id 2 — portable structure passenger
+      makeMapObject('EnemyUnit', 60, 50),        // id 3
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    const priv = logic as any;
+    const gattling = priv.spawnedEntities.get(2)!;
+
+    // Put gattling inside overlord via helixCarrierId (Overlord contain type).
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+
+    // Disable the gattling with EMP.
+    gattling.objectStatusFlags.add('DISABLED_EMP');
+
+    // Attack with overlord.
+    logic.submitCommand({
+      type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'PLAYER',
+    });
+    logic.update(1 / 30);
+
+    // Disabled PORTABLE_STRUCTURE should NOT receive the attack delegation.
+    expect(gattling.attackTargetEntityId).not.toBe(3);
   });
 });

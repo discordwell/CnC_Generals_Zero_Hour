@@ -12334,6 +12334,12 @@ export class GameLogicSubsystem implements Subsystem {
           command.targetEntityId,
           command.commandSource ?? 'PLAYER',
         );
+        // Source parity: TransportAIUpdate::privateAttackObject — propagate attack to passengers.
+        if (atkEntity) {
+          this.propagateTransportAttackToPassengers(
+            atkEntity, command.targetEntityId, command.commandSource ?? 'PLAYER',
+          );
+        }
         return;
       }
       case 'fireWeapon':
@@ -18842,6 +18848,51 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.issueMoveTo(attacker.id, target.x, target.z, attackRange);
+  }
+
+  /**
+   * Source parity: TransportAIUpdate::privateAttackObject — when a transport receives a
+   * player-issued attack, propagate the attack to all contained passengers that are allowed
+   * to fire from inside. (TransportAIUpdate.cpp lines 80-110)
+   */
+  private propagateTransportAttackToPassengers(
+    transport: MapEntity,
+    targetEntityId: number,
+    commandSource: AttackCommandSource,
+  ): void {
+    // Source parity: only propagate for player/script commands, not passive acquire.
+    if (commandSource !== 'PLAYER') return;
+    const cp = transport.containProfile;
+    if (!cp || !cp.passengersAllowedToFire) return;
+
+    const target = this.spawnedEntities.get(targetEntityId);
+    if (!target || target.destroyed) return;
+
+    for (const passengerId of this.collectContainedEntityIds(transport.id)) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) continue;
+      if (!passenger.attackWeapon || passenger.attackWeapon.primaryDamage <= 0) continue;
+
+      // Source parity: skip disabled PORTABLE_STRUCTURE passengers (TransportAIUpdate.cpp:93-101).
+      const kindOf = this.resolveEntityKindOfSet(passenger);
+      if (kindOf.has('PORTABLE_STRUCTURE')) {
+        if (
+          this.entityHasObjectStatus(passenger, 'DISABLED_HACKED')
+          || this.entityHasObjectStatus(passenger, 'DISABLED_EMP')
+          || this.entityHasObjectStatus(passenger, 'DISABLED_SUBDUED')
+          || this.entityHasObjectStatus(passenger, 'DISABLED_PARALYZED')
+        ) {
+          continue;
+        }
+      }
+
+      if (!this.isPassengerAllowedToFireFromContainingObject(passenger, transport)) continue;
+
+      // Set attack target directly — contained passengers don't move toward the target.
+      passenger.attackTargetEntityId = targetEntityId;
+      passenger.attackOriginalVictimPosition = { x: target.x, z: target.z };
+      passenger.attackCommandSource = commandSource;
+    }
   }
 
   private issueFireWeapon(
