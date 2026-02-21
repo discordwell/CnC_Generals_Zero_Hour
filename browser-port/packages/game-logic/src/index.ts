@@ -3645,6 +3645,9 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
   private readonly sideScoreState = new Map<string, SideScoreState>();
+  /** Source parity: Player::m_attackedBy + m_attackedFrame. */
+  private readonly sideAttackedBy = new Map<string, Set<string>>();
+  private readonly sideAttackedFrame = new Map<string, number>();
   private readonly sideBattlePlanBonuses = new Map<string, SideBattlePlanBonuses>();
   private readonly battlePlanParalyzedUntilFrame = new Map<number, number>();
   private readonly playerSideByIndex = new Map<number, string>();
@@ -5020,6 +5023,21 @@ export class GameLogicSubsystem implements Subsystem {
 
   getScriptObjectTopologyVersion(): number {
     return this.scriptObjectTopologyVersion;
+  }
+
+  getSideAttackedByState(side: string): {
+    attackedBySides: string[];
+    attackedFrame: number | null;
+  } {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return { attackedBySides: [], attackedFrame: null };
+    }
+    const attackedBy = this.sideAttackedBy.get(normalizedSide);
+    return {
+      attackedBySides: attackedBy ? Array.from(attackedBy.values()).sort() : [],
+      attackedFrame: this.sideAttackedFrame.get(normalizedSide) ?? null,
+    };
   }
 
   getSideUpgradeState(side: string): {
@@ -24784,10 +24802,11 @@ export class GameLogicSubsystem implements Subsystem {
       // notifies onDamage callbacks (retaliation, stealth reveal, etc.).
       if (damageType !== 'HEALING') {
         this.recordPreferredLastAttacker(target, sourceEntityId);
+        this.recordAttackedBySource(target, sourceEntityId);
         target.lastDamageFrame = this.frameCounter;
       }
       // Source parity: ActiveBody.cpp notifies Player::setAttackedBy even when damage is
-      // subdual-only. For current gameplay subset this maps to BASE_UNDER_ATTACK EVA cues.
+      // subdual-only. We record attacked-by side state and emit existing EVA cues.
       if (target.side && target.kindOf.has('STRUCTURE') && target.kindOf.has('MP_COUNT_FOR_VICTORY')) {
         this.emitEvaEvent('BASE_UNDER_ATTACK', target.side, 'own', target.id);
       }
@@ -24843,6 +24862,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Healing damage does not update the timestamp (C++ checks m_damageType != DAMAGE_HEALING).
     if (damageType !== 'HEALING') {
       this.recordPreferredLastAttacker(target, sourceEntityId);
+      this.recordAttackedBySource(target, sourceEntityId);
       target.lastDamageFrame = this.frameCounter;
     }
 
@@ -24942,6 +24962,32 @@ export class GameLogicSubsystem implements Subsystem {
     if (!current || this.isPreferredRetaliationSource(source)) {
       target.lastAttackerEntityId = sourceEntityId;
     }
+  }
+
+  /**
+   * Source parity: ActiveBody::attemptDamage → Player::setAttackedBy.
+   * Records attacker side notification even for subdual-only damage.
+   */
+  private recordAttackedBySource(target: MapEntity, sourceEntityId: number | null): void {
+    if (sourceEntityId === null || sourceEntityId === 0) {
+      return;
+    }
+    const source = this.spawnedEntities.get(sourceEntityId);
+    if (!source) {
+      return;
+    }
+    const targetSide = this.normalizeSide(target.side);
+    const sourceSide = this.normalizeSide(source.side);
+    if (!targetSide || !sourceSide) {
+      return;
+    }
+    let attackedBy = this.sideAttackedBy.get(targetSide);
+    if (!attackedBy) {
+      attackedBy = new Set<string>();
+      this.sideAttackedBy.set(targetSide, attackedBy);
+    }
+    attackedBy.add(sourceSide);
+    this.sideAttackedFrame.set(targetSide, this.frameCounter);
   }
 
   private isPreferredRetaliationSource(source: MapEntity): boolean {
@@ -31636,6 +31682,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.nextPlayerIndex = 0;
     this.skirmishAIStates.clear();
     this.sideScoreState.clear();
+    this.sideAttackedBy.clear();
+    this.sideAttackedFrame.clear();
     this.scriptObjectTopologyVersion = 0;
     this.loadedMapData = null;
     this.navigationGrid = null;

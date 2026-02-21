@@ -27251,4 +27251,41 @@ describe('SubdualDamageHelper', () => {
     const evaEvents = logic.drainEvaEvents();
     expect(evaEvents.some((event) => event.type === 'BASE_UNDER_ATTACK' && event.entityId === 1)).toBe(true);
   });
+
+  it('records side attacked-by notifications for subdual-only damage', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TargetStructure', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 1000,
+            InitialHealth: 1000,
+            SubdualDamageCap: 2000,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TargetStructure', 40, 40),
+        makeMapObject('Attacker', 50, 40),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, target, 50, 'SUBDUAL_MISSILE');
+
+    const attacked = logic.getSideAttackedByState('America');
+    expect(attacked.attackedBySides).toEqual(['china']);
+    expect(attacked.attackedFrame).toBe(0);
+  });
 });
