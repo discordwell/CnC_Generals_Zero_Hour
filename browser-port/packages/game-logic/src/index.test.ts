@@ -27531,6 +27531,111 @@ describe('Script condition groundwork', () => {
       templateName: 'UnitA',
     })).toBe(false);
   });
+
+  it('evaluates skirmish player area-presence and outside-area conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InfantryA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('DummyProjectile', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('DummyInert', 'America', ['INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('InfantryA', 6, 6),
+      makeMapObject('DummyProjectile', 8, 8),
+      makeMapObject('DummyInert', 10, 10),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'SpawnZone',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptSkirmishPlayerHasUnitsInArea({
+      side: 'America',
+      triggerName: 'SpawnZone',
+      conditionCacheId: 'skirmish-in-area',
+    })).toBe(true);
+    expect(logic.evaluateScriptSkirmishPlayerIsOutsideArea({
+      side: 'America',
+      triggerName: 'SpawnZone',
+      conditionCacheId: 'skirmish-outside',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptSkirmishPlayerHasUnitsInArea({
+      side: 'America',
+      triggerName: 'SpawnZone',
+      conditionCacheId: 'skirmish-in-area',
+    })).toBe(false);
+    expect(logic.evaluateScriptSkirmishPlayerIsOutsideArea({
+      side: 'America',
+      triggerName: 'SpawnZone',
+      conditionCacheId: 'skirmish-outside',
+    })).toBe(true);
+  });
+
+  it('evaluates skirmish player attacked-by-player condition', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Target', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Target', 10, 10),
+        makeMapObject('Attacker', 20, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptSkirmishPlayerHasBeenAttackedByPlayer({
+      side: 'America',
+      attackedBySide: 'China',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 10, 'SMALL_ARMS');
+
+    expect(logic.evaluateScriptSkirmishPlayerHasBeenAttackedByPlayer({
+      side: 'America',
+      attackedBySide: 'China',
+    })).toBe(true);
+  });
 });
 
 describe('SubdualDamageHelper', () => {

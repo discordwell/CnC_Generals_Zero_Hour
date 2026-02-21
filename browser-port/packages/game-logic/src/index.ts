@@ -5173,6 +5173,79 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerHasUnitsInArea.
+   */
+  evaluateScriptSkirmishPlayerHasUnitsInArea(filter: {
+    side: string;
+    triggerName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const triggerRegions = this.findMapTriggerRegionsByName(filter.triggerName);
+    if (triggerRegions.length === 0) {
+      return false;
+    }
+
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    let anyChanges = cache === null || cache.customData === 0;
+    // TODO(source-parity): include Team::didEnterOrExit once script team tracking exists.
+    if (cache && this.scriptObjectCountChangedFrame > cache.customFrame) {
+      anyChanges = true;
+    }
+    // Until team enter/exit notifications are available, area membership can change without
+    // topology changes, so conservatively recompute every call.
+    anyChanges = true;
+    if (!anyChanges && cache) {
+      return cache.customData === 1;
+    }
+
+    let objectCount = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
+      if (entity.destroyed || entity.kindOf.has('INERT') || entity.kindOf.has('PROJECTILE')) continue;
+      objectCount += 1;
+    }
+
+    const hasUnits = objectCount > 0;
+    if (cache) {
+      cache.customData = hasUnits ? 1 : -1;
+      cache.customFrame = this.scriptObjectCountChangedFrame;
+    }
+    return hasUnits;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerIsOutsideArea.
+   */
+  evaluateScriptSkirmishPlayerIsOutsideArea(filter: {
+    side: string;
+    triggerName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    return !this.evaluateScriptSkirmishPlayerHasUnitsInArea(filter);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerHasBeenAttackedByPlayer.
+   */
+  evaluateScriptSkirmishPlayerHasBeenAttackedByPlayer(filter: {
+    side: string;
+    attackedBySide: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedAttacker = this.normalizeSide(filter.attackedBySide);
+    if (!normalizedSide || !normalizedAttacker) {
+      return false;
+    }
+    return this.sideAttackedBy.get(normalizedSide)?.has(normalizedAttacker) ?? false;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerUnitCondition
    * (Condition::PLAYER_HAS_OBJECT_COMPARISON).
    */
