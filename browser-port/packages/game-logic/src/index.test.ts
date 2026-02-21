@@ -28093,6 +28093,61 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 1 })).toBe(false);
   });
 
+  it('evaluates named-entered-area and named-exited-area using current/previous frame parity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Scout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('Scout', 20, 20)], 128, 128);
+    map.triggers = [{
+      name: 'CaptureZone',
+      id: 1,
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40 },
+        { x: 80, y: 40 },
+        { x: 80, y: 80 },
+        { x: 40, y: 80 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number }>;
+    };
+    const scout = privateApi.spawnedEntities.get(1)!;
+
+    expect(logic.evaluateScriptNamedEnteredArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
+    expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
+
+    // Move inside the trigger and verify entered-frame + previous-frame behavior.
+    scout.x = 50;
+    scout.z = 50;
+    logic.update(0);
+    expect(logic.evaluateScriptNamedEnteredArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
+    logic.update(0);
+    expect(logic.evaluateScriptNamedEnteredArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
+    logic.update(0);
+    expect(logic.evaluateScriptNamedEnteredArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
+
+    // Move back outside and verify exit detection with same frame window.
+    scout.x = 20;
+    scout.z = 20;
+    logic.update(0);
+    expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
+    logic.update(0);
+    expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
+    logic.update(0);
+    expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [

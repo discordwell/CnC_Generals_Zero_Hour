@@ -3724,6 +3724,14 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptConditionCacheById = new Map<string, ScriptConditionCacheState>();
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
+  /** Source parity: Object::m_triggerInfo isInside snapshots keyed by entity id. */
+  private readonly scriptTriggerMembershipByEntityId = new Map<number, Set<number>>();
+  /** Source parity: Object::m_triggerInfo entered flags keyed by entity id. */
+  private readonly scriptTriggerEnteredByEntityId = new Map<number, Set<number>>();
+  /** Source parity: Object::m_triggerInfo exited flags keyed by entity id. */
+  private readonly scriptTriggerExitedByEntityId = new Map<number, Set<number>>();
+  /** Source parity: Object::m_enteredOrExitedFrame keyed by entity id. */
+  private readonly scriptTriggerEnterExitFrameByEntityId = new Map<number, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
   private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
@@ -3925,6 +3933,7 @@ export class GameLogicSubsystem implements Subsystem {
       minZ: Math.min(...trigger.points.map((p) => p.y)),
       maxZ: Math.max(...trigger.points.map((p) => p.y)),
     }));
+    this.initializeScriptTriggerMembershipBaselines();
 
     // Initialize fog of war grid based on map dimensions.
     if (heightmap) {
@@ -4300,6 +4309,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProjectileFlightCollisions();
     this.processCountermeasureDiversions();
     this.updatePendingWeaponDamage();
+    this.updateScriptTriggerTransitions();
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
     this.checkVictoryConditions();
@@ -6120,6 +6130,100 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return this.collectContainedEntityIds(entityId).length < maxSlots;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedEnteredArea.
+   * Mirrors Object::didEnter(trigger): true when entered this frame or previous frame.
+   */
+  evaluateScriptNamedEnteredArea(filter: {
+    entityId: number;
+    triggerName: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (entity.kindOf.has('INERT')) {
+      return false;
+    }
+
+    const normalizedTriggerName = filter.triggerName.trim().toUpperCase();
+    if (!normalizedTriggerName) {
+      return false;
+    }
+
+    let triggerIndex = -1;
+    for (let index = 0; index < this.mapTriggerRegions.length; index += 1) {
+      if (this.mapTriggerRegions[index]!.nameUpper === normalizedTriggerName) {
+        triggerIndex = index;
+        break;
+      }
+    }
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    const enteredOrExitedFrame = this.scriptTriggerEnterExitFrameByEntityId.get(entityId);
+    if (enteredOrExitedFrame === undefined) {
+      return false;
+    }
+    if (enteredOrExitedFrame !== this.frameCounter && enteredOrExitedFrame !== this.frameCounter - 1) {
+      return false;
+    }
+
+    return this.scriptTriggerEnteredByEntityId.get(entityId)?.has(triggerIndex) ?? false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedExitedArea.
+   * Mirrors Object::didExit(trigger): true when exited this frame or previous frame.
+   */
+  evaluateScriptNamedExitedArea(filter: {
+    entityId: number;
+    triggerName: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (entity.kindOf.has('INERT')) {
+      return false;
+    }
+
+    const normalizedTriggerName = filter.triggerName.trim().toUpperCase();
+    if (!normalizedTriggerName) {
+      return false;
+    }
+
+    let triggerIndex = -1;
+    for (let index = 0; index < this.mapTriggerRegions.length; index += 1) {
+      if (this.mapTriggerRegions[index]!.nameUpper === normalizedTriggerName) {
+        triggerIndex = index;
+        break;
+      }
+    }
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    const enteredOrExitedFrame = this.scriptTriggerEnterExitFrameByEntityId.get(entityId);
+    if (enteredOrExitedFrame === undefined) {
+      return false;
+    }
+    if (enteredOrExitedFrame !== this.frameCounter && enteredOrExitedFrame !== this.frameCounter - 1) {
+      return false;
+    }
+
+    return this.scriptTriggerExitedByEntityId.get(entityId)?.has(triggerIndex) ?? false;
   }
 
   /**
@@ -17933,11 +18037,15 @@ export class GameLogicSubsystem implements Subsystem {
 
   private addEntityToWorld(entity: MapEntity): void {
     this.spawnedEntities.set(entity.id, entity);
+    if (this.mapTriggerRegions.length > 0) {
+      this.initializeScriptTriggerMembershipForEntity(entity);
+    }
     this.notifyScriptObjectCreationOrDestruction();
   }
 
   private removeEntityFromWorld(entityId: number): void {
     if (this.spawnedEntities.delete(entityId)) {
+      this.clearScriptTriggerTrackingForEntity(entityId);
       this.notifyScriptObjectCreationOrDestruction();
     }
   }
@@ -18717,6 +18825,95 @@ export class GameLogicSubsystem implements Subsystem {
         issueMoveTo: this.issueMoveTo.bind(this),
         isValidEntity: (candidate) => !candidate.destroyed && candidate.canMove,
       });
+    }
+  }
+
+  private initializeScriptTriggerMembershipBaselines(): void {
+    this.scriptTriggerMembershipByEntityId.clear();
+    this.scriptTriggerEnteredByEntityId.clear();
+    this.scriptTriggerExitedByEntityId.clear();
+    this.scriptTriggerEnterExitFrameByEntityId.clear();
+    for (const entity of this.spawnedEntities.values()) {
+      this.initializeScriptTriggerMembershipForEntity(entity);
+    }
+  }
+
+  private initializeScriptTriggerMembershipForEntity(entity: MapEntity): void {
+    if (entity.destroyed || entity.kindOf.has('INERT') || entity.kindOf.has('PROJECTILE')) {
+      this.clearScriptTriggerTrackingForEntity(entity.id);
+      return;
+    }
+
+    this.scriptTriggerMembershipByEntityId.set(
+      entity.id,
+      this.computeCurrentScriptTriggerMembership(entity),
+    );
+    this.scriptTriggerEnteredByEntityId.delete(entity.id);
+    this.scriptTriggerExitedByEntityId.delete(entity.id);
+    this.scriptTriggerEnterExitFrameByEntityId.delete(entity.id);
+  }
+
+  private clearScriptTriggerTrackingForEntity(entityId: number): void {
+    this.scriptTriggerMembershipByEntityId.delete(entityId);
+    this.scriptTriggerEnteredByEntityId.delete(entityId);
+    this.scriptTriggerExitedByEntityId.delete(entityId);
+    this.scriptTriggerEnterExitFrameByEntityId.delete(entityId);
+  }
+
+  private computeCurrentScriptTriggerMembership(entity: Pick<MapEntity, 'x' | 'z'>): Set<number> {
+    const membership = new Set<number>();
+    for (let index = 0; index < this.mapTriggerRegions.length; index += 1) {
+      const region = this.mapTriggerRegions[index]!;
+      if (this.isPointInsideTriggerRegion(region, entity.x, entity.z)) {
+        membership.add(index);
+      }
+    }
+    return membership;
+  }
+
+  private updateScriptTriggerTransitions(): void {
+    if (this.mapTriggerRegions.length === 0) {
+      return;
+    }
+
+    for (const trackedEntityId of Array.from(this.scriptTriggerMembershipByEntityId.keys())) {
+      const trackedEntity = this.spawnedEntities.get(trackedEntityId);
+      if (!trackedEntity || trackedEntity.destroyed) {
+        this.clearScriptTriggerTrackingForEntity(trackedEntityId);
+      }
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.kindOf.has('INERT') || entity.kindOf.has('PROJECTILE')) {
+        this.clearScriptTriggerTrackingForEntity(entity.id);
+        continue;
+      }
+
+      const previousMembership = this.scriptTriggerMembershipByEntityId.get(entity.id) ?? new Set<number>();
+      const currentMembership = this.computeCurrentScriptTriggerMembership(entity);
+      const entered = new Set<number>();
+      const exited = new Set<number>();
+
+      for (const triggerIndex of currentMembership) {
+        if (!previousMembership.has(triggerIndex)) {
+          entered.add(triggerIndex);
+        }
+      }
+      for (const triggerIndex of previousMembership) {
+        if (!currentMembership.has(triggerIndex)) {
+          exited.add(triggerIndex);
+        }
+      }
+
+      this.scriptTriggerMembershipByEntityId.set(entity.id, currentMembership);
+
+      if (entered.size === 0 && exited.size === 0) {
+        continue;
+      }
+
+      this.scriptTriggerEnteredByEntityId.set(entity.id, entered);
+      this.scriptTriggerExitedByEntityId.set(entity.id, exited);
+      this.scriptTriggerEnterExitFrameByEntityId.set(entity.id, this.frameCounter);
     }
   }
 
@@ -34089,6 +34286,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();
     this.scriptObjectCountBySideAndType.clear();
+    this.scriptTriggerMembershipByEntityId.clear();
+    this.scriptTriggerEnteredByEntityId.clear();
+    this.scriptTriggerExitedByEntityId.clear();
+    this.scriptTriggerEnterExitFrameByEntityId.clear();
     this.loadedMapData = null;
     this.navigationGrid = null;
     this.bridgeSegments.clear();
