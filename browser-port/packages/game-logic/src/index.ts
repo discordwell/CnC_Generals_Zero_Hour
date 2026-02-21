@@ -6133,6 +6133,39 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateNamedInsideArea.
+   */
+  evaluateScriptNamedInsideArea(filter: {
+    entityId: number;
+    triggerName: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const triggerRegion = this.findMapTriggerRegionsByName(filter.triggerName)[0];
+    if (!triggerRegion) {
+      return false;
+    }
+    return this.isPointInsideTriggerRegion(triggerRegion, entity.x, entity.z);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedOutsideArea.
+   */
+  evaluateScriptNamedOutsideArea(filter: {
+    entityId: number;
+    triggerName: string;
+  }): boolean {
+    return !this.evaluateScriptNamedInsideArea(filter);
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateNamedEnteredArea.
    * Mirrors Object::didEnter(trigger): true when entered this frame or previous frame.
    */

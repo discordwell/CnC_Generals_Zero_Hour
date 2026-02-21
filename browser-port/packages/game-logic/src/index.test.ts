@@ -28124,6 +28124,8 @@ describe('Script condition groundwork', () => {
     };
     const scout = privateApi.spawnedEntities.get(1)!;
 
+    expect(logic.evaluateScriptNamedInsideArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
+    expect(logic.evaluateScriptNamedOutsideArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
     expect(logic.evaluateScriptNamedEnteredArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
     expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
 
@@ -28131,6 +28133,8 @@ describe('Script condition groundwork', () => {
     scout.x = 50;
     scout.z = 50;
     logic.update(0);
+    expect(logic.evaluateScriptNamedInsideArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
+    expect(logic.evaluateScriptNamedOutsideArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
     expect(logic.evaluateScriptNamedEnteredArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
     logic.update(0);
     expect(logic.evaluateScriptNamedEnteredArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
@@ -28141,6 +28145,8 @@ describe('Script condition groundwork', () => {
     scout.x = 20;
     scout.z = 20;
     logic.update(0);
+    expect(logic.evaluateScriptNamedInsideArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
+    expect(logic.evaluateScriptNamedOutsideArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
     expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
     logic.update(0);
     expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(true);
