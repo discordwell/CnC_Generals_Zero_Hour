@@ -27955,6 +27955,40 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates named-has-free-container-slots from contain occupancy', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GarrisonHub', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_Contain', { ContainMax: 1 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GarrisonHub', 12, 12),
+        makeMapObject('Ranger', 14, 12),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 2 })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { garrisonContainerId: number | null }>;
+    };
+    privateApi.spawnedEntities.get(2)!.garrisonContainerId = 1;
+
+    expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 1 })).toBe(false);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [

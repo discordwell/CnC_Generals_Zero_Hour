@@ -5964,6 +5964,47 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateNamedHasFreeContainerSlots.
+   */
+  evaluateScriptNamedHasFreeContainerSlots(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const contain = entity.containProfile;
+    if (!contain) {
+      return false;
+    }
+
+    let maxSlots = 0;
+    switch (contain.moduleType) {
+      case 'GARRISON':
+        maxSlots = contain.garrisonCapacity;
+        break;
+      case 'TUNNEL':
+        // TODO(source-parity): tunnel capacity comes from TunnelTracker shared state.
+        maxSlots = this.config.maxTunnelCapacity;
+        break;
+      default:
+        maxSlots = contain.transportCapacity;
+        break;
+    }
+
+    if (maxSlots <= 0) {
+      return true;
+    }
+
+    return this.collectContainedEntityIds(entityId).length < maxSlots;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerHasNOrFewerBuildings.
    */
   evaluateScriptPlayerHasNOrFewerBuildings(filter: {
