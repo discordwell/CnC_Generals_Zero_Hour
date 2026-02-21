@@ -17848,10 +17848,14 @@ export class GameLogicSubsystem implements Subsystem {
    * point.  The produced unit follows the full path in order.
    */
   private applyQueueProductionExitPath(producer: MapEntity, producedUnit: MapEntity): void {
+    // Source parity: C++ only appends player rally point for ground-moving
+    // units (ai->isDoingGroundMovement()).  Aircraft skip the rally point.
+    const isGroundMover = !producedUnit.kindOf.has('AIRCRAFT');
     const exitPath = resolveQueueProductionExitPathImpl(
       producer,
       producedUnit.canMove,
       MAP_XY_FACTOR,
+      isGroundMover,
     );
     if (exitPath.length === 0) {
       return;

@@ -114,4 +114,41 @@ describe('resolveQueueProductionExitPath', () => {
     expect(path[1]!.x).toBe(100);
     expect(path[1]!.z).toBe(80);
   });
+
+  it('skips player rally point for non-ground movers (aircraft)', () => {
+    const producer = makeProducer({ rallyPoint: { x: 100, z: 80 } });
+    const path = resolveQueueProductionExitPath(producer, true, MAP_XY_FACTOR, false);
+
+    // Air units get only the natural rally point, not the player rally point.
+    expect(path.length).toBe(1);
+    expect(path[0]!.x).toBeCloseTo(88, 1);
+    expect(path[0]!.z).toBeCloseTo(40, 1);
+  });
+
+  it('SUPPLY_CENTER always appends rally point even for non-ground movers', () => {
+    const producer = makeProducer({
+      moduleType: 'SUPPLY_CENTER',
+      rallyPoint: { x: 100, z: 80 },
+    });
+    // SupplyCenter doesn't check isDoingGroundMovement in C++.
+    const path = resolveQueueProductionExitPath(producer, true, MAP_XY_FACTOR, false);
+
+    expect(path.length).toBe(2);
+    expect(path[0]!.x).toBeCloseTo(68, 1);
+    expect(path[0]!.z).toBeCloseTo(40, 1);
+    expect(path[1]!.x).toBe(100);
+    expect(path[1]!.z).toBe(80);
+  });
+
+  it('applies offset for SPAWN_POINT module type (inherits Default behavior)', () => {
+    const producer = makeProducer({ moduleType: 'SPAWN_POINT' });
+    const path = resolveQueueProductionExitPath(producer, true, MAP_XY_FACTOR);
+
+    // SPAWN_POINT inherits DefaultProductionExitUpdate which applies the offset.
+    // offset = 28 + 28*(2*10/28) = 28 + 20 = 48
+    // worldX = 40 + 48*cos(0) = 88
+    expect(path.length).toBe(1); // No doubling for non-QUEUE types
+    expect(path[0]!.x).toBeCloseTo(88, 1);
+    expect(path[0]!.z).toBeCloseTo(40, 1);
+  });
 });

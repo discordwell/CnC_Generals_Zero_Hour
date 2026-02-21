@@ -102,6 +102,7 @@ export function resolveQueueProductionExitPath(
   producer: ProducerForSpawnResolution,
   producedUnitCanMove: boolean,
   mapXyFactor: number,
+  producedUnitIsGroundMover: boolean = true,
 ): { x: number; z: number }[] {
   if (!producedUnitCanMove) {
     return [];
@@ -110,17 +111,18 @@ export function resolveQueueProductionExitPath(
   const exitProfile = producer.queueProductionExitProfile;
   if (!exitProfile || !exitProfile.naturalRallyPoint) {
     // No exit profile — fall back to just the player rally point if set.
-    if (producer.rallyPoint) {
+    if (producer.rallyPoint && producedUnitIsGroundMover) {
       return [{ x: producer.rallyPoint.x, z: producer.rallyPoint.z }];
     }
     return [];
   }
 
   // Compute the natural rally point in world space.
+  // Source parity: getNaturalRallyPoint(offset=TRUE) adds 2*PATHFIND_CELL_SIZE
+  // along the normalized rally vector for Default and Queue types.
+  // SupplyCenter reads m_naturalRallyPoint directly (no offset).
   const rallyLocal = { ...exitProfile.naturalRallyPoint };
-  if (exitProfile.moduleType === 'QUEUE') {
-    // Source parity: QueueProductionExitUpdate doubles the natural
-    // rally vector by 2*PATHFIND_CELL_SIZE to prevent stacking.
+  if (exitProfile.moduleType !== 'SUPPLY_CENTER') {
     const magnitude = Math.hypot(rallyLocal.x, rallyLocal.y, rallyLocal.z);
     if (magnitude > 0) {
       const offsetScale = (2 * mapXyFactor) / magnitude;
@@ -140,10 +142,15 @@ export function resolveQueueProductionExitPath(
 
   const path: { x: number; z: number }[] = [naturalWorld];
 
-  // Source parity: player rally point is appended after the natural
-  // point (DefaultProductionExitUpdate.cpp lines 109-118).
+  // Source parity: player rally point is appended after the natural point.
+  // Default/Queue: only for ground-moving units (C++ ai->isDoingGroundMovement()).
+  // SupplyCenter: always appended (no ground movement check in C++).
   if (producer.rallyPoint) {
-    path.push({ x: producer.rallyPoint.x, z: producer.rallyPoint.z });
+    const shouldAppendRally = exitProfile.moduleType === 'SUPPLY_CENTER'
+      || producedUnitIsGroundMover;
+    if (shouldAppendRally) {
+      path.push({ x: producer.rallyPoint.x, z: producer.rallyPoint.z });
+    }
   } else if (exitProfile.moduleType === 'QUEUE') {
     // Source parity: QueueProductionExitUpdate.cpp lines 153-156 —
     // "Double the destination to keep redguards from stacking."
@@ -158,7 +165,8 @@ export function resolveQueueProductionNaturalRallyPoint(
   producer: ProducerForSpawnResolution,
   producedUnitCanMove: boolean,
   mapXyFactor: number,
+  producedUnitIsGroundMover: boolean = true,
 ): { x: number; z: number } | null {
-  const path = resolveQueueProductionExitPath(producer, producedUnitCanMove, mapXyFactor);
+  const path = resolveQueueProductionExitPath(producer, producedUnitCanMove, mapXyFactor, producedUnitIsGroundMover);
   return path.length > 0 ? path[0]! : null;
 }
