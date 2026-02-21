@@ -27279,6 +27279,90 @@ describe('onStructureConstructionComplete parity hooks', () => {
   });
 });
 
+describe('Script object-count + trigger groundwork', () => {
+  it('provides script object-count filtering and change-since-frame checks', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('UnitB', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('UnitA', 10, 10),
+        makeMapObject('UnitA', 12, 10),
+        makeMapObject('UnitB', 20, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.getScriptObjectCount()).toBe(3);
+    expect(logic.getScriptObjectCount({ side: 'America' })).toBe(2);
+    expect(logic.getScriptObjectCount({ templateName: 'UnitA' })).toBe(2);
+    expect(logic.getScriptObjectCount({ kindOfAll: ['INFANTRY'] })).toBe(3);
+    expect(logic.didScriptObjectCountChangeSince(0)).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.getScriptObjectCount()).toBe(2);
+    expect(logic.getScriptObjectCount({ side: 'America' })).toBe(1);
+    expect(logic.didScriptObjectCountChangeSince(0)).toBe(true);
+  });
+
+  it('counts entities inside named map trigger polygons', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericanUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ChineseUnit', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericanUnit', 5, 5),
+      makeMapObject('ChineseUnit', 10, 10),
+      makeMapObject('ChineseUnit', 60, 60),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'SpawnZone',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.getMapTriggerNames()).toEqual(['SpawnZone']);
+    expect(logic.isPointInsideMapTrigger('SpawnZone', 6, 6)).toBe(true);
+    expect(logic.isPointInsideMapTrigger('SpawnZone', 50, 50)).toBe(false);
+    expect(logic.getScriptObjectCount({ triggerName: 'SpawnZone' })).toBe(2);
+    expect(logic.getScriptObjectCount({ triggerName: 'SpawnZone', side: 'America' })).toBe(1);
+    expect(logic.getScriptObjectCount({ triggerName: 'UnknownZone' })).toBe(0);
+  });
+});
+
 describe('SubdualDamageHelper', () => {
   it('accumulates subdual damage instead of reducing health', () => {
     const bundle = makeBundle({

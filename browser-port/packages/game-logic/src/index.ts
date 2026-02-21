@@ -3709,6 +3709,17 @@ export class GameLogicSubsystem implements Subsystem {
     /** Water surface height (original engine Z → game-logic Y). */
     waterHeight: number;
   }> = [];
+  /** Source parity groundwork: map polygon triggers (named regions for scripting conditions). */
+  private mapTriggerRegions: Array<{
+    id: number;
+    name: string;
+    nameUpper: string;
+    points: Array<{ x: number; y: number; z: number }>;
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+  }> = [];
   /** Source parity: SpyVisionSpecialPower — temporary fog reveals with expiration timers. */
   private readonly temporaryVisionReveals: {
     playerIndex: number;
@@ -3839,6 +3850,17 @@ export class GameLogicSubsystem implements Subsystem {
         // Source parity: C++ getWaterHeight returns pTrig->getPoint(0)->z (original engine Z = height).
         waterHeight: trigger.points[0]?.z ?? 0,
       }));
+
+    this.mapTriggerRegions = mapData.triggers.map((trigger) => ({
+      id: trigger.id,
+      name: trigger.name,
+      nameUpper: trigger.name.trim().toUpperCase(),
+      points: trigger.points,
+      minX: Math.min(...trigger.points.map((p) => p.x)),
+      maxX: Math.max(...trigger.points.map((p) => p.x)),
+      minZ: Math.min(...trigger.points.map((p) => p.y)),
+      maxZ: Math.max(...trigger.points.map((p) => p.y)),
+    }));
 
     // Initialize fog of war grid based on map dimensions.
     if (heightmap) {
@@ -5036,6 +5058,90 @@ export class GameLogicSubsystem implements Subsystem {
 
   getScriptObjectCountChangedFrame(): number {
     return this.scriptObjectCountChangedFrame;
+  }
+
+  /**
+   * Source parity groundwork: ScriptEngine object-count cache invalidation check.
+   * Returns true when object topology changed after the supplied frame.
+   */
+  didScriptObjectCountChangeSince(frame: number): boolean {
+    return this.scriptObjectCountChangedFrame > frame;
+  }
+
+  /**
+   * Source parity groundwork: named map trigger regions used by scripting.
+   */
+  getMapTriggerNames(): string[] {
+    const names = new Set<string>();
+    for (const trigger of this.mapTriggerRegions) {
+      if (trigger.nameUpper.length === 0) continue;
+      names.add(trigger.name);
+    }
+    return Array.from(names.values()).sort((left, right) => left.localeCompare(right));
+  }
+
+  /**
+   * Source parity groundwork: test whether a world point lies inside a named trigger polygon.
+   */
+  isPointInsideMapTrigger(triggerName: string, worldX: number, worldZ: number): boolean {
+    const normalizedName = triggerName.trim().toUpperCase();
+    if (!normalizedName) return false;
+    for (const trigger of this.mapTriggerRegions) {
+      if (trigger.nameUpper !== normalizedName) continue;
+      if (this.isPointInsideTriggerRegion(trigger, worldX, worldZ)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity groundwork: script object-count query for trigger/side/template conditions.
+   */
+  getScriptObjectCount(filter: {
+    side?: string;
+    templateName?: string;
+    kindOfAll?: string[];
+    triggerName?: string;
+  } = {}): number {
+    const normalizedSide = filter.side ? this.normalizeSide(filter.side) : null;
+    const normalizedTemplate = filter.templateName
+      ? filter.templateName.trim().toUpperCase()
+      : '';
+    const requiredKinds = (filter.kindOfAll ?? [])
+      .map((kind) => kind.trim().toUpperCase())
+      .filter((kind) => kind.length > 0);
+
+    let regionCandidates: typeof this.mapTriggerRegions | null = null;
+    if (filter.triggerName) {
+      const triggerName = filter.triggerName.trim().toUpperCase();
+      if (!triggerName) return 0;
+      regionCandidates = this.mapTriggerRegions.filter((region) => region.nameUpper === triggerName);
+      if (regionCandidates.length === 0) return 0;
+    }
+
+    let count = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (normalizedSide && this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (normalizedTemplate && entity.templateName.toUpperCase() !== normalizedTemplate) continue;
+      if (requiredKinds.length > 0 && !requiredKinds.every((kind) => entity.kindOf.has(kind))) continue;
+
+      if (regionCandidates) {
+        let inAnyRegion = false;
+        for (const region of regionCandidates) {
+          if (this.isPointInsideTriggerRegion(region, entity.x, entity.z)) {
+            inAnyRegion = true;
+            break;
+          }
+        }
+        if (!inAnyRegion) continue;
+      }
+
+      count += 1;
+    }
+
+    return count;
   }
 
   getSideAttackedByState(side: string): {
@@ -16882,6 +16988,23 @@ export class GameLogicSubsystem implements Subsystem {
         isValidEntity: (candidate) => !candidate.destroyed && candidate.canMove,
       });
     }
+  }
+
+  private isPointInsideTriggerRegion(
+    region: {
+      points: Array<{ x: number; y: number; z: number }>;
+      minX: number;
+      maxX: number;
+      minZ: number;
+      maxZ: number;
+    },
+    worldX: number,
+    worldZ: number,
+  ): boolean {
+    if (worldX < region.minX || worldX > region.maxX || worldZ < region.minZ || worldZ > region.maxZ) {
+      return false;
+    }
+    return pointInPolygon(worldX, worldZ, region.points);
   }
 
   private clearChinookSupplyBoxes(entityId: number): void {
