@@ -16540,6 +16540,9 @@ describe('PilotFindVehicleUpdate', () => {
     const objects: ObjectDef[] = [
       makeObjectDef('Pilot', pilotSide, ['INFANTRY'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        makeBlock('Behavior', 'VeterancyCrateCollide ModuleTag_PilotCollide', {
+          IsPilot: 'Yes',
+        }),
         makeBlock('Behavior', 'PilotFindVehicleUpdate ModuleTag_PFV', {
           ScanRate: 100,
           ScanRange: scanRange,
@@ -16548,7 +16551,7 @@ describe('PilotFindVehicleUpdate', () => {
       ]),
       makeObjectDef('EmptyTank', vehicleSide, ['VEHICLE'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: vehicleMaxHealth, InitialHealth: vehicleHealth }),
-      ]),
+      ], { ExperienceRequired: [1, 50, 100, 200] }),
     ];
 
     if (opts.vehicleOccupied) {
@@ -16587,21 +16590,30 @@ describe('PilotFindVehicleUpdate', () => {
         templateName: string;
         x: number;
         z: number;
+        y: number;
         moving: boolean;
+        destroyed: boolean;
         moveTarget: { x: number; z: number } | null;
         pilotFindVehicleProfile: unknown;
         pilotFindVehicleDidMoveToBase: boolean;
         pilotFindVehicleTargetId: number | null;
         transportContainerId: number | null;
+        experienceState: { currentLevel: number };
         category: string;
       }>;
     }).spawnedEntities;
 
     let pilot: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
     let vehicle: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
+    let occupant: (typeof entities extends Map<number, infer V> ? V : never) | undefined;
     for (const [, e] of entities) {
       if (e.templateName === 'Pilot') pilot = e;
       if (e.templateName === 'EmptyTank') vehicle = e;
+      if (e.templateName === 'Occupant') occupant = e;
+    }
+
+    if (opts.vehicleOccupied && occupant && vehicle) {
+      occupant.transportContainerId = vehicle.id;
     }
 
     return { logic, pilot: pilot!, vehicle: vehicle!, entities };
@@ -16620,11 +16632,13 @@ describe('PilotFindVehicleUpdate', () => {
       logic.update(1 / 30);
     }
 
-    // The pilot should have entered the vehicle (MASKED inside it) or be en route.
+    // Pilot should either still be moving/targeting, or be consumed after veterancy transfer.
     const hasTarget = pilot.pilotFindVehicleTargetId === vehicle.id;
     const isMoving = pilot.moveTarget !== null || pilot.moving;
-    const hasEntered = pilot.transportContainerId === vehicle.id;
-    expect(hasTarget || isMoving || hasEntered).toBe(true);
+    expect(hasTarget || isMoving || pilot.destroyed).toBe(true);
+    if (pilot.destroyed) {
+      expect(vehicle.experienceState.currentLevel).toBeGreaterThan(0);
+    }
   });
 
   it('does not activate for human-controlled pilots', () => {
@@ -16662,6 +16676,18 @@ describe('PilotFindVehicleUpdate', () => {
     }
 
     expect(pilot.pilotFindVehicleTargetId).toBeNull();
+  });
+
+  it('allows targeting occupied same-side vehicles when pilot collide path is valid', () => {
+    const { logic, pilot, vehicle } = makePilotSetup({ vehicleOccupied: true });
+
+    for (let i = 0; i < 60; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Source parity: occupied same-side vehicles are still valid for pilot collide behavior.
+    expect(pilot.destroyed).toBe(true);
+    expect(vehicle.experienceState.currentLevel).toBeGreaterThan(0);
   });
 
   it('moves to base when no vehicle found', () => {

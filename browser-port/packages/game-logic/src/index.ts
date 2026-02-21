@@ -18418,6 +18418,23 @@ export class GameLogicSubsystem implements Subsystem {
     if (!collector.experienceProfile) return false;
     if (collector.experienceState.currentLevel >= LEVEL_HEROIC) return false;
 
+    if (prof.isPilot) {
+      // Source parity: VeterancyCrateCollide::isValidToExecute / executeCrateBehavior.
+      // Pilot only "enters" same-side, non-airborne targets and only while actively targeting it.
+      const crateSide = crate.side ? this.normalizeSide(crate.side) : null;
+      const collectorSide = collector.side ? this.normalizeSide(collector.side) : null;
+      if (!crateSide || !collectorSide || crateSide !== collectorSide) return false;
+
+      const terrainY = this.resolveGroundHeight(collector.x, collector.z);
+      if ((collector.y - collector.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD) {
+        return false;
+      }
+
+      if (crate.pilotFindVehicleTargetId !== null && crate.pilotFindVehicleTargetId !== collector.id) {
+        return false;
+      }
+    }
+
     const levelsToGain = prof.addsOwnerVeterancy
       ? Math.max(1, crate.experienceState.currentLevel)
       : 1;
@@ -26790,20 +26807,26 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: if already navigating to a target, check arrival.
       if (entity.pilotFindVehicleTargetId !== null) {
         const target = this.spawnedEntities.get(entity.pilotFindVehicleTargetId);
-        // Re-validate target: must still be alive, same side, and unoccupied.
+        // Re-validate target.
         if (!target || target.destroyed
           || (target.side ? this.normalizeSide(target.side) : null) !== side
-          || this.collectContainedEntityIds(target.id).length > 0) {
+          || !this.isPilotVehicleTargetEligible(entity, target)) {
           entity.pilotFindVehicleTargetId = null;
         } else {
           const dx = entity.x - target.x;
           const dz = entity.z - target.z;
           const dist = Math.sqrt(dx * dx + dz * dz);
           if (dist <= 15) {
-            // Source parity: pilot enters vehicle — use transport containment.
-            // TODO(C++ parity): C++ gates this through wouldLikeToCollideWith()
-            // collide modules; currently we accept any vehicle that passes health/side checks.
-            this.enterTransport(entity, target);
+            // Source parity: PilotFindVehicleUpdate + ActionManager::canEnterObject.
+            // Pilots with VeterancyCrateCollide(IsPilot=Yes) use collide execution path.
+            const crateProfile = entity.crateCollideProfile;
+            if (crateProfile?.crateType === 'VETERANCY' && crateProfile.isPilot) {
+              // Keep target locked so executeCrateVeterancy can enforce "goal object" parity.
+              entity.pilotFindVehicleTargetId = target.id;
+              this.executeGeneralCrateBehavior(entity, target);
+            } else {
+              this.enterTransport(entity, target);
+            }
             entity.pilotFindVehicleTargetId = null;
             continue;
           }
@@ -26842,10 +26865,9 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
 
-        // Source parity: C++ uses DONT_CHECK_CAPACITY and gates via wouldLikeToCollideWith()
-        // collide modules. We approximate by rejecting occupied vehicles.
-        // TODO(C++ parity): C++ allows entering occupied vehicles (pilot "takes over").
-        if (this.collectContainedEntityIds(candidate.id).length > 0) continue;
+        // Source parity: PilotFindVehicleUpdate::scanClosestTarget uses collide
+        // modules (wouldLikeToCollideWith) to validate targets.
+        if (!this.isPilotVehicleTargetEligible(entity, candidate)) continue;
 
         const dx = candidate.x - entity.x;
         const dz = candidate.z - entity.z;
@@ -26871,6 +26893,43 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
     }
+  }
+
+  /**
+   * Source parity: PilotFindVehicleUpdate::scanClosestTarget + ActionManager::canEnterObject.
+   * Pilot auto-entry should only consider targets accepted by pilot collide behavior
+   * (VeterancyCrateCollide with IsPilot=Yes).
+   */
+  private isPilotVehicleTargetEligible(pilot: MapEntity, target: MapEntity): boolean {
+    if (target.destroyed) return false;
+
+    const crateProfile = pilot.crateCollideProfile;
+    if (!crateProfile || crateProfile.crateType !== 'VETERANCY' || !crateProfile.isPilot) {
+      // Fallback: non-pilot collide units still use transport entry path.
+      return true;
+    }
+
+    // Reuse base crate eligibility checks.
+    if (!this.isCrateCollideEligible(pilot, target)) return false;
+
+    // Veterancy target must be trainable and not already max-level.
+    if (!target.experienceProfile) return false;
+    if (target.experienceState.currentLevel >= LEVEL_HEROIC) return false;
+
+    // C++ parity: pilots cannot "enter" airborne units.
+    const terrainY = this.resolveGroundHeight(target.x, target.z);
+    if ((target.y - target.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD) {
+      return false;
+    }
+
+    // C++ parity: pilot-only veterancy requires same-player target.
+    const pilotSide = pilot.side ? this.normalizeSide(pilot.side) : null;
+    const targetSide = target.side ? this.normalizeSide(target.side) : null;
+    if (!pilotSide || !targetSide || pilotSide !== targetSide) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
