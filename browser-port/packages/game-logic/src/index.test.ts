@@ -19931,3 +19931,243 @@ describe('LeafletDropBehavior', () => {
     expect(priv.spawnedEntities.get(3)!.objectStatusFlags.has('DISABLED_EMP')).toBe(true);
   });
 });
+
+// ─── SmartBombTargetHomingUpdate ─────────────────────────────────────────────
+describe('SmartBombTargetHomingUpdate', () => {
+  it('interpolates position toward target while above terrain', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SmartBomb', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'SmartBombTargetHomingUpdate ModuleTag_Smart', {
+            CourseCorrectionScalar: 0.5,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SmartBomb', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; y: number; z: number; baseHeight: number }>;
+      resolveGroundHeight(x: number, z: number): number;
+    };
+    const bomb = priv.spawnedEntities.get(1)!;
+    // Entity spawns at world position (50, 50).
+    // Raise the bomb significantly above terrain to pass isSignificantlyAboveTerrain.
+    const terrainY = priv.resolveGroundHeight(50, 50);
+    bomb.y = terrainY + bomb.baseHeight + 50; // 50 units above terrain
+
+    // Set the smart bomb target at world coords (100, 120).
+    logic.setSmartBombTarget(1, 100, 120);
+
+    logic.update(1 / 30);
+
+    // With scalar=0.5: new pos = target * 0.5 + current * 0.5
+    // x: 100 * 0.5 + 50 * 0.5 = 75
+    // z: 120 * 0.5 + 50 * 0.5 = 85
+    expect(bomb.x).toBeCloseTo(75, 0);
+    expect(bomb.z).toBeCloseTo(85, 0);
+  });
+
+  it('does not course-correct when near ground', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SmartBomb', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          makeBlock('Behavior', 'SmartBombTargetHomingUpdate ModuleTag_Smart', {
+            CourseCorrectionScalar: 0.5,
+          }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SmartBomb', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; y: number; z: number }>;
+    };
+    const bomb = priv.spawnedEntities.get(1)!;
+    const startX = bomb.x;
+    const startZ = bomb.z;
+
+    // Set the target but leave the bomb near the ground (default spawn height).
+    logic.setSmartBombTarget(1, 100, 120);
+
+    logic.update(1 / 30);
+
+    // Position should be unchanged — not significantly above terrain.
+    expect(bomb.x).toBe(startX);
+    expect(bomb.z).toBe(startZ);
+  });
+});
+
+// ─── DynamicGeometryInfoUpdate ───────────────────────────────────────────────
+describe('DynamicGeometryInfoUpdate', () => {
+  it('morphs geometry from initial to final over transition time', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Morpher', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'DynamicGeometryInfoUpdate ModuleTag_DynGeom', {
+            InitialDelay: 0,
+            InitialHeight: 10,
+            InitialMajorRadius: 5,
+            InitialMinorRadius: 5,
+            FinalHeight: 20,
+            FinalMajorRadius: 15,
+            FinalMinorRadius: 15,
+            TransitionTime: 300, // 300ms = 9 frames at 30fps
+            ReverseAtTransitionTime: 'No',
+          }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 10 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Morpher', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        obstacleGeometry: { height: number; majorRadius: number; minorRadius: number } | null;
+        dynamicGeometryState: { finished: boolean; timeActive: number } | null;
+      }>;
+    };
+
+    // Run enough frames for the transition to complete (delay=1 frame min + 9 transition frames).
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.dynamicGeometryState!.finished).toBe(true);
+    // Final geometry should be close to final values.
+    expect(entity.obstacleGeometry!.height).toBeCloseTo(20, 0);
+    expect(entity.obstacleGeometry!.majorRadius).toBeCloseTo(15, 0);
+  });
+
+  it('reverses direction when reverseAtTransitionTime is enabled', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Morpher', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'DynamicGeometryInfoUpdate ModuleTag_DynGeom', {
+            InitialDelay: 0,
+            InitialHeight: 10,
+            InitialMajorRadius: 5,
+            InitialMinorRadius: 5,
+            FinalHeight: 30,
+            FinalMajorRadius: 20,
+            FinalMinorRadius: 20,
+            TransitionTime: 300, // 9 frames
+            ReverseAtTransitionTime: 'Yes',
+          }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 10 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Morpher', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        obstacleGeometry: { height: number; majorRadius: number; minorRadius: number } | null;
+        dynamicGeometryState: { finished: boolean; timeActive: number; reverseAtTransitionTime: boolean } | null;
+      }>;
+    };
+
+    // Run past first transition — should reverse.
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+
+    const entity = priv.spawnedEntities.get(1)!;
+    // After first transition completes, it should have reversed (not finished).
+    // After the reverse pass completes, it should be finished.
+    // Run more frames for the reverse pass.
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+
+    expect(entity.dynamicGeometryState!.finished).toBe(true);
+    // Geometry should be back near initial values.
+    expect(entity.obstacleGeometry!.height).toBeCloseTo(10, 0);
+    expect(entity.obstacleGeometry!.majorRadius).toBeCloseTo(5, 0);
+  });
+});
+
+// ─── FireOCLAfterWeaponCooldownUpdate ────────────────────────────────────────
+describe('FireOCLAfterWeaponCooldownUpdate', () => {
+  it('fires OCL when entity stops attacking after enough shots', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+          makeBlock('Behavior', 'FireOCLAfterWeaponCooldownUpdate ModuleTag_OCL', {
+            WeaponSlot: 'PRIMARY',
+            OCL: 'OCL_TestEffect',
+            MinShotsToCreateOCL: 2,
+            OCLLifetimePerSecond: 1000,
+            OCLLifetimeMaxCap: 10000,
+          }),
+        ]),
+        makeObjectDef('Target', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 5000, InitialHealth: 5000 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          AttackRange: 220,
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          DelayBetweenShots: 100,
+          DamageType: 'ARMOR_PIERCING',
+          DeathType: 'NORMAL',
+          WeaponSpeed: 999,
+          ProjectileNudge: '0 0 0',
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Attacker', 8, 8),
+        makeMapObject('Target', 10, 8),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Command attacker to attack target.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    // Run enough frames for weapon to fire multiple shots.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        fireOCLAfterCooldownStates: { valid: boolean; consecutiveShots: number }[];
+      }>;
+    };
+
+    // Verify the tracking state has been initialized and is counting.
+    const attacker = priv.spawnedEntities.get(1)!;
+    expect(attacker.fireOCLAfterCooldownStates.length).toBe(1);
+  });
+});

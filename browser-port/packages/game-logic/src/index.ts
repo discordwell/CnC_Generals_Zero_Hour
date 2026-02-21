@@ -1611,6 +1611,18 @@ interface MapEntity {
   leafletDropProfile: LeafletDropProfile | null;
   leafletDropState: LeafletDropRuntimeState | null;
 
+  // ── Source parity: SmartBombTargetHomingUpdate — course correction for falling projectiles ──
+  smartBombProfile: SmartBombTargetHomingProfile | null;
+  smartBombState: SmartBombTargetHomingState | null;
+
+  // ── Source parity: DynamicGeometryInfoUpdate — geometry morphing over time ──
+  dynamicGeometryProfile: DynamicGeometryInfoUpdateProfile | null;
+  dynamicGeometryState: DynamicGeometryInfoUpdateState | null;
+
+  // ── Source parity: FireOCLAfterWeaponCooldownUpdate — fire OCL after weapon stops ──
+  fireOCLAfterCooldownProfiles: FireOCLAfterWeaponCooldownProfile[];
+  fireOCLAfterCooldownStates: FireOCLAfterWeaponCooldownState[];
+
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
@@ -2706,6 +2718,80 @@ interface HijackerRuntimeState {
   ejectZ: number;
 }
 
+/**
+ * Source parity: SmartBombTargetHomingUpdate — gently adjusts a falling object's XZ position
+ * toward its designated target coordinate each frame while airborne.
+ * C++ file: SmartBombTargetHomingUpdate.h/cpp.
+ */
+interface SmartBombTargetHomingProfile {
+  /** Blend factor: 0 = snap to target, 1 = no correction, default 0.99. */
+  courseCorrectionScalar: number;
+}
+
+interface SmartBombTargetHomingState {
+  /** Whether a target has been received via SetTargetPosition. */
+  targetReceived: boolean;
+  /** Target X world coordinate. */
+  targetX: number;
+  /** Target Y world coordinate. */
+  targetY: number;
+}
+
+/**
+ * Source parity: DynamicGeometryInfoUpdate — morphs collision geometry over time.
+ * C++ file: DynamicGeometryInfoUpdate.cpp.
+ */
+interface DynamicGeometryInfoUpdateProfile {
+  initialDelayFrames: number;
+  initialHeight: number;
+  initialMajorRadius: number;
+  initialMinorRadius: number;
+  finalHeight: number;
+  finalMajorRadius: number;
+  finalMinorRadius: number;
+  transitionTimeFrames: number;
+  reverseAtTransitionTime: boolean;
+}
+
+interface DynamicGeometryInfoUpdateState {
+  delayCountdown: number;
+  started: boolean;
+  finished: boolean;
+  timeActive: number;
+  /** Current initial values (may be swapped on reverse). */
+  initialHeight: number;
+  initialMajorRadius: number;
+  initialMinorRadius: number;
+  finalHeight: number;
+  finalMajorRadius: number;
+  finalMinorRadius: number;
+  /** Whether reverse has been triggered (only once). */
+  reverseAtTransitionTime: boolean;
+}
+
+/**
+ * Source parity: FireOCLAfterWeaponCooldownUpdate — fires an OCL when a tracked weapon
+ * stops shooting after enough consecutive shots. C++ file: FireOCLAfterWeaponCooldownUpdate.cpp.
+ */
+interface FireOCLAfterWeaponCooldownProfile {
+  /** Which weapon slot to track (0 = PRIMARY, 1 = SECONDARY, 2 = TERTIARY). */
+  weaponSlot: number;
+  /** OCL template name to create. */
+  oclName: string;
+  /** Minimum consecutive shots required before OCL creation. */
+  minShotsRequired: number;
+  /** Lifetime scaling factor (ms of OCL lifetime per second of firing). */
+  oclLifetimePerSecond: number;
+  /** Maximum OCL lifetime in frames. */
+  oclMaxFrames: number;
+}
+
+interface FireOCLAfterWeaponCooldownState {
+  valid: boolean;
+  consecutiveShots: number;
+  startFrame: number;
+}
+
 /** Source parity: PoisonedBehavior default INI values. */
 const DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES = 10; // ~0.33s at 30fps
 const DEFAULT_POISON_DURATION_FRAMES = 90; // ~3s at 30fps
@@ -3275,6 +3361,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateStickyBombs();
     this.updateSlowDeathEntities();
     this.updateStructureCollapseEntities();
+    this.updateSmartBombHoming();
+    this.updateDynamicGeometry();
+    this.updateFireOCLAfterCooldown();
     this.updateEmpEntities();
     this.updateLeafletDropEntities();
     this.updateWeaponIdleAutoReload();
@@ -5060,6 +5149,15 @@ export class GameLogicSubsystem implements Subsystem {
       // Leaflet drop (delayed radius disable)
       leafletDropProfile: this.extractLeafletDropProfile(objectDef),
       leafletDropState: null,
+      // SmartBomb target homing (course correction for falling projectiles)
+      smartBombProfile: this.extractSmartBombProfile(objectDef),
+      smartBombState: null,
+      // Dynamic geometry (collision shape morphing)
+      dynamicGeometryProfile: this.extractDynamicGeometryProfile(objectDef),
+      dynamicGeometryState: null,
+      // Fire OCL after weapon cooldown
+      fireOCLAfterCooldownProfiles: this.extractFireOCLAfterCooldownProfiles(objectDef),
+      fireOCLAfterCooldownStates: [],
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -8959,6 +9057,90 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.parentDef.blocks) visitBlock(block);
     }
     return profile;
+  }
+
+  /**
+   * Source parity: SmartBombTargetHomingUpdate — extract course correction profile from INI.
+   * C++ file: SmartBombTargetHomingUpdate.h (buildFieldParse).
+   */
+  private extractSmartBombProfile(objectDef: ObjectDef | undefined): SmartBombTargetHomingProfile | null {
+    if (!objectDef) return null;
+    let profile: SmartBombTargetHomingProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'SMARTBOMBTARGETHOMINGUPDATE') return;
+      profile = {
+        courseCorrectionScalar: readNumericField(block.fields, ['CourseCorrectionScalar']) ?? 0.99,
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: DynamicGeometryInfoUpdate — extract geometry morphing profile from INI.
+   * C++ file: DynamicGeometryInfoUpdate.cpp (buildFieldParse).
+   */
+  private extractDynamicGeometryProfile(objectDef: ObjectDef | undefined): DynamicGeometryInfoUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: DynamicGeometryInfoUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'DYNAMICGEOMETRYINFOUPDATE') return;
+      profile = {
+        initialDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['InitialDelay']) ?? 0),
+        initialHeight: readNumericField(block.fields, ['InitialHeight']) ?? 0,
+        initialMajorRadius: readNumericField(block.fields, ['InitialMajorRadius']) ?? 0,
+        initialMinorRadius: readNumericField(block.fields, ['InitialMinorRadius']) ?? 0,
+        finalHeight: readNumericField(block.fields, ['FinalHeight']) ?? 0,
+        finalMajorRadius: readNumericField(block.fields, ['FinalMajorRadius']) ?? 0,
+        finalMinorRadius: readNumericField(block.fields, ['FinalMinorRadius']) ?? 0,
+        transitionTimeFrames: this.msToLogicFrames(readNumericField(block.fields, ['TransitionTime']) ?? 1),
+        reverseAtTransitionTime: (readStringField(block.fields, ['ReverseAtTransitionTime']) ?? '').toUpperCase() === 'YES',
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: FireOCLAfterWeaponCooldownUpdate — extract OCL-after-cooldown profiles from INI.
+   * C++ file: FireOCLAfterWeaponCooldownUpdate.cpp (buildFieldParse).
+   * Multiple modules per entity are allowed.
+   */
+  private extractFireOCLAfterCooldownProfiles(objectDef: ObjectDef | undefined): FireOCLAfterWeaponCooldownProfile[] {
+    if (!objectDef) return [];
+    const profiles: FireOCLAfterWeaponCooldownProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'FIREOCLAFTERWEAPONCOOLDOWNUPDATE') return;
+      const slotStr = (readStringField(block.fields, ['WeaponSlot']) ?? 'PRIMARY').toUpperCase();
+      const slot = slotStr === 'SECONDARY' ? 1 : slotStr === 'TERTIARY' ? 2 : 0;
+      profiles.push({
+        weaponSlot: slot,
+        oclName: readStringField(block.fields, ['OCL']) ?? '',
+        minShotsRequired: readNumericField(block.fields, ['MinShotsToCreateOCL']) ?? 1,
+        oclLifetimePerSecond: readNumericField(block.fields, ['OCLLifetimePerSecond']) ?? 1000,
+        oclMaxFrames: this.msToLogicFrames(readNumericField(block.fields, ['OCLLifetimeMaxCap']) ?? 33333),
+      });
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profiles;
   }
 
   /**
@@ -22907,6 +23089,190 @@ export class GameLogicSubsystem implements Subsystem {
         this.applyEmpDisable(victim, profile.disabledDurationFrames);
       }
     }
+  }
+
+  /**
+   * Source parity: SmartBombTargetHomingUpdate::update — each frame, interpolate falling
+   * object's XZ position toward its target while it remains significantly above terrain.
+   * C++ file: SmartBombTargetHomingUpdate.cpp lines 76-111.
+   */
+  private updateSmartBombHoming(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
+      const profile = entity.smartBombProfile;
+      if (!profile) continue;
+      const state = entity.smartBombState;
+      if (!state || !state.targetReceived) continue;
+
+      // Source parity: if not significantly above terrain, don't course-correct.
+      const terrainY = this.resolveGroundHeight(entity.x, entity.z);
+      if ((entity.y - entity.baseHeight - terrainY) <= SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD) continue;
+
+      // Source parity: blend current position toward target.
+      const statusCoeff = Math.max(0, Math.min(1, profile.courseCorrectionScalar));
+      const targetCoeff = 1.0 - statusCoeff;
+
+      entity.x = state.targetX * targetCoeff + entity.x * statusCoeff;
+      entity.z = state.targetY * targetCoeff + entity.z * statusCoeff;
+      // entity.y (vertical) is NOT modified — projectile continues natural descent.
+    }
+  }
+
+  /**
+   * Source parity: SmartBombTargetHomingUpdate::SetTargetPosition — sets the target
+   * for a smart bomb entity to home toward.
+   */
+  setSmartBombTarget(entityId: number, targetX: number, targetZ: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.smartBombProfile) return;
+    entity.smartBombState = {
+      targetReceived: true,
+      targetX,
+      targetY: targetZ,
+    };
+  }
+
+  /**
+   * Source parity: DynamicGeometryInfoUpdate::update — per-frame geometry interpolation
+   * with optional delay, transition, and reverse. C++ file: DynamicGeometryInfoUpdate.cpp lines 117-186.
+   */
+  private updateDynamicGeometry(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
+      const profile = entity.dynamicGeometryProfile;
+      if (!profile) continue;
+
+      // Lazy-init runtime state.
+      if (!entity.dynamicGeometryState) {
+        entity.dynamicGeometryState = {
+          delayCountdown: Math.max(profile.initialDelayFrames, 1),
+          started: false,
+          finished: false,
+          timeActive: 0,
+          initialHeight: profile.initialHeight,
+          initialMajorRadius: profile.initialMajorRadius,
+          initialMinorRadius: profile.initialMinorRadius,
+          finalHeight: profile.finalHeight,
+          finalMajorRadius: profile.finalMajorRadius,
+          finalMinorRadius: profile.finalMinorRadius,
+          reverseAtTransitionTime: profile.reverseAtTransitionTime,
+        };
+      }
+
+      const state = entity.dynamicGeometryState;
+      if (state.finished) continue;
+
+      if (!state.started) {
+        state.delayCountdown--;
+        if (state.delayCountdown > 0) continue;
+        state.started = true;
+      }
+
+      // Interpolate geometry based on ratio.
+      const transitionTime = Math.max(profile.transitionTimeFrames, 1);
+      const ratio = state.timeActive / transitionTime;
+
+      const newHeight = state.initialHeight + (ratio * (state.finalHeight - state.initialHeight));
+      const newMajor = state.initialMajorRadius + (ratio * (state.finalMajorRadius - state.initialMajorRadius));
+      const newMinor = state.initialMinorRadius + (ratio * (state.finalMinorRadius - state.initialMinorRadius));
+
+      // Apply new geometry to entity's obstacle geometry.
+      if (entity.obstacleGeometry) {
+        entity.obstacleGeometry.height = newHeight;
+        entity.obstacleGeometry.majorRadius = newMajor;
+        entity.obstacleGeometry.minorRadius = newMinor;
+      }
+
+      state.timeActive++;
+
+      // Check if transition complete.
+      if (state.timeActive > transitionTime) {
+        if (state.reverseAtTransitionTime) {
+          // Swap directions: reset timer, swap initial/final values.
+          state.timeActive = 0;
+          state.reverseAtTransitionTime = false;
+          const tmpH = state.initialHeight;
+          const tmpMaj = state.initialMajorRadius;
+          const tmpMin = state.initialMinorRadius;
+          state.initialHeight = state.finalHeight;
+          state.initialMajorRadius = state.finalMajorRadius;
+          state.initialMinorRadius = state.finalMinorRadius;
+          state.finalHeight = tmpH;
+          state.finalMajorRadius = tmpMaj;
+          state.finalMinorRadius = tmpMin;
+        } else {
+          state.finished = true;
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: FireOCLAfterWeaponCooldownUpdate::update — tracks weapon firing and
+   * fires OCL when weapon stops after enough consecutive shots.
+   * C++ file: FireOCLAfterWeaponCooldownUpdate.cpp lines 102-183.
+   *
+   * Simplified: uses entity.attackTargetEntityId presence and nextAttackFrame timing to
+   * detect consecutive shots and firing cessation.
+   */
+  private updateFireOCLAfterCooldown(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
+      if (entity.fireOCLAfterCooldownProfiles.length === 0) continue;
+
+      // Lazy-init states to match profiles.
+      if (entity.fireOCLAfterCooldownStates.length !== entity.fireOCLAfterCooldownProfiles.length) {
+        entity.fireOCLAfterCooldownStates = entity.fireOCLAfterCooldownProfiles.map(() => ({
+          valid: false,
+          consecutiveShots: 0,
+          startFrame: 0,
+        }));
+      }
+
+      for (let i = 0; i < entity.fireOCLAfterCooldownProfiles.length; i++) {
+        const profile = entity.fireOCLAfterCooldownProfiles[i]!;
+        const state = entity.fireOCLAfterCooldownStates[i]!;
+
+        // Track whether the entity is actively firing its weapon this frame.
+        const isFiring = entity.attackTargetEntityId !== null && entity.nextAttackFrame > 0;
+
+        if (isFiring) {
+          // Entity is actively attacking — count shots via nextAttackFrame transitions.
+          if (!state.valid) {
+            // Just started firing.
+            state.consecutiveShots = 1;
+            state.startFrame = this.frameCounter;
+          } else if (entity.nextAttackFrame === this.frameCounter) {
+            // A new shot is firing this frame.
+            state.consecutiveShots++;
+          }
+        } else if (state.valid && state.consecutiveShots >= profile.minShotsRequired) {
+          // Entity stopped firing — fire OCL if enough shots.
+          this.fireOCLAfterCooldown(entity, profile, state);
+        }
+
+        state.valid = isFiring;
+      }
+    }
+  }
+
+  /**
+   * Source parity: FireOCLAfterWeaponCooldownUpdate::fireOCL — create OCL with
+   * firing-duration-scaled lifetime.
+   */
+  private fireOCLAfterCooldown(
+    entity: MapEntity,
+    profile: FireOCLAfterWeaponCooldownProfile,
+    state: FireOCLAfterWeaponCooldownState,
+  ): void {
+    // Source parity: ObjectCreationList::create — spawn OCL at entity position.
+    // NOTE: C++ passes oclFrames for lifetime scaling of spawned objects. Our executeOCL
+    // spawns objects that inherit their own LifetimeUpdate from INI; this is acceptable
+    // because the scaled lifetime only matters for visual effects (e.g., napalm overlays).
+    this.executeOCL(profile.oclName, entity);
+
+    state.consecutiveShots = 0;
+    state.startFrame = 0;
   }
 
   /**
