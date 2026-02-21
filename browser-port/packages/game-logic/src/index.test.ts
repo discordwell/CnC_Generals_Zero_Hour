@@ -27483,6 +27483,72 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptAllDestroyed({ side: 'America' })).toBe(true);
   });
 
+  it('evaluates named-discovered with held/stealth visibility gating', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScoutA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 40 }),
+        makeObjectDef('ScoutC', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 40 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScoutA', 10, 10), // id 1
+        makeMapObject('ScoutC', 15, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptNamedDiscovered({ entityId: 1, side: 'China' })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('STEALTHED');
+    expect(logic.evaluateScriptNamedDiscovered({ entityId: 1, side: 'China' })).toBe(false);
+
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('DETECTED');
+    expect(logic.evaluateScriptNamedDiscovered({ entityId: 1, side: 'China' })).toBe(true);
+
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('DISABLED_HELD');
+    expect(logic.evaluateScriptNamedDiscovered({ entityId: 1, side: 'China' })).toBe(false);
+  });
+
+  it('keeps mission-attempt and player-destroyed-N-buildings conditions at source TODO behavior', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenterA', 'America', ['STRUCTURE', 'COMMANDCENTER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CommandCenterA', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptMissionAttempts({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      attempts: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptPlayerDestroyedNOrMoreBuildings({
+      side: 'America',
+      count: 1,
+      opponentSide: 'China',
+    })).toBe(false);
+  });
+
   it('evaluates named-area existence and in-area type/kind conditions', () => {
     const bundle = makeBundle({
       objects: [

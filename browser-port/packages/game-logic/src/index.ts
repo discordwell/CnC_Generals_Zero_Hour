@@ -5348,6 +5348,41 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateNamedDiscovered.
+   */
+  evaluateScriptNamedDiscovered(filter: {
+    entityId: number;
+    side: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+
+    // Source parity: held objects are not visible.
+    if (entity.objectStatusFlags.has('DISABLED_HELD')) {
+      return false;
+    }
+    // Source parity: stealthed + not detected/disguised objects are not visible.
+    if (entity.objectStatusFlags.has('STEALTHED')
+      && !entity.objectStatusFlags.has('DETECTED')
+      && !entity.objectStatusFlags.has('DISGUISED')) {
+      return false;
+    }
+
+    const shroudStatus = this.resolveEntityShroudStatusForSide(entity, normalizedSide);
+    return shroudStatus === 'CLEAR' || shroudStatus === 'FOGGED';
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateSkirmishNamedAreaExists.
    */
   evaluateScriptSkirmishNamedAreaExists(triggerName: string): boolean {
@@ -5937,6 +5972,30 @@ export class GameLogicSubsystem implements Subsystem {
     const requestedCredits = Number.isFinite(filter.credits) ? Math.trunc(filter.credits) : 0;
     const currentCredits = this.getSideCredits(normalizedSide);
     return this.compareScriptCount(filter.comparison, requestedCredits, currentCredits);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateMissionAttempts.
+   * C++ currently returns false (unimplemented TODO).
+   */
+  evaluateScriptMissionAttempts(_filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    attempts: number;
+  }): boolean {
+    return false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerDestroyedNOrMoreBuildings.
+   * C++ currently returns false (unimplemented TODO).
+   */
+  evaluateScriptPlayerDestroyedNOrMoreBuildings(_filter: {
+    side: string;
+    count: number;
+    opponentSide: string;
+  }): boolean {
+    return false;
   }
 
   /**
