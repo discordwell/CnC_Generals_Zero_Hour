@@ -1682,6 +1682,12 @@ interface MapEntity {
    * immediate retaliation rather than waiting for the 2-second auto-target scan.
    */
   lastAttackerEntityId: number | null;
+  /** Source parity: BodyModule::m_lastDamageInfo.in.m_sourceID (persistent for script conditions). */
+  scriptLastDamageSourceEntityId: number | null;
+  /** Source parity: BodyModule::m_lastDamageInfo.in.m_sourceTemplate (template name snapshot). */
+  scriptLastDamageSourceTemplateName: string | null;
+  /** Source parity: BodyModule::m_lastDamageInfo.in.m_sourcePlayerMask (resolved to side key). */
+  scriptLastDamageSourceSide: string | null;
   /** Source parity: StealthDetectorUpdate — parsed detector module profile. */
   detectorProfile: DetectorProfile | null;
   /** Frame at which next detection scan is allowed (rate throttle). */
@@ -6181,6 +6187,31 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateNamedAttackedByPlayer.
+   * Checks persistent last-damage source player for a named unit.
+   */
+  evaluateScriptNamedAttackedByPlayer(filter: {
+    entityId: number;
+    attackedBySide: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const normalizedAttackerSide = this.normalizeSide(filter.attackedBySide);
+    if (!normalizedAttackerSide) {
+      return false;
+    }
+
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+
+    return entity.scriptLastDamageSourceSide === normalizedAttackerSide;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateNamedHasFreeContainerSlots.
    */
   evaluateScriptNamedHasFreeContainerSlots(filter: {
@@ -7825,6 +7856,9 @@ export class GameLogicSubsystem implements Subsystem {
       detectedUntilFrame: 0,
       lastDamageFrame: 0,
       lastAttackerEntityId: null,
+      scriptLastDamageSourceEntityId: null,
+      scriptLastDamageSourceTemplateName: null,
+      scriptLastDamageSourceSide: null,
       detectorProfile: this.extractDetectorProfile(objectDef),
       detectorNextScanFrame: 0,
       autoHealProfile: this.extractAutoHealProfile(objectDef),
@@ -27235,6 +27269,7 @@ export class GameLogicSubsystem implements Subsystem {
       // but does NOT return — it continues to record lastDamageInfo, lastDamageTimestamp, and
       // notifies onDamage callbacks (retaliation, stealth reveal, etc.).
       if (damageType !== 'HEALING') {
+        this.recordScriptLastDamageInfo(target, sourceEntityId);
         this.recordPreferredLastAttacker(target, sourceEntityId);
         this.recordAttackedBySource(target, sourceEntityId);
         target.lastDamageFrame = this.frameCounter;
@@ -27295,6 +27330,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: ActiveBody::getLastDamageTimestamp — track last damage frame for stealth.
     // Healing damage does not update the timestamp (C++ checks m_damageType != DAMAGE_HEALING).
     if (damageType !== 'HEALING') {
+      this.recordScriptLastDamageInfo(target, sourceEntityId);
       this.recordPreferredLastAttacker(target, sourceEntityId);
       this.recordAttackedBySource(target, sourceEntityId);
       target.lastDamageFrame = this.frameCounter;
@@ -27368,6 +27404,31 @@ export class GameLogicSubsystem implements Subsystem {
         this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
         this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
+  }
+
+  /**
+   * Source parity: BodyModule::m_lastDamageInfo source fields.
+   * Persists attacker id/template/player-side snapshot for script condition queries.
+   */
+  private recordScriptLastDamageInfo(target: MapEntity, sourceEntityId: number | null): void {
+    if (sourceEntityId === null || sourceEntityId === 0) {
+      target.scriptLastDamageSourceEntityId = null;
+      target.scriptLastDamageSourceTemplateName = null;
+      target.scriptLastDamageSourceSide = null;
+      return;
+    }
+
+    const source = this.spawnedEntities.get(sourceEntityId);
+    if (!source) {
+      target.scriptLastDamageSourceEntityId = null;
+      target.scriptLastDamageSourceTemplateName = null;
+      target.scriptLastDamageSourceSide = null;
+      return;
+    }
+
+    target.scriptLastDamageSourceEntityId = sourceEntityId;
+    target.scriptLastDamageSourceTemplateName = source.templateName.trim().toUpperCase();
+    target.scriptLastDamageSourceSide = this.normalizeSide(source.side);
   }
 
   /**

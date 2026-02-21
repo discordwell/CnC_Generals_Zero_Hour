@@ -28111,6 +28111,70 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 1 })).toBe(true);
   });
 
+  it('evaluates named-attacked-by-player using persistent last-damage source side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Target', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Target', 10, 10),   // id 1
+        makeMapObject('Attacker', 20, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptNamedAttackedByPlayer({
+      entityId: 1,
+      attackedBySide: 'China',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 10, 'SMALL_ARMS');
+
+    expect(logic.evaluateScriptNamedAttackedByPlayer({
+      entityId: 1,
+      attackedBySide: 'China',
+    })).toBe(true);
+    expect(logic.evaluateScriptNamedAttackedByPlayer({
+      entityId: 1,
+      attackedBySide: 'America',
+    })).toBe(false);
+
+    // Source parity: last-damage source player remains available even if attacker is gone.
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptNamedAttackedByPlayer({
+      entityId: 1,
+      attackedBySide: 'China',
+    })).toBe(true);
+
+    // Environmental/no-source damage overwrites last damage info with no attacker side.
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 1, 'FLAME');
+    expect(logic.evaluateScriptNamedAttackedByPlayer({
+      entityId: 1,
+      attackedBySide: 'China',
+    })).toBe(false);
+  });
+
   it('evaluates named-has-free-container-slots from contain occupancy', () => {
     const bundle = makeBundle({
       objects: [
