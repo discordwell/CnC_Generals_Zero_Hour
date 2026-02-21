@@ -1781,6 +1781,10 @@ interface MapEntity {
   // ── Source parity: NeutronBlastBehavior — death-triggered radius neutron blast ──
   neutronBlastProfile: NeutronBlastProfile | null;
 
+  // ── Source parity: BunkerBusterBehavior — kills garrisoned units on bomb death ──
+  bunkerBusterProfile: BunkerBusterProfile | null;
+  bunkerBusterVictimId: number | null;
+
   // ── Source parity: GrantStealthBehavior — expanding radius stealth grant ──
   grantStealthProfile: GrantStealthProfile | null;
   grantStealthCurrentRadius: number;
@@ -3198,6 +3202,21 @@ interface NeutronBlastProfile {
 }
 
 /**
+ * Source parity: BunkerBusterBehavior — death-triggered behavior that kills garrisoned
+ * units inside a targeted building. The bomb tracks its victim (attackTarget) during flight,
+ * then on death force-exits and damages all contained units in bustable containers.
+ * C++ file: BunkerBusterBehavior.h/cpp.
+ */
+interface BunkerBusterProfile {
+  /** Upgrade that must be completed by the owning player for the effect to trigger. Empty = no gate. */
+  upgradeRequired: string;
+  /** Weapon providing damageType/deathType for occupant damage. Empty = kill outright. */
+  occupantDamageWeaponName: string;
+  /** Weapon fired at detonation point for shockwave effect. Empty = none. */
+  shockwaveWeaponName: string;
+}
+
+/**
  * Source parity: NeutronMissileSlowDeathBehavior — extends SlowDeathBehavior with
  * sequential timed blast waves for the China Nuke superweapon missile object.
  * Up to 9 blast rings with configurable delay, radius, damage falloff, and topple.
@@ -3846,6 +3865,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateJetSlowDeath();
     this.updateStructureCollapseEntities();
     this.updateSmartBombHoming();
+    this.updateBunkerBusterTracking();
     this.updateDynamicGeometry();
     this.updateFireOCLAfterCooldown();
     this.updateEmpEntities();
@@ -5653,6 +5673,9 @@ export class GameLogicSubsystem implements Subsystem {
       fireOCLAfterCooldownStates: [],
       // Neutron blast (death-triggered radius effect)
       neutronBlastProfile: this.extractNeutronBlastProfile(objectDef),
+      // Bunker buster (kills garrisoned units on bomb death)
+      bunkerBusterProfile: this.extractBunkerBusterProfile(objectDef),
+      bunkerBusterVictimId: null,
       // Grant stealth (GPS Scrambler expanding radius)
       grantStealthProfile: this.extractGrantStealthProfile(objectDef),
       grantStealthCurrentRadius: 0,
@@ -10038,6 +10061,32 @@ export class GameLogicSubsystem implements Subsystem {
         blastRadius: readNumericField(block.fields, ['BlastRadius']) ?? 10.0,
         affectAirborne: (readStringField(block.fields, ['AffectAirborne']) ?? 'Yes').toUpperCase() !== 'NO',
         affectAllies: (readStringField(block.fields, ['AffectAllies']) ?? 'Yes').toUpperCase() !== 'NO',
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (!profile && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: BunkerBusterBehavior — extract bunker buster profile from INI.
+   * C++ file: BunkerBusterBehavior.h (buildFieldParse).
+   */
+  private extractBunkerBusterProfile(objectDef: ObjectDef | undefined): BunkerBusterProfile | null {
+    if (!objectDef) return null;
+    let profile: BunkerBusterProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'BUNKERBUSTERBEHAVIOR') return;
+      profile = {
+        upgradeRequired: (readStringField(block.fields, ['UpgradeRequired']) ?? '').trim().toUpperCase(),
+        occupantDamageWeaponName: (readStringField(block.fields, ['OccupantDamageWeaponTemplate']) ?? '').trim(),
+        shockwaveWeaponName: (readStringField(block.fields, ['ShockwaveWeaponTemplate']) ?? '').trim(),
       };
     };
     for (const block of objectDef.blocks) visitBlock(block);
@@ -26716,6 +26765,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: NeutronBlastBehavior::onDie — radius neutron blast on death.
     this.executeNeutronBlast(entity);
 
+    // Source parity: BunkerBusterBehavior::onDie — kill garrisoned units in victim building.
+    this.executeBunkerBuster(entity);
+
     // Source parity: FXListDie::onDie — trigger death FX for matching profiles.
     this.executeFXListDieModules(entity);
 
@@ -27270,6 +27322,103 @@ export class GameLogicSubsystem implements Subsystem {
         this.unregisterEntityEnergy(victim);
         victim.side = '';
         victim.controllingPlayerToken = null;
+      }
+    }
+  }
+
+  /**
+   * Source parity: BunkerBusterBehavior::update — each frame, capture the entity's attack
+   * target as the bunker buster victim. C++ calls ai->getCurrentVictim().
+   * C++ file: BunkerBusterBehavior.cpp lines 135-166.
+   */
+  private updateBunkerBusterTracking(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (!entity.bunkerBusterProfile || entity.destroyed) continue;
+      if (entity.bunkerBusterVictimId !== null) continue;
+      if (entity.attackTargetEntityId !== null) {
+        entity.bunkerBusterVictimId = entity.attackTargetEntityId;
+      }
+    }
+  }
+
+  /**
+   * Source parity: BunkerBusterBehavior::onDie → bustTheBunker — on death, kill all
+   * garrisoned units inside the targeted building.
+   * C++ file: BunkerBusterBehavior.cpp lines 184-248.
+   *
+   * - Checks upgrade gate (player must have UpgradeRequired)
+   * - Finds victim by captured victimID
+   * - If victim has bustable contain (garrison or tunnel):
+   *   - OccupantDamageWeaponTemplate: force-exit then apply 100 damage per occupant
+   *   - Otherwise: kill all contained outright
+   * - Fires ShockwaveWeaponTemplate at victim position
+   */
+  private executeBunkerBuster(entity: MapEntity): void {
+    const profile = entity.bunkerBusterProfile;
+    if (!profile) return;
+
+    // Source parity: check upgrade gate (C++ line 188-193).
+    if (profile.upgradeRequired) {
+      if (!entity.side || !this.hasSideUpgradeCompleted(entity.side, profile.upgradeRequired)) {
+        return;
+      }
+    }
+
+    const victimId = entity.bunkerBusterVictimId;
+    if (victimId === null) return;
+    const victim = this.spawnedEntities.get(victimId);
+    if (!victim) return;
+
+    // Source parity: check if victim has a bustable contain module (C++ line 207).
+    // GarrisonContain, TunnelContain, and CaveContain return isBustable()=TRUE.
+    // TransportContain, OverlordContain return FALSE.
+    const isBustable = victim.containProfile?.moduleType === 'GARRISON'
+      || victim.containProfile?.moduleType === 'TUNNEL';
+    if (isBustable) {
+      // Collect passengers in this bustable container.
+      const passengerIds: number[] = [];
+      for (const candidate of this.spawnedEntities.values()) {
+        if (candidate.destroyed) continue;
+        if (candidate.garrisonContainerId === victimId
+          || candidate.tunnelContainerId === victimId) {
+          passengerIds.push(candidate.id);
+        }
+      }
+
+      if (profile.occupantDamageWeaponName) {
+        // Source parity: harmAndForceExitAllContained — release then damage each occupant (C++ line 211-218).
+        const weaponDef = this.iniDataRegistry?.getWeapon(profile.occupantDamageWeaponName);
+        const damageType = weaponDef
+          ? (readStringField(weaponDef.fields, ['DamageType'])?.toUpperCase() ?? 'EXPLOSION')
+          : 'EXPLOSION';
+        const deathType = weaponDef
+          ? (readStringField(weaponDef.fields, ['DeathType'])?.toUpperCase() || undefined)
+          : undefined;
+        for (const passengerId of passengerIds) {
+          const passenger = this.spawnedEntities.get(passengerId);
+          if (!passenger || passenger.destroyed) continue;
+          // Source parity: removeFromContain(rider, true) — force exit.
+          this.releaseEntityFromContainer(passenger);
+          // Source parity: rider->attemptDamage(&damageInfo) with m_amount=100 (C++ line 217).
+          this.applyWeaponDamageAmount(entity.id, passenger, 100, damageType, deathType);
+        }
+      } else {
+        // Source parity: killAllContained() — kill outright (C++ line 221).
+        for (const passengerId of passengerIds) {
+          const passenger = this.spawnedEntities.get(passengerId);
+          if (!passenger || passenger.destroyed) continue;
+          this.applyWeaponDamageAmount(entity.id, passenger, passenger.maxHealth, 'UNRESISTABLE');
+        }
+      }
+    }
+
+    // Source parity: fire shockwave weapon at victim position (C++ line 244-245).
+    if (profile.shockwaveWeaponName) {
+      const shockwaveWeaponDef = this.iniDataRegistry?.getWeapon(profile.shockwaveWeaponName);
+      if (shockwaveWeaponDef) {
+        // Source parity: TheWeaponStore->createAndFireTempWeapon(m_shockwaveWeaponTemplate, objectForFX, objectForFX->getPosition()).
+        // objectForFX is the victim building when target exists.
+        this.fireTemporaryWeaponAtPosition(entity, shockwaveWeaponDef, victim.x, victim.z);
       }
     }
   }
