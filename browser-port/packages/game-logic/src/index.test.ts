@@ -27765,6 +27765,63 @@ describe('Script condition groundwork', () => {
       kilowatts: 0,
     })).toBe(false);
   });
+
+  it('evaluates skirmish garrisoned-building and captured-unit comparisons', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GarrisonBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_Contain', { ContainMax: 5 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GarrisonBuilding', 10, 10),
+        makeMapObject('Ranger', 12, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        garrisonContainerId: number | null;
+      }>;
+      captureEntity: (entityId: number, newSide: string) => void;
+    };
+
+    // Simulate one unit inside one garrison building.
+    const ranger = privateApi.spawnedEntities.get(2)!;
+    ranger.garrisonContainerId = 1;
+
+    expect(logic.evaluateScriptSkirmishPlayerHasComparisonGarrisoned({
+      side: 'America',
+      comparison: 'EQUAL',
+      count: 1,
+    })).toBe(true);
+
+    // Capture unit into China side; source parity Object::isCaptured should become true.
+    privateApi.captureEntity(2, 'China');
+    expect(logic.evaluateScriptSkirmishPlayerHasComparisonCapturedUnits({
+      side: 'China',
+      comparison: 'GREATER_EQUAL',
+      count: 1,
+    })).toBe(true);
+
+    // Recapturing back to the original side clears captured state.
+    privateApi.captureEntity(2, 'America');
+    expect(logic.evaluateScriptSkirmishPlayerHasComparisonCapturedUnits({
+      side: 'America',
+      comparison: 'EQUAL',
+      count: 0,
+    })).toBe(true);
+  });
 });
 
 describe('SubdualDamageHelper', () => {

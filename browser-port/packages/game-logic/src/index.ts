@@ -1515,6 +1515,10 @@ interface MapEntity {
   category: ObjectCategory;
   kindOf: Set<string>;
   side?: string;
+  /** Source parity: original controlling side used by Object::isCaptured(). */
+  originalOwningSide: string;
+  /** Source parity: Object::isCaptured() runtime state. */
+  capturedFromOriginalOwner: boolean;
   controllingPlayerToken: string | null;
   resolved: boolean;
   bridgeFlags: number;
@@ -5349,6 +5353,55 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerHasComparisonGarrisoned.
+   */
+  evaluateScriptSkirmishPlayerHasComparisonGarrisoned(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    count: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    let garrisonedBuildingCount = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (entity.containProfile?.moduleType !== 'GARRISON') continue;
+      if (this.collectContainedEntityIds(entity.id).length <= 0) continue;
+      garrisonedBuildingCount += 1;
+    }
+
+    return this.compareScriptCount(filter.comparison, garrisonedBuildingCount, filter.count);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerHasComparisonCapturedUnits.
+   */
+  evaluateScriptSkirmishPlayerHasComparisonCapturedUnits(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    count: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    let capturedUnitCount = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (!entity.capturedFromOriginalOwner) continue;
+      capturedUnitCount += 1;
+    }
+
+    return this.compareScriptCount(filter.comparison, capturedUnitCount, filter.count);
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerUnitCondition
    * (Condition::PLAYER_HAS_OBJECT_COMPARISON).
    */
@@ -6099,6 +6152,8 @@ export class GameLogicSubsystem implements Subsystem {
     // Transfer base energy between sides on capture.
     this.unregisterEntityEnergy(entity);
     entity.side = normalizedNewSide;
+    entity.capturedFromOriginalOwner =
+      entity.originalOwningSide.length > 0 && normalizedNewSide !== entity.originalOwningSide;
     entity.controllingPlayerToken = this.normalizeControllingPlayerToken(normalizedNewSide);
     this.registerEntityEnergy(entity);
     this.transferCostModifierUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
@@ -6324,6 +6379,7 @@ export class GameLogicSubsystem implements Subsystem {
     const initialScatterTargetsUnused = attackWeapon
       ? Array.from({ length: attackWeapon.scatterTargets.length }, (_entry, index) => index)
       : [];
+    const normalizedOriginalSide = this.normalizeSide(objectDef?.side ?? '');
 
     const entity: MapEntity = {
       id: objectId,
@@ -6331,6 +6387,8 @@ export class GameLogicSubsystem implements Subsystem {
       category,
       kindOf: normalizedKindOf,
       side: objectDef?.side,
+      originalOwningSide: normalizedOriginalSide,
+      capturedFromOriginalOwner: false,
       controllingPlayerToken,
       resolved: isResolved,
       bridgeFlags,
