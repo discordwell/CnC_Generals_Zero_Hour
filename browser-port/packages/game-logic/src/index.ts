@@ -19068,6 +19068,11 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      // Source parity: ActiveBody::shouldRetaliate — skip if using a special ability.
+      if (entity.objectStatusFlags.has('IS_USING_ABILITY')) {
+        continue;
+      }
+
       // Source parity: AIGuardRetaliate — immediate retaliation when attacked.
       // C++ BodyModule::getClearableLastAttacker() returns the last damage source;
       // guard/idle AI checks this EVERY FRAME and immediately retaliates, bypassing
@@ -19079,7 +19084,9 @@ export class GameLogicSubsystem implements Subsystem {
         if (attacker && !attacker.destroyed
             && this.getTeamRelationship(entity, attacker) === RELATIONSHIP_ENEMIES
             && this.canAttackerTargetEntity(entity, attacker, 'AI')
-            && !entity.objectStatusFlags.has('STEALTHED')) {
+            // Source parity: ActiveBody.cpp lines 783-786 — stealthed units skip
+            // retaliation UNLESS they are detected (inside a detector's radius).
+            && !(entity.objectStatusFlags.has('STEALTHED') && !entity.objectStatusFlags.has('DETECTED'))) {
           this.issueAttackEntity(entity.id, attacker.id, 'AI');
           continue;
         }
@@ -24307,6 +24314,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
     entity.attackSubState = 'IDLE';
+    entity.lastAttackerEntityId = null;
     this.onObjectDestroyed(entityId);
   }
 
@@ -24633,6 +24641,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
     entity.attackSubState = 'IDLE';
+    entity.lastAttackerEntityId = null;
     entity.continuousFireState = 'NONE';
     entity.continuousFireCooldownFrame = 0;
     entity.objectStatusFlags.delete('CONTINUOUS_FIRE_SLOW');
