@@ -3673,6 +3673,10 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: Player::m_attackedBy + m_attackedFrame. */
   private readonly sideAttackedBy = new Map<string, Set<string>>();
   private readonly sideAttackedFrame = new Map<string, number>();
+  /** Source parity: AIPlayer::m_supplySourceAttackCheckFrame (per-side scan gate). */
+  private readonly sideSupplySourceAttackCheckFrame = new Map<string, number>();
+  /** Source parity: AIPlayer::m_attackedSupplyCenter (last attacked economy object ID). */
+  private readonly sideAttackedSupplySource = new Map<string, number>();
   private readonly sideBattlePlanBonuses = new Map<string, SideBattlePlanBonuses>();
   private readonly battlePlanParalyzedUntilFrame = new Map<number, number>();
   private readonly playerSideByIndex = new Map<number, string>();
@@ -5414,6 +5418,58 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateSkirmishSuppliesWithinDistancePerimeter.
+   * Finds max supply value among non-enemy supply warehouses in trigger radius+distance.
+   */
+  evaluateScriptSkirmishSuppliesWithinDistancePerimeter(filter: {
+    side: string;
+    distance: number;
+    triggerName: string;
+    value: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const triggerRegion = this.findMapTriggerRegionsByName(filter.triggerName)[0];
+    if (!triggerRegion) {
+      return false;
+    }
+
+    const { centerX, centerZ, radius } = this.computeTriggerRegionCenterAndRadius(triggerRegion);
+    const searchRadius = radius + (Number.isFinite(filter.distance) ? filter.distance : 0);
+    const searchRadiusSq = searchRadius * searchRadius;
+    const compareToValue = Number.isFinite(filter.value) ? filter.value : 0;
+
+    let maxValue = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (!entity.kindOf.has('STRUCTURE')) continue;
+      if (!entity.supplyWarehouseProfile) continue;
+
+      const entitySide = this.normalizeSide(entity.side);
+      if (entitySide && this.getTeamRelationshipBySides(normalizedSide, entitySide) === RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+
+      const dx = entity.x - centerX;
+      const dz = entity.z - centerZ;
+      if (dx * dx + dz * dz > searchRadiusSq) continue;
+
+      const warehouseState = this.supplyWarehouseStates.get(entity.id);
+      if (!warehouseState) continue;
+
+      const value = DEFAULT_SUPPLY_BOX_VALUE * warehouseState.currentBoxes;
+      if (value > maxValue) {
+        maxValue = value;
+      }
+    }
+
+    return maxValue > compareToValue;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateSkirmishPlayerTechBuildingWithinDistancePerimeter.
    */
   evaluateScriptSkirmishPlayerTechBuildingWithinDistancePerimeter(filter: {
@@ -5480,6 +5536,63 @@ export class GameLogicSubsystem implements Subsystem {
       factionUnitCount += 1;
     }
     return this.compareScriptCount(filter.comparison, factionUnitCount, filter.count);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishSupplySourceAttacked.
+   * Mirrors AIPlayer::isSupplySourceAttacked polling on economy unit damage.
+   */
+  evaluateScriptSkirmishSupplySourceAttacked(filter: {
+    side: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const scanRateFrames = 10;
+    if (this.frameCounter === 0) {
+      this.sideSupplySourceAttackCheckFrame.set(normalizedSide, this.frameCounter + scanRateFrames);
+      return false;
+    }
+
+    this.sideAttackedSupplySource.delete(normalizedSide);
+
+    const nextCheckFrame = this.sideSupplySourceAttackCheckFrame.get(normalizedSide) ?? 0;
+    if (this.frameCounter < nextCheckFrame) {
+      return false;
+    }
+
+    const attackedFrame = this.sideAttackedFrame.get(normalizedSide);
+    if (attackedFrame === undefined || attackedFrame + scanRateFrames < this.frameCounter) {
+      return false;
+    }
+
+    this.sideSupplySourceAttackCheckFrame.set(normalizedSide, this.frameCounter + scanRateFrames);
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (
+        !entity.kindOf.has('CASH_GENERATOR')
+        && !entity.kindOf.has('DOZER')
+        && !entity.kindOf.has('HARVESTER')
+      ) {
+        continue;
+      }
+
+      // TODO(source-parity): C++ also checks Body::getLastDamageInfo()->out.m_noEffect.
+      if (entity.lastDamageFrame > 0 && entity.lastDamageFrame + scanRateFrames > this.frameCounter) {
+        this.sideAttackedSupplySource.set(normalizedSide, entity.id);
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -33011,6 +33124,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideScoreState.clear();
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
+    this.sideSupplySourceAttackCheckFrame.clear();
+    this.sideAttackedSupplySource.clear();
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();

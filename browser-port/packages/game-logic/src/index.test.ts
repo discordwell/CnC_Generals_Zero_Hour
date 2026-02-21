@@ -27999,6 +27999,68 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates skirmish supplies-within-distance-perimeter against non-enemy warehouses', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('FriendlyWarehouse', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 5,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+        ]),
+        makeObjectDef('NeutralWarehouse', 'Civilian', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 6,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+        ]),
+        makeObjectDef('EnemyWarehouse', 'China', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 20,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('FriendlyWarehouse', 10, 10),
+      makeMapObject('NeutralWarehouse', 18, 10),
+      makeMapObject('EnemyWarehouse', 22, 10),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'SupplyProbe',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Friendly/neutral warehouses: max = 6 * 100 = 600.
+    expect(logic.evaluateScriptSkirmishSuppliesWithinDistancePerimeter({
+      side: 'America',
+      distance: 10,
+      triggerName: 'SupplyProbe',
+      value: 550,
+    })).toBe(true);
+    // Enemy warehouse (20 * 100 = 2000) must be excluded.
+    expect(logic.evaluateScriptSkirmishSuppliesWithinDistancePerimeter({
+      side: 'America',
+      distance: 10,
+      triggerName: 'SupplyProbe',
+      value: 1000,
+    })).toBe(false);
+  });
+
   it('evaluates skirmish unowned faction unit comparison and prereq-to-build condition', () => {
     const bundle = makeBundle({
       objects: [
@@ -28044,6 +28106,54 @@ describe('Script condition groundwork', () => {
       side: 'America',
       templateName: 'AdvancedTank',
     })).toBe(true);
+  });
+
+  it('evaluates skirmish supply-source-attacked with AI scan gating', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyCenter', 'America', ['STRUCTURE', 'CASH_GENERATOR', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+        makeObjectDef('EnemyAttacker', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyCenter', 10, 10),
+        makeMapObject('EnemyAttacker', 20, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.update(1 / 30);
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 25, 'SMALL_ARMS');
+
+    expect(logic.evaluateScriptSkirmishSupplySourceAttacked({
+      side: 'America',
+    })).toBe(true);
+    // Source parity: scan rate gate suppresses repeated positive results until next scan window.
+    expect(logic.evaluateScriptSkirmishSupplySourceAttacked({
+      side: 'America',
+    })).toBe(false);
+
+    for (let i = 0; i < 11; i += 1) {
+      logic.update(1 / 30);
+    }
+    // Last attacked frame is no longer within the 10-frame scan window.
+    expect(logic.evaluateScriptSkirmishSupplySourceAttacked({
+      side: 'America',
+    })).toBe(false);
   });
 });
 
