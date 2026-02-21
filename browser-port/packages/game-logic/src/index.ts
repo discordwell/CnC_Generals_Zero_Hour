@@ -1346,6 +1346,12 @@ interface MapEntity {
   detectedUntilFrame: number;
   /** Frame at which entity last took damage (for STEALTH_NOT_WHILE_TAKING_DAMAGE). */
   lastDamageFrame: number;
+  /**
+   * Source parity: BodyModule::m_lastDamageSourceId / getClearableLastAttacker().
+   * Set when damage is received; cleared after retaliation check. Enables
+   * immediate retaliation rather than waiting for the 2-second auto-target scan.
+   */
+  lastAttackerEntityId: number | null;
   /** Source parity: StealthDetectorUpdate — parsed detector module profile. */
   detectorProfile: DetectorProfile | null;
   /** Frame at which next detection scan is allowed (rate throttle). */
@@ -5123,6 +5129,7 @@ export class GameLogicSubsystem implements Subsystem {
       stealthDelayRemaining: 0,
       detectedUntilFrame: 0,
       lastDamageFrame: 0,
+      lastAttackerEntityId: null,
       detectorProfile: this.extractDetectorProfile(objectDef),
       detectorNextScanFrame: 0,
       autoHealProfile: this.extractAutoHealProfile(objectDef),
@@ -19061,6 +19068,23 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      // Source parity: AIGuardRetaliate — immediate retaliation when attacked.
+      // C++ BodyModule::getClearableLastAttacker() returns the last damage source;
+      // guard/idle AI checks this EVERY FRAME and immediately retaliates, bypassing
+      // the 2-second auto-target scan interval. This makes units feel responsive.
+      if (entity.lastAttackerEntityId !== null) {
+        const attackerId = entity.lastAttackerEntityId;
+        entity.lastAttackerEntityId = null; // Source parity: clearLastAttacker().
+        const attacker = this.spawnedEntities.get(attackerId);
+        if (attacker && !attacker.destroyed
+            && this.getTeamRelationship(entity, attacker) === RELATIONSHIP_ENEMIES
+            && this.canAttackerTargetEntity(entity, attacker, 'AI')
+            && !entity.objectStatusFlags.has('STEALTHED')) {
+          this.issueAttackEntity(entity.id, attacker.id, 'AI');
+          continue;
+        }
+      }
+
       // Guarding entities use their own scan logic in updateGuardBehavior().
       if (entity.guardState !== 'NONE') {
         continue;
@@ -20742,6 +20766,11 @@ export class GameLogicSubsystem implements Subsystem {
     // Healing damage does not update the timestamp (C++ checks m_damageType != DAMAGE_HEALING).
     if (damageType !== 'HEALING') {
       target.lastDamageFrame = this.frameCounter;
+      // Source parity: BodyModule::setLastDamageInfo — record attacker for retaliation.
+      // C++ stores source ID in m_lastDamageSourceId; guard/idle AI checks it each frame.
+      if (sourceEntityId !== null && sourceEntityId !== 0) {
+        target.lastAttackerEntityId = sourceEntityId;
+      }
     }
 
     // Source parity: onDamage resets heal timers for AutoHeal and BaseRegen.
