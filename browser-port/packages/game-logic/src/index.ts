@@ -14,6 +14,7 @@ import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
   IniDataRegistry,
   type ArmorDef,
+  type LocomotorDef,
   type SpecialPowerDef,
   type ObjectDef,
   type ScienceDef,
@@ -667,6 +668,31 @@ interface LocomotorSetProfile {
   surfaceMask: number;
   downhillOnly: boolean;
   movementSpeed: number;
+  /**
+   * Source parity: Locomotor::m_minSpeed — minimum speed when unit is moving.
+   * Units that have started moving won't go below this speed.
+   */
+  minSpeed: number;
+  /**
+   * Source parity: Locomotor::m_acceleration — how quickly the unit reaches top speed.
+   * In world-units/second^2. 0 = instant acceleration.
+   */
+  acceleration: number;
+  /**
+   * Source parity: Locomotor::m_braking — how quickly the unit decelerates.
+   * In world-units/second^2. BIGNUM/0 = instant braking.
+   */
+  braking: number;
+  /**
+   * Source parity: Locomotor::m_turnRate — radians/second the unit can turn.
+   * 0 = instant rotation (current behavior fallback).
+   */
+  turnRate: number;
+  /**
+   * Source parity: Locomotor::m_appearance — affects movement pattern.
+   * E.g., 'TREADS', 'FOUR_WHEELS', 'TWO_LEGS', 'HOVER', 'WINGS', 'THRUST'.
+   */
+  appearance: string;
 }
 
 interface BridgeSegmentState {
@@ -1327,7 +1353,13 @@ interface MapEntity {
   movePath: VectorXZ[];
   pathIndex: number;
   moving: boolean;
+  /** Max speed from the active locomotor set (world-units per second). */
   speed: number;
+  /**
+   * Source parity: Locomotor::m_curSpeed — instantaneous speed along heading.
+   * Smoothly accelerates/decelerates toward `speed` or 0.
+   */
+  currentSpeed: number;
   moveTarget: VectorXZ | null;
   pathfindGoalCell: { x: number; z: number } | null;
   pathfindPosCell: { x: number; z: number } | null;
@@ -5115,6 +5147,7 @@ export class GameLogicSubsystem implements Subsystem {
       pathIndex: 0,
       moving: false,
       speed: locomotorProfile.movementSpeed > 0 ? locomotorProfile.movementSpeed : this.config.defaultMoveSpeed,
+      currentSpeed: 0,
       moveTarget: null,
       pathfindGoalCell: null,
       pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
@@ -11232,6 +11265,13 @@ export class GameLogicSubsystem implements Subsystem {
       let surfaceMask = 0;
       let downhillOnly = false;
       let movementSpeed = 0;
+      // Source parity: physics fields come from the primary (fastest) locomotor in the set.
+      let acceleration = 0;
+      let braking = 0;
+      let turnRate = 0;
+      let minSpeed = 0;
+      let appearance = 'OTHER';
+      let primaryLocomotor: LocomotorDef | null = null;
       for (const locomotorName of locomotorNames) {
         const locomotor = iniDataRegistry.getLocomotor(locomotorName);
         if (!locomotor) {
@@ -11241,12 +11281,31 @@ export class GameLogicSubsystem implements Subsystem {
         downhillOnly = downhillOnly || locomotor.downhillOnly;
         if ((locomotor.speed ?? 0) > movementSpeed) {
           movementSpeed = locomotor.speed ?? 0;
+          primaryLocomotor = locomotor;
+        }
+      }
+      if (primaryLocomotor) {
+        const f = primaryLocomotor.fields;
+        acceleration = readNumericField(f, ['Acceleration']) ?? 0;
+        braking = readNumericField(f, ['Braking']) ?? 0;
+        turnRate = readNumericField(f, ['TurnRate']) ?? 0;
+        minSpeed = readNumericField(f, ['MinSpeed']) ?? 0;
+        // Source parity: TurnRate in INI is degrees/sec, convert to radians/sec.
+        turnRate = turnRate * (Math.PI / 180);
+        const appearanceToken = readStringField(f, ['Appearance'])?.toUpperCase().trim();
+        if (appearanceToken) {
+          appearance = appearanceToken;
         }
       }
       profiles.set(setName, {
         surfaceMask,
         downhillOnly,
         movementSpeed,
+        minSpeed,
+        acceleration,
+        braking,
+        turnRate,
+        appearance,
       });
     }
 
@@ -14414,7 +14473,7 @@ export class GameLogicSubsystem implements Subsystem {
       if ((forbidden & STEALTH_FORBIDDEN_MOVING) !== 0) {
         if (profile && profile.moveThresholdSpeed > 0) {
           // Source parity: break stealth only if speed exceeds threshold.
-          if (entity.moving && entity.speed > profile.moveThresholdSpeed) {
+          if (entity.moving && entity.currentSpeed > profile.moveThresholdSpeed) {
             breakStealth = true;
           }
         } else if (entity.moving) {
@@ -25625,6 +25684,10 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (!entity.canMove || !entity.moving || entity.moveTarget === null) {
+        // Decelerate stopped entities.
+        if (entity.currentSpeed > 0) {
+          entity.currentSpeed = 0;
+        }
         continue;
       }
 
@@ -25633,6 +25696,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.moveTarget = null;
         entity.movePath = [];
         entity.pathfindGoalCell = null;
+        entity.currentSpeed = 0;
         continue;
       }
 
@@ -25651,13 +25715,101 @@ export class GameLogicSubsystem implements Subsystem {
           entity.moveTarget = null;
           entity.movePath = [];
           entity.pathfindGoalCell = null;
+          entity.currentSpeed = 0;
           continue;
         }
         entity.moveTarget = entity.movePath[entity.pathIndex]!;
         continue;
       }
 
-      const step = entity.speed * dt;
+      // Source parity: Locomotor physics — get active locomotor profile.
+      const locoProfile = entity.locomotorSets.get(entity.activeLocomotorSet);
+      const maxSpeed = entity.speed;
+      const accel = locoProfile?.acceleration ?? 0;
+      const brake = locoProfile?.braking ?? 0;
+      const turnRateRad = locoProfile?.turnRate ?? 0;
+      const minSpeed = locoProfile?.minSpeed ?? 0;
+
+      // Source parity: Locomotor::computeDesiredDirection — angle toward waypoint.
+      // In our coordinate system: atan2(dz, dx) + PI/2 converts to heading.
+      const desiredHeading = Math.atan2(dz, dx) + Math.PI / 2;
+
+      // Source parity: Locomotor turn-rate limiting.
+      // If turnRate > 0, smoothly rotate toward desired heading instead of snapping.
+      if (turnRateRad > 0) {
+        let angleDiff = desiredHeading - entity.rotationY;
+        // Normalize to [-PI, PI].
+        while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+        while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+        const maxTurn = turnRateRad * dt;
+        if (Math.abs(angleDiff) <= maxTurn) {
+          entity.rotationY = desiredHeading;
+        } else {
+          entity.rotationY += Math.sign(angleDiff) * maxTurn;
+          // Normalize rotationY.
+          while (entity.rotationY > Math.PI) entity.rotationY -= 2 * Math.PI;
+          while (entity.rotationY < -Math.PI) entity.rotationY += 2 * Math.PI;
+        }
+      } else {
+        // Instant rotation (legacy behavior).
+        entity.rotationY = desiredHeading;
+      }
+
+      // Source parity: Locomotor acceleration/braking.
+      // Compute remaining path distance for braking calculation.
+      let remainingPathDist = distance;
+      for (let i = entity.pathIndex + 1; i < entity.movePath.length; i++) {
+        const prev = i === entity.pathIndex + 1 ? entity.moveTarget : entity.movePath[i - 1]!;
+        const curr = entity.movePath[i]!;
+        remainingPathDist += Math.hypot(curr.x - prev.x, curr.z - prev.z);
+      }
+
+      // Compute braking distance: v^2 / (2 * braking).
+      const effectiveBrake = brake > 0 ? brake : 99999;
+      const brakingDist = (entity.currentSpeed * entity.currentSpeed) / (2 * effectiveBrake);
+
+      // Determine target speed for this frame.
+      let targetSpeed = maxSpeed;
+      if (remainingPathDist <= brakingDist && brake > 0) {
+        // Need to decelerate — compute max speed for safe stop.
+        targetSpeed = Math.sqrt(Math.max(0, 2 * effectiveBrake * remainingPathDist));
+        targetSpeed = Math.min(targetSpeed, maxSpeed);
+      }
+
+      // Source parity: scale speed by turn alignment.
+      // When turning sharply, slow down proportionally (C++ Locomotor behavior).
+      if (turnRateRad > 0) {
+        let headingDiff = desiredHeading - entity.rotationY;
+        while (headingDiff > Math.PI) headingDiff -= 2 * Math.PI;
+        while (headingDiff < -Math.PI) headingDiff += 2 * Math.PI;
+        const alignment = Math.cos(headingDiff);
+        // Units moving perpendicular or backward slow significantly.
+        if (alignment < 0) {
+          targetSpeed = minSpeed;
+        } else {
+          targetSpeed *= Math.max(0.3, alignment);
+        }
+      }
+
+      // Apply acceleration or braking.
+      if (accel > 0 || brake > 0) {
+        if (entity.currentSpeed < targetSpeed) {
+          const effectiveAccel = accel > 0 ? accel : 99999;
+          entity.currentSpeed = Math.min(targetSpeed, entity.currentSpeed + effectiveAccel * dt);
+        } else if (entity.currentSpeed > targetSpeed) {
+          entity.currentSpeed = Math.max(targetSpeed, entity.currentSpeed - effectiveBrake * dt);
+        }
+      } else {
+        // No physics specified — instant speed (legacy behavior).
+        entity.currentSpeed = maxSpeed;
+      }
+
+      // Enforce minimum speed when moving.
+      if (entity.currentSpeed > 0 && entity.currentSpeed < minSpeed && distance > minSpeed * dt * 2) {
+        entity.currentSpeed = minSpeed;
+      }
+
+      const step = entity.currentSpeed * dt;
       if (distance <= step) {
         entity.x = entity.moveTarget.x;
         entity.z = entity.moveTarget.z;
@@ -25667,10 +25819,38 @@ export class GameLogicSubsystem implements Subsystem {
           entity.moveTarget = null;
           entity.movePath = [];
           entity.pathfindGoalCell = null;
+          entity.currentSpeed = 0;
           continue;
         }
         entity.moveTarget = entity.movePath[entity.pathIndex]!;
+      } else if (turnRateRad > 0) {
+        // Source parity: move along current heading, not directly toward target.
+        // This creates realistic curved movement when turning.
+        // Derive direction vector from rotationY (heading convention):
+        // rotationY = atan2(dz, dx) + PI/2, so direction = (-sin(rot-PI/2), cos(rot-PI/2))
+        // which simplifies to (cos(rotationY - PI/2), sin(rotationY - PI/2))
+        // = (sin(rotationY), cos(rotationY))... but this depends on coordinate convention.
+        // Use a safe approach: reverse the heading formula to get direction.
+        const headingAngle = entity.rotationY - Math.PI / 2; // reverse the +PI/2 offset
+        const headingX = Math.cos(headingAngle);
+        const headingZ = Math.sin(headingAngle);
+        // Blend heading movement with direct waypoint movement to prevent orbiting.
+        // When well-aligned, mostly follow heading; when misaligned, bias toward waypoint.
+        let headingDiff = desiredHeading - entity.rotationY;
+        while (headingDiff > Math.PI) headingDiff -= 2 * Math.PI;
+        while (headingDiff < -Math.PI) headingDiff += 2 * Math.PI;
+        const alignment = Math.abs(headingDiff) < 0.01 ? 1 : Math.max(0, Math.cos(headingDiff));
+        const directX = dx / distance;
+        const directZ = dz / distance;
+        const moveX = headingX * alignment + directX * (1 - alignment);
+        const moveZ = headingZ * alignment + directZ * (1 - alignment);
+        const moveMag = Math.hypot(moveX, moveZ);
+        if (moveMag > 0.001) {
+          entity.x += (moveX / moveMag) * step;
+          entity.z += (moveZ / moveMag) * step;
+        }
       } else {
+        // No turn rate — move directly toward waypoint (legacy behavior).
         const inv = 1 / distance;
         entity.x += dx * inv * step;
         entity.z += dz * inv * step;
@@ -25689,7 +25869,6 @@ export class GameLogicSubsystem implements Subsystem {
         entity.y += bob;
       }
 
-      entity.rotationY = Math.atan2(dz, dx) + Math.PI / 2;
       this.updatePathfindPosCell(entity);
     }
 
