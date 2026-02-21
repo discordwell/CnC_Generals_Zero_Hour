@@ -1173,7 +1173,7 @@ function evaluateSpecialPowers<TEntity extends AIEntity>(
     const upper = power.effectCategory.toUpperCase();
 
     // Position-targeted area powers: fire at enemy base or unit concentration.
-    if (upper === 'AREA_DAMAGE' || upper === 'EMP_PULSE') {
+    if (upper === 'AREA_DAMAGE' || upper === 'EMP_PULSE' || upper === 'OCL_SPAWN') {
       // Find enemy concentration (most clustered group).
       const target = findBestAreaTarget(state, context);
       if (target) {

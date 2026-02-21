@@ -294,8 +294,9 @@ export function executeEmpPulse<TEntity extends SpecialPowerEntity>(
  * kind of special power this is. We route to the appropriate effect handler.
  */
 export const MODULE_TYPE_EFFECTS: Record<string, string> = {
-  // OCL-based powers that deal area damage
-  OCLSPECIALPOWER: 'AREA_DAMAGE',
+  // OCL-based powers — execute ObjectCreationList at source, FireWeapon at target.
+  // Falls back to AREA_DAMAGE if no OCL name is available.
+  OCLSPECIALPOWER: 'OCL_SPAWN',
   // Cash hack / steal
   CASHHACKSPECIALPOWER: 'CASH_HACK',
   // Defector

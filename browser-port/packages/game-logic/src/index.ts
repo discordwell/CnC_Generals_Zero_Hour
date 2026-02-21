@@ -789,6 +789,11 @@ interface SpecialPowerModuleProfile {
    */
   cleanupMoveRange: number;
   /**
+   * Source parity: OCLSpecialPowerModuleData::m_defaultOCL.
+   * INI field: OCL. The ObjectCreationList to execute when the power fires.
+   */
+  oclName: string;
+  /**
    * Source parity: OCLSpecialPower / area-damage fallback radius.
    * INI field: Radius. Default 0 (use fallback constant).
    */
@@ -9729,6 +9734,8 @@ export class GameLogicSubsystem implements Subsystem {
               spyVisionBaseDurationMs: readNumericField(block.fields, ['BaseDuration']) ?? 0,
               fireWeaponMaxShots: readNumericField(block.fields, ['MaxShotsToFire']) ?? 1,
               cleanupMoveRange: readNumericField(block.fields, ['MaxMoveDistanceFromLocation']) ?? 0,
+              // Source parity: OCLSpecialPower OCL name.
+              oclName: readStringField(block.fields, ['OCL']) ?? '',
               // NOTE: In the original engine, area damage/heal parameters live on weapon templates
               // spawned via OCL, not on the special power module itself. These field names are
               // forward-looking placeholders for OCL-less parameter passing; real game INI files
@@ -12012,6 +12019,13 @@ export class GameLogicSubsystem implements Subsystem {
     const effectContext = this.createSpecialPowerEffectContext();
 
     switch (effectCategory) {
+      case 'OCL_SPAWN':
+        // Source parity: OCLSpecialPower::initiateInternal — execute OCL at source position.
+        // No target for no-target powers; FireWeapon nuggets fire at source position.
+        if (module.oclName) {
+          this.executeOCL(module.oclName, source, undefined, source.x, source.z);
+        }
+        break;
       case 'SPY_VISION':
         // Simplified: C++ spy vision globally spies on all enemy unit vision for a duration.
         // Until the full SpyVisionUpdate system is ported, approximate as area reveal.
@@ -12082,6 +12096,25 @@ export class GameLogicSubsystem implements Subsystem {
     const sourceSide = source.side ?? '';
 
     switch (effectCategory) {
+      case 'OCL_SPAWN':
+        // Source parity: OCLSpecialPower::initiateInternal — execute OCL at source,
+        // passing target position so FireWeapon nuggets fire at the target location.
+        // CreateObject nuggets spawn at source entity; FireWeapon nuggets fire at target.
+        if (module.oclName) {
+          this.executeOCL(module.oclName, source, undefined, targetX, targetZ);
+        } else {
+          // Fallback: if no OCL name, apply flat area damage (legacy behavior).
+          executeAreaDamageImpl({
+            sourceEntityId,
+            sourceSide,
+            targetX,
+            targetZ,
+            radius: module.areaDamageRadius > 0 ? module.areaDamageRadius : DEFAULT_AREA_DAMAGE_RADIUS,
+            damage: module.areaDamageAmount > 0 ? module.areaDamageAmount : DEFAULT_AREA_DAMAGE_AMOUNT,
+            damageType: 'EXPLOSION',
+          }, effectContext);
+        }
+        break;
       case 'AREA_DAMAGE':
         executeAreaDamageImpl({
           sourceEntityId,
@@ -24689,7 +24722,13 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ObjectCreationList::create — execute an OCL by name.
    * Resolves CreateObject nuggets and spawns entities.
    */
-  private executeOCL(oclName: string, sourceEntity: MapEntity, lifetimeOverrideFrames?: number): void {
+  private executeOCL(
+    oclName: string,
+    sourceEntity: MapEntity,
+    lifetimeOverrideFrames?: number,
+    targetX?: number,
+    targetZ?: number,
+  ): void {
     const registry = this.iniDataRegistry;
     if (!registry) return;
     const oclDef = registry.getObjectCreationList(oclName);
@@ -24701,8 +24740,12 @@ export class GameLogicSubsystem implements Subsystem {
       const nuggetType = (nugget.type || nugget.name.split(/\s+/)[0] || '').toUpperCase();
       if (nuggetType === 'CREATEOBJECT' || nuggetType === 'CREATEDEBRIS') {
         this.executeCreateObjectNugget(nugget, sourceEntity, lifetimeOverrideFrames);
+      } else if (nuggetType === 'FIREWEAPON') {
+        // Source parity: FireWeaponNugget::create — fires weapon at secondary (target) position.
+        // C++ calls TheWeaponStore->createAndFireTempWeapon(m_weapon, primaryObj, secondary).
+        this.executeFireWeaponNugget(nugget, sourceEntity, targetX, targetZ);
       }
-      // FireWeapon, DeliverPayload, Attack, ApplyRandomForce are omitted for now.
+      // DeliverPayload, Attack, ApplyRandomForce are omitted for now.
     }
   }
 
@@ -24767,6 +24810,31 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
     }
+  }
+
+  /**
+   * Source parity: FireWeaponNugget::create — fire a weapon at a target position.
+   * C++ creates a temporary weapon from the template and fires it at the secondary position.
+   */
+  private executeFireWeaponNugget(
+    nugget: IniBlock,
+    sourceEntity: MapEntity,
+    targetX?: number,
+    targetZ?: number,
+  ): void {
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+
+    const weaponName = readStringField(nugget.fields, ['Weapon']);
+    if (!weaponName) return;
+
+    const weaponDef = registry.getWeapon(weaponName);
+    if (!weaponDef) return;
+
+    // Fire at target position if provided, otherwise at source entity position.
+    const fireX = targetX ?? sourceEntity.x;
+    const fireZ = targetZ ?? sourceEntity.z;
+    this.fireTemporaryWeaponAtPosition(sourceEntity, weaponDef, fireX, fireZ);
   }
 
   /**
