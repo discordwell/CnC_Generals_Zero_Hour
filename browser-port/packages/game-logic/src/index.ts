@@ -920,7 +920,8 @@ interface UpgradeModuleProfile {
     | 'EXPERIENCESCALARUPGRADE'
     | 'MODELCONDITIONUPGRADE'
     | 'OBJECTCREATIONUPGRADE'
-    | 'ACTIVESHROUDUPGRADE';
+    | 'ACTIVESHROUDUPGRADE'
+    | 'REPLACEOBJECTUPGRADE';
   triggeredBy: Set<string>;
   conflictsWith: Set<string>;
   removesUpgrades: Set<string>;
@@ -942,6 +943,7 @@ interface UpgradeModuleProfile {
   conditionFlag: string;
   upgradeObjectOCLName: string;
   newShroudRange: number;
+  replaceObjectName: string;
 }
 
 interface KindOfProductionCostModifier {
@@ -5368,6 +5370,14 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (module.moduleType === 'ACTIVESHROUDUPGRADE') {
         // Source parity: ActiveShroudUpgrade.cpp line 87 — sets entity's shroud range.
         appliedThisModule = this.applyActiveShroudUpgrade(entity, module);
+      } else if (module.moduleType === 'REPLACEOBJECTUPGRADE') {
+        // Source parity: ReplaceObjectUpgrade.cpp line 70 — destroy old, create replacement at same position.
+        appliedThisModule = this.applyReplaceObjectUpgrade(entity, module);
+        if (appliedThisModule) {
+          // Entity was destroyed and replaced — stop processing further modules on this entity.
+          entity.executedUpgradeModules.add(module.id);
+          return true;
+        }
       }
 
       if (!appliedThisModule) {
@@ -10954,6 +10964,71 @@ export class GameLogicSubsystem implements Subsystem {
     entity.shroudRange = 0;
   }
 
+  /**
+   * Source parity: ReplaceObjectUpgrade.cpp line 70-108.
+   * Destroys the current entity and creates a replacement at the same position/rotation/team.
+   * Fires onBuildComplete on the replacement (GrantUpgradeCreate, LockWeaponCreate, SpecialPowerCreate).
+   */
+  private applyReplaceObjectUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
+    if (!module.replaceObjectName) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    // Resolve the replacement template.
+    const replacementDef = findObjectDefByName(registry, module.replaceObjectName);
+    if (!replacementDef) {
+      return false;
+    }
+
+    // Capture the old entity's transform and team before destruction.
+    const oldX = entity.x;
+    const oldZ = entity.z;
+    const oldY = entity.y;
+    const oldRotationY = entity.rotationY;
+    const oldSide = entity.side;
+    const oldControllingPlayerToken = entity.controllingPlayerToken;
+
+    // Source parity: C++ line 88-89 — remove from pathfind then destroy.
+    this.silentDestroyEntity(entity.id);
+
+    // Source parity: C++ line 91-93 — create replacement with same team and position.
+    const replacement = this.spawnEntityFromTemplate(
+      replacementDef.name,
+      oldX,
+      oldZ,
+      oldRotationY,
+      oldSide,
+    );
+    if (!replacement) {
+      return true; // Old entity was already destroyed; nothing more we can do.
+    }
+
+    replacement.y = oldY;
+    replacement.controllingPlayerToken = oldControllingPlayerToken;
+
+    // Source parity: C++ line 97-103 — call onBuildComplete on all create modules.
+    // GrantUpgradeCreate::onBuildComplete
+    for (const prof of replacement.grantUpgradeCreateProfiles) {
+      this.applyGrantUpgradeCreate(replacement, prof);
+    }
+    // LockWeaponCreate::onBuildComplete
+    if (replacement.lockWeaponCreateSlot !== null) {
+      replacement.forcedWeaponSlot = replacement.lockWeaponCreateSlot;
+      replacement.weaponLockStatus = 'LOCKED_PERMANENTLY';
+    }
+    // SpecialPowerCreate::onBuildComplete
+    if (replacement.hasSpecialPowerCreate) {
+      this.onBuildCompleteSpecialPowerCreate(replacement);
+    }
+
+    return true;
+  }
+
   private applyCostModifierUpgradeModule(entity: MapEntity, module: UpgradeModuleProfile): boolean {
     const side = this.normalizeSide(entity.side);
     if (!side) {
@@ -11794,6 +11869,8 @@ export class GameLogicSubsystem implements Subsystem {
         // ObjectCreationUpgrade is instantaneous (spawns OCL), no persistent state to remove.
       } else if (module.moduleType === 'ACTIVESHROUDUPGRADE') {
         this.removeActiveShroudUpgrade(entity, module);
+      } else if (module.moduleType === 'REPLACEOBJECTUPGRADE') {
+        // ReplaceObjectUpgrade is irreversible — the original entity was destroyed.
       }
     }
 
@@ -22967,6 +23044,13 @@ export class GameLogicSubsystem implements Subsystem {
       // Reset heal countdown and wake the helper when positive damage is applied.
       if (adjustedDamage > 0 && target.subdualDamageHealRate > 0) {
         target.subdualHealingCountdown = target.subdualDamageHealRate;
+      }
+      // Source parity: C++ ActiveBody::attemptDamage sets alreadyHandled=TRUE (skipping health change)
+      // but does NOT return — it continues to record lastDamageInfo, lastDamageTimestamp, and
+      // notifies onDamage callbacks (retaliation, stealth reveal, etc.).
+      target.lastDamageFrame = this.frameCounter;
+      if (sourceEntityId !== null && sourceEntityId !== 0) {
+        target.lastAttackerEntityId = sourceEntityId;
       }
       return;
     }

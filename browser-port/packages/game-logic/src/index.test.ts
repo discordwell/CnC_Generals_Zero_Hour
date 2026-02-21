@@ -24905,6 +24905,117 @@ describe('ActiveShroudUpgrade', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ReplaceObjectUpgrade
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ReplaceObjectUpgrade', () => {
+  it('destroys old entity and spawns replacement at same position', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OldBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ReplaceObjectUpgrade ModuleTag_ROU', {
+            TriggeredBy: 'Upgrade_Replace',
+            ReplaceObject: 'NewBuilding',
+          }),
+        ]),
+        makeObjectDef('NewBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ]),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_Replace', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('OldBuilding', 50, 50)]), makeRegistry(bundle), makeHeightmap());
+
+    // Entity 1 is OldBuilding.
+    expect(logic.getEntityState(1)!.templateName).toBe('OldBuilding');
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_Replace' });
+    logic.update(1 / 30);
+
+    // Old entity should be destroyed and finalized (removed from map after update).
+    expect(logic.getEntityState(1)).toBeNull();
+
+    // New entity should exist as entity 2.
+    const newState = logic.getEntityState(2);
+    expect(newState).toBeDefined();
+    expect(newState!.templateName).toBe('NewBuilding');
+    // Same position as old entity.
+    expect(newState!.x).toBeCloseTo(50, 0);
+    expect(newState!.z).toBeCloseTo(50, 0);
+    // Verify replacement has correct max health via internal state.
+    const priv = logic as unknown as { spawnedEntities: Map<number, { maxHealth: number; side: string }> };
+    const newEntity = priv.spawnedEntities.get(2)!;
+    expect(newEntity.maxHealth).toBe(800);
+    expect(newEntity.side).toBe('America');
+  });
+
+  it('fires onBuildComplete hooks on replacement entity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OldFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+          makeBlock('Behavior', 'ReplaceObjectUpgrade ModuleTag_ROU', {
+            TriggeredBy: 'Upgrade_ReplaceFactory',
+            ReplaceObject: 'NewFactory',
+          }),
+        ]),
+        makeObjectDef('NewFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 600, InitialHealth: 600 }),
+          makeBlock('Behavior', 'GrantUpgradeCreate ModuleTag_GUC', {
+            UpgradeToGrant: 'Upgrade_FactoryBonus',
+          }),
+        ]),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_ReplaceFactory', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 }),
+        makeUpgradeDef('Upgrade_FactoryBonus', { Type: 'OBJECT', BuildTime: 0.1, BuildCost: 0 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('OldFactory', 60, 60)]), makeRegistry(bundle), makeHeightmap());
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_ReplaceFactory' });
+    logic.update(1 / 30);
+
+    // The replacement entity should have received GrantUpgradeCreate's onBuildComplete,
+    // which grants Upgrade_FactoryBonus to the entity.
+    const priv = logic as unknown as { spawnedEntities: Map<number, { completedUpgrades: Set<string> }> };
+    const newEntity = priv.spawnedEntities.get(2);
+    expect(newEntity).toBeDefined();
+    expect(newEntity!.completedUpgrades.has('UPGRADE_FACTORYBONUS')).toBe(true);
+  });
+
+  it('returns false for unknown replacement template', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BadReplaceBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Behavior', 'ReplaceObjectUpgrade ModuleTag_ROU', {
+            TriggeredBy: 'Upgrade_BadReplace',
+            ReplaceObject: 'NonExistentTemplate',
+          }),
+        ]),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_BadReplace', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('BadReplaceBuilding', 70, 70)]), makeRegistry(bundle), makeHeightmap());
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_BadReplace' });
+    logic.update(1 / 30);
+
+    // Entity should still exist and not be destroyed (template not found → no replacement).
+    const priv = logic as unknown as { spawnedEntities: Map<number, { destroyed: boolean }> };
+    expect(priv.spawnedEntities.get(1)!.destroyed).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SpecialPowerCreate
 // ═══════════════════════════════════════════════════════════════════════════
 

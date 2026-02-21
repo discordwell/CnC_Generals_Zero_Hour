@@ -28,7 +28,8 @@ export interface ParsedUpgradeModuleProfile {
     | 'EXPERIENCESCALARUPGRADE'
     | 'MODELCONDITIONUPGRADE'
     | 'OBJECTCREATIONUPGRADE'
-    | 'ACTIVESHROUDUPGRADE';
+    | 'ACTIVESHROUDUPGRADE'
+    | 'REPLACEOBJECTUPGRADE';
   triggeredBy: Set<string>;
   conflictsWith: Set<string>;
   removesUpgrades: Set<string>;
@@ -50,6 +51,7 @@ export interface ParsedUpgradeModuleProfile {
   conditionFlag: string;
   upgradeObjectOCLName: string;
   newShroudRange: number;
+  replaceObjectName: string;
 }
 
 export interface UpgradeModuleParsingHelpers {
@@ -98,6 +100,7 @@ function asSupportedUpgradeModuleType(
     || moduleType === 'MODELCONDITIONUPGRADE'
     || moduleType === 'OBJECTCREATIONUPGRADE'
     || moduleType === 'ACTIVESHROUDUPGRADE'
+    || moduleType === 'REPLACEOBJECTUPGRADE'
   ) {
     return moduleType;
   }
@@ -174,6 +177,9 @@ export function extractUpgradeModulesFromBlocks(
         const newShroudRange = moduleType === 'ACTIVESHROUDUPGRADE'
           ? (readNumericField(block.fields, ['NewShroudRange']) ?? 0)
           : 0;
+        const replaceObjectName = moduleType === 'REPLACEOBJECTUPGRADE'
+          ? (readStringField(block.fields, ['ReplaceObject'])?.trim() ?? '')
+          : '';
         const moduleId = sourceUpgradeName === null
           ? `${moduleType}:${block.name}:${index}`
           : `${moduleType}:${block.name}:${index}:${sourceUpgradeName}`;
@@ -202,6 +208,7 @@ export function extractUpgradeModulesFromBlocks(
           conditionFlag,
           upgradeObjectOCLName,
           newShroudRange,
+          replaceObjectName,
         });
       }
     }
