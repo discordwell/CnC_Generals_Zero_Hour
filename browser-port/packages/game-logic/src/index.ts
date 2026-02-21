@@ -3611,6 +3611,23 @@ interface SideScoreState {
   moneySpent: number;
 }
 
+type ScriptComparisonType =
+  | 'LESS_THAN'
+  | 'LESS_EQUAL'
+  | 'EQUAL'
+  | 'GREATER_EQUAL'
+  | 'GREATER'
+  | 'NOT_EQUAL';
+
+type ScriptComparisonInput = ScriptComparisonType | number;
+
+interface ScriptConditionCacheState {
+  /** Source parity: Condition::m_customData (-1=false, 0=unknown, 1=true). */
+  customData: -1 | 0 | 1;
+  /** Source parity: Condition::m_customFrame. */
+  customFrame: number;
+}
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -3662,6 +3679,10 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: ScriptEngine::notifyOfObjectCreationOrDestruction dirty version. */
   private scriptObjectTopologyVersion = 0;
   private scriptObjectCountChangedFrame = 0;
+  /** Source parity: Condition::m_customData/m_customFrame cache keyed by scripted condition id. */
+  private readonly scriptConditionCacheById = new Map<string, ScriptConditionCacheState>();
+  /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
+  private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
   private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
@@ -5142,6 +5163,212 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return count;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishNamedAreaExists.
+   */
+  evaluateScriptSkirmishNamedAreaExists(triggerName: string): boolean {
+    return this.findMapTriggerRegionsByName(triggerName).length > 0;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerUnitCondition
+   * (Condition::PLAYER_HAS_OBJECT_COMPARISON).
+   */
+  evaluateScriptPlayerHasObjectComparison(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    count: number;
+    templateName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    if (cache && cache.customData !== 0 && this.scriptObjectCountChangedFrame === cache.customFrame) {
+      return cache.customData === 1;
+    }
+
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedTemplateName = filter.templateName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedTemplateName) {
+      if (cache) {
+        cache.customData = -1;
+        cache.customFrame = this.scriptObjectCountChangedFrame;
+      }
+      return false;
+    }
+
+    const objectCount = this.countScriptObjectsByTemplateForSide(normalizedSide, normalizedTemplateName);
+    const comparison = this.compareScriptCount(filter.comparison, objectCount, filter.count);
+    if (cache) {
+      cache.customData = comparison ? 1 : -1;
+      cache.customFrame = this.scriptObjectCountChangedFrame;
+    }
+    return comparison;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateBuiltByPlayer.
+   */
+  evaluateScriptBuiltByPlayer(filter: {
+    side: string;
+    templateName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    if (cache && cache.customData !== 0 && this.scriptObjectCountChangedFrame === cache.customFrame) {
+      return cache.customData === 1;
+    }
+
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedTemplateName = filter.templateName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedTemplateName) {
+      if (cache) {
+        cache.customData = -1;
+        cache.customFrame = this.scriptObjectCountChangedFrame;
+      }
+      return false;
+    }
+
+    const objectCount = this.countScriptObjectsByTemplateForSide(normalizedSide, normalizedTemplateName);
+    const built = objectCount !== 0;
+    if (cache) {
+      cache.customData = built ? 1 : -1;
+      cache.customFrame = this.scriptObjectCountChangedFrame;
+    }
+    return built;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerHasUnitTypeInArea.
+   */
+  evaluateScriptPlayerHasUnitTypeInArea(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    count: number;
+    templateName: string;
+    triggerName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const triggerRegions = this.findMapTriggerRegionsByName(filter.triggerName);
+    if (triggerRegions.length === 0) {
+      return false;
+    }
+
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedTemplateName = filter.templateName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedTemplateName) {
+      return false;
+    }
+
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    let anyChanges = cache === null || cache.customData === 0;
+    // TODO(source-parity): include Team::didEnterOrExit once script team tracking exists.
+    if (cache && this.scriptObjectCountChangedFrame > cache.customFrame) {
+      anyChanges = true;
+    }
+    // Until team enter/exit notifications are available, area membership can change without
+    // topology changes, so conservatively recompute every call.
+    anyChanges = true;
+    if (!anyChanges && cache) {
+      return cache.customData === 1;
+    }
+
+    let objectCount = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (!this.areEquivalentTemplateNames(entity.templateName, normalizedTemplateName)) continue;
+      if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
+
+      // Source parity: count dead/inert objects only when the object is a crate.
+      const isDeadOrInert = entity.destroyed || entity.kindOf.has('INERT');
+      if (isDeadOrInert && !entity.kindOf.has('CRATE')) continue;
+
+      objectCount += 1;
+    }
+
+    const comparison = this.compareScriptCount(filter.comparison, objectCount, filter.count);
+    if (cache) {
+      cache.customData = comparison ? 1 : -1;
+      cache.customFrame = this.scriptObjectCountChangedFrame;
+    }
+    return comparison;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerHasUnitKindInArea.
+   */
+  evaluateScriptPlayerHasUnitKindInArea(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    count: number;
+    kindOf: string;
+    triggerName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const triggerRegions = this.findMapTriggerRegionsByName(filter.triggerName);
+    if (triggerRegions.length === 0) {
+      return false;
+    }
+
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedKindOf = filter.kindOf.trim().toUpperCase();
+    if (!normalizedSide || !normalizedKindOf) {
+      return false;
+    }
+
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    let anyChanges = cache === null || cache.customData === 0;
+    // TODO(source-parity): include Team::didEnterOrExit once script team tracking exists.
+    if (cache && this.scriptObjectCountChangedFrame > cache.customFrame) {
+      anyChanges = true;
+    }
+    // Until team enter/exit notifications are available, area membership can change without
+    // topology changes, so conservatively recompute every call.
+    anyChanges = true;
+    if (!anyChanges && cache) {
+      return cache.customData === 1;
+    }
+
+    let objectCount = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (!entity.kindOf.has(normalizedKindOf)) continue;
+      if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
+      if (entity.destroyed || entity.kindOf.has('INERT')) continue;
+      objectCount += 1;
+    }
+
+    const comparison = this.compareScriptCount(filter.comparison, objectCount, filter.count);
+    if (cache) {
+      cache.customData = comparison ? 1 : -1;
+      cache.customFrame = this.scriptObjectCountChangedFrame;
+    }
+    return comparison;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerLostObjectType.
+   */
+  evaluateScriptPlayerLostObjectType(filter: { side: string; templateName: string }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedTemplateName = filter.templateName.trim().toUpperCase();
+    if (!normalizedSide || !normalizedTemplateName) {
+      return false;
+    }
+
+    const objectCount = this.countScriptObjectsByTemplateForSide(normalizedSide, normalizedTemplateName);
+    const key = `${normalizedSide}:${normalizedTemplateName}`;
+    const previousCount = this.scriptObjectCountBySideAndType.get(key);
+    if (previousCount === undefined) {
+      this.scriptObjectCountBySideAndType.set(key, objectCount);
+      return false;
+    }
+
+    if (objectCount !== previousCount) {
+      this.scriptObjectCountBySideAndType.set(key, objectCount);
+    }
+    return objectCount < previousCount;
   }
 
   getSideAttackedByState(side: string): {
@@ -13181,6 +13408,98 @@ export class GameLogicSubsystem implements Subsystem {
     return hasSquish(objectDef.blocks);
   }
 
+  private getOrCreateScriptConditionCache(conditionCacheId?: string): ScriptConditionCacheState | null {
+    const normalizedId = conditionCacheId?.trim() ?? '';
+    if (!normalizedId) {
+      return null;
+    }
+
+    const existing = this.scriptConditionCacheById.get(normalizedId);
+    if (existing) {
+      return existing;
+    }
+
+    const created: ScriptConditionCacheState = { customData: 0, customFrame: 0 };
+    this.scriptConditionCacheById.set(normalizedId, created);
+    return created;
+  }
+
+  private countScriptObjectsByTemplateForSide(normalizedSide: string, normalizedTemplateName: string): number {
+    let count = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+        continue;
+      }
+      if (!this.areEquivalentTemplateNames(entity.templateName, normalizedTemplateName)) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  private resolveScriptComparisonCode(comparison: ScriptComparisonInput): number | null {
+    if (typeof comparison === 'number') {
+      if (!Number.isFinite(comparison)) {
+        return null;
+      }
+      const code = Math.trunc(comparison);
+      return code >= 0 && code <= 5 ? code : null;
+    }
+
+    switch (comparison.trim().toUpperCase()) {
+      case 'LESS_THAN':
+        return 0;
+      case 'LESS_EQUAL':
+        return 1;
+      case 'EQUAL':
+        return 2;
+      case 'GREATER_EQUAL':
+        return 3;
+      case 'GREATER':
+        return 4;
+      case 'NOT_EQUAL':
+        return 5;
+      default:
+        return null;
+    }
+  }
+
+  private compareScriptCount(
+    comparison: ScriptComparisonInput,
+    currentCount: number,
+    targetCount: number,
+  ): boolean {
+    const comparisonCode = this.resolveScriptComparisonCode(comparison);
+    if (comparisonCode === null) {
+      return false;
+    }
+
+    const normalizedTargetCount = Number.isFinite(targetCount) ? Math.trunc(targetCount) : 0;
+    switch (comparisonCode) {
+      case 0:
+        return currentCount < normalizedTargetCount;
+      case 1:
+        return currentCount <= normalizedTargetCount;
+      case 2:
+        return currentCount === normalizedTargetCount;
+      case 3:
+        return currentCount >= normalizedTargetCount;
+      case 4:
+        return currentCount > normalizedTargetCount;
+      case 5:
+        return currentCount !== normalizedTargetCount;
+      default:
+        return false;
+    }
+  }
+
   private normalizeSide(side?: string): string {
     return side ? side.trim().toLowerCase() : '';
   }
@@ -16988,6 +17307,41 @@ export class GameLogicSubsystem implements Subsystem {
         isValidEntity: (candidate) => !candidate.destroyed && candidate.canMove,
       });
     }
+  }
+
+  private findMapTriggerRegionsByName(triggerName: string): Array<{
+    id: number;
+    name: string;
+    nameUpper: string;
+    points: Array<{ x: number; y: number; z: number }>;
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+  }> {
+    const normalizedName = triggerName.trim().toUpperCase();
+    if (!normalizedName) {
+      return [];
+    }
+    return this.mapTriggerRegions.filter((region) => region.nameUpper === normalizedName);
+  }
+
+  private isInsideAnyTriggerRegion(
+    entity: Pick<MapEntity, 'x' | 'z'>,
+    triggerRegions: Array<{
+      points: Array<{ x: number; y: number; z: number }>;
+      minX: number;
+      maxX: number;
+      minZ: number;
+      maxZ: number;
+    }>,
+  ): boolean {
+    for (const region of triggerRegions) {
+      if (this.isPointInsideTriggerRegion(region, entity.x, entity.z)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private isPointInsideTriggerRegion(
@@ -32073,6 +32427,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideAttackedFrame.clear();
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
+    this.scriptConditionCacheById.clear();
+    this.scriptObjectCountBySideAndType.clear();
     this.loadedMapData = null;
     this.navigationGrid = null;
     this.bridgeSegments.clear();

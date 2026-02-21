@@ -27363,6 +27363,176 @@ describe('Script object-count + trigger groundwork', () => {
   });
 });
 
+describe('Script condition groundwork', () => {
+  it('evaluates player object-comparison and built-by-player conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('UnitA', 10, 10),
+        makeMapObject('UnitA', 14, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptPlayerHasObjectComparison({
+      side: 'America',
+      comparison: 3, // GREATER_EQUAL
+      count: 2,
+      templateName: 'UnitA',
+      conditionCacheId: 'player-has-unita',
+    })).toBe(true);
+    expect(logic.evaluateScriptBuiltByPlayer({
+      side: 'America',
+      templateName: 'UnitA',
+      conditionCacheId: 'built-unita',
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptPlayerHasObjectComparison({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      count: 2,
+      templateName: 'UnitA',
+      conditionCacheId: 'player-has-unita',
+    })).toBe(false);
+
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptBuiltByPlayer({
+      side: 'America',
+      templateName: 'UnitA',
+      conditionCacheId: 'built-unita',
+    })).toBe(false);
+  });
+
+  it('evaluates named-area existence and in-area type/kind conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InfantryA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('SupplyCrate', 'America', ['CRATE', 'INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('InfantryA', 6, 6),
+      makeMapObject('SupplyCrate', 8, 8),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'SpawnZone',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptSkirmishNamedAreaExists('SpawnZone')).toBe(true);
+    expect(logic.evaluateScriptSkirmishNamedAreaExists('MissingZone')).toBe(false);
+
+    expect(logic.evaluateScriptPlayerHasUnitTypeInArea({
+      side: 'America',
+      comparison: 'EQUAL',
+      count: 1,
+      templateName: 'SupplyCrate',
+      triggerName: 'SpawnZone',
+      conditionCacheId: 'unit-type-area',
+    })).toBe(true);
+
+    expect(logic.evaluateScriptPlayerHasUnitKindInArea({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      count: 1,
+      kindOf: 'INFANTRY',
+      triggerName: 'SpawnZone',
+      conditionCacheId: 'unit-kind-area',
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptPlayerHasUnitKindInArea({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      count: 1,
+      kindOf: 'INFANTRY',
+      triggerName: 'SpawnZone',
+      conditionCacheId: 'unit-kind-area',
+    })).toBe(false);
+  });
+
+  it('tracks player-lost-object-type transitions against previous counts', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('UnitA', 10, 10),
+        makeMapObject('UnitA', 12, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptPlayerLostObjectType({
+      side: 'America',
+      templateName: 'UnitA',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptPlayerLostObjectType({
+      side: 'America',
+      templateName: 'UnitA',
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerLostObjectType({
+      side: 'America',
+      templateName: 'UnitA',
+    })).toBe(false);
+  });
+});
+
 describe('SubdualDamageHelper', () => {
   it('accumulates subdual damage instead of reducing health', () => {
     const bundle = makeBundle({
