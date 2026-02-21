@@ -28232,6 +28232,76 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates building-entered and is-building-empty from contain state', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GarrisonHub', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 900,
+            InitialHealth: 900,
+          }),
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_Contain', {
+            ContainMax: 2,
+          }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GarrisonHub', 12, 12), // id 1
+        makeMapObject('Ranger', 14, 12),      // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptBuildingEntered({
+      side: 'America',
+      entityId: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptIsBuildingEmpty({
+      entityId: 1,
+    })).toBe(true);
+
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.update(0);
+
+    expect(logic.evaluateScriptBuildingEntered({
+      side: 'America',
+      entityId: 1,
+    })).toBe(true);
+    expect(logic.evaluateScriptBuildingEntered({
+      side: 'China',
+      entityId: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptIsBuildingEmpty({
+      entityId: 1,
+    })).toBe(false);
+
+    // Source parity: OpenContain::update clears player-entered flag each frame.
+    logic.update(0);
+    expect(logic.evaluateScriptBuildingEntered({
+      side: 'America',
+      entityId: 1,
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { garrisonContainerId: number | null }>;
+    };
+    privateApi.spawnedEntities.get(2)!.garrisonContainerId = null;
+    expect(logic.evaluateScriptIsBuildingEmpty({
+      entityId: 1,
+    })).toBe(true);
+  });
+
   it('evaluates named-has-free-container-slots from contain occupancy', () => {
     const bundle = makeBundle({
       objects: [

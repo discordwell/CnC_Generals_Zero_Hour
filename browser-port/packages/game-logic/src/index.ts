@@ -1607,6 +1607,8 @@ interface MapEntity {
   parkingSpaceProducerId: number | null;
   helixCarrierId: number | null;
   garrisonContainerId: number | null;
+  /** Source parity: OpenContain::m_playerEnteredMask (cleared every frame, set on enter). */
+  containPlayerEnteredSide: string | null;
   /** Source parity: m_containedBy for TransportContain/OverlordContain (Humvee, Chinook, etc.). */
   transportContainerId: number | null;
   /** Source parity: TunnelContain — references the tunnel this entity currently resides in. */
@@ -4221,6 +4223,7 @@ export class GameLogicSubsystem implements Subsystem {
   update(dt: number): void {
     this.animationTime += dt;
     this.frameCounter++;
+    this.resetContainPlayerEnteredSides();
     this.flushCommands();
     this.updateDisabledHackedStatuses();
     this.updateDisabledEmpStatuses();
@@ -4325,6 +4328,13 @@ export class GameLogicSubsystem implements Subsystem {
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
     this.checkVictoryConditions();
+  }
+
+  private resetContainPlayerEnteredSides(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (!entity.containProfile) continue;
+      entity.containPlayerEnteredSide = null;
+    }
   }
 
   submitCommand(command: GameLogicCommand): void {
@@ -6242,6 +6252,46 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateBuildingEntered.
+   * True only on frames where contain module recorded an entering player side.
+   */
+  evaluateScriptBuildingEntered(filter: {
+    side: string;
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.containProfile) {
+      return false;
+    }
+    return entity.containPlayerEnteredSide === normalizedSide;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateIsBuildingEmpty.
+   */
+  evaluateScriptIsBuildingEmpty(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.containProfile) {
+      return false;
+    }
+    return this.collectContainedEntityIds(entityId).length === 0;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateNamedHasFreeContainerSlots.
    */
   evaluateScriptNamedHasFreeContainerSlots(filter: {
@@ -7876,6 +7926,7 @@ export class GameLogicSubsystem implements Subsystem {
       parkingSpaceProducerId: null,
       helixCarrierId: null,
       garrisonContainerId: null,
+      containPlayerEnteredSide: null,
       transportContainerId: null,
       tunnelContainerId: null,
       tunnelEnteredFrame: 0,
@@ -17788,6 +17839,13 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
+  private noteContainerEnteredBy(container: MapEntity, rider: MapEntity): void {
+    if (!container.containProfile) {
+      return;
+    }
+    container.containPlayerEnteredSide = this.normalizeSide(rider.side);
+  }
+
   private handleGarrisonBuildingCommand(command: GarrisonBuildingCommand): void {
     const infantry = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
@@ -17818,6 +17876,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.cancelEntityCommandPathActions(infantry.id);
     this.clearAttackTarget(infantry.id);
     infantry.garrisonContainerId = building.id;
+    this.noteContainerEnteredBy(building, infantry);
     infantry.x = building.x;
     infantry.z = building.z;
     infantry.y = building.y;
@@ -17854,6 +17913,7 @@ export class GameLogicSubsystem implements Subsystem {
       this.cancelEntityCommandPathActions(infantry.id);
       this.clearAttackTarget(infantry.id);
       infantry.garrisonContainerId = building.id;
+      this.noteContainerEnteredBy(building, infantry);
       infantry.x = building.x;
       infantry.z = building.z;
       infantry.y = building.y;
@@ -17940,6 +18000,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.cancelEntityCommandPathActions(passenger.id);
     this.clearAttackTarget(passenger.id);
     passenger.transportContainerId = transport.id;
+    this.noteContainerEnteredBy(transport, passenger);
     passenger.x = transport.x;
     passenger.z = transport.z;
     passenger.y = transport.y;
@@ -21284,6 +21345,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.clearAttackTarget(passenger.id);
 
     passenger.tunnelContainerId = tunnel.id;
+    this.noteContainerEnteredBy(tunnel, passenger);
     passenger.tunnelEnteredFrame = this.frameCounter;
     passenger.x = tunnel.x;
     passenger.z = tunnel.z;
