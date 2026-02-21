@@ -28175,6 +28175,63 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates named-attacked-by-type from persistent last-damage source template', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Target', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+        makeObjectDef('VehicleAttacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Target', 10, 10),          // id 1
+        makeMapObject('VehicleAttacker', 20, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptNamedAttackedByType({
+      entityId: 1,
+      objectType: 'VehicleAttacker',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 10, 'SMALL_ARMS');
+
+    expect(logic.evaluateScriptNamedAttackedByType({
+      entityId: 1,
+      objectType: 'VehicleAttacker',
+    })).toBe(true);
+    expect(logic.evaluateScriptNamedAttackedByType({
+      entityId: 1,
+      objectType: 'UnknownTemplate',
+    })).toBe(false);
+
+    // Source parity: source template is retained even after attacker object is gone.
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptNamedAttackedByType({
+      entityId: 1,
+      objectType: 'VehicleAttacker',
+    })).toBe(true);
+  });
+
   it('evaluates named-has-free-container-slots from contain occupancy', () => {
     const bundle = makeBundle({
       objects: [

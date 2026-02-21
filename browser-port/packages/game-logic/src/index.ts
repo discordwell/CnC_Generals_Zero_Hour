@@ -6212,6 +6212,34 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptConditions::evaluateNamedAttackedByType.
+   * Current subset matches direct template names from last damage source template.
+   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
+   */
+  evaluateScriptNamedAttackedByType(filter: {
+    entityId: number;
+    objectType: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const normalizedObjectType = filter.objectType.trim().toUpperCase();
+    if (!normalizedObjectType) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+    const lastSourceTemplate = entity.scriptLastDamageSourceTemplateName;
+    if (!lastSourceTemplate) {
+      return false;
+    }
+    return this.areEquivalentTemplateNames(lastSourceTemplate, normalizedObjectType);
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateNamedHasFreeContainerSlots.
    */
   evaluateScriptNamedHasFreeContainerSlots(filter: {
