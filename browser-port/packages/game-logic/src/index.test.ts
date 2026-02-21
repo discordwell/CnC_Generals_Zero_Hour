@@ -17376,6 +17376,144 @@ describe('KeepObjectDie', () => {
   });
 });
 
+describe('DestroyDie', () => {
+  it('extracts DestroyDie profiles from INI with DieMuxData fields', () => {
+    const objectDef = makeObjectDef('FilteredDestroy', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'DestroyDie ModuleTag_Destroy', {
+        DeathTypes: 'CRUSHED',
+        ExemptStatus: 'SOLD',
+      }),
+    ]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('FilteredDestroy', 10, 10)]), makeRegistry(makeBundle({ objects: [objectDef] })), makeHeightmap());
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { destroyDieProfiles: Array<{ deathTypes: Set<string>; exemptStatus: Set<string> }> }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.destroyDieProfiles.length).toBe(1);
+    expect(entity.destroyDieProfiles[0]!.deathTypes.has('CRUSHED')).toBe(true);
+    expect(entity.destroyDieProfiles[0]!.exemptStatus.has('SOLD')).toBe(true);
+  });
+
+  it('overrides KeepObjectDie removal only when DestroyDie DeathTypes match', () => {
+    const objectDef = makeObjectDef('ConditionalWreck', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'KeepObjectDie ModuleTag_Keep', {}),
+      makeBlock('Behavior', 'DestroyDie ModuleTag_Destroy', {
+        DeathTypes: 'CRUSHED',
+      }),
+    ]);
+    const bundle = makeBundle({ objects: [objectDef] });
+
+    const logicNormal = new GameLogicSubsystem(new THREE.Scene());
+    logicNormal.loadMapObjects(makeMap([makeMapObject('ConditionalWreck', 10, 10)]), makeRegistry(bundle), makeHeightmap());
+    const normalPriv = logicNormal as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string, deathType?: string) => void;
+      spawnedEntities: Map<number, { destroyed: boolean }>;
+    };
+    const normalTarget = normalPriv.spawnedEntities.get(1)!;
+    normalPriv.applyWeaponDamageAmount(null, normalTarget, 200, 'EXPLOSION', 'NORMAL');
+    logicNormal.update(1 / 30);
+    // KeepObjectDie applies; DestroyDie(DeathTypes=CRUSHED) does not.
+    expect(normalPriv.spawnedEntities.has(1)).toBe(true);
+
+    const logicCrushed = new GameLogicSubsystem(new THREE.Scene());
+    logicCrushed.loadMapObjects(makeMap([makeMapObject('ConditionalWreck', 10, 10)]), makeRegistry(bundle), makeHeightmap());
+    const crushedPriv = logicCrushed as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string, deathType?: string) => void;
+      spawnedEntities: Map<number, { destroyed: boolean }>;
+    };
+    const crushedTarget = crushedPriv.spawnedEntities.get(1)!;
+    crushedPriv.applyWeaponDamageAmount(null, crushedTarget, 200, 'EXPLOSION', 'CRUSHED');
+    logicCrushed.update(1 / 30);
+    // Matching DestroyDie profile overrides KeepObjectDie and removes the wreck.
+    expect(crushedPriv.spawnedEntities.has(1)).toBe(false);
+  });
+});
+
+describe('DamDie', () => {
+  it('extracts DamDie profiles from INI with DieMuxData fields', () => {
+    const damDef = makeObjectDef('Dam', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'DamDie ModuleTag_Dam', {
+        DeathTypes: 'CRUSHED',
+        RequiredStatus: 'UNDER_CONSTRUCTION',
+      }),
+    ]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('Dam', 10, 10)]), makeRegistry(makeBundle({ objects: [damDef] })), makeHeightmap());
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { damDieProfiles: Array<{ deathTypes: Set<string>; requiredStatus: Set<string> }> }>;
+    };
+    const dam = priv.spawnedEntities.get(1)!;
+    expect(dam.damDieProfiles.length).toBe(1);
+    expect(dam.damDieProfiles[0]!.deathTypes.has('CRUSHED')).toBe(true);
+    expect(dam.damDieProfiles[0]!.requiredStatus.has('UNDER_CONSTRUCTION')).toBe(true);
+  });
+
+  it('enables WAVEGUIDE objects when DamDie death filter matches', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dam', 'Civilian', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'DamDie ModuleTag_Dam', {
+            DeathTypes: 'CRUSHED',
+          }),
+        ]),
+        makeObjectDef('WaveGuideObject', 'Civilian', ['WAVEGUIDE', 'STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Dam', 20, 20),
+        makeMapObject('WaveGuideObject', 30, 20),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const priv = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string, deathType?: string) => void;
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const dam = priv.spawnedEntities.get(1)!;
+    const waveGuide = priv.spawnedEntities.get(2)!;
+    waveGuide.objectStatusFlags.add('DISABLED_DEFAULT');
+
+    // Non-matching death type should not enable wave guides.
+    priv.applyWeaponDamageAmount(null, dam, 1000, 'EXPLOSION', 'NORMAL');
+    logic.update(1 / 30);
+    expect(waveGuide.objectStatusFlags.has('DISABLED_DEFAULT')).toBe(true);
+
+    // Reload and kill with matching death type.
+    const logic2 = new GameLogicSubsystem(new THREE.Scene());
+    logic2.loadMapObjects(
+      makeMap([
+        makeMapObject('Dam', 20, 20),
+        makeMapObject('WaveGuideObject', 30, 20),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv2 = logic2 as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string, deathType?: string) => void;
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const dam2 = priv2.spawnedEntities.get(1)!;
+    const waveGuide2 = priv2.spawnedEntities.get(2)!;
+    waveGuide2.objectStatusFlags.add('DISABLED_DEFAULT');
+    priv2.applyWeaponDamageAmount(null, dam2, 1000, 'EXPLOSION', 'CRUSHED');
+    logic2.update(1 / 30);
+    expect(waveGuide2.objectStatusFlags.has('DISABLED_DEFAULT')).toBe(false);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DeletionUpdate — silent timed removal (no death pipeline)
 // ═══════════════════════════════════════════════════════════════════════════

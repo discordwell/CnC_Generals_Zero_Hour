@@ -1938,6 +1938,10 @@ interface MapEntity {
   fxListDieProfiles: FXListDieProfile[];
   // ── Source parity: CrushDie — sets FRONTCRUSHED/BACKCRUSHED model conditions on crush death ──
   crushDieProfiles: CrushDieProfile[];
+  // ── Source parity: DestroyDie — DieMuxData-filtered forced removal on death ──
+  destroyDieProfiles: DestroyDieProfile[];
+  // ── Source parity: DamDie — enables WAVEGUIDE objects when dam dies ──
+  damDieProfiles: DamDieProfile[];
   /** Source parity: BodyModule::m_frontCrushed — front end was crushed. */
   frontCrushed: boolean;
   /** Source parity: BodyModule::m_backCrushed — back end was crushed. */
@@ -2149,6 +2153,28 @@ interface FXListDieProfile {
  */
 interface CrushDieProfile {
   /** DieMuxData filtering. */
+  deathTypes: Set<string>;
+  veterancyLevels: Set<string>;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
+}
+
+/**
+ * Source parity: DestroyDie — default die module with DieMuxData filters.
+ * C++ file: DestroyDie.cpp.
+ */
+interface DestroyDieProfile {
+  deathTypes: Set<string>;
+  veterancyLevels: Set<string>;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
+}
+
+/**
+ * Source parity: DamDie — on applicable death, enables all WAVEGUIDE objects.
+ * C++ file: DamDie.cpp.
+ */
+interface DamDieProfile {
   deathTypes: Set<string>;
   veterancyLevels: Set<string>;
   exemptStatus: Set<string>;
@@ -5901,6 +5927,10 @@ export class GameLogicSubsystem implements Subsystem {
       fxListDieProfiles: this.extractFXListDieProfiles(objectDef),
       // CrushDie
       crushDieProfiles: this.extractCrushDieProfiles(objectDef),
+      // DestroyDie
+      destroyDieProfiles: this.extractDestroyDieProfiles(objectDef),
+      // DamDie
+      damDieProfiles: this.extractDamDieProfiles(objectDef),
       frontCrushed: false,
       backCrushed: false,
       // GrantUpgradeCreate
@@ -8823,6 +8853,95 @@ export class GameLogicSubsystem implements Subsystem {
     };
     if (objectDef.blocks) {
       for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  private extractDieMuxData(block: IniBlock): {
+    deathTypes: Set<string>;
+    veterancyLevels: Set<string>;
+    exemptStatus: Set<string>;
+    requiredStatus: Set<string>;
+  } {
+    const deathTypes = new Set<string>();
+    const dtStr = readStringField(block.fields, ['DeathTypes'])?.trim().toUpperCase() ?? '';
+    if (dtStr) {
+      for (const token of dtStr.split(/\s+/)) {
+        if (token) deathTypes.add(token);
+      }
+    }
+
+    const veterancyLevels = new Set<string>();
+    const vlStr = readStringField(block.fields, ['VeterancyLevels'])?.trim().toUpperCase() ?? '';
+    if (vlStr) {
+      for (const token of vlStr.split(/\s+/)) {
+        if (token) veterancyLevels.add(token);
+      }
+    }
+
+    const exemptStatus = new Set<string>();
+    const esStr = readStringField(block.fields, ['ExemptStatus'])?.trim().toUpperCase() ?? '';
+    if (esStr) {
+      for (const token of esStr.split(/\s+/)) {
+        if (token) exemptStatus.add(token);
+      }
+    }
+
+    const requiredStatus = new Set<string>();
+    const rsStr = readStringField(block.fields, ['RequiredStatus'])?.trim().toUpperCase() ?? '';
+    if (rsStr) {
+      for (const token of rsStr.split(/\s+/)) {
+        if (token) requiredStatus.add(token);
+      }
+    }
+
+    return { deathTypes, veterancyLevels, exemptStatus, requiredStatus };
+  }
+
+  /**
+   * Source parity: DestroyDie — extract DestroyDie modules with DieMuxData filtering.
+   * C++ file: DestroyDie.cpp.
+   */
+  private extractDestroyDieProfiles(objectDef: ObjectDef | undefined): DestroyDieProfile[] {
+    if (!objectDef) return [];
+    const profiles: DestroyDieProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DESTROYDIE') {
+          profiles.push(this.extractDieMuxData(block));
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: DamDie — extract DamDie modules with DieMuxData filtering.
+   * C++ file: DamDie.cpp.
+   */
+  private extractDamDieProfiles(objectDef: ObjectDef | undefined): DamDieProfile[] {
+    if (!objectDef) return [];
+    const profiles: DamDieProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DAMDIE') {
+          profiles.push(this.extractDieMuxData(block));
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
     }
     return profiles;
   }
@@ -27485,6 +27604,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: CrushDie::onDie — set FRONTCRUSHED/BACKCRUSHED model conditions.
     this.executeCrushDie(entity, attackerId);
 
+    // Source parity: DamDie::onDie — enable all WAVEGUIDE objects for flood wave.
+    this.executeDamDieModules(entity);
+
     // Source parity: UpgradeDie::onDie — remove upgrade from producer on death.
     this.executeUpgradeDieModules(entity);
 
@@ -27690,7 +27812,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (blockType !== 'DIE' && blockType !== 'BEHAVIOR') continue;
       const moduleType = block.name.split(/\s+/)[0] ?? '';
       const upperModuleType = moduleType.toUpperCase();
-      // CreateObjectDie, SlowDeathBehavior, DestroyDie
+      // CreateObjectDie, SlowDeathBehavior
       if (upperModuleType.includes('CREATEOBJECTDIE') || upperModuleType.includes('SLOWDEATH')) {
         // Parse DieMuxData fields.
         const deathTypes = new Set<string>();
@@ -28226,6 +28348,34 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: DamDie::onDie — enable all WAVEGUIDE objects when dam dies.
+   * C++ file: DamDie.cpp lines 91-106.
+   */
+  private executeDamDieModules(entity: MapEntity): void {
+    if (entity.damDieProfiles.length === 0) {
+      return;
+    }
+
+    let shouldEnableWaveGuides = false;
+    for (const profile of entity.damDieProfiles) {
+      if (this.isDieModuleApplicable(entity, profile)) {
+        shouldEnableWaveGuides = true;
+        break;
+      }
+    }
+    if (!shouldEnableWaveGuides) {
+      return;
+    }
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (!candidate.kindOf.has('WAVEGUIDE')) {
+        continue;
+      }
+      candidate.objectStatusFlags.delete('DISABLED_DEFAULT');
+    }
+  }
+
+  /**
    * Source parity: crushLocationCheck — determine which end of the victim was closest to the crusher.
    * C++ file: CrushDie.cpp lines 49-145.
    * Returns 'TOTAL' | 'FRONT' | 'BACK' | 'NONE'.
@@ -28330,6 +28480,18 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return true;
+  }
+
+  private isAnyDestroyDieProfileApplicable(entity: MapEntity): boolean {
+    if (entity.destroyDieProfiles.length === 0) {
+      return false;
+    }
+    for (const profile of entity.destroyDieProfiles) {
+      if (this.isDieModuleApplicable(entity, profile)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // ── EVA Announcer system ──
@@ -28577,7 +28739,8 @@ export class GameLogicSubsystem implements Subsystem {
   private finalizeDestroyedEntities(): void {
     const destroyedEntityIds: number[] = [];
     for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed && !entity.keepObjectOnDeath) {
+      const destroyDieMatched = this.isAnyDestroyDieProfileApplicable(entity);
+      if (entity.destroyed && (!entity.keepObjectOnDeath || destroyDieMatched)) {
         destroyedEntityIds.push(entity.id);
       }
     }
