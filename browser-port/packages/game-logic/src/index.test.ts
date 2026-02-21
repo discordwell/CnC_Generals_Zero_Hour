@@ -26924,7 +26924,8 @@ describe('onStructureConstructionComplete parity hooks', () => {
     }
 
     expect(logic.getSideScoreState('America')).toEqual({ structuresBuilt: 1, moneySpent: 500 });
-    expect(logic.getScriptObjectTopologyVersion()).toBe(1);
+    expect(logic.getScriptObjectTopologyVersion()).toBe(2);
+    expect(logic.getScriptObjectCountChangedFrame()).toBeGreaterThan(0);
   });
 
   it('notifies skirmish AI on produced structure completion', () => {
@@ -26967,6 +26968,38 @@ describe('onStructureConstructionComplete parity hooks', () => {
     }
 
     expect(priv.skirmishAIStates.get('america')?.builtStructureKeywords.has('PATRIOT')).toBe(true);
+  });
+
+  it('updates script object-change frame when an entity is removed from world', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Target', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Target', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    expect(logic.getScriptObjectTopologyVersion()).toBe(0);
+    expect(logic.getScriptObjectCountChangedFrame()).toBe(0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+      frameCounter: number;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(null, target, 200, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getScriptObjectTopologyVersion()).toBe(1);
+    expect(logic.getScriptObjectCountChangedFrame()).toBe(privateApi.frameCounter);
   });
 });
 

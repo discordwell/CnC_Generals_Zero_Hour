@@ -3657,6 +3657,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sharedShortcutSpecialPowerReadyFrames = new Map<string, number>();
   /** Source parity: ScriptEngine::notifyOfObjectCreationOrDestruction dirty version. */
   private scriptObjectTopologyVersion = 0;
+  private scriptObjectCountChangedFrame = 0;
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
   private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
@@ -3790,7 +3791,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       const mapEntity = this.createMapEntity(mapObject, objectDef, iniDataRegistry, heightmap);
-      this.spawnedEntities.set(mapEntity.id, mapEntity);
+      this.addEntityToWorld(mapEntity);
       this.registerEntityEnergy(mapEntity);
       this.initializeMinefieldState(mapEntity);
       this.registerTunnelEntity(mapEntity);
@@ -3839,6 +3840,10 @@ export class GameLogicSubsystem implements Subsystem {
     if (heightmap) {
       this.fogOfWarGrid = new FogOfWarGrid(heightmap.worldWidth, heightmap.worldDepth, MAP_XY_FACTOR);
     }
+
+    // Source parity: script condition caches begin from the post-load baseline.
+    this.scriptObjectTopologyVersion = 0;
+    this.scriptObjectCountChangedFrame = 0;
 
     return this.placementSummary;
   }
@@ -5023,6 +5028,10 @@ export class GameLogicSubsystem implements Subsystem {
 
   getScriptObjectTopologyVersion(): number {
     return this.scriptObjectTopologyVersion;
+  }
+
+  getScriptObjectCountChangedFrame(): number {
+    return this.scriptObjectCountChangedFrame;
   }
 
   getSideAttackedByState(side: string): {
@@ -14785,7 +14794,7 @@ export class GameLogicSubsystem implements Subsystem {
     created.z = z;
     created.y = terrainY + created.baseHeight;
     this.updatePathfindPosCell(created);
-    this.spawnedEntities.set(created.id, created);
+    this.addEntityToWorld(created);
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
     this.registerTunnelEntity(created);
@@ -16073,6 +16082,18 @@ export class GameLogicSubsystem implements Subsystem {
 
   private notifyScriptObjectCreationOrDestruction(): void {
     this.scriptObjectTopologyVersion += 1;
+    this.scriptObjectCountChangedFrame = this.frameCounter;
+  }
+
+  private addEntityToWorld(entity: MapEntity): void {
+    this.spawnedEntities.set(entity.id, entity);
+    this.notifyScriptObjectCreationOrDestruction();
+  }
+
+  private removeEntityFromWorld(entityId: number): void {
+    if (this.spawnedEntities.delete(entityId)) {
+      this.notifyScriptObjectCreationOrDestruction();
+    }
   }
 
   private getOrCreateSideScoreState(side: string): SideScoreState {
@@ -19754,7 +19775,7 @@ export class GameLogicSubsystem implements Subsystem {
       this.issueMoveTo(constructor.id, created.x, created.z);
     }
 
-    this.spawnedEntities.set(created.id, created);
+    this.addEntityToWorld(created);
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
     this.registerTunnelEntity(created);
@@ -21031,7 +21052,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (side) {
       entity.controllingPlayerToken = this.normalizeControllingPlayerToken(side);
     }
-    this.spawnedEntities.set(entity.id, entity);
+    this.addEntityToWorld(entity);
     this.registerEntityEnergy(entity);
     this.initializeMinefieldState(entity);
     this.registerTunnelEntity(entity);
@@ -21076,7 +21097,7 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    this.spawnedEntities.set(created.id, created);
+    this.addEntityToWorld(created);
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
     this.registerTunnelEntity(created);
@@ -30621,7 +30642,7 @@ export class GameLogicSubsystem implements Subsystem {
         }
         entity.tunnelContainerId = null;
       }
-      this.spawnedEntities.delete(entityId);
+      this.removeEntityFromWorld(entityId);
       this.removeEntityFromSelection(entityId);
     }
   }
@@ -31685,6 +31706,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
     this.scriptObjectTopologyVersion = 0;
+    this.scriptObjectCountChangedFrame = 0;
     this.loadedMapData = null;
     this.navigationGrid = null;
     this.bridgeSegments.clear();
