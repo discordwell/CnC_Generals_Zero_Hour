@@ -146,6 +146,7 @@ import {
 } from './special-power-routing.js';
 import {
   DEFAULT_SUPPLY_BOX_VALUE,
+  SupplyTruckAIState,
   initializeWarehouseState as initializeWarehouseStateImpl,
   updateSupplyTruck as updateSupplyTruckImpl,
   type SupplyChainContext,
@@ -1468,6 +1469,14 @@ interface PendingCombatDropActionState {
   nextDropFrame: number;
 }
 
+interface PendingChinookRappelState {
+  sourceEntityId: number;
+  targetObjectId: number | null;
+  targetX: number;
+  targetZ: number;
+  descentSpeedPerFrame: number;
+}
+
 interface RepairDockProfile {
   /** Source parity: RepairDockUpdateModuleData::m_framesForFullHeal (duration real in frames). */
   timeForFullHealFrames: number;
@@ -1492,6 +1501,7 @@ interface ChinookAIProfile {
   perRopeDelayMaxFrames: number;
   minDropHeight: number;
   waitForRopesToDrop: boolean;
+  rappelSpeed: number;
   ropeDropSpeed: number;
   ropeFinalHeight: number;
 }
@@ -3313,10 +3323,16 @@ interface StructureCollapseRuntimeState {
 }
 
 /** Source parity: GlobalData::m_gravity = -1.0f */
-const STRUCTURE_COLLAPSE_GRAVITY = -1.0;
+const SOURCE_DEFAULT_GRAVITY = -1.0;
+
+/** Source parity: GlobalData::m_gravity = -1.0f */
+const STRUCTURE_COLLAPSE_GRAVITY = SOURCE_DEFAULT_GRAVITY;
 
 /** Source parity: gravity for helicopter slow death fall. */
-const HELICOPTER_GRAVITY = -1.0;
+const HELICOPTER_GRAVITY = SOURCE_DEFAULT_GRAVITY;
+
+/** Source parity: ChinookAIUpdateModuleData constructor default for m_rappelSpeed. */
+const DEFAULT_CHINOOK_RAPPEL_SPEED = Math.abs(SOURCE_DEFAULT_GRAVITY) * LOGIC_FRAME_RATE * 0.5;
 
 /**
  * Source parity: EMPUpdate — electromagnetic pulse field that grows, disables nearby entities,
@@ -3658,6 +3674,10 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: TunnelTracker — per-side shared tunnel network state. */
   private readonly tunnelTrackers = new Map<string, TunnelTrackerState>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
+  /** Source parity: ChinookCombatDropState — rappellers actively descending. */
+  private readonly pendingChinookRappels = new Map<number, PendingChinookRappelState>();
+  /** Source parity: ChinookAIUpdate::m_pendingCommand while in takeoff/landing/rappel states. */
+  private readonly pendingChinookCommandByEntityId = new Map<number, GameLogicCommand>();
   /** Source parity: BuildAssistant repair — dozer ID → target building ID. */
   private readonly pendingRepairActions = new Map<number, number>();
   /** Source parity: DozerAIUpdate — dozer ID → building ID being constructed. */
@@ -4099,6 +4119,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingRepairActions();
     this.updatePendingConstructionActions();
     this.updateDozerIdleBehavior();
+    this.updatePendingChinookRappels();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
@@ -8388,6 +8409,7 @@ export class GameLogicSubsystem implements Subsystem {
             perRopeDelayMaxFrames: this.msToLogicFrames(perRopeDelayMaxMs),
             minDropHeight: readNumericField(block.fields, ['MinDropHeight']) ?? 30.0,
             waitForRopesToDrop: readBooleanField(block.fields, ['WaitForRopesToDrop']) ?? true,
+            rappelSpeed: readNumericField(block.fields, ['RappelSpeed']) ?? DEFAULT_CHINOOK_RAPPEL_SPEED,
             ropeDropSpeed: readNumericField(block.fields, ['RopeDropSpeed']) ?? 1e10,
             ropeFinalHeight: readNumericField(block.fields, ['RopeFinalHeight']) ?? 0.0,
           };
@@ -13473,6 +13495,10 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    if (this.deferCommandWhileChinookBusy(command)) {
+      return;
+    }
+
     if (this.shouldIgnoreRailedTransportPlayerCommand(command)) {
       return;
     }
@@ -13832,6 +13858,25 @@ export class GameLogicSubsystem implements Subsystem {
       command,
       executeFrame: this.frameCounter + packDelayFrames,
     });
+    return true;
+  }
+
+  private deferCommandWhileChinookBusy(command: GameLogicCommand): boolean {
+    const hasEntityId = 'entityId' in command && typeof command.entityId === 'number';
+    if (!hasEntityId) {
+      return false;
+    }
+
+    const entity = this.spawnedEntities.get(command.entityId);
+    if (!entity || entity.destroyed || !entity.chinookAIProfile) {
+      return false;
+    }
+
+    if (!this.pendingCombatDropActions.has(entity.id)) {
+      return false;
+    }
+
+    this.pendingChinookCommandByEntityId.set(entity.id, command);
     return true;
   }
 
@@ -16619,10 +16664,95 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private clearChinookSupplyBoxes(entityId: number): void {
+    const state = this.supplyTruckStates.get(entityId);
+    if (!state || state.currentBoxes <= 0) {
+      return;
+    }
+
+    // Source parity: ChinookCombatDropState::onEnter — while (ai->loseOneBox()).
+    state.currentBoxes = 0;
+    if (state.aiState === SupplyTruckAIState.APPROACHING_DEPOT || state.aiState === SupplyTruckAIState.DEPOSITING) {
+      state.targetDepotId = null;
+      state.aiState = SupplyTruckAIState.IDLE;
+    }
+  }
+
+  private countActiveChinookRappellers(sourceEntityId: number): number {
+    let count = 0;
+    for (const pending of this.pendingChinookRappels.values()) {
+      if (pending.sourceEntityId === sourceEntityId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private clearPendingChinookCommands(entityId: number): void {
+    this.pendingChinookCommandByEntityId.delete(entityId);
+  }
+
+  private flushPendingChinookCommand(entityId: number): void {
+    const command = this.pendingChinookCommandByEntityId.get(entityId);
+    if (!command) {
+      return;
+    }
+    this.pendingChinookCommandByEntityId.delete(entityId);
+    this.submitCommand(command);
+  }
+
+  private abortPendingChinookRappels(sourceEntityId: number): void {
+    for (const [passengerId, pending] of this.pendingChinookRappels.entries()) {
+      if (pending.sourceEntityId !== sourceEntityId) {
+        continue;
+      }
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (passenger && !passenger.destroyed) {
+        // Source parity: ChinookCombatDropState::onExit(STATE_FAILURE) -> rappellerAI->aiIdle().
+        passenger.objectStatusFlags.delete('DISABLED_HELD');
+        this.cancelEntityCommandPathActions(passenger.id);
+        this.clearAttackTarget(passenger.id);
+      }
+      this.pendingChinookRappels.delete(passengerId);
+    }
+  }
+
+  private updatePendingChinookRappels(): void {
+    for (const [passengerId, pending] of this.pendingChinookRappels.entries()) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        this.pendingChinookRappels.delete(passengerId);
+        continue;
+      }
+
+      const source = this.spawnedEntities.get(pending.sourceEntityId);
+      if (!source || source.destroyed) {
+        passenger.objectStatusFlags.delete('DISABLED_HELD');
+        this.cancelEntityCommandPathActions(passenger.id);
+        this.clearAttackTarget(passenger.id);
+        this.pendingChinookRappels.delete(passengerId);
+        continue;
+      }
+
+      const groundY = this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
+      if (passenger.y > groundY) {
+        passenger.y = Math.max(groundY, passenger.y - Math.max(0, pending.descentSpeedPerFrame));
+        continue;
+      }
+
+      passenger.y = groundY;
+      passenger.objectStatusFlags.delete('DISABLED_HELD');
+      this.pendingChinookRappels.delete(passengerId);
+      this.issueDroppedPassengerCommand(passenger, pending.targetX, pending.targetZ, pending.targetObjectId);
+    }
+  }
+
   private updatePendingCombatDropActions(): void {
     for (const [sourceId, pending] of this.pendingCombatDropActions.entries()) {
       const source = this.spawnedEntities.get(sourceId);
       if (!source || source.destroyed) {
+        this.abortPendingChinookRappels(sourceId);
+        this.clearPendingChinookCommands(sourceId);
         this.pendingCombatDropActions.delete(sourceId);
         continue;
       }
@@ -16642,6 +16772,16 @@ export class GameLogicSubsystem implements Subsystem {
         // Source parity subset: ChinookCombatDropState rappels CAN_RAPPEL passengers over time.
         const profile = source.chinookAIProfile;
         if (pending.nextDropFrame === 0) {
+          // Source parity: combat drop holds the transport in place while rappelling.
+          source.objectStatusFlags.add('DISABLED_HELD');
+          // Source parity: ChinookCombatDropState::onEnter — lose all gathered supply boxes.
+          this.clearChinookSupplyBoxes(source.id);
+          // Source parity subset: keep chinook at min drop height while deploying ropes.
+          const hoverGround = this.resolveGroundHeight(source.x, source.z);
+          const hoverY = hoverGround + source.baseHeight + Math.max(0, profile.minDropHeight);
+          if (source.y < hoverY) {
+            source.y = hoverY;
+          }
           pending.nextDropFrame = this.frameCounter + this.resolveChinookCombatDropInitialDelayFrames(source);
         }
         if (this.frameCounter < pending.nextDropFrame) {
@@ -16657,12 +16797,18 @@ export class GameLogicSubsystem implements Subsystem {
           droppedAny = true;
         }
 
-        if (!droppedAny || this.countContainedRappellers(source.id) <= 0) {
+        const hasContainedRappellers = this.countContainedRappellers(source.id) > 0;
+        const hasActiveRappellers = this.countActiveChinookRappellers(source.id) > 0;
+        if (!hasContainedRappellers && !hasActiveRappellers) {
+          source.objectStatusFlags.delete('DISABLED_HELD');
           this.pendingCombatDropActions.delete(sourceId);
+          this.flushPendingChinookCommand(source.id);
           continue;
         }
 
-        pending.nextDropFrame = this.frameCounter + this.resolveChinookCombatDropIntervalFrames(profile);
+        pending.nextDropFrame = droppedAny
+          ? this.frameCounter + this.resolveChinookCombatDropIntervalFrames(profile)
+          : this.frameCounter + 1;
         continue;
       }
 
@@ -19606,6 +19752,13 @@ export class GameLogicSubsystem implements Subsystem {
     return this.gameRandom.nextRange(minFrames, maxFrames);
   }
 
+  private resolveChinookRappelSpeedPerFrame(profile: ChinookAIProfile): number {
+    if (!Number.isFinite(profile.rappelSpeed) || profile.rappelSpeed <= 0) {
+      return 0;
+    }
+    return profile.rappelSpeed / LOGIC_FRAME_RATE;
+  }
+
   private releaseEntityFromContainer(entity: MapEntity): void {
     if (entity.parkingSpaceProducerId !== null) {
       const parkingProducer = this.spawnedEntities.get(entity.parkingSpaceProducerId);
@@ -19658,7 +19811,8 @@ export class GameLogicSubsystem implements Subsystem {
     targetZ: number,
     targetObjectId: number | null,
   ): boolean {
-    const target = targetObjectId !== null ? this.spawnedEntities.get(targetObjectId) : null;
+    const isChinookCombatDrop = container.chinookAIProfile !== null
+      && this.pendingCombatDropActions.has(container.id);
     for (const passengerId of this.collectContainedEntityIds(container.id)) {
       const passenger = this.spawnedEntities.get(passengerId);
       if (!passenger || passenger.destroyed) continue;
@@ -19667,20 +19821,20 @@ export class GameLogicSubsystem implements Subsystem {
       this.releaseEntityFromContainer(passenger);
       passenger.x = container.x;
       passenger.z = container.z;
-      passenger.y = this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
+      passenger.y = Math.max(container.y, this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight);
       this.updatePathfindPosCell(passenger);
 
-      if (
-        target
-        && !target.destroyed
-        && this.getTeamRelationship(passenger, target) === RELATIONSHIP_ENEMIES
-      ) {
-        this.issueAttackEntity(passenger.id, target.id, 'PLAYER');
-        if (passenger.attackTargetEntityId === null && passenger.canMove) {
-          this.issueMoveTo(passenger.id, targetX, targetZ);
-        }
-      } else if (passenger.canMove) {
-        this.issueMoveTo(passenger.id, targetX, targetZ);
+      if (isChinookCombatDrop && container.chinookAIProfile) {
+        passenger.objectStatusFlags.add('DISABLED_HELD');
+        this.pendingChinookRappels.set(passenger.id, {
+          sourceEntityId: container.id,
+          targetObjectId,
+          targetX,
+          targetZ,
+          descentSpeedPerFrame: this.resolveChinookRappelSpeedPerFrame(container.chinookAIProfile),
+        });
+      } else {
+        this.issueDroppedPassengerCommand(passenger, targetX, targetZ, targetObjectId);
       }
       return true;
     }
@@ -19698,7 +19852,6 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const target = targetObjectId !== null ? this.spawnedEntities.get(targetObjectId) : null;
     for (const passengerId of passengerIds) {
       const passenger = this.spawnedEntities.get(passengerId);
       if (!passenger || passenger.destroyed) {
@@ -19711,18 +19864,31 @@ export class GameLogicSubsystem implements Subsystem {
       passenger.y = this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
       this.updatePathfindPosCell(passenger);
 
-      if (
-        target
-        && !target.destroyed
-        && this.getTeamRelationship(passenger, target) === RELATIONSHIP_ENEMIES
-      ) {
-        this.issueAttackEntity(passenger.id, target.id, 'PLAYER');
-        if (passenger.attackTargetEntityId === null && passenger.canMove) {
-          this.issueMoveTo(passenger.id, targetX, targetZ);
-        }
-      } else if (passenger.canMove) {
+      this.issueDroppedPassengerCommand(passenger, targetX, targetZ, targetObjectId);
+    }
+  }
+
+  private issueDroppedPassengerCommand(
+    passenger: MapEntity,
+    targetX: number,
+    targetZ: number,
+    targetObjectId: number | null,
+  ): void {
+    const target = targetObjectId !== null ? this.spawnedEntities.get(targetObjectId) : null;
+    if (
+      target
+      && !target.destroyed
+      && this.getTeamRelationship(passenger, target) === RELATIONSHIP_ENEMIES
+    ) {
+      this.issueAttackEntity(passenger.id, target.id, 'PLAYER');
+      if (passenger.attackTargetEntityId === null && passenger.canMove) {
         this.issueMoveTo(passenger.id, targetX, targetZ);
       }
+      return;
+    }
+
+    if (passenger.canMove) {
+      this.issueMoveTo(passenger.id, targetX, targetZ);
     }
   }
 
@@ -28398,9 +28564,24 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingTunnelActions.delete(sourceId);
       }
     }
-    for (const pendingAction of this.pendingCombatDropActions.values()) {
+    for (const [sourceId, pendingAction] of this.pendingCombatDropActions.entries()) {
+      if (sourceId === entityId) {
+        this.pendingCombatDropActions.delete(sourceId);
+        this.abortPendingChinookRappels(sourceId);
+        this.clearPendingChinookCommands(sourceId);
+        continue;
+      }
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
+      }
+    }
+    for (const [passengerId, pendingRappel] of this.pendingChinookRappels.entries()) {
+      if (passengerId === entityId || pendingRappel.sourceEntityId === entityId) {
+        this.pendingChinookRappels.delete(passengerId);
+        continue;
+      }
+      if (pendingRappel.targetObjectId === entityId) {
+        pendingRappel.targetObjectId = null;
       }
     }
     for (const [dozerId, targetBuildingId] of this.pendingConstructionActions.entries()) {
@@ -29044,9 +29225,24 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingTunnelActions.delete(sourceId);
       }
     }
-    for (const pendingAction of this.pendingCombatDropActions.values()) {
+    for (const [sourceId, pendingAction] of this.pendingCombatDropActions.entries()) {
+      if (sourceId === entityId) {
+        this.pendingCombatDropActions.delete(sourceId);
+        this.abortPendingChinookRappels(sourceId);
+        this.clearPendingChinookCommands(sourceId);
+        continue;
+      }
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
+      }
+    }
+    for (const [passengerId, pendingRappel] of this.pendingChinookRappels.entries()) {
+      if (passengerId === entityId || pendingRappel.sourceEntityId === entityId) {
+        this.pendingChinookRappels.delete(passengerId);
+        continue;
+      }
+      if (pendingRappel.targetObjectId === entityId) {
+        pendingRappel.targetObjectId = null;
       }
     }
     // Clear dozer construction tasks targeting this building.
@@ -31222,6 +31418,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingEnterObjectActions.clear();
     this.pendingRepairDockActions.clear();
     this.pendingCombatDropActions.clear();
+    this.pendingChinookRappels.clear();
+    this.pendingChinookCommandByEntityId.clear();
     this.pendingGarrisonActions.clear();
     this.pendingTransportActions.clear();
     this.pendingTunnelActions.clear();

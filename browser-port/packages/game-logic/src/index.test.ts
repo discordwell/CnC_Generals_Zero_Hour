@@ -8209,6 +8209,237 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(withPassengerCredits).toBe(0);
   });
 
+  it('clears Chinook carried supply boxes when combat drop begins', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const warehouseDef = makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+        StartingBoxes: 10,
+        DeleteWhenEmpty: false,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const chinookDef = makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT', 'HARVESTER'], [
+      makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+        NumRopes: 1,
+        PerRopeDelayMin: 100,
+        PerRopeDelayMax: 100,
+        WaitForRopesToDrop: false,
+        MinDropHeight: 0,
+      }),
+      makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+        Slots: 5,
+        InitialPayload: 0,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+    ]);
+
+    const rappellerDef = makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [warehouseDef, supplyCenterDef, chinookDef, rappellerDef],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyWarehouse', 10, 10), // id 1
+        makeMapObject('SupplyCenter', 35, 10),    // id 2
+        makeMapObject('SupplyChinook', 10, 10),   // id 3
+        makeMapObject('Rappeller', 10, 10),       // id 4
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      supplyTruckStates: Map<number, { currentBoxes: number }>;
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+    };
+
+    let carriedBoxes = 0;
+    for (let i = 0; i < 240; i++) {
+      logic.update(1 / 30);
+      carriedBoxes = priv.supplyTruckStates.get(3)?.currentBoxes ?? 0;
+      if (carriedBoxes > 0) {
+        break;
+      }
+    }
+    expect(carriedBoxes).toBeGreaterThan(0);
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 4, targetTransportId: 3 });
+    for (let frame = 0; frame < 5; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(priv.spawnedEntities.get(4)?.transportContainerId).toBe(3);
+
+    const chinookBeforeDrop = logic.getEntityState(3);
+    expect(chinookBeforeDrop).not.toBeNull();
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 3,
+      targetObjectId: null,
+      targetPosition: [chinookBeforeDrop!.x, 0, chinookBeforeDrop!.z],
+    });
+
+    let boxesAfterDrop = priv.supplyTruckStates.get(3)?.currentBoxes ?? -1;
+    for (let frame = 0; frame < 30; frame += 1) {
+      logic.update(1 / 30);
+      boxesAfterDrop = priv.supplyTruckStates.get(3)?.currentBoxes ?? -1;
+      if (boxesAfterDrop === 0) {
+        break;
+      }
+    }
+
+    expect(boxesAfterDrop).toBe(0);
+  });
+
+  it('keeps Chinook and rappeller held until rappel descent completes', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 0,
+            PerRopeDelayMax: 0,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 30,
+            RappelSpeed: 30,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+        ]),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+      ],
+    });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8), // id 1
+        makeMapObject('Rappeller', 8, 8),     // id 2
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    for (let frame = 0; frame < 4; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: null,
+      targetPosition: [8, 0, 8],
+    });
+
+    for (let frame = 0; frame < 8; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const chinookDuring = logic.getEntityState(1);
+    const rappellerDuring = logic.getEntityState(2);
+    expect(chinookDuring?.statusFlags ?? []).toContain('DISABLED_HELD');
+    expect(rappellerDuring?.statusFlags ?? []).toContain('DISABLED_HELD');
+    expect(chinookDuring?.y ?? 0).toBeGreaterThan(15);
+
+    for (let frame = 0; frame < 80; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const chinookAfter = logic.getEntityState(1);
+    const rappellerAfter = logic.getEntityState(2);
+    expect(chinookAfter?.statusFlags ?? []).not.toContain('DISABLED_HELD');
+    expect(rappellerAfter?.statusFlags ?? []).not.toContain('DISABLED_HELD');
+  });
+
+  it('replays deferred Chinook command after combat drop finishes', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 0,
+            PerRopeDelayMax: 0,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 30,
+            RappelSpeed: 30,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL ChinookLocomotor', {}),
+        ]),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+      ],
+      locomotors: [
+        makeLocomotorDef('ChinookLocomotor', 120),
+      ],
+    });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8), // id 1
+        makeMapObject('Rappeller', 8, 8),     // id 2
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+      pendingCombatDropActions: Map<number, unknown>;
+      pendingChinookCommandByEntityId: Map<number, unknown>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    for (let frame = 0; frame < 12; frame += 1) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(2)?.transportContainerId === 1) {
+        break;
+      }
+    }
+    expect(priv.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: null,
+      targetPosition: [8, 0, 8],
+    });
+    const startX = logic.getEntityState(1)?.x ?? 0;
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 30, targetZ: 8 });
+
+    logic.update(1 / 30);
+    expect(priv.pendingCombatDropActions.has(1)).toBe(true);
+    expect(priv.pendingChinookCommandByEntityId.has(1)).toBe(true);
+
+    for (let frame = 0; frame < 120; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(priv.pendingChinookCommandByEntityId.has(1)).toBe(false);
+    const movedState = logic.getEntityState(1);
+    expect(movedState?.x ?? 0).toBeGreaterThan(startX + 3);
+  });
+
   it('uses DozerAIUpdate RepairHealthPercentPerSecond during repair', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
