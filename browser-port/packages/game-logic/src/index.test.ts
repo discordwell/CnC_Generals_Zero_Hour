@@ -28156,6 +28156,72 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates skirmish supply-source-safe with AI safety scan and cached polling', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 20,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+        ]),
+        makeObjectDef('EnemyInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyWarehouse', 20, 20),
+        makeMapObject('EnemyInfantry', 24, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setSidePlayerType('America', 'COMPUTER');
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    expect(logic.evaluateScriptSkirmishSupplySourceSafe({
+      side: 'America',
+      minSupplyAmount: 1000,
+      conditionCacheId: 'safe-ai',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number }>;
+    };
+    const enemy = privateApi.spawnedEntities.get(2)!;
+    enemy.x = 500;
+    enemy.z = 500;
+
+    // Source parity: condition only refreshes every 2*LOGICFRAMES_PER_SECOND.
+    expect(logic.evaluateScriptSkirmishSupplySourceSafe({
+      side: 'America',
+      minSupplyAmount: 1000,
+      conditionCacheId: 'safe-ai',
+    })).toBe(false);
+
+    for (let i = 0; i < 61; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.evaluateScriptSkirmishSupplySourceSafe({
+      side: 'America',
+      minSupplyAmount: 1000,
+      conditionCacheId: 'safe-ai',
+    })).toBe(true);
+
+    logic.setSidePlayerType('America', 'HUMAN');
+    expect(logic.evaluateScriptSkirmishSupplySourceSafe({
+      side: 'America',
+      minSupplyAmount: 99999,
+      conditionCacheId: 'safe-human',
+    })).toBe(true);
+  });
+
   it('evaluates skirmish start-position condition from explicit side start slot', () => {
     const bundle = makeBundle({
       objects: [

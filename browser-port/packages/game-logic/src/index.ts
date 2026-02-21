@@ -5628,6 +5628,44 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateSkirmishSupplySourceSafe.
+   * Polls every 2 seconds and caches the prior result via condition cache state.
+   */
+  evaluateScriptSkirmishSupplySourceSafe(filter: {
+    side: string;
+    minSupplyAmount: number;
+    conditionCacheId?: string;
+  }): boolean {
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    const anyChanges = cache === null || this.frameCounter > cache.customFrame;
+    if (!anyChanges && cache) {
+      if (cache.customData === -1) return false;
+      if (cache.customData === 1) return true;
+    }
+
+    if (cache) {
+      cache.customFrame = this.frameCounter + 2 * LOGIC_FRAME_RATE;
+    }
+
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      if (cache) {
+        cache.customData = -1;
+      }
+      return false;
+    }
+
+    const minSupplyAmount = Number.isFinite(filter.minSupplyAmount)
+      ? Math.max(0, Math.trunc(filter.minSupplyAmount))
+      : 0;
+    const isSafe = this.isScriptSupplySourceSafe(normalizedSide, minSupplyAmount);
+    if (cache) {
+      cache.customData = isSafe ? 1 : -1;
+    }
+    return isSafe;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateSkirmishStartPosition.
    */
   evaluateScriptSkirmishStartPosition(filter: {
@@ -28187,6 +28225,156 @@ export class GameLogicSubsystem implements Subsystem {
     }
     if (count === 0) return null;
     return { x: totalX / count, z: totalZ / count };
+  }
+
+  /**
+   * Source parity: Player::isSupplySourceSafe / AIPlayer::isSupplySourceSafe.
+   * Human players have no AI module in C++, so they return true.
+   */
+  private isScriptSupplySourceSafe(normalizedSide: string, minSupplies: number): boolean {
+    if (this.getSidePlayerType(normalizedSide) !== 'COMPUTER') {
+      return true;
+    }
+
+    const warehouse = this.findScriptSupplySourceForSide(normalizedSide, minSupplies);
+    if (!warehouse) {
+      return true;
+    }
+
+    const warehouseRadius = this.resolveEntityMajorRadius(warehouse);
+    return this.isScriptLocationSafeForSupplySource(normalizedSide, warehouse.x, warehouse.z, warehouseRadius);
+  }
+
+  /**
+   * Source parity: AIPlayer::findSupplyCenter(minimumCash).
+   */
+  private findScriptSupplySourceForSide(normalizedSide: string, minimumCash: number): MapEntity | null {
+    const baseCenter = this.resolveAiBaseCenter(normalizedSide);
+    const enemyCenter = this.resolveScriptEnemyBaseCenter(normalizedSide);
+    const supplyCenterCloseDistance = 20 * PATHFIND_CELL_SIZE;
+
+    let requiredCash = Math.max(0, Math.trunc(minimumCash));
+    do {
+      let bestWarehouse: MapEntity | null = null;
+      let bestDistSqr = 0;
+
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed) continue;
+        if (!entity.kindOf.has('STRUCTURE') || !entity.kindOf.has('SUPPLY_SOURCE')) continue;
+        if (!entity.supplyWarehouseProfile) continue;
+
+        const warehouseState = this.supplyWarehouseStates.get(entity.id);
+        if (!warehouseState) continue;
+        const availableCash = warehouseState.currentBoxes * DEFAULT_SUPPLY_BOX_VALUE;
+        if (availableCash < requiredCash) continue;
+
+        const entitySide = this.normalizeSide(entity.side);
+        if (entitySide && this.getTeamRelationshipBySides(normalizedSide, entitySide) === RELATIONSHIP_ENEMIES) {
+          continue;
+        }
+
+        // Source parity: skip warehouses that already have an owned cash generator nearby.
+        const nearbyRadius = supplyCenterCloseDistance + this.resolveEntityMajorRadius(entity);
+        const nearbyRadiusSq = nearbyRadius * nearbyRadius;
+        let hasNearbySupplyCenter = false;
+        for (const nearby of this.spawnedEntities.values()) {
+          if (nearby.destroyed) continue;
+          if (!nearby.kindOf.has('CASH_GENERATOR')) continue;
+          if (this.normalizeSide(nearby.side) !== normalizedSide) continue;
+          const dx = nearby.x - entity.x;
+          const dz = nearby.z - entity.z;
+          if (dx * dx + dz * dz <= nearbyRadiusSq) {
+            hasNearbySupplyCenter = true;
+            break;
+          }
+        }
+        if (hasNearbySupplyCenter) continue;
+
+        const dxBase = baseCenter ? entity.x - baseCenter.x : 0;
+        const dzBase = baseCenter ? entity.z - baseCenter.z : 0;
+        const distSqr = dxBase * dxBase + dzBase * dzBase;
+
+        if (enemyCenter) {
+          const dxEnemy = entity.x - enemyCenter.x;
+          const dzEnemy = entity.z - enemyCenter.z;
+          const enemyDistSqr = dxEnemy * dxEnemy + dzEnemy * dzEnemy;
+          // Source parity: reject expansions that are too close to enemy compared to own base.
+          if (distSqr * 0.4 > enemyDistSqr * 0.6) {
+            continue;
+          }
+        }
+
+        if (!bestWarehouse || bestDistSqr > distSqr) {
+          bestWarehouse = entity;
+          bestDistSqr = distSqr;
+        }
+      }
+
+      if (bestWarehouse) {
+        return bestWarehouse;
+      }
+
+      requiredCash = Math.trunc(requiredCash / 2);
+    } while (requiredCash > 100);
+
+    return null;
+  }
+
+  private resolveScriptEnemyBaseCenter(normalizedSide: string): { x: number; z: number } | null {
+    let bestEnemySide: string | null = null;
+    let bestEnemyWeight = Number.NEGATIVE_INFINITY;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const entitySide = this.normalizeSide(entity.side);
+      if (!entitySide || entitySide === normalizedSide) continue;
+      if (this.getTeamRelationshipBySides(normalizedSide, entitySide) !== RELATIONSHIP_ENEMIES) continue;
+      let weight = 1;
+      if (entity.kindOf.has('STRUCTURE')) weight += 3;
+      if (entity.kindOf.has('MP_COUNT_FOR_VICTORY')) weight += 2;
+      if (weight > bestEnemyWeight) {
+        bestEnemyWeight = weight;
+        bestEnemySide = entitySide;
+      }
+    }
+    return this.resolveAiBaseCenter(bestEnemySide);
+  }
+
+  /**
+   * Source parity: AIPlayer::isLocationSafe.
+   */
+  private isScriptLocationSafeForSupplySource(
+    normalizedSide: string,
+    centerX: number,
+    centerZ: number,
+    sourceRadius: number,
+  ): boolean {
+    const supplyCenterSafeRadius = 250 + sourceRadius;
+    for (const enemy of this.spawnedEntities.values()) {
+      if (enemy.destroyed) continue;
+      const enemySide = this.normalizeSide(enemy.side);
+      if (!enemySide) continue;
+      if (this.getTeamRelationshipBySides(normalizedSide, enemySide) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+      if (enemy.kindOf.has('HARVESTER') || enemy.kindOf.has('DOZER')) {
+        continue;
+      }
+      if (
+        enemy.objectStatusFlags.has('STEALTHED')
+        && !enemy.objectStatusFlags.has('DETECTED')
+        && !enemy.objectStatusFlags.has('DISGUISED')
+      ) {
+        continue;
+      }
+
+      const dx = enemy.x - centerX;
+      const dz = enemy.z - centerZ;
+      const range = supplyCenterSafeRadius + this.resolveEntityMajorRadius(enemy);
+      if (dx * dx + dz * dz <= range * range) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // ── Source parity: ToppleUpdate ──
