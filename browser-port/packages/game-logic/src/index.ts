@@ -5365,6 +5365,143 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateSkirmishValueInArea.
+   * Sums BuildCost of alive, non-inert side-owned objects inside trigger.
+   */
+  evaluateScriptSkirmishValueInArea(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    money: number;
+    triggerName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const triggerRegions = this.findMapTriggerRegionsByName(filter.triggerName);
+    if (triggerRegions.length === 0) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    let anyChanges = cache === null || cache.customData === 0;
+    // TODO(source-parity): include Team::didEnterOrExit once script team tracking exists.
+    if (cache && this.scriptObjectCountChangedFrame !== cache.customFrame) {
+      anyChanges = true;
+    }
+    // Movement in/out can happen without topology changes; recompute conservatively.
+    anyChanges = true;
+    if (!anyChanges && cache) {
+      return cache.customData === 1;
+    }
+
+    let totalCost = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (entity.destroyed) continue;
+      if (entity.kindOf.has('INERT')) continue;
+      if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
+      totalCost += this.resolveEntityBuildCostRaw(entity);
+    }
+
+    const comparison = this.compareScriptCount(filter.comparison, totalCost, filter.money);
+    if (cache) {
+      cache.customData = comparison ? 1 : -1;
+      cache.customFrame = this.scriptObjectCountChangedFrame;
+    }
+    return comparison;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerTechBuildingWithinDistancePerimeter.
+   */
+  evaluateScriptSkirmishPlayerTechBuildingWithinDistancePerimeter(filter: {
+    side: string;
+    distance: number;
+    triggerName: string;
+    conditionCacheId?: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const triggerRegion = this.findMapTriggerRegionsByName(filter.triggerName)[0];
+    if (!triggerRegion) {
+      return false;
+    }
+
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    // Source parity: this condition is effectively static and cached permanently once evaluated.
+    if (cache && cache.customData !== 0) {
+      return cache.customData === 1;
+    }
+
+    const { centerX, centerZ, radius } = this.computeTriggerRegionCenterAndRadius(triggerRegion);
+    const searchRadius = radius + (Number.isFinite(filter.distance) ? filter.distance : 0);
+    const searchRadiusSq = searchRadius * searchRadius;
+
+    let found = false;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (!entity.kindOf.has('TECH_BUILDING')) continue;
+
+      const candidateSide = this.normalizeSide(entity.side);
+      if (!candidateSide || candidateSide === normalizedSide) continue;
+      if (this.getTeamRelationshipBySides(normalizedSide, candidateSide) !== RELATIONSHIP_ALLIES) continue;
+
+      const dx = entity.x - centerX;
+      const dz = entity.z - centerZ;
+      if (dx * dx + dz * dz > searchRadiusSq) continue;
+      found = true;
+      break;
+    }
+
+    if (cache) {
+      cache.customData = found ? 1 : -1;
+      cache.customFrame = this.scriptObjectCountChangedFrame;
+    }
+    return found;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishUnownedFactionUnitComparison.
+   * Counts neutral-controlled unmanned faction units.
+   */
+  evaluateScriptSkirmishUnownedFactionUnitComparison(filter: {
+    comparison: ScriptComparisonInput;
+    count: number;
+  }): boolean {
+    let factionUnitCount = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (!entity.objectStatusFlags.has('DISABLED_UNMANNED')) continue;
+      if (!this.isEntityNeutralControlled(entity)) continue;
+      factionUnitCount += 1;
+    }
+    return this.compareScriptCount(filter.comparison, factionUnitCount, filter.count);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSkirmishPlayerHasPrereqsToBuild.
+   */
+  evaluateScriptSkirmishPlayerHasPrereqsToBuild(filter: {
+    side: string;
+    templateName: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(filter.templateName);
+    if (!objectDef) {
+      return false;
+    }
+    return this.canSideBuildUnitTemplate(normalizedSide, objectDef);
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerHasCredits.
    * Note: source compares (requestedCredits [cmp] currentMoney), not the reverse.
    */
@@ -13816,6 +13953,18 @@ export class GameLogicSubsystem implements Subsystem {
     return count;
   }
 
+  private resolveEntityBuildCostRaw(entity: MapEntity): number {
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    if (!objectDef) {
+      return 0;
+    }
+    const buildCostRaw = readNumericField(objectDef.fields, ['BuildCost']) ?? 0;
+    if (!Number.isFinite(buildCostRaw)) {
+      return 0;
+    }
+    return Math.max(0, Math.trunc(buildCostRaw));
+  }
+
   private resolveScriptComparisonCode(comparison: ScriptComparisonInput): number | null {
     if (typeof comparison === 'number') {
       if (!Number.isFinite(comparison)) {
@@ -17746,6 +17895,31 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return false;
+  }
+
+  private computeTriggerRegionCenterAndRadius(region: {
+    points: Array<{ x: number; y: number; z: number }>;
+  }): { centerX: number; centerZ: number; radius: number } {
+    if (region.points.length === 0) {
+      return { centerX: 0, centerZ: 0, radius: 0 };
+    }
+
+    let centerX = 0;
+    let centerZ = 0;
+    for (const point of region.points) {
+      centerX += point.x;
+      centerZ += point.y;
+    }
+    centerX /= region.points.length;
+    centerZ /= region.points.length;
+
+    let radius = 0;
+    for (const point of region.points) {
+      const dx = point.x - centerX;
+      const dz = point.y - centerZ;
+      radius = Math.max(radius, Math.sqrt(dx * dx + dz * dz));
+    }
+    return { centerX, centerZ, radius };
   }
 
   private isPointInsideTriggerRegion(

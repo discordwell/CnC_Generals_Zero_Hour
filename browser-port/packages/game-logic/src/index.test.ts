@@ -27945,6 +27945,106 @@ describe('Script condition groundwork', () => {
       conditionCacheId: 'sp-missing',
     })).toBe(false);
   });
+
+  it('evaluates skirmish value-in-area and tech-building distance conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericanTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], { BuildCost: 700 }),
+        makeObjectDef('AmericanInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { BuildCost: 300 }),
+        makeObjectDef('AlliedTechBuilding', 'China', ['STRUCTURE', 'TECH_BUILDING'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericanTank', 8, 8),
+      makeMapObject('AmericanInfantry', 10, 10),
+      makeMapObject('AlliedTechBuilding', 40, 40),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'StagingArea',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setTeamRelationship('America', 'China', 2);
+
+    expect(logic.evaluateScriptSkirmishValueInArea({
+      side: 'America',
+      comparison: 'EQUAL',
+      money: 1000,
+      triggerName: 'StagingArea',
+      conditionCacheId: 'value-area',
+    })).toBe(true);
+
+    expect(logic.evaluateScriptSkirmishPlayerTechBuildingWithinDistancePerimeter({
+      side: 'America',
+      distance: 60,
+      triggerName: 'StagingArea',
+      conditionCacheId: 'tech-dist',
+    })).toBe(true);
+  });
+
+  it('evaluates skirmish unowned faction unit comparison and prereq-to-build condition', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+        makeObjectDef('AdvancedTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ], { BuildCost: 1200, Prerequisites: 'WarFactory' }),
+        makeObjectDef('NeutralHulkA', 'Civilian', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('WarFactory', 10, 10),
+        makeMapObject('NeutralHulkA', 20, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setSidePlayerType('America', 'HUMAN');
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string>; side?: string }>;
+      sidePlayerTypes: Map<string, string>;
+    };
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.add('DISABLED_UNMANNED');
+    privateApi.spawnedEntities.get(2)!.side = 'Civilian';
+    // Keep civilian side as neutral by not registering player type.
+    privateApi.sidePlayerTypes.delete('civilian');
+
+    expect(logic.evaluateScriptSkirmishUnownedFactionUnitComparison({
+      comparison: 'EQUAL',
+      count: 1,
+    })).toBe(true);
+
+    expect(logic.evaluateScriptSkirmishPlayerHasPrereqsToBuild({
+      side: 'America',
+      templateName: 'AdvancedTank',
+    })).toBe(true);
+  });
 });
 
 describe('SubdualDamageHelper', () => {
