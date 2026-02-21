@@ -14366,6 +14366,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingEnterObjectActions.delete(entityId);
     this.pendingRepairDockActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
+    this.clearChinookCombatDropIgnoredObstacle(entityId);
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
     this.pendingRepairActions.delete(entityId);
@@ -14675,6 +14676,9 @@ export class GameLogicSubsystem implements Subsystem {
     // which delegates per-unit AI combat-drop behavior.
     this.cancelEntityCommandPathActions(source.id);
     this.clearAttackTarget(source.id);
+    // Source parity: ChinookAIUpdate::getBuildingToNotPathAround.
+    // While in MOVE_TO_COMBAT_DROP/DO_COMBAT_DROP, pathing must not avoid the goal building.
+    this.syncChinookCombatDropIgnoredObstacle(source, targetObjectId);
     this.issueMoveTo(source.id, targetX, targetZ);
     this.pendingCombatDropActions.set(source.id, {
       targetObjectId,
@@ -16723,6 +16727,27 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: ChinookAIUpdate::getBuildingToNotPathAround.
+   * During combat-drop movement/state, treat the target building as ignorable for pathing.
+   */
+  private syncChinookCombatDropIgnoredObstacle(source: MapEntity, targetObjectId: number | null): void {
+    if (!source.chinookAIProfile || targetObjectId === null) {
+      source.ignoredMovementObstacleId = null;
+      return;
+    }
+    const target = this.spawnedEntities.get(targetObjectId);
+    source.ignoredMovementObstacleId = target && !target.destroyed ? target.id : null;
+  }
+
+  private clearChinookCombatDropIgnoredObstacle(entityId: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.chinookAIProfile) {
+      return;
+    }
+    entity.ignoredMovementObstacleId = null;
+  }
+
   private updatePendingChinookRappels(): void {
     for (const [passengerId, pending] of this.pendingChinookRappels.entries()) {
       const passenger = this.spawnedEntities.get(passengerId);
@@ -16757,11 +16782,14 @@ export class GameLogicSubsystem implements Subsystem {
     for (const [sourceId, pending] of this.pendingCombatDropActions.entries()) {
       const source = this.spawnedEntities.get(sourceId);
       if (!source || source.destroyed) {
+        this.clearChinookCombatDropIgnoredObstacle(sourceId);
         this.abortPendingChinookRappels(sourceId);
         this.clearPendingChinookCommands(sourceId);
         this.pendingCombatDropActions.delete(sourceId);
         continue;
       }
+
+      this.syncChinookCombatDropIgnoredObstacle(source, pending.targetObjectId);
 
       if (source.moving) {
         continue;
@@ -16807,6 +16835,7 @@ export class GameLogicSubsystem implements Subsystem {
         const hasActiveRappellers = this.countActiveChinookRappellers(source.id) > 0;
         if (!hasContainedRappellers && !hasActiveRappellers) {
           source.objectStatusFlags.delete('DISABLED_HELD');
+          this.clearChinookCombatDropIgnoredObstacle(sourceId);
           this.pendingCombatDropActions.delete(sourceId);
           this.flushPendingChinookCommand(source.id);
           continue;
@@ -16820,6 +16849,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Non-Chinook combat-drop carriers: immediate evac at destination.
       this.evacuateContainedEntities(source, pending.targetX, pending.targetZ, pending.targetObjectId);
+      this.clearChinookCombatDropIgnoredObstacle(sourceId);
       this.pendingCombatDropActions.delete(sourceId);
     }
   }
@@ -28572,6 +28602,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     for (const [sourceId, pendingAction] of this.pendingCombatDropActions.entries()) {
       if (sourceId === entityId) {
+        this.clearChinookCombatDropIgnoredObstacle(sourceId);
         this.pendingCombatDropActions.delete(sourceId);
         this.abortPendingChinookRappels(sourceId);
         this.clearPendingChinookCommands(sourceId);
@@ -28579,6 +28610,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
+        this.clearChinookCombatDropIgnoredObstacle(sourceId);
       }
     }
     for (const [passengerId, pendingRappel] of this.pendingChinookRappels.entries()) {
@@ -29233,6 +29265,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     for (const [sourceId, pendingAction] of this.pendingCombatDropActions.entries()) {
       if (sourceId === entityId) {
+        this.clearChinookCombatDropIgnoredObstacle(sourceId);
         this.pendingCombatDropActions.delete(sourceId);
         this.abortPendingChinookRappels(sourceId);
         this.clearPendingChinookCommands(sourceId);
@@ -29240,6 +29273,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (pendingAction.targetObjectId === entityId) {
         pendingAction.targetObjectId = null;
+        this.clearChinookCombatDropIgnoredObstacle(sourceId);
       }
     }
     for (const [passengerId, pendingRappel] of this.pendingChinookRappels.entries()) {

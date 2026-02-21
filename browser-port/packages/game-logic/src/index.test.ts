@@ -7831,6 +7831,88 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
   });
 
+  it('ignores combat-drop target building for Chinook pathing only while drop is active', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 0,
+            PerRopeDelayMax: 0,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 30,
+            RappelSpeed: 120,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL ChinookLocomotor', {}),
+        ]),
+        makeObjectDef('DropTarget', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+      ],
+      locomotors: [
+        makeLocomotorDef('ChinookLocomotor', 120),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8), // id 1
+        makeMapObject('DropTarget', 8, 8),    // id 2
+        makeMapObject('Rappeller', 8, 8),     // id 3
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null; ignoredMovementObstacleId: number | null }>;
+      pendingCombatDropActions: Map<number, unknown>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let frame = 0; frame < 12; frame += 1) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(3)?.transportContainerId === 1) {
+        break;
+      }
+    }
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: 2,
+      targetPosition: null,
+    });
+
+    for (let frame = 0; frame < 30; frame += 1) {
+      logic.update(1 / 30);
+      if (priv.pendingCombatDropActions.has(1)) {
+        break;
+      }
+    }
+
+    expect(priv.pendingCombatDropActions.has(1)).toBe(true);
+    expect(priv.spawnedEntities.get(1)?.ignoredMovementObstacleId).toBe(2);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount(attackerId: number | null, target: unknown, amount: number, damageType: string): void;
+    };
+    const dropTarget = priv.spawnedEntities.get(2);
+    expect(dropTarget).toBeDefined();
+    privateApi.applyWeaponDamageAmount(null, dropTarget as unknown as never, 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(priv.spawnedEntities.get(1)?.ignoredMovementObstacleId).toBeNull();
+  });
+
   it('records no-target special power dispatch on source entity module', () => {
     const bundle = makeBundle({
       objects: [
