@@ -14452,6 +14452,12 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    // Source parity: ChinookAIUpdate::getAiFreeToExit — combat-drop exits are owned by
+    // ChinookCombatDropState (rappel), not by generic passenger exit commands.
+    if (container.chinookAIProfile && this.pendingCombatDropActions.has(container.id)) {
+      return;
+    }
+
     // Source parity: AIUpdate::privateExit — blocked when container is DISABLED_SUBDUED.
     // C++ AIUpdate.cpp:3819-3840: prevents passengers exiting subdued containers.
     if (this.entityHasObjectStatus(container, 'DISABLED_SUBDUED')) {

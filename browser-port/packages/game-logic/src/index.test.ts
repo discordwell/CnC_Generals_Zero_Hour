@@ -7766,6 +7766,71 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
   });
 
+  it('blocks manual exitContainer while Chinook combat drop is active', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 0,
+            PerRopeDelayMax: 0,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 30,
+            RappelSpeed: 30,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+        ]),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], []),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8), // id 1
+        makeMapObject('Rappeller', 8, 8),     // id 2
+        makeMapObject('Passenger', 8, 8),     // id 3
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let frame = 0; frame < 5; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(priv.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: null,
+      targetPosition: [8, 0, 8],
+    });
+    for (let frame = 0; frame < 6; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    // Manual exit is ignored while combat drop owns passenger release.
+    logic.submitCommand({ type: 'exitContainer', entityId: 3 });
+    for (let frame = 0; frame < 6; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+  });
+
   it('records no-target special power dispatch on source entity module', () => {
     const bundle = makeBundle({
       objects: [
