@@ -27955,6 +27955,110 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates player-special-power-midway/complete with source filtering and event consumption', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+        makeObjectDef('SpecialPowerPayload', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+          makeBlock('Behavior', 'SpecialPowerCompletionDie ModuleTag_Complete', {
+            SpecialPowerTemplate: 'SpecialPowerTrigger',
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerTrigger', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SpecialPowerSource', 10, 10),   // id 1
+        makeMapObject('SpecialPowerPayload', 12, 10),  // id 2
+        makeMapObject('SpecialPowerPayload', 14, 10),  // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        specialPowerCompletionDieProfiles: Array<{ specialPowerTemplateName: string }>;
+        specialPowerCompletionCreatorId: number;
+        specialPowerCompletionCreatorSet: boolean;
+      }>;
+      sideScriptMidwaySpecialPowerEvents: Map<string, Array<{ name: string; sourceEntityId: number }>>;
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+    };
+
+    // Verify profile extraction and seed creator IDs.
+    expect(privateApi.spawnedEntities.get(2)!.specialPowerCompletionDieProfiles[0]!.specialPowerTemplateName).toBe('SPECIALPOWERTRIGGER');
+    privateApi.spawnedEntities.get(2)!.specialPowerCompletionCreatorId = 1;
+    privateApi.spawnedEntities.get(2)!.specialPowerCompletionCreatorSet = true;
+    privateApi.spawnedEntities.get(3)!.specialPowerCompletionCreatorId = 1;
+    privateApi.spawnedEntities.get(3)!.specialPowerCompletionCreatorSet = true;
+
+    // Midway list parity (no producer in current subset): consume once.
+    privateApi.sideScriptMidwaySpecialPowerEvents.set('america', [{
+      name: 'SPECIALPOWERTRIGGER',
+      sourceEntityId: 1,
+    }]);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitMidway({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitMidway({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(false);
+
+    // Kill payload #1 and consume completion event by explicit source.
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitComplete({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitComplete({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(false);
+
+    // Kill payload #2, then kill source.
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(3), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    // Source-specific lookup fails when source no longer exists, but event remains.
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitComplete({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+      sourceEntityId: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitComplete({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerSpecialPowerFromUnitComplete({
+      side: 'America',
+      specialPowerName: 'SpecialPowerTrigger',
+    })).toBe(false);
+  });
+
   it('evaluates named-has-free-container-slots from contain occupancy', () => {
     const bundle = makeBundle({
       objects: [

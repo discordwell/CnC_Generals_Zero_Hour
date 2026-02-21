@@ -2104,6 +2104,12 @@ interface MapEntity {
   destroyDieProfiles: DestroyDieProfile[];
   // ── Source parity: DamDie — enables WAVEGUIDE objects when dam dies ──
   damDieProfiles: DamDieProfile[];
+  // ── Source parity: SpecialPowerCompletionDie — script callback on death ──
+  specialPowerCompletionDieProfiles: SpecialPowerCompletionDieProfile[];
+  /** Source parity: SpecialPowerCompletionDie::m_creatorID. */
+  specialPowerCompletionCreatorId: number;
+  /** Source parity: SpecialPowerCompletionDie::m_creatorSet (creator can only be assigned once). */
+  specialPowerCompletionCreatorSet: boolean;
   /** Source parity: BodyModule::m_frontCrushed — front end was crushed. */
   frontCrushed: boolean;
   /** Source parity: BodyModule::m_backCrushed — back end was crushed. */
@@ -2347,6 +2353,18 @@ interface DestroyDieProfile {
  * C++ file: DamDie.cpp.
  */
 interface DamDieProfile {
+  deathTypes: Set<string>;
+  veterancyLevels: Set<string>;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
+}
+
+/**
+ * Source parity: SpecialPowerCompletionDie — notifies ScriptEngine when configured object dies.
+ * C++ file: SpecialPowerCompletionDie.cpp.
+ */
+interface SpecialPowerCompletionDieProfile {
+  specialPowerTemplateName: string;
   deathTypes: Set<string>;
   veterancyLevels: Set<string>;
   exemptStatus: Set<string>;
@@ -3675,6 +3693,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideScriptAcquiredSciences = new Map<string, Set<string>>();
   /** Source parity: ScriptEngine::m_triggeredSpecialPowers script event list. */
   private readonly sideScriptTriggeredSpecialPowerEvents = new Map<string, ScriptNamedEvent[]>();
+  /** Source parity: ScriptEngine::m_midwaySpecialPowers script event list. */
+  private readonly sideScriptMidwaySpecialPowerEvents = new Map<string, ScriptNamedEvent[]>();
+  /** Source parity: ScriptEngine::m_finishedSpecialPowers script event list. */
+  private readonly sideScriptCompletedSpecialPowerEvents = new Map<string, ScriptNamedEvent[]>();
   /** Source parity: ScriptEngine::m_completedUpgrades script event list. */
   private readonly sideScriptCompletedUpgradeEvents = new Map<string, ScriptNamedEvent[]>();
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
@@ -5857,6 +5879,102 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluatePlayerSpecialPowerFromUnitMidway.
+   * Consumes the midway-special-power script event when a match is found.
+   */
+  evaluateScriptPlayerSpecialPowerFromUnitMidway(filter: {
+    side: string;
+    specialPowerName: string;
+    sourceEntityId?: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(filter.specialPowerName);
+    if (!normalizedSide || !normalizedSpecialPowerName) {
+      return false;
+    }
+
+    let sourceEntityId: number | null = null;
+    if (filter.sourceEntityId !== undefined) {
+      if (!Number.isFinite(filter.sourceEntityId)) {
+        return false;
+      }
+      sourceEntityId = Math.trunc(filter.sourceEntityId);
+      const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+      if (!sourceEntity || sourceEntity.destroyed) {
+        return false;
+      }
+    }
+
+    const events = this.sideScriptMidwaySpecialPowerEvents.get(normalizedSide);
+    if (!events || events.length === 0) {
+      return false;
+    }
+
+    for (let index = 0; index < events.length; index += 1) {
+      const event = events[index]!;
+      if (event.name !== normalizedSpecialPowerName) {
+        continue;
+      }
+      if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
+        continue;
+      }
+
+      events.splice(index, 1);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluatePlayerSpecialPowerFromUnitComplete.
+   * Consumes the completed-special-power script event when a match is found.
+   */
+  evaluateScriptPlayerSpecialPowerFromUnitComplete(filter: {
+    side: string;
+    specialPowerName: string;
+    sourceEntityId?: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(filter.specialPowerName);
+    if (!normalizedSide || !normalizedSpecialPowerName) {
+      return false;
+    }
+
+    let sourceEntityId: number | null = null;
+    if (filter.sourceEntityId !== undefined) {
+      if (!Number.isFinite(filter.sourceEntityId)) {
+        return false;
+      }
+      sourceEntityId = Math.trunc(filter.sourceEntityId);
+      const sourceEntity = this.spawnedEntities.get(sourceEntityId);
+      if (!sourceEntity || sourceEntity.destroyed) {
+        return false;
+      }
+    }
+
+    const events = this.sideScriptCompletedSpecialPowerEvents.get(normalizedSide);
+    if (!events || events.length === 0) {
+      return false;
+    }
+
+    for (let index = 0; index < events.length; index += 1) {
+      const event = events[index]!;
+      if (event.name !== normalizedSpecialPowerName) {
+        continue;
+      }
+      if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
+        continue;
+      }
+
+      events.splice(index, 1);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateScienceAcquired.
    * Consumes the acquired-science script event when the condition is true.
    */
@@ -6516,6 +6634,27 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
+  private recordScriptCompletedSpecialPowerEvent(
+    normalizedSide: string,
+    specialPowerName: string,
+    sourceEntityId: number,
+  ): void {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName || !Number.isFinite(sourceEntityId)) {
+      return;
+    }
+
+    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
+    if (normalizedSourceEntityId <= 0) {
+      return;
+    }
+
+    this.getScriptCompletedSpecialPowerEvents(normalizedSide).push({
+      name: normalizedSpecialPowerName,
+      sourceEntityId: normalizedSourceEntityId,
+    });
+  }
+
   private recordScriptCompletedUpgradeEvent(
     normalizedSide: string,
     upgradeName: string,
@@ -6669,6 +6808,16 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const created: ScriptNamedEvent[] = [];
     this.sideScriptTriggeredSpecialPowerEvents.set(normalizedSide, created);
+    return created;
+  }
+
+  private getScriptCompletedSpecialPowerEvents(normalizedSide: string): ScriptNamedEvent[] {
+    const existing = this.sideScriptCompletedSpecialPowerEvents.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+    const created: ScriptNamedEvent[] = [];
+    this.sideScriptCompletedSpecialPowerEvents.set(normalizedSide, created);
     return created;
   }
 
@@ -7128,6 +7277,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideSciences.clear();
     this.sideScriptAcquiredSciences.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
+    this.sideScriptMidwaySpecialPowerEvents.clear();
+    this.sideScriptCompletedSpecialPowerEvents.clear();
     this.sideScriptCompletedUpgradeEvents.clear();
     this.localPlayerScienceAvailability.clear();
     this.sidePowerBonus.clear();
@@ -7621,6 +7772,10 @@ export class GameLogicSubsystem implements Subsystem {
       destroyDieProfiles: this.extractDestroyDieProfiles(objectDef),
       // DamDie
       damDieProfiles: this.extractDamDieProfiles(objectDef),
+      // SpecialPowerCompletionDie
+      specialPowerCompletionDieProfiles: this.extractSpecialPowerCompletionDieProfiles(objectDef),
+      specialPowerCompletionCreatorId: 0,
+      specialPowerCompletionCreatorSet: false,
       frontCrushed: false,
       backCrushed: false,
       // GrantUpgradeCreate
@@ -10919,6 +11074,40 @@ export class GameLogicSubsystem implements Subsystem {
         const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
         if (moduleType === 'DAMDIE') {
           profiles.push(this.extractDieMuxData(block));
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: SpecialPowerCompletionDie — extract script-notification die modules.
+   * C++ file: SpecialPowerCompletionDie.cpp.
+   */
+  private extractSpecialPowerCompletionDieProfiles(objectDef: ObjectDef | undefined): SpecialPowerCompletionDieProfile[] {
+    if (!objectDef) return [];
+    const profiles: SpecialPowerCompletionDieProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'SPECIALPOWERCOMPLETIONDIE') {
+          const specialPowerTemplateName = this.normalizeShortcutSpecialPowerName(
+            readStringField(block.fields, ['SpecialPowerTemplate']) ?? '',
+          );
+          if (!specialPowerTemplateName) {
+            return;
+          }
+
+          profiles.push({
+            specialPowerTemplateName,
+            ...this.extractDieMuxData(block),
+          });
         }
       }
       for (const child of block.blocks) {
@@ -25038,6 +25227,9 @@ export class GameLogicSubsystem implements Subsystem {
     let travelSpeed = weapon.weaponSpeed;
     if (weapon.projectileObjectName) {
       delivery = 'PROJECTILE';
+      // Source parity: Weapon.cpp projectile branch notifies completion immediately when the
+      // source object itself has SpecialPowerCompletionDie with a valid creator id.
+      this.notifyScriptCompletedSpecialPowerOnProjectileFired(attacker);
       // Source parity subset: projectile weapons in WeaponTemplate::fireWeaponTemplate()
       // spawn ProjectileObject and defer damage to projectile update/collision.
       // We represent this as a deterministic delayed impact without spawning a full
@@ -25306,6 +25498,34 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.pendingWeaponDamageEvents.push(event);
+  }
+
+  /**
+   * Source parity: Weapon.cpp projectile fire path.
+   * If the source object has SpecialPowerCompletionDie and a valid creator id,
+   * notify the script completion list immediately when the projectile is fired.
+   */
+  private notifyScriptCompletedSpecialPowerOnProjectileFired(source: MapEntity): void {
+    const profile = source.specialPowerCompletionDieProfiles[0];
+    if (!profile) {
+      return;
+    }
+
+    const normalizedSide = this.normalizeSide(source.side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    const creatorId = Math.trunc(source.specialPowerCompletionCreatorId);
+    if (creatorId <= 0) {
+      return;
+    }
+
+    this.recordScriptCompletedSpecialPowerEvent(
+      normalizedSide,
+      profile.specialPowerTemplateName,
+      creatorId,
+    );
   }
 
   private classifyWeaponVisualType(weapon: AttackWeaponProfile): import('./types.js').ProjectileVisualType {
@@ -31421,6 +31641,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: DamDie::onDie — enable all WAVEGUIDE objects for flood wave.
     this.executeDamDieModules(entity);
 
+    // Source parity: SpecialPowerCompletionDie::onDie — notify script engine of completion.
+    this.executeSpecialPowerCompletionDieModules(entity);
+
     // Source parity: UpgradeDie::onDie — remove upgrade from producer on death.
     this.executeUpgradeDieModules(entity);
 
@@ -32208,6 +32431,38 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       candidate.objectStatusFlags.delete('DISABLED_DEFAULT');
+    }
+  }
+
+  /**
+   * Source parity: SpecialPowerCompletionDie::onDie — notify ScriptEngine special-power completion list.
+   * C++ file: SpecialPowerCompletionDie.cpp lines 56-74.
+   */
+  private executeSpecialPowerCompletionDieModules(entity: MapEntity): void {
+    if (entity.specialPowerCompletionDieProfiles.length === 0) {
+      return;
+    }
+
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (!normalizedSide) {
+      return;
+    }
+
+    const creatorId = entity.specialPowerCompletionCreatorId;
+    if (!Number.isFinite(creatorId) || Math.trunc(creatorId) <= 0) {
+      return;
+    }
+    const normalizedCreatorId = Math.trunc(creatorId);
+
+    for (const profile of entity.specialPowerCompletionDieProfiles) {
+      if (!this.isDieModuleApplicable(entity, profile)) {
+        continue;
+      }
+      this.recordScriptCompletedSpecialPowerEvent(
+        normalizedSide,
+        profile.specialPowerTemplateName,
+        normalizedCreatorId,
+      );
     }
   }
 
@@ -33827,6 +34082,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideAttackedSupplySource.clear();
     this.sideScriptAcquiredSciences.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
+    this.sideScriptMidwaySpecialPowerEvents.clear();
+    this.sideScriptCompletedSpecialPowerEvents.clear();
     this.sideScriptCompletedUpgradeEvents.clear();
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
