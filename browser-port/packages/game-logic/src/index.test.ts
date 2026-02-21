@@ -14482,6 +14482,151 @@ describe('FXListDie', () => {
   });
 });
 
+describe('CrushDie', () => {
+  it('extracts CrushDie profiles from INI with DieMuxData fields', () => {
+    const objects = [
+      makeObjectDef('CrushVictim', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'CrushDie ModuleTag_CrushDie1', {}),
+        makeBlock('Behavior', 'CrushDie ModuleTag_CrushDie2', {
+          DeathTypes: 'CRUSHED',
+          ExemptStatus: 'SOLD',
+        }),
+      ], { CrushableLevel: 2 }),
+    ];
+    const bundle = makeBundle({ objects });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('CrushVictim', 10, 10)]), registry, makeHeightmap());
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        crushDieProfiles: Array<{ deathTypes: Set<string>; exemptStatus: Set<string> }>;
+      }>;
+    };
+    const unit = priv.spawnedEntities.get(1)!;
+    expect(unit.crushDieProfiles.length).toBe(2);
+    // First profile: no filtering (empty sets).
+    expect(unit.crushDieProfiles[0]!.deathTypes.size).toBe(0);
+    // Second profile: CRUSHED death type, SOLD exempt status.
+    expect(unit.crushDieProfiles[1]!.deathTypes.has('CRUSHED')).toBe(true);
+    expect(unit.crushDieProfiles[1]!.exemptStatus.has('SOLD')).toBe(true);
+  });
+
+  it('sets crush model conditions when entity dies from crush damage', () => {
+    // Use the same pattern as 'crush damage during movement' tests — cell-aligned positions on large map.
+    const objects = [
+      makeObjectDef('CrushVictim', 'China', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'CrushDie ModuleTag_CrushDie', {}),
+        makeBlock('Collide', 'SquishCollide ModuleTag_Squish', {}),
+      ], { CrushableLevel: 0 }),
+      makeObjectDef('CrusherTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('LocomotorSet', 'SET_NORMAL TankLoco', {}),
+      ], { CrusherLevel: 2, GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+    ];
+    const locomotors = [makeLocomotorDef('TankLoco', 180)];
+    const bundle = makeBundle({ objects, locomotors });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    // Place victim and crusher on the same Z row, crusher to the left.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrushVictim', 225, 205),
+        makeMapObject('CrusherTank', 205, 205),
+      ], 128, 128),
+      registry, makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Access internal state to check crush flags after death pipeline but before finalize.
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        destroyed: boolean;
+        frontCrushed: boolean;
+        backCrushed: boolean;
+        modelConditionFlags: Set<string>;
+        pendingDeathType: string;
+      }>;
+    };
+    const victim = priv.spawnedEntities.get(1)!;
+
+    // Move tank through victim.
+    logic.submitCommand({ type: 'moveTo', entityId: 2, targetX: 255, targetZ: 205 });
+
+    let foundCrush = false;
+    for (let i = 0; i < 20; i++) {
+      logic.update(1 / 30);
+      // Keep a direct reference: finalizeDestroyedEntities removes dead entities from
+      // spawnedEntities in the same update tick.
+      if (victim.destroyed && !foundCrush) {
+        foundCrush = true;
+        // Crush die should have set the model condition flags.
+        expect(victim.frontCrushed || victim.backCrushed).toBe(true);
+        expect(
+          victim.modelConditionFlags.has('FRONTCRUSHED')
+          || victim.modelConditionFlags.has('BACKCRUSHED'),
+        ).toBe(true);
+        expect(victim.pendingDeathType).toBe('CRUSHED');
+        break;
+      }
+    }
+    expect(foundCrush).toBe(true);
+    expect(priv.spawnedEntities.has(1)).toBe(false);
+  });
+
+  it('does not set crush flags when entity dies from non-crush damage', () => {
+    const objects = [
+      makeObjectDef('CrushVictim', 'China', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        makeBlock('Behavior', 'CrushDie ModuleTag_CrushDie', {}),
+      ]),
+      makeObjectDef('Shooter', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+      ]),
+    ];
+    const weapons = [
+      makeWeaponDef('TestGun', {
+        AttackRange: 120, PrimaryDamage: 999, DelayBetweenShots: 100,
+      }),
+    ];
+    const bundle = makeBundle({ objects, weapons });
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CrushVictim', 10, 10), makeMapObject('Shooter', 30, 10)]),
+      registry, makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        destroyed: boolean;
+        frontCrushed: boolean;
+        backCrushed: boolean;
+      }>;
+    };
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+      const victim = priv.spawnedEntities.get(1);
+      if (victim?.destroyed) {
+        // Died from gun damage, not crush — no crush flags should be set.
+        expect(victim.frontCrushed).toBe(false);
+        expect(victim.backCrushed).toBe(false);
+        return;
+      }
+    }
+    // Entity should be dead.
+    expect(logic.getEntityState(1)).toBeNull();
+  });
+});
+
 describe('WanderAIUpdate', () => {
   function makeWanderSetup() {
     const objects = [
@@ -24989,6 +25134,91 @@ describe('ReplaceObjectUpgrade', () => {
     expect(newEntity!.completedUpgrades.has('UPGRADE_FACTORYBONUS')).toBe(true);
   });
 
+  it('applies VeterancyGainCreate on replacement using final owner side sciences', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OldVehicle', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+          makeBlock('Behavior', 'ReplaceObjectUpgrade ModuleTag_ROU', {
+            TriggeredBy: 'Upgrade_ReplaceVehicle',
+            ReplaceObject: 'NewVehicle',
+          }),
+        ]),
+        makeObjectDef('NewVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 600, InitialHealth: 600 }),
+          makeBlock('Behavior', 'VeterancyGainCreate ModuleTag_VetCreate', {
+            StartingLevel: 'VETERAN',
+            ScienceRequired: 'SCIENCE_REPLACE_VET',
+          }),
+        ], { ExperienceRequired: [0, 50, 200, 500], ExperienceValue: [10, 20, 30, 40] }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_ReplaceVehicle', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 }),
+      ],
+      sciences: [makeScienceDef('SCIENCE_REPLACE_VET', { IsGrantable: 'Yes' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    (logic as unknown as { sideSciences: Map<string, Set<string>> }).sideSciences.set(
+      'america',
+      new Set(['SCIENCE_REPLACE_VET']),
+    );
+    logic.loadMapObjects(makeMap([makeMapObject('OldVehicle', 80, 80)]), makeRegistry(bundle), makeHeightmap());
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_ReplaceVehicle' });
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { side: string; experienceState: { currentLevel: number } }>;
+    };
+    const replacement = priv.spawnedEntities.get(2);
+    expect(replacement).toBeDefined();
+    expect(replacement!.side).toBe('America');
+    expect(replacement!.experienceState.currentLevel).toBe(1);
+  });
+
+  it('refreshes navigation grid after replacement structure construction callback', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OldStruct', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ReplaceObjectUpgrade ModuleTag_ROU', {
+            TriggeredBy: 'Upgrade_ReplaceStruct',
+            ReplaceObject: 'NewStruct',
+          }),
+        ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('NewStruct', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 700, InitialHealth: 700 }),
+        ], { GeometryMajorRadius: 35, GeometryMinorRadius: 35 }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_ReplaceStruct', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('OldStruct', 100, 100)], 128, 128), makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privBefore = logic as unknown as { navigationGrid: { blocked: Uint8Array } | null };
+    const beforeBlocked = Array.from(privBefore.navigationGrid!.blocked);
+
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_ReplaceStruct' });
+    logic.update(1 / 30);
+
+    const privAfter = logic as unknown as {
+      navigationGrid: { blocked: Uint8Array } | null;
+      spawnedEntities: Map<number, { templateName: string }>;
+    };
+    expect(privAfter.spawnedEntities.get(2)?.templateName).toBe('NewStruct');
+    const afterBlocked = Array.from(privAfter.navigationGrid!.blocked);
+
+    let changedCells = 0;
+    for (let i = 0; i < beforeBlocked.length; i++) {
+      if (beforeBlocked[i] !== afterBlocked[i]) changedCells++;
+    }
+    expect(changedCells).toBeGreaterThan(0);
+  });
+
   it('returns false for unknown replacement template', () => {
     const bundle = makeBundle({
       objects: [
@@ -25343,5 +25573,88 @@ describe('SubdualDamageHelper', () => {
     privateApi.applyWeaponDamageAmount(null, target, 500, 'SUBDUAL_MISSILE');
     expect(target.health).toBe(100);
     expect(target.currentSubdualDamage).toBe(0);
+  });
+
+  it('prefers vehicle/infantry/structure attackers for same-frame subdual retaliation source', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SubdualTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+            SubdualDamageCap: 200,
+          }),
+        ]),
+        makeObjectDef('LowPriorityAttacker', 'China', ['AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('VehicleAttacker', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SubdualTarget', 10, 10),
+        makeMapObject('LowPriorityAttacker', 20, 10),
+        makeMapObject('VehicleAttacker', 30, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { lastAttackerEntityId: number | null }>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+
+    privateApi.applyWeaponDamageAmount(2, target, 10, 'SUBDUAL_MISSILE');
+    expect(target.lastAttackerEntityId).toBe(2);
+
+    // Same-frame vehicle hit should override low-priority aircraft source.
+    privateApi.applyWeaponDamageAmount(3, target, 10, 'SUBDUAL_MISSILE');
+    expect(target.lastAttackerEntityId).toBe(3);
+
+    // Same-frame low-priority hit should not override preferred source.
+    privateApi.applyWeaponDamageAmount(2, target, 10, 'SUBDUAL_MISSILE');
+    expect(target.lastAttackerEntityId).toBe(3);
+  });
+
+  it('emits BASE_UNDER_ATTACK EVA for subdual-only damage on victory structures', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 1000,
+            InitialHealth: 1000,
+            SubdualDamageCap: 2000,
+          }),
+        ]),
+        makeObjectDef('Microwave', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PowerPlant', 40, 40),
+        makeMapObject('Microwave', 50, 40),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, target, 50, 'SUBDUAL_MISSILE');
+
+    const evaEvents = logic.drainEvaEvents();
+    expect(evaEvents.some((event) => event.type === 'BASE_UNDER_ATTACK' && event.entityId === 1)).toBe(true);
   });
 });

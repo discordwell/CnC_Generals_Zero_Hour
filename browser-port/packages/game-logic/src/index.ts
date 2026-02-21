@@ -1936,6 +1936,12 @@ interface MapEntity {
   veterancyGainCreateProfiles: VeterancyGainCreateProfile[];
   // ── Source parity: FXListDie — death FX lists with DieMuxData filtering ──
   fxListDieProfiles: FXListDieProfile[];
+  // ── Source parity: CrushDie — sets FRONTCRUSHED/BACKCRUSHED model conditions on crush death ──
+  crushDieProfiles: CrushDieProfile[];
+  /** Source parity: BodyModule::m_frontCrushed — front end was crushed. */
+  frontCrushed: boolean;
+  /** Source parity: BodyModule::m_backCrushed — back end was crushed. */
+  backCrushed: boolean;
   // ── Source parity: GrantUpgradeCreate — grants upgrade on creation/build complete ──
   grantUpgradeCreateProfiles: GrantUpgradeCreateProfile[];
 
@@ -2130,6 +2136,18 @@ interface FXListDieProfile {
   deathFXName: string;
   /** If true, orient the FX toward the damage source. */
   orientToObject: boolean;
+  /** DieMuxData filtering. */
+  deathTypes: Set<string>;
+  veterancyLevels: Set<string>;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
+}
+
+/**
+ * Source parity: CrushDie — sets FRONTCRUSHED/BACKCRUSHED model conditions when entity dies from crush.
+ * C++ file: CrushDie.cpp — determines which end of the victim was crushed based on crusher position.
+ */
+interface CrushDieProfile {
   /** DieMuxData filtering. */
   deathTypes: Set<string>;
   veterancyLevels: Set<string>;
@@ -3402,6 +3420,7 @@ export class GameLogicSubsystem implements Subsystem {
   private animationTime = 0;
   private selectedEntityId: number | null = null;
   private selectedEntityIds: readonly number[] = [];
+  private loadedMapData: MapDataJSON | null = null;
   private mapHeightmap: HeightmapGrid | null = null;
   private navigationGrid: NavigationGrid | null = null;
   private iniDataRegistry: IniDataRegistry | null = null;
@@ -3521,6 +3540,7 @@ export class GameLogicSubsystem implements Subsystem {
     heightmap: HeightmapGrid | null,
   ): MapObjectPlacementSummary {
     this.clearSpawnedObjects();
+    this.loadedMapData = mapData;
     this.mapHeightmap = heightmap;
     this.iniDataRegistry = iniDataRegistry;
 
@@ -5398,6 +5418,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.selectedEntityId = null;
     this.nextId = 1;
     this.animationTime = 0;
+    this.loadedMapData = null;
     this.mapHeightmap = null;
     this.navigationGrid = null;
     this.iniDataRegistry = null;
@@ -5878,6 +5899,10 @@ export class GameLogicSubsystem implements Subsystem {
       veterancyGainCreateProfiles: this.extractVeterancyGainCreateProfiles(objectDef),
       // FXListDie
       fxListDieProfiles: this.extractFXListDieProfiles(objectDef),
+      // CrushDie
+      crushDieProfiles: this.extractCrushDieProfiles(objectDef),
+      frontCrushed: false,
+      backCrushed: false,
       // GrantUpgradeCreate
       grantUpgradeCreateProfiles: this.extractGrantUpgradeCreateProfiles(objectDef),
       // LockWeaponCreate
@@ -8765,6 +8790,44 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: CrushDie — extract all CrushDie modules from INI.
+   * C++ file: CrushDie.h — die module that sets FRONTCRUSHED/BACKCRUSHED model conditions.
+   */
+  private extractCrushDieProfiles(objectDef: ObjectDef | undefined): CrushDieProfile[] {
+    if (!objectDef) return [];
+    const profiles: CrushDieProfile[] = [];
+    const visitBlock = (block: IniBlock): void => {
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'CRUSHDIE') {
+          // DieMuxData filtering fields.
+          const deathTypes = new Set<string>();
+          const dtStr = readStringField(block.fields, ['DeathTypes'])?.trim().toUpperCase() ?? '';
+          if (dtStr) { for (const t of dtStr.split(/\s+/)) { if (t) deathTypes.add(t); } }
+          const veterancyLevels = new Set<string>();
+          const vlStr = readStringField(block.fields, ['VeterancyLevels'])?.trim().toUpperCase() ?? '';
+          if (vlStr) { for (const t of vlStr.split(/\s+/)) { if (t) veterancyLevels.add(t); } }
+          const exemptStatus = new Set<string>();
+          const esStr = readStringField(block.fields, ['ExemptStatus'])?.trim().toUpperCase() ?? '';
+          if (esStr) { for (const t of esStr.split(/\s+/)) { if (t) exemptStatus.add(t); } }
+          const requiredStatus = new Set<string>();
+          const rsStr = readStringField(block.fields, ['RequiredStatus'])?.trim().toUpperCase() ?? '';
+          if (rsStr) { for (const t of rsStr.split(/\s+/)) { if (t) requiredStatus.add(t); } }
+
+          profiles.push({ deathTypes, veterancyLevels, exemptStatus, requiredStatus });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
    * Source parity: GrantUpgradeCreate — extract all GrantUpgradeCreate modules from INI.
    * C++ file: GrantUpgradeCreate.cpp — grants upgrades on object creation / build complete.
    */
@@ -10967,7 +11030,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: ReplaceObjectUpgrade.cpp line 70-108.
    * Destroys the current entity and creates a replacement at the same position/rotation/team.
-   * Fires onBuildComplete on the replacement (GrantUpgradeCreate, LockWeaponCreate, SpecialPowerCreate).
+   * Fires onBuildComplete on the replacement and then notifies player structure completion.
    */
   private applyReplaceObjectUpgrade(entity: MapEntity, module: UpgradeModuleProfile): boolean {
     if (!module.replaceObjectName) {
@@ -11016,6 +11079,13 @@ export class GameLogicSubsystem implements Subsystem {
     for (const prof of replacement.grantUpgradeCreateProfiles) {
       this.applyGrantUpgradeCreate(replacement, prof);
     }
+    // VeterancyGainCreate::onCreate semantics are side/science dependent. ReplaceObjectUpgrade
+    // runs onBuildComplete after side transfer, so re-evaluate veterancy with final owner side.
+    for (const prof of replacement.veterancyGainCreateProfiles) {
+      if (prof.scienceRequired === null || this.hasSideScience(replacement.side ?? '', prof.scienceRequired)) {
+        this.setMinVeterancyLevel(replacement, prof.startingLevel);
+      }
+    }
     // LockWeaponCreate::onBuildComplete
     if (replacement.lockWeaponCreateSlot !== null) {
       replacement.forcedWeaponSlot = replacement.lockWeaponCreateSlot;
@@ -11024,6 +11094,9 @@ export class GameLogicSubsystem implements Subsystem {
     // SpecialPowerCreate::onBuildComplete
     if (replacement.hasSpecialPowerCreate) {
       this.onBuildCompleteSpecialPowerCreate(replacement);
+    }
+    if (replacement.kindOf.has('STRUCTURE')) {
+      this.onStructureConstructionComplete(entity, replacement, false);
     }
 
     return true;
@@ -15138,6 +15211,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: onBuildComplete — finalize construction state.
    */
   private completeConstruction(building: MapEntity): void {
+    const builder = building.builderId !== 0 ? this.spawnedEntities.get(building.builderId) ?? null : null;
     building.constructionPercent = CONSTRUCTION_COMPLETE;
     building.builderId = 0;
     building.health = building.maxHealth;
@@ -15168,6 +15242,31 @@ export class GameLogicSubsystem implements Subsystem {
     if (building.hasSpecialPowerCreate) {
       this.onBuildCompleteSpecialPowerCreate(building);
     }
+
+    this.onStructureConstructionComplete(builder, building, false);
+  }
+
+  /**
+   * Source parity hook: Player::onStructureConstructionComplete.
+   * Current implementation refreshes pathfinding footprint from current entity topology.
+   * TODO(PARITY): Add scorekeeper, AI callback, and script-engine notifications.
+   */
+  private onStructureConstructionComplete(
+    _builder: MapEntity | null,
+    structure: MapEntity,
+    _isRebuild: boolean,
+  ): void {
+    if (!structure.kindOf.has('STRUCTURE')) {
+      return;
+    }
+    this.refreshNavigationGridFromCurrentMap();
+  }
+
+  private refreshNavigationGridFromCurrentMap(): void {
+    if (!this.loadedMapData) {
+      return;
+    }
+    this.navigationGrid = this.buildNavigationGrid(this.loadedMapData, this.mapHeightmap);
   }
 
   private updatePendingEnterObjectActions(): void {
@@ -18390,6 +18489,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Normal dozer-built buildings fire this from completeConstruction().
     if (buildTimeFrames <= 0 && created.hasSpecialPowerCreate) {
       this.onBuildCompleteSpecialPowerCreate(created);
+    }
+    if (buildTimeFrames <= 0 && created.kindOf.has('STRUCTURE')) {
+      this.onStructureConstructionComplete(constructor, created, false);
     }
 
     return created;
@@ -23048,9 +23150,14 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: C++ ActiveBody::attemptDamage sets alreadyHandled=TRUE (skipping health change)
       // but does NOT return — it continues to record lastDamageInfo, lastDamageTimestamp, and
       // notifies onDamage callbacks (retaliation, stealth reveal, etc.).
-      target.lastDamageFrame = this.frameCounter;
-      if (sourceEntityId !== null && sourceEntityId !== 0) {
-        target.lastAttackerEntityId = sourceEntityId;
+      if (damageType !== 'HEALING') {
+        this.recordPreferredLastAttacker(target, sourceEntityId);
+        target.lastDamageFrame = this.frameCounter;
+      }
+      // Source parity: ActiveBody.cpp notifies Player::setAttackedBy even when damage is
+      // subdual-only. For current gameplay subset this maps to BASE_UNDER_ATTACK EVA cues.
+      if (target.side && target.kindOf.has('STRUCTURE') && target.kindOf.has('MP_COUNT_FOR_VICTORY')) {
+        this.emitEvaEvent('BASE_UNDER_ATTACK', target.side, 'own', target.id);
       }
       return;
     }
@@ -23103,12 +23210,8 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: ActiveBody::getLastDamageTimestamp — track last damage frame for stealth.
     // Healing damage does not update the timestamp (C++ checks m_damageType != DAMAGE_HEALING).
     if (damageType !== 'HEALING') {
+      this.recordPreferredLastAttacker(target, sourceEntityId);
       target.lastDamageFrame = this.frameCounter;
-      // Source parity: BodyModule::setLastDamageInfo — record attacker for retaliation.
-      // C++ stores source ID in m_lastDamageSourceId; guard/idle AI checks it each frame.
-      if (sourceEntityId !== null && sourceEntityId !== 0) {
-        target.lastAttackerEntityId = sourceEntityId;
-      }
     }
 
     // Source parity: onDamage resets heal timers for AutoHeal and BaseRegen.
@@ -23179,6 +23282,40 @@ export class GameLogicSubsystem implements Subsystem {
         this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
         this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
     }
+  }
+
+  /**
+   * Source parity: ActiveBody::attemptDamage chooses preferred attacker when multiple
+   * damages happen in the same/next frame. Vehicle/infantry/structure sources win.
+   */
+  private recordPreferredLastAttacker(target: MapEntity, sourceEntityId: number | null): void {
+    if (sourceEntityId === null || sourceEntityId === 0) {
+      return;
+    }
+
+    const source = this.spawnedEntities.get(sourceEntityId);
+    if (!source) {
+      return;
+    }
+
+    const withinPriorityWindow =
+      target.lastDamageFrame === this.frameCounter
+      || target.lastDamageFrame === this.frameCounter - 1;
+    if (!withinPriorityWindow || target.lastAttackerEntityId === null) {
+      target.lastAttackerEntityId = sourceEntityId;
+      return;
+    }
+
+    const current = this.spawnedEntities.get(target.lastAttackerEntityId);
+    if (!current || this.isPreferredRetaliationSource(source)) {
+      target.lastAttackerEntityId = sourceEntityId;
+    }
+  }
+
+  private isPreferredRetaliationSource(source: MapEntity): boolean {
+    return source.kindOf.has('VEHICLE')
+      || source.kindOf.has('INFANTRY')
+      || source.kindOf.has('STRUCTURE');
   }
 
   private adjustDamageByArmorSet(target: MapEntity, amount: number, damageType: string): number {
@@ -27345,6 +27482,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: FXListDie::onDie — trigger death FX for matching profiles.
     this.executeFXListDieModules(entity);
 
+    // Source parity: CrushDie::onDie — set FRONTCRUSHED/BACKCRUSHED model conditions.
+    this.executeCrushDie(entity, attackerId);
+
     // Source parity: UpgradeDie::onDie — remove upgrade from producer on death.
     this.executeUpgradeDieModules(entity);
 
@@ -28053,6 +28193,98 @@ export class GameLogicSubsystem implements Subsystem {
         projectileType: 'GENERIC',
       });
     }
+  }
+
+  /**
+   * Source parity: CrushDie::onDie — compute crush location and set model conditions.
+   * C++ file: CrushDie.cpp lines 163-208.
+   */
+  private executeCrushDie(entity: MapEntity, attackerId: number): void {
+    if (entity.crushDieProfiles.length === 0) return;
+
+    for (const profile of entity.crushDieProfiles) {
+      if (!this.isDieModuleApplicable(entity, profile)) continue;
+
+      // Source parity: CrushDie.cpp line 169 — only for CRUSH damage type.
+      if (entity.pendingDeathType !== 'CRUSHED') continue;
+
+      const crusher = this.spawnedEntities.get(attackerId);
+      // Source parity: CrushDie.cpp line 175 — if no crusher found, use TOTAL_CRUSH.
+      const crushType = crusher
+        ? this.crushLocationCheck(crusher, entity)
+        : 'TOTAL';
+
+      if (crushType === 'NONE') continue;
+
+      // Source parity: CrushDie.cpp lines 195-204.
+      entity.frontCrushed = crushType === 'TOTAL' || crushType === 'FRONT';
+      entity.backCrushed = crushType === 'TOTAL' || crushType === 'BACK';
+
+      if (entity.frontCrushed) entity.modelConditionFlags.add('FRONTCRUSHED');
+      if (entity.backCrushed) entity.modelConditionFlags.add('BACKCRUSHED');
+    }
+  }
+
+  /**
+   * Source parity: crushLocationCheck — determine which end of the victim was closest to the crusher.
+   * C++ file: CrushDie.cpp lines 49-145.
+   * Returns 'TOTAL' | 'FRONT' | 'BACK' | 'NONE'.
+   */
+  private crushLocationCheck(crusher: MapEntity, victim: MapEntity): 'TOTAL' | 'FRONT' | 'BACK' | 'NONE' {
+    // Source parity: victim's forward direction vector.
+    // C++ uses getUnitDirectionVector2D(); our convention: dirX = cos(rotationY - PI/2), dirZ = sin(rotationY - PI/2).
+    const dirX = Math.cos(victim.rotationY - Math.PI / 2);
+    const dirZ = Math.sin(victim.rotationY - Math.PI / 2);
+
+    // Source parity: CrushDie.cpp line 62 — offset = majorRadius * 0.5.
+    const majorRadius = victim.obstacleGeometry ? victim.obstacleGeometry.majorRadius : 1.0;
+    const offsetDist = majorRadius * 0.5;
+    const offsetX = dirX * offsetDist;
+    const offsetZ = dirZ * offsetDist;
+
+    const crusherX = crusher.x;
+    const crusherZ = crusher.z;
+    const victimX = victim.x;
+    const victimZ = victim.z;
+
+    let result: 'TOTAL' | 'FRONT' | 'BACK' | 'NONE' = 'NONE';
+    let bestDist = 99999;
+
+    // Source parity: CrushDie.cpp lines 78-90 — check middle (TOTAL_CRUSH).
+    if (!victim.frontCrushed && !victim.backCrushed) {
+      const dx = victimX - crusherX;
+      const dz = victimZ - crusherZ;
+      const dist = dx * dx + dz * dz;
+      result = 'TOTAL';
+      bestDist = dist;
+    }
+
+    // Source parity: CrushDie.cpp lines 92-116 — check front point.
+    if (!victim.frontCrushed) {
+      const fx = victimX + offsetX;
+      const fz = victimZ + offsetZ;
+      const dx = fx - crusherX;
+      const dz = fz - crusherZ;
+      const dist = dx * dx + dz * dz;
+      if (dist < bestDist) {
+        result = victim.backCrushed ? 'TOTAL' : 'FRONT';
+        bestDist = dist;
+      }
+    }
+
+    // Source parity: CrushDie.cpp lines 118-142 — check back point.
+    if (!victim.backCrushed) {
+      const bx = victimX - offsetX;
+      const bz = victimZ - offsetZ;
+      const dx = bx - crusherX;
+      const dz = bz - crusherZ;
+      const dist = dx * dx + dz * dz;
+      if (dist < bestDist) {
+        result = victim.frontCrushed ? 'TOTAL' : 'BACK';
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -29377,6 +29609,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sidePlayerIndex.clear();
     this.nextPlayerIndex = 0;
     this.skirmishAIStates.clear();
+    this.loadedMapData = null;
     this.navigationGrid = null;
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
