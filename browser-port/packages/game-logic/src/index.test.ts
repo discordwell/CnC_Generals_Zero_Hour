@@ -7764,6 +7764,135 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(creditsAfter).toBeGreaterThanOrEqual(300);
   });
 
+  it('treats WorkerAIUpdate units as supply gatherers with supply truck delays/scan', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const warehouseDef = makeObjectDef('SupplyWarehouse', 'GLA', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+        StartingBoxes: 10,
+        DeleteWhenEmpty: false,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const supplyCenterDef = makeObjectDef('SupplyCenter', 'GLA', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const workerDef = makeObjectDef('GLAWorker', 'GLA', ['INFANTRY', 'DOZER', 'HARVESTER'], [
+      makeBlock('Behavior', 'WorkerAIUpdate ModuleTag_WorkerAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+        RepairHealthPercentPerSecond: '2%',
+        BoredTime: 3000,
+        BoredRange: 250,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [warehouseDef, supplyCenterDef, workerDef],
+    }));
+
+    const map = makeMap([
+      makeMapObject('SupplyWarehouse', 10, 10),
+      makeMapObject('SupplyCenter', 35, 10),
+      makeMapObject('GLAWorker', 10, 10),
+    ], 64, 64);
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.submitCommand({ type: 'setSideCredits', side: 'GLA', amount: 0 });
+    logic.update(0);
+
+    for (let i = 0; i < 300; i++) {
+      logic.update(0.033);
+    }
+
+    expect(logic.getSideCredits('GLA')).toBeGreaterThanOrEqual(300);
+  });
+
+  it('uses DozerAIUpdate RepairHealthPercentPerSecond during repair', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [dozerDef, buildingDef],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),
+        makeMapObject('USABarracks', 20, 20),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    logic.update(0);
+
+    const before = logic.getEntityState(2)!.health;
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+    const after = logic.getEntityState(2)!.health;
+
+    // 30% per second on 500 max HP => 5 HP per frame.
+    expect(after - before).toBeCloseTo(5, 4);
+  });
+
+  it('idle dozer auto-seeks nearby repairs after bored time', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '20%',
+        BoredTime: 100, // ~3 frames
+        BoredRange: 120,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const buildingDef = makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 300 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [dozerDef, buildingDef],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),
+        makeMapObject('USAPowerPlant', 23, 20),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    logic.update(0);
+
+    const before = logic.getEntityState(2)!.health;
+    for (let i = 0; i < 12; i++) {
+      logic.update(1 / 30);
+    }
+    const after = logic.getEntityState(2)!.health;
+    expect(after).toBeGreaterThan(before);
+  });
+
   it('deletes warehouse when empty if DeleteWhenEmpty is true', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

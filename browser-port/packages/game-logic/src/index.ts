@@ -1375,6 +1375,15 @@ interface RepairDockProfile {
   timeForFullHealFrames: number;
 }
 
+interface DozerAIProfile {
+  /** Source parity: DozerAIUpdateModuleData::m_repairHealthPercentPerSecond (0..1 per second). */
+  repairHealthPercentPerSecond: number;
+  /** Source parity: DozerAIUpdateModuleData::m_boredTime (duration real in frames). */
+  boredTimeFrames: number;
+  /** Source parity: DozerAIUpdateModuleData::m_boredRange. */
+  boredRange: number;
+}
+
 interface MapEntity {
   id: number;
   templateName: string;
@@ -1519,6 +1528,9 @@ interface MapEntity {
   supplyWarehouseProfile: SupplyWarehouseProfile | null;
   supplyTruckProfile: SupplyTruckProfile | null;
   repairDockProfile: RepairDockProfile | null;
+  dozerAIProfile: DozerAIProfile | null;
+  /** Source parity: DozerPrimaryIdleState::m_idleTooLongTimestamp. */
+  dozerIdleTooLongTimestamp: number;
   isSupplyCenter: boolean;
   experienceProfile: ExperienceProfile | null;
   experienceState: ExperienceState;
@@ -3961,6 +3973,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingTunnelActions();
     this.updatePendingRepairActions();
     this.updatePendingConstructionActions();
+    this.updateDozerIdleBehavior();
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
@@ -5524,6 +5537,7 @@ export class GameLogicSubsystem implements Subsystem {
     const supplyWarehouseProfile = this.extractSupplyWarehouseProfile(objectDef);
     const supplyTruckProfile = this.extractSupplyTruckProfile(objectDef);
     const repairDockProfile = this.extractRepairDockProfile(objectDef);
+    const dozerAIProfile = this.extractDozerAIProfile(objectDef);
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
     const experienceProfile = this.extractExperienceProfile(objectDef);
     const jetAIProfile = this.extractJetAIProfile(objectDef);
@@ -5699,6 +5713,8 @@ export class GameLogicSubsystem implements Subsystem {
       supplyWarehouseProfile,
       supplyTruckProfile,
       repairDockProfile,
+      dozerAIProfile,
+      dozerIdleTooLongTimestamp: this.frameCounter,
       isSupplyCenter,
       experienceProfile,
       experienceState: createExperienceStateImpl(),
@@ -8013,7 +8029,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (block.type.toUpperCase() === 'BEHAVIOR') {
         const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-        if (moduleType === 'SUPPLYTRUCKAIUPDATE') {
+        if (moduleType === 'SUPPLYTRUCKAIUPDATE' || moduleType === 'WORKERAIUPDATE') {
           const maxBoxes = Math.max(1, Math.trunc(readNumericField(block.fields, ['MaxBoxes']) ?? 3));
           const supplyCenterActionDelayMs = readNumericField(block.fields, ['SupplyCenterActionDelay']) ?? 0;
           const supplyWarehouseActionDelayMs = readNumericField(block.fields, ['SupplyWarehouseActionDelay']) ?? 0;
@@ -8067,6 +8083,49 @@ export class GameLogicSubsystem implements Subsystem {
           return;
         }
       }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Source parity: DozerAIUpdateModuleData / WorkerAIUpdateModuleData shared fields.
+   * Parses DozerAIUpdate and WorkerAIUpdate modules for repair and bored behavior.
+   */
+  private extractDozerAIProfile(objectDef: ObjectDef | undefined): DozerAIProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: DozerAIProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'DOZERAIUPDATE' || moduleType === 'WORKERAIUPDATE') {
+          const repairHealthPercentPerSecond = this.parseNumericIniValue(
+            this.readIniFieldValue(block.fields, 'RepairHealthPercentPerSecond'),
+          ) ?? 0;
+          const boredTimeMs = readNumericField(block.fields, ['BoredTime']) ?? 0;
+          const boredRange = readNumericField(block.fields, ['BoredRange']) ?? 0;
+          profile = {
+            repairHealthPercentPerSecond: Math.max(0, repairHealthPercentPerSecond),
+            boredTimeFrames: boredTimeMs > 0 ? this.msToLogicFramesReal(boredTimeMs) : 0,
+            boredRange: Math.max(0, boredRange),
+          };
+          return;
+        }
+      }
+
       for (const child of block.blocks) {
         visitBlock(child);
       }
@@ -14336,14 +14395,18 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private isEntityDozerCapable(entity: MapEntity): boolean {
+    const kindOf = this.resolveEntityKindOfSet(entity);
+    return kindOf.has('DOZER') || entity.dozerAIProfile !== null;
+  }
+
   private handleConstructBuildingCommand(command: ConstructBuildingCommand): void {
     const constructor = this.spawnedEntities.get(command.entityId);
     if (!constructor || constructor.destroyed) {
       return;
     }
 
-    const constructorKindOf = this.resolveEntityKindOfSet(constructor);
-    if (!constructorKindOf.has('DOZER')) {
+    if (!this.isEntityDozerCapable(constructor)) {
       return;
     }
 
@@ -15250,14 +15313,7 @@ export class GameLogicSubsystem implements Subsystem {
     const dozer = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
     if (!dozer || !building || dozer.destroyed || building.destroyed) return;
-    if (!dozer.kindOf.has('DOZER')) return;
-    if (!building.kindOf.has('STRUCTURE')) return;
-    if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) return;
-
-    // Must be same side.
-    const dozerSide = this.normalizeSide(dozer.side);
-    const buildingSide = this.normalizeSide(building.side);
-    if (dozerSide !== buildingSide) return;
+    if (!this.canDozerRepairTarget(dozer, building)) return;
 
     // Source parity: DozerAIUpdate::privateResumeConstruction — if the building is
     // still under construction, resume building instead of repairing.
@@ -15281,10 +15337,10 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: BuildAssistant repair update — dozers repair buildings over time.
-   * Repair rate: ~2% max HP per second, costs ~0.5% of building cost per second.
+   * Repair rate comes from DozerAIUpdate/WorkerAIUpdate RepairHealthPercentPerSecond.
+   * Repair still consumes build-cost-based credits over time.
    */
   private updatePendingRepairActions(): void {
-    const REPAIR_RATE_PER_FRAME = 0.02 / 30; // 2% of maxHP per second at 30fps
     const REPAIR_COST_RATE = 0.005 / 30; // 0.5% of build cost per second at 30fps
 
     for (const [dozerId, buildingId] of this.pendingRepairActions.entries()) {
@@ -15323,11 +15379,111 @@ export class GameLogicSubsystem implements Subsystem {
       const frameCost = REPAIR_COST_RATE * buildCost;
       if (credits < frameCost) continue; // Can't afford this frame
 
-      // Deduct cost and apply repair.
+      const repairHealthPercentPerSecond = dozer.dozerAIProfile?.repairHealthPercentPerSecond ?? 0.02;
+      if (repairHealthPercentPerSecond <= 0) {
+        continue;
+      }
+      const healAmount = (repairHealthPercentPerSecond / LOGIC_FRAME_RATE) * building.maxHealth;
+      if (healAmount <= 0) {
+        continue;
+      }
+
+      // Source parity: attemptHealingFromSoleBenefactor rejects competing dozers/workers.
+      const healed = this.attemptHealingFromSoleBenefactor(building, healAmount, dozer.id, 2);
+      if (!healed) {
+        this.pendingRepairActions.delete(dozerId);
+        continue;
+      }
+
+      // Deduct repair cost only when healing was accepted.
       this.sideCredits.set(dozerSide, credits - frameCost);
-      const healAmount = REPAIR_RATE_PER_FRAME * building.maxHealth;
-      building.health = Math.min(building.maxHealth, building.health + healAmount);
     }
+  }
+
+  /**
+   * Source parity: DozerPrimaryIdleState::update — bored dozers auto-seek nearby repairs.
+   */
+  private updateDozerIdleBehavior(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.dozerAIProfile;
+      if (!profile || profile.boredTimeFrames <= 0 || profile.boredRange <= 0) continue;
+
+      const hasTask = this.pendingConstructionActions.has(entity.id)
+        || this.pendingRepairActions.has(entity.id);
+      const isIdle = !entity.moving
+        && entity.moveTarget === null
+        && entity.attackTargetEntityId === null
+        && entity.attackTargetPosition === null
+        && !hasTask;
+
+      if (!isIdle) {
+        entity.dozerIdleTooLongTimestamp = this.frameCounter;
+        continue;
+      }
+
+      if ((this.frameCounter - entity.dozerIdleTooLongTimestamp) <= profile.boredTimeFrames) {
+        continue;
+      }
+
+      // Source parity: throttle expensive scans by resetting idle timestamp after each check.
+      entity.dozerIdleTooLongTimestamp = this.frameCounter;
+
+      const target = this.findDozerAutoRepairTarget(entity, profile.boredRange);
+      if (!target) {
+        continue;
+      }
+
+      this.handleRepairBuildingCommand({
+        type: 'repairBuilding',
+        entityId: entity.id,
+        targetBuildingId: target.id,
+      });
+    }
+  }
+
+  private findDozerAutoRepairTarget(dozer: MapEntity, range: number): MapEntity | null {
+    const rangeSqr = range * range;
+    let closest: MapEntity | null = null;
+    let closestDistSqr = Infinity;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.id === dozer.id || candidate.destroyed) continue;
+      if (!candidate.kindOf.has('STRUCTURE')) continue;
+      if (!this.canDozerRepairTarget(dozer, candidate)) continue;
+
+      const dx = candidate.x - dozer.x;
+      const dz = candidate.z - dozer.z;
+      const distSqr = dx * dx + dz * dz;
+      if (distSqr > rangeSqr) continue;
+
+      if (distSqr < closestDistSqr) {
+        closest = candidate;
+        closestDistSqr = distSqr;
+      }
+    }
+    return closest;
+  }
+
+  private canDozerRepairTarget(dozer: MapEntity, building: MapEntity): boolean {
+    if (!this.isEntityDozerCapable(dozer)) return false;
+    if (!building.kindOf.has('STRUCTURE')) return false;
+    if (building.objectStatusFlags.has('SOLD')) return false;
+    if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) return false;
+
+    const dozerSide = this.normalizeSide(dozer.side);
+    const buildingSide = this.normalizeSide(building.side);
+    if (dozerSide !== buildingSide) return false;
+
+    // Source parity: don't pile onto a target currently repaired by another dozer.
+    if (
+      building.soleHealingBenefactorId !== null
+      && building.soleHealingBenefactorId !== dozer.id
+      && this.frameCounter < building.soleHealingBenefactorExpirationFrame
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -17097,7 +17253,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private attemptHealingFromSoleBenefactor(
     target: MapEntity, amount: number, sourceId: number, duration: number,
-  ): void {
+  ): boolean {
     const now = this.frameCounter;
     if (now >= target.soleHealingBenefactorExpirationFrame || target.soleHealingBenefactorId === sourceId) {
       target.soleHealingBenefactorId = sourceId;
@@ -17112,7 +17268,9 @@ export class GameLogicSubsystem implements Subsystem {
           this.mineOnDamage(target, sourceId, 'HEALING');
         }
       }
+      return true;
     }
+    return false;
   }
 
   // ── Source parity: MinefieldBehavior — mine collision system ──────────────
@@ -18531,6 +18689,11 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (entity.supplyTruckProfile) {
+        // Source parity: WorkerAIUpdate runs supply-truck logic only while not in dozer tasks.
+        if (entity.dozerAIProfile
+          && (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id))) {
+          continue;
+        }
         updateSupplyTruckImpl(entity, entity.supplyTruckProfile, supplyChainContext);
       }
     }
