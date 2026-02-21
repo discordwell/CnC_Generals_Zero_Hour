@@ -76,6 +76,8 @@ export interface SupplyChainContext<TEntity extends SupplyChainEntity> {
   getTruckProfile(entity: TEntity): SupplyTruckProfile | null;
   /** Check if an entity is a supply center (has SupplyCenterDockUpdate). */
   isSupplyCenter(entity: TEntity): boolean;
+  /** Source parity: DockUpdateInterface::isDockCrippled — warehouse disabled at REALLYDAMAGED. */
+  isWarehouseDockCrippled(entity: TEntity): boolean;
 
   /** Get/set warehouse runtime state. */
   getWarehouseState(entityId: number): SupplyWarehouseState | undefined;
@@ -136,6 +138,10 @@ export function findNearestWarehouseWithBoxes<TEntity extends SupplyChainEntity>
 
     const warehouseState = context.getWarehouseState(entity.id);
     if (!warehouseState || warehouseState.currentBoxes <= 0) {
+      continue;
+    }
+    // Source parity: DockUpdateInterface::isDockCrippled — skip heavily damaged warehouses.
+    if (context.isWarehouseDockCrippled(entity)) {
       continue;
     }
 

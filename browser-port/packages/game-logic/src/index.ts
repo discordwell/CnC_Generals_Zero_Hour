@@ -1760,6 +1760,15 @@ interface MapEntity {
   // ── Source parity: TechBuildingBehavior — neutral buildings that revert on death ──
   techBuildingProfile: TechBuildingBehaviorProfile | null;
 
+  // ── Source parity: SupplyWarehouseCripplingBehavior — self-heal + dock disable ──
+  supplyWarehouseCripplingProfile: SupplyWarehouseCripplingProfile | null;
+  /** Frame after which healing is allowed (suppression timer). */
+  swCripplingHealSuppressedUntilFrame: number;
+  /** Frame of next heal tick. */
+  swCripplingNextHealFrame: number;
+  /** Whether the dock is currently crippled (REALLYDAMAGED state). */
+  swCripplingDockDisabled: boolean;
+
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
@@ -3187,6 +3196,19 @@ interface TechBuildingBehaviorProfile {
   pulseFXRateFrames: number;
 }
 
+/**
+ * Source parity: SupplyWarehouseCripplingBehavior — disables dock on REALLYDAMAGED,
+ * self-heals after suppression delay. C++ file: SupplyWarehouseCripplingBehavior.cpp.
+ */
+interface SupplyWarehouseCripplingProfile {
+  /** Frames after damage before healing can start. */
+  selfHealSuppressionFrames: number;
+  /** Frames between each heal tick. */
+  selfHealDelayFrames: number;
+  /** HP healed per tick. */
+  selfHealAmount: number;
+}
+
 /** Source parity: PoisonedBehavior default INI values. */
 const DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES = 10; // ~0.33s at 30fps
 const DEFAULT_POISON_DURATION_FRAMES = 90; // ~3s at 30fps
@@ -3753,6 +3775,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateDynamicShroud();
     this.updatePilotFindVehicle();
     this.updateToppleEntities();
+    this.updateSupplyWarehouseCrippling();
     this.updateRadarExtension();
     this.updateTemporaryVisionReveals();
     this.updateRenderStates();
@@ -5586,6 +5609,11 @@ export class GameLogicSubsystem implements Subsystem {
       assistedTargetingProfile: this.extractAssistedTargetingProfile(objectDef),
       // Tech building behavior (neutral buildings)
       techBuildingProfile: this.extractTechBuildingProfile(objectDef),
+      // SupplyWarehouseCrippling
+      supplyWarehouseCripplingProfile: this.extractSupplyWarehouseCripplingProfile(objectDef),
+      swCripplingHealSuppressedUntilFrame: 0,
+      swCripplingNextHealFrame: 0,
+      swCripplingDockDisabled: false,
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -9993,6 +10021,32 @@ export class GameLogicSubsystem implements Subsystem {
       if (moduleType !== 'TECHBUILDINGBEHAVIOR') return;
       profile = {
         pulseFXRateFrames: this.msToLogicFrames(readNumericField(block.fields, ['PulseFXRate']) ?? 0),
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (!profile && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: SupplyWarehouseCripplingBehavior — extract self-heal profile from INI.
+   * C++ file: SupplyWarehouseCripplingBehavior.cpp (buildFieldParse).
+   */
+  private extractSupplyWarehouseCripplingProfile(objectDef: ObjectDef | undefined): SupplyWarehouseCripplingProfile | null {
+    if (!objectDef) return null;
+    let profile: SupplyWarehouseCripplingProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'SUPPLYWAREHOUSECRIPPLINGBEHAVIOR') return;
+      profile = {
+        selfHealSuppressionFrames: this.msToLogicFrames(readNumericField(block.fields, ['SelfHealSupression']) ?? 0),
+        selfHealDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['SelfHealDelay']) ?? 0),
+        selfHealAmount: readNumericField(block.fields, ['SelfHealAmount']) ?? 0,
       };
     };
     for (const block of objectDef.blocks) visitBlock(block);
@@ -17046,6 +17100,7 @@ export class GameLogicSubsystem implements Subsystem {
       getWarehouseProfile: (entity: MapEntity) => entity.supplyWarehouseProfile,
       getTruckProfile: (entity: MapEntity) => entity.supplyTruckProfile,
       isSupplyCenter: (entity: MapEntity) => entity.isSupplyCenter,
+      isWarehouseDockCrippled: (entity: MapEntity) => entity.swCripplingDockDisabled,
       getWarehouseState: (entityId: number) => this.supplyWarehouseStates.get(entityId),
       setWarehouseState: (entityId: number, state: SupplyWarehouseState) => {
         this.supplyWarehouseStates.set(entityId, state);
@@ -21925,7 +21980,20 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
+    // Source parity: track body damage state transitions for SupplyWarehouseCripplingBehavior.
+    const oldDamageState = target.supplyWarehouseCripplingProfile
+      ? calcBodyDamageState(target.health, target.maxHealth)
+      : 0 as BodyDamageState;
+
     target.health = Math.max(0, target.health - adjustedDamage);
+
+    // Source parity: SupplyWarehouseCripplingBehavior::onBodyDamageStateChange.
+    if (target.supplyWarehouseCripplingProfile && target.health > 0) {
+      const newDamageState = calcBodyDamageState(target.health, target.maxHealth);
+      if (oldDamageState !== newDamageState) {
+        this.supplyWarehouseCripplingOnStateChange(target, oldDamageState, newDamageState);
+      }
+    }
 
     // Source parity: ActiveBody::getLastDamageTimestamp — track last damage frame for stealth.
     // Healing damage does not update the timestamp (C++ checks m_damageType != DAMAGE_HEALING).
@@ -21976,6 +22044,11 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: FireWeaponWhenDamagedBehavior::onDamage — fire reaction weapons.
     if (target.fireWhenDamagedProfiles.length > 0) {
       this.fireWhenDamagedReaction(target, adjustedDamage);
+    }
+
+    // Source parity: SupplyWarehouseCripplingBehavior::onDamage — reset heal suppression.
+    if (target.supplyWarehouseCripplingProfile) {
+      this.supplyWarehouseCripplingOnDamage(target);
     }
 
     // Source parity: ProneUpdate::goProne() — damage adds to prone frame counter.
@@ -24265,6 +24338,67 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: ToppleUpdate::update() — per-frame angular rotation and bounce.
    */
+  // ── Source parity: SupplyWarehouseCripplingBehavior ──
+
+  /**
+   * Source parity: SupplyWarehouseCripplingBehavior::onDamage — reset heal suppression timer.
+   */
+  private supplyWarehouseCripplingOnDamage(entity: MapEntity): void {
+    const profile = entity.supplyWarehouseCripplingProfile!;
+    entity.swCripplingHealSuppressedUntilFrame = this.frameCounter + profile.selfHealSuppressionFrames;
+    entity.swCripplingNextHealFrame = entity.swCripplingHealSuppressedUntilFrame;
+  }
+
+  /**
+   * Source parity: SupplyWarehouseCripplingBehavior::onBodyDamageStateChange — toggle dock.
+   * REALLYDAMAGED (2) = cripple dock; exit from REALLYDAMAGED = re-enable dock.
+   */
+  private supplyWarehouseCripplingOnStateChange(
+    entity: MapEntity,
+    oldState: BodyDamageState,
+    newState: BodyDamageState,
+  ): void {
+    const REALLYDAMAGED: BodyDamageState = 2;
+    if (newState === REALLYDAMAGED && !entity.swCripplingDockDisabled) {
+      entity.swCripplingDockDisabled = true;
+    } else if (oldState === REALLYDAMAGED && entity.swCripplingDockDisabled) {
+      entity.swCripplingDockDisabled = false;
+    }
+  }
+
+  /**
+   * Source parity: SupplyWarehouseCripplingBehavior::update() — periodic self-heal.
+   * Healing is suppressed for selfHealSuppressionFrames after each damage event.
+   * Once suppression expires, heals selfHealAmount every selfHealDelayFrames.
+   * Stops when entity reaches full health.
+   */
+  private updateSupplyWarehouseCrippling(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.supplyWarehouseCripplingProfile;
+      if (!profile) continue;
+      // No healing needed if at full health.
+      if (entity.health >= entity.maxHealth) continue;
+      // Still suppressed from recent damage.
+      if (this.frameCounter < entity.swCripplingHealSuppressedUntilFrame) continue;
+      // Not yet time for next heal tick.
+      if (this.frameCounter < entity.swCripplingNextHealFrame) continue;
+
+      // Schedule next heal.
+      entity.swCripplingNextHealFrame = this.frameCounter + profile.selfHealDelayFrames;
+
+      // Apply healing.
+      const oldDamageState = calcBodyDamageState(entity.health, entity.maxHealth);
+      entity.health = Math.min(entity.maxHealth, entity.health + profile.selfHealAmount);
+      const newDamageState = calcBodyDamageState(entity.health, entity.maxHealth);
+
+      // Check if healing caused a state transition (e.g. REALLYDAMAGED → DAMAGED).
+      if (oldDamageState !== newDamageState) {
+        this.supplyWarehouseCripplingOnStateChange(entity, oldDamageState, newDamageState);
+      }
+    }
+  }
+
   private updateToppleEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) continue;

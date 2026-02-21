@@ -22765,3 +22765,223 @@ describe('AssistedTargetingUpdate', () => {
     expect(target.health).toBeLessThan(200);
   });
 });
+
+describe('SupplyWarehouseCripplingBehavior', () => {
+  function makeCripplingBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('SupplyWarehouse', 'America', ['SUPPLY_SOURCE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 20,
+            DeleteWhenEmpty: 'No',
+          }),
+          makeBlock('Behavior', 'SupplyWarehouseCripplingBehavior ModuleTag_Cripple', {
+            SelfHealSupression: 3000,   // 3000ms → 90 frames
+            SelfHealDelay: 1000,         // 1000ms → 30 frames
+            SelfHealAmount: 50,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('BigGun', {
+          AttackRange: 200,
+          PrimaryDamage: 100,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    });
+  }
+
+  it('extracts crippling profile from INI', () => {
+    const bundle = makeCripplingBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SupplyWarehouse', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        supplyWarehouseCripplingProfile: {
+          selfHealSuppressionFrames: number;
+          selfHealDelayFrames: number;
+          selfHealAmount: number;
+        } | null;
+      }>;
+    };
+
+    const warehouse = [...priv.spawnedEntities.values()][0]!;
+    expect(warehouse.supplyWarehouseCripplingProfile).not.toBeNull();
+    expect(warehouse.supplyWarehouseCripplingProfile!.selfHealSuppressionFrames).toBe(90);
+    expect(warehouse.supplyWarehouseCripplingProfile!.selfHealDelayFrames).toBe(30);
+    expect(warehouse.supplyWarehouseCripplingProfile!.selfHealAmount).toBe(50);
+  });
+
+  it('disables dock when health drops to REALLYDAMAGED', () => {
+    const bundle = makeCripplingBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SupplyWarehouse', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; health: number; maxHealth: number; destroyed: boolean;
+        swCripplingDockDisabled: boolean;
+      }>;
+      applyWeaponDamageAmount: (
+        sourceEntityId: number | null, target: unknown, amount: number,
+        damageType: string, weaponDeathType?: string,
+      ) => void;
+    };
+
+    const warehouse = [...priv.spawnedEntities.values()][0]!;
+    expect(warehouse.swCripplingDockDisabled).toBe(false);
+
+    // Damage warehouse to REALLYDAMAGED: health ratio <= 0.1 (health <= 100).
+    // MaxHealth=1000, so deal 950 damage → health=50, ratio=0.05 → REALLYDAMAGED.
+    priv.applyWeaponDamageAmount(null, warehouse, 950, 'ARMOR_PIERCING');
+    expect(warehouse.health).toBe(50);
+    expect(warehouse.swCripplingDockDisabled).toBe(true);
+  });
+
+  it('self-heals after suppression delay expires', () => {
+    const bundle = makeCripplingBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SupplyWarehouse', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; health: number; maxHealth: number; destroyed: boolean;
+        swCripplingDockDisabled: boolean;
+      }>;
+      applyWeaponDamageAmount: (
+        sourceEntityId: number | null, target: unknown, amount: number,
+        damageType: string, weaponDeathType?: string,
+      ) => void;
+    };
+
+    const warehouse = [...priv.spawnedEntities.values()][0]!;
+    // Damage to health=400 (ratio 0.4 → DAMAGED state since 0.4 <= 0.5).
+    priv.applyWeaponDamageAmount(null, warehouse, 600, 'ARMOR_PIERCING');
+    expect(warehouse.health).toBe(400);
+
+    // Suppression is 90 frames. Run 89 frames — should NOT have healed yet.
+    for (let i = 0; i < 89; i++) {
+      logic.update(1 / 30);
+    }
+    expect(warehouse.health).toBe(400);
+
+    // Run 2 more frames to pass suppression + first heal tick.
+    logic.update(1 / 30); // frame 90: suppression expires
+    logic.update(1 / 30); // frame 91: heal tick fires
+    expect(warehouse.health).toBeGreaterThan(400);
+  });
+
+  it('re-enables dock when health heals past REALLYDAMAGED threshold', () => {
+    const bundle = makeCripplingBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SupplyWarehouse', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; health: number; maxHealth: number; destroyed: boolean;
+        swCripplingDockDisabled: boolean;
+      }>;
+      applyWeaponDamageAmount: (
+        sourceEntityId: number | null, target: unknown, amount: number,
+        damageType: string, weaponDeathType?: string,
+      ) => void;
+    };
+
+    const warehouse = [...priv.spawnedEntities.values()][0]!;
+
+    // Damage to health=50 (ratio 0.05 → REALLYDAMAGED since 0.05 <= 0.1).
+    priv.applyWeaponDamageAmount(null, warehouse, 950, 'ARMOR_PIERCING');
+    expect(warehouse.health).toBe(50);
+    expect(warehouse.swCripplingDockDisabled).toBe(true);
+
+    // Wait for suppression to expire (90 frames) and enough heal ticks to cross threshold.
+    // selfHealAmount=50, every 30 frames. REALLYDAMAGED threshold is ratio > 0.1 → health > 100.
+    // Need to heal from 50 to >100, so 2 ticks of 50 = 100 total heal → health=150 (ratio 0.15 → DAMAGED).
+    // After suppression (90 frames), first heal at frame 90, second at frame 120.
+    for (let i = 0; i < 130; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Health should have healed past 100.
+    expect(warehouse.health).toBeGreaterThan(100);
+    // Dock should be re-enabled since health is no longer REALLYDAMAGED.
+    expect(warehouse.swCripplingDockDisabled).toBe(false);
+  });
+
+  it('damage resets heal suppression timer', () => {
+    const bundle = makeCripplingBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SupplyWarehouse', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; health: number; maxHealth: number; destroyed: boolean;
+      }>;
+      applyWeaponDamageAmount: (
+        sourceEntityId: number | null, target: unknown, amount: number,
+        damageType: string, weaponDeathType?: string,
+      ) => void;
+    };
+
+    const warehouse = [...priv.spawnedEntities.values()][0]!;
+
+    // First damage: health 1000 → 600.
+    priv.applyWeaponDamageAmount(null, warehouse, 400, 'ARMOR_PIERCING');
+    expect(warehouse.health).toBe(600);
+
+    // Run 80 frames (not yet past 90 frame suppression).
+    for (let i = 0; i < 80; i++) {
+      logic.update(1 / 30);
+    }
+    expect(warehouse.health).toBe(600); // Still suppressed.
+
+    // Second damage: resets suppression timer. Health 600 → 500.
+    priv.applyWeaponDamageAmount(null, warehouse, 100, 'ARMOR_PIERCING');
+    expect(warehouse.health).toBe(500);
+
+    // Run 80 more frames — still within NEW suppression window (90 frames from second hit).
+    for (let i = 0; i < 80; i++) {
+      logic.update(1 / 30);
+    }
+    expect(warehouse.health).toBe(500); // Still suppressed from second hit.
+
+    // Run 12 more frames to pass new suppression window + first tick.
+    for (let i = 0; i < 12; i++) {
+      logic.update(1 / 30);
+    }
+    expect(warehouse.health).toBeGreaterThan(500); // Healing has started.
+  });
+});
