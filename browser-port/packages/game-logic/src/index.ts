@@ -1249,6 +1249,65 @@ interface PendingWeaponDamageEvent {
   countermeasureDivertFrame: number;
   /** If true, this missile has been diverted and deals no damage on detonation. */
   countermeasureNoDamage: boolean;
+  /** Source parity: MissileAIUpdate module profile on the projectile object template. */
+  missileAIProfile: MissileAIProfile | null;
+  /** Source parity: MissileAIUpdate runtime state for in-flight homing missiles. */
+  missileAIState: MissileAIRuntimeState | null;
+}
+
+type MissileAIState = 'PRELAUNCH' | 'LAUNCH' | 'IGNITION' | 'ATTACK_NOTURN' | 'ATTACK' | 'KILL_SELF';
+
+/**
+ * Source parity: MissileAIUpdateModuleData — parsed from projectile object INI Behavior.
+ * C++ file: MissileAIUpdate.cpp.
+ */
+interface MissileAIProfile {
+  tryToFollowTarget: boolean;
+  fuelLifetimeFrames: number;
+  ignitionDelayFrames: number;
+  initialVelocity: number;
+  distanceToTravelBeforeTurning: number;
+  distanceToTargetBeforeDiving: number;
+  distanceToTargetForLock: number;
+  useWeaponSpeed: boolean;
+  detonateOnNoFuel: boolean;
+  distanceScatterWhenJammed: number;
+  detonateCallsKill: boolean;
+  killSelfDelayFrames: number;
+  /** Locomotor turn rate converted from radians/second to radians/frame. */
+  turnRatePerFrame: number;
+}
+
+/**
+ * Source parity: MissileAIUpdate runtime state.
+ * C++ fields mapped from m_state/m_fuelExpirationDate/m_noTurnDistLeft/etc.
+ */
+interface MissileAIRuntimeState {
+  state: MissileAIState;
+  stateEnteredFrame: number;
+  currentX: number;
+  currentY: number;
+  currentZ: number;
+  prevX: number;
+  prevY: number;
+  prevZ: number;
+  velocityX: number;
+  velocityY: number;
+  velocityZ: number;
+  speed: number;
+  armed: boolean;
+  fuelExpirationFrame: number;
+  noTurnDistanceLeft: number;
+  trackingTarget: boolean;
+  targetEntityId: number | null;
+  targetX: number;
+  targetY: number;
+  targetZ: number;
+  originalTargetX: number;
+  originalTargetY: number;
+  originalTargetZ: number;
+  travelDistance: number;
+  totalDistanceEstimate: number;
 }
 
 interface SellingEntityState {
@@ -3507,6 +3566,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly shortcutSpecialPowerNamesByEntityId = new Map<number, Set<string>>();
   private readonly sharedShortcutSpecialPowerReadyFrames = new Map<string, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
+  private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
   private readonly evaEventBuffer: import('./types.js').EvaEvent[] = [];
   /** Cooldown tracker: EvaEventType → next frame this event can fire again. */
@@ -4042,6 +4102,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateWeaponIdleAutoReload();
     this.updatePointDefenseLaser();
     this.updateCountermeasures();
+    this.updateMissileAIEvents();
     this.updateProjectileFlightCollisions();
     this.processCountermeasureDiversions();
     this.updatePendingWeaponDamage();
@@ -4653,46 +4714,56 @@ export class GameLogicSubsystem implements Subsystem {
 
     for (const event of this.pendingWeaponDamageEvents) {
       if (event.delivery !== 'PROJECTILE') continue;
-
-      const totalFrames = event.executeFrame - event.launchFrame;
-      if (totalFrames <= 0) continue;
-
-      const elapsed = this.frameCounter - event.launchFrame;
-      const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
-
+      const missileState = event.missileAIState;
       let x: number, y: number, z: number;
+      let progress: number;
+      let heading: number;
 
-      if (event.hasBezierArc) {
-        // Source parity: DumbProjectileBehavior cubic Bezier flight path evaluation.
-        // P0 = (sourceX, sourceY, sourceZ), P3 = (impactX, impactY, impactZ).
-        // P1 and P2 placed along the 3D line at firstPercentIndent/secondPercentIndent.
-        const p0x = event.sourceX, p0y = event.sourceY, p0z = event.sourceZ;
-        const p3x = event.impactX, p3y = event.impactY, p3z = event.impactZ;
-        const dx = p3x - p0x, dy = p3y - p0y, dz = p3z - p0z;
-        const dist = Math.hypot(dx, dy, dz);
-        const nx = dist > 0 ? dx / dist : 0;
-        const nz = dist > 0 ? dz / dist : 0;
-        const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
-        const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
-        const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
-        const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
-
-        x = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
-        y = evaluateCubicBezier(progress, p0y, event.bezierP1Y, event.bezierP2Y, p3y);
-        z = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+      if (missileState) {
+        x = missileState.currentX;
+        y = missileState.currentY;
+        z = missileState.currentZ;
+        progress = Math.min(1, Math.max(0, missileState.travelDistance / Math.max(1, missileState.totalDistanceEstimate)));
+        heading = Math.atan2(missileState.velocityX, missileState.velocityZ);
       } else {
-        // Fallback: linear XZ + parabolic Y arc for projectiles without Bezier data.
-        x = event.sourceX + (event.impactX - event.sourceX) * progress;
-        z = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
-        const baseY = event.sourceY;
-        const arcHeight = Math.max(5, Math.hypot(event.impactX - event.sourceX, event.impactZ - event.sourceZ) * 0.15);
-        const arcY = baseY + arcHeight * 4 * progress * (1 - progress);
-        const terrainY = heightmap ? heightmap.getInterpolatedHeight(x, z) : 0;
-        y = Math.max(terrainY + 1, arcY);
-      }
+        const totalFrames = event.executeFrame - event.launchFrame;
+        if (totalFrames <= 0) continue;
 
-      // Heading from source to target.
-      const heading = Math.atan2(event.impactX - event.sourceX, event.impactZ - event.sourceZ);
+        const elapsed = this.frameCounter - event.launchFrame;
+        progress = Math.min(1, Math.max(0, elapsed / totalFrames));
+
+        if (event.hasBezierArc) {
+          // Source parity: DumbProjectileBehavior cubic Bezier flight path evaluation.
+          // P0 = (sourceX, sourceY, sourceZ), P3 = (impactX, impactY, impactZ).
+          // P1 and P2 placed along the 3D line at firstPercentIndent/secondPercentIndent.
+          const p0x = event.sourceX, p0y = event.sourceY, p0z = event.sourceZ;
+          const p3x = event.impactX, p3y = event.impactY, p3z = event.impactZ;
+          const dx = p3x - p0x, dy = p3y - p0y, dz = p3z - p0z;
+          const dist = Math.hypot(dx, dy, dz);
+          const nx = dist > 0 ? dx / dist : 0;
+          const nz = dist > 0 ? dz / dist : 0;
+          const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
+          const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
+          const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
+          const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
+
+          x = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
+          y = evaluateCubicBezier(progress, p0y, event.bezierP1Y, event.bezierP2Y, p3y);
+          z = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+        } else {
+          // Fallback: linear XZ + parabolic Y arc for projectiles without Bezier data.
+          x = event.sourceX + (event.impactX - event.sourceX) * progress;
+          z = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+          const baseY = event.sourceY;
+          const arcHeight = Math.max(5, Math.hypot(event.impactX - event.sourceX, event.impactZ - event.sourceZ) * 0.15);
+          const arcY = baseY + arcHeight * 4 * progress * (1 - progress);
+          const terrainY = heightmap ? heightmap.getInterpolatedHeight(x, z) : 0;
+          y = Math.max(terrainY + 1, arcY);
+        }
+
+        // Heading from source to target.
+        heading = Math.atan2(event.impactX - event.sourceX, event.impactZ - event.sourceZ);
+      }
 
       projectiles.push({
         id: event.projectileVisualId,
@@ -6906,6 +6977,69 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
     return { firstHeight, secondHeight, firstPercentIndent, secondPercentIndent };
+  }
+
+  /**
+   * Source parity: MissileAIUpdateModuleData — extract homing missile config
+   * from the projectile object template's MissileAIUpdate behavior.
+   * C++ file: MissileAIUpdate.cpp.
+   */
+  private extractMissileAIProfile(projectileObjectName: string): MissileAIProfile | null {
+    const normalizedTemplateName = projectileObjectName.trim().toUpperCase();
+    const cached = this.missileAIProfileByProjectileTemplate.get(normalizedTemplateName);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      this.missileAIProfileByProjectileTemplate.set(normalizedTemplateName, null);
+      return null;
+    }
+    const projectileDef = findObjectDefByName(registry, projectileObjectName);
+    if (!projectileDef) {
+      this.missileAIProfileByProjectileTemplate.set(normalizedTemplateName, null);
+      return null;
+    }
+
+    let profile: MissileAIProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'MISSILEAIUPDATE') {
+          const locomotorProfiles = this.resolveLocomotorProfiles(projectileDef, registry);
+          const locomotorProfile = locomotorProfiles.get(LOCOMOTORSET_NORMAL)
+            ?? locomotorProfiles.values().next().value
+            ?? null;
+          profile = {
+            tryToFollowTarget: readBooleanField(block.fields, ['TryToFollowTarget']) ?? true,
+            fuelLifetimeFrames: this.msToLogicFrames(readNumericField(block.fields, ['FuelLifetime']) ?? 0),
+            ignitionDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['IgnitionDelay']) ?? 0),
+            initialVelocity: readNumericField(block.fields, ['InitialVelocity']) ?? 0,
+            distanceToTravelBeforeTurning: readNumericField(block.fields, ['DistanceToTravelBeforeTurning']) ?? 0,
+            distanceToTargetBeforeDiving: readNumericField(block.fields, ['DistanceToTargetBeforeDiving']) ?? 0,
+            distanceToTargetForLock: readNumericField(block.fields, ['DistanceToTargetForLock']) ?? 75,
+            useWeaponSpeed: readBooleanField(block.fields, ['UseWeaponSpeed']) ?? false,
+            detonateOnNoFuel: readBooleanField(block.fields, ['DetonateOnNoFuel']) ?? false,
+            distanceScatterWhenJammed: readNumericField(block.fields, ['DistanceScatterWhenJammed']) ?? 75,
+            detonateCallsKill: readBooleanField(block.fields, ['DetonateCallsKill']) ?? false,
+            killSelfDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['KillSelfDelay']) ?? 3),
+            turnRatePerFrame: Math.max(0, (locomotorProfile?.turnRate ?? 0) / LOGIC_FRAME_RATE),
+          };
+        }
+      }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of projectileDef.blocks) {
+      visitBlock(block);
+    }
+
+    this.missileAIProfileByProjectileTemplate.set(normalizedTemplateName, profile);
+    return profile;
   }
 
   /**
@@ -22508,12 +22642,94 @@ export class GameLogicSubsystem implements Subsystem {
       }
       : weapon;
 
+    let missileAIProfile: MissileAIProfile | null = null;
+    let missileAIState: MissileAIRuntimeState | null = null;
+    let executeFrame = this.frameCounter + delayFrames;
+
+    if (delivery === 'PROJECTILE' && weapon.projectileObjectName) {
+      missileAIProfile = this.extractMissileAIProfile(weapon.projectileObjectName);
+      if (missileAIProfile) {
+        // Source parity: MissileAIUpdate owns flight and detonation timing.
+        // Leave queued executeFrame far in the future until MissileAI transitions to KILL.
+        executeFrame = Number.MAX_SAFE_INTEGER;
+
+        // Source parity: projectileFireAtObjectOrPosition initializes heading from
+        // launcher forward vector with positive-Z correction when target is above missile.
+        let dirX = 0;
+        let dirY = 0;
+        let dirZ = 1;
+        const launcherForward = this.resolveForwardUnitVector(attacker);
+        const forwardLength = Math.hypot(launcherForward.x, launcherForward.z);
+        if (forwardLength > 0) {
+          dirX = launcherForward.x / forwardLength;
+          dirZ = launcherForward.z / forwardLength;
+        } else {
+          const toTargetX = impactX - sourceX;
+          const toTargetZ = impactZ - sourceZ;
+          const toTargetLength = Math.hypot(toTargetX, toTargetZ);
+          if (toTargetLength > 0) {
+            dirX = toTargetX / toTargetLength;
+            dirZ = toTargetZ / toTargetLength;
+          }
+        }
+
+        const xyDistance = Math.max(1, Math.hypot(impactX - sourceX, impactZ - sourceZ));
+        const deltaY = impactY - attacker.y;
+        const zFactor = deltaY > 0 ? (deltaY / xyDistance) : 0;
+        dirY += 2 * zFactor;
+
+        const directionLength = Math.hypot(dirX, dirY, dirZ);
+        if (directionLength > 0) {
+          dirX /= directionLength;
+          dirY /= directionLength;
+          dirZ /= directionLength;
+        } else {
+          dirX = 0;
+          dirY = 0;
+          dirZ = 1;
+        }
+
+        const missileSpeed = missileAIProfile.useWeaponSpeed
+          ? travelSpeed
+          : (missileAIProfile.initialVelocity > 0 ? missileAIProfile.initialVelocity : travelSpeed);
+        const speed = Number.isFinite(missileSpeed) && missileSpeed > 0 ? missileSpeed : travelSpeed;
+
+        missileAIState = {
+          state: 'LAUNCH',
+          stateEnteredFrame: this.frameCounter,
+          currentX: sourceX,
+          currentY: attacker.y,
+          currentZ: sourceZ,
+          prevX: sourceX,
+          prevY: attacker.y,
+          prevZ: sourceZ,
+          velocityX: dirX * speed,
+          velocityY: dirY * speed,
+          velocityZ: dirZ * speed,
+          speed,
+          armed: false,
+          fuelExpirationFrame: Number.MAX_SAFE_INTEGER,
+          noTurnDistanceLeft: missileAIProfile.distanceToTravelBeforeTurning,
+          trackingTarget: missileAIProfile.tryToFollowTarget && primaryVictimEntityId !== null,
+          targetEntityId: missileAIProfile.tryToFollowTarget ? primaryVictimEntityId : null,
+          targetX: impactX,
+          targetY: impactY,
+          targetZ: impactZ,
+          originalTargetX: impactX,
+          originalTargetY: impactY,
+          originalTargetZ: impactZ,
+          travelDistance: 0,
+          totalDistanceEstimate: Math.max(1, Math.hypot(impactX - sourceX, impactZ - sourceZ)),
+        };
+      }
+    }
+
     const event: PendingWeaponDamageEvent = {
       sourceEntityId: attacker.id,
       primaryVictimEntityId,
       impactX,
       impactZ,
-      executeFrame: this.frameCounter + delayFrames,
+      executeFrame,
       delivery,
       weapon: bonusedWeapon,
       launchFrame: this.frameCounter,
@@ -22530,6 +22746,8 @@ export class GameLogicSubsystem implements Subsystem {
       hasBezierArc,
       countermeasureDivertFrame: 0,
       countermeasureNoDamage: false,
+      missileAIProfile,
+      missileAIState,
     };
 
     // Emit muzzle flash visual event.
@@ -22789,6 +23007,199 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: MissileAIUpdate::update() — per-frame homing missile flight state machine.
+   * Handles ignition delay, fuel lifetime, turn gating, lock distance detonation, and
+   * target-follow behavior for projectile objects with MissileAIUpdate.
+   */
+  private updateMissileAIEvents(): void {
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.delivery !== 'PROJECTILE') continue;
+      if (event.executeFrame <= this.frameCounter) continue;
+      const profile = event.missileAIProfile;
+      const state = event.missileAIState;
+      if (!profile || !state) continue;
+
+      // Countermeasure diversion can swap victim to a flare entity. Rebind tracking target.
+      if (event.countermeasureNoDamage && event.primaryVictimEntityId !== null
+        && state.targetEntityId !== event.primaryVictimEntityId) {
+        state.trackingTarget = true;
+        state.targetEntityId = event.primaryVictimEntityId;
+      }
+
+      // Track moving target object when enabled, otherwise hold original target position.
+      if (state.trackingTarget && state.targetEntityId !== null) {
+        const tracked = this.spawnedEntities.get(state.targetEntityId);
+        if (!tracked || tracked.destroyed) {
+          // Source parity: MissileAIUpdate::airborneTargetGone() — run out of gas and kill self.
+          event.countermeasureNoDamage = true;
+          event.impactX = state.currentX;
+          event.impactY = state.currentY;
+          event.impactZ = state.currentZ;
+          event.executeFrame = this.frameCounter;
+          continue;
+        }
+        state.targetX = tracked.x;
+        state.targetY = tracked.y;
+        state.targetZ = tracked.z;
+      } else {
+        state.targetX = state.originalTargetX;
+        state.targetY = state.originalTargetY;
+        state.targetZ = state.originalTargetZ;
+      }
+
+      if (state.state === 'LAUNCH' && this.frameCounter - state.stateEnteredFrame >= profile.ignitionDelayFrames) {
+        state.state = 'IGNITION';
+        state.stateEnteredFrame = this.frameCounter;
+      }
+
+      if (state.state === 'IGNITION') {
+        state.armed = true;
+        state.fuelExpirationFrame = profile.fuelLifetimeFrames > 0
+          ? this.frameCounter + profile.fuelLifetimeFrames
+          : Number.MAX_SAFE_INTEGER;
+        state.state = 'ATTACK_NOTURN';
+        state.stateEnteredFrame = this.frameCounter;
+      }
+
+      if (state.state === 'ATTACK_NOTURN' && state.noTurnDistanceLeft <= 0) {
+        state.state = 'ATTACK';
+        state.stateEnteredFrame = this.frameCounter;
+      }
+
+      const fuelExpired = this.frameCounter >= state.fuelExpirationFrame;
+      if (fuelExpired && profile.detonateOnNoFuel) {
+        event.impactX = state.currentX;
+        event.impactY = state.currentY;
+        event.impactZ = state.currentZ;
+        event.executeFrame = this.frameCounter;
+        continue;
+      }
+      if (fuelExpired && !profile.detonateOnNoFuel && state.state !== 'KILL_SELF') {
+        state.state = 'KILL_SELF';
+        state.stateEnteredFrame = this.frameCounter;
+      }
+      if (state.state === 'KILL_SELF') {
+        if (this.frameCounter - state.stateEnteredFrame >= profile.killSelfDelayFrames) {
+          event.countermeasureNoDamage = true;
+          event.impactX = state.currentX;
+          event.impactY = state.currentY;
+          event.impactZ = state.currentZ;
+          event.executeFrame = this.frameCounter;
+        }
+        continue;
+      }
+
+      const speed = Number.isFinite(state.speed) && state.speed > 0
+        ? state.speed
+        : Math.max(1, Math.hypot(state.velocityX, state.velocityY, state.velocityZ));
+
+      let dirX = state.velocityX;
+      let dirY = state.velocityY;
+      let dirZ = state.velocityZ;
+      const canTurn = state.state === 'ATTACK' && !fuelExpired;
+      if (canTurn) {
+        const toTargetX = state.targetX - state.currentX;
+        const toTargetY = state.targetY - state.currentY;
+        const toTargetZ = state.targetZ - state.currentZ;
+        const toTargetLength = Math.hypot(toTargetX, toTargetY, toTargetZ);
+        if (toTargetLength > 0) {
+          const desiredDirX = toTargetX / toTargetLength;
+          const desiredDirY = toTargetY / toTargetLength;
+          const desiredDirZ = toTargetZ / toTargetLength;
+
+          if (profile.turnRatePerFrame > 0) {
+            const currentHeading = Math.atan2(state.velocityX, state.velocityZ);
+            const desiredHeading = Math.atan2(desiredDirX, desiredDirZ);
+            const headingDelta = this.normalizeAngle(desiredHeading - currentHeading);
+            const clampedTurn = Math.max(-profile.turnRatePerFrame, Math.min(profile.turnRatePerFrame, headingDelta));
+            const nextHeading = currentHeading + clampedTurn;
+            const horizontal = Math.hypot(desiredDirX, desiredDirZ);
+            const pitch = Math.atan2(desiredDirY, horizontal);
+            dirX = Math.sin(nextHeading);
+            dirY = Math.sin(pitch);
+            dirZ = Math.cos(nextHeading);
+          } else {
+            dirX = desiredDirX;
+            dirY = desiredDirY;
+            dirZ = desiredDirZ;
+          }
+        }
+      }
+
+      const directionLength = Math.hypot(dirX, dirY, dirZ);
+      if (directionLength > 0) {
+        dirX /= directionLength;
+        dirY /= directionLength;
+        dirZ /= directionLength;
+      } else {
+        const fallbackX = state.targetX - state.currentX;
+        const fallbackY = state.targetY - state.currentY;
+        const fallbackZ = state.targetZ - state.currentZ;
+        const fallbackLength = Math.hypot(fallbackX, fallbackY, fallbackZ);
+        if (fallbackLength > 0) {
+          dirX = fallbackX / fallbackLength;
+          dirY = fallbackY / fallbackLength;
+          dirZ = fallbackZ / fallbackLength;
+        } else {
+          dirX = 0;
+          dirY = 0;
+          dirZ = 1;
+        }
+      }
+
+      state.prevX = state.currentX;
+      state.prevY = state.currentY;
+      state.prevZ = state.currentZ;
+
+      state.velocityX = dirX * speed;
+      state.velocityY = dirY * speed;
+      state.velocityZ = dirZ * speed;
+      state.currentX += state.velocityX;
+      state.currentY += state.velocityY;
+      state.currentZ += state.velocityZ;
+
+      const distanceThisFrame = Math.hypot(
+        state.currentX - state.prevX,
+        state.currentY - state.prevY,
+        state.currentZ - state.prevZ,
+      );
+      if (state.noTurnDistanceLeft > 0 && (state.state === 'ATTACK_NOTURN' || state.state === 'ATTACK')) {
+        state.noTurnDistanceLeft -= distanceThisFrame;
+      }
+      state.travelDistance += distanceThisFrame;
+
+      // Source parity: below world is silently destroyed.
+      if (state.currentY < 0) {
+        event.countermeasureNoDamage = true;
+        event.impactX = state.currentX;
+        event.impactY = state.currentY;
+        event.impactZ = state.currentZ;
+        event.executeFrame = this.frameCounter;
+        continue;
+      }
+
+      event.impactX = state.targetX;
+      event.impactY = state.targetY;
+      event.impactZ = state.targetZ;
+
+      if (state.armed) {
+        // Source parity: DistanceToTargetForLock switches missile to kill state (forced hit path).
+        let lockDistance = profile.distanceToTargetForLock;
+        if (lockDistance > 0 && !state.trackingTarget) {
+          lockDistance *= 0.5;
+        }
+        const distanceToTarget2D = Math.hypot(state.targetX - state.currentX, state.targetZ - state.currentZ);
+        if ((lockDistance > 0 && distanceToTarget2D <= lockDistance) || distanceToTarget2D <= Math.max(1, speed)) {
+          event.impactX = state.targetX;
+          event.impactY = state.targetY;
+          event.impactZ = state.targetZ;
+          event.executeFrame = this.frameCounter;
+        }
+      }
+    }
+  }
+
+  /**
    * Source parity: DumbProjectileBehavior::update() / PhysicsBehavior collision detection.
    * For each in-flight projectile, interpolate the current position and check for
    * entity collisions using shouldProjectileCollideWithEntity(). If a collision is
@@ -22799,31 +23210,37 @@ export class GameLogicSubsystem implements Subsystem {
     for (const event of this.pendingWeaponDamageEvents) {
       if (event.delivery !== 'PROJECTILE') continue;
       if (event.executeFrame <= this.frameCounter) continue;
+      const missileState = event.missileAIState;
+      if (missileState && !missileState.armed) continue;
 
-      const totalFrames = event.executeFrame - event.launchFrame;
-      if (totalFrames <= 0) continue;
-
-      const elapsed = this.frameCounter - event.launchFrame;
-      const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
-
-      // Interpolate the projectile's current position.
+      // Interpolate current projectile position (or use MissileAI runtime position).
       let projX: number, projZ: number;
-      if (event.hasBezierArc) {
-        const p0x = event.sourceX, p0z = event.sourceZ;
-        const p3x = event.impactX, p3z = event.impactZ;
-        const dx = p3x - p0x, dz = p3z - p0z;
-        const dist = Math.hypot(dx, dz);
-        const nx = dist > 0 ? dx / dist : 0;
-        const nz = dist > 0 ? dz / dist : 0;
-        const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
-        const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
-        const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
-        const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
-        projX = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
-        projZ = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+      if (missileState) {
+        projX = missileState.currentX;
+        projZ = missileState.currentZ;
       } else {
-        projX = event.sourceX + (event.impactX - event.sourceX) * progress;
-        projZ = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+        const totalFrames = event.executeFrame - event.launchFrame;
+        if (totalFrames <= 0) continue;
+
+        const elapsed = this.frameCounter - event.launchFrame;
+        const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
+        if (event.hasBezierArc) {
+          const p0x = event.sourceX, p0z = event.sourceZ;
+          const p3x = event.impactX, p3z = event.impactZ;
+          const dx = p3x - p0x, dz = p3z - p0z;
+          const dist = Math.hypot(dx, dz);
+          const nx = dist > 0 ? dx / dist : 0;
+          const nz = dist > 0 ? dz / dist : 0;
+          const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
+          const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
+          const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
+          const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
+          projX = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
+          projZ = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+        } else {
+          projX = event.sourceX + (event.impactX - event.sourceX) * progress;
+          projZ = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
+        }
       }
 
       const launcher = this.spawnedEntities.get(event.sourceEntityId);
@@ -24200,6 +24617,9 @@ export class GameLogicSubsystem implements Subsystem {
    * Interpolate the current position of an in-flight projectile event.
    */
   private interpolateProjectilePosition(event: PendingWeaponDamageEvent): { x: number; z: number } | null {
+    if (event.missileAIState) {
+      return { x: event.missileAIState.currentX, z: event.missileAIState.currentZ };
+    }
     const totalFrames = event.executeFrame - event.launchFrame;
     if (totalFrames <= 0) return null;
     const elapsed = this.frameCounter - event.launchFrame;
@@ -25493,6 +25913,10 @@ export class GameLogicSubsystem implements Subsystem {
         event.impactX = flare.x;
         event.impactZ = flare.z;
         event.primaryVictimEntityId = closestFlareId;
+        if (event.missileAIState) {
+          event.missileAIState.trackingTarget = true;
+          event.missileAIState.targetEntityId = closestFlareId;
+        }
       }
     }
   }
@@ -30123,6 +30547,7 @@ export class GameLogicSubsystem implements Subsystem {
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
     this.pendingWeaponDamageEvents.length = 0;
+    this.missileAIProfileByProjectileTemplate.clear();
     this.visualEventBuffer.length = 0;
     this.nextProjectileVisualId = 1;
     for (const [entityId] of this.overchargeStateByEntityId) {

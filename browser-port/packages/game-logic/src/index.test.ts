@@ -5968,6 +5968,183 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(target.health).toBeLessThan(200);
   });
 
+  it('homes onto moving targets when projectile object has MissileAIUpdate', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('HomingAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HomingMissileWeapon'] }),
+    ]);
+    const targetDef = makeObjectDef('MovingTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const projectileDef = makeObjectDef('HomingMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'Yes',
+        InitialVelocity: 6,
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 8,
+        FuelLifetime: 5000,
+        IgnitionDelay: 0,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('HomingMissileWeapon', {
+      PrimaryDamage: 80,
+      PrimaryDamageRadius: 0,
+      AttackRange: 300,
+      WeaponSpeed: 6,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'HomingMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('HomingAttacker', 0, 0),
+      makeMapObject('MovingTarget', 6, 0),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+    logic.submitCommand({ type: 'moveTo', entityId: 2, targetX: 60, targetZ: 60 });
+
+    for (let i = 0; i < 45; i++) {
+      logic.update(1 / 30);
+    }
+
+    const target = [...(logic as any).spawnedEntities.values()].find(
+      (e: any) => e.templateName === 'MovingTarget',
+    );
+    expect(target.health).toBeLessThan(200);
+  });
+
+  it('keeps MissileAI projectiles unarmed during ignition delay so early collisions are ignored', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('DelayedMissileAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'DelayedMissileWeapon'] }),
+    ]);
+    const blockerDef = makeObjectDef('IgnitionDelayBlocker', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 4, GeometryMinorRadius: 4 });
+    const targetDef = makeObjectDef('IgnitionDelayTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const projectileDef = makeObjectDef('DelayedMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'Yes',
+        InitialVelocity: 4,
+        IgnitionDelay: 1000, // ~30 frames
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 8,
+        FuelLifetime: 5000,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('DelayedMissileWeapon', {
+      PrimaryDamage: 80,
+      PrimaryDamageRadius: 0,
+      AttackRange: 300,
+      WeaponSpeed: 4,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'DelayedMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, blockerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('DelayedMissileAttacker', 0, 0),
+      makeMapObject('IgnitionDelayBlocker', 1, 0),
+      makeMapObject('IgnitionDelayTarget', 8, 0),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3 });
+
+    for (let i = 0; i < 20; i++) {
+      logic.update(1 / 30);
+    }
+
+    const blocker = [...(logic as any).spawnedEntities.values()].find(
+      (e: any) => e.templateName === 'IgnitionDelayBlocker',
+    );
+    expect(blocker.health).toBe(200);
+  });
+
+  it('detonates MissileAI projectiles on fuel expiry when DetonateOnNoFuel is enabled', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('FuelLimitedAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'FuelLimitedMissileWeapon'] }),
+    ]);
+    const targetDef = makeObjectDef('FuelLimitedTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const projectileDef = makeObjectDef('FuelLimitedMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'Yes',
+        InitialVelocity: 6,
+        FuelLifetime: 100, // ~3 frames
+        DetonateOnNoFuel: 'Yes',
+        IgnitionDelay: 0,
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 1,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('FuelLimitedMissileWeapon', {
+      PrimaryDamage: 80,
+      PrimaryDamageRadius: 0,
+      AttackRange: 400,
+      WeaponSpeed: 6,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'FuelLimitedMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('FuelLimitedAttacker', 0, 0),
+      makeMapObject('FuelLimitedTarget', 200, 0),
+    ], 256, 256);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    for (let i = 0; i < 25; i++) {
+      logic.update(1 / 30);
+    }
+
+    const target = [...(logic as any).spawnedEntities.values()].find(
+      (e: any) => e.templateName === 'FuelLimitedTarget',
+    );
+    expect(target.health).toBe(200);
+  });
+
   it('keeps DamageDealtAtSelfPosition anchored at source even when ScatterTarget offsets are present', () => {
     const withoutScatterTarget = runDamageAtSelfScatterTargetTimeline(false);
     expect(withoutScatterTarget.targetHealthTimeline).toEqual([150, 150, 150, 150]);
