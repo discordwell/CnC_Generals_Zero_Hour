@@ -16015,6 +16015,79 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     this.refreshNavigationGridFromCurrentMap();
+    this.emitSuperweaponDetectedOnStructureComplete(structure);
+  }
+
+  private resolveEvaRelationshipForSides(
+    observerSide: string,
+    subjectSide: string,
+  ): 'own' | 'ally' | 'enemy' {
+    const observer = this.normalizeSide(observerSide);
+    const subject = this.normalizeSide(subjectSide);
+    if (!observer || !subject) {
+      return 'enemy';
+    }
+    if (observer === subject) {
+      return 'own';
+    }
+    return this.getTeamRelationshipBySides(observer, subject) === RELATIONSHIP_ALLIES
+      ? 'ally'
+      : 'enemy';
+  }
+
+  /**
+   * Source parity: Player::onStructureConstructionComplete emits superweapon detection EVA
+   * cues when a newly completed structure provides a superweapon.
+   */
+  private emitSuperweaponDetectedOnStructureComplete(structure: MapEntity): void {
+    if (!structure.kindOf.has('FS_SUPERWEAPON')) {
+      return;
+    }
+    const ownerSide = this.normalizeSide(structure.side);
+    if (!ownerSide) {
+      return;
+    }
+
+    const announcedPowers = new Set<string>();
+    const knownSides = this.collectKnownSides();
+    for (const [, module] of structure.specialPowerModules) {
+      const normalizedPower = module.specialPowerTemplateName.trim().toUpperCase();
+      if (!normalizedPower || announcedPowers.has(normalizedPower)) {
+        continue;
+      }
+      announcedPowers.add(normalizedPower);
+
+      for (const side of knownSides) {
+        this.emitEvaEvent(
+          'SUPERWEAPON_DETECTED',
+          side,
+          this.resolveEvaRelationshipForSides(side, ownerSide),
+          structure.id,
+          module.specialPowerTemplateName,
+        );
+      }
+    }
+  }
+
+  private collectKnownSides(): string[] {
+    const sides = new Set<string>();
+    for (const side of this.sideCredits.keys()) {
+      if (side) {
+        sides.add(side);
+      }
+    }
+    for (const side of this.sidePowerBonus.keys()) {
+      if (side) {
+        sides.add(side);
+      }
+    }
+    for (const entity of this.spawnedEntities.values()) {
+      const side = this.normalizeSide(entity.side);
+      if (side) {
+        sides.add(side);
+      }
+    }
+    return Array.from(sides.values()).sort();
   }
 
   private refreshNavigationGridFromCurrentMap(): void {

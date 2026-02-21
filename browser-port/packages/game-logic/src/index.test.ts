@@ -26758,6 +26758,67 @@ describe('SpecialPowerCreate', () => {
     expect(readyFrame).toBeGreaterThan(priv.frameCounter);
   });
 
+  it('emits SUPERWEAPON_DETECTED EVA on superweapon structure completion with own/ally/enemy relationships', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SuperweaponBuilding', 'America', ['STRUCTURE', 'FS_SUPERWEAPON'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'SpecialPowerCreate ModuleTag_SPC', {}),
+          makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SuperWeapon', {
+            SpecialPowerTemplate: 'SuperweaponParticleCannon',
+          }),
+        ], { BuildTime: 0.5 }),
+        makeObjectDef('Dozer', 'America', ['DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('AllyScout', 'China', ['INFANTRY'], []),
+        makeObjectDef('EnemyScout', 'GLA', ['INFANTRY'], []),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SuperweaponParticleCannon', { ReloadTime: 6000 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Dozer', 100, 100),      // id 1 (America)
+        makeMapObject('AllyScout', 20, 20),    // id 2 (China)
+        makeMapObject('EnemyScout', 30, 30),   // id 3 (GLA)
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    // China is allied with America; GLA remains non-allied (treated as enemy for EVA).
+    logic.setTeamRelationship('China', 'America', 2);
+    logic.setTeamRelationship('America', 'China', 2);
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'SuperweaponBuilding',
+      targetPosition: [100, 0, 100] as const,
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(1 / 30);
+
+    // Complete construction.
+    for (let i = 0; i < 25; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    const detected = logic
+      .drainEvaEvents()
+      .filter((event) => event.type === 'SUPERWEAPON_DETECTED'
+        && (event.detail ?? '').toUpperCase() === 'SUPERWEAPONPARTICLECANNON');
+
+    expect(detected.some((event) => event.side === 'america' && event.relationship === 'own')).toBe(true);
+    expect(detected.some((event) => event.side === 'china' && event.relationship === 'ally')).toBe(true);
+    expect(detected.some((event) => event.side === 'gla' && event.relationship === 'enemy')).toBe(true);
+  });
+
   it('map-placed building with SpecialPowerCreate starts timer immediately', () => {
     const bundle = makeBundle({
       objects: [
