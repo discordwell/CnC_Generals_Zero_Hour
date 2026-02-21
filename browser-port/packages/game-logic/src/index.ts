@@ -107,7 +107,7 @@ import {
   shouldReserveParkingDoorWhenQueued as shouldReserveParkingDoorWhenQueuedImpl,
 } from './production-parking.js';
 import {
-  resolveQueueProductionNaturalRallyPoint as resolveQueueProductionNaturalRallyPointImpl,
+  resolveQueueProductionExitPath as resolveQueueProductionExitPathImpl,
   resolveQueueSpawnLocation as resolveQueueSpawnLocationImpl,
   tickQueueExitGate as tickQueueExitGateImpl,
 } from './production-spawn.js';
@@ -12752,6 +12752,12 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      // Source parity: BuildAssistant::isLocationLegalToBuild —
+      // terrain tile restrictions and height flatness check.
+      if (!this.isConstructTerrainLegal(objectDef, x, z, command.angle)) {
+        continue;
+      }
+
       if (maxSimultaneousOfType > 0) {
         const existingCount = this.countActiveEntitiesForMaxSimultaneousForSide(side, objectDef);
         if (existingCount >= maxSimultaneousOfType) {
@@ -12928,6 +12934,92 @@ export class GameLogicSubsystem implements Subsystem {
       ) {
         return false;
       }
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity: BuildAssistant::isLocationLegalToBuild —
+   * checks terrain tile restrictions and height flatness across the
+   * building's footprint.  Rejects placement on water, cliffs, or
+   * impassable cells, and rejects placement where the height variation
+   * across the footprint exceeds the cliff threshold.
+   */
+  private isConstructTerrainLegal(
+    objectDef: ObjectDef,
+    worldX: number,
+    worldZ: number,
+    angle: number,
+  ): boolean {
+    const navGrid = this.navigationGrid;
+    const heightmap = this.mapHeightmap;
+    if (!navGrid || !heightmap) {
+      return true;
+    }
+
+    const geometry = this.resolveConstructCollisionGeometry(objectDef);
+    if (!geometry) {
+      return true;
+    }
+
+    // Compute footprint half-extents.
+    const halfW = geometry.majorRadius;
+    const halfH = geometry.shape === 'box' ? geometry.minorRadius : geometry.majorRadius;
+
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+
+    let loHeight = Infinity;
+    let hiHeight = -Infinity;
+
+    // Sample the footprint at cell resolution (MAP_XY_FACTOR).
+    for (let ly = -halfH; ly <= halfH + 0.01; ly += MAP_XY_FACTOR) {
+      for (let lx = -halfW; lx <= halfW + 0.01; lx += MAP_XY_FACTOR) {
+        // For circular geometry, skip points outside the circle.
+        if (geometry.shape === 'circle') {
+          const dist2 = lx * lx + ly * ly;
+          if (dist2 > halfW * halfW) {
+            continue;
+          }
+        }
+
+        // Transform local → world.
+        const wx = worldX + (lx * cosA - ly * sinA);
+        const wz = worldZ + (lx * sinA + ly * cosA);
+
+        // Check navigation cell type.
+        const cellX = Math.floor(wx / MAP_XY_FACTOR);
+        const cellZ = Math.floor(wz / MAP_XY_FACTOR);
+        if (cellX >= 0 && cellX < navGrid.width && cellZ >= 0 && cellZ < navGrid.height) {
+          const cellIndex = cellZ * navGrid.width + cellX;
+          const terrainCell = navGrid.terrainType[cellIndex]!;
+          if (
+            terrainCell === NAV_WATER
+            || terrainCell === NAV_CLIFF
+            || terrainCell === NAV_IMPASSABLE
+          ) {
+            return false;
+          }
+        } else {
+          // Out of map bounds.
+          return false;
+        }
+
+        // Track height range for flatness check.
+        const h = heightmap.getInterpolatedHeight(wx, wz);
+        if (h < loHeight) loHeight = h;
+        if (h > hiHeight) hiHeight = h;
+      }
+    }
+
+    // Source parity: BuildAssistant::checkSampleBuildLocation —
+    // reject if height variation exceeds threshold.  C++ uses
+    // TheGlobalData->m_allowedHeightVariationForBuilding (default 0.0
+    // which is overridden in INI).  We use the cliff delta as a
+    // reasonable default.
+    if (hiHeight - loHeight > CLIFF_HEIGHT_DELTA) {
+      return false;
     }
 
     return true;
@@ -17692,7 +17784,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.registerEntityEnergy(created);
     this.initializeMinefieldState(created);
     this.registerTunnelEntity(created);
-    this.applyQueueProductionNaturalRallyPoint(producer, created);
+    this.applyQueueProductionExitPath(producer, created);
 
     // Source parity: Eva UNIT_READY fires when a unit exits the production queue.
     if (created.side) {
@@ -17750,16 +17842,28 @@ export class GameLogicSubsystem implements Subsystem {
     return resolveQueueSpawnLocationImpl(producer, this.mapHeightmap);
   }
 
-  private applyQueueProductionNaturalRallyPoint(producer: MapEntity, producedUnit: MapEntity): void {
-    const rallyPoint = resolveQueueProductionNaturalRallyPointImpl(
+  /**
+   * Source parity: DefaultProductionExitUpdate::exitObjectViaDoor —
+   * builds an exit path: natural rally point first, then player rally
+   * point.  The produced unit follows the full path in order.
+   */
+  private applyQueueProductionExitPath(producer: MapEntity, producedUnit: MapEntity): void {
+    const exitPath = resolveQueueProductionExitPathImpl(
       producer,
       producedUnit.canMove,
       MAP_XY_FACTOR,
     );
-    if (!rallyPoint) {
+    if (exitPath.length === 0) {
       return;
     }
-    this.issueMoveTo(producedUnit.id, rallyPoint.x, rallyPoint.z);
+    // Issue moveTo to the first waypoint (natural rally point).
+    this.issueMoveTo(producedUnit.id, exitPath[0]!.x, exitPath[0]!.z);
+    // Append any additional waypoints (player rally point) to the path.
+    if (exitPath.length > 1 && producedUnit.moving) {
+      for (let i = 1; i < exitPath.length; i++) {
+        producedUnit.movePath.push(exitPath[i]!);
+      }
+    }
   }
 
   private withdrawSideCredits(side: string | undefined, amount: number): number {

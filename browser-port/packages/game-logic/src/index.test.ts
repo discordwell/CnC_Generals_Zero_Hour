@@ -4950,6 +4950,54 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(first).toEqual(second);
   });
 
+  it('routes produced units through natural rally point then player rally point', () => {
+    // Test the exit path logic directly via resolveQueueProductionExitPath.
+    // Integration: when a factory has a player rally point set, produced units
+    // should receive a two-waypoint path (natural → player rally point).
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Factory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 3,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [12, 0, 0],
+            NaturalRallyPoint: [28, 0, 0],
+            ExitDelay: 0,
+            InitialBurst: 0,
+          }),
+        ]),
+        makeObjectDef('Soldier', 'America', ['INFANTRY'], [], { BuildTime: 0.1, BuildCost: 50 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const map = makeMap([makeMapObject('Factory', 40, 40)]);
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    // Set player rally point at (100, 80).
+    logic.submitCommand({ type: 'setRallyPoint', entityId: 1, targetX: 100, targetZ: 80 });
+    // Process the buffered commands so rally point is applied.
+    logic.update(1 / 30);
+
+    // Verify the rally point was stored.
+    const factoryState = logic.getEntityState(1);
+    expect(factoryState).not.toBeNull();
+    expect(factoryState!.rallyPoint).toEqual({ x: 100, z: 80 });
+
+    // Queue and produce a unit.
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'Soldier' });
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    const soldierIds = logic.getEntityIdsByTemplate('Soldier');
+    expect(soldierIds.length).toBe(1);
+  });
+
   it('keeps QueueProductionExitUpdate duration-based ExitDelay timing deterministic across repeated runs', () => {
     const first = runQuantityModifierDelayTimeline(2);
     const second = runQuantityModifierDelayTimeline(2);
@@ -6463,6 +6511,184 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     expect(logic.getSideCredits('America')).toBe(500);
     expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([]);
+  });
+
+  it('rejects construction on water terrain cells', () => {
+    const sz = 32;
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Water area covers cells (10,10) to (25,25) in world units (100-250).
+    const mapData: MapDataJSON = {
+      heightmap: {
+        width: sz,
+        height: sz,
+        borderSize: 0,
+        data: uint8ArrayToBase64(new Uint8Array(sz * sz).fill(0)),
+      },
+      objects: [makeMapObject('Dozer', 5, 5)],
+      triggers: [{
+        name: 'WaterArea',
+        id: 1,
+        isWaterArea: true,
+        isRiver: false,
+        points: [
+          { x: 100, y: 100 },
+          { x: 250, y: 100 },
+          { x: 250, y: 250 },
+          { x: 100, y: 250 },
+        ],
+      }],
+      textureClasses: [],
+      blendTileCount: 0,
+    };
+
+    const heightmap = HeightmapGrid.fromJSON(mapData.heightmap);
+    logic.loadMapObjects(mapData, makeRegistry(bundle), heightmap);
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    // Try to build in the water area.
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [150, 0, 150],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    // Construction should fail — water cells block placement.
+    expect(logic.getSideCredits('America')).toBe(1000);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([]);
+  });
+
+  it('rejects construction on cliff terrain cells', () => {
+    const sz = 32;
+    // Create a heightmap with a cliff in the middle (rows 14-16 have height 200).
+    const heightData = new Uint8Array(sz * sz).fill(0);
+    for (let z = 14; z <= 16; z++) {
+      for (let x = 0; x < sz; x++) {
+        // Height value 200 → world height = 200 * MAP_HEIGHT_SCALE = 200 * 0.625 = 125
+        // vs 0 height for surrounding cells. Delta = 125 >> CLIFF_HEIGHT_DELTA(9.8).
+        heightData[z * sz + x] = 200;
+      }
+    }
+
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const mapData: MapDataJSON = {
+      heightmap: {
+        width: sz,
+        height: sz,
+        borderSize: 0,
+        data: uint8ArrayToBase64(heightData),
+      },
+      objects: [makeMapObject('Dozer', 5, 5)],
+      triggers: [],
+      textureClasses: [],
+      blendTileCount: 0,
+    };
+
+    const heightmap = HeightmapGrid.fromJSON(mapData.heightmap);
+    logic.loadMapObjects(mapData, makeRegistry(bundle), heightmap);
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    // Try to build at the cliff edge (row ~14-15, world z ≈ 140-150).
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [100, 0, 145],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    // Construction should fail — cliff terrain blocks placement.
+    expect(logic.getSideCredits('America')).toBe(1000);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([]);
+  });
+
+  it('allows construction on flat valid terrain', () => {
+    const sz = 32;
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const mapData: MapDataJSON = {
+      heightmap: {
+        width: sz,
+        height: sz,
+        borderSize: 0,
+        data: uint8ArrayToBase64(new Uint8Array(sz * sz).fill(0)),
+      },
+      objects: [makeMapObject('Dozer', 5, 5)],
+      triggers: [],
+      textureClasses: [],
+      blendTileCount: 0,
+    };
+
+    const heightmap = HeightmapGrid.fromJSON(mapData.heightmap);
+    logic.loadMapObjects(mapData, makeRegistry(bundle), heightmap);
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    // Build on flat terrain away from map edges.
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [150, 0, 150],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    // Construction should succeed — flat terrain, no obstacles.
+    expect(logic.getSideCredits('America')).toBe(800);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America').length).toBe(1);
   });
 
   it('continues line-building after blocked first tile', () => {

@@ -87,43 +87,78 @@ export function resolveQueueSpawnLocation(
   };
 }
 
-export function resolveQueueProductionNaturalRallyPoint(
+/**
+ * Source parity: DefaultProductionExitUpdate::exitObjectViaDoor —
+ * builds an exit path with the natural rally point first, then the
+ * player-set rally point (if any).  The C++ code always pushes the
+ * natural rally point, and conditionally appends the player rally point
+ * for ground-movable units.
+ *
+ * QueueProductionExitUpdate variant (lines 153-156): when no player
+ * rally point is set, it doubles the natural rally point to prevent
+ * units from stacking.
+ */
+export function resolveQueueProductionExitPath(
   producer: ProducerForSpawnResolution,
   producedUnitCanMove: boolean,
   mapXyFactor: number,
-): { x: number; z: number } | null {
+): { x: number; z: number }[] {
   if (!producedUnitCanMove) {
-    return null;
-  }
-
-  if (producer.rallyPoint) {
-    return {
-      x: producer.rallyPoint.x,
-      z: producer.rallyPoint.z,
-    };
+    return [];
   }
 
   const exitProfile = producer.queueProductionExitProfile;
   if (!exitProfile || !exitProfile.naturalRallyPoint) {
-    return null;
+    // No exit profile — fall back to just the player rally point if set.
+    if (producer.rallyPoint) {
+      return [{ x: producer.rallyPoint.x, z: producer.rallyPoint.z }];
+    }
+    return [];
   }
 
-  const rallyPoint = { ...exitProfile.naturalRallyPoint };
+  // Compute the natural rally point in world space.
+  const rallyLocal = { ...exitProfile.naturalRallyPoint };
   if (exitProfile.moduleType === 'QUEUE') {
-    const magnitude = Math.hypot(rallyPoint.x, rallyPoint.y, rallyPoint.z);
+    // Source parity: QueueProductionExitUpdate doubles the natural
+    // rally vector by 2*PATHFIND_CELL_SIZE to prevent stacking.
+    const magnitude = Math.hypot(rallyLocal.x, rallyLocal.y, rallyLocal.z);
     if (magnitude > 0) {
       const offsetScale = (2 * mapXyFactor) / magnitude;
-      rallyPoint.x += rallyPoint.x * offsetScale;
-      rallyPoint.y += rallyPoint.y * offsetScale;
-      rallyPoint.z += rallyPoint.z * offsetScale;
+      rallyLocal.x += rallyLocal.x * offsetScale;
+      rallyLocal.y += rallyLocal.y * offsetScale;
+      rallyLocal.z += rallyLocal.z * offsetScale;
     }
   }
 
   const yaw = producer.rotationY;
   const cos = Math.cos(yaw);
   const sin = Math.sin(yaw);
-  return {
-    x: producer.x + (rallyPoint.x * cos - rallyPoint.y * sin),
-    z: producer.z + (rallyPoint.x * sin + rallyPoint.y * cos),
+  const naturalWorld = {
+    x: producer.x + (rallyLocal.x * cos - rallyLocal.y * sin),
+    z: producer.z + (rallyLocal.x * sin + rallyLocal.y * cos),
   };
+
+  const path: { x: number; z: number }[] = [naturalWorld];
+
+  // Source parity: player rally point is appended after the natural
+  // point (DefaultProductionExitUpdate.cpp lines 109-118).
+  if (producer.rallyPoint) {
+    path.push({ x: producer.rallyPoint.x, z: producer.rallyPoint.z });
+  } else if (exitProfile.moduleType === 'QUEUE') {
+    // Source parity: QueueProductionExitUpdate.cpp lines 153-156 —
+    // "Double the destination to keep redguards from stacking."
+    path.push({ ...naturalWorld });
+  }
+
+  return path;
+}
+
+/** @deprecated Use resolveQueueProductionExitPath instead. */
+export function resolveQueueProductionNaturalRallyPoint(
+  producer: ProducerForSpawnResolution,
+  producedUnitCanMove: boolean,
+  mapXyFactor: number,
+): { x: number; z: number } | null {
+  const path = resolveQueueProductionExitPath(producer, producedUnitCanMove, mapXyFactor);
+  return path.length > 0 ? path[0]! : null;
 }
