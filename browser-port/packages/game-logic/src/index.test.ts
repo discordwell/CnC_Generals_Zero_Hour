@@ -20860,3 +20860,436 @@ describe('NeutronMissileSlowDeathUpdate', () => {
     expect(target.objectStatusFlags.has('BURNED')).toBe(true);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// TechBuildingBehavior — neutral buildings that revert on death
+// ──────────────────────────────────────────────────────────────────────────
+describe('TechBuildingBehavior', () => {
+  it('reverts to civilian side on death instead of being destroyed', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OilDerrick', 'civilian', ['STRUCTURE', 'TECH_BUILDING'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Behavior', 'TechBuildingBehavior ModuleTag_TB', {
+            PulseFXRate: 0,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0, AttackRange: 50,
+          DamageType: 'ARMOR_PIERCING', DeathType: 'NORMAL',
+          DelayBetweenShots: 500, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('OilDerrick', 50, 50),
+        makeMapObject('Attacker', 80, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    // Capture the oil derrick for America first.
+    logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'America' });
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; side: string; health: number; maxHealth: number;
+        techBuildingProfile: unknown;
+      }>;
+    };
+
+    const derrick = priv.spawnedEntities.get(1)!;
+    expect(derrick.side).toBe('america');
+    expect(derrick.techBuildingProfile).not.toBeNull();
+
+    // Kill the derrick with GLA attacker.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Derrick should NOT be destroyed — it should have reverted to civilian.
+    expect(derrick.destroyed).toBe(false);
+    expect(derrick.side).toBe('civilian');
+    expect(derrick.health).toBe(derrick.maxHealth);
+  });
+
+  it('can be recaptured after death revert', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hospital', 'civilian', ['STRUCTURE', 'TECH_BUILDING'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 150, InitialHealth: 150 }),
+          makeBlock('Behavior', 'TechBuildingBehavior ModuleTag_TB', {
+            PulseFXRate: 0,
+          }),
+        ]),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0, AttackRange: 50,
+          DamageType: 'ARMOR_PIERCING', DeathType: 'NORMAL',
+          DelayBetweenShots: 500, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hospital', 50, 50),
+        makeMapObject('Attacker', 80, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; side: string; health: number; maxHealth: number;
+      }>;
+    };
+
+    // Capture for China.
+    logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'China' });
+    logic.update(1 / 30);
+    expect(priv.spawnedEntities.get(1)!.side).toBe('china');
+
+    // Kill it with GLA attacker.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+    expect(priv.spawnedEntities.get(1)!.side).toBe('civilian');
+    expect(priv.spawnedEntities.get(1)!.destroyed).toBe(false);
+
+    // Recapture for China again.
+    logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'China' });
+    logic.update(1 / 30);
+    expect(priv.spawnedEntities.get(1)!.side).toBe('china');
+    expect(priv.spawnedEntities.get(1)!.destroyed).toBe(false);
+    expect(priv.spawnedEntities.get(1)!.health).toBe(priv.spawnedEntities.get(1)!.maxHealth);
+  });
+
+  it('starts as civilian and is capturable from initial state', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OilRefinery', 'civilian', ['STRUCTURE', 'TECH_BUILDING'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Behavior', 'TechBuildingBehavior ModuleTag_TB', {
+            PulseFXRate: 0,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('OilRefinery', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; side: string; health: number; destroyed: boolean;
+        techBuildingProfile: unknown;
+      }>;
+    };
+
+    logic.update(1 / 30);
+    const building = priv.spawnedEntities.get(1)!;
+    expect(building.side).toBe('civilian');
+    expect(building.techBuildingProfile).not.toBeNull();
+
+    // Capture for America.
+    logic.submitCommand({ type: 'captureEntity', entityId: 1, newSide: 'America' });
+    logic.update(1 / 30);
+    expect(building.side).toBe('america');
+    expect(building.health).toBe(300);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// FireWeaponWhenDeadBehavior — fire weapon on death with upgrade control
+// ──────────────────────────────────────────────────────────────────────────
+describe('FireWeaponWhenDeadBehavior', () => {
+  it('fires death weapon on entity destruction (StartsActive=Yes)', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Bomber', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'FireWeaponWhenDeadBehavior ModuleTag_FWWD', {
+            StartsActive: 'Yes',
+            DeathWeapon: 'DeathBlast',
+          }),
+        ]),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+        ]),
+        makeObjectDef('Bystander', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0, AttackRange: 50,
+          DamageType: 'ARMOR_PIERCING', DeathType: 'NORMAL',
+          DelayBetweenShots: 500, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+        makeWeaponDef('DeathBlast', {
+          PrimaryDamage: 40, PrimaryDamageRadius: 30, AttackRange: 30,
+          DamageType: 'EXPLOSION', DeathType: 'NORMAL',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Bomber', 50, 50),
+        makeMapObject('Attacker', 80, 50),
+        makeMapObject('Bystander', 60, 50),  // Within DeathBlast radius (30) of Bomber.
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; maxHealth: number;
+      }>;
+    };
+
+    const bystander = priv.spawnedEntities.get(3)!;
+    expect(bystander.health).toBe(100);
+
+    // Kill the Bomber — should fire DeathBlast hitting the Bystander.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Bomber should be destroyed (removed from entities).
+    expect(logic.getEntityState(1)).toBeNull();
+    // Bystander should have taken damage from the death blast.
+    expect(bystander.health).toBeLessThan(100);
+  });
+
+  it('does not fire when StartsActive=No and no upgrade applied', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'FireWeaponWhenDeadBehavior ModuleTag_FWWD', {
+            StartsActive: 'No',
+            TriggeredBy: 'Upgrade_SelfDestruct',
+            DeathWeapon: 'DeathBlast',
+          }),
+        ]),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+        ]),
+        makeObjectDef('Bystander', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0, AttackRange: 50,
+          DamageType: 'ARMOR_PIERCING', DeathType: 'NORMAL',
+          DelayBetweenShots: 500, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+        makeWeaponDef('DeathBlast', {
+          PrimaryDamage: 40, PrimaryDamageRadius: 30, AttackRange: 30,
+          DamageType: 'EXPLOSION', DeathType: 'NORMAL',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 50, 50),
+        makeMapObject('Attacker', 80, 50),
+        makeMapObject('Bystander', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+      }>;
+    };
+
+    const bystander = priv.spawnedEntities.get(3)!;
+
+    // Kill Tank without upgrade — no death weapon should fire.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)).toBeNull();
+    // Bystander should be unharmed (no death blast).
+    expect(bystander.health).toBe(100);
+  });
+
+  it('fires when StartsActive=No but upgrade has been applied', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'FireWeaponWhenDeadBehavior ModuleTag_FWWD', {
+            StartsActive: 'No',
+            TriggeredBy: 'Upgrade_SelfDestruct',
+            DeathWeapon: 'DeathBlast',
+          }),
+        ]),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+        ]),
+        makeObjectDef('Bystander', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0, AttackRange: 50,
+          DamageType: 'ARMOR_PIERCING', DeathType: 'NORMAL',
+          DelayBetweenShots: 500, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+        makeWeaponDef('DeathBlast', {
+          PrimaryDamage: 40, PrimaryDamageRadius: 30, AttackRange: 30,
+          DamageType: 'EXPLOSION', DeathType: 'NORMAL',
+        }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_SelfDestruct', {}),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 50, 50),
+        makeMapObject('Attacker', 80, 50),
+        makeMapObject('Bystander', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    // Apply the upgrade to activate the behavior.
+    logic.submitCommand({ type: 'applyUpgrade', entityId: 1, upgradeName: 'Upgrade_SelfDestruct' });
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+      }>;
+    };
+
+    const bystander = priv.spawnedEntities.get(3)!;
+
+    // Kill Tank with upgrade — death weapon should fire.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)).toBeNull();
+    // Bystander should be damaged by death blast.
+    expect(bystander.health).toBeLessThan(100);
+  });
+
+  it('respects DieMuxData DeathTypes filter', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Truck', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'FireWeaponWhenDeadBehavior ModuleTag_FWWD', {
+            StartsActive: 'Yes',
+            DeathWeapon: 'DeathBlast',
+            DeathTypes: 'LASERED',  // Only fires on LASERED death, not NORMAL.
+          }),
+        ]),
+        makeObjectDef('Attacker', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestGun'] }),
+        ]),
+        makeObjectDef('Bystander', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', {
+          PrimaryDamage: 500, PrimaryDamageRadius: 0, AttackRange: 50,
+          DamageType: 'ARMOR_PIERCING', DeathType: 'NORMAL',
+          DelayBetweenShots: 500, ClipSize: 1, AutoReloadsClip: 'Yes',
+        }),
+        makeWeaponDef('DeathBlast', {
+          PrimaryDamage: 40, PrimaryDamageRadius: 30, AttackRange: 30,
+          DamageType: 'EXPLOSION', DeathType: 'NORMAL',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Truck', 50, 50),
+        makeMapObject('Attacker', 80, 50),
+        makeMapObject('Bystander', 60, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+      }>;
+    };
+
+    const bystander = priv.spawnedEntities.get(3)!;
+
+    // Kill with NORMAL death type — DeathTypes filter is LASERED, so no blast.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)).toBeNull();
+    // Bystander should be unharmed (death type mismatch).
+    expect(bystander.health).toBe(100);
+  });
+});

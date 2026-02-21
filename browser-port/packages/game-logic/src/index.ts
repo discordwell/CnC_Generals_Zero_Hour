@@ -1548,10 +1548,6 @@ interface MapEntity {
   /** Frame at which timed bomb detonates (0 = remote-triggered). */
   stickyBombDieFrame: number;
 
-  // ── Source parity: FireWeaponWhenDeadBehavior — weapon fired on death ──
-  /** Weapon template names to fire at entity position on death (from FireWeaponWhenDeadBehavior). */
-  deathWeaponNames: string[];
-
   // ── Source parity: FireWeaponWhenDamagedBehavior — weapon fired on damage ──
   /** Reaction weapons keyed by body damage state (fired once per damage event). */
   fireWhenDamagedProfiles: FireWhenDamagedProfile[];
@@ -1587,6 +1583,8 @@ interface MapEntity {
   // ── Source parity: InstantDeathBehavior — die modules with filtering ──
   /** Parsed InstantDeathBehavior modules from INI (all matching profiles fire on death). */
   instantDeathProfiles: InstantDeathProfile[];
+  /** Parsed FireWeaponWhenDeadBehavior modules from INI (fire weapon on death with upgrade control). */
+  fireWeaponWhenDeadProfiles: FireWeaponWhenDeadProfile[];
 
   // ── Source parity: SlowDeathBehavior — phased death sequences ──
   /** Parsed SlowDeathBehavior modules from INI (multiple per entity, one selected on death). */
@@ -1633,6 +1631,9 @@ interface MapEntity {
   // ── Source parity: NeutronMissileSlowDeathBehavior — timed blast wave sequence ──
   neutronMissileSlowDeathProfile: NeutronMissileSlowDeathProfile | null;
   neutronMissileSlowDeathState: NeutronMissileSlowDeathState | null;
+
+  // ── Source parity: TechBuildingBehavior — neutral buildings that revert on death ──
+  techBuildingProfile: TechBuildingBehaviorProfile | null;
 
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
@@ -2574,6 +2575,30 @@ interface InstantDeathProfile {
 }
 
 /**
+ * Source parity: FireWeaponWhenDeadBehavior — fires a weapon on death with
+ * DieMuxData filtering and upgrade activation control.
+ * C++ file: FireWeaponWhenDeadBehavior.cpp / FireWeaponWhenDeadBehavior.h.
+ */
+interface FireWeaponWhenDeadProfile {
+  /** DieMuxData: which death types trigger this (empty = ALL). */
+  deathTypes: Set<string>;
+  /** DieMuxData: which veterancy levels allow this (empty = ALL). */
+  veterancyLevels: Set<string>;
+  /** DieMuxData: status flags that exempt this behavior. */
+  exemptStatus: Set<string>;
+  /** DieMuxData: status flags required for this behavior. */
+  requiredStatus: Set<string>;
+  /** Weapon template name to fire on death. */
+  deathWeaponName: string;
+  /** Source parity: StartsActive — if true, active without upgrade. */
+  startsActive: boolean;
+  /** Source parity: TriggeredBy — upgrade name(s) that activate this module. */
+  triggeredBy: string[];
+  /** Source parity: ConflictsWithTriggeredBy — upgrade name(s) that disable this module. */
+  conflictsWith: string[];
+}
+
+/**
  * Source parity: RadarUpdate module parsed from INI.
  * Manages the radar dish extension animation timer.
  * Actual radar functionality is tracked via player-level radarCount.
@@ -2859,6 +2884,16 @@ interface GrantStealthProfile {
   radiusGrowRate: number;
   /** KindOf filter for targets. null = all types. */
   kindOf: Set<string> | null;
+}
+
+/**
+ * Source parity: TechBuildingBehavior — neutral buildings (oil derricks, hospitals, etc.)
+ * that revert to neutral team on death so they can be recaptured.
+ * C++ file: TechBuildingBehavior.cpp.
+ */
+interface TechBuildingBehaviorProfile {
+  /** Source parity: PulseFXRate — visual-only (timer interval for FX pulse). */
+  pulseFXRateFrames: number;
 }
 
 /** Source parity: PoisonedBehavior default INI values. */
@@ -5184,8 +5219,6 @@ export class GameLogicSubsystem implements Subsystem {
       stickyBombProfile: this.extractStickyBombUpdateProfile(objectDef),
       stickyBombTargetId: 0,
       stickyBombDieFrame: 0,
-      // Death weapons
-      deathWeaponNames: this.extractDeathWeaponNames(objectDef),
       // Fire weapon when damaged
       fireWhenDamagedProfiles: this.extractFireWhenDamagedProfiles(objectDef),
       // Fire weapon update (autonomous fire at own position)
@@ -5204,6 +5237,8 @@ export class GameLogicSubsystem implements Subsystem {
       tempWeaponBonusExpiryFrame: 0,
       // Instant death die modules
       instantDeathProfiles: this.extractInstantDeathProfiles(objectDef),
+      // Fire weapon when dead die modules
+      fireWeaponWhenDeadProfiles: this.extractFireWeaponWhenDeadProfiles(objectDef),
       // Slow death
       slowDeathProfiles: this.extractSlowDeathProfiles(objectDef),
       slowDeathState: null,
@@ -5236,6 +5271,8 @@ export class GameLogicSubsystem implements Subsystem {
       // Neutron missile slow death (timed blast waves)
       neutronMissileSlowDeathProfile: this.extractNeutronMissileSlowDeathProfile(objectDef),
       neutronMissileSlowDeathState: null,
+      // Tech building behavior (neutral buildings)
+      techBuildingProfile: this.extractTechBuildingProfile(objectDef),
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -7523,32 +7560,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: FireWeaponWhenDeadBehavior — extract death weapon names from INI.
-   * C++ fires createAndFireTempWeapon at entity position on death.
-   */
-  private extractDeathWeaponNames(objectDef: ObjectDef | undefined): string[] {
-    if (!objectDef) return [];
-    const weapons: string[] = [];
-    const visitBlock = (block: IniBlock): void => {
-      const blockType = block.type.toUpperCase();
-      if (blockType === 'BEHAVIOR') {
-        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-        if (moduleType === 'FIREWEAPONWHENDEADBEHAVIOR') {
-          const weaponName = readStringField(block.fields, ['DeathWeapon']);
-          if (weaponName) weapons.push(weaponName);
-        }
-      }
-      if (block.blocks) {
-        for (const child of block.blocks) visitBlock(child);
-      }
-    };
-    if (objectDef.blocks) {
-      for (const block of objectDef.blocks) visitBlock(block);
-    }
-    return weapons;
-  }
-
-  /**
    * Source parity: FireWeaponWhenDamagedBehavior — extract reaction/continuous weapon config.
    */
   private extractFireWhenDamagedProfiles(objectDef: ObjectDef | undefined): FireWhenDamagedProfile[] {
@@ -9320,6 +9331,30 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: TechBuildingBehavior — extract profile from INI.
+   * C++ file: TechBuildingBehavior.cpp (buildFieldParse).
+   */
+  private extractTechBuildingProfile(objectDef: ObjectDef | undefined): TechBuildingBehaviorProfile | null {
+    if (!objectDef) return null;
+    let profile: TechBuildingBehaviorProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'TECHBUILDINGBEHAVIOR') return;
+      profile = {
+        pulseFXRateFrames: this.msToLogicFrames(readNumericField(block.fields, ['PulseFXRate']) ?? 0),
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (!profile && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: InstantDeathBehavior — extract die module profiles from INI.
    * C++ file: InstantDeathBehavior.cpp (buildFieldParse) + DieModule.cpp (DieMuxData).
    * An entity can have multiple InstantDeathBehavior modules; all matching ones fire on death.
@@ -9399,6 +9434,95 @@ export class GameLogicSubsystem implements Subsystem {
             weaponNames,
             oclNames,
           });
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: FireWeaponWhenDeadBehavior — extract profiles from INI.
+   * C++ file: FireWeaponWhenDeadBehavior.cpp (buildFieldParse) + DieModule.cpp (DieMuxData).
+   */
+  private extractFireWeaponWhenDeadProfiles(objectDef: ObjectDef | undefined): FireWeaponWhenDeadProfile[] {
+    if (!objectDef) return [];
+    const profiles: FireWeaponWhenDeadProfile[] = [];
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR' || blockType === 'DIE') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'FIREWEAPONWHENDEADBEHAVIOR') {
+          // Parse DieMuxData fields.
+          const deathTypes = new Set<string>();
+          const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
+          if (deathTypesStr) {
+            for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
+              if (token) deathTypes.add(token);
+            }
+          }
+
+          const veterancyLevels = new Set<string>();
+          const vetStr = readStringField(block.fields, ['VeterancyLevels']);
+          if (vetStr) {
+            for (const token of vetStr.toUpperCase().split(/\s+/)) {
+              if (token) veterancyLevels.add(token);
+            }
+          }
+
+          const exemptStatus = new Set<string>();
+          const exemptStr = readStringField(block.fields, ['ExemptStatus']);
+          if (exemptStr) {
+            for (const token of exemptStr.toUpperCase().split(/\s+/)) {
+              if (token) exemptStatus.add(token);
+            }
+          }
+
+          const requiredStatus = new Set<string>();
+          const reqStr = readStringField(block.fields, ['RequiredStatus']);
+          if (reqStr) {
+            for (const token of reqStr.toUpperCase().split(/\s+/)) {
+              if (token) requiredStatus.add(token);
+            }
+          }
+
+          const deathWeaponName = readStringField(block.fields, ['DeathWeapon']) ?? '';
+          const startsActive = readBooleanField(block.fields, ['StartsActive']) ?? true;
+
+          const triggeredBy: string[] = [];
+          const triggeredByStr = readStringField(block.fields, ['TriggeredBy']);
+          if (triggeredByStr) {
+            for (const token of triggeredByStr.split(/\s+/)) {
+              if (token) triggeredBy.push(token);
+            }
+          }
+
+          const conflictsWith: string[] = [];
+          const conflictsStr = readStringField(block.fields, ['ConflictsWith']);
+          if (conflictsStr) {
+            for (const token of conflictsStr.split(/\s+/)) {
+              if (token) conflictsWith.push(token);
+            }
+          }
+
+          if (deathWeaponName) {
+            profiles.push({
+              deathTypes,
+              veterancyLevels,
+              exemptStatus,
+              requiredStatus,
+              deathWeaponName,
+              startsActive,
+              triggeredBy,
+              conflictsWith,
+            });
+          }
         }
       }
       if (block.blocks) {
@@ -20343,7 +20467,6 @@ export class GameLogicSubsystem implements Subsystem {
         target.health = 0;
         target.pendingDeathType = weaponDeathType || damageTypeToDeathType(damageType);
         if (!target.slowDeathState && !target.structureCollapseState) {
-          this.fireDeathWeapons(target);
           this.tryBeginStructureCollapse(target) ||
             this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
             this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
@@ -20499,8 +20622,6 @@ export class GameLogicSubsystem implements Subsystem {
         this.detonateDemoTrap(target, target.demoTrapProfile);
         return; // detonateDemoTrap calls markEntityDestroyed
       }
-      // Source parity: FireWeaponWhenDeadBehavior::onDie fires BEFORE slow death begins.
-      this.fireDeathWeapons(target);
       this.tryBeginStructureCollapse(target) ||
         this.tryBeginSlowDeath(target, sourceEntityId ?? -1) ||
         this.markEntityDestroyed(target.id, sourceEntityId ?? -1);
@@ -22985,15 +23106,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnEntityFromTemplate(profile.crateTemplateName, crateX, crateZ, rotation, entity.side);
   }
 
-  private fireDeathWeapons(entity: MapEntity): void {
-    if (entity.deathWeaponNames.length === 0) return;
-    for (const weaponName of entity.deathWeaponNames) {
-      const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
-      if (!weaponDef) continue;
-      this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
-    }
-  }
-
   private tryBeginSlowDeath(entity: MapEntity, attackerId: number): boolean {
     if (entity.slowDeathProfiles.length === 0) return false;
 
@@ -24065,12 +24177,15 @@ export class GameLogicSubsystem implements Subsystem {
     if (blast.outerRadius <= 0) return;
     const outerSqr = blast.outerRadius * blast.outerRadius;
     for (const other of this.spawnedEntities.values()) {
-      if (other.destroyed || other.id === missile.id) continue;
+      if (other.destroyed) continue;
+      // Source parity: C++ iterateObjectsInRange(FROM_CENTER_2D) for range check.
       const dx = other.x - missile.x;
       const dz = other.z - missile.z;
-      const distSqr = dx * dx + dz * dz;
-      if (distSqr > outerSqr) continue;
-      const dist = Math.sqrt(distSqr);
+      const distSqr2D = dx * dx + dz * dz;
+      if (distSqr2D > outerSqr) continue;
+      // Source parity: C++ uses forceVector.length() (3D) for damage falloff.
+      const dy = other.y - missile.y;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
       // Source parity: topple with NO_BOUNCE | NO_FX (simplified — our topple doesn't have options).
       if (blast.toppleSpeed > 0) {
@@ -24101,7 +24216,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (blast.outerRadius <= 0) return;
     const outerSqr = blast.outerRadius * blast.outerRadius;
     for (const other of this.spawnedEntities.values()) {
-      if (other.destroyed || other.id === missile.id) continue;
+      if (other.destroyed) continue;
+      // Source parity: C++ does NOT skip self — missile gets scorched too.
       const dx = other.x - missile.x;
       const dz = other.z - missile.z;
       if (dx * dx + dz * dz > outerSqr) continue;
@@ -24124,6 +24240,21 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     this.dyingEntityIds.add(entityId);
+
+    // Source parity: TechBuildingBehavior::onDie — revert to neutral team instead of destroying.
+    // C++ sets team to ThePlayerList->getNeutralPlayer()->getDefaultTeam() and clears MODELCONDITION_CAPTURED.
+    // C++ does NOT restore health, but our engine would re-trigger death at 0 HP, so we restore to maxHealth.
+    if (entity.techBuildingProfile) {
+      this.dyingEntityIds.delete(entityId);
+      // Unregister energy from current side.
+      this.unregisterEntityEnergy(entity);
+      // Revert to civilian/neutral side.
+      entity.side = 'civilian';
+      entity.controllingPlayerToken = this.normalizeControllingPlayerToken('civilian');
+      // Restore full health to prevent re-death loop (pragmatic deviation from C++).
+      entity.health = entity.maxHealth;
+      return;
+    }
 
     // Source parity: Object::onDie calls checkAndDetonateBoobyTrap before die modules.
     // C++ file: Object.cpp line 4575.
@@ -24180,6 +24311,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: InstantDeathBehavior::onDie — fire matching die module effects.
     this.executeInstantDeathModules(entity);
+
+    // Source parity: FireWeaponWhenDeadBehavior::onDie — fire weapon on death with upgrade control.
+    this.executeFireWeaponWhenDeadModules(entity);
 
     // Source parity: NeutronBlastBehavior::onDie — radius neutron blast on death.
     this.executeNeutronBlast(entity);
@@ -24568,6 +24702,46 @@ export class GameLogicSubsystem implements Subsystem {
             this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Source parity: FireWeaponWhenDeadBehavior::onDie — fire death weapon with
+   * DieMuxData filtering and upgrade activation control.
+   * C++ file: FireWeaponWhenDeadBehavior.cpp lines 84-118.
+   */
+  private executeFireWeaponWhenDeadModules(entity: MapEntity): void {
+    for (const profile of entity.fireWeaponWhenDeadProfiles) {
+      // Source parity: UpgradeMux — check if module is active.
+      // StartsActive=Yes means active by default; TriggeredBy activates via upgrade.
+      if (!profile.startsActive) {
+        // Need at least one TriggeredBy upgrade to be present.
+        if (profile.triggeredBy.length === 0) continue;
+        const hasActivation = profile.triggeredBy.some(
+          u => entity.completedUpgrades.has(u.toUpperCase()),
+        );
+        if (!hasActivation) continue;
+      }
+
+      // Source parity: ConflictsWithTriggeredBy — if any conflicting upgrade is present, skip.
+      if (profile.conflictsWith.length > 0) {
+        const hasConflict = profile.conflictsWith.some(
+          u => entity.completedUpgrades.has(u.toUpperCase()),
+        );
+        if (hasConflict) continue;
+      }
+
+      // Source parity: skip if under construction (line 98).
+      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) continue;
+
+      // DieMuxData filtering.
+      if (!this.isDieModuleApplicable(entity, profile)) continue;
+
+      // Fire the death weapon.
+      const weaponDef = this.iniDataRegistry?.getWeapon(profile.deathWeaponName);
+      if (weaponDef) {
+        this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
       }
     }
   }
