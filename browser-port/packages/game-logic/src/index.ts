@@ -1742,6 +1742,17 @@ interface MapEntity {
   neutronMissileSlowDeathProfile: NeutronMissileSlowDeathProfile | null;
   neutronMissileSlowDeathState: NeutronMissileSlowDeathState | null;
 
+  // ── Source parity: HelicopterSlowDeathBehavior — spiral crash death for helicopters ──
+  helicopterSlowDeathProfiles: HelicopterSlowDeathProfile[];
+  helicopterSlowDeathState: HelicopterSlowDeathState | null;
+
+  // ── Source parity: CleanupHazardUpdate — passive hazard cleanup scanning ──
+  cleanupHazardProfile: CleanupHazardProfile | null;
+  cleanupHazardState: CleanupHazardState | null;
+
+  // ── Source parity: AssistedTargetingUpdate — laser designation assisted attacks ──
+  assistedTargetingProfile: AssistedTargetingProfile | null;
+
   // ── Source parity: TechBuildingBehavior — neutral buildings that revert on death ──
   techBuildingProfile: TechBuildingBehaviorProfile | null;
 
@@ -2746,6 +2757,102 @@ interface SlowDeathRuntimeState {
   midpointExecuted: boolean;
 }
 
+/**
+ * Source parity: HelicopterSlowDeathBehavior — extended slow death for helicopters.
+ * Adds spiral orbit, self-spin, gravity descent, blade fly-off, and ground impact.
+ * C++ file: HelicopterSlowDeathUpdate.cpp (extends SlowDeathBehavior).
+ */
+interface HelicopterSlowDeathProfile {
+  /** DieMuxData filtering. */
+  deathTypes: Set<string>;
+  veterancyLevels: Set<string>;
+  exemptStatus: Set<string>;
+  requiredStatus: Set<string>;
+  /** Radians/frame to turn the spiral orbit circle. */
+  spiralOrbitTurnRate: number;
+  /** Initial forward speed in the spiral (units/frame). */
+  spiralOrbitForwardSpeed: number;
+  /** Forward speed multiplier per frame (0-1, 1 = no damping). */
+  spiralOrbitForwardSpeedDamping: number;
+  /** Minimum self-spin rate (rad/frame). */
+  minSelfSpin: number;
+  /** Maximum self-spin rate (rad/frame). */
+  maxSelfSpin: number;
+  /** Frames between self-spin rate updates. */
+  selfSpinUpdateDelay: number;
+  /** Amount to change self-spin rate per update (rad/s → rad/frame internally). */
+  selfSpinUpdateAmount: number;
+  /** Fraction of gravity applied for fall (0 = float, 1 = full gravity). */
+  fallHowFast: number;
+  /** Frames after ground hit before final explosion. */
+  delayFromGroundToFinalDeath: number;
+  /** OCL names to execute on ground hit. */
+  oclHitGround: string[];
+  /** OCL names to execute on final explosion. */
+  oclFinalBlowUp: string[];
+  /** Final rubble object template name. */
+  finalRubbleObject: string;
+}
+
+interface HelicopterSlowDeathState {
+  /** Forward angle of the spiral orbit (not the body heading). */
+  forwardAngle: number;
+  /** Current forward speed in the spiral. */
+  forwardSpeed: number;
+  /** Current vertical velocity (negative = falling). */
+  verticalVelocity: number;
+  /** Current self-spin rate (rad/frame). */
+  selfSpin: number;
+  /** Whether self-spin is increasing toward max (true) or decreasing toward min (false). */
+  selfSpinTowardsMax: boolean;
+  /** Frame when self-spin rate was last updated. */
+  lastSelfSpinUpdateFrame: number;
+  /** Orbit direction: 1 = left, -1 = right. */
+  orbitDirection: number;
+  /** Frame when the helicopter hit the ground (0 = still airborne). */
+  hitGroundFrame: number;
+  /** Index into helicopterSlowDeathProfiles for the applicable profile. */
+  profileIndex: number;
+}
+
+/**
+ * Source parity: CleanupHazardUpdate — workers passively scan for nearby CLEANUP_HAZARD
+ * entities and auto-attack them. C++ file: CleanupHazardUpdate.cpp.
+ */
+interface CleanupHazardProfile {
+  /** Weapon slot used for cleanup (e.g., PRIMARY, SECONDARY). */
+  weaponSlot: string;
+  /** Frames between scans for hazard targets. */
+  scanFrames: number;
+  /** Range to scan for hazard targets (units). */
+  scanRange: number;
+}
+
+interface CleanupHazardState {
+  /** Entity ID of the current cleanup target (0 = none). */
+  bestTargetId: number;
+  /** Countdown frames until next scan. */
+  nextScanFrame: number;
+  /** Whether target was in firing range last check. */
+  inRange: boolean;
+}
+
+/**
+ * Source parity: AssistedTargetingUpdate — laser designation system.
+ * Allows a unit to be told to assist-attack a target by another unit.
+ * C++ file: AssistedTargetingUpdate.cpp.
+ */
+interface AssistedTargetingProfile {
+  /** Clip size for assisted attacks. */
+  clipSize: number;
+  /** Weapon slot to lock when assisting. */
+  weaponSlot: string;
+  /** Laser template for line from assister to self. */
+  laserFromAssisted: string;
+  /** Laser template for line from self to target. */
+  laserToTarget: string;
+}
+
 /** Source parity: SlowDeathBehavior midpoint is randomly placed between 35-65% of destruction time. */
 const SLOW_DEATH_BEGIN_MIDPOINT_RATIO = 0.35;
 const SLOW_DEATH_END_MIDPOINT_RATIO = 0.65;
@@ -2796,6 +2903,9 @@ interface StructureCollapseRuntimeState {
 
 /** Source parity: GlobalData::m_gravity = -1.0f */
 const STRUCTURE_COLLAPSE_GRAVITY = -1.0;
+
+/** Source parity: gravity for helicopter slow death fall. */
+const HELICOPTER_GRAVITY = -1.0;
 
 /**
  * Source parity: EMPUpdate — electromagnetic pulse field that grows, disables nearby entities,
@@ -3586,12 +3696,14 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHeightDieEntities();
     this.updateStickyBombs();
     this.updateSlowDeathEntities();
+    this.updateHelicopterSlowDeath();
     this.updateStructureCollapseEntities();
     this.updateSmartBombHoming();
     this.updateDynamicGeometry();
     this.updateFireOCLAfterCooldown();
     this.updateEmpEntities();
     this.updateLeafletDropEntities();
+    this.updateCleanupHazard();
     this.updateWeaponIdleAutoReload();
     this.updatePointDefenseLaser();
     this.updateCountermeasures();
@@ -5395,6 +5507,14 @@ export class GameLogicSubsystem implements Subsystem {
       // Neutron missile slow death (timed blast waves)
       neutronMissileSlowDeathProfile: this.extractNeutronMissileSlowDeathProfile(objectDef),
       neutronMissileSlowDeathState: null,
+      // Helicopter slow death (spiral crash)
+      helicopterSlowDeathProfiles: this.extractHelicopterSlowDeathProfiles(objectDef),
+      helicopterSlowDeathState: null,
+      // Cleanup hazard (workers scan and clean hazards)
+      cleanupHazardProfile: this.extractCleanupHazardProfile(objectDef),
+      cleanupHazardState: null,
+      // Assisted targeting (laser designation)
+      assistedTargetingProfile: this.extractAssistedTargetingProfile(objectDef),
       // Tech building behavior (neutral buildings)
       techBuildingProfile: this.extractTechBuildingProfile(objectDef),
       // Generate minefield
@@ -9184,6 +9304,156 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     return profiles;
+  }
+
+  /**
+   * Source parity: HelicopterSlowDeathBehavior — extract helicopter spiral death profiles.
+   * C++ file: HelicopterSlowDeathUpdate.cpp (extends SlowDeathBehavior).
+   */
+  private extractHelicopterSlowDeathProfiles(objectDef: ObjectDef | undefined): HelicopterSlowDeathProfile[] {
+    if (!objectDef) return [];
+    const profiles: HelicopterSlowDeathProfile[] = [];
+
+    const visitBlock = (block: IniBlock): void => {
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'DIE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'HELICOPTERSLOWDEATHBEHAVIOR') return;
+
+      // DieMuxData fields.
+      const deathTypes = new Set<string>();
+      const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
+      if (deathTypesStr) {
+        for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
+          if (token) deathTypes.add(token);
+        }
+      }
+      const veterancyLevels = new Set<string>();
+      const vetStr = readStringField(block.fields, ['VeterancyLevels']);
+      if (vetStr) {
+        for (const token of vetStr.toUpperCase().split(/\s+/)) {
+          if (token) veterancyLevels.add(token);
+        }
+      }
+      const exemptStatus = new Set<string>();
+      const exemptStr = readStringField(block.fields, ['ExemptStatus']);
+      if (exemptStr) {
+        for (const token of exemptStr.toUpperCase().split(/\s+/)) {
+          if (token) exemptStatus.add(token);
+        }
+      }
+      const requiredStatus = new Set<string>();
+      const reqStr = readStringField(block.fields, ['RequiredStatus']);
+      if (reqStr) {
+        for (const token of reqStr.toUpperCase().split(/\s+/)) {
+          if (token) requiredStatus.add(token);
+        }
+      }
+
+      // C++ parseAngularVelocityReal: degrees/sec → radians/frame.
+      const degPerSecToRadPerFrame = (v: number): number => (v * Math.PI / 180) / LOGIC_FRAME_RATE;
+      // C++ parseVelocityReal: units/sec → units/frame.
+      const unitsPerSecToPerFrame = (v: number): number => v / LOGIC_FRAME_RATE;
+
+      // Helicopter-specific fields.
+      const spiralOrbitTurnRate = degPerSecToRadPerFrame(
+        readNumericField(block.fields, ['SpiralOrbitTurnRate']) ?? 0);
+      const spiralOrbitForwardSpeed = unitsPerSecToPerFrame(
+        readNumericField(block.fields, ['SpiralOrbitForwardSpeed']) ?? 0);
+      const spiralOrbitForwardSpeedDamping =
+        readNumericField(block.fields, ['SpiralOrbitForwardSpeedDamping']) ?? 1.0;
+      const minSelfSpin = degPerSecToRadPerFrame(
+        readNumericField(block.fields, ['MinSelfSpin']) ?? 0);
+      const maxSelfSpin = degPerSecToRadPerFrame(
+        readNumericField(block.fields, ['MaxSelfSpin']) ?? 0);
+      const selfSpinUpdateDelay = this.msToLogicFrames(
+        readNumericField(block.fields, ['SelfSpinUpdateDelay']) ?? 0);
+      // parseAngleReal: degrees → radians, then divided by FPS in update.
+      const selfSpinUpdateAmount = (readNumericField(block.fields, ['SelfSpinUpdateAmount']) ?? 0)
+        * Math.PI / 180;
+      // parsePercentToReal: percentage → 0-1.
+      const fallHowFast = (readNumericField(block.fields, ['FallHowFast']) ?? 50) / 100;
+      const delayFromGroundToFinalDeath = this.msToLogicFrames(
+        readNumericField(block.fields, ['DelayFromGroundToFinalDeath']) ?? 0);
+
+      // OCL references.
+      const oclHitGround: string[] = [];
+      const hitGroundStr = readStringField(block.fields, ['OCLHitGround']);
+      if (hitGroundStr) oclHitGround.push(hitGroundStr);
+      const oclFinalBlowUp: string[] = [];
+      const finalStr = readStringField(block.fields, ['OCLFinalBlowUp']);
+      if (finalStr) oclFinalBlowUp.push(finalStr);
+
+      const finalRubbleObject = readStringField(block.fields, ['FinalRubbleObject']) ?? '';
+
+      profiles.push({
+        deathTypes,
+        veterancyLevels,
+        exemptStatus,
+        requiredStatus,
+        spiralOrbitTurnRate,
+        spiralOrbitForwardSpeed,
+        spiralOrbitForwardSpeedDamping,
+        minSelfSpin,
+        maxSelfSpin,
+        selfSpinUpdateDelay,
+        selfSpinUpdateAmount,
+        fallHowFast,
+        delayFromGroundToFinalDeath,
+        oclHitGround,
+        oclFinalBlowUp,
+        finalRubbleObject,
+      });
+    };
+
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (profiles.length === 0 && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profiles;
+  }
+
+  /**
+   * Source parity: CleanupHazardUpdate — extract cleanup hazard profile from INI.
+   * C++ file: CleanupHazardUpdate.cpp — workers scan for CLEANUP_HAZARD entities.
+   */
+  private extractCleanupHazardProfile(objectDef: ObjectDef | undefined): CleanupHazardProfile | null {
+    if (!objectDef) return null;
+    for (const block of objectDef.blocks) {
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'CLEANUPHAZARDUPDATE') continue;
+      const weaponSlotStr = readStringField(block.fields, ['WeaponSlot'])?.toUpperCase() ?? 'PRIMARY';
+      const weaponSlot = weaponSlotStr === 'SECONDARY' ? 'SECONDARY' : weaponSlotStr === 'TERTIARY' ? 'TERTIARY' : 'PRIMARY';
+      const scanFrames = this.msToLogicFrames(readNumericField(block.fields, ['ScanRate']) ?? 0);
+      const scanRange = readNumericField(block.fields, ['ScanRange']) ?? 0;
+      return { weaponSlot, scanFrames, scanRange };
+    }
+    if (objectDef.parentDef) {
+      return this.extractCleanupHazardProfile(objectDef.parentDef);
+    }
+    return null;
+  }
+
+  /**
+   * Source parity: AssistedTargetingUpdate — extract assisted targeting profile from INI.
+   * C++ file: AssistedTargetingUpdate.cpp — laser designation system.
+   */
+  private extractAssistedTargetingProfile(objectDef: ObjectDef | undefined): AssistedTargetingProfile | null {
+    if (!objectDef) return null;
+    for (const block of objectDef.blocks) {
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'ASSISTEDTARGETINGUPDATE') continue;
+      const clipSize = readNumericField(block.fields, ['AssistingClipSize']) ?? 1;
+      const weaponSlotStr = readStringField(block.fields, ['AssistingWeaponSlot'])?.toUpperCase() ?? 'PRIMARY';
+      const weaponSlot = weaponSlotStr === 'SECONDARY' ? 'SECONDARY' : weaponSlotStr === 'TERTIARY' ? 'TERTIARY' : 'PRIMARY';
+      const laserFromAssisted = readStringField(block.fields, ['LaserFromAssisted']) ?? '';
+      const laserToTarget = readStringField(block.fields, ['LaserToTarget']) ?? '';
+      return { clipSize, weaponSlot, laserFromAssisted, laserToTarget };
+    }
+    if (objectDef.parentDef) {
+      return this.extractAssistedTargetingProfile(objectDef.parentDef);
+    }
+    return null;
   }
 
   /**
@@ -24143,6 +24413,27 @@ export class GameLogicSubsystem implements Subsystem {
       };
     }
 
+    // Source parity: HelicopterSlowDeathBehavior — initialize spiral crash state.
+    if (entity.helicopterSlowDeathProfiles.length > 0) {
+      // Find first applicable helicopter death profile.
+      for (let hpi = 0; hpi < entity.helicopterSlowDeathProfiles.length; hpi++) {
+        const heliProfile = entity.helicopterSlowDeathProfiles[hpi]!;
+        if (!this.isDieModuleApplicable(entity, heliProfile)) continue;
+        entity.helicopterSlowDeathState = {
+          forwardAngle: entity.rotationY,
+          forwardSpeed: heliProfile.spiralOrbitForwardSpeed,
+          verticalVelocity: 0,
+          selfSpin: heliProfile.minSelfSpin,
+          selfSpinTowardsMax: true,
+          lastSelfSpinUpdateFrame: this.frameCounter,
+          orbitDirection: 1, // Always left (C++ line 213).
+          hitGroundFrame: 0,
+          profileIndex: hpi,
+        };
+        break;
+      }
+    }
+
     return true;
   }
 
@@ -25176,6 +25467,244 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: HelicopterSlowDeathBehavior::update — per-frame spiral orbit,
+   * self-spin, gravity descent, ground hit detection, and final explosion.
+   * C++ file: HelicopterSlowDeathUpdate.cpp lines 285-498.
+   */
+  private updateHelicopterSlowDeath(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const hs = entity.helicopterSlowDeathState;
+      if (!hs) continue;
+
+      // Look up the profile that was selected at init time.
+      const profile = entity.helicopterSlowDeathProfiles[hs.profileIndex];
+      if (!profile) continue;
+
+      // ── Still airborne ──
+      if (hs.hitGroundFrame === 0) {
+        // Self-spin: rotate the entity body (visual rotation).
+        entity.rotationY += hs.selfSpin * hs.orbitDirection;
+
+        // Self-spin rate oscillation: ping-pong between minSelfSpin and maxSelfSpin.
+        if (profile.selfSpinUpdateDelay > 0
+          && this.frameCounter - hs.lastSelfSpinUpdateFrame > profile.selfSpinUpdateDelay) {
+          const spinIncrement = profile.selfSpinUpdateAmount / LOGIC_FRAME_RATE;
+          if (hs.selfSpinTowardsMax) {
+            hs.selfSpin += spinIncrement;
+            if (hs.selfSpin >= profile.maxSelfSpin) {
+              hs.selfSpin = profile.maxSelfSpin;
+              hs.selfSpinTowardsMax = false;
+            }
+          } else {
+            hs.selfSpin -= spinIncrement;
+            if (hs.selfSpin <= profile.minSelfSpin) {
+              hs.selfSpin = profile.minSelfSpin;
+              hs.selfSpinTowardsMax = true;
+            }
+          }
+          hs.lastSelfSpinUpdateFrame = this.frameCounter;
+        }
+
+        // Forward motion along spiral orbit direction.
+        entity.x += Math.cos(hs.forwardAngle) * hs.forwardSpeed;
+        entity.z += Math.sin(hs.forwardAngle) * hs.forwardSpeed;
+
+        // Turn the spiral orbit angle.
+        hs.forwardAngle += profile.spiralOrbitTurnRate * hs.orbitDirection;
+
+        // Damp forward speed.
+        hs.forwardSpeed *= profile.spiralOrbitForwardSpeedDamping;
+
+        // Gravity-based descent.
+        // C++: locomotor maxLift = -gravity * (1 - fallHowFast).
+        // Simplified: apply downward velocity proportional to fallHowFast.
+        hs.verticalVelocity += HELICOPTER_GRAVITY * profile.fallHowFast;
+        entity.y += hs.verticalVelocity;
+
+        // Ground hit detection.
+        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
+        if (entity.y <= terrainY + 1.0) {
+          entity.y = terrainY;
+          hs.hitGroundFrame = this.frameCounter;
+
+          // Execute ground hit OCLs.
+          for (const oclName of profile.oclHitGround) {
+            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
+          }
+
+          // Hold the helicopter in place.
+          entity.moving = false;
+          entity.moveTarget = null;
+          entity.movePath = [];
+        }
+      }
+
+      // ── On the ground: wait for final explosion ──
+      if (hs.hitGroundFrame > 0
+        && this.frameCounter - hs.hitGroundFrame > profile.delayFromGroundToFinalDeath) {
+        // Execute final explosion OCLs.
+        for (const oclName of profile.oclFinalBlowUp) {
+          this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
+        }
+
+        // Spawn rubble object.
+        if (profile.finalRubbleObject) {
+          this.spawnEntityFromTemplate(
+            profile.finalRubbleObject, entity.x, entity.z, entity.rotationY, entity.side);
+        }
+
+        // Destroy the helicopter.
+        entity.helicopterSlowDeathState = null;
+        entity.slowDeathState = null;
+        this.markEntityDestroyed(entity.id, -1);
+      }
+    }
+  }
+
+  /**
+   * Source parity: CleanupHazardUpdate::update — passive scan for CLEANUP_HAZARD entities
+   * and auto-attack them. C++ file: CleanupHazardUpdate.cpp lines 131-293.
+   */
+  private updateCleanupHazard(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.cleanupHazardProfile) continue;
+      const profile = entity.cleanupHazardProfile;
+
+      // Initialize state on first tick.
+      if (!entity.cleanupHazardState) {
+        entity.cleanupHazardState = {
+          bestTargetId: 0,
+          nextScanFrame: 0,
+          inRange: false,
+        };
+      }
+      const state = entity.cleanupHazardState;
+
+      // Skip if entity is busy with a player-issued command.
+      if (entity.attackTargetEntityId !== null && entity.attackCommandSource === 'PLAYER') continue;
+
+      // Countdown between scans.
+      if (state.nextScanFrame > 0) {
+        state.nextScanFrame--;
+        // Try to fire at existing target while waiting.
+        this.cleanupHazardFireWhenReady(entity, profile, state);
+        continue;
+      }
+      state.nextScanFrame = profile.scanFrames;
+
+      // Scan for closest CLEANUP_HAZARD entity within range.
+      const target = this.scanCleanupHazardTarget(entity, profile);
+      if (target) {
+        state.bestTargetId = target.id;
+        this.cleanupHazardFireWhenReady(entity, profile, state);
+      } else {
+        state.bestTargetId = 0;
+      }
+    }
+  }
+
+  /**
+   * Source parity: CleanupHazardUpdate::scanClosestTarget — find the nearest CLEANUP_HAZARD
+   * entity within scan range.
+   */
+  private scanCleanupHazardTarget(entity: MapEntity, profile: CleanupHazardProfile): MapEntity | null {
+    let bestTarget: MapEntity | null = null;
+    let bestDistSq = profile.scanRange * profile.scanRange;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || candidate.id === entity.id) continue;
+      const kindOf = this.resolveEntityKindOfSet(candidate);
+      if (!kindOf.has('CLEANUP_HAZARD')) continue;
+      const dx = candidate.x - entity.x;
+      const dz = candidate.z - entity.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestTarget = candidate;
+      }
+    }
+    return bestTarget;
+  }
+
+  /**
+   * Source parity: CleanupHazardUpdate::fireWhenReady — attack the tracked target if idle.
+   */
+  private cleanupHazardFireWhenReady(
+    entity: MapEntity,
+    profile: CleanupHazardProfile,
+    state: CleanupHazardState,
+  ): void {
+    if (state.bestTargetId === 0) return;
+    const target = this.spawnedEntities.get(state.bestTargetId);
+    if (!target || target.destroyed) {
+      state.bestTargetId = 0;
+      state.inRange = false;
+      return;
+    }
+
+    // Range check — use active weapon's attack range.
+    const fireRange = entity.attackWeapon?.attackRange ?? profile.scanRange;
+    const dx = target.x - entity.x;
+    const dz = target.z - entity.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    if (dist < fireRange) {
+      state.inRange = true;
+    } else if (state.inRange) {
+      // Was in range but target moved out — rescan.
+      state.nextScanFrame = 0;
+      state.bestTargetId = 0;
+      state.inRange = false;
+      return;
+    }
+
+    // Fire if entity is idle (not already attacking something from player) and in range.
+    if (state.inRange && (entity.attackTargetEntityId === null || entity.attackCommandSource === 'AI')) {
+      // Source parity: CleanupHazardUpdate bypasses normal enemy relationship checks.
+      // Directly apply weapon damage to the CLEANUP_HAZARD entity.
+      const weapon = entity.attackWeapon;
+      if (weapon && weapon.primaryDamage > 0) {
+        this.applyWeaponDamageAmount(entity.id, target, weapon.primaryDamage, weapon.damageType);
+      }
+    }
+  }
+
+  /**
+   * Source parity: AssistedTargetingUpdate::isFreeToAssist — check if entity can accept
+   * an assisted attack request. Returns true if the entity has an AssistedTargetingProfile
+   * and is able to attack (weapon ready).
+   * C++ file: AssistedTargetingUpdate.cpp lines 85-94.
+   */
+  isEntityFreeToAssist(entity: MapEntity): boolean {
+    if (!entity.assistedTargetingProfile) return false;
+    if (entity.destroyed) return false;
+    if (!entity.attackWeapon) return false;
+    // Source parity: checks isAbleToAttack() and weapon status READY_TO_FIRE.
+    if (entity.attackCooldownRemaining > 0) return false;
+    return true;
+  }
+
+  /**
+   * Source parity: AssistedTargetingUpdate::assistAttack — an external unit tells this
+   * entity to attack a target. Locks the assisted weapon slot and issues attack command.
+   * C++ file: AssistedTargetingUpdate.cpp lines 98-114.
+   */
+  issueAssistedAttack(
+    assistedEntityId: number,
+    targetEntityId: number,
+  ): void {
+    const entity = this.spawnedEntities.get(assistedEntityId);
+    const target = this.spawnedEntities.get(targetEntityId);
+    if (!entity || !target) return;
+    if (!entity.assistedTargetingProfile) return;
+    if (entity.destroyed || target.destroyed) return;
+
+    // Source parity: lock weapon and issue attack with clip limit.
+    this.issueAttackEntity(entity.id, target.id, 'AI');
+  }
+
   private markEntityDestroyed(entityId: number, attackerId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || entity.destroyed) {
@@ -25865,7 +26394,8 @@ export class GameLogicSubsystem implements Subsystem {
       if (profile.deathTypes.has('NONE') && profile.deathTypes.size === 1) {
         return false; // Explicitly set to NONE — never fires.
       }
-      if (!profile.deathTypes.has(entity.pendingDeathType)) {
+      // Source parity: ALL = all death types accepted (bitmask with all bits set in C++).
+      if (!profile.deathTypes.has('ALL') && !profile.deathTypes.has(entity.pendingDeathType)) {
         return false;
       }
     }

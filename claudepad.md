@@ -1,5 +1,25 @@
 # Session Summaries
 
+## 2026-02-21T14:10Z — HelicopterSlowDeath + CleanupHazard + AssistedTargeting
+- HelicopterSlowDeathBehavior: spiral orbit, self-spin oscillation, gravity descent, ground hit detection, final explosion
+  - Fixed: `entity.heading` → `entity.rotationY`, `executeOCLByName` → `executeOCL`, profile index tracking in state
+  - Fixed: `isDieModuleApplicable` now handles `DeathTypes: ALL` as special case
+  - 5 tests (profile extraction, state init, spiral motion, ground destroy, spin oscillation)
+- CleanupHazardUpdate: passive scan for CLEANUP_HAZARD entities, auto-attack with weapon damage
+  - Bypasses enemy relationship checks (direct damage via `applyWeaponDamageAmount`)
+  - 3 tests (profile extraction, auto-attack nearby, ignore out-of-range)
+- AssistedTargetingUpdate: profile extraction + `isEntityFreeToAssist` + `issueAssistedAttack` methods
+  - 3 tests (profile extraction, free-to-assist check, assisted attack issues damage)
+- All 1356 tests pass
+
+## 2026-02-21T13:25Z — JetAI + Collision Code Review Fixes
+- Fixed JetAI HIGH: commands during TAKING_OFF/LANDING/RETURNING now queued as pending (C++ parity: aiDoCommand lines 2415-2420)
+- Fixed JetAI MEDIUM: attackMoveTo interception added for parked/transitioning jets
+- Fixed JetAI MEDIUM: suppressed auto-targeting for PARKED/RELOAD_AMMO/TAKING_OFF/LANDING jets
+- Fixed JetAI MEDIUM: findSuitableAirfield uses getTeamRelationship === ALLIES (C++ ALLOW_ALLIES parity)
+- Collision review findings (overlap cap + IS_USING_ABILITY guard) were already in committed code from 6b9bc6c
+- All 1345 tests pass, committed e726985, pushed
+
 ## 2026-02-21T13:20Z — JetAIUpdate Flight State Machine
 - Implemented 7-state JetAI state machine: PARKED → TAKING_OFF → AIRBORNE → RETURNING_FOR_LANDING → LANDING → RELOAD_AMMO → PARKED + CIRCLING_DEAD_AIRFIELD
 - Replaced JetAISneakyProfile with full JetAIProfile (13 fields from INI)

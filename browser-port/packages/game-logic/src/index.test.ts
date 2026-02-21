@@ -21967,3 +21967,524 @@ describe('JetAIUpdate flight state machine', () => {
     expect(jet.jetAIState.pendingCommand).toEqual({ type: 'attackEntity', targetId: 3 });
   });
 });
+
+describe('HelicopterSlowDeathBehavior', () => {
+  function makeHeliBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('Helicopter', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SD', {
+            DeathTypes: 'ALL',
+            DestructionDelay: 3000,
+            SinkRate: 0,
+            ProbabilityModifier: 100,
+          }),
+          makeBlock('Behavior', 'HelicopterSlowDeathBehavior ModuleTag_HSD', {
+            DeathTypes: 'ALL',
+            DestructionDelay: 3000,
+            SinkRate: 0,
+            ProbabilityModifier: 1,
+            SpiralOrbitTurnRate: 180,          // 180 deg/s
+            SpiralOrbitForwardSpeed: 60,       // 60 units/s → 2 units/frame
+            SpiralOrbitForwardSpeedDamping: 0.98,
+            MinSelfSpin: 90,                   // 90 deg/s → ~0.052 rad/frame
+            MaxSelfSpin: 360,                  // 360 deg/s → ~0.209 rad/frame
+            SelfSpinUpdateDelay: 200,          // 200ms → 6 frames
+            SelfSpinUpdateAmount: 30,          // 30 degrees → ~0.524 rad
+            FallHowFast: 50,                   // 50% gravity
+            DelayFromGroundToFinalDeath: 500,  // 500ms → 15 frames
+          }),
+        ]),
+        makeObjectDef('Killer', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BigGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('BigGun', {
+          AttackRange: 300,
+          PrimaryDamage: 9999,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+          AntiAirborneVehicle: true,
+        }),
+      ],
+    });
+  }
+
+  it('extracts helicopter slow death profiles from INI', () => {
+    const bundle = makeHeliBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Helicopter', 128, 128),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        helicopterSlowDeathProfiles: { spiralOrbitTurnRate: number; deathTypes: Set<string> }[];
+        slowDeathProfiles: { deathTypes: Set<string>; probabilityModifier: number }[];
+      }>;
+    };
+
+    const heli = [...priv.spawnedEntities.values()][0]!;
+    // Verify helicopter slow death profiles were extracted.
+    expect(heli.helicopterSlowDeathProfiles.length).toBe(1);
+    expect(heli.helicopterSlowDeathProfiles[0]!.spiralOrbitTurnRate).toBeGreaterThan(0);
+    // Verify slow death profiles also include helicopter (since it extends SlowDeathBehavior).
+    expect(heli.slowDeathProfiles.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('initializes helicopter spiral death state when killed', () => {
+    const bundle = makeHeliBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Helicopter', 10, 10),
+        makeMapObject('Killer', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number;
+        helicopterSlowDeathState: { forwardAngle: number; forwardSpeed: number; hitGroundFrame: number; profileIndex: number } | null;
+        helicopterSlowDeathProfiles: unknown[];
+        slowDeathState: unknown;
+      }>;
+    };
+
+    const heli = [...priv.spawnedEntities.values()].find(e => e.helicopterSlowDeathProfiles.length > 0)!;
+    expect(heli).toBeDefined();
+    // Elevate helicopter so it can spiral down.
+    heli.y = 100;
+
+    // Kill the helicopter — give enough frames for combat to execute.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (heli.health <= 0) break;
+    }
+
+    // After lethal damage, helicopter should have slow death state initialized.
+    expect(heli.health).toBeLessThanOrEqual(0);
+    expect(heli.destroyed).toBe(false);
+    expect(heli.slowDeathState).not.toBeNull();
+    expect(heli.helicopterSlowDeathState).not.toBeNull();
+    expect(heli.helicopterSlowDeathState!.profileIndex).toBe(0);
+    expect(heli.helicopterSlowDeathState!.hitGroundFrame).toBe(0);
+  });
+
+  it('spirals and descends per frame while airborne', () => {
+    const bundle = makeHeliBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Helicopter', 10, 10),
+        makeMapObject('Killer', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number; x: number; z: number; heading: number;
+        helicopterSlowDeathState: {
+          forwardAngle: number; forwardSpeed: number; hitGroundFrame: number;
+          verticalVelocity: number; selfSpin: number;
+        } | null;
+        helicopterSlowDeathProfiles: unknown[];
+      }>;
+    };
+
+    const heli = [...priv.spawnedEntities.values()].find(e => e.helicopterSlowDeathProfiles.length > 0)!;
+    heli.y = 200; // Start high up.
+
+    // Kill it — give enough frames for combat.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (heli.health <= 0) break;
+    }
+
+    const hs = heli.helicopterSlowDeathState!;
+    expect(hs).not.toBeNull();
+    const initX = heli.x;
+    const initZ = heli.z;
+    const initY = heli.y;
+
+    // Run several frames of spiral death.
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Helicopter should have moved laterally (spiral orbit).
+    expect(Math.abs(heli.x - initX) + Math.abs(heli.z - initZ)).toBeGreaterThan(0.1);
+    // Should be descending (lower Y).
+    expect(heli.y).toBeLessThan(initY);
+    // Forward speed should be damped.
+    expect(hs.forwardSpeed).toBeLessThan(2); // Was ~2 units/frame initially.
+    // Vertical velocity should be increasingly negative.
+    expect(hs.verticalVelocity).toBeLessThan(0);
+  });
+
+  it('hits ground and destroys after delay', () => {
+    const bundle = makeHeliBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Helicopter', 10, 10),
+        makeMapObject('Killer', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number;
+        helicopterSlowDeathState: { hitGroundFrame: number } | null;
+        helicopterSlowDeathProfiles: unknown[];
+      }>;
+    };
+
+    const heli = [...priv.spawnedEntities.values()].find(e => e.helicopterSlowDeathProfiles.length > 0)!;
+    heli.y = 30; // Start relatively low — will hit ground quickly.
+
+    // Kill it — give enough frames for combat.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (heli.health <= 0) break;
+    }
+
+    expect(heli.helicopterSlowDeathState).not.toBeNull();
+
+    // Run frames until it hits the ground.
+    let hitGround = false;
+    for (let i = 0; i < 200; i++) {
+      logic.update(1 / 30);
+      if (heli.helicopterSlowDeathState?.hitGroundFrame && heli.helicopterSlowDeathState.hitGroundFrame > 0) {
+        hitGround = true;
+        break;
+      }
+      if (heli.destroyed) break;
+    }
+    expect(hitGround || heli.destroyed).toBe(true);
+
+    // If it hit ground but isn't destroyed yet, run more frames for the delay.
+    if (!heli.destroyed) {
+      // DelayFromGroundToFinalDeath = 500ms → 15 frames.
+      for (let i = 0; i < 20; i++) {
+        logic.update(1 / 30);
+        if (heli.destroyed) break;
+      }
+      expect(heli.destroyed).toBe(true);
+    }
+  });
+
+  it('self-spin oscillates between min and max rates', () => {
+    const bundle = makeHeliBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Helicopter', 10, 10),
+        makeMapObject('Killer', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number; y: number;
+        helicopterSlowDeathState: {
+          selfSpin: number; selfSpinTowardsMax: boolean; hitGroundFrame: number;
+        } | null;
+        helicopterSlowDeathProfiles: unknown[];
+      }>;
+    };
+
+    const heli = [...priv.spawnedEntities.values()].find(e => e.helicopterSlowDeathProfiles.length > 0)!;
+    heli.y = 500; // Very high — won't hit ground during test.
+
+    // Kill it — give enough frames for combat.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (heli.health <= 0) break;
+    }
+
+    const hs = heli.helicopterSlowDeathState!;
+    expect(hs).not.toBeNull();
+    const initSpin = hs.selfSpin;
+
+    // SelfSpinUpdateDelay = 200ms → 6 frames. Run enough frames for spin to update.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Spin should have changed from the initial value (started at minSelfSpin, heading toward max).
+    expect(hs.selfSpin).not.toBe(initSpin);
+    // The helicopter should still be airborne.
+    expect(hs.hitGroundFrame).toBe(0);
+  });
+});
+
+describe('CleanupHazardUpdate', () => {
+  function makeCleanupBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('Worker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'CleanupGun'] }),
+          makeBlock('Behavior', 'CleanupHazardUpdate ModuleTag_CHU', {
+            WeaponSlot: 'PRIMARY',
+            ScanRate: 200,   // 200ms → 6 frames
+            ScanRange: 100,
+          }),
+        ]),
+        makeObjectDef('ToxinPuddle', 'Neutral', ['CLEANUP_HAZARD'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('CleanupGun', {
+          AttackRange: 80,
+          PrimaryDamage: 100,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+        }),
+      ],
+    });
+  }
+
+  it('extracts cleanup hazard profile from INI', () => {
+    const bundle = makeCleanupBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Worker', 10, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        cleanupHazardProfile: { weaponSlot: string; scanFrames: number; scanRange: number } | null;
+      }>;
+    };
+
+    const worker = [...priv.spawnedEntities.values()][0]!;
+    expect(worker.cleanupHazardProfile).not.toBeNull();
+    expect(worker.cleanupHazardProfile!.scanRange).toBe(100);
+    expect(worker.cleanupHazardProfile!.scanFrames).toBe(6); // 200ms → 6 frames
+  });
+
+  it('auto-attacks nearby CLEANUP_HAZARD entities', () => {
+    const bundle = makeCleanupBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Worker', 10, 10),
+        makeMapObject('ToxinPuddle', 25, 10), // 15 units away — well within scan range of 100
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    // Worker and ToxinPuddle are both neutral/enemy? Worker is America, puddle is Neutral.
+    // CleanupHazard doesn't need enemy relationship — it targets CLEANUP_HAZARD by kindOf.
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+        cleanupHazardState: { bestTargetId: number } | null;
+      }>;
+    };
+
+    const puddle = [...priv.spawnedEntities.values()].find(e => e.health === 50)!;
+    expect(puddle).toBeDefined();
+
+    // Run frames for the worker to scan and attack.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+      if (puddle.health < 50) break;
+    }
+
+    // The puddle should have taken damage or be destroyed.
+    expect(puddle.health).toBeLessThan(50);
+  });
+
+  it('ignores hazards outside scan range', () => {
+    const bundle = makeCleanupBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Worker', 10, 10),
+        makeMapObject('ToxinPuddle', 200, 200), // ~270 units away — beyond scan range of 100
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+      }>;
+    };
+
+    const puddle = [...priv.spawnedEntities.values()].find(e => e.health === 50)!;
+
+    // Run many frames.
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Puddle should be unharmed.
+    expect(puddle.health).toBe(50);
+  });
+});
+
+describe('AssistedTargetingUpdate', () => {
+  function makeAssistedBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('Patriot', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'PatriotMissile'] }),
+          makeBlock('Behavior', 'AssistedTargetingUpdate ModuleTag_AT', {
+            AssistingClipSize: 4,
+            AssistingWeaponSlot: 'PRIMARY',
+            LaserFromAssisted: 'AssistLaser1',
+            LaserToTarget: 'AssistLaser2',
+          }),
+        ]),
+        makeObjectDef('Target', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('Designator', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('PatriotMissile', {
+          AttackRange: 200,
+          PrimaryDamage: 80,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 1000,
+        }),
+      ],
+    });
+  }
+
+  it('extracts assisted targeting profile from INI', () => {
+    const bundle = makeAssistedBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Patriot', 10, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        assistedTargetingProfile: { clipSize: number; weaponSlot: string; laserFromAssisted: string } | null;
+      }>;
+    };
+
+    const patriot = [...priv.spawnedEntities.values()][0]!;
+    expect(patriot.assistedTargetingProfile).not.toBeNull();
+    expect(patriot.assistedTargetingProfile!.clipSize).toBe(4);
+    expect(patriot.assistedTargetingProfile!.weaponSlot).toBe('PRIMARY');
+    expect(patriot.assistedTargetingProfile!.laserFromAssisted).toBe('AssistLaser1');
+  });
+
+  it('isFreeToAssist returns true when weapon is ready', () => {
+    const bundle = makeAssistedBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Patriot', 10, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; assistedTargetingProfile: unknown;
+        attackCooldownRemaining: number; destroyed: boolean;
+      }>;
+    };
+
+    const patriot = [...priv.spawnedEntities.values()][0]!;
+    // Should be free to assist when weapon is ready (cooldown=0).
+    expect((logic as unknown as { isEntityFreeToAssist: (e: unknown) => boolean }).isEntityFreeToAssist(patriot)).toBe(true);
+
+    // Set cooldown — should no longer be free.
+    patriot.attackCooldownRemaining = 10;
+    expect((logic as unknown as { isEntityFreeToAssist: (e: unknown) => boolean }).isEntityFreeToAssist(patriot)).toBe(false);
+  });
+
+  it('issueAssistedAttack causes the assisted entity to attack the target', () => {
+    const bundle = makeAssistedBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Patriot', 10, 10),
+        makeMapObject('Target', 30, 10), // 20 units away — within range
+        makeMapObject('Designator', 10, 20),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number; destroyed: boolean; health: number;
+        attackTargetEntityId: number | null;
+      }>;
+    };
+
+    const target = [...priv.spawnedEntities.values()].find(e => e.health === 200)!;
+    const patriot = [...priv.spawnedEntities.values()].find(e => e.health === 300)!;
+
+    // Issue assisted attack.
+    (logic as unknown as { issueAssistedAttack: (a: number, t: number) => void }).issueAssistedAttack(patriot.id, target.id);
+
+    // Run frames for the attack to fire.
+    for (let i = 0; i < 10; i++) {
+      logic.update(1 / 30);
+      if (target.health < 200) break;
+    }
+
+    // Target should have taken damage from the patriot.
+    expect(target.health).toBeLessThan(200);
+  });
+});
