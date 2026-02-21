@@ -9,6 +9,8 @@ interface CombatUpdateWeaponLike {
   clipSize: number;
   autoReloadWhenIdleFrames: number;
   clipReloadFrames: number;
+  /** Source parity: Weapon::m_leechRangeWeapon — unlimited range after first shot connects. */
+  leechRangeWeapon: boolean;
 }
 
 interface CombatUpdateEntityLike {
@@ -35,6 +37,8 @@ interface CombatUpdateEntityLike {
   attackNeedsLineOfSight: boolean;
   maxShotsRemaining: number;
   category: string;
+  /** Source parity: Weapon::m_leechWeaponRangeActive — set true after first shot with leech weapon. */
+  leechRangeActive: boolean;
 }
 
 interface CombatUpdateConstants {
@@ -164,7 +168,8 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
       continue;
     }
 
-    if (distanceSqr > attackRangeSqr) {
+    // Source parity: Weapon.cpp:873 — skip range check for leech range weapons with active lock.
+    if (distanceSqr > attackRangeSqr && !(weapon.leechRangeWeapon && attacker.leechRangeActive)) {
       context.setEntityAimingWeaponStatus(attacker, false);
       if (attacker.canMove) {
         context.issueMoveTo(attacker.id, target.x, target.z, attackRange);
@@ -231,6 +236,10 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
     context.queueWeaponDamageEvent(attacker, target, weapon);
     context.setEntityIgnoringStealthStatus(attacker, false);
     attacker.preAttackFinishFrame = 0;
+    // Source parity: Weapon.cpp:2511 — activate leech range after first shot fires.
+    if (weapon.leechRangeWeapon) {
+      attacker.leechRangeActive = true;
+    }
     context.recordConsecutiveAttackShot(attacker, target.id);
 
     // Source parity: Weapon::fire decrements m_maxShotCount; when exhausted, attack ends.

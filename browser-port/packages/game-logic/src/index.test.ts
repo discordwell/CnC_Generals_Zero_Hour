@@ -23154,3 +23154,252 @@ describe('TransportAI attack delegation', () => {
     expect(gattling.attackTargetEntityId).not.toBe(3);
   });
 });
+
+describe('InternetHackContain', () => {
+  it('auto-issues hackInternet command when hacker enters internet center', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InternetCenter', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'InternetHackContain ModuleTag_Contain', {
+            ContainMax: 8,
+          }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 20,
+          GeometryMinorRadius: 20,
+        }),
+        makeObjectDef('Hacker', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'HackInternetAIUpdate ModuleTag_Hack', {
+            UnpackTime: 0,
+            CashUpdateDelay: 0,
+            CashUpdateDelayFast: 0,
+            RegularCashAmount: 50,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('InternetCenter', 30, 30),  // id 1
+        makeMapObject('Hacker', 30, 30),           // id 2 — adjacent to center
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 0 });
+
+    // Enter the internet center.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30); // process enter
+    logic.update(1 / 30); // process auto-issued hackInternet command
+
+    // Run a few frames to accumulate hack income.
+    for (let frame = 0; frame < 3; frame++) {
+      logic.update(1 / 30);
+    }
+
+    // Hacker should be generating money from inside the internet center.
+    expect(logic.getSideCredits('China')).toBeGreaterThan(0);
+  });
+
+  it('uses fast cash update delay when hacker is inside internet center', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InternetCenter', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'InternetHackContain ModuleTag_Contain', {
+            ContainMax: 8,
+          }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 20,
+          GeometryMinorRadius: 20,
+        }),
+        makeObjectDef('Hacker', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'HackInternetAIUpdate ModuleTag_Hack', {
+            UnpackTime: 0,
+            CashUpdateDelay: 3000,
+            CashUpdateDelayFast: 0,
+            RegularCashAmount: 100,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('InternetCenter', 30, 30),  // id 1
+        makeMapObject('Hacker', 30, 30),           // id 2
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 0 });
+
+    // Enter the internet center to trigger fast hack.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30); // process enter
+    logic.update(1 / 30); // process auto-hackInternet
+
+    // Run 5 frames — with CashUpdateDelayFast=0, should generate quickly.
+    // With normal CashUpdateDelay=3000 (90 frames), no cash would appear yet.
+    for (let frame = 0; frame < 5; frame++) {
+      logic.update(1 / 30);
+    }
+
+    // Fast delay should have generated cash; normal delay would not have.
+    expect(logic.getSideCredits('China')).toBeGreaterThan(0);
+  });
+});
+
+describe('LeechRangeWeapon', () => {
+  it('maintains attack on target that moves out of normal weapon range', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hacker', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HackWeapon'] }),
+        ]),
+        makeObjectDef('EnemyVehicle', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('HackWeapon', {
+          PrimaryDamage: 5, AttackRange: 50, DelayBetweenShots: 100,
+          DamageType: 'INFORMATION', LeechRangeWeapon: 'Yes',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hacker', 10, 10),       // id 1
+        makeMapObject('EnemyVehicle', 40, 10),  // id 2 — within 50 range
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    // Issue attack and run a few frames so weapon fires.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2, commandSource: 'PLAYER' });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as any;
+    const hacker = priv.spawnedEntities.get(1)!;
+    const enemy = priv.spawnedEntities.get(2)!;
+
+    // Leech range should be active after first shot.
+    expect(hacker.leechRangeActive).toBe(true);
+
+    // Move target way beyond normal weapon range.
+    enemy.x = 200;
+    enemy.z = 10;
+
+    // Run more frames — hacker should STILL be attacking (leech range = unlimited).
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Hacker should still have the target locked despite being far out of range.
+    expect(hacker.attackTargetEntityId).toBe(2);
+  });
+
+  it('clears leechRangeActive when attack target is cleared', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hacker', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HackWeapon'] }),
+        ]),
+        makeObjectDef('EnemyVehicle', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('HackWeapon', {
+          PrimaryDamage: 5, AttackRange: 50, DelayBetweenShots: 100,
+          DamageType: 'INFORMATION', LeechRangeWeapon: 'Yes',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hacker', 10, 10),       // id 1
+        makeMapObject('EnemyVehicle', 40, 10),  // id 2
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2, commandSource: 'PLAYER' });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as any;
+    const hacker = priv.spawnedEntities.get(1)!;
+    expect(hacker.leechRangeActive).toBe(true);
+
+    // Stop the hacker (clears attack target).
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.update(1 / 30);
+
+    // Leech range should be cleared.
+    expect(hacker.leechRangeActive).toBe(false);
+  });
+
+  it('does NOT grant leech range to normal weapons', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TankCannon'] }),
+        ]),
+        makeObjectDef('EnemyUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TankCannon', {
+          PrimaryDamage: 50, AttackRange: 100, DelayBetweenShots: 500, DamageType: 'ARMOR_PIERCING',
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Tank', 10, 10),      // id 1
+        makeMapObject('EnemyUnit', 40, 10),  // id 2
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2, commandSource: 'PLAYER' });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as any;
+    const tank = priv.spawnedEntities.get(1)!;
+
+    // Normal weapon should NOT activate leech range.
+    expect(tank.leechRangeActive).toBe(false);
+  });
+});

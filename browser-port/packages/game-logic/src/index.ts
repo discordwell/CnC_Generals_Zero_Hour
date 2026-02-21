@@ -252,7 +252,7 @@ const RELATIONSHIP_NEUTRAL = 1;
 const RELATIONSHIP_ALLIES = 2;
 type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTRAL | typeof RELATIONSHIP_ALLIES;
 type SidePlayerType = 'HUMAN' | 'COMPUTER';
-type AttackCommandSource = 'PLAYER' | 'AI';
+type AttackCommandSource = 'PLAYER' | 'AI' | 'SCRIPT';
 
 /** Reusable empty kindOf set for projectile templates with no kindOf. */
 const EMPTY_KINDOF_SET = new Set<string>();
@@ -772,6 +772,8 @@ interface AttackWeaponProfile {
   projectileArcSecondHeight: number;
   projectileArcFirstPercentIndent: number;
   projectileArcSecondPercentIndent: number;
+  /** Source parity: Weapon::m_leechRangeWeapon — unlimited range after first shot connects. */
+  leechRangeWeapon: boolean;
 }
 
 interface WeaponTemplateSetProfile {
@@ -1014,7 +1016,7 @@ interface ParkingPlaceProfile {
   reservedProductionIds: Set<number>;
 }
 
-type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL' | 'HEAL';
+type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL' | 'HEAL' | 'INTERNET_HACK';
 
 interface ContainProfile {
   moduleType: ContainModuleType;
@@ -1356,6 +1358,8 @@ interface MapEntity {
   forcedWeaponSlot: number | null;
   weaponLockStatus: 'NOT_LOCKED' | 'LOCKED_TEMPORARILY' | 'LOCKED_PERMANENTLY';
   maxShotsRemaining: number;
+  /** Source parity: Weapon::m_leechWeaponRangeActive — unlimited range lock after first shot. */
+  leechRangeActive: boolean;
   /** Source parity: TurretAI modules controlling weapon slot availability. */
   turretProfiles: TurretProfile[];
   /** Source parity: TurretAI runtime state — one per turret profile. */
@@ -5373,6 +5377,7 @@ export class GameLogicSubsystem implements Subsystem {
       forcedWeaponSlot: null,
       weaponLockStatus: 'NOT_LOCKED' as const,
       maxShotsRemaining: 0,
+      leechRangeActive: false,
       turretProfiles: this.extractTurretProfiles(objectDef),
       turretStates: [], // Initialized after entity creation below.
       armorTemplateSets,
@@ -6425,6 +6430,7 @@ export class GameLogicSubsystem implements Subsystem {
     const minWeaponSpeedRaw = readNumericField(weaponDef.fields, ['MinWeaponSpeed']) ?? 999999;
     const minWeaponSpeed = Number.isFinite(minWeaponSpeedRaw) && minWeaponSpeedRaw > 0 ? minWeaponSpeedRaw : 999999;
     const scaleWeaponSpeed = readBooleanField(weaponDef.fields, ['ScaleWeaponSpeed']) ?? false;
+    const leechRangeWeapon = readBooleanField(weaponDef.fields, ['LeechRangeWeapon']) ?? false;
     const clipSizeRaw = readNumericField(weaponDef.fields, ['ClipSize']) ?? 0;
     const clipSize = Math.max(0, Math.trunc(clipSizeRaw));
     const clipReloadFrames = this.msToLogicFrames(readNumericField(weaponDef.fields, ['ClipReloadTime']) ?? 0);
@@ -6528,6 +6534,7 @@ export class GameLogicSubsystem implements Subsystem {
       projectileArcSecondHeight: bezierArc?.secondHeight ?? 0,
       projectileArcFirstPercentIndent: bezierArc?.firstPercentIndent ?? 0,
       projectileArcSecondPercentIndent: bezierArc?.secondPercentIndent ?? 0,
+      leechRangeWeapon,
     };
   }
 
@@ -7312,6 +7319,17 @@ export class GameLogicSubsystem implements Subsystem {
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
+        };
+      } else if (moduleType === 'INTERNETHACKCONTAIN') {
+        // Source parity: InternetHackContain — extends TransportContain, auto-issues
+        // hackInternet command to entering units. C++ file: InternetHackContain.cpp.
+        profile = {
+          moduleType: 'INTERNET_HACK',
+          passengersAllowedToFire: false,
+          passengersAllowedToFireDefault: false,
+          garrisonCapacity: 0,
+          transportCapacity: containMax,
+          timeForFullHealFrames: 0,
         };
       }
 
@@ -14286,7 +14304,8 @@ export class GameLogicSubsystem implements Subsystem {
       && containProfile.moduleType !== 'OVERLORD'
       && containProfile.moduleType !== 'HELIX'
       && containProfile.moduleType !== 'OPEN'
-      && containProfile.moduleType !== 'HEAL') return;
+      && containProfile.moduleType !== 'HEAL'
+      && containProfile.moduleType !== 'INTERNET_HACK') return;
 
     // Source parity: TransportContain type checks — only infantry for TRANSPORT,
     // infantry + portable structures for OVERLORD/HELIX.
@@ -14327,6 +14346,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (transport.containProfile?.moduleType === 'HEAL') {
       passenger.healContainEnteredFrame = this.frameCounter;
     }
+    // Source parity: InternetHackContain::onContaining — auto-issue hackInternet to entering unit.
+    // C++ file: InternetHackContain.cpp — rider->getAI()->aiHackInternet(CMD_FROM_AI).
+    if (transport.containProfile?.moduleType === 'INTERNET_HACK') {
+      this.commandQueue.push({ type: 'hackInternet', entityId: passenger.id });
+    }
     // Source parity: Object::onContainedBy — set UNSELECTABLE and MASKED for enclosed containers.
     passenger.objectStatusFlags.add('UNSELECTABLE');
     if (this.isEnclosingContainer(transport)) {
@@ -14347,7 +14371,8 @@ export class GameLogicSubsystem implements Subsystem {
       || profile.moduleType === 'OVERLORD'
       || profile.moduleType === 'HELIX'
       || profile.moduleType === 'TUNNEL'
-      || profile.moduleType === 'HEAL';
+      || profile.moduleType === 'HEAL'
+      || profile.moduleType === 'INTERNET_HACK';
   }
 
   private updatePendingTransportActions(): void {
@@ -18861,7 +18886,8 @@ export class GameLogicSubsystem implements Subsystem {
     commandSource: AttackCommandSource,
   ): void {
     // Source parity: only propagate for player/script commands, not passive acquire.
-    if (commandSource !== 'PLAYER') return;
+    // C++ TransportAIUpdate.cpp:74 — CMD_FROM_PLAYER || CMD_FROM_SCRIPT.
+    if (commandSource !== 'PLAYER' && commandSource !== 'SCRIPT') return;
     const cp = transport.containProfile;
     if (!cp || !cp.passengersAllowedToFire) return;
 
@@ -19045,6 +19071,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: AIAttackState::onExit() — clear all attack flags on target release.
     this.setEntityAttackStatus(entity, false);
     entity.preAttackFinishFrame = 0;
+    // Source parity: AIAttackState::onExit() — clear leech range mode for all weapons.
+    // C++ file: AIStates.cpp:5714 — obj->clearLeechRangeModeForAllWeapons().
+    entity.leechRangeActive = false;
     // Source parity: releaseWeaponLock on attack exit — temporary locks are cleared.
     this.releaseTemporaryWeaponLock(entity);
   }
@@ -26373,6 +26402,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
     entity.attackSubState = 'IDLE';
+    entity.leechRangeActive = false;
     entity.lastAttackerEntityId = null;
     entity.continuousFireState = 'NONE';
     entity.continuousFireCooldownFrame = 0;
