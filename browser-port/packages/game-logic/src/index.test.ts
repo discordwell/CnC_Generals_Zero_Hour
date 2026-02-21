@@ -20171,3 +20171,261 @@ describe('FireOCLAfterWeaponCooldownUpdate', () => {
     expect(attacker.fireOCLAfterCooldownStates.length).toBe(1);
   });
 });
+
+describe('NeutronBlastBehavior', () => {
+  it('kills infantry and makes vehicles unmanned on death', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NeutronShell', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'NeutronBlastBehavior ModuleTag_NB', {
+            BlastRadius: 200,
+            AffectAirborne: 'Yes',
+            AffectAllies: 'Yes',
+          }),
+        ]),
+        makeObjectDef('Infantry1', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Vehicle1', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronShell', 50, 50),
+        makeMapObject('Infantry1', 51, 50),
+        makeMapObject('Vehicle1', 52, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Run one frame to initialize.
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number;
+        destroyed: boolean;
+        health: number;
+        side: string;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+
+    const shell = priv.spawnedEntities.get(1)!;
+    const infantry = priv.spawnedEntities.get(2)!;
+    const vehicle = priv.spawnedEntities.get(3)!;
+
+    // Verify all alive before blast.
+    expect(infantry.destroyed).toBe(false);
+    expect(vehicle.destroyed).toBe(false);
+
+    // Kill the neutron shell to trigger the blast.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 1 });
+    // Apply direct damage to kill the shell.
+    const privLogic = logic as unknown as {
+      applyWeaponDamageAmount(attackerId: number | null, target: { id: number }, amount: number, damageType: string): void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    // Use a direct kill via unresistable damage.
+    const shellEntity = privLogic.spawnedEntities.get(1) as { maxHealth: number; id: number };
+    (logic as unknown as { applyWeaponDamageAmount(a: null, t: unknown, amount: number, dt: string): void })
+      .applyWeaponDamageAmount(null, shellEntity, 1000, 'UNRESISTABLE');
+
+    // Run a frame to process death.
+    logic.update(1 / 30);
+
+    // Infantry should be dead (killed by neutron blast).
+    expect(infantry.destroyed).toBe(true);
+    // Vehicle should be alive but unmanned.
+    expect(vehicle.destroyed).toBe(false);
+    expect(vehicle.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+    // Vehicle should be transferred to neutral (empty side).
+    expect(vehicle.side).toBe('');
+  });
+
+  it('respects AffectAllies=No by sparing allied units', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NeutronShell', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'NeutronBlastBehavior ModuleTag_NB', {
+            BlastRadius: 200,
+            AffectAllies: 'No',
+          }),
+        ]),
+        makeObjectDef('FriendlyInf', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('EnemyInf', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronShell', 50, 50),
+        makeMapObject('FriendlyInf', 51, 50),
+        makeMapObject('EnemyInf', 52, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { destroyed: boolean; health: number }>;
+    };
+
+    // Capture references BEFORE the kill (finalizeDestroyedEntities removes dead entities from the map).
+    const friendly = priv.spawnedEntities.get(2)!;
+    const enemy = priv.spawnedEntities.get(3)!;
+
+    // Kill the shell to trigger the blast.
+    const shellEntity = priv.spawnedEntities.get(1) as { id: number; maxHealth: number };
+    (logic as unknown as { applyWeaponDamageAmount(a: null, t: unknown, amount: number, dt: string): void })
+      .applyWeaponDamageAmount(null, shellEntity, 1000, 'UNRESISTABLE');
+
+    logic.update(1 / 30);
+
+    // Allied infantry should be spared.
+    expect(friendly.destroyed).toBe(false);
+
+    // Enemy infantry should be killed.
+    expect(enemy.destroyed).toBe(true);
+  });
+
+  it('kills CLIFF_JUMPER vehicles outright instead of making them unmanned', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NeutronShell', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'NeutronBlastBehavior ModuleTag_NB', {
+            BlastRadius: 200,
+          }),
+        ]),
+        makeObjectDef('CombatBike', 'China', ['VEHICLE', 'CLIFF_JUMPER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('NormalVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronShell', 50, 50),
+        makeMapObject('CombatBike', 51, 50),
+        makeMapObject('NormalVehicle', 52, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        destroyed: boolean;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+
+    // Capture references BEFORE the kill (entities are removed from map on finalize).
+    const bike = priv.spawnedEntities.get(2)!;
+    const normal = priv.spawnedEntities.get(3)!;
+
+    // Kill the shell.
+    const shellEntity = priv.spawnedEntities.get(1) as { id: number; maxHealth: number };
+    (logic as unknown as { applyWeaponDamageAmount(a: null, t: unknown, amount: number, dt: string): void })
+      .applyWeaponDamageAmount(null, shellEntity, 1000, 'UNRESISTABLE');
+
+    logic.update(1 / 30);
+
+    // CLIFF_JUMPER should be killed outright.
+    expect(bike.destroyed).toBe(true);
+
+    // Normal vehicle should be alive but unmanned.
+    expect(normal.destroyed).toBe(false);
+    expect(normal.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+  });
+
+  it('kills contained passengers inside vehicles', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NeutronShell', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'NeutronBlastBehavior ModuleTag_NB', {
+            BlastRadius: 200,
+          }),
+        ]),
+        makeObjectDef('GarrisonHouse', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_GC', {
+            MaxOccupants: 10,
+          }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 10 }),
+        makeObjectDef('Soldier', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutronShell', 50, 50),
+        makeMapObject('GarrisonHouse', 51, 50),
+        makeMapObject('Soldier', 51, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Put the soldier inside the garrison.
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 3, targetBuildingId: 2 });
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { destroyed: boolean; garrisonContainerId: number | null }>;
+    };
+
+    // Capture references BEFORE the kill.
+    const soldier = priv.spawnedEntities.get(3)!;
+    const building = priv.spawnedEntities.get(2)!;
+
+    // Verify soldier is garrisoned.
+    expect(soldier.garrisonContainerId).toBe(2);
+
+    // Kill the shell.
+    const shellEntity = priv.spawnedEntities.get(1) as { id: number; maxHealth: number };
+    (logic as unknown as { applyWeaponDamageAmount(a: null, t: unknown, amount: number, dt: string): void })
+      .applyWeaponDamageAmount(null, shellEntity, 1000, 'UNRESISTABLE');
+
+    logic.update(1 / 30);
+
+    // Garrisoned soldier should be killed by neutron blast.
+    expect(soldier.destroyed).toBe(true);
+
+    // Building itself should survive (not infantry or vehicle).
+    expect(building.destroyed).toBe(false);
+  });
+});

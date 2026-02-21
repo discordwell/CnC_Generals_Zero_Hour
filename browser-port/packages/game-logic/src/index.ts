@@ -1623,6 +1623,9 @@ interface MapEntity {
   fireOCLAfterCooldownProfiles: FireOCLAfterWeaponCooldownProfile[];
   fireOCLAfterCooldownStates: FireOCLAfterWeaponCooldownState[];
 
+  // ── Source parity: NeutronBlastBehavior — death-triggered radius neutron blast ──
+  neutronBlastProfile: NeutronBlastProfile | null;
+
   // ── Source parity: GenerateMinefieldBehavior — spawns mines on death ──
   generateMinefieldProfile: GenerateMinefieldProfile | null;
   generateMinefieldDone: boolean;
@@ -2731,10 +2734,10 @@ interface SmartBombTargetHomingProfile {
 interface SmartBombTargetHomingState {
   /** Whether a target has been received via SetTargetPosition. */
   targetReceived: boolean;
-  /** Target X world coordinate. */
+  /** Target X world coordinate (horizontal). */
   targetX: number;
-  /** Target Y world coordinate. */
-  targetY: number;
+  /** Target Z world coordinate (horizontal depth). */
+  targetZ: number;
 }
 
 /**
@@ -2790,6 +2793,20 @@ interface FireOCLAfterWeaponCooldownState {
   valid: boolean;
   consecutiveShots: number;
   startFrame: number;
+}
+
+/**
+ * Source parity: NeutronBlastBehavior — death-triggered radius effect that kills infantry,
+ * kills all contained units, and makes vehicles unmanned. Used by Neutron Mines/Shells.
+ * C++ file: NeutronBlastBehavior.h/cpp.
+ */
+interface NeutronBlastProfile {
+  /** Blast radius for scanning victims. Default 10. */
+  blastRadius: number;
+  /** Whether airborne aircraft are affected. Default true. */
+  affectAirborne: boolean;
+  /** Whether allied units are affected. Default true. */
+  affectAllies: boolean;
 }
 
 /** Source parity: PoisonedBehavior default INI values. */
@@ -5158,6 +5175,8 @@ export class GameLogicSubsystem implements Subsystem {
       // Fire OCL after weapon cooldown
       fireOCLAfterCooldownProfiles: this.extractFireOCLAfterCooldownProfiles(objectDef),
       fireOCLAfterCooldownStates: [],
+      // Neutron blast (death-triggered radius effect)
+      neutronBlastProfile: this.extractNeutronBlastProfile(objectDef),
       // Generate minefield
       generateMinefieldProfile: this.extractGenerateMinefieldProfile(objectDef),
       generateMinefieldDone: false,
@@ -9141,6 +9160,32 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.parentDef.blocks) visitBlock(block);
     }
     return profiles;
+  }
+
+  /**
+   * Source parity: NeutronBlastBehavior — extract neutron blast profile from INI.
+   * C++ file: NeutronBlastBehavior.h (buildFieldParse).
+   */
+  private extractNeutronBlastProfile(objectDef: ObjectDef | undefined): NeutronBlastProfile | null {
+    if (!objectDef) return null;
+    let profile: NeutronBlastProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'NEUTRONBLASTBEHAVIOR') return;
+      profile = {
+        blastRadius: readNumericField(block.fields, ['BlastRadius']) ?? 10.0,
+        affectAirborne: (readStringField(block.fields, ['AffectAirborne']) ?? 'Yes').toUpperCase() !== 'NO',
+        affectAllies: (readStringField(block.fields, ['AffectAllies']) ?? 'Yes').toUpperCase() !== 'NO',
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (!profile && objectDef.parentDef) {
+      for (const block of objectDef.parentDef.blocks) visitBlock(block);
+    }
+    return profile;
   }
 
   /**
@@ -23113,7 +23158,7 @@ export class GameLogicSubsystem implements Subsystem {
       const targetCoeff = 1.0 - statusCoeff;
 
       entity.x = state.targetX * targetCoeff + entity.x * statusCoeff;
-      entity.z = state.targetY * targetCoeff + entity.z * statusCoeff;
+      entity.z = state.targetZ * targetCoeff + entity.z * statusCoeff;
       // entity.y (vertical) is NOT modified — projectile continues natural descent.
     }
   }
@@ -23125,10 +23170,12 @@ export class GameLogicSubsystem implements Subsystem {
   setSmartBombTarget(entityId: number, targetX: number, targetZ: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.smartBombProfile) return;
+    // Source parity: C++ SetTargetPosition guards against zero-vector targets.
+    if (targetX === 0 && targetZ === 0) return;
     entity.smartBombState = {
       targetReceived: true,
       targetX,
-      targetY: targetZ,
+      targetZ,
     };
   }
 
@@ -23177,29 +23224,26 @@ export class GameLogicSubsystem implements Subsystem {
       const newMinor = state.initialMinorRadius + (ratio * (state.finalMinorRadius - state.initialMinorRadius));
 
       // Apply new geometry to entity's obstacle geometry.
-      if (entity.obstacleGeometry) {
-        entity.obstacleGeometry.height = newHeight;
-        entity.obstacleGeometry.majorRadius = newMajor;
-        entity.obstacleGeometry.minorRadius = newMinor;
-      }
+      // Source parity: C++ calls getGeometryInfo() unconditionally; skip if no geometry.
+      if (!entity.obstacleGeometry) continue;
+      entity.obstacleGeometry.height = newHeight;
+      entity.obstacleGeometry.majorRadius = newMajor;
+      entity.obstacleGeometry.minorRadius = newMinor;
 
       state.timeActive++;
 
       // Check if transition complete.
       if (state.timeActive > transitionTime) {
         if (state.reverseAtTransitionTime) {
-          // Swap directions: reset timer, swap initial/final values.
+          // Source parity: C++ reads from immutable data-> (profile) for the swap.
           state.timeActive = 0;
           state.reverseAtTransitionTime = false;
-          const tmpH = state.initialHeight;
-          const tmpMaj = state.initialMajorRadius;
-          const tmpMin = state.initialMinorRadius;
-          state.initialHeight = state.finalHeight;
-          state.initialMajorRadius = state.finalMajorRadius;
-          state.initialMinorRadius = state.finalMinorRadius;
-          state.finalHeight = tmpH;
-          state.finalMajorRadius = tmpMaj;
-          state.finalMinorRadius = tmpMin;
+          state.initialHeight = profile.finalHeight;
+          state.initialMajorRadius = profile.finalMajorRadius;
+          state.initialMinorRadius = profile.finalMinorRadius;
+          state.finalHeight = profile.initialHeight;
+          state.finalMajorRadius = profile.initialMajorRadius;
+          state.finalMinorRadius = profile.initialMinorRadius;
         } else {
           state.finished = true;
         }
@@ -23265,11 +23309,17 @@ export class GameLogicSubsystem implements Subsystem {
     profile: FireOCLAfterWeaponCooldownProfile,
     state: FireOCLAfterWeaponCooldownState,
   ): void {
-    // Source parity: ObjectCreationList::create — spawn OCL at entity position.
-    // NOTE: C++ passes oclFrames for lifetime scaling of spawned objects. Our executeOCL
-    // spawns objects that inherit their own LifetimeUpdate from INI; this is acceptable
-    // because the scaled lifetime only matters for visual effects (e.g., napalm overlays).
-    this.executeOCL(profile.oclName, entity);
+    // Source parity: FireOCLAfterWeaponCooldownUpdate::fireOCL — compute scaled lifetime
+    // based on firing duration: seconds * oclLifetimePerSecond * 0.001, clamped to oclMaxFrames.
+    const firingDurationFrames = this.frameCounter - state.startFrame;
+    const firingSeconds = firingDurationFrames / LOGIC_FRAME_RATE;
+    const scaledSeconds = firingSeconds * profile.oclLifetimePerSecond * 0.001;
+    let oclFrames = Math.trunc(scaledSeconds * LOGIC_FRAME_RATE);
+    if (profile.oclMaxFrames > 0) {
+      oclFrames = Math.min(oclFrames, profile.oclMaxFrames);
+    }
+
+    this.executeOCL(profile.oclName, entity, oclFrames > 0 ? oclFrames : undefined);
 
     state.consecutiveShots = 0;
     state.startFrame = 0;
@@ -23837,6 +23887,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: InstantDeathBehavior::onDie — fire matching die module effects.
     this.executeInstantDeathModules(entity);
 
+    // Source parity: NeutronBlastBehavior::onDie — radius neutron blast on death.
+    this.executeNeutronBlast(entity);
+
     // Source parity: FXListDie::onDie — trigger death FX for matching profiles.
     this.executeFXListDieModules(entity);
 
@@ -24099,7 +24152,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ObjectCreationList::create — execute an OCL by name.
    * Resolves CreateObject nuggets and spawns entities.
    */
-  private executeOCL(oclName: string, sourceEntity: MapEntity): void {
+  private executeOCL(oclName: string, sourceEntity: MapEntity, lifetimeOverrideFrames?: number): void {
     const registry = this.iniDataRegistry;
     if (!registry) return;
     const oclDef = registry.getObjectCreationList(oclName);
@@ -24110,7 +24163,7 @@ export class GameLogicSubsystem implements Subsystem {
       // If type is empty, fall back to the first token of name.
       const nuggetType = (nugget.type || nugget.name.split(/\s+/)[0] || '').toUpperCase();
       if (nuggetType === 'CREATEOBJECT' || nuggetType === 'CREATEDEBRIS') {
-        this.executeCreateObjectNugget(nugget, sourceEntity);
+        this.executeCreateObjectNugget(nugget, sourceEntity, lifetimeOverrideFrames);
       }
       // FireWeapon, DeliverPayload, Attack, ApplyRandomForce are omitted for now.
     }
@@ -24119,7 +24172,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: GenericObjectCreationNugget::reallyCreate — spawn objects from an OCL nugget.
    */
-  private executeCreateObjectNugget(nugget: IniBlock, sourceEntity: MapEntity): void {
+  private executeCreateObjectNugget(nugget: IniBlock, sourceEntity: MapEntity, lifetimeOverrideFrames?: number): void {
     const registry = this.iniDataRegistry;
     if (!registry) return;
 
@@ -24171,6 +24224,10 @@ export class GameLogicSubsystem implements Subsystem {
         if (spawned.minefieldProfile) {
           spawned.mineCreatorId = sourceEntity.id;
         }
+        // Source parity: ObjectCreationList::create passes oclFrames to override spawned object lifetime.
+        if (lifetimeOverrideFrames !== undefined && lifetimeOverrideFrames > 0) {
+          spawned.lifetimeDieFrame = this.frameCounter + lifetimeOverrideFrames;
+        }
       }
     }
   }
@@ -24217,6 +24274,99 @@ export class GameLogicSubsystem implements Subsystem {
             this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Source parity: NeutronBlastBehavior::onDie — on death, scan a radius and:
+   * - Kill infantry outright
+   * - Kill all contained passengers in containers
+   * - Kill CLIFF_JUMPER vehicles (combat bikes)
+   * - Make other vehicles unmanned (DISABLED_UNMANNED + transfer to neutral team)
+   * C++ file: NeutronBlastBehavior.cpp lines 66-162.
+   */
+  private executeNeutronBlast(entity: MapEntity): void {
+    const profile = entity.neutronBlastProfile;
+    if (!profile) return;
+
+    const radiusSqr = profile.blastRadius * profile.blastRadius;
+
+    for (const victim of this.spawnedEntities.values()) {
+      if (victim.destroyed || victim.id === entity.id) continue;
+      if (victim.slowDeathState || victim.structureCollapseState) continue;
+
+      // Source parity: PartitionFilterAlive + PartitionFilterSameMapStatus.
+      const dx = victim.x - entity.x;
+      const dz = victim.z - entity.z;
+      if (dx * dx + dz * dz > radiusSqr) continue;
+
+      const victimKindOf = this.resolveEntityKindOfSet(victim);
+
+      // Source parity: skip airborne aircraft if affectAirborne is false.
+      if (!profile.affectAirborne) {
+        if (victimKindOf.has('AIRCRAFT') || victim.objectStatusFlags.has('AIRBORNE_TARGET')) {
+          continue;
+        }
+      }
+
+      this.neutronBlastToObject(entity, victim, victimKindOf, profile);
+    }
+  }
+
+  /**
+   * Source parity: NeutronBlastBehavior::neutronBlastToObject — apply neutron effect to one victim.
+   */
+  private neutronBlastToObject(
+    source: MapEntity,
+    victim: MapEntity,
+    victimKindOf: Set<string>,
+    profile: NeutronBlastProfile,
+  ): void {
+    // Source parity: skip allies if affectAllies is false.
+    if (!profile.affectAllies) {
+      const rel = this.getEntityRelationship(source.id, victim.id);
+      if (rel === 'allies') return;
+    }
+
+    // Kill infantry.
+    if (victimKindOf.has('INFANTRY')) {
+      this.applyWeaponDamageAmount(null, victim, victim.maxHealth, 'UNRESISTABLE');
+    }
+
+    // Kill all contained units (garrison, transport, helix, tunnel passengers).
+    const containedIds = this.collectContainedEntityIds(victim.id);
+    for (const passengerId of containedIds) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (passenger && !passenger.destroyed) {
+        this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
+      }
+    }
+
+    // Vehicle special handling: kill pilots.
+    if (victimKindOf.has('VEHICLE') && !victimKindOf.has('DRONE')) {
+      if (victimKindOf.has('CLIFF_JUMPER')) {
+        // Source parity: CLIFF_JUMPER vehicles (combat bikes) are killed outright.
+        this.applyWeaponDamageAmount(null, victim, victim.maxHealth, 'UNRESISTABLE');
+      } else {
+        // Source parity: make vehicle unmanned — sets DISABLED_UNMANNED, transfers to neutral team.
+        victim.objectStatusFlags.add('DISABLED_UNMANNED');
+        // Clear attack state (C++ calls aiIdle).
+        victim.attackTargetEntityId = null;
+        victim.attackTargetPosition = null;
+        if (victim.moving) {
+          victim.moving = false;
+          victim.moveTarget = null;
+          victim.movePath = [];
+          victim.pathIndex = 0;
+          victim.pathfindGoalCell = null;
+        }
+        // Source parity: deselectObject + setTeam to neutral player.
+        victim.isSelected = false;
+        // Transfer to a neutral side by clearing ownership.
+        this.unregisterEntityEnergy(victim);
+        victim.side = '';
+        victim.controllingPlayerToken = null;
       }
     }
   }
