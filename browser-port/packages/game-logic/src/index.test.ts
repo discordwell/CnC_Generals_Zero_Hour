@@ -23403,3 +23403,202 @@ describe('LeechRangeWeapon', () => {
     expect(tank.leechRangeActive).toBe(false);
   });
 });
+
+describe('AssaultTransportAIUpdate', () => {
+  function makeAssaultTransportBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('TroopCrawler', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            PassengersAllowedToFire: 'No',
+            ContainMax: 8,
+          }),
+          makeBlock('Behavior', 'AssaultTransportAIUpdate ModuleTag_AssaultAI', {
+            MembersGetHealedAtLifeRatio: 0.3,
+          }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('RedGuard', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'RedGuardGun'] }),
+        ]),
+        makeObjectDef('EnemyTank', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('RedGuardGun', {
+          PrimaryDamage: 5, AttackRange: 80, DelayBetweenShots: 100, DamageType: 'SMALL_ARMS',
+        }),
+      ],
+    });
+  }
+
+  it('extracts AssaultTransportProfile from INI', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeAssaultTransportBundle());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TroopCrawler', 50, 50)], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    const priv = logic as any;
+    const crawler = priv.spawnedEntities.get(1)!;
+    expect(crawler.assaultTransportProfile).not.toBeNull();
+    expect(crawler.assaultTransportProfile.membersGetHealedAtLifeRatio).toBeCloseTo(0.3);
+  });
+
+  it('deploys passengers when transport receives attack command', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeAssaultTransportBundle());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopCrawler', 50, 50),   // id 1
+        makeMapObject('RedGuard', 50, 50),         // id 2
+        makeMapObject('EnemyTank', 100, 50),       // id 3
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    // Load passenger.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    const priv = logic as any;
+    const guard = priv.spawnedEntities.get(2)!;
+    expect(guard.transportContainerId).toBe(1);
+
+    // Attack command on transport — should begin assault and deploy passengers.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'PLAYER' });
+    // Run several frames for command processing + assault transport update.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Verify assault transport state was created.
+    const assaultState = priv.assaultTransportStateByEntityId.get(1);
+    expect(assaultState).toBeDefined();
+    expect(assaultState.designatedTargetId).toBe(3);
+
+    // After some frames, member should be ejected (exitContainer queued).
+    // Guard should no longer be contained once eject processes.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    expect(guard.transportContainerId).toBeNull();
+  });
+
+  it('recalls wounded members back into transport', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeAssaultTransportBundle());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopCrawler', 50, 50),   // id 1
+        makeMapObject('RedGuard', 50, 50),         // id 2
+        makeMapObject('EnemyTank', 100, 50),       // id 3
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    // Load passenger, then attack to deploy.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'PLAYER' });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const priv = logic as any;
+    const guard = priv.spawnedEntities.get(2)!;
+    // Guard should be outside now.
+    expect(guard.transportContainerId).toBeNull();
+
+    // Wound the guard below the heal ratio (0.3 * 100 = 30 health).
+    guard.health = 20;
+
+    // Run assault transport update — should recall wounded member.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Guard should be back in the transport.
+    expect(guard.transportContainerId).toBe(1);
+  });
+
+  it('transfers attack orders to troops when transport is destroyed', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeAssaultTransportBundle());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopCrawler', 50, 50),   // id 1
+        makeMapObject('RedGuard', 55, 50),         // id 2 — nearby, not inside
+        makeMapObject('EnemyTank', 100, 50),       // id 3
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    // Load passenger, attack to deploy.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'PLAYER' });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const priv = logic as any;
+    const guard = priv.spawnedEntities.get(2)!;
+    // Ensure guard is deployed outside.
+    expect(guard.transportContainerId).toBeNull();
+
+    // Destroy the transport via markEntityDestroyed.
+    (priv as { markEntityDestroyed: (id: number, attackerId: number) => void }).markEntityDestroyed(1, -1);
+    logic.update(1 / 30);
+
+    // Assault transport state should be cleaned up.
+    expect(priv.assaultTransportStateByEntityId.has(1)).toBe(false);
+
+    // Guard should have received attack orders for the target.
+    expect(guard.attackTargetEntityId).toBe(3);
+  });
+
+  it('resets state and recalls members on stop command', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const registry = makeRegistry(makeAssaultTransportBundle());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopCrawler', 50, 50),   // id 1
+        makeMapObject('RedGuard', 50, 50),         // id 2
+        makeMapObject('EnemyTank', 100, 50),       // id 3
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'China', 0);
+
+    // Load, attack, deploy.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 3, commandSource: 'PLAYER' });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const priv = logic as any;
+    const guard = priv.spawnedEntities.get(2)!;
+    expect(guard.transportContainerId).toBeNull();
+
+    // Stop command — recalls all members.
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // State should be deleted and member recalled.
+    expect(priv.assaultTransportStateByEntityId.has(1)).toBe(false);
+    expect(guard.transportContainerId).toBe(1);
+  });
+});

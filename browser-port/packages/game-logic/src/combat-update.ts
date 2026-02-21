@@ -37,7 +37,11 @@ interface CombatUpdateEntityLike {
   attackNeedsLineOfSight: boolean;
   maxShotsRemaining: number;
   category: string;
-  /** Source parity: Weapon::m_leechWeaponRangeActive — set true after first shot with leech weapon. */
+  /**
+   * Source parity: Weapon::m_leechWeaponRangeActive — set true after first shot with leech weapon.
+   * Note: C++ tracks this per-weapon; we track per-entity. Safe because the range bypass also checks
+   * weapon.leechRangeWeapon, so non-leech weapons on the same entity won't get unlimited range.
+   */
   leechRangeActive: boolean;
 }
 
@@ -180,7 +184,9 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
 
     // Source parity: Weapon::canFireWeapon() — LOS check.
     // If attacker needs line of sight and terrain blocks it, move closer.
-    if (attacker.attackNeedsLineOfSight && attacker.category !== 'air') {
+    // Source parity: AIStates.cpp:1139 — leech range weapons bypass LOS check (locked on).
+    if (attacker.attackNeedsLineOfSight && attacker.category !== 'air'
+      && !(weapon.leechRangeWeapon && attacker.leechRangeActive)) {
       if (context.isAttackLineOfSightBlocked(attacker.x, attacker.z, target.x, target.z)) {
         context.setEntityAimingWeaponStatus(attacker, false);
         if (attacker.canMove) {
@@ -220,6 +226,10 @@ export function updateCombat<TEntity extends CombatUpdateEntityLike>(
       const preAttackDelay = context.resolveWeaponPreAttackDelayFrames(attacker, target, weapon);
       if (preAttackDelay > 0) {
         attacker.preAttackFinishFrame = context.frameCounter + preAttackDelay;
+        // Source parity: Weapon::preFireWeapon (Weapon.cpp:2708) — activate leech range at pre-attack start.
+        if (weapon.leechRangeWeapon) {
+          attacker.leechRangeActive = true;
+        }
         if (attacker.preAttackFinishFrame > context.frameCounter) {
           continue;
         }

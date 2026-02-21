@@ -1267,6 +1267,29 @@ interface HackInternetPendingCommandState {
   executeFrame: number;
 }
 
+// ── Source parity: AssaultTransportAIUpdate — auto-deploy/recall passengers ──
+
+interface AssaultTransportProfile {
+  /** Health ratio below which members are recalled for healing. 0 = never recall. */
+  membersGetHealedAtLifeRatio: number;
+}
+
+interface AssaultTransportMember {
+  entityId: number;
+  isHealing: boolean;
+  isNew: boolean;
+}
+
+interface AssaultTransportState {
+  members: AssaultTransportMember[];
+  designatedTargetId: number | null;
+  attackMoveGoalX: number;
+  attackMoveGoalZ: number;
+  isAttackMove: boolean;
+  isAttackObject: boolean;
+  newOccupantsAreNewMembers: boolean;
+}
+
 interface OverchargeBehaviorProfile {
   healthPercentToDrainPerSecond: number;
   notAllowedWhenHealthBelowPercent: number;
@@ -1900,6 +1923,10 @@ interface MapEntity {
   jetAIProfile: JetAIProfile | null;
   /** JetAI runtime state (null = not an aircraft with JetAIUpdate). */
   jetAIState: JetAIRuntimeState | null;
+
+  // ── Source parity: AssaultTransportAIUpdate — auto-deploy/recall passengers ──
+  /** AssaultTransport profile (null = not an assault transport). */
+  assaultTransportProfile: AssaultTransportProfile | null;
 }
 
 /**
@@ -3294,6 +3321,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sellingEntities = new Map<number, SellingEntityState>();
   private readonly hackInternetStateByEntityId = new Map<number, HackInternetRuntimeState>();
   private readonly hackInternetPendingCommandByEntityId = new Map<number, HackInternetPendingCommandState>();
+  private readonly assaultTransportStateByEntityId = new Map<number, AssaultTransportState>();
   private readonly overchargeStateByEntityId = new Map<number, OverchargeRuntimeState>();
   private readonly disabledHackedStatusByEntityId = new Map<number, number>();
   private readonly disabledEmpStatusByEntityId = new Map<number, number>();
@@ -3739,6 +3767,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingCombatDropActions();
     this.updateHackInternet();
     this.updatePendingHackInternetCommands();
+    this.updateAssaultTransports();
     this.updateOvercharge();
     this.updateGrantStealth();
     this.updateStealth();
@@ -5709,6 +5738,8 @@ export class GameLogicSubsystem implements Subsystem {
       // JetAI
       jetAIProfile,
       jetAIState: null,
+      // AssaultTransport
+      assaultTransportProfile: this.extractAssaultTransportProfile(objectDef),
     };
 
     // Source parity: TurretAI init — create runtime state for each turret.
@@ -7422,6 +7453,28 @@ export class GameLogicSubsystem implements Subsystem {
       attackLocoPersistFrames,
       returnLocomotorSet,
     };
+  }
+
+  /**
+   * Source parity: AssaultTransportAIUpdate — extract assault transport profile from INI.
+   * C++ file: AssaultTransportAIUpdate.h (buildFieldParse).
+   */
+  private extractAssaultTransportProfile(objectDef: ObjectDef | undefined): AssaultTransportProfile | null {
+    if (!objectDef) return null;
+    let profile: AssaultTransportProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'ASSAULTTRANSPORTAIUPDATE') {
+          const ratio = readNumericField(block.fields, ['MembersGetHealedAtLifeRatio']) ?? 0;
+          profile = { membersGetHealedAtLifeRatio: Math.max(0, Math.min(1, ratio)) };
+        }
+      }
+      for (const child of block.blocks) visitBlock(child);
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    return profile;
   }
 
   /**
@@ -12315,6 +12368,10 @@ export class GameLogicSubsystem implements Subsystem {
           command.targetZ,
           command.attackDistance,
         );
+        // Source parity: AssaultTransportAIUpdate::aiDoCommand — begin assault on attack-move.
+        if (amEntity?.assaultTransportProfile) {
+          this.beginAssaultTransportAttackMove(amEntity, command.targetX, command.targetZ);
+        }
         return;
       }
       case 'guardPosition':
@@ -12358,6 +12415,10 @@ export class GameLogicSubsystem implements Subsystem {
             atkEntity, command.targetEntityId, command.commandSource ?? 'PLAYER',
           );
         }
+        // Source parity: AssaultTransportAIUpdate::aiDoCommand — begin assault on attack command.
+        if (atkEntity?.assaultTransportProfile && (command.commandSource ?? 'PLAYER') !== 'AI') {
+          this.beginAssaultTransportAttack(atkEntity, command.targetEntityId, false);
+        }
         return;
       }
       case 'fireWeapon':
@@ -12385,6 +12446,8 @@ export class GameLogicSubsystem implements Subsystem {
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
+        // Source parity: AssaultTransportAIUpdate::aiDoCommand(AICMD_IDLE) — recall all members.
+        this.resetAssaultTransportState(command.entityId);
         const stopEntity = this.spawnedEntities.get(command.entityId);
         if (stopEntity) {
           // Source parity: explicit stop resets auto-target scan timer and clears guard state.
@@ -15069,6 +15132,181 @@ export class GameLogicSubsystem implements Subsystem {
 
       this.hackInternetPendingCommandByEntityId.delete(entityId);
       this.applyCommand(pending.command);
+    }
+  }
+
+  // ── Source parity: AssaultTransportAIUpdate — auto-deploy/recall passengers ──
+
+  private beginAssaultTransportAttack(transport: MapEntity, targetEntityId: number, _isAttackMove: boolean): void {
+    const state = this.getOrCreateAssaultTransportState(transport.id);
+    // Source parity: reset() then set attack flags.
+    state.members = [];
+    state.designatedTargetId = targetEntityId;
+    state.isAttackObject = true;
+    state.isAttackMove = false;
+    state.newOccupantsAreNewMembers = false;
+  }
+
+  private beginAssaultTransportAttackMove(transport: MapEntity, targetX: number, targetZ: number): void {
+    const state = this.getOrCreateAssaultTransportState(transport.id);
+    state.members = [];
+    state.designatedTargetId = null;
+    state.attackMoveGoalX = targetX;
+    state.attackMoveGoalZ = targetZ;
+    state.isAttackMove = true;
+    state.isAttackObject = false;
+    state.newOccupantsAreNewMembers = false;
+  }
+
+  private resetAssaultTransportState(entityId: number): void {
+    const state = this.assaultTransportStateByEntityId.get(entityId);
+    if (!state) return;
+    // Source parity: retrieveMembers() — order all outside members back in.
+    for (const member of state.members) {
+      const memberEntity = this.spawnedEntities.get(member.entityId);
+      if (!memberEntity || memberEntity.destroyed) continue;
+      if (!this.isEntityContained(memberEntity)) {
+        // Order member to re-enter transport.
+        this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: entityId });
+      }
+    }
+    this.assaultTransportStateByEntityId.delete(entityId);
+  }
+
+  private getOrCreateAssaultTransportState(entityId: number): AssaultTransportState {
+    let state = this.assaultTransportStateByEntityId.get(entityId);
+    if (!state) {
+      state = {
+        members: [],
+        designatedTargetId: null,
+        attackMoveGoalX: 0,
+        attackMoveGoalZ: 0,
+        isAttackMove: false,
+        isAttackObject: false,
+        newOccupantsAreNewMembers: false,
+      };
+      this.assaultTransportStateByEntityId.set(entityId, state);
+    }
+    return state;
+  }
+
+  /**
+   * Source parity: AssaultTransportAIUpdate::update() — frame-by-frame member coordination.
+   * C++ file: AssaultTransportAIUpdate.cpp lines 155-370.
+   */
+  private updateAssaultTransports(): void {
+    for (const [transportId, state] of this.assaultTransportStateByEntityId.entries()) {
+      const transport = this.spawnedEntities.get(transportId);
+      if (!transport || transport.destroyed) {
+        // Source parity: giveFinalOrders() — transfer commands to troops when transport dies.
+        this.giveAssaultTransportFinalOrders(state);
+        this.assaultTransportStateByEntityId.delete(transportId);
+        continue;
+      }
+      const profile = transport.assaultTransportProfile;
+      if (!profile) {
+        this.assaultTransportStateByEntityId.delete(transportId);
+        continue;
+      }
+
+      // Source parity: cleanup dead or externally-commanded members.
+      state.members = state.members.filter((member) => {
+        const memberEntity = this.spawnedEntities.get(member.entityId);
+        if (!memberEntity || memberEntity.destroyed) return false;
+        // Source parity: if member received direct player command, release from tracking.
+        if (memberEntity.attackCommandSource === 'PLAYER') return false;
+        return true;
+      });
+
+      // Source parity: add new contained passengers not yet tracked.
+      const containedIds = this.collectContainedEntityIds(transportId);
+      for (const passengerId of containedIds) {
+        if (state.members.some((m) => m.entityId === passengerId)) continue;
+        if (state.members.length >= 10) break; // MAX_TRANSPORT_SLOTS
+        const passenger = this.spawnedEntities.get(passengerId);
+        if (!passenger || passenger.destroyed) continue;
+        const isWounded = profile.membersGetHealedAtLifeRatio > 0
+          && passenger.health / passenger.maxHealth < profile.membersGetHealedAtLifeRatio;
+        state.members.push({
+          entityId: passengerId,
+          isHealing: isWounded,
+          isNew: state.newOccupantsAreNewMembers,
+        });
+      }
+      // After first sync, all future occupants are new members.
+      state.newOccupantsAreNewMembers = true;
+
+      // Resolve designated target.
+      let target = state.designatedTargetId !== null
+        ? this.spawnedEntities.get(state.designatedTargetId) ?? null
+        : null;
+      if (target?.destroyed) {
+        target = null;
+        state.designatedTargetId = null;
+      }
+
+      if (target) {
+        // Source parity: coordinate members for attack-object.
+        for (const member of state.members) {
+          const memberEntity = this.spawnedEntities.get(member.entityId);
+          if (!memberEntity || memberEntity.destroyed) continue;
+          const contained = this.isEntityContained(memberEntity);
+          const isHealthy = memberEntity.health >= memberEntity.maxHealth;
+          const isWounded = profile.membersGetHealedAtLifeRatio > 0
+            && memberEntity.health / memberEntity.maxHealth < profile.membersGetHealedAtLifeRatio;
+
+          if (contained && isHealthy && !member.isNew) {
+            // Eject healthy members.
+            this.commandQueue.push({ type: 'exitContainer', entityId: member.entityId });
+          } else if (!contained && isWounded) {
+            // Recall wounded members.
+            member.isHealing = true;
+            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+          } else if (!contained && !isWounded) {
+            // Order healthy outside members to attack target.
+            member.isHealing = false;
+            if (memberEntity.attackTargetEntityId !== target.id) {
+              this.commandQueue.push({ type: 'attackEntity', entityId: member.entityId, targetEntityId: target.id, commandSource: 'AI' });
+            }
+          }
+        }
+      } else if (state.isAttackObject) {
+        // Target died — retrieve members.
+        for (const member of state.members) {
+          const memberEntity = this.spawnedEntities.get(member.entityId);
+          if (!memberEntity || memberEntity.destroyed) continue;
+          if (!this.isEntityContained(memberEntity)) {
+            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+          }
+        }
+        state.isAttackObject = false;
+        state.designatedTargetId = null;
+      }
+    }
+  }
+
+  /**
+   * Source parity: AssaultTransportAIUpdate::giveFinalOrders() — transfer command to troops.
+   */
+  private giveAssaultTransportFinalOrders(state: AssaultTransportState): void {
+    for (const member of state.members) {
+      const memberEntity = this.spawnedEntities.get(member.entityId);
+      if (!memberEntity || memberEntity.destroyed) continue;
+      const target = state.designatedTargetId !== null
+        ? this.spawnedEntities.get(state.designatedTargetId)
+        : null;
+      if (state.isAttackObject && target && !target.destroyed) {
+        // Transfer as PLAYER command so troops continue independently.
+        this.commandQueue.push({ type: 'attackEntity', entityId: member.entityId, targetEntityId: target.id, commandSource: 'PLAYER' });
+      } else if (state.isAttackMove) {
+        this.commandQueue.push({
+          type: 'attackMoveTo',
+          entityId: member.entityId,
+          targetX: state.attackMoveGoalX,
+          targetZ: state.attackMoveGoalZ,
+          attackDistance: 0,
+        });
+      }
     }
   }
 
