@@ -27602,6 +27602,51 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates bridge-broken and bridge-repaired only on bridge-change frames', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BridgeAnchor', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BridgeAnchor', 10, 10), // id 1
+        makeMapObject('BridgeAnchor', 20, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      bridgeSegments: Map<number, { passable: boolean; cellIndices: number[]; transitionIndices: number[] }>;
+      bridgeSegmentByControlEntity: Map<number, number>;
+    };
+    privateApi.bridgeSegments.set(0, { passable: true, cellIndices: [], transitionIndices: [] });
+    privateApi.bridgeSegmentByControlEntity.set(1, 0);
+    privateApi.bridgeSegmentByControlEntity.set(2, 0);
+
+    expect(logic.evaluateScriptBridgeBroken({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptBridgeRepaired({ entityId: 1 })).toBe(false);
+
+    logic.update(1 / 30);
+    expect(logic.onObjectDestroyed(1)).toBe(true);
+    expect(logic.evaluateScriptBridgeBroken({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptBridgeRepaired({ entityId: 1 })).toBe(false);
+
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptBridgeBroken({ entityId: 1 })).toBe(false);
+    expect(logic.onObjectRepaired(1)).toBe(true);
+    expect(logic.evaluateScriptBridgeBroken({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptBridgeRepaired({ entityId: 1 })).toBe(true);
+
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptBridgeRepaired({ entityId: 1 })).toBe(false);
+  });
+
   it('evaluates all-destroyed, all-build-facilities-destroyed, and named-owned-by-player', () => {
     const bundle = makeBundle({
       objects: [

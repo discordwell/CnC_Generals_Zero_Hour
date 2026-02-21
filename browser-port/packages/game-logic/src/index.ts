@@ -3701,6 +3701,10 @@ export class GameLogicSubsystem implements Subsystem {
   private frameCounter = 0;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
+  /** Source parity: TerrainLogic::m_bridgeDamageStatesChanged frame gate. */
+  private bridgeDamageStatesChangedFrame = -1;
+  /** Source parity: BridgeInfo::damageStateChanged + curDamageState snapshot for this frame. */
+  private readonly bridgeDamageStateByControlEntity = new Map<number, boolean>();
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
   private readonly sideCredits = new Map<string, number>();
@@ -4238,6 +4242,7 @@ export class GameLogicSubsystem implements Subsystem {
   update(dt: number): void {
     this.animationTime += dt;
     this.frameCounter++;
+    this.resetBridgeDamageStateChanges();
     this.resetContainPlayerEnteredSides();
     this.flushCommands();
     this.updateDisabledHackedStatuses();
@@ -5410,6 +5415,44 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return entity.selected;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateBridgeBroken.
+   */
+  evaluateScriptBridgeBroken(filter: {
+    entityId: number;
+  }): boolean {
+    if (this.bridgeDamageStatesChangedFrame !== this.frameCounter) {
+      return false;
+    }
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    if (!this.spawnedEntities.has(entityId)) {
+      return false;
+    }
+    return this.bridgeDamageStateByControlEntity.get(entityId) === false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateBridgeRepaired.
+   */
+  evaluateScriptBridgeRepaired(filter: {
+    entityId: number;
+  }): boolean {
+    if (this.bridgeDamageStatesChangedFrame !== this.frameCounter) {
+      return false;
+    }
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    if (!this.spawnedEntities.has(entityId)) {
+      return false;
+    }
+    return this.bridgeDamageStateByControlEntity.get(entityId) === true;
   }
 
   /**
@@ -7781,6 +7824,8 @@ export class GameLogicSubsystem implements Subsystem {
       grid.bridgeTransitions[index] = passableByte;
     }
 
+    this.noteBridgeDamageStateChange(segmentId, passable);
+
     return true;
   }
 
@@ -7811,6 +7856,21 @@ export class GameLogicSubsystem implements Subsystem {
     return Array.from(this.bridgeSegments.entries())
       .map(([segmentId, segment]) => ({ segmentId, passable: segment.passable }))
       .sort((a, b) => a.segmentId - b.segmentId);
+  }
+
+  private resetBridgeDamageStateChanges(): void {
+    this.bridgeDamageStatesChangedFrame = -1;
+    this.bridgeDamageStateByControlEntity.clear();
+  }
+
+  private noteBridgeDamageStateChange(segmentId: number, passable: boolean): void {
+    this.bridgeDamageStatesChangedFrame = this.frameCounter;
+    for (const [entityId, mappedSegmentId] of this.bridgeSegmentByControlEntity.entries()) {
+      if (mappedSegmentId !== segmentId) {
+        continue;
+      }
+      this.bridgeDamageStateByControlEntity.set(entityId, passable);
+    }
   }
 
   onObjectDestroyed(entityId: number): boolean {
@@ -8033,6 +8093,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.clearSpawnedObjects();
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
+    this.resetBridgeDamageStateChanges();
     this.selectedEntityId = null;
     this.nextId = 1;
     this.animationTime = 0;
@@ -24517,6 +24578,8 @@ export class GameLogicSubsystem implements Subsystem {
     const bridgeSegmentByCell = new Int32Array(total);
     bridgeSegmentByCell.fill(-1);
     this.bridgeSegments.clear();
+    this.bridgeSegmentByControlEntity.clear();
+    this.resetBridgeDamageStateChanges();
 
     const waterCells = this.buildWaterCellsFromTriggers(mapData, heightmap, cellWidth, cellHeight);
     const cliffBits = this.tryDecodeMapCliffState(mapData, heightmap);
@@ -35080,6 +35143,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.navigationGrid = null;
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
+    this.resetBridgeDamageStateChanges();
     this.shortcutSpecialPowerSourceByName.clear();
     this.shortcutSpecialPowerNamesByEntityId.clear();
     this.spawnedEntities.clear();
