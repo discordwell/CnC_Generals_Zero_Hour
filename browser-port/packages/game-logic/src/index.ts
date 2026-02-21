@@ -3724,6 +3724,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptConditionCacheById = new Map<string, ScriptConditionCacheState>();
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
+  /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
+  private readonly scriptExistedEntityIds = new Set<number>();
   /** Source parity: Object::m_triggerInfo isInside snapshots keyed by entity id. */
   private readonly scriptTriggerMembershipByEntityId = new Map<number, Set<number>>();
   /** Source parity: Object::m_triggerInfo entered flags keyed by entity id. */
@@ -6091,6 +6093,91 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return false;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedCreated.
+   * C++ note: this is effectively evaluateNamedExists (alive or dead, as long as object still exists).
+   */
+  evaluateScriptNamedCreated(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    return this.spawnedEntities.has(entityId);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedUnitExists.
+   * Returns true only when object exists and is not effectively dead.
+   */
+  evaluateScriptNamedUnitExists(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+    return !this.isScriptEntityEffectivelyDead(entity);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedUnitDestroyed.
+   * True if object is effectively dead, or if it existed previously and is now gone.
+   */
+  evaluateScriptNamedUnitDestroyed(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (entity) {
+      return this.isScriptEntityEffectivelyDead(entity);
+    }
+    return this.scriptExistedEntityIds.has(entityId);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedUnitDying.
+   * True only while object exists and is effectively dead (not after final removal).
+   */
+  evaluateScriptNamedUnitDying(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return false;
+    }
+    return this.isScriptEntityEffectivelyDead(entity);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateNamedUnitTotallyDead.
+   * True only if object existed before and no longer exists.
+   */
+  evaluateScriptNamedUnitTotallyDead(filter: {
+    entityId: number;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    if (this.spawnedEntities.has(entityId)) {
+      return false;
+    }
+    return this.scriptExistedEntityIds.has(entityId);
   }
 
   /**
@@ -15028,6 +15115,10 @@ export class GameLogicSubsystem implements Subsystem {
     return this.compareScriptNumeric(comparison, normalizedCurrentCount, normalizedTargetCount);
   }
 
+  private isScriptEntityEffectivelyDead(entity: MapEntity): boolean {
+    return entity.destroyed || entity.slowDeathState !== null || entity.structureCollapseState !== null;
+  }
+
   private isEntityScriptSpecialPowerDisabled(entity: MapEntity): boolean {
     if (entity.objectStatusFlags.has('DISABLED') || entity.objectStatusFlags.has('SCRIPT_DISABLED')) {
       return true;
@@ -18143,6 +18234,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private addEntityToWorld(entity: MapEntity): void {
     this.spawnedEntities.set(entity.id, entity);
+    this.scriptExistedEntityIds.add(entity.id);
     if (this.mapTriggerRegions.length > 0) {
       this.initializeScriptTriggerMembershipForEntity(entity);
     }
@@ -34393,6 +34485,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();
     this.scriptObjectCountBySideAndType.clear();
+    this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();
     this.scriptTriggerEnteredByEntityId.clear();
     this.scriptTriggerExitedByEntityId.clear();

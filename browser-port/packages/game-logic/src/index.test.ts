@@ -28059,6 +28059,58 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates named-unit lifecycle conditions with did-exist parity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Scout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Scout', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptNamedCreated({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptNamedUnitExists({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptNamedUnitDying({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 1 })).toBe(false);
+
+    // Never-existing unit id should stay false for destroyed/totally-dead checks.
+    expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 999 })).toBe(false);
+    expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 999 })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+
+    // During death pipeline, object still exists but is effectively dead.
+    expect(logic.evaluateScriptNamedCreated({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptNamedUnitExists({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptNamedUnitDying({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 1 })).toBe(false);
+
+    logic.update(1 / 30);
+
+    // After finalization, object is gone but did exist.
+    expect(logic.evaluateScriptNamedCreated({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptNamedUnitExists({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptNamedUnitDying({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 1 })).toBe(true);
+  });
+
   it('evaluates named-has-free-container-slots from contain occupancy', () => {
     const bundle = makeBundle({
       objects: [
