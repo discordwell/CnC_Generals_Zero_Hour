@@ -27700,6 +27700,91 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates science-acquired, can-purchase-science, and science-points conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_ALPHA', {
+          SciencePurchasePointCost: 2,
+          IsGrantable: 'Yes',
+        }),
+        makeScienceDef('SCIENCE_BETA', {
+          SciencePurchasePointCost: 3,
+          PrerequisiteSciences: 'SCIENCE_ALPHA',
+          IsGrantable: 'Yes',
+        }),
+        makeScienceDef('SCIENCE_NOT_PURCHASABLE', {
+          SciencePurchasePointCost: 0,
+          IsGrantable: 'Yes',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CommandCenter', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      getSideRankStateMap: (side: string) => { sciencePurchasePoints: number };
+    };
+    privateApi.getSideRankStateMap('america').sciencePurchasePoints = 3;
+
+    expect(logic.evaluateScriptCanPurchaseScience({
+      side: 'America',
+      scienceName: 'SCIENCE_ALPHA',
+    })).toBe(true);
+    expect(logic.evaluateScriptCanPurchaseScience({
+      side: 'America',
+      scienceName: 'SCIENCE_BETA',
+    })).toBe(false);
+    expect(logic.evaluateScriptCanPurchaseScience({
+      side: 'America',
+      scienceName: 'SCIENCE_NOT_PURCHASABLE',
+    })).toBe(false);
+
+    expect(logic.evaluateScriptSciencePurchasePoints({
+      side: 'America',
+      pointsNeeded: 3,
+    })).toBe(true);
+    expect(logic.evaluateScriptSciencePurchasePoints({
+      side: 'America',
+      pointsNeeded: 4,
+    })).toBe(false);
+
+    logic.submitCommand({
+      type: 'grantSideScience',
+      side: 'America',
+      scienceName: 'SCIENCE_ALPHA',
+    });
+    logic.update(1 / 30);
+
+    // Source parity: evaluateScienceAcquired consumes the event once.
+    expect(logic.evaluateScriptScienceAcquired({
+      side: 'America',
+      scienceName: 'SCIENCE_ALPHA',
+    })).toBe(true);
+    expect(logic.evaluateScriptScienceAcquired({
+      side: 'America',
+      scienceName: 'SCIENCE_ALPHA',
+    })).toBe(false);
+
+    expect(logic.evaluateScriptCanPurchaseScience({
+      side: 'America',
+      scienceName: 'SCIENCE_ALPHA',
+    })).toBe(false);
+    expect(logic.evaluateScriptCanPurchaseScience({
+      side: 'America',
+      scienceName: 'SCIENCE_BETA',
+    })).toBe(true);
+  });
+
   it('evaluates player power percentage and excess-power comparisons', () => {
     const bundle = makeBundle({
       objects: [

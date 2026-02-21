@@ -3666,6 +3666,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideCompletedUpgrades = new Map<string, Set<string>>();
   private readonly sideKindOfProductionCostModifiers = new Map<string, KindOfProductionCostModifier[]>();
   private readonly sideSciences = new Map<string, Set<string>>();
+  /** Source parity: ScriptEngine::m_acquiredSciences (consumed by evaluateScienceAcquired). */
+  private readonly sideScriptAcquiredSciences = new Map<string, Set<string>>();
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
@@ -5798,6 +5800,61 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptConditions::evaluateScienceAcquired.
+   * Consumes the acquired-science script event when the condition is true.
+   */
+  evaluateScriptScienceAcquired(filter: {
+    side: string;
+    scienceName: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedScience = this.resolveScienceInternalName(filter.scienceName);
+    if (!normalizedSide || !normalizedScience) {
+      return false;
+    }
+
+    const acquiredSciences = this.sideScriptAcquiredSciences.get(normalizedSide);
+    if (!acquiredSciences || !acquiredSciences.has(normalizedScience)) {
+      return false;
+    }
+
+    acquiredSciences.delete(normalizedScience);
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateCanPurchaseScience.
+   */
+  evaluateScriptCanPurchaseScience(filter: {
+    side: string;
+    scienceName: string;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedScience = this.resolveScienceInternalName(filter.scienceName);
+    if (!normalizedSide || !normalizedScience) {
+      return false;
+    }
+
+    return this.canSidePurchaseScience(normalizedSide, normalizedScience);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateSciencePurchasePoints.
+   */
+  evaluateScriptSciencePurchasePoints(filter: {
+    side: string;
+    pointsNeeded: number;
+  }): boolean {
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const pointsNeeded = Number.isFinite(filter.pointsNeeded) ? Math.trunc(filter.pointsNeeded) : 0;
+    return this.getSideRankStateMap(normalizedSide).sciencePurchasePoints >= pointsNeeded;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluatePlayerHasNOrFewerBuildings.
    */
   evaluateScriptPlayerHasNOrFewerBuildings(filter: {
@@ -6255,6 +6312,28 @@ export class GameLogicSubsystem implements Subsystem {
     return this.addScienceToSide(normalizedSide, normalizedScience);
   }
 
+  private resolveScienceInternalName(scienceName: string): string | null {
+    const normalizedScienceName = scienceName.trim().toUpperCase();
+    if (!normalizedScienceName || normalizedScienceName === 'NONE') {
+      return null;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return null;
+    }
+    const scienceDef = findScienceDefByName(registry, normalizedScienceName);
+    if (!scienceDef) {
+      return null;
+    }
+
+    const normalizedScience = scienceDef.name.trim().toUpperCase();
+    if (!normalizedScience || normalizedScience === 'NONE') {
+      return null;
+    }
+    return normalizedScience;
+  }
+
   private addScienceToSide(normalizedSide: string, normalizedScience: string): boolean {
     const sideSciences = this.getSideScienceSet(normalizedSide);
     if (sideSciences.has(normalizedScience)) {
@@ -6262,6 +6341,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     sideSciences.add(normalizedScience);
+    this.getScriptScienceAcquiredSet(normalizedSide).add(normalizedScience);
     return true;
   }
 
@@ -6291,6 +6371,37 @@ export class GameLogicSubsystem implements Subsystem {
     return availability !== 'disabled' && availability !== 'hidden';
   }
 
+  private canSidePurchaseScience(normalizedSide: string, normalizedScience: string): boolean {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const scienceDef = findScienceDefByName(registry, normalizedScience);
+    if (!scienceDef) {
+      return false;
+    }
+
+    const canonicalScience = scienceDef.name.trim().toUpperCase();
+    if (!canonicalScience || canonicalScience === 'NONE') {
+      return false;
+    }
+
+    if (this.hasSideScience(normalizedSide, canonicalScience)) {
+      return false;
+    }
+
+    // TODO(source-parity): apply per-side disabled/hidden science state here.
+    for (const prerequisite of this.getSciencePrerequisites(scienceDef)) {
+      if (!this.hasSideScience(normalizedSide, prerequisite)) {
+        return false;
+      }
+    }
+
+    const scienceCost = this.getSciencePurchaseCost(scienceDef);
+    return scienceCost > 0 && scienceCost <= this.getSideRankStateMap(normalizedSide).sciencePurchasePoints;
+  }
+
   private getPurchasableScienceCost(side: string, scienceName: string): number {
     const normalizedScienceName = scienceName.trim().toUpperCase();
     if (!normalizedScienceName || normalizedScienceName === 'NONE') {
@@ -6317,26 +6428,14 @@ export class GameLogicSubsystem implements Subsystem {
       return 0;
     }
 
+    if (!this.canSidePurchaseScience(normalizedSide, normalizedScience)) {
+      return 0;
+    }
+
     if (!this.isScienceAvailableForLocalPlayer(normalizedScience)) {
       return 0;
     }
-
-    if (this.hasSideScience(normalizedSide, normalizedScience)) {
-      return 0;
-    }
-
-    const scienceCost = this.getSciencePurchaseCost(scienceDef);
-    if (scienceCost <= 0 || scienceCost > this.getLocalPlayerSciencePurchasePoints()) {
-      return 0;
-    }
-
-    for (const prerequisite of this.getSciencePrerequisites(scienceDef)) {
-      if (!this.hasSideScience(normalizedSide, prerequisite)) {
-        return 0;
-      }
-    }
-
-    return scienceCost;
+    return this.getSciencePurchaseCost(scienceDef);
   }
 
   private getSideUpgradeSet(map: Map<string, Set<string>>, normalizedSide: string): Set<string> {
@@ -6356,6 +6455,16 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const created = new Set<string>();
     this.sideSciences.set(normalizedSide, created);
+    return created;
+  }
+
+  private getScriptScienceAcquiredSet(normalizedSide: string): Set<string> {
+    const existing = this.sideScriptAcquiredSciences.get(normalizedSide);
+    if (existing) {
+      return existing;
+    }
+    const created = new Set<string>();
+    this.sideScriptAcquiredSciences.set(normalizedSide, created);
     return created;
   }
 
@@ -6803,6 +6912,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCompletedUpgrades.clear();
     this.sideKindOfProductionCostModifiers.clear();
     this.sideSciences.clear();
+    this.sideScriptAcquiredSciences.clear();
     this.localPlayerScienceAvailability.clear();
     this.sidePowerBonus.clear();
     this.sideRadarState.clear();
@@ -21039,24 +21149,12 @@ export class GameLogicSubsystem implements Subsystem {
         if (!registry) return [];
         const normalizedSide = this.normalizeSide(side);
         if (!normalizedSide) return [];
-        const rankState = this.getSideRankStateMap(normalizedSide);
         const result: Array<{ name: string; cost: number }> = [];
         for (const scienceDef of iterAllScienceDefs(registry)) {
           const scienceName = scienceDef.name.trim().toUpperCase();
           if (!scienceName || scienceName === 'NONE') continue;
-          if (this.hasSideScience(normalizedSide, scienceName)) continue;
+          if (!this.canSidePurchaseScience(normalizedSide, scienceName)) continue;
           const cost = this.getSciencePurchaseCost(scienceDef);
-          if (cost <= 0 || cost > rankState.sciencePurchasePoints) continue;
-          // Check prerequisites.
-          const prereqs = this.getSciencePrerequisites(scienceDef);
-          let prereqsMet = true;
-          for (const prereq of prereqs) {
-            if (!this.hasSideScience(normalizedSide, prereq)) {
-              prereqsMet = false;
-              break;
-            }
-          }
-          if (!prereqsMet) continue;
           result.push({ name: scienceName, cost });
         }
         return result;
