@@ -27421,6 +27421,56 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('evaluates player-unit-condition as object-comparison subset', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('UnitA', 10, 10), // id 1
+        makeMapObject('UnitA', 12, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptPlayerUnitCondition({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      count: 2,
+      unitType: 'UnitA',
+      conditionCacheId: 'player-unit-condition-ge-2',
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptPlayerUnitCondition({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      count: 2,
+      unitType: 'UnitA',
+      conditionCacheId: 'player-unit-condition-ge-2',
+    })).toBe(false);
+    expect(logic.evaluateScriptPlayerUnitCondition({
+      side: 'America',
+      comparison: 'EQUAL',
+      count: 1,
+      unitType: 'UnitA',
+      conditionCacheId: 'player-unit-condition-eq-1',
+    })).toBe(true);
+  });
+
   it('evaluates all-destroyed, all-build-facilities-destroyed, and named-owned-by-player', () => {
     const bundle = makeBundle({
       objects: [

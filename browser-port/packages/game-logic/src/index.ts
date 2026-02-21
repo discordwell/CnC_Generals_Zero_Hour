@@ -6882,6 +6882,26 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptConditions::evaluatePlayerUnitCondition.
+   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
+   */
+  evaluateScriptPlayerUnitCondition(filter: {
+    side: string;
+    comparison: ScriptComparisonInput;
+    count: number;
+    unitType: string;
+    conditionCacheId?: string;
+  }): boolean {
+    return this.evaluateScriptPlayerHasObjectComparison({
+      side: filter.side,
+      comparison: filter.comparison,
+      count: filter.count,
+      templateName: filter.unitType,
+      conditionCacheId: filter.conditionCacheId,
+    });
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateBuiltByPlayer.
    */
   evaluateScriptBuiltByPlayer(filter: {
