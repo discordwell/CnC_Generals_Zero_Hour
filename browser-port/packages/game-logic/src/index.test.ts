@@ -12206,6 +12206,50 @@ describe('crush damage during movement', () => {
     expect(infHealth).toBe(100);
   });
 
+  it('applies vehicle crush only after passing the selected crush point', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CrusherTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TankLocomotor', {}),
+        ], { CrusherLevel: 2, GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('CrushableVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TankLocomotor', {}),
+        ], { CrushableLevel: 0, GeometryMajorRadius: 10, GeometryMinorRadius: 10 }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TankLocomotor', 120),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CrusherTank', 225, 205),
+        makeMapObject('CrushableVehicle', 220, 205),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { moving: boolean; rotationY: number; speed: number; health: number; destroyed: boolean }>;
+      updateCrushCollisions: () => void;
+    };
+    const crusher = privateApi.spawnedEntities.get(1)!;
+    const victim = privateApi.spawnedEntities.get(2)!;
+    crusher.moving = true;
+    crusher.rotationY = Math.PI / 2; // facing +X, so target center is behind (dot < 0)
+    crusher.speed = 1;
+    victim.rotationY = 0; // align victim crush points to center-line for deterministic TOTAL target.
+
+    privateApi.updateCrushCollisions();
+    expect(victim.health <= 0 || victim.destroyed).toBe(true);
+  });
+
   it('hijacker infantry is immune to crush by target vehicle', () => {
     // Source parity: SquishCollide::onCollide — infantry with a pending hijackVehicle
     // action targeting the crusher is immune to being crushed by that vehicle.

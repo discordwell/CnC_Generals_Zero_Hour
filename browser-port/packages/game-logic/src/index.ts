@@ -1632,6 +1632,8 @@ interface MapEntity {
   pathDiameter: number;
   pathfindCenterInCell: boolean;
   blocksPath: boolean;
+  /** Source parity: Object geometry major radius (world units) used by crush/collision logic. */
+  geometryMajorRadius: number;
   obstacleGeometry: ObstacleGeometry | null;
   obstacleFootprint: number;
   ignoredMovementObstacleId: number | null;
@@ -5791,6 +5793,11 @@ export class GameLogicSubsystem implements Subsystem {
     const obstacleGeometry = needsGeometry ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
     const { pathDiameter, pathfindCenterInCell } = this.resolvePathRadiusAndCenter(category, objectDef, obstacleGeometry);
+    const geometryMajorRadius = objectDef
+      ? (this.pathDiameterFromGeometryFields(objectDef)
+        ?? obstacleGeometry?.majorRadius
+        ?? MAP_XY_FACTOR / 2)
+      : MAP_XY_FACTOR / 2;
     const [worldX, worldY, worldZ] = this.objectToWorldPosition(mapObject, heightmap);
     const baseHeight = nominalHeight / 2;
     const x = worldX;
@@ -5916,6 +5923,7 @@ export class GameLogicSubsystem implements Subsystem {
       pathDiameter,
       pathfindCenterInCell,
       blocksPath,
+      geometryMajorRadius,
       obstacleGeometry,
       obstacleFootprint,
       largestWeaponRange,
@@ -19874,6 +19882,9 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveEntityMajorRadius(entity: MapEntity): number {
+    if (entity.geometryMajorRadius > 0) {
+      return entity.geometryMajorRadius;
+    }
     if (entity.obstacleGeometry && entity.obstacleGeometry.majorRadius > 0) {
       return entity.obstacleGeometry.majorRadius;
     }
@@ -31519,10 +31530,6 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: PhysicsUpdate::checkForOverlapCollision + SquishCollide::onCollide —
    * moving entities with crusherLevel > 0 crush overlapping enemies whose crushableLevel
    * is lower. Applies CRUSH damage (HUGE_DAMAGE_AMOUNT = guaranteed kill).
-   *
-   * TODO(C&C source parity): Vehicle-on-vehicle crush uses a front/back/center crush
-   * point system in C++ (dot < 0 past-target check) rather than the SquishCollide-style
-   * approach check (dot > 0) used here. Currently simplified for all targets.
    */
   private updateCrushCollisions(): void {
     for (const mover of this.spawnedEntities.values()) {
@@ -31537,11 +31544,9 @@ export class GameLogicSubsystem implements Subsystem {
       const moveDirX = Math.sin(mover.rotationY);
       const moveDirZ = -Math.cos(mover.rotationY);
 
-      // Source parity: use obstacleGeometry majorRadius for bounding circle collision.
-      // Crushers always get obstacleGeometry resolved (needsGeometry includes crusherLevel > 0).
-      const moverRadius = mover.obstacleGeometry
-        ? mover.obstacleGeometry.majorRadius
-        : 1.0;
+      // Source parity: geometry major radius comes from object geometry info.
+      // In this port some units keep radius via pathDiameter even when obstacleGeometry is null.
+      const moverRadius = this.resolveEntityMajorRadius(mover);
 
       for (const target of this.spawnedEntities.values()) {
         if (target.destroyed || !target.canTakeDamage || target.id === mover.id) {
@@ -31563,7 +31568,7 @@ export class GameLogicSubsystem implements Subsystem {
         // Source parity: SquishCollide::onCollide uses radius 1.0 for infantry collision.
         const targetRadius = target.canBeSquished
           ? 1.0
-          : (target.obstacleGeometry ? target.obstacleGeometry.majorRadius : 1.0);
+          : this.resolveEntityMajorRadius(target);
 
         const combinedRadius = moverRadius + targetRadius;
         const dx = target.x - mover.x;
@@ -31574,14 +31579,18 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
 
-        // Source parity: SquishCollide::onCollide — dot product check ensures
-        // crusher is moving toward the victim, not away. Skip if moving away.
-        // For zero-distance overlap, always crush (entities directly on top).
-        if (distSqr > 0.001) {
-          const dot = moveDirX * dx + moveDirZ * dz;
-          if (dot <= 0) {
-            continue;
+        if (target.canBeSquished) {
+          // Source parity: SquishCollide::onCollide — infantry crush requires the
+          // crusher to be moving toward the target (dot > 0).
+          if (distSqr > 0.001) {
+            const dot = moveDirX * dx + moveDirZ * dz;
+            if (dot <= 0) {
+              continue;
+            }
           }
+        } else if (!this.shouldCrushVehicleTarget(mover, target)) {
+          // Source parity: PhysicsUpdate vehicle-on-vehicle crush point check.
+          continue;
         }
 
         // Source parity: ToppleUpdate::onCollide — entities with topple profile get toppled
@@ -31596,6 +31605,136 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
     }
+  }
+
+  private perpsLogicallyEqual(perpOne: number, perpTwo: number): boolean {
+    const PERP_RANGE = 0.15;
+    return Math.abs(perpOne - perpTwo) <= PERP_RANGE;
+  }
+
+  /**
+   * Source parity: PhysicsBehavior::checkForOverlapCollision vehicle crush targeting.
+   * Chooses FRONT/BACK/TOTAL crush point by shortest perpendicular-to-direction check.
+   */
+  private resolveVehicleCrushTarget(
+    crusher: MapEntity,
+    victim: MapEntity,
+  ): 'TOTAL' | 'FRONT' | 'BACK' | 'NONE' {
+    const frontCrushed = victim.frontCrushed;
+    const backCrushed = victim.backCrushed;
+    if (frontCrushed && backCrushed) {
+      return 'NONE';
+    }
+
+    if (frontCrushed) return 'BACK';
+    if (backCrushed) return 'FRONT';
+
+    const dirX = Math.sin(crusher.rotationY);
+    const dirZ = -Math.cos(crusher.rotationY);
+    const victimDirX = Math.sin(victim.rotationY);
+    const victimDirZ = -Math.cos(victim.rotationY);
+    const crushPointOffsetDistance = this.resolveEntityMajorRadius(victim) * 0.5;
+    const offsetX = victimDirX * crushPointOffsetDistance;
+    const offsetZ = victimDirZ * crushPointOffsetDistance;
+
+    const frontX = victim.x + offsetX;
+    const frontZ = victim.z + offsetZ;
+    const backX = victim.x - offsetX;
+    const backZ = victim.z - offsetZ;
+    const centerX = victim.x;
+    const centerZ = victim.z;
+
+    const frontVectorX = frontX - crusher.x;
+    const frontVectorZ = frontZ - crusher.z;
+    const backVectorX = backX - crusher.x;
+    const backVectorZ = backZ - crusher.z;
+    const centerVectorX = centerX - crusher.x;
+    const centerVectorZ = centerZ - crusher.z;
+
+    const frontRayLength = frontVectorX * dirX + frontVectorZ * dirZ;
+    const backRayLength = backVectorX * dirX + backVectorZ * dirZ;
+    const centerRayLength = centerVectorX * dirX + centerVectorZ * dirZ;
+
+    const frontPerpLength = Math.hypot(frontRayLength * dirX - frontVectorX, frontRayLength * dirZ - frontVectorZ);
+    const backPerpLength = Math.hypot(backRayLength * dirX - backVectorX, backRayLength * dirZ - backVectorZ);
+    const centerPerpLength = Math.hypot(centerRayLength * dirX - centerVectorX, centerRayLength * dirZ - centerVectorZ);
+
+    const frontVectorLength = Math.hypot(frontVectorX, frontVectorZ);
+    const backVectorLength = Math.hypot(backVectorX, backVectorZ);
+    const centerVectorLength = Math.hypot(centerVectorX, centerVectorZ);
+
+    if (frontPerpLength <= centerPerpLength && frontPerpLength <= backPerpLength) {
+      if (
+        this.perpsLogicallyEqual(frontPerpLength, centerPerpLength)
+        || this.perpsLogicallyEqual(frontPerpLength, backPerpLength)
+      ) {
+        if (this.perpsLogicallyEqual(frontPerpLength, centerPerpLength)) {
+          return frontVectorLength < centerVectorLength ? 'FRONT' : 'TOTAL';
+        }
+        return frontVectorLength < backVectorLength ? 'FRONT' : 'BACK';
+      }
+      return 'FRONT';
+    }
+
+    if (backPerpLength <= centerPerpLength && backPerpLength <= frontPerpLength) {
+      if (
+        this.perpsLogicallyEqual(backPerpLength, centerPerpLength)
+        || this.perpsLogicallyEqual(backPerpLength, frontPerpLength)
+      ) {
+        if (this.perpsLogicallyEqual(backPerpLength, centerPerpLength)) {
+          return backVectorLength < centerVectorLength ? 'BACK' : 'TOTAL';
+        }
+        return backVectorLength < frontVectorLength ? 'BACK' : 'FRONT';
+      }
+      return 'BACK';
+    }
+
+    if (
+      this.perpsLogicallyEqual(centerPerpLength, backPerpLength)
+      || this.perpsLogicallyEqual(centerPerpLength, frontPerpLength)
+    ) {
+      if (this.perpsLogicallyEqual(centerPerpLength, frontPerpLength)) {
+        return centerVectorLength < frontVectorLength ? 'TOTAL' : 'FRONT';
+      }
+      return centerVectorLength < backVectorLength ? 'TOTAL' : 'BACK';
+    }
+    return 'TOTAL';
+  }
+
+  /**
+   * Source parity: PhysicsBehavior::checkForOverlapCollision vehicle crush gate.
+   * Vehicle crush triggers only after the crusher has passed the selected crush point.
+   */
+  private shouldCrushVehicleTarget(crusher: MapEntity, victim: MapEntity): boolean {
+    const crushTarget = this.resolveVehicleCrushTarget(crusher, victim);
+    if (crushTarget === 'NONE') {
+      return false;
+    }
+
+    const victimDirX = Math.sin(victim.rotationY);
+    const victimDirZ = -Math.cos(victim.rotationY);
+    const crushPointOffsetDistance = this.resolveEntityMajorRadius(victim) * 0.5;
+    const offsetX = victimDirX * crushPointOffsetDistance;
+    const offsetZ = victimDirZ * crushPointOffsetDistance;
+
+    let pointX = victim.x;
+    let pointZ = victim.z;
+    if (crushTarget === 'FRONT') {
+      pointX += offsetX;
+      pointZ += offsetZ;
+    } else if (crushTarget === 'BACK') {
+      pointX -= offsetX;
+      pointZ -= offsetZ;
+    }
+
+    const dx = pointX - crusher.x;
+    const dz = pointZ - crusher.z;
+    const dirX = Math.sin(crusher.rotationY);
+    const dirZ = -Math.cos(crusher.rotationY);
+    const dot = dirX * dx + dirZ * dz;
+    const distanceSquared = dx * dx + dz * dz;
+    const distanceTooFarSquared = 2.25 * crushPointOffsetDistance * crushPointOffsetDistance;
+    return dot < 0 && distanceSquared < distanceTooFarSquared;
   }
 
   private clearEntitySelectionState(): void {
