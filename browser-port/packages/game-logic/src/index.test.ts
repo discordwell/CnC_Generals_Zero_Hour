@@ -6145,6 +6145,212 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(target.health).toBe(200);
   });
 
+  it('uses lock approach height and enters KILL state for non-tracking MissileAI shots', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('LockDiveAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'LockDiveMissileWeapon'] }),
+    ]);
+    const targetDef = makeObjectDef('LockDiveTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const projectileDef = makeObjectDef('LockDiveMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'No',
+        InitialVelocity: 6,
+        IgnitionDelay: 1000,
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 20,
+        FuelLifetime: 8000,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('LockDiveMissileWeapon', {
+      PrimaryDamage: 50,
+      PrimaryDamageRadius: 0,
+      AttackRange: 500,
+      WeaponSpeed: 6,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'LockDiveMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('LockDiveAttacker', 0, 0),
+      makeMapObject('LockDiveTarget', 180, 0),
+    ], 256, 256);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        attackWeapon: unknown;
+      }>;
+      queueWeaponDamageEvent: (
+        attacker: { attackWeapon: unknown },
+        target: unknown,
+        weapon: unknown,
+      ) => void;
+      frameCounter: number;
+      updateMissileAIEvents: () => void;
+      pendingWeaponDamageEvents: Array<{
+        missileAIState: {
+          state: string;
+          trackingTarget: boolean;
+          targetY: number;
+          originalTargetY: number;
+        } | null;
+      }>;
+    };
+    const findMissileEvent = () =>
+      privateApi.pendingWeaponDamageEvents.find((event) => event.missileAIState !== null);
+
+    const attacker = privateApi.spawnedEntities.get(1);
+    const target = privateApi.spawnedEntities.get(2);
+    if (!attacker || !target || !attacker.attackWeapon) {
+      throw new Error('Expected attacker/target with attack weapon');
+    }
+    privateApi.queueWeaponDamageEvent(attacker, target, attacker.attackWeapon);
+
+    const initialEvent = findMissileEvent();
+    expect(initialEvent).toBeDefined();
+    const initialState = initialEvent?.missileAIState;
+    expect(initialState?.trackingTarget).toBe(false);
+    expect(initialState?.targetY ?? 0).toBeGreaterThan(initialState?.originalTargetY ?? 0);
+
+    let sawKillState = false;
+    for (let i = 0; i < 220; i++) {
+      privateApi.frameCounter += 1;
+      privateApi.updateMissileAIEvents();
+      const event = findMissileEvent();
+      if (!event || !event.missileAIState) {
+        break;
+      }
+      if (event.missileAIState.state === 'KILL') {
+        sawKillState = true;
+        expect(event.missileAIState.targetY).toBeCloseTo(event.missileAIState.originalTargetY, 5);
+        break;
+      }
+    }
+
+    expect(sawKillState).toBe(true);
+  });
+
+  it('enters KILL_SELF when a tracking MissileAI target disappears and tears down without impact FX', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('LostTargetAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'LostTargetMissileWeapon'] }),
+    ]);
+    const targetDef = makeObjectDef('LostTargetVictim', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const projectileDef = makeObjectDef('LostTargetMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'Yes',
+        InitialVelocity: 6,
+        IgnitionDelay: 0,
+        FuelLifetime: 8000,
+        KillSelfDelay: 100, // ~3 frames
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 0,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('LostTargetMissileWeapon', {
+      PrimaryDamage: 100,
+      PrimaryDamageRadius: 10,
+      AttackRange: 800,
+      WeaponSpeed: 6,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'LostTargetMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('LostTargetAttacker', 0, 0),
+      makeMapObject('LostTargetVictim', 350, 0),
+    ], 512, 512);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      frameCounter: number;
+      spawnedEntities: Map<number, {
+        attackWeapon: unknown;
+        destroyed: boolean;
+      }>;
+      queueWeaponDamageEvent: (
+        attacker: { attackWeapon: unknown },
+        target: unknown,
+        weapon: unknown,
+      ) => void;
+      updateMissileAIEvents: () => void;
+      updatePendingWeaponDamage: () => void;
+      pendingWeaponDamageEvents: Array<{
+        executeFrame: number;
+        suppressImpactVisual: boolean;
+        missileAIProfile: { killSelfDelayFrames: number } | null;
+        missileAIState: { state: string } | null;
+      }>;
+      visualEventBuffer: Array<{ type: string }>;
+    };
+    const findMissileEvent = () =>
+      privateApi.pendingWeaponDamageEvents.find((event) => event.missileAIState !== null);
+
+    const attacker = privateApi.spawnedEntities.get(1);
+    const target = privateApi.spawnedEntities.get(2);
+    if (!attacker || !target || !attacker.attackWeapon) {
+      throw new Error('Expected attacker/target with attack weapon');
+    }
+
+    privateApi.queueWeaponDamageEvent(attacker, target, attacker.attackWeapon);
+    const event = findMissileEvent();
+    expect(event).toBeDefined();
+
+    // Simulate tracked target disappearing mid-flight.
+    target.destroyed = true;
+
+    privateApi.frameCounter += 1;
+    privateApi.updateMissileAIEvents();
+
+    expect(event?.missileAIState?.state).toBe('KILL_SELF');
+    expect(event?.suppressImpactVisual).toBe(true);
+    const killDelayFrames = event?.missileAIProfile?.killSelfDelayFrames ?? 0;
+    expect(killDelayFrames).toBeGreaterThan(0);
+
+    for (let i = 0; i < killDelayFrames - 1; i++) {
+      privateApi.frameCounter += 1;
+      privateApi.updateMissileAIEvents();
+      expect(event?.executeFrame).toBe(Number.MAX_SAFE_INTEGER);
+    }
+
+    privateApi.frameCounter += 1;
+    privateApi.updateMissileAIEvents();
+    expect(event?.executeFrame).toBe(privateApi.frameCounter);
+
+    privateApi.visualEventBuffer.length = 0;
+    privateApi.updatePendingWeaponDamage();
+    const impactFx = privateApi.visualEventBuffer.find((entry) => entry.type === 'WEAPON_IMPACT');
+    expect(impactFx).toBeUndefined();
+  });
+
   it('keeps DamageDealtAtSelfPosition anchored at source even when ScatterTarget offsets are present', () => {
     const withoutScatterTarget = runDamageAtSelfScatterTargetTimeline(false);
     expect(withoutScatterTarget.targetHealthTimeline).toEqual([150, 150, 150, 150]);

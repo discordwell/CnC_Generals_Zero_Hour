@@ -1289,13 +1289,15 @@ interface PendingWeaponDamageEvent {
   countermeasureDivertFrame: number;
   /** If true, this missile has been diverted and deals no damage on detonation. */
   countermeasureNoDamage: boolean;
+  /** If true, impact visual should be suppressed (quiet KILL_SELF teardown). */
+  suppressImpactVisual: boolean;
   /** Source parity: MissileAIUpdate module profile on the projectile object template. */
   missileAIProfile: MissileAIProfile | null;
   /** Source parity: MissileAIUpdate runtime state for in-flight homing missiles. */
   missileAIState: MissileAIRuntimeState | null;
 }
 
-type MissileAIState = 'PRELAUNCH' | 'LAUNCH' | 'IGNITION' | 'ATTACK_NOTURN' | 'ATTACK' | 'KILL_SELF';
+type MissileAIState = 'PRELAUNCH' | 'LAUNCH' | 'IGNITION' | 'ATTACK_NOTURN' | 'ATTACK' | 'KILL' | 'KILL_SELF';
 
 /**
  * Source parity: MissileAIUpdateModuleData — parsed from projectile object INI Behavior.
@@ -23468,6 +23470,12 @@ export class GameLogicSubsystem implements Subsystem {
           ? travelSpeed
           : (missileAIProfile.initialVelocity > 0 ? missileAIProfile.initialVelocity : travelSpeed);
         const speed = Number.isFinite(missileSpeed) && missileSpeed > 0 ? missileSpeed : travelSpeed;
+        const trackingTarget = missileAIProfile.tryToFollowTarget && primaryVictimEntityId !== null;
+        // Source parity: MissileAIUpdate::projectileFireAtObjectOrPosition adds an approach
+        // height offset for coordinate shots when lock distance is enabled.
+        const approachHeight = (!trackingTarget && missileAIProfile.distanceToTargetForLock > 0)
+          ? 10.0
+          : 0.0;
 
         missileAIState = {
           state: 'LAUNCH',
@@ -23485,10 +23493,10 @@ export class GameLogicSubsystem implements Subsystem {
           armed: false,
           fuelExpirationFrame: Number.MAX_SAFE_INTEGER,
           noTurnDistanceLeft: missileAIProfile.distanceToTravelBeforeTurning,
-          trackingTarget: missileAIProfile.tryToFollowTarget && primaryVictimEntityId !== null,
-          targetEntityId: missileAIProfile.tryToFollowTarget ? primaryVictimEntityId : null,
+          trackingTarget,
+          targetEntityId: trackingTarget ? primaryVictimEntityId : null,
           targetX: impactX,
-          targetY: impactY,
+          targetY: impactY + approachHeight,
           targetZ: impactZ,
           originalTargetX: impactX,
           originalTargetY: impactY,
@@ -23521,6 +23529,7 @@ export class GameLogicSubsystem implements Subsystem {
       hasBezierArc,
       countermeasureDivertFrame: 0,
       countermeasureNoDamage: false,
+      suppressImpactVisual: false,
       missileAIProfile,
       missileAIState,
     };
@@ -23805,12 +23814,15 @@ export class GameLogicSubsystem implements Subsystem {
       if (state.trackingTarget && state.targetEntityId !== null) {
         const tracked = this.spawnedEntities.get(state.targetEntityId);
         if (!tracked || tracked.destroyed) {
-          // Source parity: MissileAIUpdate::airborneTargetGone() — run out of gas and kill self.
+          // Source parity: MissileAIUpdate::airborneTargetGone() — run out of gas and enter KILL_SELF.
+          state.trackingTarget = false;
+          state.targetEntityId = null;
+          state.fuelExpirationFrame = this.frameCounter;
+          state.state = 'KILL_SELF';
+          state.stateEnteredFrame = this.frameCounter;
           event.countermeasureNoDamage = true;
-          event.impactX = state.currentX;
-          event.impactY = state.currentY;
-          event.impactZ = state.currentZ;
-          event.executeFrame = this.frameCounter;
+          event.primaryVictimEntityId = null;
+          event.suppressImpactVisual = true;
           continue;
         }
         state.targetX = tracked.x;
@@ -23852,10 +23864,14 @@ export class GameLogicSubsystem implements Subsystem {
       if (fuelExpired && !profile.detonateOnNoFuel && state.state !== 'KILL_SELF') {
         state.state = 'KILL_SELF';
         state.stateEnteredFrame = this.frameCounter;
+        event.countermeasureNoDamage = true;
+        event.primaryVictimEntityId = null;
+        event.suppressImpactVisual = true;
       }
       if (state.state === 'KILL_SELF') {
         if (this.frameCounter - state.stateEnteredFrame >= profile.killSelfDelayFrames) {
           event.countermeasureNoDamage = true;
+          event.primaryVictimEntityId = null;
           event.impactX = state.currentX;
           event.impactY = state.currentY;
           event.impactZ = state.currentZ;
@@ -23871,7 +23887,7 @@ export class GameLogicSubsystem implements Subsystem {
       let dirX = state.velocityX;
       let dirY = state.velocityY;
       let dirZ = state.velocityZ;
-      const canTurn = state.state === 'ATTACK' && !fuelExpired;
+      const canTurn = (state.state === 'ATTACK' || state.state === 'KILL') && !fuelExpired;
       if (canTurn) {
         const toTargetX = state.targetX - state.currentX;
         const toTargetY = state.targetY - state.currentY;
@@ -23882,11 +23898,14 @@ export class GameLogicSubsystem implements Subsystem {
           const desiredDirY = toTargetY / toTargetLength;
           const desiredDirZ = toTargetZ / toTargetLength;
 
-          if (profile.turnRatePerFrame > 0) {
+          const maxTurnRate = state.state === 'KILL'
+            ? Number.POSITIVE_INFINITY
+            : profile.turnRatePerFrame;
+          if (Number.isFinite(maxTurnRate) && maxTurnRate > 0) {
             const currentHeading = Math.atan2(state.velocityX, state.velocityZ);
             const desiredHeading = Math.atan2(desiredDirX, desiredDirZ);
             const headingDelta = this.normalizeAngle(desiredHeading - currentHeading);
-            const clampedTurn = Math.max(-profile.turnRatePerFrame, Math.min(profile.turnRatePerFrame, headingDelta));
+            const clampedTurn = Math.max(-maxTurnRate, Math.min(maxTurnRate, headingDelta));
             const nextHeading = currentHeading + clampedTurn;
             const horizontal = Math.hypot(desiredDirX, desiredDirZ);
             const pitch = Math.atan2(desiredDirY, horizontal);
@@ -23958,13 +23977,37 @@ export class GameLogicSubsystem implements Subsystem {
       event.impactZ = state.targetZ;
 
       if (state.armed) {
-        // Source parity: DistanceToTargetForLock switches missile to kill state (forced hit path).
+        // Source parity: DistanceToTargetForLock switches missiles into KILL.
         let lockDistance = profile.distanceToTargetForLock;
         if (lockDistance > 0 && !state.trackingTarget) {
           lockDistance *= 0.5;
         }
         const distanceToTarget2D = Math.hypot(state.targetX - state.currentX, state.targetZ - state.currentZ);
-        if ((lockDistance > 0 && distanceToTarget2D <= lockDistance) || distanceToTarget2D <= Math.max(1, speed)) {
+        const distanceToTarget3D = Math.hypot(
+          state.targetX - state.currentX,
+          state.targetY - state.currentY,
+          state.targetZ - state.currentZ,
+        );
+
+        if (lockDistance > 0 && distanceToTarget2D <= lockDistance && state.state !== 'KILL') {
+          // Source parity: coordinate-shot missiles dive to original target when lock range is reached.
+          if (!state.trackingTarget) {
+            state.targetX = state.originalTargetX;
+            state.targetY = state.originalTargetY;
+            state.targetZ = state.originalTargetZ;
+          }
+          state.state = 'KILL';
+          state.stateEnteredFrame = this.frameCounter;
+        }
+
+        if (state.state === 'KILL') {
+          if (distanceToTarget3D <= Math.max(1, speed)) {
+            event.impactX = state.targetX;
+            event.impactY = state.targetY;
+            event.impactZ = state.targetZ;
+            event.executeFrame = this.frameCounter;
+          }
+        } else if (lockDistance <= 0 && distanceToTarget3D <= Math.max(1, speed)) {
           event.impactX = state.targetX;
           event.impactY = state.targetY;
           event.impactZ = state.targetZ;
@@ -24082,8 +24125,10 @@ export class GameLogicSubsystem implements Subsystem {
     for (const event of this.pendingWeaponDamageEvents) {
       if (event.executeFrame <= this.frameCounter) {
         // Source parity: MissileAIUpdate::doKillState — diverted missiles still detonate
-        // visually but deal no damage. Emit the visual event regardless.
-        this.emitWeaponImpactVisualEvent(event);
+        // visually but deal no damage. KILL_SELF teardown suppresses visuals.
+        if (!event.suppressImpactVisual) {
+          this.emitWeaponImpactVisualEvent(event);
+        }
 
         // Source parity: countermeasure-diverted missiles — suppress damage and radii.
         if (event.countermeasureNoDamage) {
