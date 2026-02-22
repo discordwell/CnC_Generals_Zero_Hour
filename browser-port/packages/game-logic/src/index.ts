@@ -3835,6 +3835,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [6, 'SET_TIMER'],
   [8, 'ENABLE_SCRIPT'],
   [9, 'DISABLE_SCRIPT'],
+  [10, 'CALL_SUBROUTINE'],
   [15, 'INCREMENT_COUNTER'],
   [16, 'DECREMENT_COUNTER'],
   [20, 'SET_MILLISECOND_TIMER'],
@@ -3963,6 +3964,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptUIInteractions = new Set<string>();
   /** Source parity subset: Script/ScriptGroup active flags toggled by ENABLE_SCRIPT / DISABLE_SCRIPT. */
   private readonly scriptActiveByName = new Map<string, boolean>();
+  /** Source parity subset: CALL_SUBROUTINE invocation queue (execution wiring is pending). */
+  private readonly scriptSubroutineCalls: string[] = [];
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
@@ -5630,6 +5633,32 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptEngine::callSubroutine dispatch marker.
+   * TODO(source-parity): execute real script/subroutine graph once map-script runtime is wired.
+   */
+  notifyScriptSubroutineCall(scriptName: string): boolean {
+    const normalizedName = scriptName.trim().toUpperCase();
+    if (!normalizedName) {
+      return false;
+    }
+    this.scriptSubroutineCalls.push(normalizedName);
+    return true;
+  }
+
+  consumeScriptSubroutineCall(scriptName: string): boolean {
+    const normalizedName = scriptName.trim().toUpperCase();
+    if (!normalizedName) {
+      return false;
+    }
+    const index = this.scriptSubroutineCalls.indexOf(normalizedName);
+    if (index === -1) {
+      return false;
+    }
+    this.scriptSubroutineCalls.splice(index, 1);
+    return true;
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -5675,6 +5704,8 @@ export class GameLogicSubsystem implements Subsystem {
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), false);
+      case 'CALL_SUBROUTINE':
+        return this.notifyScriptSubroutineCall(readString(0, ['scriptName', 'script']));
       case 'SET_FLAG':
         return this.setScriptFlag(
           readString(0, ['flagName', 'flag']),
@@ -37631,6 +37662,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptFlagsByName.clear();
     this.scriptUIInteractions.clear();
     this.scriptActiveByName.clear();
+    this.scriptSubroutineCalls.length = 0;
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();
