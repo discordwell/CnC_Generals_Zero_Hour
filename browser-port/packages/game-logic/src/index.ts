@@ -3970,6 +3970,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [427, 'AUDIO_RESTORE_VOLUME_ALL_TYPE'],
   [428, 'INGAME_POPUP_MESSAGE'],
   [430, 'NAMED_SET_HELD'],
+  [431, 'NAMED_SET_TOPPLE_DIRECTION'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4096,6 +4097,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptDisabledAudioEventNames = new Set<string>();
   /** Source parity bridge: Audio::setAudioEventVolumeOverride script overrides. */
   private readonly scriptAudioVolumeOverrides = new Map<string, number>();
+  /** Source parity bridge: ScriptEngine::m_toppleDirections keyed by named entity. */
+  private readonly scriptToppleDirectionByEntityId = new Map<number, { x: number; z: number }>();
   /** Source parity bridge: Radar::createEvent script requests. */
   private readonly scriptRadarEvents: ScriptRadarEventState[] = [];
   /** Source parity: Radar::m_lastRadarEvent (excluding beacon pulse events). */
@@ -6148,6 +6151,29 @@ export class GameLogicSubsystem implements Subsystem {
     return eventName.trim();
   }
 
+  getScriptNamedToppleDirection(entityId: number): { x: number; z: number } | null {
+    const direction = this.scriptToppleDirectionByEntityId.get(entityId);
+    if (!direction) {
+      return null;
+    }
+    return { ...direction };
+  }
+
+  private setScriptNamedToppleDirection(entityId: number, dirX: number, dirZ: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (!Number.isFinite(dirX) || !Number.isFinite(dirZ)) {
+      return false;
+    }
+    this.scriptToppleDirectionByEntityId.set(entityId, {
+      x: dirX,
+      z: dirZ,
+    });
+    return true;
+  }
+
   getScriptRadarEvents(): ScriptRadarEventState[] {
     this.pruneExpiredScriptRadarEvents();
     return this.scriptRadarEvents.map((event) => ({ ...event }));
@@ -6536,6 +6562,16 @@ export class GameLogicSubsystem implements Subsystem {
           readInteger(0, ['entityId', 'unitId', 'named']),
           readBoolean(1, ['held', 'value', 'enabled']),
         );
+      case 'NAMED_SET_TOPPLE_DIRECTION': {
+        const direction = this.coerceScriptConditionCoord3(
+          readValue(1, ['direction', 'dir', 'toppleDirection']),
+        );
+        return this.setScriptNamedToppleDirection(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          direction?.x ?? 0,
+          direction?.y ?? 0,
+        );
+      }
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -11377,6 +11413,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptPopupMessages.length = 0;
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
+    this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraTetherState = null;
@@ -19055,6 +19092,34 @@ export class GameLogicSubsystem implements Subsystem {
     return defaultValue;
   }
 
+  private coerceScriptConditionCoord3(value: unknown): { x: number; y: number; z: number } | null {
+    const readNumber = (raw: unknown): number | null => {
+      if (typeof raw === 'number') {
+        return Number.isFinite(raw) ? raw : null;
+      }
+      if (typeof raw === 'string') {
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    };
+
+    if (Array.isArray(value)) {
+      const x = readNumber(value[0]) ?? 0;
+      const y = readNumber(value[1]) ?? 0;
+      const z = readNumber(value[2]) ?? 0;
+      return { x, y, z };
+    }
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      const x = readNumber(record.x ?? record.X) ?? 0;
+      const y = readNumber(record.y ?? record.Y) ?? 0;
+      const z = readNumber(record.z ?? record.Z) ?? 0;
+      return { x, y, z };
+    }
+    return null;
+  }
+
   private coerceScriptBuildableStatus(value: unknown): BuildableStatus {
     const numericStatus = this.coerceScriptConditionNumber(value);
     if (numericStatus !== null) {
@@ -22627,6 +22692,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private removeEntityFromWorld(entityId: number): void {
     if (this.spawnedEntities.delete(entityId)) {
+      this.scriptToppleDirectionByEntityId.delete(entityId);
       this.clearScriptTriggerTrackingForEntity(entityId);
       this.scriptCompletedWaypointPathsByEntityId.delete(entityId);
       for (const team of this.scriptTeamsByName.values()) {
@@ -34360,6 +34426,15 @@ export class GameLogicSubsystem implements Subsystem {
     let normDirX = dirX / len;
     let normDirZ = dirZ / len;
 
+    const scriptToppleDirection = this.scriptToppleDirectionByEntityId.get(entity.id);
+    if (scriptToppleDirection) {
+      const scriptLen = Math.hypot(scriptToppleDirection.x, scriptToppleDirection.z);
+      if (scriptLen >= 0.001) {
+        normDirX = scriptToppleDirection.x / scriptLen;
+        normDirZ = scriptToppleDirection.z / scriptLen;
+      }
+    }
+
     // Source parity: ToppleLeftOrRightOnly — constrain topple direction to perpendicular
     // to the entity's current orientation (for fence-like objects).
     if (profile.toppleLeftOrRightOnly) {
@@ -39014,6 +39089,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptPopupMessages.length = 0;
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
+    this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraMovementFinished = true;

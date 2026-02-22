@@ -28954,6 +28954,47 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named-set-topple-direction action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ToppleTree', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'ToppleUpdate ModuleTag_Topple', {}),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ToppleTree', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 431, // NAMED_SET_TOPPLE_DIRECTION
+      params: [1, { x: 0, y: 1, z: 0 }],
+    })).toBe(true);
+    expect(logic.getScriptNamedToppleDirection(1)).toEqual({ x: 0, z: 1 });
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, unknown>;
+      applyTopplingForce: (entity: unknown, dirX: number, dirZ: number, speed: number) => void;
+    };
+    const entity = privateApi.spawnedEntities.get(1);
+    expect(entity).toBeDefined();
+    privateApi.applyTopplingForce(entity!, 1, 0, 1);
+
+    const toppledState = privateApi.spawnedEntities.get(1) as { toppleDirX: number; toppleDirZ: number };
+    expect(toppledState.toppleDirX).toBeCloseTo(0, 5);
+    expect(toppledState.toppleDirZ).toBeCloseTo(1, 5);
+
+    expect(logic.executeScriptAction({
+      actionType: 431,
+      params: [999, { x: 1, y: 0, z: 0 }],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
