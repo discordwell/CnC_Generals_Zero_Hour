@@ -29551,6 +29551,65 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script flash-white actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 18, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('FlashTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        scriptFlashCount: number;
+        scriptFlashColor: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 447, // NAMED_FLASH_WHITE
+      params: [1, 3],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashColor).toBe(0xffffff);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(6);
+
+    expect(logic.executeScriptAction({
+      actionType: 448, // TEAM_FLASH_WHITE
+      params: ['FlashTeam', 2],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashColor).toBe(0xffffff);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashColor).toBe(0xffffff);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(4);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(4);
+
+    for (let frame = 0; frame < 15; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(3);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(3);
+
+    expect(logic.executeScriptAction({
+      actionType: 447,
+      params: [999, 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 448,
+      params: ['MissingTeam', 2],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

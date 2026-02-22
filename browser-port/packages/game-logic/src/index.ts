@@ -301,6 +301,7 @@ const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
 const ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE = 0.5;
 const LOGIC_FRAME_RATE = 30;
 const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
+const DRAWABLE_FRAMES_PER_FLASH = Math.max(1, Math.trunc(LOGIC_FRAME_RATE / 2));
 const SOURCE_FRAMES_TO_ALLOW_SCAFFOLD = LOGIC_FRAME_RATE * 1.5;
 const SOURCE_TOTAL_FRAMES_TO_SELL_OBJECT = LOGIC_FRAME_RATE * 3;
 const SOURCE_DEFAULT_SELL_PERCENTAGE = 1.0;
@@ -309,6 +310,7 @@ const CONSTRUCTION_COMPLETE = -1;
 const SOURCE_HACK_FALLBACK_CASH_AMOUNT = 1;
 const SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER = 3;
 const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
+const SOURCE_FLASH_COLOR_WHITE = 0xffffff;
 
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
@@ -1681,6 +1683,10 @@ interface MapEntity {
   objectStatusFlags: Set<string>;
   /** Source parity: ModelConditionFlags — visual state flags for drawable/animation system. */
   modelConditionFlags: Set<string>;
+  /** Source parity: Drawable::m_flashCount script-driven blink pulses remaining. */
+  scriptFlashCount: number;
+  /** Source parity: Drawable::m_flashColor as packed RGB integer. */
+  scriptFlashColor: number;
   commandSetStringOverride: string | null;
   locomotorUpgradeEnabled: boolean;
   activeLocomotorSet: string;
@@ -4041,6 +4047,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [444, 'TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT'],
   [445, 'NAMED_USE_COMMANDBUTTON_ABILITY'],
   [446, 'TEAM_USE_COMMANDBUTTON_ABILITY'],
+  [447, 'NAMED_FLASH_WHITE'],
+  [448, 'TEAM_FLASH_WHITE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4699,6 +4707,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.animationTime += dt;
     this.frameCounter++;
     this.updateScriptCountdownTimers();
+    this.updateScriptEntityFlashes();
     this.resetBridgeDamageStateChanges();
     this.resetContainPlayerEnteredSides();
     this.flushCommands();
@@ -4818,6 +4827,18 @@ export class GameLogicSubsystem implements Subsystem {
       if (counter.value >= 0) {
         counter.value -= 1;
       }
+    }
+  }
+
+  private updateScriptEntityFlashes(): void {
+    if (this.frameCounter % DRAWABLE_FRAMES_PER_FLASH !== 0) {
+      return;
+    }
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.scriptFlashCount <= 0) {
+        continue;
+      }
+      entity.scriptFlashCount = Math.max(0, entity.scriptFlashCount - 1);
     }
   }
 
@@ -6573,6 +6594,16 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
         );
+      case 'NAMED_FLASH_WHITE':
+        return this.executeScriptNamedFlashWhite(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
+        );
+      case 'TEAM_FLASH_WHITE':
+        return this.executeScriptTeamFlashWhite(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8201,6 +8232,43 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return executed || teamMembers.length === 0;
+  }
+
+  private applyScriptEntityFlash(entity: MapEntity, timeInSeconds: number, color: number): boolean {
+    if (timeInSeconds <= 0) {
+      return true;
+    }
+    const frames = Math.trunc(LOGIC_FRAME_RATE * timeInSeconds);
+    const flashCount = Math.max(0, Math.trunc(frames / DRAWABLE_FRAMES_PER_FLASH));
+    entity.scriptFlashColor = color;
+    entity.scriptFlashCount = flashCount;
+    return true;
+  }
+
+  private executeScriptNamedFlashWhite(entityId: number, timeInSeconds: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    return this.applyScriptEntityFlash(entity, timeInSeconds, SOURCE_FLASH_COLOR_WHITE);
+  }
+
+  private executeScriptTeamFlashWhite(teamName: string, timeInSeconds: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let flashed = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.applyScriptEntityFlash(entity, timeInSeconds, SOURCE_FLASH_COLOR_WHITE)) {
+        flashed = true;
+      }
+    }
+    return flashed;
   }
 
   private executeScriptNamedStop(entityId: number): boolean {
@@ -12563,6 +12631,8 @@ export class GameLogicSubsystem implements Subsystem {
       upgradeModules,
       objectStatusFlags: new Set<string>(),
       modelConditionFlags: new Set<string>(),
+      scriptFlashCount: 0,
+      scriptFlashColor: 0,
       commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,
       specialPowerModules,
