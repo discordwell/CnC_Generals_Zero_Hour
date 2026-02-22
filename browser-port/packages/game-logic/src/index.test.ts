@@ -29676,6 +29676,73 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script skirmish-build-base-defense-front action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          CommandSet: 'DozerConstructSet',
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('PatriotBattery', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructPatriot', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'PatriotBattery',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('DozerConstructSet', {
+          1: 'Command_ConstructPatriot',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 5000 });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 455, // SKIRMISH_BUILD_BASE_DEFENSE_FRONT
+    })).toBe(false);
+
+    expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 455, // SKIRMISH_BUILD_BASE_DEFENSE_FRONT
+    })).toBe(true);
+
+    const buildId = privateApi.pendingConstructionActions.get(1);
+    expect(buildId).toBeDefined();
+    expect(privateApi.spawnedEntities.get(buildId!)?.templateName).toBe('PatriotBattery');
+
+    logic.clearScriptCurrentPlayerSide();
+    expect(logic.executeScriptAction({
+      actionType: 455,
+    })).toBe(false);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

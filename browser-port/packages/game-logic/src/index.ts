@@ -4065,6 +4065,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [452, 'RESUME_SUPPLY_TRUCKING'],
   [453, 'NAMED_CUSTOM_COLOR'],
   [454, 'SKIRMISH_MOVE_TO_APPROACH_PATH'],
+  [455, 'SKIRMISH_BUILD_BASE_DEFENSE_FRONT'],
   [457, 'NAMED_RECEIVE_UPGRADE'],
   [458, 'PLAYER_REPAIR_NAMED_STRUCTURE'],
 ]);
@@ -4075,6 +4076,16 @@ const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
   ['ADD_TO_TIMER', 'ADD_TO_MSEC_TIMER'],
   ['SUB_FROM_TIMER', 'SUB_FROM_MSEC_TIMER'],
 ]);
+
+const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
+  'PATRIOT',
+  'GATTLINGCANNON',
+  'GATTLING',
+  'BUNKER',
+  'STINGERMISSILE',
+  'STINGER',
+  'TUNNELNETWORK',
+] as const;
 
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
@@ -6671,6 +6682,10 @@ export class GameLogicSubsystem implements Subsystem {
           readString(1, ['waypointPathLabel', 'pathLabel', 'waypointPath']),
           readString(2, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
+      case 'SKIRMISH_BUILD_BASE_DEFENSE_FRONT':
+        return this.executeScriptSkirmishBuildBaseDefenseFront(
+          readString(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
       case 'IDLE_ALL_UNITS':
         return this.executeScriptIdleAllUnits();
       case 'RESUME_SUPPLY_TRUCKING':
@@ -8493,6 +8508,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doBuildBaseDefense(false).
+   * Chooses a defense structure from the current player's dozer build options.
+   */
+  private executeScriptSkirmishBuildBaseDefenseFront(explicitPlayerSide: string): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const templateName = this.resolveScriptSkirmishDefenseTemplateName(side);
+    if (!templateName) {
+      return false;
+    }
+
+    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+  }
+
+  /**
    * Source parity subset: ScriptActions::doPlayerRepairStructure -> Player::repairStructure.
    * In source this queues repair requests on AI players; non-AI players no-op.
    */
@@ -8555,6 +8588,46 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return bestDozer;
+  }
+
+  private resolveScriptSkirmishDefenseTemplateName(side: string): string | null {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== side) continue;
+      if (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id)) continue;
+      if (!this.isEntityDozerCapable(entity)) continue;
+
+      let buildableTemplates = this.collectCommandSetTemplates(entity, ['DOZER_CONSTRUCT', 'UNIT_BUILD']);
+      if (buildableTemplates.length === 0 && entity.productionProfile) {
+        buildableTemplates = entity.productionProfile.quantityModifiers
+          .filter((modifier) => {
+            const upper = modifier.templateName.trim().toUpperCase();
+            return upper.length > 0 && !upper.includes('UPGRADE') && !upper.includes('SCIENCE');
+          })
+          .map((modifier) => modifier.templateName);
+      }
+
+      for (const templateName of buildableTemplates) {
+        if (this.isScriptSkirmishDefenseTemplateName(templateName)) {
+          return templateName;
+        }
+      }
+    }
+    return null;
+  }
+
+  private isScriptSkirmishDefenseTemplateName(templateName: string): boolean {
+    const normalizedTemplate = templateName.trim().toUpperCase();
+    if (!normalizedTemplate) {
+      return false;
+    }
+
+    for (const keyword of SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS) {
+      if (normalizedTemplate.includes(keyword)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
