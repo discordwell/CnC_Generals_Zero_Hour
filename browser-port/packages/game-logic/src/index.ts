@@ -3819,6 +3819,12 @@ interface ScriptTeamRecord {
   created: boolean;
   stateName: string;
   controllingSide: string | null;
+  /** Source parity: TeamTemplateInfo::m_productionPriority. */
+  productionPriority: number;
+  /** Source parity: TeamTemplateInfo::m_productionPrioritySuccessIncrease. */
+  productionPrioritySuccessIncrease: number;
+  /** Source parity: TeamTemplateInfo::m_productionPriorityFailureDecrease. */
+  productionPriorityFailureDecrease: number;
 }
 
 interface ScriptCounterState {
@@ -4041,6 +4047,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [436, 'NAMED_SET_REPULSOR'],
   [437, 'TEAM_SET_REPULSOR'],
   [438, 'TEAM_WANDER_IN_PLACE'],
+  [439, 'TEAM_INCREASE_PRIORITY'],
+  [440, 'TEAM_DECREASE_PRIORITY'],
   [441, 'DISPLAY_COUNTER'],
   [442, 'HIDE_COUNTER'],
   [443, 'TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED'],
@@ -6850,6 +6858,10 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'TEAM_WANDER_IN_PLACE':
         return this.executeScriptTeamWanderInPlace(readString(0, ['teamName', 'team']));
+      case 'TEAM_INCREASE_PRIORITY':
+        return this.executeScriptTeamIncreasePriority(readString(0, ['teamName', 'team']));
+      case 'TEAM_DECREASE_PRIORITY':
+        return this.executeScriptTeamDecreasePriority(readString(0, ['teamName', 'team']));
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -7624,6 +7636,42 @@ export class GameLogicSubsystem implements Subsystem {
     }
     team.controllingSide = normalizedSide;
     return true;
+  }
+
+  /**
+   * Source parity helper: TeamTemplateInfo priority fields used by
+   * ScriptActions::doTeamIncreasePriority / doTeamDecreasePriority.
+   */
+  setScriptTeamPriorityValues(
+    teamName: string,
+    productionPriority: number,
+    successIncrease: number,
+    failureDecrease: number,
+  ): boolean {
+    const team = this.getOrCreateScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.productionPriority = Math.trunc(productionPriority);
+    team.productionPrioritySuccessIncrease = Math.trunc(successIncrease);
+    team.productionPriorityFailureDecrease = Math.trunc(failureDecrease);
+    return true;
+  }
+
+  getScriptTeamPriorityState(teamName: string): {
+    productionPriority: number;
+    successIncrease: number;
+    failureDecrease: number;
+  } | null {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return null;
+    }
+    return {
+      productionPriority: team.productionPriority,
+      successIncrease: team.productionPrioritySuccessIncrease,
+      failureDecrease: team.productionPriorityFailureDecrease,
+    };
   }
 
   private resolveScriptTeamSideForRelationship(teamName: string): string | null {
@@ -8658,6 +8706,32 @@ export class GameLogicSubsystem implements Subsystem {
       entity.scriptWanderInPlaceOriginZ = entity.z;
       this.setScriptWanderInPlaceGoal(entity);
     }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamIncreasePriority.
+   * TeamPrototype::increaseAIPriorityForSuccess adds success increase to current priority.
+   */
+  private executeScriptTeamIncreasePriority(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.productionPriority += team.productionPrioritySuccessIncrease;
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamDecreasePriority.
+   * TeamPrototype::decreaseAIPriorityForFailure subtracts failure decrease from current priority.
+   */
+  private executeScriptTeamDecreasePriority(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.productionPriority -= team.productionPriorityFailureDecrease;
     return true;
   }
 
@@ -20483,6 +20557,9 @@ export class GameLogicSubsystem implements Subsystem {
       created: false,
       stateName: '',
       controllingSide: null,
+      productionPriority: 0,
+      productionPrioritySuccessIncrease: 0,
+      productionPriorityFailureDecrease: 0,
     };
     this.scriptTeamsByName.set(teamNameUpper, created);
     return created;

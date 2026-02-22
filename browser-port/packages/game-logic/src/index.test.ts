@@ -29376,6 +29376,52 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team-priority actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.setScriptTeamMembers('PriorityTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamPriorityValues('PriorityTeam', 10, 3, 2)).toBe(true);
+    expect(logic.getScriptTeamPriorityState('PriorityTeam')).toEqual({
+      productionPriority: 10,
+      successIncrease: 3,
+      failureDecrease: 2,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 439, // TEAM_INCREASE_PRIORITY
+      params: ['PriorityTeam'],
+    })).toBe(true);
+    expect(logic.getScriptTeamPriorityState('PriorityTeam')?.productionPriority).toBe(13);
+
+    expect(logic.executeScriptAction({
+      actionType: 440, // TEAM_DECREASE_PRIORITY
+      params: ['PriorityTeam'],
+    })).toBe(true);
+    expect(logic.getScriptTeamPriorityState('PriorityTeam')?.productionPriority).toBe(11);
+
+    expect(logic.executeScriptAction({
+      actionType: 439,
+      params: ['MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 440,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
