@@ -29147,6 +29147,63 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script map-reveal-all-perm actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaScout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 0 }),
+        makeObjectDef('GLAScout', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaScout', 16, 16),
+        makeMapObject('GLAScout', 240, 240),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'GLA', playerType: 'COMPUTER' });
+    logic.update(1 / 30);
+
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_SHROUDED);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 434, // MAP_REVEAL_ALL_PERM
+      params: ['MissingPlayerName'],
+    })).toBe(true);
+    // Unknown playerName falls back to all human players (America only in this setup).
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_CLEAR);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 435, // MAP_REVEAL_ALL_UNDO_PERM
+      params: ['MissingPlayerName'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_FOGGED);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 434,
+      params: ['GLA'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_CLEAR);
+
+    expect(logic.executeScriptAction({
+      actionType: 435,
+      params: ['GLA'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_FOGGED);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

@@ -96,6 +96,46 @@ export class FogOfWarGrid {
   }
 
   /**
+   * Source parity: PartitionManager::revealMapForPlayerPermanently.
+   * Adds a persistent looker to every cell so shroud generation no longer covers the map.
+   */
+  revealMapForPlayerPermanently(playerIndex: number): void {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS) {
+      return;
+    }
+
+    const lookers = this.lookerCounts[playerIndex];
+    const seen = this.everSeen[playerIndex];
+    if (!lookers || !seen) {
+      return;
+    }
+
+    for (let idx = 0; idx < lookers.length; idx++) {
+      lookers[idx] = (lookers[idx] ?? 0) + 1;
+      seen[idx] = 1;
+    }
+  }
+
+  /**
+   * Source parity: PartitionManager::undoRevealMapForPlayerPermanently.
+   * Removes one persistent reveal layer from every cell.
+   */
+  undoRevealMapForPlayerPermanently(playerIndex: number): void {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS) {
+      return;
+    }
+
+    const lookers = this.lookerCounts[playerIndex];
+    if (!lookers) {
+      return;
+    }
+
+    for (let idx = 0; idx < lookers.length; idx++) {
+      lookers[idx] = Math.max(0, (lookers[idx] ?? 0) - 1);
+    }
+  }
+
+  /**
    * Remove a looker (decrements looker count). Call when a unit moves or dies.
    * Source parity: PartitionManager::queueUndoShroudReveal
    */

@@ -3976,6 +3976,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [431, 'NAMED_SET_TOPPLE_DIRECTION'],
   [432, 'UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE'],
   [433, 'TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE'],
+  [434, 'MAP_REVEAL_ALL_PERM'],
+  [435, 'MAP_REVEAL_ALL_UNDO_PERM'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6666,6 +6668,16 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readString(1, ['objectType', 'templateName', 'type']),
           readString(2, ['triggerName', 'trigger', 'areaName', 'area']),
+        );
+      case 'MAP_REVEAL_ALL_PERM':
+        return this.executeScriptRevealMapEntirePermanently(
+          true,
+          readString(0, ['side', 'playerName', 'player']),
+        );
+      case 'MAP_REVEAL_ALL_UNDO_PERM':
+        return this.executeScriptRevealMapEntirePermanently(
+          false,
+          readString(0, ['side', 'playerName', 'player']),
         );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
@@ -25589,6 +25601,111 @@ export class GameLogicSubsystem implements Subsystem {
       radius: maxRadius,
       expiryFrame: this.frameCounter + 18000, // ~10 minutes at 30fps
     });
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doRevealMapEntirePermanently.
+   * - If playerName resolves to a known player side and is not empty: apply to that player.
+   * - Otherwise: apply to all human players.
+   */
+  private executeScriptRevealMapEntirePermanently(reveal: boolean, playerName: string): boolean {
+    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
+    if (targetSide) {
+      this.setMapRevealEntirePermanentlyForSide(targetSide, reveal);
+      return true;
+    }
+
+    for (const side of this.collectScriptHumanSides()) {
+      this.setMapRevealEntirePermanentlyForSide(side, reveal);
+    }
+    return true;
+  }
+
+  private setMapRevealEntirePermanentlyForSide(side: string, reveal: boolean): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return;
+    }
+    const playerIndex = this.resolvePlayerIndexForSide(side);
+    if (playerIndex < 0) {
+      return;
+    }
+    if (reveal) {
+      grid.revealMapForPlayerPermanently(playerIndex);
+      return;
+    }
+    grid.undoRevealMapForPlayerPermanently(playerIndex);
+  }
+
+  private resolveScriptRevealMapTargetSide(playerName: string): string | null {
+    const normalizedPlayerName = this.normalizeSide(playerName);
+    if (!normalizedPlayerName) {
+      return null;
+    }
+
+    return this.collectScriptKnownSides().has(normalizedPlayerName)
+      ? normalizedPlayerName
+      : null;
+  }
+
+  private collectScriptHumanSides(): string[] {
+    const sides: string[] = [];
+    for (const side of this.collectScriptKnownSides()) {
+      if (this.getSidePlayerType(side) === 'HUMAN') {
+        sides.push(side);
+      }
+    }
+    sides.sort();
+    return sides;
+  }
+
+  private collectScriptKnownSides(): Set<string> {
+    const configuredSides = new Set<string>();
+
+    for (const [, side] of this.playerSideByIndex) {
+      const normalized = this.normalizeSide(side);
+      if (normalized) {
+        configuredSides.add(normalized);
+      }
+    }
+    for (const side of this.sidePlayerTypes.keys()) {
+      const normalized = this.normalizeSide(side);
+      if (normalized) {
+        configuredSides.add(normalized);
+      }
+    }
+    if (configuredSides.size > 0) {
+      return configuredSides;
+    }
+
+    const sides = new Set<string>();
+
+    for (const side of this.sidePlayerIndex.keys()) {
+      const normalized = this.normalizeSide(side);
+      if (normalized) {
+        sides.add(normalized);
+      }
+    }
+    for (const side of this.sideCredits.keys()) {
+      const normalized = this.normalizeSide(side);
+      if (normalized) {
+        sides.add(normalized);
+      }
+    }
+    for (const side of this.sideRankState.keys()) {
+      const normalized = this.normalizeSide(side);
+      if (normalized) {
+        sides.add(normalized);
+      }
+    }
+    for (const entity of this.spawnedEntities.values()) {
+      const normalized = this.normalizeSide(entity.side);
+      if (normalized) {
+        sides.add(normalized);
+      }
+    }
+
+    return sides;
   }
 
   /**
