@@ -29204,6 +29204,63 @@ describe('Script condition groundwork', () => {
     expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_FOGGED);
   });
 
+  it('executes script repulsor actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 14, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('RepulsorTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 436, // NAMED_SET_REPULSOR
+      params: [1, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('REPULSOR');
+
+    expect(logic.executeScriptAction({
+      actionType: 436,
+      params: [1, 0],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('REPULSOR');
+
+    expect(logic.executeScriptAction({
+      actionType: 437, // TEAM_SET_REPULSOR
+      params: ['RepulsorTeam', 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('REPULSOR');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('REPULSOR');
+
+    expect(logic.executeScriptAction({
+      actionType: 437,
+      params: ['RepulsorTeam', 0],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('REPULSOR');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('REPULSOR');
+
+    expect(logic.executeScriptAction({
+      actionType: 436,
+      params: [999, 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 437,
+      params: ['MissingTeam', 1],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

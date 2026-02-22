@@ -3978,6 +3978,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [433, 'TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE'],
   [434, 'MAP_REVEAL_ALL_PERM'],
   [435, 'MAP_REVEAL_ALL_UNDO_PERM'],
+  [436, 'NAMED_SET_REPULSOR'],
+  [437, 'TEAM_SET_REPULSOR'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6679,6 +6681,16 @@ export class GameLogicSubsystem implements Subsystem {
           false,
           readString(0, ['side', 'playerName', 'player']),
         );
+      case 'NAMED_SET_REPULSOR':
+        return this.executeScriptNamedSetRepulsor(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readBoolean(1, ['repulsor', 'value', 'enabled']),
+        );
+      case 'TEAM_SET_REPULSOR':
+        return this.executeScriptTeamSetRepulsor(
+          readString(0, ['teamName', 'team']),
+          readBoolean(1, ['repulsor', 'value', 'enabled']),
+        );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -7879,6 +7891,45 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedSetRepulsor.
+   */
+  private executeScriptNamedSetRepulsor(entityId: number, repulsor: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    if (repulsor) {
+      entity.objectStatusFlags.add('REPULSOR');
+    } else {
+      entity.objectStatusFlags.delete('REPULSOR');
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamSetRepulsor.
+   */
+  private executeScriptTeamSetRepulsor(teamName: string, repulsor: boolean): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (repulsor) {
+        entity.objectStatusFlags.add('REPULSOR');
+      } else {
+        entity.objectStatusFlags.delete('REPULSOR');
+      }
     }
     return true;
   }
