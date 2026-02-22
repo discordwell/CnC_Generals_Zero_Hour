@@ -28398,6 +28398,52 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script victory/defeat actions using source action ids', () => {
+    const createLogic = (): GameLogicSubsystem => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        makeMap([], 128, 128),
+        makeRegistry(makeBundle({ objects: [] })),
+        makeHeightmap(128, 128),
+      );
+      logic.setPlayerSide(0, 'America');
+      logic.setPlayerSide(1, 'China');
+      return logic;
+    };
+
+    const victoryLogic = createLogic();
+    expect(victoryLogic.executeScriptAction({
+      actionType: 3, // VICTORY
+    })).toBe(true);
+    expect(victoryLogic.getGameEndState()).toMatchObject({
+      status: 'VICTORY',
+    });
+
+    const defeatLogic = createLogic();
+    expect(defeatLogic.executeScriptAction({
+      actionType: 4, // DEFEAT
+    })).toBe(true);
+    expect(defeatLogic.getGameEndState()).toMatchObject({
+      status: 'DEFEAT',
+    });
+
+    const quickVictoryLogic = createLogic();
+    expect(quickVictoryLogic.executeScriptAction({
+      actionType: 324, // QUICKVICTORY
+    })).toBe(true);
+    expect(quickVictoryLogic.getGameEndState()).toMatchObject({
+      status: 'VICTORY',
+    });
+
+    const localDefeatLogic = createLogic();
+    expect(localDefeatLogic.executeScriptAction({
+      actionType: 296, // LOCALDEFEAT
+    })).toBe(true);
+    expect(localDefeatLogic.getGameEndState()).toMatchObject({
+      status: 'DEFEAT',
+    });
+  });
+
   it('executes script relation-override actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

@@ -3831,6 +3831,8 @@ const SCRIPT_CONDITION_TYPE_ALIASES = new Map<string, string>([
 const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [1, 'SET_FLAG'],
   [2, 'SET_COUNTER'],
+  [3, 'VICTORY'],
+  [4, 'DEFEAT'],
   [5, 'NO_OP'],
   [6, 'SET_TIMER'],
   [8, 'ENABLE_SCRIPT'],
@@ -3855,7 +3857,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [275, 'PLAYER_SET_RANKLEVELLIMIT'],
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
+  [296, 'LOCALDEFEAT'],
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
+  [324, 'QUICKVICTORY'],
   [383, 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM'],
   [384, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
   [385, 'TEAM_REMOVE_ALL_OVERRIDE_RELATIONS'],
@@ -5676,6 +5680,23 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doVictory/doDefeat and timer start.
+   * This port applies the local outcome immediately (without UI/end-game timer windows).
+   */
+  private setScriptLocalGameEndState(localDefeated: boolean): boolean {
+    const localSide = this.resolveLocalPlayerSide();
+    if (localSide) {
+      if (localDefeated) {
+        this.defeatedSides.add(localSide);
+      } else {
+        this.defeatedSides.delete(localSide);
+      }
+    }
+    this.gameEndFrame = this.frameCounter;
+    return true;
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -5727,6 +5748,12 @@ export class GameLogicSubsystem implements Subsystem {
     switch (actionType) {
       case 'NO_OP':
         return true;
+      case 'VICTORY':
+      case 'QUICKVICTORY':
+        return this.setScriptLocalGameEndState(false);
+      case 'DEFEAT':
+      case 'LOCALDEFEAT':
+        return this.setScriptLocalGameEndState(true);
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
