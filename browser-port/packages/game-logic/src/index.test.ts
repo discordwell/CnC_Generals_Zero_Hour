@@ -28533,6 +28533,32 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptRadarForced()).toBe(false);
   });
 
+  it('executes script screen-shake action using source action id', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 415, // SCREEN_SHAKE
+      params: [2],
+    })).toBe(true);
+    expect(logic.getScriptScreenShakeState()).toEqual({
+      intensity: 2,
+      frame: 0,
+    });
+    expect(logic.executeScriptAction({
+      actionType: 415,
+      params: ['invalid'],
+    })).toBe(true);
+    expect(logic.getScriptScreenShakeState()).toEqual({
+      intensity: 0,
+      frame: 0,
+    });
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

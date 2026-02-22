@@ -3714,6 +3714,11 @@ interface ScriptCameraLookTowardWaypointState {
   reverseRotation: boolean;
 }
 
+interface ScriptScreenShakeState {
+  intensity: number;
+  frame: number;
+}
+
 interface ScriptTeamRecord {
   nameUpper: string;
   memberEntityIds: Set<number>;
@@ -3919,6 +3924,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [412, 'UNIT_DESTROY_ALL_CONTAINED'],
   [413, 'RADAR_FORCE_ENABLE'],
   [414, 'RADAR_REVERT_TO_NORMAL'],
+  [415, 'SCREEN_SHAKE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4033,6 +4039,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraMovementFinished = true;
   /** Source parity bridge: Radar::forceOn script control. */
   private scriptRadarForced = false;
+  /** Source parity bridge: TacticalView::shake request from scripts. */
+  private scriptScreenShakeState: ScriptScreenShakeState | null = null;
   /** Source parity bridge: TacticalView camera lock target for script tether actions. */
   private scriptCameraTetherState: ScriptCameraTetherState | null = null;
   /** Source parity bridge: TacticalView default camera values set by scripts. */
@@ -5942,6 +5950,28 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: ScriptActions::doScreenShake.
+   * TODO(source-parity): forward to TacticalView::shake.
+   */
+  setScriptScreenShake(intensity: number): boolean {
+    if (!Number.isFinite(intensity)) {
+      return false;
+    }
+    this.scriptScreenShakeState = {
+      intensity: Math.trunc(intensity),
+      frame: this.frameCounter,
+    };
+    return true;
+  }
+
+  getScriptScreenShakeState(): ScriptScreenShakeState | null {
+    if (!this.scriptScreenShakeState) {
+      return null;
+    }
+    return { ...this.scriptScreenShakeState };
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -6017,6 +6047,8 @@ export class GameLogicSubsystem implements Subsystem {
       case 'RADAR_REVERT_TO_NORMAL':
         this.setScriptRadarForced(false);
         return true;
+      case 'SCREEN_SHAKE':
+        return this.setScriptScreenShake(readInteger(0, ['intensity', 'shakeType', 'cameraShakeType']));
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -10949,6 +10981,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
+    this.scriptScreenShakeState = null;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
@@ -38546,6 +38579,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
+    this.scriptScreenShakeState = null;
     this.scriptCameraMovementFinished = true;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
