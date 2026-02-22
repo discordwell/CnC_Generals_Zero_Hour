@@ -712,6 +712,10 @@ const MAX_SCRIPT_RADAR_EVENTS = 64;
 const SCRIPT_RADAR_EVENT_TTL_FRAMES = LOGIC_FRAME_RATE * 4;
 const SCRIPT_THIS_TEAM = '<This Team>';
 const SCRIPT_THIS_OBJECT = '<This Object>';
+const SCRIPT_THIS_PLAYER = '<This Player>';
+const SCRIPT_LOCAL_PLAYER = '<Local Player>';
+const SCRIPT_THIS_PLAYER_ENEMY = "<This Player's Enemy>";
+const SCRIPT_THE_PLAYER = 'ThePlayer';
 const SCRIPT_TEAM_THE_PLAYER = 'teamThePlayer';
 const RADAR_EVENT_BEACON_PULSE = 5;
 
@@ -1730,6 +1734,10 @@ interface MapEntity {
   dozerAIProfile: DozerAIProfile | null;
   /** Source parity: DozerPrimaryIdleState::m_idleTooLongTimestamp. */
   dozerIdleTooLongTimestamp: number;
+  /** Source parity: Dozer/Worker task ordering timestamp for build tasks. */
+  dozerBuildTaskOrderFrame: number;
+  /** Source parity: Dozer/Worker task ordering timestamp for repair tasks. */
+  dozerRepairTaskOrderFrame: number;
   isSupplyCenter: boolean;
   experienceProfile: ExperienceProfile | null;
   experienceState: ExperienceState;
@@ -6826,6 +6834,8 @@ export class GameLogicSubsystem implements Subsystem {
       this.resolveScriptConditionParamValue(actionRecord, paramsObject, paramsArray, index, keyNames);
     const readString = (index: number, keyNames: readonly string[] = []): string =>
       this.coerceScriptConditionString(readValue(index, keyNames));
+    const readSide = (index: number, keyNames: readonly string[] = []): string =>
+      this.resolveScriptPlayerSideFromInput(readString(index, keyNames)) ?? '';
     const readNumber = (index: number, keyNames: readonly string[] = []): number =>
       this.coerceScriptConditionNumber(readValue(index, keyNames)) ?? 0;
     const readInteger = (index: number, keyNames: readonly string[] = []): number =>
@@ -6994,28 +7004,28 @@ export class GameLogicSubsystem implements Subsystem {
       case 'SKIRMISH_BUILD_BUILDING':
         return this.executeScriptSkirmishBuildBuilding(
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'SKIRMISH_FOLLOW_APPROACH_PATH':
         return this.executeScriptTeamFollowSkirmishApproachPath(
           readString(0, ['teamName', 'team']),
           readString(1, ['waypointPathLabel', 'pathLabel', 'waypointPath']),
           readBoolean(2, ['asTeam', 'asGroup']),
-          readString(3, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(3, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'SKIRMISH_MOVE_TO_APPROACH_PATH':
         return this.executeScriptTeamMoveToSkirmishApproachPath(
           readString(0, ['teamName', 'team']),
           readString(1, ['waypointPathLabel', 'pathLabel', 'waypointPath']),
-          readString(2, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(2, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'SKIRMISH_BUILD_BASE_DEFENSE_FRONT':
         return this.executeScriptSkirmishBuildBaseDefenseFront(
-          readString(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'SKIRMISH_FIRE_SPECIAL_POWER_AT_MOST_COST':
         return this.executeScriptSkirmishFireSpecialPowerAtMostCost(
-          readString(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
           readString(1, ['specialPowerName', 'specialPower']),
         );
       case 'IDLE_ALL_UNITS':
@@ -7034,22 +7044,22 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'PLAYER_REPAIR_NAMED_STRUCTURE':
         return this.executeScriptPlayerRepairNamedStructure(
-          readString(0, ['side', 'playerName', 'player']),
+          readSide(0, ['side', 'playerName', 'player']),
           readEntityId(1, ['targetEntityId', 'entityId', 'targetBuildingId', 'unitId', 'named']),
         );
       case 'SKIRMISH_BUILD_BASE_DEFENSE_FLANK':
         return this.executeScriptSkirmishBuildBaseDefenseFlank(
-          readString(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'SKIRMISH_BUILD_STRUCTURE_FRONT':
         return this.executeScriptSkirmishBuildStructureFront(
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'SKIRMISH_BUILD_STRUCTURE_FLANK':
         return this.executeScriptSkirmishBuildStructureFlank(
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE':
         return this.executeScriptSkirmishAttackNearestGroupWithValue(
@@ -7132,7 +7142,7 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS':
         return this.executeScriptPlayerCreateTeamFromCapturedUnits(
-          readString(0, ['side', 'playerName', 'player']),
+          readSide(0, ['side', 'playerName', 'player']),
           readString(1, ['teamName', 'team']),
         );
       case 'ENABLE_SCRIPT':
@@ -7216,7 +7226,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'TEAM_TRANSFER_TO_PLAYER':
         return this.setScriptTeamControllingSide(
           readString(0, ['teamName', 'team']),
-          readString(1, ['side', 'playerName', 'player']),
+          readSide(1, ['side', 'playerName', 'player']),
         );
       case 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM':
         return this.setScriptTeamOverrideRelationToTeam(
@@ -7236,28 +7246,28 @@ export class GameLogicSubsystem implements Subsystem {
       case 'TEAM_SET_OVERRIDE_RELATION_TO_PLAYER':
         return this.setScriptTeamOverrideRelationToPlayer(
           readString(0, ['teamName', 'team']),
-          readString(1, ['otherPlayer', 'side', 'playerName', 'player']),
+          readSide(1, ['otherPlayer', 'side', 'playerName', 'player']),
           readRelationship(2, ['relationship', 'relation']),
         );
       case 'TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER':
         return this.removeScriptTeamOverrideRelationToPlayer(
           readString(0, ['teamName', 'team']),
-          readString(1, ['otherPlayer', 'side', 'playerName', 'player']),
+          readSide(1, ['otherPlayer', 'side', 'playerName', 'player']),
         );
       case 'PLAYER_SET_OVERRIDE_RELATION_TO_TEAM':
         return this.setScriptPlayerOverrideRelationToTeam(
-          readString(0, ['side', 'playerName', 'player']),
+          readSide(0, ['side', 'playerName', 'player']),
           readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
           readRelationship(2, ['relationship', 'relation']),
         );
       case 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM':
         return this.removeScriptPlayerOverrideRelationToTeam(
-          readString(0, ['side', 'playerName', 'player']),
+          readSide(0, ['side', 'playerName', 'player']),
           readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
         );
       case 'PLAYER_RELATES_PLAYER': {
-        const sourceSide = readString(0, ['side', 'playerName', 'player', 'sourcePlayer']);
-        const targetSide = readString(1, ['otherPlayer', 'targetPlayer', 'targetSide']);
+        const sourceSide = readSide(0, ['side', 'playerName', 'player', 'sourcePlayer']);
+        const targetSide = readSide(1, ['otherPlayer', 'targetPlayer', 'targetSide']);
         const relationship = this.resolveScriptRelationshipInput(
           readRelationship(2, ['relationship', 'relation']),
         );
@@ -7461,7 +7471,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'TEAM_STOP_AND_DISBAND':
         return this.executeScriptTeamStopAndDisband(readString(0, ['teamName', 'team']));
       case 'PLAYER_SET_MONEY': {
-        const side = readString(0, ['side', 'playerName', 'player']);
+        const side = readSide(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {
           return false;
         }
@@ -7469,7 +7479,7 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'PLAYER_GIVE_MONEY': {
-        const side = readString(0, ['side', 'playerName', 'player']);
+        const side = readSide(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {
           return false;
         }
@@ -7477,7 +7487,7 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'PLAYER_ADD_SKILLPOINTS': {
-        const side = readString(0, ['side', 'playerName', 'player']);
+        const side = readSide(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {
           return false;
         }
@@ -7485,7 +7495,7 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'PLAYER_ADD_RANKLEVEL': {
-        const side = readString(0, ['side', 'playerName', 'player']);
+        const side = readSide(0, ['side', 'playerName', 'player']);
         const normalizedSide = this.normalizeSide(side);
         if (!normalizedSide) {
           return false;
@@ -7498,7 +7508,7 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'PLAYER_SET_RANKLEVEL': {
-        const side = readString(0, ['side', 'playerName', 'player']);
+        const side = readSide(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {
           return false;
         }
@@ -7513,11 +7523,11 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'PLAYER_GRANT_SCIENCE':
         return this.grantSideScience(
-          readString(0, ['side', 'playerName', 'player']),
+          readSide(0, ['side', 'playerName', 'player']),
           readString(1, ['scienceName', 'science']),
         );
       case 'PLAYER_PURCHASE_SCIENCE': {
-        const side = readString(0, ['side', 'playerName', 'player']);
+        const side = readSide(0, ['side', 'playerName', 'player']);
         const normalizedSide = this.normalizeSide(side);
         if (!normalizedSide) {
           return false;
@@ -7567,7 +7577,7 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'PLAYER_SCIENCE_AVAILABILITY':
         return this.setSideScienceAvailability(
-          readString(0, ['side', 'playerName', 'player']),
+          readSide(0, ['side', 'playerName', 'player']),
           readString(1, ['scienceName', 'science']),
           readString(2, ['availability', 'scienceAvailability', 'value']),
         );
@@ -7600,6 +7610,8 @@ export class GameLogicSubsystem implements Subsystem {
       this.resolveScriptConditionParamValue(conditionRecord, paramsObject, paramsArray, index, keyNames);
     const readString = (index: number, keyNames: readonly string[] = []): string =>
       this.coerceScriptConditionString(readValue(index, keyNames));
+    const readSide = (index: number, keyNames: readonly string[] = []): string =>
+      this.resolveScriptPlayerSideFromInput(readString(index, keyNames)) ?? '';
     const readNumber = (index: number, keyNames: readonly string[] = []): number =>
       this.coerceScriptConditionNumber(readValue(index, keyNames)) ?? 0;
     const readInteger = (index: number, keyNames: readonly string[] = []): number =>
@@ -7681,11 +7693,11 @@ export class GameLogicSubsystem implements Subsystem {
 
       case 'PLAYER_ALL_DESTROYED':
         return this.evaluateScriptAllDestroyed({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
         });
       case 'PLAYER_ALL_BUILDFACILITIES_DESTROYED':
         return this.evaluateScriptAllBuildFacilitiesDestroyed({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
         });
       case 'TEAM_INSIDE_AREA_PARTIALLY':
         return this.evaluateScriptTeamInsideAreaPartially({
@@ -7781,18 +7793,18 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return this.evaluateScriptNamedAttackedByPlayer({
           entityId,
-          attackedBySide: readString(1, ['attackedBySide', 'side']),
+          attackedBySide: readSide(1, ['attackedBySide', 'side']),
         });
       }
       case 'TEAM_ATTACKED_BY_PLAYER':
         return this.evaluateScriptTeamAttackedByPlayer({
           teamName: readString(0, ['teamName', 'team']),
-          attackedBySide: readString(1, ['attackedBySide', 'side']),
+          attackedBySide: readSide(1, ['attackedBySide', 'side']),
         });
       case 'BUILT_BY_PLAYER':
         return this.evaluateScriptBuiltByPlayer({
           templateName: readString(0, ['templateName', 'objectType', 'unitType']),
-          side: readString(1, ['side']),
+          side: readSide(1, ['side']),
           conditionCacheId,
         });
       case 'NAMED_CREATED': {
@@ -7810,7 +7822,7 @@ export class GameLogicSubsystem implements Subsystem {
         return this.evaluateScriptPlayerHasCredits({
           credits: readNumber(0, ['credits']),
           comparison: readComparison(1, ['comparison']),
-          side: readString(2, ['side']),
+          side: readSide(2, ['side']),
         });
       case 'NAMED_DISCOVERED': {
         const entityId = readEntityId(0, ['entityId']);
@@ -7819,17 +7831,17 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return this.evaluateScriptNamedDiscovered({
           entityId,
-          side: readString(1, ['side']),
+          side: readSide(1, ['side']),
         });
       }
       case 'TEAM_DISCOVERED':
         return this.evaluateScriptTeamDiscovered({
           teamName: readString(0, ['teamName', 'team']),
-          side: readString(1, ['side']),
+          side: readSide(1, ['side']),
         });
       case 'MISSION_ATTEMPTS':
         return this.evaluateScriptMissionAttempts({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           attempts: readInteger(2, ['attempts']),
         });
@@ -7840,26 +7852,26 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return this.evaluateScriptNamedOwnedByPlayer({
           entityId,
-          side: readString(1, ['side']),
+          side: readSide(1, ['side']),
         });
       }
       case 'TEAM_OWNED_BY_PLAYER':
         return this.evaluateScriptTeamOwnedByPlayer({
           teamName: readString(0, ['teamName', 'team']),
-          side: readString(1, ['side']),
+          side: readSide(1, ['side']),
         });
       case 'PLAYER_HAS_N_OR_FEWER_BUILDINGS':
         return this.evaluateScriptPlayerHasNOrFewerBuildings({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           buildingCount: readInteger(1, ['buildingCount', 'count']),
         });
       case 'PLAYER_HAS_POWER':
         return this.evaluateScriptPlayerHasPower({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
         });
       case 'PLAYER_HAS_NO_POWER':
         return !this.evaluateScriptPlayerHasPower({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
         });
       case 'NAMED_REACHED_WAYPOINTS_END': {
         const entityId = readEntityId(0, ['entityId']);
@@ -7952,7 +7964,7 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return this.evaluateScriptBuildingEntered({
           entityId,
-          side: readString(1, ['side']),
+          side: readSide(1, ['side']),
         });
       }
       case 'ENEMY_SIGHTED': {
@@ -7963,7 +7975,7 @@ export class GameLogicSubsystem implements Subsystem {
         return this.evaluateScriptEnemySighted({
           entityId,
           alliance: readRelationship(1, ['alliance']),
-          side: readString(2, ['side']),
+          side: readSide(2, ['side']),
         });
       }
       case 'TYPE_SIGHTED': {
@@ -7974,7 +7986,7 @@ export class GameLogicSubsystem implements Subsystem {
         return this.evaluateScriptTypeSighted({
           entityId,
           objectType: readString(1, ['objectType', 'templateName', 'unitType']),
-          side: readString(2, ['side']),
+          side: readSide(2, ['side']),
         });
       }
       case 'UNIT_HEALTH': {
@@ -8018,7 +8030,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'PLAYER_HAS_OBJECT_COMPARISON':
         return this.evaluateScriptPlayerUnitCondition({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
           unitType: readString(3, ['unitType', 'objectType', 'templateName']),
@@ -8026,50 +8038,50 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_TRIGGERED_SPECIAL_POWER':
         return this.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
         });
       case 'PLAYER_TRIGGERED_SPECIAL_POWER_FROM_NAMED':
         return this.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
       case 'PLAYER_MIDWAY_SPECIAL_POWER':
         return this.evaluateScriptPlayerSpecialPowerFromUnitMidway({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
         });
       case 'PLAYER_MIDWAY_SPECIAL_POWER_FROM_NAMED':
         return this.evaluateScriptPlayerSpecialPowerFromUnitMidway({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
       case 'PLAYER_COMPLETED_SPECIAL_POWER':
         return this.evaluateScriptPlayerSpecialPowerFromUnitComplete({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
         });
       case 'PLAYER_COMPLETED_SPECIAL_POWER_FROM_NAMED':
         return this.evaluateScriptPlayerSpecialPowerFromUnitComplete({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
       case 'PLAYER_ACQUIRED_SCIENCE':
         return this.evaluateScriptScienceAcquired({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           scienceName: readString(1, ['scienceName']),
         });
       case 'PLAYER_CAN_PURCHASE_SCIENCE':
         return this.evaluateScriptCanPurchaseScience({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           scienceName: readString(1, ['scienceName']),
         });
       case 'PLAYER_HAS_SCIENCEPURCHASEPOINTS':
         return this.evaluateScriptSciencePurchasePoints({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           pointsNeeded: readNumber(1, ['pointsNeeded', 'sciencePurchasePoints']),
         });
       case 'NAMED_HAS_FREE_CONTAINER_SLOTS': {
@@ -8081,12 +8093,12 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'PLAYER_BUILT_UPGRADE':
         return this.evaluateScriptUpgradeFromUnitComplete({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           upgradeName: readString(1, ['upgradeName', 'upgrade']),
         });
       case 'PLAYER_BUILT_UPGRADE_FROM_NAMED':
         return this.evaluateScriptUpgradeFromUnitComplete({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           upgradeName: readString(1, ['upgradeName', 'upgrade']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
@@ -8095,13 +8107,13 @@ export class GameLogicSubsystem implements Subsystem {
         return false;
       case 'PLAYER_DESTROYED_N_BUILDINGS_PLAYER':
         return this.evaluateScriptPlayerDestroyedNOrMoreBuildings({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           count: readInteger(1, ['count']),
-          opponentSide: readString(2, ['opponentSide']),
+          opponentSide: readSide(2, ['opponentSide']),
         });
       case 'PLAYER_HAS_COMPARISON_UNIT_TYPE_IN_TRIGGER_AREA':
         return this.evaluateScriptPlayerHasUnitTypeInArea({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
           templateName: readString(3, ['templateName', 'objectType', 'unitType']),
@@ -8110,7 +8122,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_HAS_COMPARISON_UNIT_KIND_IN_TRIGGER_AREA':
         return this.evaluateScriptPlayerHasUnitKindInArea({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
           kindOf: readString(3, ['kindOf']),
@@ -8133,7 +8145,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'PLAYER_HAS_N_OR_FEWER_FACTION_BUILDINGS':
         return this.evaluateScriptPlayerHasNOrFewerFactionBuildings({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           buildingCount: readInteger(1, ['buildingCount', 'count']),
         });
       case 'UNIT_HAS_OBJECT_STATUS': {
@@ -8160,25 +8172,25 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_POWER_COMPARE_PERCENT':
         return this.evaluateScriptPlayerHasComparisonPercentPower({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           percent: readNumber(2, ['percent']),
         });
       case 'PLAYER_EXCESS_POWER_COMPARE_VALUE':
         return this.evaluateScriptPlayerHasComparisonValueExcessPower({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           kilowatts: readNumber(2, ['kilowatts']),
         });
       case 'SKIRMISH_SPECIAL_POWER_READY':
         return this.evaluateScriptSkirmishSpecialPowerIsReady({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
           conditionCacheId,
         });
       case 'SKIRMISH_VALUE_IN_AREA':
         return this.evaluateScriptSkirmishValueInArea({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           money: readInteger(2, ['money', 'value']),
           triggerName: readString(3, ['triggerName', 'trigger']),
@@ -8186,32 +8198,32 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'SKIRMISH_PLAYER_FACTION':
         return this.evaluateScriptSkirmishPlayerIsFaction({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           factionName: readString(1, ['factionName', 'faction']),
         });
       case 'SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE':
         return this.evaluateScriptSkirmishSuppliesWithinDistancePerimeter({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           distance: readNumber(1, ['distance']),
           triggerName: readString(2, ['triggerName', 'trigger']),
           value: readInteger(3, ['value']),
         });
       case 'SKIRMISH_TECH_BUILDING_WITHIN_DISTANCE':
         return this.evaluateScriptSkirmishPlayerTechBuildingWithinDistancePerimeter({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           distance: readNumber(1, ['distance']),
           triggerName: readString(2, ['triggerName', 'trigger']),
           conditionCacheId,
         });
       case 'SKIRMISH_COMMAND_BUTTON_READY_ALL':
         return this.evaluateScriptSkirmishCommandButtonIsReady({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           commandButtonName: readString(2, ['commandButtonName', 'commandButton']),
           allReady: true,
         });
       case 'SKIRMISH_COMMAND_BUTTON_READY_PARTIAL':
         return this.evaluateScriptSkirmishCommandButtonIsReady({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           commandButtonName: readString(2, ['commandButtonName', 'commandButton']),
           allReady: false,
         });
@@ -8222,18 +8234,18 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'SKIRMISH_PLAYER_HAS_PREREQUISITE_TO_BUILD':
         return this.evaluateScriptSkirmishPlayerHasPrereqsToBuild({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           templateName: readString(1, ['templateName', 'objectType', 'unitType']),
         });
       case 'SKIRMISH_PLAYER_HAS_COMPARISON_GARRISONED':
         return this.evaluateScriptSkirmishPlayerHasComparisonGarrisoned({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
         });
       case 'SKIRMISH_PLAYER_HAS_COMPARISON_CAPTURED_UNITS':
         return this.evaluateScriptSkirmishPlayerHasComparisonCapturedUnits({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
         });
@@ -8243,25 +8255,25 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'SKIRMISH_PLAYER_HAS_UNITS_IN_AREA':
         return this.evaluateScriptSkirmishPlayerHasUnitsInArea({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           triggerName: readString(1, ['triggerName', 'trigger']),
           conditionCacheId,
         });
       case 'SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER':
         return this.evaluateScriptSkirmishPlayerHasBeenAttackedByPlayer({
-          side: readString(0, ['side']),
-          attackedBySide: readString(1, ['attackedBySide', 'side']),
+          side: readSide(0, ['side']),
+          attackedBySide: readSide(1, ['attackedBySide', 'side']),
         });
       case 'SKIRMISH_PLAYER_IS_OUTSIDE_AREA':
         return this.evaluateScriptSkirmishPlayerIsOutsideArea({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           triggerName: readString(1, ['triggerName', 'trigger']),
           conditionCacheId,
         });
       case 'SKIRMISH_PLAYER_HAS_DISCOVERED_PLAYER':
         return this.evaluateScriptSkirmishPlayerHasDiscoveredPlayer({
-          side: readString(0, ['side']),
-          discoveredBySide: readString(1, ['discoveredBySide', 'side']),
+          side: readSide(0, ['side']),
+          discoveredBySide: readSide(1, ['discoveredBySide', 'side']),
         });
       case 'MUSIC_TRACK_HAS_COMPLETED':
         return this.evaluateScriptMusicHasCompleted({
@@ -8270,22 +8282,22 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_LOST_OBJECT_TYPE':
         return this.evaluateScriptPlayerLostObjectType({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           templateName: readString(1, ['templateName', 'objectType', 'unitType']),
         });
       case 'SUPPLY_SOURCE_SAFE':
         return this.evaluateScriptSkirmishSupplySourceSafe({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           minSupplyAmount: readNumber(1, ['minSupplyAmount', 'supplyAmount']),
           conditionCacheId,
         });
       case 'SUPPLY_SOURCE_ATTACKED':
         return this.evaluateScriptSkirmishSupplySourceAttacked({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
         });
       case 'START_POSITION_IS':
         return this.evaluateScriptSkirmishStartPosition({
-          side: readString(0, ['side']),
+          side: readSide(0, ['side']),
           startPosition: readInteger(1, ['startPosition']),
         });
 
@@ -8358,7 +8370,7 @@ export class GameLogicSubsystem implements Subsystem {
       team.controllingSide = null;
       return true;
     }
-    const normalizedSide = this.normalizeSide(side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(side);
     if (!normalizedSide) {
       return false;
     }
@@ -10539,11 +10551,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveScriptCurrentPlayerSide(explicitPlayerSide: string): string | null {
-    const normalizedExplicit = this.normalizeSide(explicitPlayerSide);
-    if (normalizedExplicit) {
-      return normalizedExplicit;
+    const resolvedExplicit = this.resolveScriptPlayerSideFromInput(explicitPlayerSide);
+    if (resolvedExplicit) {
+      return resolvedExplicit;
     }
-    return this.scriptCurrentPlayerSide;
+    return this.resolveScriptCurrentPlayerSideFromContext();
   }
 
   private findScriptBuildDozerForTemplate(side: string, templateName: string): MapEntity | null {
@@ -15494,6 +15506,8 @@ export class GameLogicSubsystem implements Subsystem {
       repairDockProfile,
       dozerAIProfile,
       dozerIdleTooLongTimestamp: this.frameCounter,
+      dozerBuildTaskOrderFrame: 0,
+      dozerRepairTaskOrderFrame: 0,
       isSupplyCenter,
       experienceProfile,
       experienceState: createExperienceStateImpl(),
@@ -23437,6 +23451,54 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptCallingEntityId ?? this.scriptConditionEntityId;
   }
 
+  private resolveScriptCurrentPlayerSideFromContext(): string | null {
+    if (this.scriptCurrentPlayerSide) {
+      return this.scriptCurrentPlayerSide;
+    }
+
+    const teamName = this.resolveScriptContextTeamName();
+    if (teamName) {
+      const team = this.scriptTeamsByName.get(teamName);
+      const controllingSide = team ? this.resolveScriptTeamControllingSide(team) : null;
+      if (controllingSide) {
+        return controllingSide;
+      }
+    }
+
+    const entityId = this.resolveScriptContextEntityId();
+    if (entityId !== null) {
+      const entity = this.spawnedEntities.get(entityId);
+      const entitySide = entity ? this.normalizeSide(entity.side) : '';
+      if (entitySide) {
+        return entitySide;
+      }
+    }
+
+    return null;
+  }
+
+  private resolveScriptPlayerSideFromInput(playerName: string): string | null {
+    const trimmed = playerName.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed === SCRIPT_LOCAL_PLAYER || trimmed === SCRIPT_THE_PLAYER) {
+      return this.resolveLocalPlayerSide();
+    }
+    if (trimmed === SCRIPT_THIS_PLAYER) {
+      return this.resolveScriptCurrentPlayerSideFromContext();
+    }
+    if (trimmed === SCRIPT_THIS_PLAYER_ENEMY) {
+      const currentSide = this.resolveScriptCurrentPlayerSideFromContext();
+      if (!currentSide) {
+        return null;
+      }
+      return this.resolveScriptSkirmishEnemySide(currentSide);
+    }
+    const normalized = this.normalizeSide(trimmed);
+    return normalized || null;
+  }
+
   private resolveScriptWaypointPosition(waypointName: string): { x: number; z: number } | null {
     const normalizedWaypointName = waypointName.trim().toUpperCase();
     if (!normalizedWaypointName) {
@@ -25154,6 +25216,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
     this.pendingRepairActions.delete(entityId);
+    const dozer = this.spawnedEntities.get(entityId);
+    if (dozer) {
+      dozer.dozerRepairTaskOrderFrame = 0;
+    }
     this.clearScriptWanderInPlace(entityId);
     // Source parity: DozerAIUpdate::cancelTask — clear active construction assignment.
     this.cancelDozerConstructionTask(entityId);
@@ -25185,6 +25251,10 @@ export class GameLogicSubsystem implements Subsystem {
       if (building && !building.destroyed && building.builderId === dozerId) {
         building.builderId = 0;
       }
+    }
+    const dozer = this.spawnedEntities.get(dozerId);
+    if (dozer) {
+      dozer.dozerBuildTaskOrderFrame = 0;
     }
   }
 
@@ -26529,6 +26599,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Another dozer can resume. Claim it.
       building.builderId = dozer.id;
       this.pendingConstructionActions.set(dozer.id, building.id);
+      dozer.dozerBuildTaskOrderFrame = this.frameCounter;
       this.issueMoveTo(dozer.id, building.x, building.z);
       return;
     }
@@ -26539,6 +26610,7 @@ export class GameLogicSubsystem implements Subsystem {
       this.issueMoveTo(dozer.id, building.x, building.z);
     }
     this.pendingRepairActions.set(dozer.id, building.id);
+    dozer.dozerRepairTaskOrderFrame = this.frameCounter;
   }
 
   /**
@@ -26546,6 +26618,32 @@ export class GameLogicSubsystem implements Subsystem {
    * Repair rate comes from DozerAIUpdate/WorkerAIUpdate RepairHealthPercentPerSecond.
    * Repair still consumes build-cost-based credits over time.
    */
+  private getDozerCurrentTask(dozer: MapEntity): 'BUILD' | 'REPAIR' | null {
+    const hasBuild = this.pendingConstructionActions.has(dozer.id);
+    const hasRepair = this.pendingRepairActions.has(dozer.id);
+    if (!hasBuild && !hasRepair) {
+      return null;
+    }
+    if (hasBuild && !hasRepair) {
+      return 'BUILD';
+    }
+    if (hasRepair && !hasBuild) {
+      return 'REPAIR';
+    }
+    return dozer.dozerRepairTaskOrderFrame > dozer.dozerBuildTaskOrderFrame ? 'REPAIR' : 'BUILD';
+  }
+
+  private clearDozerTaskOrder(dozer: MapEntity | null, task: 'BUILD' | 'REPAIR'): void {
+    if (!dozer) {
+      return;
+    }
+    if (task === 'BUILD') {
+      dozer.dozerBuildTaskOrderFrame = 0;
+    } else {
+      dozer.dozerRepairTaskOrderFrame = 0;
+    }
+  }
+
   private updatePendingRepairActions(): void {
     const REPAIR_COST_RATE = 0.005 / 30; // 0.5% of build cost per second at 30fps
 
@@ -26554,12 +26652,18 @@ export class GameLogicSubsystem implements Subsystem {
       const building = this.spawnedEntities.get(buildingId);
       if (!dozer || !building || dozer.destroyed || building.destroyed) {
         this.pendingRepairActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer ?? null, 'REPAIR');
+        continue;
+      }
+
+      if (this.getDozerCurrentTask(dozer) !== 'REPAIR') {
         continue;
       }
 
       // Building fully repaired.
       if (building.health >= building.maxHealth) {
         this.pendingRepairActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer, 'REPAIR');
         continue;
       }
 
@@ -26578,6 +26682,7 @@ export class GameLogicSubsystem implements Subsystem {
       const dozerSide = this.normalizeSide(dozer.side);
       if (!dozerSide) {
         this.pendingRepairActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer, 'REPAIR');
         continue;
       }
       const credits = this.sideCredits.get(dozerSide) ?? 0;
@@ -26598,6 +26703,7 @@ export class GameLogicSubsystem implements Subsystem {
       const healed = this.attemptHealingFromSoleBenefactor(building, healAmount, dozer.id, 2);
       if (!healed) {
         this.pendingRepairActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer, 'REPAIR');
         continue;
       }
 
@@ -26771,18 +26877,25 @@ export class GameLogicSubsystem implements Subsystem {
           // Source parity: dozer dies → building stays partially built, builderId cleared.
           building.builderId = 0;
         }
+        this.clearDozerTaskOrder(dozer ?? null, 'BUILD');
+        continue;
+      }
+
+      if (this.getDozerCurrentTask(dozer) !== 'BUILD') {
         continue;
       }
 
       // Already complete (e.g. instant build).
       if (building.constructionPercent === CONSTRUCTION_COMPLETE) {
         this.pendingConstructionActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer, 'BUILD');
         continue;
       }
 
       // Source parity: builder exclusivity check — only the assigned builder may progress.
       if (building.builderId !== dozerId) {
         this.pendingConstructionActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer, 'BUILD');
         continue;
       }
 
@@ -26804,6 +26917,7 @@ export class GameLogicSubsystem implements Subsystem {
         // Shouldn't happen — complete immediately.
         this.completeConstruction(building);
         this.pendingConstructionActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer, 'BUILD');
         continue;
       }
 
@@ -26818,6 +26932,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (building.constructionPercent >= 100.0) {
         this.completeConstruction(building);
         this.pendingConstructionActions.delete(dozerId);
+        this.clearDozerTaskOrder(dozer, 'BUILD');
       }
     }
   }
@@ -29599,13 +29714,14 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveScriptRevealMapTargetSide(playerName: string): string | null {
-    const normalizedPlayerName = this.normalizeSide(playerName);
-    if (!normalizedPlayerName) {
+    const resolvedSide = this.resolveScriptPlayerSideFromInput(playerName);
+    if (!resolvedSide) {
       return null;
     }
 
-    return this.collectScriptKnownSides().has(normalizedPlayerName)
-      ? normalizedPlayerName
+    const knownSides = this.collectScriptKnownSides();
+    return knownSides.size === 0 || knownSides.has(resolvedSide)
+      ? resolvedSide
       : null;
   }
 
@@ -30699,6 +30815,16 @@ export class GameLogicSubsystem implements Subsystem {
           ? profile.upgradedSupplyBoost
           : 0;
       },
+      getSupplyTruckScanDistance: (truck: MapEntity, profile: SupplyTruckProfile) => {
+        const side = this.normalizeSide(truck.side);
+        if (!side) {
+          return profile.supplyWarehouseScanDistance;
+        }
+        // Source parity: SupplyTruckAIUpdate::getWarehouseScanDistance (AI uses 2x scan range).
+        return this.getSidePlayerType(side) === 'COMPUTER'
+          ? profile.supplyWarehouseScanDistance * 2
+          : profile.supplyWarehouseScanDistance;
+      },
       moveEntityTo: (entityId: number, targetX: number, targetZ: number) => {
         this.submitCommand({ type: 'moveTo', entityId, targetX, targetZ });
       },
@@ -30979,6 +31105,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Note: UNDER_CONSTRUCTION side effects are checked directly via objectStatusFlags.
       // Register dozer construction task.
       this.pendingConstructionActions.set(constructor.id, created.id);
+      constructor.dozerBuildTaskOrderFrame = this.frameCounter;
       // Move dozer to building site.
       this.issueMoveTo(constructor.id, created.x, created.z);
     }
@@ -37615,6 +37742,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Resume existing construction with the new worker.
       reconstructing.builderId = worker.id;
       this.pendingConstructionActions.set(worker.id, reconstructing.id);
+      worker.dozerBuildTaskOrderFrame = this.frameCounter;
     }
 
     // Source parity: mask hole during active reconstruction (invisible to UI/AI).
