@@ -3748,6 +3748,13 @@ interface ScriptPopupMessageState {
   frame: number;
 }
 
+interface ScriptDisplayedCounterState {
+  counterName: string;
+  counterText: string;
+  isCountdown: boolean;
+  frame: number;
+}
+
 interface ScriptRadarEventState {
   x: number;
   y: number;
@@ -3987,6 +3994,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [436, 'NAMED_SET_REPULSOR'],
   [437, 'TEAM_SET_REPULSOR'],
   [438, 'TEAM_WANDER_IN_PLACE'],
+  [441, 'DISPLAY_COUNTER'],
+  [442, 'HIDE_COUNTER'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4109,6 +4118,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCinematicTextState: ScriptCinematicTextState | null = null;
   /** Source parity bridge: InGameUI::popupMessage script queue. */
   private readonly scriptPopupMessages: ScriptPopupMessageState[] = [];
+  /** Source parity bridge: InGameUI::addNamedTimer / removeNamedTimer script counters. */
+  private readonly scriptDisplayedCounters = new Map<string, ScriptDisplayedCounterState>();
   /** Source parity bridge: Audio::setAudioEventEnabled script toggles. */
   private readonly scriptDisabledAudioEventNames = new Set<string>();
   /** Source parity bridge: Audio::setAudioEventVolumeOverride script overrides. */
@@ -6112,6 +6123,38 @@ export class GameLogicSubsystem implements Subsystem {
     return messages;
   }
 
+  private setScriptDisplayedCounter(counterName: string, counterText: string, isCountdown: boolean): boolean {
+    const normalizedName = this.normalizeScriptVariableName(counterName);
+    if (!normalizedName) {
+      return false;
+    }
+    this.scriptDisplayedCounters.set(normalizedName, {
+      counterName: normalizedName,
+      counterText,
+      isCountdown,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  private hideScriptDisplayedCounter(counterName: string): boolean {
+    const normalizedName = this.normalizeScriptVariableName(counterName);
+    if (!normalizedName) {
+      return false;
+    }
+    this.scriptDisplayedCounters.delete(normalizedName);
+    return true;
+  }
+
+  getScriptDisplayedCounters(): ScriptDisplayedCounterState[] {
+    if (this.scriptDisplayedCounters.size === 0) {
+      return [];
+    }
+    return [...this.scriptDisplayedCounters.values()]
+      .map((counter) => ({ ...counter }))
+      .sort((left, right) => left.counterName.localeCompare(right.counterName));
+  }
+
   /**
    * Source parity bridge: ScriptActions::doSoundEnableType.
    */
@@ -6455,6 +6498,14 @@ export class GameLogicSubsystem implements Subsystem {
           readInteger(3, ['width']),
           readBoolean(4, ['pause']),
         );
+      case 'DISPLAY_COUNTER':
+        return this.setScriptDisplayedCounter(
+          readString(0, ['counterName', 'counter']),
+          readString(1, ['counterText', 'text', 'displayText']),
+          false,
+        );
+      case 'HIDE_COUNTER':
+        return this.hideScriptDisplayedCounter(readString(0, ['counterName', 'counter']));
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -11788,6 +11839,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
+    this.scriptDisplayedCounters.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
     this.scriptToppleDirectionByEntityId.clear();
@@ -39682,6 +39734,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
+    this.scriptDisplayedCounters.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
     this.scriptToppleDirectionByEntityId.clear();

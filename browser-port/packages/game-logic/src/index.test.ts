@@ -28854,6 +28854,56 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptPopupMessages()).toEqual([]);
   });
 
+  it('executes script display/hide-counter actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 441, // DISPLAY_COUNTER
+      params: ['MissionCounter', 'MissionCounterText'],
+    })).toBe(true);
+    expect(logic.getScriptDisplayedCounters()).toEqual([
+      {
+        counterName: 'MissionCounter',
+        counterText: 'MissionCounterText',
+        isCountdown: false,
+        frame: 0,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 441,
+      params: ['MissionCounter', 'UpdatedCounterText'],
+    })).toBe(true);
+    expect(logic.getScriptDisplayedCounters()).toEqual([
+      {
+        counterName: 'MissionCounter',
+        counterText: 'UpdatedCounterText',
+        isCountdown: false,
+        frame: 0,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 442, // HIDE_COUNTER
+      params: ['MissionCounter'],
+    })).toBe(true);
+    expect(logic.getScriptDisplayedCounters()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 441,
+      params: ['', 'NoCounterName'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 442,
+      params: [''],
+    })).toBe(false);
+  });
+
   it('executes script sound/audio-control actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
