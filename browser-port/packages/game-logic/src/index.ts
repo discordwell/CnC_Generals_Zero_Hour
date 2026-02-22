@@ -3857,6 +3857,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [275, 'PLAYER_SET_RANKLEVELLIMIT'],
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
+  [291, 'PLAYER_RELATES_PLAYER'],
   [296, 'LOCALDEFEAT'],
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
   [324, 'QUICKVICTORY'],
@@ -5874,6 +5875,21 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['side', 'playerName', 'player']),
           readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
         );
+      case 'PLAYER_RELATES_PLAYER': {
+        const sourceSide = readString(0, ['side', 'playerName', 'player', 'sourcePlayer']);
+        const targetSide = readString(1, ['otherPlayer', 'targetPlayer', 'targetSide']);
+        const relationship = this.resolveScriptRelationshipInput(
+          readRelationship(2, ['relationship', 'relation']),
+        );
+        if (relationship === null) {
+          return false;
+        }
+        if (!this.normalizeSide(sourceSide) || !this.normalizeSide(targetSide)) {
+          return false;
+        }
+        this.setPlayerRelationship(sourceSide, targetSide, relationship);
+        return true;
+      }
       case 'PLAYER_SET_MONEY': {
         const side = readString(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {

@@ -28470,6 +28470,15 @@ describe('Script condition groundwork', () => {
 
     expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
     expect(logic.executeScriptAction({
+      actionType: 291, // PLAYER_RELATES_PLAYER
+      params: ['America', 'China', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(2, 1)).toBe('neutral');
+    logic.removePlayerRelationship('America', 'China');
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
       actionType: 383, // TEAM_SET_OVERRIDE_RELATION_TO_TEAM
       params: ['AlphaTeam', 'BravoTeam', 0],
     })).toBe(true);
