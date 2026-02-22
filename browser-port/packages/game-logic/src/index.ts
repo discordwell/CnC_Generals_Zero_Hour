@@ -4020,6 +4020,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [389, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER'],
   [390, 'PLAYER_SET_OVERRIDE_RELATION_TO_TEAM'],
   [391, 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
+  [403, 'NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED'],
+  [404, 'NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT'],
   [407, 'TEAM_GUARD_POSITION'],
   [408, 'TEAM_GUARD_OBJECT'],
   [409, 'TEAM_GUARD_AREA'],
@@ -6750,6 +6752,18 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'HIDE_COUNTER':
         return this.hideScriptDisplayedCounter(readString(0, ['counterName', 'counter']));
+      case 'NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED':
+        return this.executeScriptNamedUseCommandButtonAbilityOnNamed(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readInteger(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
+      case 'NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT':
+        return this.executeScriptNamedUseCommandButtonAbilityAtWaypoint(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readString(2, ['waypointName', 'waypoint']),
+        );
       case 'TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED':
         return this.executeScriptTeamUseCommandButtonAbilityOnNamed(
           readString(0, ['teamName', 'team']),

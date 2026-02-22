@@ -30553,6 +30553,30 @@ describe('Script condition groundwork', () => {
     });
 
     expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_ScriptOnNamed', 3],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      commandButtonId: 'Command_ScriptOnNamed',
+      targetEntityId: 3,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_ScriptAtWaypoint', 'AbilityWaypoint'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_ScriptAtWaypoint',
+      targetEntityId: null,
+      targetX: 96,
+      targetZ: 80,
+    });
+
+    expect(logic.executeScriptAction({
       actionType: 443, // TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED
       params: ['AbilityTeam', 'Command_ScriptOnNamed', 3],
     })).toBe(true);
@@ -30618,6 +30642,18 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 445,
       params: [1, 'Command_Missing'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403,
+      params: [999, 'Command_ScriptOnNamed', 3],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403,
+      params: [1, 'Command_ScriptOnNamed', 999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404,
+      params: [1, 'Command_ScriptAtWaypoint', 'MissingWaypoint'],
     })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 443,
