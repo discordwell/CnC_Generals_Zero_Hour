@@ -3690,6 +3690,11 @@ interface ScriptTeamRecord {
   controllingSide: string | null;
 }
 
+interface ScriptCounterState {
+  value: number;
+  isCountdownTimer: boolean;
+}
+
 /**
  * Source parity: Condition::ConditionType enum order from Scripts.h.
  * Used to resolve numeric condition ids to canonical enum names.
@@ -3906,6 +3911,12 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptObjectCountChangedFrame = 0;
   /** Source parity: Condition::m_customData/m_customFrame cache keyed by scripted condition id. */
   private readonly scriptConditionCacheById = new Map<string, ScriptConditionCacheState>();
+  /** Source parity: ScriptEngine::m_counters indexed by counter name in this port. */
+  private readonly scriptCountersByName = new Map<string, ScriptCounterState>();
+  /** Source parity: ScriptEngine::m_flags indexed by flag name in this port. */
+  private readonly scriptFlagsByName = new Map<string, boolean>();
+  /** Source parity: ScriptEngine::m_uiInteractions one-frame signal names. */
+  private readonly scriptUIInteractions = new Set<string>();
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
@@ -4405,6 +4416,7 @@ export class GameLogicSubsystem implements Subsystem {
   update(dt: number): void {
     this.animationTime += dt;
     this.frameCounter++;
+    this.updateScriptCountdownTimers();
     this.resetBridgeDamageStateChanges();
     this.resetContainPlayerEnteredSides();
     this.flushCommands();
@@ -4511,6 +4523,23 @@ export class GameLogicSubsystem implements Subsystem {
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
     this.checkVictoryConditions();
+    this.clearScriptUIInteractions();
+  }
+
+  private updateScriptCountdownTimers(): void {
+    for (const counter of this.scriptCountersByName.values()) {
+      if (!counter.isCountdownTimer) {
+        continue;
+      }
+      // Source parity: countdown timers decrement to -1 and then stop.
+      if (counter.value >= 0) {
+        counter.value -= 1;
+      }
+    }
+  }
+
+  private clearScriptUIInteractions(): void {
+    this.scriptUIInteractions.clear();
   }
 
   private resetContainPlayerEnteredSides(): void {
@@ -5454,6 +5483,95 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptEngine counter state mutation for script integration.
+   */
+  setScriptCounter(counterName: string, value: number): boolean {
+    const counter = this.getOrCreateScriptCounter(counterName);
+    if (!counter) {
+      return false;
+    }
+    counter.value = Number.isFinite(value) ? Math.trunc(value) : 0;
+    counter.isCountdownTimer = false;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine counter increment/decrement helpers.
+   */
+  addScriptCounter(counterName: string, delta: number): boolean {
+    const counter = this.getOrCreateScriptCounter(counterName);
+    if (!counter) {
+      return false;
+    }
+    const normalizedDelta = Number.isFinite(delta) ? Math.trunc(delta) : 0;
+    counter.value += normalizedDelta;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::setTimer frame countdown semantics.
+   */
+  startScriptTimer(counterName: string, frames: number): boolean {
+    const counter = this.getOrCreateScriptCounter(counterName);
+    if (!counter) {
+      return false;
+    }
+    counter.value = Number.isFinite(frames) ? Math.trunc(frames) : 0;
+    counter.isCountdownTimer = true;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::pauseTimer.
+   */
+  pauseScriptTimer(counterName: string): boolean {
+    const counter = this.getOrCreateScriptCounter(counterName);
+    if (!counter) {
+      return false;
+    }
+    counter.isCountdownTimer = false;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::restartTimer.
+   */
+  resumeScriptTimer(counterName: string): boolean {
+    const counter = this.getOrCreateScriptCounter(counterName);
+    if (!counter) {
+      return false;
+    }
+    if (counter.value > 0) {
+      counter.isCountdownTimer = true;
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::setFlag.
+   */
+  setScriptFlag(flagName: string, value: boolean): boolean {
+    const normalizedName = this.normalizeScriptVariableName(flagName);
+    if (!normalizedName) {
+      return false;
+    }
+    this.scriptFlagsByName.set(normalizedName, value);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
+   */
+  notifyScriptUIInteraction(flagName: string): boolean {
+    const normalizedName = this.normalizeScriptVariableName(flagName);
+    if (!normalizedName) {
+      return false;
+    }
+    this.scriptUIInteractions.add(normalizedName);
+    return true;
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateCondition dispatcher.
    * Accepts either positional parameter arrays (`params` / `parameters`) or named parameter objects.
    */
@@ -5481,6 +5599,11 @@ export class GameLogicSubsystem implements Subsystem {
       this.coerceScriptConditionNumber(readValue(index, keyNames)) ?? 0;
     const readInteger = (index: number, keyNames: readonly string[] = []): number =>
       Math.trunc(readNumber(index, keyNames));
+    const readBoolean = (
+      index: number,
+      keyNames: readonly string[] = [],
+      defaultValue = false,
+    ): boolean => this.coerceScriptConditionBoolean(readValue(index, keyNames), defaultValue);
     const readOptionalInteger = (
       index: number,
       keyNames: readonly string[] = [],
@@ -5514,6 +5637,21 @@ export class GameLogicSubsystem implements Subsystem {
         return false;
       case 'CONDITION_TRUE':
         return true;
+      case 'COUNTER':
+        return this.evaluateScriptCounterCondition({
+          counterName: readString(0, ['counterName', 'counter']),
+          comparison: readComparison(1, ['comparison']),
+          value: readInteger(2, ['value']),
+        });
+      case 'FLAG':
+        return this.evaluateScriptFlagCondition({
+          flagName: readString(0, ['flagName', 'flag']),
+          value: readBoolean(1, ['value']),
+        });
+      case 'TIMER_EXPIRED':
+        return this.evaluateScriptTimerExpired({
+          counterName: readString(0, ['counterName', 'counter']),
+        });
 
       case 'PLAYER_ALL_DESTROYED':
         return this.evaluateScriptAllDestroyed({
@@ -17057,6 +17195,69 @@ export class GameLogicSubsystem implements Subsystem {
     return hasSquish(objectDef.blocks);
   }
 
+  private normalizeScriptVariableName(name: string): string {
+    return name.trim();
+  }
+
+  private getOrCreateScriptCounter(counterName: string): ScriptCounterState | null {
+    const normalizedName = this.normalizeScriptVariableName(counterName);
+    if (!normalizedName) {
+      return null;
+    }
+
+    const existing = this.scriptCountersByName.get(normalizedName);
+    if (existing) {
+      return existing;
+    }
+
+    const created: ScriptCounterState = {
+      value: 0,
+      isCountdownTimer: false,
+    };
+    this.scriptCountersByName.set(normalizedName, created);
+    return created;
+  }
+
+  private evaluateScriptCounterCondition(filter: {
+    counterName: string;
+    comparison: ScriptComparisonInput;
+    value: number;
+  }): boolean {
+    const counter = this.getOrCreateScriptCounter(filter.counterName);
+    if (!counter) {
+      return false;
+    }
+    return this.compareScriptCount(filter.comparison, counter.value, filter.value);
+  }
+
+  private evaluateScriptFlagCondition(filter: {
+    flagName: string;
+    value: boolean;
+  }): boolean {
+    const normalizedName = this.normalizeScriptVariableName(filter.flagName);
+    if (!normalizedName) {
+      return false;
+    }
+
+    const currentValue = this.scriptFlagsByName.get(normalizedName) ?? false;
+    if (currentValue === filter.value) {
+      return true;
+    }
+
+    // Source parity: shell/UI hooks are one-frame flag satisfiers.
+    return this.scriptUIInteractions.has(normalizedName);
+  }
+
+  private evaluateScriptTimerExpired(filter: {
+    counterName: string;
+  }): boolean {
+    const counter = this.getOrCreateScriptCounter(filter.counterName);
+    if (!counter || !counter.isCountdownTimer) {
+      return false;
+    }
+    return counter.value < 1;
+  }
+
   private getOrCreateScriptConditionCache(conditionCacheId?: string): ScriptConditionCacheState | null {
     const normalizedId = conditionCacheId?.trim() ?? '';
     if (!normalizedId) {
@@ -17176,6 +17377,41 @@ export class GameLogicSubsystem implements Subsystem {
       return Number.isFinite(parsed) ? parsed : null;
     }
     return null;
+  }
+
+  private coerceScriptConditionBoolean(value: unknown, defaultValue: boolean): boolean {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return defaultValue;
+      }
+      return value !== 0;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toUpperCase();
+      if (!normalized) {
+        return defaultValue;
+      }
+      if (
+        normalized === 'TRUE'
+        || normalized === 'YES'
+        || normalized === 'ON'
+        || normalized === '1'
+      ) {
+        return true;
+      }
+      if (
+        normalized === 'FALSE'
+        || normalized === 'NO'
+        || normalized === 'OFF'
+        || normalized === '0'
+      ) {
+        return false;
+      }
+    }
+    return defaultValue;
   }
 
   private resolveScriptConditionCacheId(
@@ -36930,6 +37166,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();
+    this.scriptCountersByName.clear();
+    this.scriptFlagsByName.clear();
+    this.scriptUIInteractions.clear();
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();

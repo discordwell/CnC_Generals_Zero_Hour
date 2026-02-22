@@ -27980,6 +27980,83 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates COUNTER/FLAG/TIMER_EXPIRED condition types with source-style state', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    // Source parity: counters default to 0 when first referenced.
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['MissionCounter', 'EQUAL', 0],
+    })).toBe(true);
+
+    logic.setScriptCounter('MissionCounter', 5);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['MissionCounter', 'GREATER_EQUAL', 5],
+    })).toBe(true);
+    logic.addScriptCounter('MissionCounter', -2);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['MissionCounter', 'EQUAL', 3],
+    })).toBe(true);
+
+    // Source parity: flags default false and can be one-frame satisfied by UI interaction hooks.
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['MissionFlag', 1],
+    })).toBe(false);
+    logic.setScriptFlag('MissionFlag', true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['MissionFlag', 1],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['MissionFlag', 0],
+    })).toBe(false);
+    logic.notifyScriptUIInteraction('MissionFlag');
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['MissionFlag', 0],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['MissionFlag', 0],
+    })).toBe(false);
+
+    // Source parity: countdown timer decrements every frame and expires when value < 1.
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TIMER_EXPIRED',
+      params: ['MissionTimer'],
+    })).toBe(false);
+    logic.startScriptTimer('MissionTimer', 2);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TIMER_EXPIRED',
+      params: ['MissionTimer'],
+    })).toBe(false);
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TIMER_EXPIRED',
+      params: ['MissionTimer'],
+    })).toBe(false);
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TIMER_EXPIRED',
+      params: ['MissionTimer'],
+    })).toBe(true);
+    logic.pauseScriptTimer('MissionTimer');
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TIMER_EXPIRED',
+      params: ['MissionTimer'],
+    })).toBe(false);
+  });
+
   it('evaluates named-reached-waypoints-end from completed waypoint labels', () => {
     const bundle = makeBundle({
       objects: [
