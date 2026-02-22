@@ -4063,6 +4063,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [452, 'RESUME_SUPPLY_TRUCKING'],
   [453, 'NAMED_CUSTOM_COLOR'],
   [457, 'NAMED_RECEIVE_UPGRADE'],
+  [458, 'PLAYER_REPAIR_NAMED_STRUCTURE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4268,6 +4269,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly pendingChinookCommandByEntityId = new Map<number, GameLogicCommand>();
   /** Source parity: BuildAssistant repair — dozer ID → target building ID. */
   private readonly pendingRepairActions = new Map<number, number>();
+  /** Source parity subset: AIPlayer::repairStructure queue keyed by controlling side. */
+  private readonly scriptSideRepairQueue = new Map<string, Set<number>>();
   /** Source parity: DozerAIUpdate — dozer ID → building ID being constructed. */
   private readonly pendingConstructionActions = new Map<number, number>();
   private readonly supplyWarehouseStates = new Map<number, SupplyWarehouseState>();
@@ -4751,6 +4754,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingTunnelActions();
     this.updatePendingRepairActions();
     this.updatePendingConstructionActions();
+    this.updateScriptSideRepairQueues();
     this.updateDozerIdleBehavior();
     this.updatePendingChinookRappels();
     this.updatePendingCombatDropActions();
@@ -6637,6 +6641,11 @@ export class GameLogicSubsystem implements Subsystem {
           readInteger(0, ['entityId', 'unitId', 'named', 'namedUnit']),
           readString(1, ['upgradeName', 'upgrade']),
         );
+      case 'PLAYER_REPAIR_NAMED_STRUCTURE':
+        return this.executeScriptPlayerRepairNamedStructure(
+          readString(0, ['side', 'playerName', 'player']),
+          readInteger(1, ['targetEntityId', 'entityId', 'targetBuildingId', 'unitId', 'named']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8384,6 +8393,46 @@ export class GameLogicSubsystem implements Subsystem {
       return true;
     }
     return entity.completedUpgrades.has(normalizedUpgrade);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doPlayerRepairStructure -> Player::repairStructure.
+   * In source this queues repair requests on AI players; non-AI players no-op.
+   */
+  private executeScriptPlayerRepairNamedStructure(playerSide: string, targetBuildingId: number): boolean {
+    const normalizedSide = this.normalizeSide(playerSide);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const building = this.spawnedEntities.get(targetBuildingId);
+    if (!building || building.destroyed) {
+      return false;
+    }
+    if (!building.kindOf.has('STRUCTURE')) {
+      return false;
+    }
+    if (this.normalizeSide(building.side) !== normalizedSide) {
+      return false;
+    }
+
+    // Source parity: Player::repairStructure only delegates when the player has an AI controller.
+    if (this.getSidePlayerType(normalizedSide) !== 'COMPUTER') {
+      return true;
+    }
+
+    if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) {
+      return true;
+    }
+
+    let queued = this.scriptSideRepairQueue.get(normalizedSide);
+    if (!queued) {
+      queued = new Set<number>();
+      this.scriptSideRepairQueue.set(normalizedSide, queued);
+    }
+    queued.add(building.id);
+    this.updateScriptSideRepairQueues();
+    return true;
   }
 
   private getScriptActionHumanSides(): Set<string> {
@@ -12665,6 +12714,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCredits.clear();
     this.sidePlayerTypes.clear();
     this.sideUnitsShouldIdleOrResume.clear();
+    this.scriptSideRepairQueue.clear();
     this.sideCashBountyPercent.clear();
     this.sideBattlePlanBonuses.clear();
     this.battlePlanParalyzedUntilFrame.clear();
@@ -23774,6 +23824,68 @@ export class GameLogicSubsystem implements Subsystem {
       // Deduct repair cost only when healing was accepted.
       this.sideCredits.set(dozerSide, credits - frameCost);
     }
+  }
+
+  /**
+   * Source parity subset: AIPlayer::repairStructure queue dispatch.
+   * Attempts to assign queued structure repairs to available dozers on each side.
+   */
+  private updateScriptSideRepairQueues(): void {
+    for (const [side, queuedBuildingIds] of this.scriptSideRepairQueue.entries()) {
+      for (const buildingId of Array.from(queuedBuildingIds.values())) {
+        const building = this.spawnedEntities.get(buildingId);
+        if (!building || building.destroyed) {
+          queuedBuildingIds.delete(buildingId);
+          continue;
+        }
+        if (this.normalizeSide(building.side) !== side) {
+          queuedBuildingIds.delete(buildingId);
+          continue;
+        }
+        if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) {
+          queuedBuildingIds.delete(buildingId);
+          continue;
+        }
+
+        const dozer = this.findScriptRepairDozerForBuilding(side, building);
+        if (!dozer) {
+          continue;
+        }
+
+        this.handleRepairBuildingCommand({
+          type: 'repairBuilding',
+          entityId: dozer.id,
+          targetBuildingId: building.id,
+        });
+        queuedBuildingIds.delete(buildingId);
+      }
+
+      if (queuedBuildingIds.size === 0) {
+        this.scriptSideRepairQueue.delete(side);
+      }
+    }
+  }
+
+  private findScriptRepairDozerForBuilding(side: string, building: MapEntity): MapEntity | null {
+    let best: MapEntity | null = null;
+    let bestDistSqr = Infinity;
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== side) continue;
+      if (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id)) continue;
+      if (!this.canDozerRepairTarget(entity, building)) continue;
+
+      const dx = entity.x - building.x;
+      const dz = entity.z - building.z;
+      const distSqr = dx * dx + dz * dz;
+      if (distSqr < bestDistSqr) {
+        best = entity;
+        bestDistSqr = distSqr;
+      }
+    }
+
+    return best;
   }
 
   /**
@@ -40560,6 +40672,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.caveTrackers.clear();
     this.caveTrackerIndexByEntityId.clear();
     this.pendingRepairActions.clear();
+    this.scriptSideRepairQueue.clear();
     this.pendingConstructionActions.clear();
     this.supplyWarehouseStates.clear();
     this.supplyTruckStates.clear();

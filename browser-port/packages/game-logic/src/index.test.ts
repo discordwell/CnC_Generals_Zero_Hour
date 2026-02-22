@@ -29820,6 +29820,61 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script player-repair-named-structure action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+            RepairHealthPercentPerSecond: '30%',
+            BoredTime: 999999,
+            BoredRange: 300,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('USABarracks', 20, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingRepairActions: Map<number, number>;
+    };
+
+    const before = logic.getEntityState(2)!.health;
+    expect(logic.executeScriptAction({
+      actionType: 458, // PLAYER_REPAIR_NAMED_STRUCTURE
+      params: ['America', 2],
+    })).toBe(true);
+    expect(privateApi.pendingRepairActions.get(1)).toBe(2);
+
+    logic.update(1 / 30);
+    const after = logic.getEntityState(2)!.health;
+    expect(after).toBeGreaterThan(before);
+
+    expect(logic.executeScriptAction({
+      actionType: 458,
+      params: ['America', 999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 458,
+      params: ['', 2],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
