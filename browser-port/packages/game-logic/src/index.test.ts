@@ -28573,6 +28573,55 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team stop-and-disband action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10),
+        makeMapObject('Ranger', 14, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'AlphaTeam' })).toBe(true);
+
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { guardState: string }>;
+    };
+    expect(privateApi.spawnedEntities.get(1)?.guardState).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+
+    expect(logic.executeScriptAction({
+      actionType: 381, // TEAM_STOP_AND_DISBAND
+      params: ['AlphaTeam'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
+    expect(logic.evaluateScriptHasUnits({ teamName: 'AlphaTeam' })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 380, // TEAM_STOP
+      params: ['AlphaTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 381, // TEAM_STOP_AND_DISBAND
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script relation-override actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

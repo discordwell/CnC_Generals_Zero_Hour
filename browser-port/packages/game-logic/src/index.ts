@@ -3867,6 +3867,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [324, 'QUICKVICTORY'],
   [379, 'NAMED_STOP'],
   [380, 'TEAM_STOP'],
+  [381, 'TEAM_STOP_AND_DISBAND'],
   [383, 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM'],
   [384, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
   [385, 'TEAM_REMOVE_ALL_OVERRIDE_RELATIONS'],
@@ -5949,6 +5950,8 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
         return this.executeScriptTeamStop(readString(0, ['teamName', 'team']));
+      case 'TEAM_STOP_AND_DISBAND':
+        return this.executeScriptTeamStopAndDisband(readString(0, ['teamName', 'team']));
       case 'PLAYER_SET_MONEY': {
         const side = readString(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {
@@ -6841,6 +6844,20 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyCommand({ type: 'stop', entityId: entity.id });
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamStop(team, TRUE) in ScriptActions.cpp.
+   * Stops all current members and disbands the script team record.
+   * TODO(source-parity): set recruitable flag and merge into controlling player's default
+   * team once full Team/AI group internals are ported.
+   */
+  private executeScriptTeamStopAndDisband(teamName: string): boolean {
+    const stopped = this.executeScriptTeamStop(teamName);
+    if (!stopped) {
+      return false;
+    }
+    return this.clearScriptTeam(teamName);
   }
 
   clearScriptTeam(teamName: string): boolean {
