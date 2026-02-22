@@ -739,6 +739,8 @@ const RADAR_EVENT_BEACON_PULSE = 5;
  */
 type GuardState = 'NONE' | 'IDLE' | 'PURSUING' | 'RETURNING';
 
+type ChinookFlightStatus = 'TAKING_OFF' | 'FLYING' | 'DOING_COMBAT_DROP' | 'LANDING' | 'LANDED';
+
 interface LocomotorSetProfile {
   surfaceMask: number;
   downhillOnly: boolean;
@@ -770,6 +772,10 @@ interface LocomotorSetProfile {
   appearance: string;
   /** Source parity: Locomotor::m_wanderAboutPointRadius. */
   wanderAboutPointRadius: number;
+  /** Source parity: Locomotor::m_preferredHeight. */
+  preferredHeight: number;
+  /** Source parity: Locomotor::m_preferredHeightDamping. */
+  preferredHeightDamping: number;
 }
 
 interface BridgeSegmentState {
@@ -1742,6 +1748,10 @@ interface MapEntity {
   supplyWarehouseProfile: SupplyWarehouseProfile | null;
   supplyTruckProfile: SupplyTruckProfile | null;
   chinookAIProfile: ChinookAIProfile | null;
+  /** Source parity: ChinookAIUpdate::m_flightStatus. */
+  chinookFlightStatus: ChinookFlightStatus | null;
+  /** Source parity: ChinookAIUpdate state entered frame. */
+  chinookFlightStatusEnteredFrame: number;
   repairDockProfile: RepairDockProfile | null;
   dozerAIProfile: DozerAIProfile | null;
   /** Source parity: DozerPrimaryIdleState::m_idleTooLongTimestamp. */
@@ -5552,6 +5562,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
     this.updateJetAI();
+    this.updateChinookAI();
     this.updateEntityMovement(dt);
     this.updateAnimationSteering();
     this.updateUnitCollisionSeparation();
@@ -15647,6 +15658,9 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     let resolvedSet = normalizedSet;
+    if (entity.chinookAIProfile && entity.chinookFlightStatus === 'LANDED') {
+      resolvedSet = LOCOMOTORSET_TAXIING;
+    }
     if (
       normalizedSet === LOCOMOTORSET_NORMAL
       && entity.locomotorUpgradeEnabled
@@ -15956,6 +15970,14 @@ export class GameLogicSubsystem implements Subsystem {
       surfaceMask: NO_SURFACES,
       downhillOnly: false,
       movementSpeed: 0,
+      minSpeed: 0,
+      acceleration: 0,
+      braking: 0,
+      turnRate: 0,
+      appearance: 'OTHER',
+      wanderAboutPointRadius: 0,
+      preferredHeight: 0,
+      preferredHeightDamping: 1,
     };
     const combatProfile = this.resolveCombatCollisionProfile(objectDef);
     const attackNeedsLineOfSight = normalizedKindOf.has('ATTACK_NEEDS_LINE_OF_SIGHT');
@@ -16124,6 +16146,8 @@ export class GameLogicSubsystem implements Subsystem {
       supplyWarehouseProfile,
       supplyTruckProfile,
       chinookAIProfile,
+      chinookFlightStatus: chinookAIProfile ? 'FLYING' : null,
+      chinookFlightStatusEnteredFrame: chinookAIProfile ? this.frameCounter : 0,
       repairDockProfile,
       dozerAIProfile,
       dozerIdleTooLongTimestamp: this.frameCounter,
@@ -24732,6 +24756,8 @@ export class GameLogicSubsystem implements Subsystem {
       let minSpeed = 0;
       let appearance = 'OTHER';
       let wanderAboutPointRadius = 0;
+      let preferredHeight = 0;
+      let preferredHeightDamping = 1;
       let primaryLocomotor: LocomotorDef | null = null;
       for (const locomotorName of locomotorNames) {
         const locomotor = iniDataRegistry.getLocomotor(locomotorName);
@@ -24752,6 +24778,8 @@ export class GameLogicSubsystem implements Subsystem {
         turnRate = readNumericField(f, ['TurnRate']) ?? 0;
         minSpeed = readNumericField(f, ['MinSpeed']) ?? 0;
         wanderAboutPointRadius = readNumericField(f, ['WanderAboutPointRadius']) ?? 0;
+        preferredHeight = readNumericField(f, ['PreferredHeight']) ?? 0;
+        preferredHeightDamping = readNumericField(f, ['PreferredHeightDamping']) ?? 1;
         // Source parity: TurnRate in INI is degrees/sec, convert to radians/sec.
         turnRate = turnRate * (Math.PI / 180);
         const appearanceToken = readStringField(f, ['Appearance'])?.toUpperCase().trim();
@@ -24769,6 +24797,8 @@ export class GameLogicSubsystem implements Subsystem {
         turnRate,
         appearance,
         wanderAboutPointRadius,
+        preferredHeight,
+        preferredHeightDamping,
       });
     }
 
@@ -25422,12 +25452,49 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    if (!this.pendingCombatDropActions.has(entity.id)) {
+    if (this.pendingCombatDropActions.has(entity.id)) {
+      this.pendingChinookCommandByEntityId.set(entity.id, command);
+      return true;
+    }
+
+    const status = entity.chinookFlightStatus ?? 'FLYING';
+    if (status === 'TAKING_OFF' || status === 'LANDING' || status === 'DOING_COMBAT_DROP') {
+      this.pendingChinookCommandByEntityId.set(entity.id, command);
+      return true;
+    }
+
+    if (command.type === 'exitContainer' || command.type === 'evacuate') {
+      if (status !== 'LANDED') {
+        this.pendingChinookCommandByEntityId.set(entity.id, command);
+        this.setChinookFlightStatus(entity, 'LANDING');
+        return true;
+      }
       return false;
     }
 
-    this.pendingChinookCommandByEntityId.set(entity.id, command);
-    return true;
+    if (this.isChinookTakeoffCommandType(command.type) && status !== 'FLYING') {
+      this.pendingChinookCommandByEntityId.set(entity.id, command);
+      this.setChinookFlightStatus(entity, 'TAKING_OFF');
+      return true;
+    }
+
+    return false;
+  }
+
+  private isChinookTakeoffCommandType(commandType: GameLogicCommand['type']): boolean {
+    switch (commandType) {
+      case 'moveTo':
+      case 'attackMoveTo':
+      case 'guardPosition':
+      case 'guardObject':
+      case 'attackEntity':
+      case 'fireWeapon':
+      case 'switchWeapon':
+      case 'combatDrop':
+        return true;
+      default:
+        return false;
+    }
   }
 
   private shouldIgnoreRailedTransportPlayerCommand(command: GameLogicCommand): boolean {
@@ -26027,6 +26094,12 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    if (container.chinookAIProfile && container.chinookFlightStatus !== 'LANDED') {
+      this.pendingChinookCommandByEntityId.set(container.id, { type: 'exitContainer', entityId });
+      this.setChinookFlightStatus(container, 'LANDING');
+      return;
+    }
+
     // Source parity: AIUpdate::privateExit — blocked when container is DISABLED_SUBDUED.
     // C++ AIUpdate.cpp:3819-3840: prevents passengers exiting subdued containers.
     if (this.entityHasObjectStatus(container, 'DISABLED_SUBDUED')) {
@@ -26048,6 +26121,12 @@ export class GameLogicSubsystem implements Subsystem {
   private handleEvacuateCommand(entityId: number): void {
     const container = this.spawnedEntities.get(entityId);
     if (!container || container.destroyed) {
+      return;
+    }
+
+    if (container.chinookAIProfile && container.chinookFlightStatus !== 'LANDED') {
+      this.pendingChinookCommandByEntityId.set(container.id, { type: 'evacuate', entityId });
+      this.setChinookFlightStatus(container, 'LANDING');
       return;
     }
 
@@ -29093,6 +29172,51 @@ export class GameLogicSubsystem implements Subsystem {
     state.actionDelayFinishFrame = this.frameCounter;
   }
 
+  private resolveChinookPreferredHeight(entity: MapEntity): number {
+    const active = entity.locomotorSets.get(entity.activeLocomotorSet);
+    if (active) {
+      return active.preferredHeight;
+    }
+    const normal = entity.locomotorSets.get(LOCOMOTORSET_NORMAL);
+    return normal ? normal.preferredHeight : 0;
+  }
+
+  private resolveChinookPreferredHeightDamping(entity: MapEntity): number {
+    const active = entity.locomotorSets.get(entity.activeLocomotorSet);
+    if (active) {
+      return active.preferredHeightDamping;
+    }
+    const normal = entity.locomotorSets.get(LOCOMOTORSET_NORMAL);
+    return normal ? normal.preferredHeightDamping : 1;
+  }
+
+  private setChinookFlightStatus(entity: MapEntity, status: ChinookFlightStatus): void {
+    if (!entity.chinookAIProfile) {
+      return;
+    }
+    if (entity.chinookFlightStatus === status) {
+      return;
+    }
+    entity.chinookFlightStatus = status;
+    entity.chinookFlightStatusEnteredFrame = this.frameCounter;
+
+    if (status === 'LANDING') {
+      // Source parity: ChinookTakeoffOrLandingState::onEnter — clear supplies on landing.
+      this.clearChinookSupplyBoxes(entity.id);
+      this.stopEntity(entity.id);
+    } else if (status === 'TAKING_OFF') {
+      this.stopEntity(entity.id);
+    }
+
+    if (status === 'LANDED') {
+      entity.objectStatusFlags.delete('AIRBORNE_TARGET');
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_TAXIING);
+    } else {
+      entity.objectStatusFlags.add('AIRBORNE_TARGET');
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
+    }
+  }
+
   private clearChinookSupplyBoxes(entityId: number): void {
     const state = this.supplyTruckStates.get(entityId);
     if (!state || state.currentBoxes <= 0) {
@@ -29227,6 +29351,7 @@ export class GameLogicSubsystem implements Subsystem {
         if (pending.nextDropFrame === 0) {
           // Source parity: combat drop holds the transport in place while rappelling.
           source.objectStatusFlags.add('DISABLED_HELD');
+          this.setChinookFlightStatus(source, 'DOING_COMBAT_DROP');
           // Source parity: ChinookCombatDropState::onEnter — lose all gathered supply boxes.
           this.clearChinookSupplyBoxes(source.id);
           // Source parity subset: keep chinook at min drop height while deploying ropes.
@@ -29256,6 +29381,7 @@ export class GameLogicSubsystem implements Subsystem {
           source.objectStatusFlags.delete('DISABLED_HELD');
           this.clearChinookCombatDropIgnoredObstacle(sourceId);
           this.pendingCombatDropActions.delete(sourceId);
+          this.setChinookFlightStatus(source, 'FLYING');
           this.flushPendingChinookCommand(source.id);
           continue;
         }
@@ -35669,6 +35795,39 @@ export class GameLogicSubsystem implements Subsystem {
           }
           break;
         }
+      }
+    }
+  }
+
+  /**
+   * Source parity: ChinookAIUpdate::update — manage takeoff/landing around
+   * transport entry/exit and queued commands.
+   */
+  private updateChinookAI(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.chinookAIProfile) {
+        continue;
+      }
+
+      if (!entity.chinookFlightStatus) {
+        // Source parity: ChinookAIUpdate ctor — start as FLYING even if grounded.
+        this.setChinookFlightStatus(entity, 'FLYING');
+      }
+
+      const status = entity.chinookFlightStatus ?? 'FLYING';
+      if (status === 'TAKING_OFF' || status === 'LANDING' || status === 'DOING_COMBAT_DROP') {
+        continue;
+      }
+
+      const waitingToEnterOrExit = this.hasPendingTransportEntryForContainer(entity.id);
+      if (waitingToEnterOrExit && status !== 'LANDED') {
+        this.setChinookFlightStatus(entity, 'LANDING');
+        continue;
+      }
+
+      if (!waitingToEnterOrExit && status === 'LANDED' && !this.pendingChinookCommandByEntityId.has(entity.id)) {
+        // TODO(source-parity): respect airfield healing (m_airfieldForHealing) before takeoff.
+        this.setChinookFlightStatus(entity, 'TAKING_OFF');
       }
     }
   }
@@ -43658,6 +43817,9 @@ export class GameLogicSubsystem implements Subsystem {
         }
         entity.tunnelContainerId = null;
       }
+      this.pendingChinookCommandByEntityId.delete(entityId);
+      this.pendingCombatDropActions.delete(entityId);
+      this.abortPendingChinookRappels(entityId);
       this.removeEntityFromWorld(entityId);
       this.removeEntityFromSelection(entityId);
     }
@@ -43809,6 +43971,68 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private updateEntityVerticalPosition(entity: MapEntity, dt: number): void {
+    if (entity.helicopterSlowDeathState || entity.jetSlowDeathState) {
+      return;
+    }
+    const groundY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
+
+    const jetState = entity.jetAIState;
+    if (jetState && jetState.allowAirLoco) {
+      // Airborne: maintain cruise altitude over terrain.
+      entity.y = groundY + jetState.cruiseHeight;
+      return;
+    }
+    if (jetState && (jetState.state === 'TAKING_OFF' || jetState.state === 'LANDING')) {
+      // TAKING_OFF and LANDING: Y is set in updateJetAI, don't override here.
+      return;
+    }
+
+    const chinookStatus = entity.chinookFlightStatus;
+    if (entity.chinookAIProfile && chinookStatus && chinookStatus !== 'LANDED') {
+      entity.objectStatusFlags.add('AIRBORNE_TARGET');
+      const preferredHeight = Math.max(0, this.resolveChinookPreferredHeight(entity));
+      const minDropHeight = Math.max(0, entity.chinookAIProfile.minDropHeight);
+      let targetY = groundY + preferredHeight;
+
+      if (chinookStatus === 'LANDING') {
+        targetY = groundY;
+      } else if (chinookStatus === 'DOING_COMBAT_DROP') {
+        targetY = groundY + Math.max(preferredHeight, minDropHeight);
+      }
+
+      const dampingRaw = this.resolveChinookPreferredHeightDamping(entity);
+      const damping = Number.isFinite(dampingRaw) ? dampingRaw : 1;
+      const delta = targetY - entity.y;
+      entity.y += delta * damping;
+
+      const remaining = Math.abs(targetY - entity.y);
+      if (chinookStatus === 'TAKING_OFF' && remaining <= 3) {
+        this.setChinookFlightStatus(entity, 'FLYING');
+        this.flushPendingChinookCommand(entity.id);
+      } else if (chinookStatus === 'LANDING' && remaining <= 3) {
+        this.setChinookFlightStatus(entity, 'LANDED');
+        this.flushPendingChinookCommand(entity.id);
+      }
+      return;
+    }
+
+    if (entity.chinookAIProfile && chinookStatus === 'LANDED') {
+      entity.objectStatusFlags.delete('AIRBORNE_TARGET');
+    }
+
+    // Ground snap for non-aircraft or parked/reloading aircraft.
+    const targetY = groundY;
+    const snapAlpha = 1 - Math.exp(-this.config.terrainSnapSpeed * dt);
+    entity.y += (targetY - entity.y) * snapAlpha;
+
+    // Subtle bob for unresolved movers (e.g., placeholders not in registry)
+    if (!entity.resolved) {
+      const bob = (Math.sin(this.animationTime * this.config.terrainSnapSpeed + entity.id) + 1) * 0.04;
+      entity.y += bob;
+    }
+  }
+
   private updateEntityMovement(dt: number): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) {
@@ -43828,6 +44052,7 @@ export class GameLogicSubsystem implements Subsystem {
         if (entity.currentSpeed > 0) {
           entity.currentSpeed = 0;
         }
+        this.updateEntityVerticalPosition(entity, dt);
         continue;
       }
 
@@ -43996,32 +44221,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.z += dz * inv * step;
       }
 
-      // Source parity: JetAI airborne entities have their Y managed by the JetAI state machine.
-      // TAKING_OFF and LANDING interpolation happens in updateJetAI. Airborne aircraft
-      // track terrain + cruiseHeight here.
-      const jetState = entity.jetAIState;
-      if (jetState && jetState.allowAirLoco) {
-        // Airborne: maintain cruise altitude over terrain.
-        if (this.mapHeightmap) {
-          const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
-          entity.y = terrainHeight + entity.baseHeight + jetState.cruiseHeight;
-        }
-      } else if (!jetState || (jetState.state !== 'TAKING_OFF' && jetState.state !== 'LANDING')) {
-        // Ground snap for non-aircraft or parked/reloading aircraft.
-        if (this.mapHeightmap) {
-          const terrainHeight = this.mapHeightmap.getInterpolatedHeight(entity.x, entity.z);
-          const targetY = terrainHeight + entity.baseHeight;
-          const snapAlpha = 1 - Math.exp(-this.config.terrainSnapSpeed * dt);
-          entity.y += (targetY - entity.y) * snapAlpha;
-        }
-
-        // Subtle bob for unresolved movers (e.g., placeholders not in registry)
-        if (!entity.resolved) {
-          const bob = (Math.sin(this.animationTime * this.config.terrainSnapSpeed + entity.id) + 1) * 0.04;
-          entity.y += bob;
-        }
-      }
-      // TAKING_OFF and LANDING: Y is set in updateJetAI, don't override here.
+      this.updateEntityVerticalPosition(entity, dt);
 
       this.updatePathfindPosCell(entity);
     }
