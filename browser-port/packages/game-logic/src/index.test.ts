@@ -28095,6 +28095,23 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
 
     expect(logic.executeScriptAction({
+      actionType: 'TEAM_SET_STATE',
+      params: ['AlphaTeam', 'ATTACKING'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_STATE_IS',
+      params: ['AlphaTeam', 'ATTACKING'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 37, // TEAM_SET_STATE
+      params: ['AlphaTeam', 'RETREATING'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_STATE_IS_NOT',
+      params: ['AlphaTeam', 'ATTACKING'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
       actionType: 6, // SET_TIMER
       params: ['ActionTimer', 2],
     })).toBe(true);

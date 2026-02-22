@@ -3835,6 +3835,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [15, 'INCREMENT_COUNTER'],
   [16, 'DECREMENT_COUNTER'],
   [20, 'SET_MILLISECOND_TIMER'],
+  [37, 'TEAM_SET_STATE'],
   [147, 'SET_RANDOM_TIMER'],
   [148, 'SET_RANDOM_MSEC_TIMER'],
   [149, 'STOP_TIMER'],
@@ -5635,6 +5636,11 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['counterName', 'counter']),
           readInteger(1, ['value']),
         );
+      case 'TEAM_SET_STATE':
+        return this.setScriptTeamState(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['stateName', 'state']),
+        );
       case 'INCREMENT_COUNTER':
         return this.addScriptCounter(
           readString(1, ['counterName', 'counter']),
@@ -6627,7 +6633,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamStateIs.
-   * TODO(source-parity): bind team state updates to ScriptAction TEAM_SET_STATE flow.
    */
   evaluateScriptTeamStateIs(filter: {
     teamName: string;
@@ -6642,7 +6647,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamStateIsNot.
-   * TODO(source-parity): bind team state updates to ScriptAction TEAM_SET_STATE flow.
    */
   evaluateScriptTeamStateIsNot(filter: {
     teamName: string;
