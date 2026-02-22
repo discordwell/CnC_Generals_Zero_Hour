@@ -36046,7 +36046,21 @@ export class GameLogicSubsystem implements Subsystem {
 
       const airfield = this.spawnedEntities.get(entity.producerEntityId);
       if (airfield?.parkingPlaceProfile) {
-        this.setParkingPlaceHealee(airfield, entity, !js.allowAirLoco);
+        if (
+          !js.allowAirLoco
+          && !js.pendingCommand
+          && entity.kindOf.has('PRODUCED_AT_HELIPAD')
+          && entity.health >= entity.maxHealth
+        ) {
+          // Source parity: helipad aircraft take off once fully healed.
+          this.setParkingPlaceHealee(airfield, entity, false);
+          this.jetAITransition(entity, js, 'TAKING_OFF');
+          entity.objectStatusFlags.add('AIRBORNE_TARGET');
+          js.allowAirLoco = false;
+          entity.moving = false;
+        } else {
+          this.setParkingPlaceHealee(airfield, entity, !js.allowAirLoco);
+        }
       } else {
         this.clearParkingPlaceHealee(entity);
       }
