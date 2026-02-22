@@ -28600,6 +28600,81 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptCameraLookTowardObjectState()).toBeNull();
   });
 
+  it('executes script team guard position/object actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 10), // id 1
+      makeMapObject('Ranger', 14, 10), // id 2
+      makeMapObject('Ranger', 35, 35), // id 3 target
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'GuardWaypointA',
+          position: { x: 80, y: 90, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    expect(logic.setScriptTeamMembers('GuardTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 407, // TEAM_GUARD_POSITION
+      params: ['GuardTeam', 'GuardWaypointA'],
+    })).toBe(true);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        guardState: string;
+        guardObjectId: number;
+        guardPositionX: number;
+        guardPositionZ: number;
+      }>;
+    };
+    expect(privateApi.spawnedEntities.get(1)?.guardState).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(0);
+    expect(privateApi.spawnedEntities.get(2)?.guardObjectId).toBe(0);
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionX).toBe(80);
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionZ).toBe(90);
+    expect(privateApi.spawnedEntities.get(2)?.guardPositionX).toBe(80);
+    expect(privateApi.spawnedEntities.get(2)?.guardPositionZ).toBe(90);
+
+    expect(logic.executeScriptAction({
+      actionType: 408, // TEAM_GUARD_OBJECT
+      params: ['GuardTeam', 3],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(3);
+    expect(privateApi.spawnedEntities.get(2)?.guardObjectId).toBe(3);
+
+    expect(logic.executeScriptAction({
+      actionType: 407,
+      params: ['GuardTeam', 'MissingWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 407,
+      params: ['MissingTeam', 'GuardWaypointA'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 408,
+      params: ['GuardTeam', 999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 408,
+      params: ['MissingTeam', 3],
+    })).toBe(false);
+  });
+
   it('executes script named/team stop actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

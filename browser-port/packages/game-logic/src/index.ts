@@ -3899,6 +3899,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [389, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER'],
   [390, 'PLAYER_SET_OVERRIDE_RELATION_TO_TEAM'],
   [391, 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
+  [407, 'TEAM_GUARD_POSITION'],
+  [408, 'TEAM_GUARD_OBJECT'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6093,6 +6095,16 @@ export class GameLogicSubsystem implements Subsystem {
           readNumber(3, ['easeInSeconds', 'easeIn']),
           readNumber(4, ['easeOutSeconds', 'easeOut']),
         );
+      case 'TEAM_GUARD_POSITION':
+        return this.executeScriptTeamGuardPosition(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointName', 'waypoint']),
+        );
+      case 'TEAM_GUARD_OBJECT':
+        return this.executeScriptTeamGuardObject(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -6989,6 +7001,55 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       this.applyCommand({ type: 'stop', entityId: entity.id });
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamGuardPosition.
+   * Uses a named waypoint and sets each team member to guard that location.
+   */
+  private executeScriptTeamGuardPosition(teamName: string, waypointName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!team || !waypoint) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'guardPosition',
+        entityId: entity.id,
+        targetX: waypoint.x,
+        targetZ: waypoint.z,
+        guardMode: 0,
+      });
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamGuardObject.
+   * Uses a named/target entity and sets each team member to guard that object.
+   */
+  private executeScriptTeamGuardObject(teamName: string, targetEntityId: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const target = this.spawnedEntities.get(targetEntityId);
+    if (!team || !target || target.destroyed) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'guardObject',
+        entityId: entity.id,
+        targetEntityId: target.id,
+        guardMode: 0,
+      });
     }
     return true;
   }
@@ -18528,6 +18589,27 @@ export class GameLogicSubsystem implements Subsystem {
 
   private normalizeScriptTeamName(teamName: string): string {
     return teamName.trim().toUpperCase();
+  }
+
+  private resolveScriptWaypointPosition(waypointName: string): { x: number; z: number } | null {
+    const normalizedWaypointName = waypointName.trim().toUpperCase();
+    if (!normalizedWaypointName) {
+      return null;
+    }
+    const waypointNodes = this.loadedMapData?.waypoints?.nodes;
+    if (!waypointNodes) {
+      return null;
+    }
+    for (const waypointNode of waypointNodes) {
+      if (waypointNode.name.trim().toUpperCase() !== normalizedWaypointName) {
+        continue;
+      }
+      return {
+        x: waypointNode.position.x,
+        z: waypointNode.position.y,
+      };
+    }
+    return null;
   }
 
   private getScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
