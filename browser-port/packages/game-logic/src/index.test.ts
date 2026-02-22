@@ -28064,6 +28064,13 @@ describe('Script condition groundwork', () => {
       makeRegistry(makeBundle({ objects: [] })),
       makeHeightmap(128, 128),
     );
+    const privateApi = logic as unknown as {
+      getSideRankStateMap: (side: string) => {
+        rankLevel: number;
+        skillPoints: number;
+        sciencePurchasePoints: number;
+      };
+    };
 
     expect(logic.executeScriptAction(null)).toBe(false);
     expect(logic.executeScriptAction({ actionType: 'UNKNOWN_ACTION' })).toBe(false);
@@ -28127,6 +28134,34 @@ describe('Script condition groundwork', () => {
       conditionType: 'PLAYER_HAS_CREDITS',
       params: ['America', 'EQUAL', 375],
     })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 272, // PLAYER_ADD_SKILLPOINTS
+      params: ['America', 500],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(3);
+    expect(privateApi.getSideRankStateMap('america').skillPoints).toBe(500);
+    expect(logic.executeScriptAction({
+      actionType: 273, // PLAYER_ADD_RANKLEVEL
+      params: ['America', 1],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(4);
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_SET_RANKLEVEL',
+      params: ['America', 2],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(2);
+    expect(privateApi.getSideRankStateMap('america').skillPoints).toBe(200);
+    expect(logic.executeScriptAction({
+      actionType: 275, // PLAYER_SET_RANKLEVELLIMIT
+      params: [2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 272, // PLAYER_ADD_SKILLPOINTS
+      params: ['America', 5000],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(2);
+    expect(privateApi.getSideRankStateMap('america').skillPoints).toBe(200);
 
     expect(logic.executeScriptAction({
       actionType: 6, // SET_TIMER

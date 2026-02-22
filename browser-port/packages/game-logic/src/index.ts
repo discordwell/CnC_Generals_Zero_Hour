@@ -3844,6 +3844,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [152, 'SUB_FROM_MSEC_TIMER'],
   [154, 'PLAYER_SET_MONEY'],
   [155, 'PLAYER_GIVE_MONEY'],
+  [272, 'PLAYER_ADD_SKILLPOINTS'],
+  [273, 'PLAYER_ADD_RANKLEVEL'],
+  [274, 'PLAYER_SET_RANKLEVEL'],
+  [275, 'PLAYER_SET_RANKLEVELLIMIT'],
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
 ]);
@@ -3922,6 +3926,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
+  /** Source parity: GameLogic::m_rankLevelLimit consumed by Player rank/skill progression. */
+  private rankLevelLimit = RANK_TABLE.length;
   private readonly sideScoreState = new Map<string, SideScoreState>();
   /** Source parity: Player::m_attackedBy + m_attackedFrame. */
   private readonly sideAttackedBy = new Map<string, Set<string>>();
@@ -5718,6 +5724,41 @@ export class GameLogicSubsystem implements Subsystem {
         this.addSideCredits(side, readInteger(1, ['value', 'amount', 'money']));
         return true;
       }
+      case 'PLAYER_ADD_SKILLPOINTS': {
+        const side = readString(0, ['side', 'playerName', 'player']);
+        if (!this.normalizeSide(side)) {
+          return false;
+        }
+        this.adjustSideSkillPoints(side, readInteger(1, ['value', 'amount', 'skillPoints']));
+        return true;
+      }
+      case 'PLAYER_ADD_RANKLEVEL': {
+        const side = readString(0, ['side', 'playerName', 'player']);
+        const normalizedSide = this.normalizeSide(side);
+        if (!normalizedSide) {
+          return false;
+        }
+        const rankState = this.getSideRankStateMap(normalizedSide);
+        this.setSideRankLevelByNormalizedSide(
+          normalizedSide,
+          rankState.rankLevel + readInteger(1, ['value', 'amount', 'rankLevels']),
+        );
+        return true;
+      }
+      case 'PLAYER_SET_RANKLEVEL': {
+        const side = readString(0, ['side', 'playerName', 'player']);
+        if (!this.normalizeSide(side)) {
+          return false;
+        }
+        this.setSideRankLevel(side, readInteger(1, ['value', 'rankLevel']));
+        return true;
+      }
+      case 'PLAYER_SET_RANKLEVELLIMIT':
+        this.rankLevelLimit = Math.max(
+          1,
+          Math.min(RANK_TABLE.length, readInteger(0, ['value', 'rankLevelLimit'])),
+        );
+        return true;
       case 'PLAYER_GRANT_SCIENCE':
         return this.grantSideScience(
           readString(0, ['side', 'playerName', 'player']),
@@ -9560,33 +9601,99 @@ export class GameLogicSubsystem implements Subsystem {
     return created;
   }
 
+  private getRankLevelCap(): number {
+    if (RANK_TABLE.length < 1) {
+      return 1;
+    }
+    const normalizedLimit = Number.isFinite(this.rankLevelLimit) ? Math.trunc(this.rankLevelLimit) : RANK_TABLE.length;
+    return Math.max(1, Math.min(RANK_TABLE.length, normalizedLimit));
+  }
+
+  private setSideRankLevel(side: string, newLevel: number): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    return this.setSideRankLevelByNormalizedSide(normalizedSide, newLevel);
+  }
+
+  /**
+   * Source parity subset: Player::setRankLevel — rank clamp + reset-on-downgrade behavior.
+   */
+  private setSideRankLevelByNormalizedSide(normalizedSide: string, newLevel: number): boolean {
+    const rankState = this.getSideRankStateMap(normalizedSide);
+    const rankCap = this.getRankLevelCap();
+    const targetLevel = Math.max(1, Math.min(rankCap, Math.trunc(newLevel)));
+    if (targetLevel === rankState.rankLevel) {
+      return false;
+    }
+
+    if (targetLevel < rankState.rankLevel) {
+      rankState.rankLevel = 1;
+      rankState.skillPoints = 0;
+      rankState.sciencePurchasePoints = RANK_TABLE[0]?.sciencePurchasePointsGranted ?? 0;
+    }
+
+    for (let level = rankState.rankLevel + 1; level <= targetLevel; level++) {
+      const rankInfo = RANK_TABLE[level - 1];
+      if (!rankInfo) {
+        continue;
+      }
+      rankState.sciencePurchasePoints = Math.max(
+        0,
+        rankState.sciencePurchasePoints + rankInfo.sciencePurchasePointsGranted,
+      );
+      if (rankState.skillPoints < rankInfo.skillPointsNeeded) {
+        rankState.skillPoints = rankInfo.skillPointsNeeded;
+      }
+    }
+
+    rankState.rankLevel = targetLevel;
+    return true;
+  }
+
+  /**
+   * Source parity subset: Player::addSkillPoints (used by script action and kill XP).
+   * Returns true if rank increased.
+   */
+  private adjustSideSkillPoints(side: string, delta: number): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const rankState = this.getSideRankStateMap(normalizedSide);
+    const normalizedDelta = Number.isFinite(delta) ? Math.trunc(delta) : 0;
+    if (normalizedDelta === 0) {
+      return false;
+    }
+
+    const rankCap = this.getRankLevelCap();
+    const pointCap = RANK_TABLE[rankCap - 1]?.skillPointsNeeded ?? Infinity;
+    rankState.skillPoints = Math.min(pointCap, rankState.skillPoints + normalizedDelta);
+
+    let didLevelUp = false;
+    while (rankState.rankLevel < rankCap) {
+      const nextRank = RANK_TABLE[rankState.rankLevel];
+      if (!nextRank || rankState.skillPoints < nextRank.skillPointsNeeded) {
+        break;
+      }
+      this.setSideRankLevelByNormalizedSide(normalizedSide, rankState.rankLevel + 1);
+      didLevelUp = true;
+    }
+
+    return didLevelUp;
+  }
+
   /**
    * Source parity: Player::addSkillPoints — award player-level skill points from kills.
    * Returns true if a rank level-up occurred.
    */
   private addPlayerSkillPoints(side: string, delta: number): boolean {
-    if (delta <= 0) return false;
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) return false;
-
-    const rankState = this.getSideRankStateMap(normalizedSide);
-
-    // Cap at max rank threshold.
-    const maxRank = RANK_TABLE.length;
-    const pointCap = RANK_TABLE[maxRank - 1]?.skillPointsNeeded ?? Infinity;
-    rankState.skillPoints = Math.min(pointCap, rankState.skillPoints + delta);
-
-    // Check for level-ups.
-    let didLevelUp = false;
-    while (rankState.rankLevel < maxRank) {
-      const nextRank = RANK_TABLE[rankState.rankLevel]; // 0-indexed, current is (rankLevel-1), next is (rankLevel)
-      if (!nextRank || rankState.skillPoints < nextRank.skillPointsNeeded) break;
-      rankState.rankLevel++;
-      rankState.sciencePurchasePoints += nextRank.sciencePurchasePointsGranted;
-      didLevelUp = true;
+    if (delta <= 0) {
+      return false;
     }
-
-    return didLevelUp;
+    return this.adjustSideSkillPoints(side, delta);
   }
 
   private hasSideScience(side: string, scienceName: string): boolean {
@@ -9980,6 +10087,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideRadarState.clear();
     this.temporaryVisionReveals.length = 0;
     this.sideRankState.clear();
+    this.rankLevelLimit = RANK_TABLE.length;
     this.frameCounter = 0;
     this.gameRandom.setSeed(1);
     this.isAttackMoveToMode = false;
