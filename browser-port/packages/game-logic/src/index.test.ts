@@ -27911,19 +27911,73 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 2 })).toBe(false);
   });
 
-  it('keeps script-condition dispatcher at explicit source TODO placeholder behavior', () => {
+  it('dispatches script conditions using source enum names/indices and positional params', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([], 128, 128),
-      makeRegistry(makeBundle({ objects: [] })),
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
+    logic.setSideCredits('America', 1000);
 
     expect(logic.evaluateScriptCondition(null)).toBe(false);
+    expect(logic.evaluateScriptCondition({ conditionType: 'UNKNOWN_CONDITION' })).toBe(false);
+
     expect(logic.evaluateScriptCondition({
-      conditionType: 'ALL_DESTROYED',
-      params: { side: 'America' },
+      conditionType: 'PLAYER_HAS_CREDITS',
+      params: [1000, 'EQUAL', 'America'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 26, // PLAYER_HAS_CREDITS
+      params: [1000, 'EQUAL', 'America'],
+    })).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'ALL_DESTROYED', // alias to PLAYER_ALL_DESTROYED
+      params: ['America'],
     })).toBe(false);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 47, // HAS_FINISHED_VIDEO
+      params: ['IntroMovie'],
+    })).toBe(false);
+    logic.notifyScriptVideoCompleted('IntroMovie');
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'HAS_FINISHED_VIDEO',
+      params: ['IntroMovie'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'HAS_FINISHED_VIDEO',
+      params: ['IntroMovie'],
+    })).toBe(false);
+
+    expect(logic.evaluateScriptCondition({
+      id: 'built-check',
+      conditionType: 'BUILT_BY_PLAYER',
+      params: ['Ranger', 'America'],
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+      scriptConditionCacheById: Map<string, unknown>;
+    };
+    expect(privateApi.scriptConditionCacheById.has('SCRIPT_CONDITION:built-check')).toBe(true);
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 5, // PLAYER_ALL_DESTROYED
+      params: ['America'],
+    })).toBe(true);
   });
 
   it('evaluates named-reached-waypoints-end from completed waypoint labels', () => {
