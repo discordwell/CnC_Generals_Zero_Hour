@@ -27911,6 +27911,21 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 2 })).toBe(false);
   });
 
+  it('keeps script-condition dispatcher at explicit source TODO placeholder behavior', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptCondition(null)).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'ALL_DESTROYED',
+      params: { side: 'America' },
+    })).toBe(false);
+  });
+
   it('evaluates named-reached-waypoints-end from completed waypoint labels', () => {
     const bundle = makeBundle({
       objects: [

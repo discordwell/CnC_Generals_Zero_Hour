@@ -5325,6 +5325,14 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity placeholder: ScriptConditions::evaluateCondition dispatcher.
+   * TODO(source-parity): map-script condition AST parsing + dispatch to evaluator methods.
+   */
+  evaluateScriptCondition(_condition: unknown): boolean {
+    return false;
+  }
+
+  /**
    * Source parity subset: explicit script-team membership assignment.
    * TODO(source-parity): support TeamPrototype instance resolution and THIS_TEAM semantics.
    */
