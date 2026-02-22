@@ -29738,6 +29738,40 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named-custom-color action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        customIndicatorColor: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 453, // NAMED_CUSTOM_COLOR
+      params: [1, 0x12ab34],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.customIndicatorColor).toBe(0x12ab34);
+
+    expect(logic.executeScriptAction({
+      actionType: 453,
+      params: [999, 0xff00ff],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

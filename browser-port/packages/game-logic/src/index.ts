@@ -1687,6 +1687,8 @@ interface MapEntity {
   scriptFlashCount: number;
   /** Source parity: Drawable::m_flashColor as packed RGB integer. */
   scriptFlashColor: number;
+  /** Source parity: Object::m_customIndicatorColor override set by script action. */
+  customIndicatorColor: number | null;
   commandSetStringOverride: string | null;
   locomotorUpgradeEnabled: boolean;
   activeLocomotorSet: string;
@@ -4059,6 +4061,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [448, 'TEAM_FLASH_WHITE'],
   [451, 'IDLE_ALL_UNITS'],
   [452, 'RESUME_SUPPLY_TRUCKING'],
+  [453, 'NAMED_CUSTOM_COLOR'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6623,6 +6626,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptIdleAllUnits();
       case 'RESUME_SUPPLY_TRUCKING':
         return this.executeScriptResumeSupplyTrucking();
+      case 'NAMED_CUSTOM_COLOR':
+        return this.executeScriptNamedCustomColor(
+          readInteger(0, ['entityId', 'unitId', 'named', 'namedUnit']),
+          readInteger(1, ['color', 'customColor']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8328,6 +8336,22 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return flashed;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedCustomColor.
+   * Applies an object-level custom indicator color override.
+   */
+  private executeScriptNamedCustomColor(entityId: number, color: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (!Number.isFinite(color)) {
+      return false;
+    }
+    entity.customIndicatorColor = Math.trunc(color) >>> 0;
+    return true;
   }
 
   private getScriptActionHumanSides(): Set<string> {
@@ -12790,6 +12814,7 @@ export class GameLogicSubsystem implements Subsystem {
       modelConditionFlags: new Set<string>(),
       scriptFlashCount: 0,
       scriptFlashColor: 0,
+      customIndicatorColor: null,
       commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,
       specialPowerModules,
