@@ -14,6 +14,7 @@ import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
   IniDataRegistry,
   type ArmorDef,
+  type CommandButtonDef,
   type LocomotorDef,
   type SpecialPowerDef,
   type ObjectDef,
@@ -267,6 +268,11 @@ interface VectorXZ {
   z: number;
 }
 
+type ScriptCommandButtonTarget =
+  | { kind: 'NONE' }
+  | { kind: 'OBJECT'; targetEntity: MapEntity }
+  | { kind: 'POSITION'; targetX: number; targetZ: number };
+
 interface NavigationGrid {
   width: number;
   height: number;
@@ -302,6 +308,41 @@ const SOURCE_DEFAULT_SELL_PERCENTAGE = 1.0;
 const CONSTRUCTION_COMPLETE = -1;
 const SOURCE_HACK_FALLBACK_CASH_AMOUNT = 1;
 const SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER = 3;
+const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
+
+const SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
+const SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
+const SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT = 0x00000004;
+const SCRIPT_COMMAND_OPTION_NEED_TARGET_POS = 0x00000020;
+const SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION = 0x00001000;
+const SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET = SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT
+  | SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT
+  | SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT;
+
+const SCRIPT_COMMAND_OPTION_NAME_TO_MASK = new Map<string, number>([
+  ['NEED_TARGET_ENEMY_OBJECT', SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT],
+  ['NEED_TARGET_NEUTRAL_OBJECT', SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT],
+  ['NEED_TARGET_ALLY_OBJECT', SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT],
+  ['ALLOW_SHRUBBERY_TARGET', 0x00000010],
+  ['NEED_TARGET_POS', SCRIPT_COMMAND_OPTION_NEED_TARGET_POS],
+  ['NEED_UPGRADE', 0x00000040],
+  ['NEED_SPECIAL_POWER_SCIENCE', 0x00000080],
+  ['OK_FOR_MULTI_SELECT', 0x00000100],
+  ['CONTEXTMODE_COMMAND', 0x00000200],
+  ['CHECK_LIKE', 0x00000400],
+  ['ALLOW_MINE_TARGET', 0x00000800],
+  ['ATTACK_OBJECTS_POSITION', SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION],
+  ['OPTION_ONE', 0x00002000],
+  ['OPTION_TWO', 0x00004000],
+  ['OPTION_THREE', 0x00008000],
+  ['NOT_QUEUEABLE', 0x00010000],
+  ['SINGLE_USE_COMMAND', 0x00020000],
+  ['SCRIPT_ONLY', 0x00080000],
+  ['IGNORES_UNDERPOWERED', 0x00100000],
+  ['USES_MINE_CLEARING_WEAPONSET', 0x00200000],
+  ['CAN_USE_WAYPOINTS', 0x00400000],
+  ['MUST_BE_STOPPED', 0x00800000],
+]);
 
 const NAV_CLEAR = 0;
 const NAV_WATER = 1;
@@ -3996,6 +4037,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [438, 'TEAM_WANDER_IN_PLACE'],
   [441, 'DISPLAY_COUNTER'],
   [442, 'HIDE_COUNTER'],
+  [443, 'TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED'],
+  [444, 'TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT'],
+  [445, 'NAMED_USE_COMMANDBUTTON_ABILITY'],
+  [446, 'TEAM_USE_COMMANDBUTTON_ABILITY'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6506,6 +6551,28 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'HIDE_COUNTER':
         return this.hideScriptDisplayedCounter(readString(0, ['counterName', 'counter']));
+      case 'TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED':
+        return this.executeScriptTeamUseCommandButtonAbilityOnNamed(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readInteger(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
+      case 'TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT':
+        return this.executeScriptTeamUseCommandButtonAbilityAtWaypoint(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readString(2, ['waypointName', 'waypoint']),
+        );
+      case 'NAMED_USE_COMMANDBUTTON_ABILITY':
+        return this.executeScriptNamedUseCommandButtonAbility(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
+      case 'TEAM_USE_COMMANDBUTTON_ABILITY':
+        return this.executeScriptTeamUseCommandButtonAbility(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -7627,6 +7694,513 @@ export class GameLogicSubsystem implements Subsystem {
     }
     this.removePlayerRelationship(sourceSide, targetSide);
     return true;
+  }
+
+  private normalizeScriptCommandTypeName(commandTypeName: string): string {
+    const normalized = this.normalizeCommandTypeNameForBuildCheck(commandTypeName);
+    if (normalized.startsWith('GUICOMMANDMODE_')) {
+      return normalized.slice('GUICOMMANDMODE_'.length);
+    }
+    return normalized;
+  }
+
+  private resolveScriptCommandButtonOptionMask(commandButtonDef: CommandButtonDef): number {
+    let optionMask = 0;
+
+    const optionNames = commandButtonDef.options.length > 0
+      ? commandButtonDef.options
+      : this.extractIniValueTokens(commandButtonDef.fields['Options']).flatMap((entry) => entry);
+
+    for (const optionName of optionNames) {
+      const normalizedOptionName = optionName.trim().toUpperCase();
+      if (!normalizedOptionName) {
+        continue;
+      }
+      const mask = SCRIPT_COMMAND_OPTION_NAME_TO_MASK.get(normalizedOptionName);
+      if (mask !== undefined) {
+        optionMask |= mask;
+      }
+    }
+
+    return optionMask;
+  }
+
+  private resolveScriptWeaponSlotFromCommandButton(commandButtonDef: CommandButtonDef): number | null {
+    const weaponSlotToken = readStringField(commandButtonDef.fields, ['WeaponSlot'])?.trim().toUpperCase() ?? '';
+    switch (weaponSlotToken) {
+      case 'PRIMARY':
+      case 'PRIMARY_WEAPON':
+        return 0;
+      case 'SECONDARY':
+      case 'SECONDARY_WEAPON':
+        return 1;
+      case 'TERTIARY':
+      case 'TERTIARY_WEAPON':
+        return 2;
+      default:
+        break;
+    }
+
+    const numericSlot = readNumericField(commandButtonDef.fields, ['WeaponSlot']);
+    if (!Number.isFinite(numericSlot)) {
+      return null;
+    }
+
+    const slot = Math.trunc(numericSlot);
+    if (slot < 0 || slot > 2) {
+      return null;
+    }
+    return slot;
+  }
+
+  private resolveScriptMaxShotsToFireFromCommandButton(commandButtonDef: CommandButtonDef): number {
+    const maxShots = readNumericField(commandButtonDef.fields, ['MaxShotsToFire']);
+    if (!Number.isFinite(maxShots)) {
+      return SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE;
+    }
+    return Math.trunc(maxShots);
+  }
+
+  private resolveScriptGuardModeForCommandType(commandTypeName: string): number {
+    switch (commandTypeName) {
+      case 'GUARD_WITHOUT_PURSUIT':
+        return 1;
+      case 'GUARD_FLYING_UNITS_ONLY':
+        return 2;
+      default:
+        return 0;
+    }
+  }
+
+  private findScriptEntityCommandButtonsByName(
+    sourceEntity: MapEntity,
+    commandButtonName: string,
+  ): CommandButtonDef[] {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return [];
+    }
+
+    const sourceObjectDef = findObjectDefByName(registry, sourceEntity.templateName);
+    if (!sourceObjectDef) {
+      return [];
+    }
+    const commandSetName = this.resolveEntityCommandSetName(sourceEntity, sourceObjectDef);
+    if (!commandSetName) {
+      return [];
+    }
+    const commandSetDef = findCommandSetDefByName(registry, commandSetName);
+    if (!commandSetDef) {
+      return [];
+    }
+
+    const normalizedCommandButtonName = commandButtonName.trim().toUpperCase();
+    if (!normalizedCommandButtonName) {
+      return [];
+    }
+
+    const matches: CommandButtonDef[] = [];
+    for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
+      const slottedCommandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      if (!slottedCommandButtonName) {
+        continue;
+      }
+      const commandButtonDef = findCommandButtonDefByName(registry, slottedCommandButtonName);
+      if (!commandButtonDef) {
+        continue;
+      }
+      if (commandButtonDef.name.trim().toUpperCase() !== normalizedCommandButtonName) {
+        continue;
+      }
+      matches.push(commandButtonDef);
+    }
+
+    return matches;
+  }
+
+  private executeScriptCommandButtonForEntity(
+    sourceEntity: MapEntity,
+    commandButtonDef: CommandButtonDef,
+    target: ScriptCommandButtonTarget,
+  ): boolean {
+    const commandTypeName = this.normalizeScriptCommandTypeName(
+      commandButtonDef.commandTypeName
+      ?? readStringField(commandButtonDef.fields, ['Command'])
+      ?? '',
+    );
+    if (!commandTypeName) {
+      return false;
+    }
+
+    switch (commandTypeName) {
+      case 'SPECIAL_POWER':
+      case 'SPECIAL_POWER_FROM_COMMAND_CENTER':
+      case 'SPECIAL_POWER_FROM_SHORTCUT':
+      case 'SPECIAL_POWER_CONSTRUCT':
+      case 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT': {
+        const specialPowerName = readStringField(commandButtonDef.fields, ['SpecialPower'])
+          ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate']);
+        if (!specialPowerName) {
+          return false;
+        }
+
+        let targetEntityId: number | null = null;
+        let targetX: number | null = null;
+        let targetZ: number | null = null;
+        if (target.kind === 'OBJECT') {
+          targetEntityId = target.targetEntity.id;
+        } else if (target.kind === 'POSITION') {
+          targetX = target.targetX;
+          targetZ = target.targetZ;
+        }
+
+        this.applyCommand({
+          type: 'issueSpecialPower',
+          commandButtonId: commandButtonDef.name,
+          specialPowerName,
+          commandOption: this.resolveScriptCommandButtonOptionMask(commandButtonDef),
+          issuingEntityIds: [sourceEntity.id],
+          sourceEntityId: sourceEntity.id,
+          targetEntityId,
+          targetX,
+          targetZ,
+        });
+        return true;
+      }
+      case 'STOP':
+        this.applyCommand({ type: 'stop', entityId: sourceEntity.id });
+        return true;
+      case 'ATTACK_MOVE':
+        if (target.kind !== 'POSITION') {
+          return false;
+        }
+        this.applyCommand({
+          type: 'attackMoveTo',
+          entityId: sourceEntity.id,
+          targetX: target.targetX,
+          targetZ: target.targetZ,
+        });
+        return true;
+      case 'SET_RALLY_POINT':
+        if (target.kind !== 'POSITION') {
+          return false;
+        }
+        this.applyCommand({
+          type: 'setRallyPoint',
+          entityId: sourceEntity.id,
+          targetX: target.targetX,
+          targetZ: target.targetZ,
+        });
+        return true;
+      case 'GUARD':
+      case 'GUARD_WITHOUT_PURSUIT':
+      case 'GUARD_FLYING_UNITS_ONLY': {
+        const guardMode = this.resolveScriptGuardModeForCommandType(commandTypeName);
+        if (target.kind === 'OBJECT') {
+          this.applyCommand({
+            type: 'guardObject',
+            entityId: sourceEntity.id,
+            targetEntityId: target.targetEntity.id,
+            guardMode,
+          });
+          return true;
+        }
+        if (target.kind === 'POSITION') {
+          this.applyCommand({
+            type: 'guardPosition',
+            entityId: sourceEntity.id,
+            targetX: target.targetX,
+            targetZ: target.targetZ,
+            guardMode,
+          });
+          return true;
+        }
+        return false;
+      }
+      case 'FIRE_WEAPON': {
+        const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef) ?? 0;
+        const maxShotsToFire = this.resolveScriptMaxShotsToFireFromCommandButton(commandButtonDef);
+        const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+        const needsObjectTarget = (commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
+        const needsTargetPosition = (commandOption & SCRIPT_COMMAND_OPTION_NEED_TARGET_POS) !== 0;
+        const attacksObjectPosition = (commandOption & SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION) !== 0;
+
+        let targetObjectId: number | null = target.kind === 'OBJECT' ? target.targetEntity.id : null;
+        let targetPosition: readonly [number, number, number] | null = target.kind === 'POSITION'
+          ? [target.targetX, 0, target.targetZ]
+          : null;
+
+        if (needsObjectTarget && targetObjectId === null) {
+          return false;
+        }
+        if (needsTargetPosition && targetPosition === null) {
+          return false;
+        }
+        if (attacksObjectPosition && targetPosition === null && targetObjectId !== null) {
+          targetPosition = this.getEntityWorldPosition(targetObjectId);
+          if (!targetPosition) {
+            return false;
+          }
+        }
+
+        this.applyCommand({
+          type: 'fireWeapon',
+          entityId: sourceEntity.id,
+          weaponSlot,
+          maxShotsToFire,
+          targetObjectId: needsObjectTarget ? targetObjectId : null,
+          targetPosition,
+        });
+        return true;
+      }
+      case 'SWITCH_WEAPON': {
+        const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef);
+        if (weaponSlot === null) {
+          return false;
+        }
+        this.applyCommand({
+          type: 'switchWeapon',
+          entityId: sourceEntity.id,
+          weaponSlot,
+        });
+        return true;
+      }
+      case 'HACK_INTERNET':
+        this.applyCommand({ type: 'hackInternet', entityId: sourceEntity.id });
+        return true;
+      case 'TOGGLE_OVERCHARGE':
+        this.applyCommand({ type: 'toggleOvercharge', entityId: sourceEntity.id });
+        return true;
+      case 'EXIT_CONTAINER':
+        this.applyCommand({ type: 'exitContainer', entityId: sourceEntity.id });
+        return true;
+      case 'EVACUATE':
+        this.applyCommand({ type: 'evacuate', entityId: sourceEntity.id });
+        return true;
+      case 'EXECUTE_RAILED_TRANSPORT':
+        this.applyCommand({ type: 'executeRailedTransport', entityId: sourceEntity.id });
+        return true;
+      case 'BEACON_DELETE':
+        this.applyCommand({ type: 'beaconDelete', entityId: sourceEntity.id });
+        return true;
+      case 'SELL':
+        this.applyCommand({ type: 'sell', entityId: sourceEntity.id });
+        return true;
+      case 'COMBATDROP': {
+        const targetObjectId = target.kind === 'OBJECT' ? target.targetEntity.id : null;
+        const targetPosition: readonly [number, number, number] | null = target.kind === 'POSITION'
+          ? [target.targetX, 0, target.targetZ]
+          : null;
+        if (targetObjectId === null && targetPosition === null) {
+          return false;
+        }
+        this.applyCommand({
+          type: 'combatDrop',
+          entityId: sourceEntity.id,
+          targetObjectId,
+          targetPosition,
+        });
+        return true;
+      }
+      case 'HIJACK_VEHICLE':
+      case 'CONVERT_TO_CARBOMB':
+      case 'SABOTAGE_BUILDING':
+        if (target.kind !== 'OBJECT') {
+          return false;
+        }
+        this.applyCommand({
+          type: 'enterObject',
+          entityId: sourceEntity.id,
+          targetObjectId: target.targetEntity.id,
+          action: commandTypeName === 'HIJACK_VEHICLE'
+            ? 'hijackVehicle'
+            : commandTypeName === 'CONVERT_TO_CARBOMB'
+            ? 'convertToCarBomb'
+            : 'sabotageBuilding',
+        });
+        return true;
+      case 'PLACE_BEACON':
+        if (target.kind !== 'POSITION') {
+          return false;
+        }
+        this.applyCommand({
+          type: 'placeBeacon',
+          targetPosition: [target.targetX, 0, target.targetZ],
+        });
+        return true;
+      default:
+        // TODO(source-parity): support remaining command button command types used by map scripts.
+        return false;
+    }
+  }
+
+  private executeScriptNamedUseCommandButtonAbility(entityId: number, commandButtonName: string): boolean {
+    const sourceEntity = this.spawnedEntities.get(entityId);
+    if (!sourceEntity || sourceEntity.destroyed) {
+      return false;
+    }
+
+    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
+    if (commandButtons.length === 0) {
+      return false;
+    }
+
+    let executed = false;
+    for (const commandButtonDef of commandButtons) {
+      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, { kind: 'NONE' })) {
+        executed = true;
+      }
+    }
+    return executed;
+  }
+
+  private executeScriptNamedUseCommandButtonAbilityOnNamed(
+    entityId: number,
+    commandButtonName: string,
+    targetEntityId: number,
+  ): boolean {
+    const sourceEntity = this.spawnedEntities.get(entityId);
+    const targetEntity = this.spawnedEntities.get(targetEntityId);
+    if (!sourceEntity || sourceEntity.destroyed || !targetEntity || targetEntity.destroyed) {
+      return false;
+    }
+
+    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
+    if (commandButtons.length === 0) {
+      return false;
+    }
+
+    let executed = false;
+    for (const commandButtonDef of commandButtons) {
+      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
+        kind: 'OBJECT',
+        targetEntity,
+      })) {
+        executed = true;
+      }
+    }
+    return executed;
+  }
+
+  private executeScriptNamedUseCommandButtonAbilityAtWaypoint(
+    entityId: number,
+    commandButtonName: string,
+    waypointName: string,
+  ): boolean {
+    const sourceEntity = this.spawnedEntities.get(entityId);
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!sourceEntity || sourceEntity.destroyed || !waypoint) {
+      return false;
+    }
+
+    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
+    if (commandButtons.length === 0) {
+      return false;
+    }
+
+    let executed = false;
+    for (const commandButtonDef of commandButtons) {
+      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
+        kind: 'POSITION',
+        targetX: waypoint.x,
+        targetZ: waypoint.z,
+      })) {
+        executed = true;
+      }
+    }
+    return executed;
+  }
+
+  private executeScriptTeamUseCommandButtonAbility(teamName: string, commandButtonName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const registry = this.iniDataRegistry;
+    if (!team || !registry) {
+      return false;
+    }
+
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team);
+    let executed = false;
+    for (const entity of teamMembers) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, { kind: 'NONE' })) {
+        executed = true;
+      }
+    }
+    return executed || teamMembers.length === 0;
+  }
+
+  private executeScriptTeamUseCommandButtonAbilityOnNamed(
+    teamName: string,
+    commandButtonName: string,
+    targetEntityId: number,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const registry = this.iniDataRegistry;
+    const targetEntity = this.spawnedEntities.get(targetEntityId);
+    if (!team || !registry || !targetEntity || targetEntity.destroyed) {
+      return false;
+    }
+
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team);
+    let executed = false;
+    for (const entity of teamMembers) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
+        kind: 'OBJECT',
+        targetEntity,
+      })) {
+        executed = true;
+      }
+    }
+    return executed || teamMembers.length === 0;
+  }
+
+  private executeScriptTeamUseCommandButtonAbilityAtWaypoint(
+    teamName: string,
+    commandButtonName: string,
+    waypointName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const registry = this.iniDataRegistry;
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!team || !registry || !waypoint) {
+      return false;
+    }
+
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team);
+    let executed = false;
+    for (const entity of teamMembers) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
+        kind: 'POSITION',
+        targetX: waypoint.x,
+        targetZ: waypoint.z,
+      })) {
+        executed = true;
+      }
+    }
+    return executed || teamMembers.length === 0;
   }
 
   private executeScriptNamedStop(entityId: number): boolean {

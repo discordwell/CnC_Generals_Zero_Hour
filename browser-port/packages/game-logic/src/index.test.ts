@@ -29376,6 +29376,181 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script command-button ability actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_NoTarget', {
+            SpecialPowerTemplate: 'ScriptPowerNoTarget',
+          }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_AtWaypoint', {
+            SpecialPowerTemplate: 'ScriptPowerAtWaypoint',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptNoTarget', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerNoTarget',
+        }),
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+        makeCommandButtonDef('Command_ScriptAtWaypoint', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerAtWaypoint',
+          Options: 'NEED_TARGET_POS',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptNoTarget',
+          2: 'Command_ScriptOnNamed',
+          3: 'Command_ScriptAtWaypoint',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerNoTarget', { ReloadTime: 0 }),
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 0 }),
+        makeSpecialPowerDef('ScriptPowerAtWaypoint', { ReloadTime: 0 }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptCaster', 10, 10), // id 1
+      makeMapObject('ScriptCaster', 18, 10), // id 2
+      makeMapObject('ScriptTarget', 40, 10), // id 3
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'AbilityWaypoint',
+          position: { x: 96, y: 80, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setTeamRelationship('America', 'China', 0);
+    expect(logic.setScriptTeamMembers('AbilityTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_ScriptNoTarget'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
+      dispatchType: 'NO_TARGET',
+      commandButtonId: 'Command_ScriptNoTarget',
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 443, // TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: ['AbilityTeam', 'Command_ScriptOnNamed', 3],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      commandButtonId: 'Command_ScriptOnNamed',
+      targetEntityId: 3,
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      commandButtonId: 'Command_ScriptOnNamed',
+      targetEntityId: 3,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 444, // TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: ['AbilityTeam', 'Command_ScriptAtWaypoint', 'AbilityWaypoint'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_ScriptAtWaypoint',
+      targetEntityId: null,
+      targetX: 96,
+      targetZ: 80,
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_ScriptAtWaypoint',
+      targetEntityId: null,
+      targetX: 96,
+      targetZ: 80,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 446, // TEAM_USE_COMMANDBUTTON_ABILITY
+      params: ['AbilityTeam', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
+      dispatchType: 'NO_TARGET',
+      commandButtonId: 'Command_ScriptNoTarget',
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
+      dispatchType: 'NO_TARGET',
+      commandButtonId: 'Command_ScriptNoTarget',
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 445,
+      params: [999, 'Command_ScriptNoTarget'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 445,
+      params: [1, 'Command_Missing'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 443,
+      params: ['MissingTeam', 'Command_ScriptOnNamed', 3],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 443,
+      params: ['AbilityTeam', 'Command_ScriptOnNamed', 999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 444,
+      params: ['AbilityTeam', 'Command_ScriptAtWaypoint', 'MissingWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 446,
+      params: ['AbilityTeam', 'Command_Missing'],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
