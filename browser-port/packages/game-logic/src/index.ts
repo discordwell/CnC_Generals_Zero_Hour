@@ -4066,6 +4066,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [453, 'NAMED_CUSTOM_COLOR'],
   [454, 'SKIRMISH_MOVE_TO_APPROACH_PATH'],
   [455, 'SKIRMISH_BUILD_BASE_DEFENSE_FRONT'],
+  [456, 'SKIRMISH_FIRE_SPECIAL_POWER_AT_MOST_COST'],
   [457, 'NAMED_RECEIVE_UPGRADE'],
   [458, 'PLAYER_REPAIR_NAMED_STRUCTURE'],
 ]);
@@ -6686,6 +6687,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptSkirmishBuildBaseDefenseFront(
           readString(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
+      case 'SKIRMISH_FIRE_SPECIAL_POWER_AT_MOST_COST':
+        return this.executeScriptSkirmishFireSpecialPowerAtMostCost(
+          readString(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readString(1, ['specialPowerName', 'specialPower']),
+        );
       case 'IDLE_ALL_UNITS':
         return this.executeScriptIdleAllUnits();
       case 'RESUME_SUPPLY_TRUCKING':
@@ -8523,6 +8529,259 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return this.executeScriptSkirmishBuildBuilding(templateName, side);
+  }
+
+  /**
+   * Source parity: ScriptActions::doSkirmishFireSpecialPowerAtMostCost.
+   * Resolves the enemy's most-costly area and fires the named special power at that location.
+   */
+  private executeScriptSkirmishFireSpecialPowerAtMostCost(
+    explicitPlayerSide: string,
+    specialPowerName: string,
+  ): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const specialPowerToken = specialPowerName.trim();
+    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
+    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
+      return false;
+    }
+
+    const specialPowerDef = this.resolveSpecialPowerDefByName(normalizedSpecialPowerName);
+    if (!specialPowerDef) {
+      return false;
+    }
+
+    const enemySide = this.resolveScriptSkirmishEnemySide(side);
+    if (!enemySide) {
+      return false;
+    }
+
+    let weaponRadius = 50;
+    const radiusCursorRadius = readNumericField(specialPowerDef.fields, ['RadiusCursorRadius']) ?? 0;
+    if (radiusCursorRadius > weaponRadius) {
+      weaponRadius = radiusCursorRadius;
+    }
+
+    const target = this.computeScriptSuperweaponTarget(enemySide, weaponRadius);
+
+    let sourceEntity: MapEntity | null = null;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== side) {
+        continue;
+      }
+      if (!entity.specialPowerModules.has(normalizedSpecialPowerName)) {
+        continue;
+      }
+      sourceEntity = entity;
+      break;
+    }
+    if (!sourceEntity) {
+      return false;
+    }
+
+    this.applyCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: '',
+      specialPowerName: specialPowerToken,
+      commandOption: 0x20, // NEED_TARGET_POS
+      issuingEntityIds: [sourceEntity.id],
+      sourceEntityId: sourceEntity.id,
+      targetEntityId: null,
+      targetX: target.x,
+      targetZ: target.z,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity: AIPlayer::computeSuperweaponTarget.
+   */
+  private computeScriptSuperweaponTarget(
+    targetSide: string,
+    weaponRadius: number,
+  ): { x: number; z: number } {
+    const bounds = this.getScriptSideStructureBounds(targetSide);
+    let radius = weaponRadius;
+    if (!Number.isFinite(radius) || radius < 1) {
+      radius = 1;
+    }
+
+    let loX = bounds.loX + radius;
+    let hiX = bounds.hiX - radius;
+    if (hiX < loX) {
+      const middle = (hiX + loX) / 2;
+      loX = middle;
+      hiX = middle;
+    }
+
+    let loZ = bounds.loZ + radius;
+    let hiZ = bounds.hiZ - radius;
+    if (hiZ < loZ) {
+      const middle = (hiZ + loZ) / 2;
+      loZ = middle;
+      hiZ = middle;
+    }
+
+    const width = hiX - loX;
+    const height = hiZ - loZ;
+    let xCount = Math.ceil(width / radius) + 1;
+    let zCount = Math.ceil(height / radius) + 1;
+    if (xCount > 10) xCount = 10;
+    if (zCount > 10) zCount = 10;
+
+    let bestValue = -1;
+    let bestX = loX;
+    let bestZ = loZ;
+    for (let i = 0; i < xCount; i += 1) {
+      for (let j = 0; j < zCount; j += 1) {
+        const x = loX + (width * i) / xCount;
+        const z = loZ + (height * j) / zCount;
+        const currentValue = this.getScriptSuperweaponTargetValue(x, z, targetSide, 2 * radius);
+        if (currentValue > bestValue) {
+          bestValue = currentValue;
+          bestX = x;
+          bestZ = z;
+        }
+      }
+    }
+
+    let finalBestValue = -1;
+    let finalBestX = 0;
+    let finalBestZ = 0;
+    let tieCount = 0;
+    for (let i = 0; i < 11; i += 1) {
+      for (let j = 0; j < 11; j += 1) {
+        const x = bestX + (i - 5) * (radius / 10);
+        const z = bestZ + (j - 5) * (radius / 10);
+        const currentValue = this.getScriptSuperweaponTargetValue(x, z, targetSide, radius);
+        if (currentValue > finalBestValue) {
+          finalBestValue = currentValue;
+          finalBestX = x;
+          finalBestZ = z;
+          tieCount = 1;
+        } else if (currentValue === finalBestValue) {
+          finalBestX += x;
+          finalBestZ += z;
+          tieCount += 1;
+        }
+      }
+    }
+
+    if (tieCount > 1) {
+      finalBestX /= tieCount;
+      finalBestZ /= tieCount;
+    }
+
+    return { x: finalBestX, z: finalBestZ };
+  }
+
+  /**
+   * Source parity: AIPlayer::getPlayerStructureBounds.
+   */
+  private getScriptSideStructureBounds(targetSide: string): { loX: number; loZ: number; hiX: number; hiZ: number } {
+    const normalizedTargetSide = this.normalizeSide(targetSide);
+    if (!normalizedTargetSide) {
+      return { loX: 0, loZ: 0, hiX: 0, hiZ: 0 };
+    }
+
+    let hasStructure = false;
+    let loX = 0;
+    let loZ = 0;
+    let hiX = 0;
+    let hiZ = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedTargetSide) {
+        continue;
+      }
+      if (!entity.kindOf.has('STRUCTURE')) {
+        continue;
+      }
+
+      if (!hasStructure) {
+        loX = hiX = entity.x;
+        loZ = hiZ = entity.z;
+        hasStructure = true;
+      } else {
+        if (entity.x < loX) loX = entity.x;
+        if (entity.z < loZ) loZ = entity.z;
+        if (entity.x > hiX) hiX = entity.x;
+        if (entity.z > hiZ) hiZ = entity.z;
+      }
+    }
+
+    if (!hasStructure) {
+      return { loX: 0, loZ: 0, hiX: 0, hiZ: 0 };
+    }
+
+    return { loX, loZ, hiX, hiZ };
+  }
+
+  /**
+   * Source parity: AIPlayer::getPlayerSuperweaponValue.
+   */
+  private getScriptSuperweaponTargetValue(
+    centerX: number,
+    centerZ: number,
+    targetSide: string,
+    radius: number,
+  ): number {
+    const minimumRadius = 4 * PATHFIND_CELL_SIZE;
+    const effectiveRadius = radius < minimumRadius ? minimumRadius : radius;
+    const radiusSqr = effectiveRadius * effectiveRadius;
+    const normalizedTargetSide = this.normalizeSide(targetSide);
+    if (!normalizedTargetSide) {
+      return 0;
+    }
+
+    let valueTotal = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedTargetSide) {
+        continue;
+      }
+      if (entity.kindOf.has('AIRCRAFT')) {
+        const terrainY = this.resolveGroundHeight(entity.x, entity.z);
+        if ((entity.y - entity.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD) {
+          continue;
+        }
+      }
+
+      const dx = centerX - entity.x;
+      const dz = centerZ - entity.z;
+      const distanceSqr = dx * dx + dz * dz;
+      if (distanceSqr >= radiusSqr) {
+        continue;
+      }
+
+      const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+      if (!objectDef) {
+        continue;
+      }
+      const distance = Math.sqrt(distanceSqr);
+      const distanceFactor = 1 - (distance / (2 * effectiveRadius)); // 1.0 at center, 0.5 at radius edge.
+      let buildCost = this.resolveObjectBuildCost(objectDef, entity.side ?? '');
+      if (entity.kindOf.has('COMMANDCENTER')) {
+        buildCost /= 10;
+      }
+      if (buildCost > 3000) {
+        buildCost /= 10;
+      }
+      valueTotal += distanceFactor * buildCost;
+    }
+
+    return valueTotal;
   }
 
   /**

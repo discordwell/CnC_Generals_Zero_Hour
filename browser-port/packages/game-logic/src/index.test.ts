@@ -29743,6 +29743,103 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script skirmish-fire-special-power-at-most-cost action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ParticleCannon', 'America', ['STRUCTURE', 'FS_SUPERWEAPON'], [
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_Strike', {
+            SpecialPowerTemplate: 'ScriptPowerStrike',
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2500, InitialHealth: 2500 }),
+        ], {
+          BuildCost: 5000,
+          GeometryMajorRadius: 18,
+          GeometryMinorRadius: 18,
+        }),
+        makeObjectDef('ChinaCommandCenter', 'China', ['STRUCTURE', 'COMMANDCENTER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+        ], {
+          BuildCost: 10000,
+          GeometryMajorRadius: 16,
+          GeometryMinorRadius: 16,
+        }),
+        makeObjectDef('EnemyWarFactory', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1600, InitialHealth: 1600 }),
+        ], {
+          BuildCost: 2000,
+          GeometryMajorRadius: 14,
+          GeometryMinorRadius: 14,
+        }),
+        makeObjectDef('EnemyPropagandaCenter', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1600, InitialHealth: 1600 }),
+        ], {
+          BuildCost: 2000,
+          GeometryMajorRadius: 14,
+          GeometryMinorRadius: 14,
+        }),
+        makeObjectDef('EnemyNukeSilo', 'China', ['STRUCTURE', 'FS_SUPERWEAPON'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2200, InitialHealth: 2200 }),
+        ], {
+          BuildCost: 5000,
+          GeometryMajorRadius: 16,
+          GeometryMinorRadius: 16,
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerStrike', {
+          ReloadTime: 0,
+          RadiusCursorRadius: 80,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ParticleCannon', 40, 40), // id 1
+        makeMapObject('ChinaCommandCenter', 20, 20), // id 2
+        makeMapObject('EnemyWarFactory', 200, 200), // id 3
+        makeMapObject('EnemyPropagandaCenter', 220, 200), // id 4
+        makeMapObject('EnemyNukeSilo', 380, 380), // id 5
+      ], 512, 512),
+      makeRegistry(bundle),
+      makeHeightmap(512, 512),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 456, // SKIRMISH_FIRE_SPECIAL_POWER_AT_MOST_COST
+      params: ['America', 'ScriptPowerStrike'],
+    })).toBe(true);
+
+    const dispatch = logic.getEntityState(1)?.lastSpecialPowerDispatch;
+    expect(dispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERSTRIKE',
+      dispatchType: 'POSITION',
+      targetEntityId: null,
+    });
+
+    const targetX = dispatch?.targetX ?? 0;
+    const targetZ = dispatch?.targetZ ?? 0;
+    const highValueDistance = Math.min(
+      Math.hypot(targetX - 200, targetZ - 200),
+      Math.hypot(targetX - 220, targetZ - 200),
+    );
+    const commandCenterDistance = Math.hypot(targetX - 20, targetZ - 20);
+    const superweaponDistance = Math.hypot(targetX - 380, targetZ - 380);
+    expect(highValueDistance).toBeLessThan(commandCenterDistance);
+    expect(highValueDistance).toBeLessThan(superweaponDistance);
+
+    expect(logic.executeScriptAction({
+      actionType: 456,
+      params: ['America', 'MissingPower'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 456,
+      params: ['', 'ScriptPowerStrike'],
+    })).toBe(false);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
