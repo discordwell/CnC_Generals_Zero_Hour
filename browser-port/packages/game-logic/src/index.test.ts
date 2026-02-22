@@ -28931,6 +28931,176 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedExitedArea({ entityId: 1, triggerName: 'CaptureZone' })).toBe(false);
   });
 
+  it('evaluates script-team core conditions from explicit team registry subset', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamUnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('TeamUnitB', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('EnemyUnitC', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TeamUnitA', 10, 10), // id 1
+        makeMapObject('TeamUnitB', 12, 10), // id 2
+        makeMapObject('EnemyUnitC', 14, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setScriptTeamMembers('AlphaTeam', [1, 2]);
+    logic.setScriptTeamCreated('AlphaTeam', true);
+    logic.setScriptTeamState('AlphaTeam', 'ASSAULT');
+    logic.setScriptTeamControllingSide('AlphaTeam', 'America');
+
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'AlphaTeam' })).toBe(true);
+    expect(logic.evaluateScriptTeamStateIs({ teamName: 'AlphaTeam', stateName: 'ASSAULT' })).toBe(true);
+    expect(logic.evaluateScriptTeamStateIsNot({ teamName: 'AlphaTeam', stateName: 'RETREAT' })).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'AlphaTeam' })).toBe(true);
+    expect(logic.evaluateScriptIsDestroyed({ teamName: 'AlphaTeam' })).toBe(false);
+    expect(logic.evaluateScriptTeamOwnedByPlayer({ teamName: 'AlphaTeam', side: 'America' })).toBe(true);
+    expect(logic.evaluateScriptTeamOwnedByPlayer({ teamName: 'AlphaTeam', side: 'China' })).toBe(false);
+    expect(logic.evaluateScriptTeamDiscovered({ teamName: 'AlphaTeam', side: 'America' })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string>; transportContainerId: number | null }>;
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+    };
+
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('VETERAN');
+    expect(logic.evaluateScriptTeamHasObjectStatus({
+      teamName: 'AlphaTeam',
+      objectStatus: 'VETERAN',
+      entireTeam: false,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamHasObjectStatus({
+      teamName: 'AlphaTeam',
+      objectStatus: 'VETERAN',
+      entireTeam: true,
+    })).toBe(false);
+
+    privateApi.applyWeaponDamageAmount(3, privateApi.spawnedEntities.get(1), 15, 'SMALL_ARMS');
+    expect(logic.evaluateScriptTeamAttackedByPlayer({
+      teamName: 'AlphaTeam',
+      attackedBySide: 'China',
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamAttackedByType({
+      teamName: 'AlphaTeam',
+      objectType: 'EnemyUnitC',
+    })).toBe(true);
+
+    logic.notifyScriptWaypointPathCompleted(1, 'RouteAlpha');
+    expect(logic.evaluateScriptTeamReachedWaypointsEnd({
+      teamName: 'AlphaTeam',
+      waypointPathName: 'RouteAlpha',
+    })).toBe(true);
+
+    privateApi.spawnedEntities.get(1)!.transportContainerId = 99;
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaTeam',
+      allContained: false,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaTeam',
+      allContained: true,
+    })).toBe(false);
+    privateApi.spawnedEntities.get(2)!.transportContainerId = 99;
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaTeam',
+      allContained: true,
+    })).toBe(true);
+
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptHasUnits({ teamName: 'AlphaTeam' })).toBe(false);
+    expect(logic.evaluateScriptIsDestroyed({ teamName: 'AlphaTeam' })).toBe(true);
+  });
+
+  it('evaluates script-team area and enter/exit conditions from member trigger transitions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamMover', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('TeamMover', 20, 20), // id 1
+      makeMapObject('TeamMover', 24, 20), // id 2
+    ], 128, 128);
+    map.triggers = [{
+      name: 'TeamZone',
+      id: 1,
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40 },
+        { x: 80, y: 40 },
+        { x: 80, y: 80 },
+        { x: 40, y: 80 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setScriptTeamMembers('BravoTeam', [1, 2]);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number }>;
+    };
+    const memberA = privateApi.spawnedEntities.get(1)!;
+    const memberB = privateApi.spawnedEntities.get(2)!;
+
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamInsideAreaPartially({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+
+    // Move one member in.
+    memberA.x = 50;
+    memberA.z = 50;
+    logic.update(0);
+
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamInsideAreaPartially({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamEnteredAreaPartially({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamEnteredAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamExitedAreaPartially({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(false);
+
+    // Move second member in.
+    memberB.x = 52;
+    memberB.z = 52;
+    logic.update(0);
+
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamInsideAreaPartially({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamEnteredAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+
+    // Move both out.
+    memberA.x = 20;
+    memberA.z = 20;
+    memberB.x = 24;
+    memberB.z = 20;
+    logic.update(0);
+
+    expect(logic.evaluateScriptTeamExitedAreaPartially({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
+  });
+
   it('evaluates unit-has-emptied with previous-frame transport count parity', () => {
     const bundle = makeBundle({
       objects: [

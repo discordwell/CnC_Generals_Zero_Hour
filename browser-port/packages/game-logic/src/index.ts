@@ -3682,6 +3682,14 @@ interface ScriptMusicCompletedEvent {
   index: number;
 }
 
+interface ScriptTeamRecord {
+  nameUpper: string;
+  memberEntityIds: Set<number>;
+  created: boolean;
+  stateName: string;
+  controllingSide: string | null;
+}
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -3744,6 +3752,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptCompletedAudio: string[] = [];
   /** Source parity: Audio::hasMusicTrackCompleted consumed by evaluateMusicHasCompleted. */
   private readonly scriptCompletedMusic: ScriptMusicCompletedEvent[] = [];
+  /** Source parity subset: ScriptEngine team registry keyed by uppercase team name. */
+  private readonly scriptTeamsByName = new Map<string, ScriptTeamRecord>();
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
@@ -5315,6 +5325,85 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: explicit script-team membership assignment.
+   * TODO(source-parity): support TeamPrototype instance resolution and THIS_TEAM semantics.
+   */
+  setScriptTeamMembers(teamName: string, entityIds: readonly number[]): boolean {
+    const team = this.getOrCreateScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const nextMembers = new Set<number>();
+    for (const entityIdRaw of entityIds) {
+      if (!Number.isFinite(entityIdRaw)) {
+        continue;
+      }
+      const entityId = Math.trunc(entityIdRaw);
+      if (!this.spawnedEntities.has(entityId)) {
+        continue;
+      }
+      nextMembers.add(entityId);
+    }
+    team.memberEntityIds = nextMembers;
+    team.created = true;
+    return true;
+  }
+
+  /**
+   * Source parity subset: Team::getState storage.
+   * TODO(source-parity): tie this to Team state machine updates.
+   */
+  setScriptTeamState(teamName: string, stateName: string): boolean {
+    const team = this.getOrCreateScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.stateName = stateName.trim();
+    return true;
+  }
+
+  /**
+   * Source parity subset: Team::isCreated toggle.
+   */
+  setScriptTeamCreated(teamName: string, created: boolean): boolean {
+    const team = this.getOrCreateScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.created = created;
+    return true;
+  }
+
+  /**
+   * Source parity subset: Team controlling player side override.
+   */
+  setScriptTeamControllingSide(teamName: string, side: string | null): boolean {
+    const team = this.getOrCreateScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    if (side === null) {
+      team.controllingSide = null;
+      return true;
+    }
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    team.controllingSide = normalizedSide;
+    return true;
+  }
+
+  clearScriptTeam(teamName: string): boolean {
+    const teamNameUpper = this.normalizeScriptTeamName(teamName);
+    if (!teamNameUpper) {
+      return false;
+    }
+    return this.scriptTeamsByName.delete(teamNameUpper);
+  }
+
+  /**
    * Source parity: ScriptEngine::notifyOfCompletedVideo.
    */
   notifyScriptVideoCompleted(videoName: string): void {
@@ -5525,6 +5614,555 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateIsDestroyed.
+   * TODO(source-parity): support full ScriptEngine team instance resolution.
+   */
+  evaluateScriptIsDestroyed(filter: {
+    teamName: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptTeamMemberAliveForObjects(entity)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateHasUnits.
+   * TODO(source-parity): support full ScriptEngine team instance resolution.
+   */
+  evaluateScriptHasUnits(filter: {
+    teamName: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptTeamMemberAliveForUnits(entity)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamStateIs.
+   * TODO(source-parity): bind team state updates to ScriptAction TEAM_SET_STATE flow.
+   */
+  evaluateScriptTeamStateIs(filter: {
+    teamName: string;
+    stateName: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    return team.stateName === filter.stateName.trim();
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamStateIsNot.
+   * TODO(source-parity): bind team state updates to ScriptAction TEAM_SET_STATE flow.
+   */
+  evaluateScriptTeamStateIsNot(filter: {
+    teamName: string;
+    stateName: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    return team.stateName !== filter.stateName.trim();
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamAttackedByType.
+   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
+   */
+  evaluateScriptTeamAttackedByType(filter: {
+    teamName: string;
+    objectType: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.evaluateScriptNamedAttackedByType({
+        entityId: entity.id,
+        objectType: filter.objectType,
+      })) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamAttackedByPlayer.
+   * TODO(source-parity): support full ScriptEngine team instance resolution.
+   */
+  evaluateScriptTeamAttackedByPlayer(filter: {
+    teamName: string;
+    attackedBySide: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.evaluateScriptNamedAttackedByPlayer({
+        entityId: entity.id,
+        attackedBySide: filter.attackedBySide,
+      })) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamCreated.
+   * TODO(source-parity): wire team creation lifecycle from TeamFactory.
+   */
+  evaluateScriptTeamCreated(filter: {
+    teamName: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    return team.created;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamDiscovered.
+   * TODO(source-parity): support full ScriptEngine team instance resolution.
+   */
+  evaluateScriptTeamDiscovered(filter: {
+    teamName: string;
+    side: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.evaluateScriptNamedDiscovered({ entityId: entity.id, side: filter.side })) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamOwnedByPlayer.
+   * TODO(source-parity): bind to Team::getControllingPlayer().
+   */
+  evaluateScriptTeamOwnedByPlayer(filter: {
+    teamName: string;
+    side: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(filter.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (!controllingSide) {
+      return false;
+    }
+    return controllingSide === normalizedSide;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamReachedWaypointsEnd.
+   * TODO(source-parity): support TeamPrototype instance expansion.
+   */
+  evaluateScriptTeamReachedWaypointsEnd(filter: {
+    teamName: string;
+    waypointPathName: string;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.evaluateScriptNamedReachedWaypointsEnd({
+        entityId: entity.id,
+        waypointPathName: filter.waypointPathName,
+      })) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamIsContained.
+   * TODO(source-parity): include AI_EXIT transitional containment state.
+   */
+  evaluateScriptTeamIsContained(filter: {
+    teamName: string;
+    allContained: boolean;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    let anyConsidered = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      const isContained = this.isEntityContained(entity);
+      if (isContained) {
+        if (!filter.allContained) {
+          return true;
+        }
+      } else if (filter.allContained) {
+        return false;
+      }
+      anyConsidered = true;
+    }
+
+    if (!anyConsidered) {
+      return false;
+    }
+    return filter.allContained;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamHasObjectStatus.
+   * TODO(source-parity): support full ScriptEngine team instance resolution.
+   */
+  evaluateScriptTeamHasObjectStatus(filter: {
+    teamName: string;
+    objectStatus: string;
+    entireTeam: boolean;
+  }): boolean {
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    const normalizedStatus = filter.objectStatus.trim().toUpperCase();
+    if (!normalizedStatus) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      const hasStatus = entity.objectStatusFlags.has(normalizedStatus);
+      if (filter.entireTeam && !hasStatus) {
+        return false;
+      }
+      if (!filter.entireTeam && hasStatus) {
+        return true;
+      }
+    }
+
+    return filter.entireTeam;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamInsideAreaEntirely.
+   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
+   */
+  evaluateScriptTeamInsideAreaEntirely(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    void filter.surfacesAllowed;
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
+    if (!triggerNameUpper) {
+      return false;
+    }
+    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    // Source parity: empty teams are not inside.
+    if (this.evaluateScriptIsDestroyed({ teamName: filter.teamName })) {
+      return false;
+    }
+
+    let anyConsidered = false;
+    let anyOutside = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      if (entity.kindOf.has('INERT')) {
+        continue;
+      }
+
+      if (!this.isScriptTeamMemberInsideTrigger(entity.id, triggerIndex)) {
+        anyOutside = true;
+      }
+      anyConsidered = true;
+    }
+
+    return anyConsidered && !anyOutside;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamInsideAreaPartially.
+   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
+   */
+  evaluateScriptTeamInsideAreaPartially(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    void filter.surfacesAllowed;
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
+    if (!triggerNameUpper) {
+      return false;
+    }
+    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    let anyConsidered = false;
+    let anyInside = false;
+    let anyOutside = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      if (entity.kindOf.has('INERT')) {
+        continue;
+      }
+
+      if (this.isScriptTeamMemberInsideTrigger(entity.id, triggerIndex)) {
+        anyInside = true;
+      } else {
+        anyOutside = true;
+      }
+      anyConsidered = true;
+    }
+
+    const someInsideSomeOutside = anyConsidered && anyInside && anyOutside;
+    const allInside = anyConsidered && !anyOutside;
+    return someInsideSomeOutside || allInside;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamOutsideAreaEntirely.
+   */
+  evaluateScriptTeamOutsideAreaEntirely(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    return !(this.evaluateScriptTeamInsideAreaEntirely(filter) || this.evaluateScriptTeamInsideAreaPartially(filter));
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaEntirely.
+   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
+   */
+  evaluateScriptTeamEnteredAreaEntirely(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    void filter.surfacesAllowed;
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
+      return false;
+    }
+
+    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
+    if (!triggerNameUpper) {
+      return false;
+    }
+    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    let entered = false;
+    let outside = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      if (entity.kindOf.has('INERT')) {
+        continue;
+      }
+
+      if (this.didScriptTeamMemberEnterTrigger(entity.id, triggerIndex)) {
+        entered = true;
+      } else if (!this.isScriptTeamMemberInsideTrigger(entity.id, triggerIndex)) {
+        outside = true;
+      }
+    }
+
+    return entered && !outside;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaPartially.
+   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
+   */
+  evaluateScriptTeamEnteredAreaPartially(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    void filter.surfacesAllowed;
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
+      return false;
+    }
+
+    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
+    if (!triggerNameUpper) {
+      return false;
+    }
+    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      if (entity.kindOf.has('INERT')) {
+        continue;
+      }
+      if (this.didScriptTeamMemberEnterTrigger(entity.id, triggerIndex)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaEntirely.
+   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
+   */
+  evaluateScriptTeamExitedAreaEntirely(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    void filter.surfacesAllowed;
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
+      return false;
+    }
+
+    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
+    if (!triggerNameUpper) {
+      return false;
+    }
+    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    let anyConsidered = false;
+    let exited = false;
+    let inside = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      if (entity.kindOf.has('INERT')) {
+        continue;
+      }
+
+      if (this.didScriptTeamMemberExitTrigger(entity.id, triggerIndex)) {
+        exited = true;
+      } else if (this.isScriptTeamMemberInsideTrigger(entity.id, triggerIndex)) {
+        inside = true;
+      }
+      anyConsidered = true;
+    }
+
+    return anyConsidered && exited && !inside;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaPartially.
+   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
+   */
+  evaluateScriptTeamExitedAreaPartially(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    void filter.surfacesAllowed;
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
+      return false;
+    }
+
+    if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
+      return false;
+    }
+
+    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
+    if (!triggerNameUpper) {
+      return false;
+    }
+    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      if (entity.kindOf.has('INERT')) {
+        continue;
+      }
+      if (this.didScriptTeamMemberExitTrigger(entity.id, triggerIndex)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -15861,6 +16499,114 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
+  private normalizeScriptTeamName(teamName: string): string {
+    return teamName.trim().toUpperCase();
+  }
+
+  private getScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
+    const teamNameUpper = this.normalizeScriptTeamName(teamName);
+    if (!teamNameUpper) {
+      return null;
+    }
+    return this.scriptTeamsByName.get(teamNameUpper) ?? null;
+  }
+
+  private getOrCreateScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
+    const teamNameUpper = this.normalizeScriptTeamName(teamName);
+    if (!teamNameUpper) {
+      return null;
+    }
+    const existing = this.scriptTeamsByName.get(teamNameUpper);
+    if (existing) {
+      return existing;
+    }
+    const created: ScriptTeamRecord = {
+      nameUpper: teamNameUpper,
+      memberEntityIds: new Set<number>(),
+      created: false,
+      stateName: '',
+      controllingSide: null,
+    };
+    this.scriptTeamsByName.set(teamNameUpper, created);
+    return created;
+  }
+
+  private getScriptTeamMemberEntities(team: ScriptTeamRecord): MapEntity[] {
+    const entities: MapEntity[] = [];
+    for (const entityId of team.memberEntityIds) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity) {
+        continue;
+      }
+      entities.push(entity);
+    }
+    return entities;
+  }
+
+  private isScriptTeamMemberAliveForObjects(entity: MapEntity): boolean {
+    if (this.isScriptEntityEffectivelyDead(entity) || entity.destroyed) {
+      return false;
+    }
+    if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('INERT') || entity.kindOf.has('MINE')) {
+      return false;
+    }
+    return true;
+  }
+
+  private isScriptTeamMemberAliveForUnits(entity: MapEntity): boolean {
+    if (this.isScriptEntityEffectivelyDead(entity) || entity.destroyed) {
+      return false;
+    }
+    if (entity.kindOf.has('STRUCTURE') || entity.kindOf.has('PROJECTILE') || entity.kindOf.has('MINE')) {
+      return false;
+    }
+    return true;
+  }
+
+  private resolveScriptTeamControllingSide(team: ScriptTeamRecord): string | null {
+    if (team.controllingSide) {
+      return team.controllingSide;
+    }
+
+    let resolvedSide: string | null = null;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      const entitySide = this.normalizeSide(entity.side);
+      if (!entitySide) {
+        return null;
+      }
+      if (resolvedSide === null) {
+        resolvedSide = entitySide;
+        continue;
+      }
+      if (resolvedSide !== entitySide) {
+        return null;
+      }
+    }
+
+    return resolvedSide;
+  }
+
+  private didScriptTeamMemberEnterOrExitThisFrame(team: ScriptTeamRecord): boolean {
+    for (const entityId of team.memberEntityIds) {
+      if (this.scriptTriggerEnterExitFrameByEntityId.get(entityId) === this.frameCounter) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private isScriptTeamMemberInsideTrigger(entityId: number, triggerIndex: number): boolean {
+    return this.scriptTriggerMembershipByEntityId.get(entityId)?.has(triggerIndex) ?? false;
+  }
+
+  private didScriptTeamMemberEnterTrigger(entityId: number, triggerIndex: number): boolean {
+    return this.scriptTriggerEnteredByEntityId.get(entityId)?.has(triggerIndex) ?? false;
+  }
+
+  private didScriptTeamMemberExitTrigger(entityId: number, triggerIndex: number): boolean {
+    return this.scriptTriggerExitedByEntityId.get(entityId)?.has(triggerIndex) ?? false;
+  }
+
   private resolveScriptRelationshipInput(input: ScriptRelationshipInput): RelationshipValue | null {
     if (typeof input === 'number') {
       const value = Math.trunc(input);
@@ -19034,6 +19780,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (this.spawnedEntities.delete(entityId)) {
       this.clearScriptTriggerTrackingForEntity(entityId);
       this.scriptCompletedWaypointPathsByEntityId.delete(entityId);
+      for (const team of this.scriptTeamsByName.values()) {
+        team.memberEntityIds.delete(entityId);
+      }
       this.scriptTransportStatusByEntityId.delete(entityId);
       this.notifyScriptObjectCreationOrDestruction();
     }
@@ -35336,6 +36085,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCompletedSpeech.length = 0;
     this.scriptCompletedAudio.length = 0;
     this.scriptCompletedMusic.length = 0;
+    this.scriptTeamsByName.clear();
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();
