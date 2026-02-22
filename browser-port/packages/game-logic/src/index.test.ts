@@ -29261,6 +29261,71 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team-wander-in-place action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL WanderLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER WanderLoco', {}),
+        ]),
+      ],
+      locomotors: [
+        { ...makeLocomotorDef('WanderLoco', 90), fields: { Speed: 90, WanderAboutPointRadius: 30 } },
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 28, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('WanderTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+        activeLocomotorSet: string;
+        scriptWanderInPlaceActive: boolean;
+      }>;
+    };
+    const unitOne = privateApi.spawnedEntities.get(1)!;
+    const unitTwo = privateApi.spawnedEntities.get(2)!;
+    const startOne = { x: unitOne.x, z: unitOne.z };
+    const startTwo = { x: unitTwo.x, z: unitTwo.z };
+
+    expect(logic.executeScriptAction({
+      actionType: 438, // TEAM_WANDER_IN_PLACE
+      params: ['WanderTeam'],
+    })).toBe(true);
+    expect(unitOne.activeLocomotorSet).toBe('SET_WANDER');
+    expect(unitTwo.activeLocomotorSet).toBe('SET_WANDER');
+    expect(unitOne.scriptWanderInPlaceActive).toBe(true);
+    expect(unitTwo.scriptWanderInPlaceActive).toBe(true);
+
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const movedOne = Math.hypot(unitOne.x - startOne.x, unitOne.z - startOne.z) > 0.1;
+    const movedTwo = Math.hypot(unitTwo.x - startTwo.x, unitTwo.z - startTwo.z) > 0.1;
+    expect(movedOne || movedTwo).toBe(true);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.update(1 / 30);
+    expect(unitOne.scriptWanderInPlaceActive).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 438,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

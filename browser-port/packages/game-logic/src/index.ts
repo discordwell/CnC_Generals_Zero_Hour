@@ -705,6 +705,8 @@ interface LocomotorSetProfile {
    * E.g., 'TREADS', 'FOUR_WHEELS', 'TWO_LEGS', 'HOVER', 'WINGS', 'THRUST'.
    */
   appearance: string;
+  /** Source parity: Locomotor::m_wanderAboutPointRadius. */
+  wanderAboutPointRadius: number;
 }
 
 interface BridgeSegmentState {
@@ -2112,6 +2114,10 @@ interface MapEntity {
 
   // ── Source parity: WanderAIUpdate — random movement when idle ──
   hasWanderAI: boolean;
+  // ── Source parity subset: AI_WANDER_IN_PLACE state from script action ──
+  scriptWanderInPlaceActive: boolean;
+  scriptWanderInPlaceOriginX: number;
+  scriptWanderInPlaceOriginZ: number;
   // ── Source parity: VeterancyGainCreate — sets veterancy level on creation if science owned ──
   veterancyGainCreateProfiles: VeterancyGainCreateProfile[];
   // ── Source parity: FXListDie — death FX lists with DieMuxData filtering ──
@@ -3980,6 +3986,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [435, 'MAP_REVEAL_ALL_UNDO_PERM'],
   [436, 'NAMED_SET_REPULSOR'],
   [437, 'TEAM_SET_REPULSOR'],
+  [438, 'TEAM_WANDER_IN_PLACE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4703,6 +4710,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateTempWeaponBonusExpiry();
     this.updateSellingEntities();
     this.updateRebuildHoles();
+    this.updateScriptWanderInPlace();
     this.updateWanderAI();
     this.updateHijackerEntities();
     this.updateFloatEntities();
@@ -6691,6 +6699,8 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readBoolean(1, ['repulsor', 'value', 'enabled']),
         );
+      case 'TEAM_WANDER_IN_PLACE':
+        return this.executeScriptTeamWanderInPlace(readString(0, ['teamName', 'team']));
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -7932,6 +7942,53 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamWanderInPlace.
+   * Uses AI_WANDER_IN_PLACE semantics: choose SET_WANDER locomotor and keep
+   * re-targeting random points around the action-time origin until interrupted.
+   */
+  private executeScriptTeamWanderInPlace(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
+      entity.scriptWanderInPlaceActive = true;
+      entity.scriptWanderInPlaceOriginX = entity.x;
+      entity.scriptWanderInPlaceOriginZ = entity.z;
+      this.setScriptWanderInPlaceGoal(entity);
+    }
+    return true;
+  }
+
+  private setScriptWanderInPlaceGoal(entity: MapEntity): void {
+    let delta = 3;
+    const locomotor = entity.locomotorSets.get(entity.activeLocomotorSet);
+    const radius = locomotor?.wanderAboutPointRadius ?? 0;
+    if (radius > 0) {
+      delta = Math.max(1, Math.floor((radius / PATHFIND_CELL_SIZE) + 0.5));
+    }
+
+    const offsetX = this.gameRandom.nextRange(-delta, delta) * PATHFIND_CELL_SIZE;
+    const offsetZ = this.gameRandom.nextRange(-delta, delta) * PATHFIND_CELL_SIZE;
+    const targetX = entity.scriptWanderInPlaceOriginX + offsetX;
+    const targetZ = entity.scriptWanderInPlaceOriginZ + offsetZ;
+    this.issueMoveTo(entity.id, targetX, targetZ);
+  }
+
+  private clearScriptWanderInPlace(entityId: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return;
+    }
+    entity.scriptWanderInPlaceActive = false;
   }
 
   /**
@@ -12219,6 +12276,10 @@ export class GameLogicSubsystem implements Subsystem {
       floatUpdateProfile: this.extractFloatUpdateProfile(objectDef),
       // WanderAIUpdate
       hasWanderAI: this.hasModuleType(objectDef, 'WANDERAIUPDATE'),
+      // ScriptActions::doTeamWanderInPlace
+      scriptWanderInPlaceActive: false,
+      scriptWanderInPlaceOriginX: 0,
+      scriptWanderInPlaceOriginZ: 0,
       // VeterancyGainCreate
       veterancyGainCreateProfiles: this.extractVeterancyGainCreateProfiles(objectDef),
       // FXListDie
@@ -20154,6 +20215,7 @@ export class GameLogicSubsystem implements Subsystem {
       let turnRate = 0;
       let minSpeed = 0;
       let appearance = 'OTHER';
+      let wanderAboutPointRadius = 0;
       let primaryLocomotor: LocomotorDef | null = null;
       for (const locomotorName of locomotorNames) {
         const locomotor = iniDataRegistry.getLocomotor(locomotorName);
@@ -20173,6 +20235,7 @@ export class GameLogicSubsystem implements Subsystem {
         braking = readNumericField(f, ['Braking']) ?? 0;
         turnRate = readNumericField(f, ['TurnRate']) ?? 0;
         minSpeed = readNumericField(f, ['MinSpeed']) ?? 0;
+        wanderAboutPointRadius = readNumericField(f, ['WanderAboutPointRadius']) ?? 0;
         // Source parity: TurnRate in INI is degrees/sec, convert to radians/sec.
         turnRate = turnRate * (Math.PI / 180);
         const appearanceToken = readStringField(f, ['Appearance'])?.toUpperCase().trim();
@@ -20189,6 +20252,7 @@ export class GameLogicSubsystem implements Subsystem {
         braking,
         turnRate,
         appearance,
+        wanderAboutPointRadius,
       });
     }
 
@@ -21349,6 +21413,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
     this.pendingRepairActions.delete(entityId);
+    this.clearScriptWanderInPlace(entityId);
     // Source parity: DozerAIUpdate::cancelTask — clear active construction assignment.
     this.cancelDozerConstructionTask(entityId);
     // Source parity: SpecialAbilityUpdate — cancel any active special ability.
@@ -33627,6 +33692,24 @@ export class GameLogicSubsystem implements Subsystem {
       if (other.attackTargetEntityId === hole.id) {
         other.attackTargetEntityId = reconstructing.id;
       }
+    }
+  }
+
+  /**
+   * Source parity: WanderAIUpdate::update — when idle, move to a random nearby position.
+   * C++ file: WanderAIUpdate.cpp — used by civilian units, animals, etc.
+   * C++ uses GameLogicRandomValue(5, 50) offset for both x and y.
+   */
+  private updateScriptWanderInPlace(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.scriptWanderInPlaceActive) continue;
+      if (!entity.canMove || this.isEntityDisabledForMovement(entity)) continue;
+      if (entity.attackTargetEntityId !== null || entity.guardState !== 'NONE') continue;
+      if (entity.moving && entity.moveTarget !== null) continue;
+
+      // TODO(source-parity): AI_WANDER_IN_PLACE transitions to AI_MOVE_AWAY_FROM_REPULSORS
+      // for CAN_BE_REPULSED objects when repulsors are nearby.
+      this.setScriptWanderInPlaceGoal(entity);
     }
   }
 
