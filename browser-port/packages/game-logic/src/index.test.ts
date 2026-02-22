@@ -17639,6 +17639,52 @@ describe('OCLUpdate', () => {
   });
 });
 
+it('transfers script name when OCL inherits veterancy', () => {
+  const bundle = makeBundle({
+    objects: [
+      makeObjectDef('NamedSource', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]),
+      makeObjectDef('SpawnedUnit', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ]),
+    ],
+  });
+
+  (bundle as Record<string, unknown>).objectCreationLists = [
+    {
+      name: 'OCLTransferNamed',
+      fields: {},
+      blocks: [{
+        type: 'CreateObject',
+        name: 'CreateObject',
+        fields: { ObjectNames: 'SpawnedUnit', Count: '1', InheritsVeterancy: 'Yes' },
+        blocks: [],
+      }],
+    },
+  ];
+
+  const logic = new GameLogicSubsystem(new THREE.Scene());
+  logic.loadMapObjects(
+    makeMap([makeMapObject('NamedSource', 10, 10, { objectName: 'NamedSource' })], 128, 128),
+    makeRegistry(bundle),
+    makeHeightmap(128, 128),
+  );
+
+  const privateApi = logic as unknown as {
+    executeOCL: (oclName: string, sourceEntity: unknown) => void;
+    spawnedEntities: Map<number, { scriptName: string | null }>;
+    scriptNamedEntitiesByName: Map<string, number>;
+  };
+  const source = privateApi.spawnedEntities.get(1);
+  expect(source).toBeDefined();
+  privateApi.executeOCL('OCLTransferNamed', source!);
+
+  const mappedId = privateApi.scriptNamedEntitiesByName.get('NamedSource');
+  expect(mappedId).toBe(2);
+  expect(privateApi.spawnedEntities.get(2)?.scriptName).toBe('NamedSource');
+});
+
 // ── WeaponBonusUpdate Tests ─────────────────────────────────────────────────
 
 describe('WeaponBonusUpdate', () => {
@@ -29042,14 +29088,14 @@ describe('Script condition groundwork', () => {
 
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeMap([makeMapObject('Ranger', 10, 10, { objectName: 'HeldRanger' })], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
 
     expect(logic.executeScriptAction({
       actionType: 430, // NAMED_SET_HELD
-      params: [1, 1],
+      params: ['HeldRanger', 1],
     })).toBe(true);
     expect(logic.getEntityState(1)?.statusFlags).toContain('DISABLED_HELD');
 
@@ -29058,6 +29104,11 @@ describe('Script condition groundwork', () => {
       params: [1, 0],
     })).toBe(true);
     expect(logic.getEntityState(1)?.statusFlags).not.toContain('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 430,
+      params: ['MissingRanger', 1],
+    })).toBe(false);
 
     expect(logic.executeScriptAction({
       actionType: 430,
@@ -30065,24 +30116,289 @@ describe('Script condition groundwork', () => {
     );
     expect(logic.setScriptTeamMembers('SpinTeam', [1])).toBe(true);
 
+    expect(logic.executeScriptAction({
+      actionType: 395, // TEAM_EXECUTE_SEQUENTIAL_SCRIPT
+      params: ['SpinTeam', 'SpinScript'],
+    })).toBe(true);
+
     const privateApi = logic as unknown as {
-      frameCounter: number;
-      scriptTeamsByName: Map<string, {
-        spinUntilFrame: number;
+      scriptSequentialScripts: Array<{
+        teamNameUpper: string | null;
+        framesToWait: number;
       }>;
     };
-    const beforeFrame = privateApi.frameCounter;
+    const spinScript = privateApi.scriptSequentialScripts.find(
+      (script) => script.teamNameUpper === 'SPINTEAM',
+    );
+    expect(spinScript).toBeTruthy();
+    expect(spinScript?.framesToWait).toBe(-1);
 
     expect(logic.executeScriptAction({
       actionType: 466, // TEAM_SPIN_FOR_FRAMECOUNT
       params: ['SpinTeam', 45],
     })).toBe(true);
-    expect(privateApi.scriptTeamsByName.get('SPINTEAM')?.spinUntilFrame).toBe(beforeFrame + 45);
+    expect(spinScript?.framesToWait).toBe(45);
 
     expect(logic.executeScriptAction({
       actionType: 466,
       params: ['MissingTeam', 45],
     })).toBe(false);
+  });
+
+  it('executes script sequential-script actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('SeqTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      scriptSequentialScripts: Array<{
+        scriptNameUpper: string;
+        objectId: number | null;
+        teamNameUpper: string | null;
+        timesToLoop: number;
+        currentInstruction: number;
+        framesToWait: number;
+        nextScript: unknown | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 392, // UNIT_EXECUTE_SEQUENTIAL_SCRIPT
+      params: [1, 'UnitSeq'],
+    })).toBe(true);
+    const unitSeq = privateApi.scriptSequentialScripts.find((script) => script.objectId === 1);
+    expect(unitSeq?.scriptNameUpper).toBe('UNITSEQ');
+    expect(unitSeq?.timesToLoop).toBe(0);
+    expect(unitSeq?.currentInstruction).toBe(-1);
+    expect(unitSeq?.framesToWait).toBe(-1);
+
+    expect(logic.executeScriptAction({
+      actionType: 393, // UNIT_EXECUTE_SEQUENTIAL_SCRIPT_LOOPING
+      params: [1, 'UnitSeqLoop', 2],
+    })).toBe(true);
+    const unitNext = unitSeq?.nextScript as { scriptNameUpper: string; timesToLoop: number } | null;
+    expect(unitNext?.scriptNameUpper).toBe('UNITSEQLOOP');
+    expect(unitNext?.timesToLoop).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 394, // UNIT_STOP_SEQUENTIAL_SCRIPT
+      params: [1],
+    })).toBe(true);
+    expect(privateApi.scriptSequentialScripts.some((script) => script.objectId === 1)).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 395, // TEAM_EXECUTE_SEQUENTIAL_SCRIPT
+      params: ['SeqTeam', 'TeamSeq'],
+    })).toBe(true);
+    const teamSeq = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'SEQTEAM');
+    expect(teamSeq?.scriptNameUpper).toBe('TEAMSEQ');
+    expect(teamSeq?.timesToLoop).toBe(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 396, // TEAM_EXECUTE_SEQUENTIAL_SCRIPT_LOOPING
+      params: ['SeqTeam', 'TeamSeqLoop', 0],
+    })).toBe(true);
+    const teamNext = teamSeq?.nextScript as { scriptNameUpper: string; timesToLoop: number } | null;
+    expect(teamNext?.scriptNameUpper).toBe('TEAMSEQLOOP');
+    expect(teamNext?.timesToLoop).toBe(-1);
+
+    expect(logic.executeScriptAction({
+      actionType: 397, // TEAM_STOP_SEQUENTIAL_SCRIPT
+      params: ['SeqTeam'],
+    })).toBe(true);
+    expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQTEAM')).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 392,
+      params: [999, 'MissingUnit'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 395,
+      params: ['MissingTeam', 'MissingScript'],
+    })).toBe(false);
+  });
+
+  it('executes script guard/idle-for-framecount actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 14, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('FrameTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 392, // UNIT_EXECUTE_SEQUENTIAL_SCRIPT
+      params: [1, 'UnitFrameSeq'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 395, // TEAM_EXECUTE_SEQUENTIAL_SCRIPT
+      params: ['FrameTeam', 'TeamFrameSeq'],
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { guardState: string }>;
+      scriptSequentialScripts: Array<{
+        objectId: number | null;
+        teamNameUpper: string | null;
+        framesToWait: number;
+      }>;
+    };
+    const unitSeq = privateApi.scriptSequentialScripts.find((script) => script.objectId === 1)!;
+    const teamSeq = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'FRAMETEAM')!;
+
+    expect(logic.executeScriptAction({
+      actionType: 398, // UNIT_GUARD_FOR_FRAMECOUNT
+      params: [1, 12],
+    })).toBe(true);
+    expect(unitSeq.framesToWait).toBe(12);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).not.toBe('NONE');
+
+    expect(logic.executeScriptAction({
+      actionType: 399, // UNIT_IDLE_FOR_FRAMECOUNT
+      params: [1, 8],
+    })).toBe(true);
+    expect(unitSeq.framesToWait).toBe(8);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+
+    expect(logic.executeScriptAction({
+      actionType: 400, // TEAM_GUARD_FOR_FRAMECOUNT
+      params: ['FrameTeam', 20],
+    })).toBe(true);
+    expect(teamSeq.framesToWait).toBe(20);
+
+    expect(logic.executeScriptAction({
+      actionType: 401, // TEAM_IDLE_FOR_FRAMECOUNT
+      params: ['FrameTeam', 5],
+    })).toBe(true);
+    expect(teamSeq.framesToWait).toBe(5);
+
+    expect(logic.executeScriptAction({
+      actionType: 398,
+      params: [999, 10],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 400,
+      params: ['MissingTeam', 10],
+    })).toBe(false);
+  });
+
+  it('executes script water height actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 50, 50), // id 1
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'WaterAreaA',
+      isWaterArea: true,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40, z: 0 },
+        { x: 60, y: 40, z: 0 },
+        { x: 60, y: 60, z: 0 },
+        { x: 40, y: 60, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privateApi = logic as unknown as {
+      waterPolygonData: Array<{ waterHeight: number }>;
+      spawnedEntities: Map<number, { destroyed: boolean }>;
+    };
+    expect(privateApi.waterPolygonData[0]?.waterHeight).toBe(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 402, // WATER_CHANGE_HEIGHT
+      params: ['WaterAreaA', 10],
+    })).toBe(true);
+    expect(privateApi.waterPolygonData[0]?.waterHeight).toBe(10);
+    expect(privateApi.spawnedEntities.get(1)?.destroyed).toBe(true);
+
+    const mapOverTime = makeMap([
+      makeMapObject('Ranger', 50, 50), // id 1
+    ], 128, 128);
+    mapOverTime.triggers = map.triggers;
+
+    const logicOverTime = new GameLogicSubsystem(new THREE.Scene());
+    logicOverTime.loadMapObjects(mapOverTime, makeRegistry(bundle), makeHeightmap(128, 128));
+    const privateOverTime = logicOverTime as unknown as {
+      waterPolygonData: Array<{ waterHeight: number }>;
+      dynamicWaterUpdates: Array<{ waterIndex: number }>;
+    };
+
+    expect(logicOverTime.executeScriptAction({
+      actionType: 405, // WATER_CHANGE_HEIGHT_OVER_TIME
+      params: ['WaterAreaA', 6, 1, 0],
+    })).toBe(true);
+    expect(privateOverTime.dynamicWaterUpdates.length).toBe(1);
+
+    for (let frame = 0; frame < 30; frame += 1) {
+      logicOverTime.update(1 / 30);
+    }
+    expect(privateOverTime.dynamicWaterUpdates.length).toBe(0);
+    expect(privateOverTime.waterPolygonData[0]?.waterHeight).toBeCloseTo(6, 4);
+
+    expect(logicOverTime.executeScriptAction({
+      actionType: 402,
+      params: ['MissingWater', 5],
+    })).toBe(false);
+  });
+
+  it('executes script map-switch-border action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as { scriptActiveBoundaryIndex: number | null };
+    expect(logic.executeScriptAction({
+      actionType: 406, // MAP_SWITCH_BORDER
+      params: [2],
+    })).toBe(true);
+    expect(privateApi.scriptActiveBoundaryIndex).toBe(2);
   });
 
   it('executes team all-use command-button target actions using source action ids', () => {
@@ -32050,7 +32366,7 @@ describe('Script condition groundwork', () => {
 
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([makeMapObject('Scout', 10, 10)], 128, 128),
+      makeMap([makeMapObject('Scout', 10, 10, { objectName: 'NamedScout' })], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
@@ -32060,6 +32376,7 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 1 })).toBe(false);
     expect(logic.evaluateScriptNamedUnitDying({ entityId: 1 })).toBe(false);
     expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptCondition({ conditionType: 'NAMED_DESTROYED', params: ['NamedScout'] })).toBe(false);
 
     // Never-existing unit id should stay false for destroyed/totally-dead checks.
     expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 999 })).toBe(false);
@@ -32077,6 +32394,7 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 1 })).toBe(true);
     expect(logic.evaluateScriptNamedUnitDying({ entityId: 1 })).toBe(true);
     expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptCondition({ conditionType: 'NAMED_DESTROYED', params: ['NamedScout'] })).toBe(true);
 
     logic.update(1 / 30);
 
@@ -32086,6 +32404,7 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedUnitDestroyed({ entityId: 1 })).toBe(true);
     expect(logic.evaluateScriptNamedUnitDying({ entityId: 1 })).toBe(false);
     expect(logic.evaluateScriptNamedUnitTotallyDead({ entityId: 1 })).toBe(true);
+    expect(logic.evaluateScriptCondition({ conditionType: 'NAMED_DESTROYED', params: ['NamedScout'] })).toBe(true);
   });
 
   it('evaluates named-attacked-by-player using persistent last-damage source side', () => {
