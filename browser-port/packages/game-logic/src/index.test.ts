@@ -28854,6 +28854,72 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptPopupMessages()).toEqual([]);
   });
 
+  it('executes script sound/audio-control actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 422, // SOUND_DISABLE_TYPE
+      params: ['MissionAlert'],
+    })).toBe(true);
+    expect(logic.getScriptDisabledAudioEventNames()).toEqual(['MissionAlert']);
+
+    expect(logic.executeScriptAction({
+      actionType: 423, // SOUND_ENABLE_TYPE
+      params: ['MissionAlert'],
+    })).toBe(true);
+    expect(logic.getScriptDisabledAudioEventNames()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 422,
+      params: ['MissionAlert'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 422,
+      params: ['SecondaryAlert'],
+    })).toBe(true);
+    expect(logic.getScriptDisabledAudioEventNames()).toEqual(['MissionAlert', 'SecondaryAlert']);
+    expect(logic.executeScriptAction({
+      actionType: 424, // SOUND_ENABLE_ALL
+    })).toBe(true);
+    expect(logic.getScriptDisabledAudioEventNames()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 425, // AUDIO_OVERRIDE_VOLUME_TYPE
+      params: ['MissionAlert', 150],
+    })).toBe(true);
+    expect(logic.getScriptAudioVolumeOverrides()).toEqual([
+      { eventName: 'MissionAlert', volumeScale: 1.5 },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 426, // AUDIO_RESTORE_VOLUME_TYPE
+      params: ['MissionAlert'],
+    })).toBe(true);
+    expect(logic.getScriptAudioVolumeOverrides()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 425,
+      params: ['TrackA', 80],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 425,
+      params: ['TrackB', 120],
+    })).toBe(true);
+    expect(logic.getScriptAudioVolumeOverrides()).toEqual([
+      { eventName: 'TrackA', volumeScale: 0.8 },
+      { eventName: 'TrackB', volumeScale: 1.2 },
+    ]);
+    expect(logic.executeScriptAction({
+      actionType: 427, // AUDIO_RESTORE_VOLUME_ALL_TYPE
+    })).toBe(true);
+    expect(logic.getScriptAudioVolumeOverrides()).toEqual([]);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

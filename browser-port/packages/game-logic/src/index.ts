@@ -3962,6 +3962,12 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [418, 'OBJECT_CREATE_RADAR_EVENT'],
   [419, 'TEAM_CREATE_RADAR_EVENT'],
   [420, 'DISPLAY_CINEMATIC_TEXT'],
+  [422, 'SOUND_DISABLE_TYPE'],
+  [423, 'SOUND_ENABLE_TYPE'],
+  [424, 'SOUND_ENABLE_ALL'],
+  [425, 'AUDIO_OVERRIDE_VOLUME_TYPE'],
+  [426, 'AUDIO_RESTORE_VOLUME_TYPE'],
+  [427, 'AUDIO_RESTORE_VOLUME_ALL_TYPE'],
   [428, 'INGAME_POPUP_MESSAGE'],
 ]);
 
@@ -4085,6 +4091,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCinematicTextState: ScriptCinematicTextState | null = null;
   /** Source parity bridge: InGameUI::popupMessage script queue. */
   private readonly scriptPopupMessages: ScriptPopupMessageState[] = [];
+  /** Source parity bridge: Audio::setAudioEventEnabled script toggles. */
+  private readonly scriptDisabledAudioEventNames = new Set<string>();
+  /** Source parity bridge: Audio::setAudioEventVolumeOverride script overrides. */
+  private readonly scriptAudioVolumeOverrides = new Map<string, number>();
   /** Source parity bridge: Radar::createEvent script requests. */
   private readonly scriptRadarEvents: ScriptRadarEventState[] = [];
   /** Source parity: Radar::m_lastRadarEvent (excluding beacon pulse events). */
@@ -6077,6 +6087,66 @@ export class GameLogicSubsystem implements Subsystem {
     return messages;
   }
 
+  /**
+   * Source parity bridge: ScriptActions::doSoundEnableType.
+   */
+  setScriptAudioEventEnabled(eventName: string, enabled: boolean): boolean {
+    const normalizedName = this.normalizeScriptAudioEventName(eventName);
+    if (!normalizedName) {
+      if (enabled) {
+        this.scriptDisabledAudioEventNames.clear();
+        return true;
+      }
+      return false;
+    }
+
+    if (enabled) {
+      this.scriptDisabledAudioEventNames.delete(normalizedName);
+    } else {
+      this.scriptDisabledAudioEventNames.add(normalizedName);
+    }
+    return true;
+  }
+
+  getScriptDisabledAudioEventNames(): string[] {
+    return Array.from(this.scriptDisabledAudioEventNames.values());
+  }
+
+  /**
+   * Source parity bridge: ScriptActions::doSoundOverrideVolume.
+   */
+  setScriptAudioEventVolumeOverride(eventName: string, newVolumePercent: number): boolean {
+    if (!Number.isFinite(newVolumePercent)) {
+      return false;
+    }
+
+    const normalizedName = this.normalizeScriptAudioEventName(eventName);
+    if (!normalizedName) {
+      if (newVolumePercent <= -100) {
+        this.scriptAudioVolumeOverrides.clear();
+        return true;
+      }
+      return false;
+    }
+
+    if (newVolumePercent <= -100) {
+      this.scriptAudioVolumeOverrides.delete(normalizedName);
+      return true;
+    }
+
+    this.scriptAudioVolumeOverrides.set(normalizedName, newVolumePercent / 100);
+    return true;
+  }
+
+  getScriptAudioVolumeOverrides(): { eventName: string; volumeScale: number }[] {
+    return Array.from(this.scriptAudioVolumeOverrides.entries())
+      .map(([eventName, volumeScale]) => ({ eventName, volumeScale }));
+  }
+
+  private normalizeScriptAudioEventName(eventName: string): string {
+    return eventName.trim();
+  }
+
   getScriptRadarEvents(): ScriptRadarEventState[] {
     this.pruneExpiredScriptRadarEvents();
     return this.scriptRadarEvents.map((event) => ({ ...event }));
@@ -6236,6 +6306,30 @@ export class GameLogicSubsystem implements Subsystem {
           readString(1, ['fontType', 'font']),
           readInteger(2, ['timeInSeconds', 'seconds', 'time']),
         );
+      case 'SOUND_DISABLE_TYPE':
+        return this.setScriptAudioEventEnabled(
+          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
+          false,
+        );
+      case 'SOUND_ENABLE_TYPE':
+        return this.setScriptAudioEventEnabled(
+          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
+          true,
+        );
+      case 'SOUND_ENABLE_ALL':
+        return this.setScriptAudioEventEnabled('', true);
+      case 'AUDIO_OVERRIDE_VOLUME_TYPE':
+        return this.setScriptAudioEventVolumeOverride(
+          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
+          readNumber(1, ['newVolume', 'volume', 'volumePercent', 'value']),
+        );
+      case 'AUDIO_RESTORE_VOLUME_TYPE':
+        return this.setScriptAudioEventVolumeOverride(
+          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
+          -100,
+        );
+      case 'AUDIO_RESTORE_VOLUME_ALL_TYPE':
+        return this.setScriptAudioEventVolumeOverride('', -100);
       case 'INGAME_POPUP_MESSAGE':
         return this.enqueueScriptPopupMessage(
           readString(0, ['message', 'text']),
@@ -11258,6 +11352,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
+    this.scriptDisabledAudioEventNames.clear();
+    this.scriptAudioVolumeOverrides.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraTetherState = null;
@@ -38893,6 +38989,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
+    this.scriptDisabledAudioEventNames.clear();
+    this.scriptAudioVolumeOverrides.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraMovementFinished = true;
