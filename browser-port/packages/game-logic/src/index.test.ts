@@ -28074,6 +28074,7 @@ describe('Script condition groundwork', () => {
 
     expect(logic.executeScriptAction(null)).toBe(false);
     expect(logic.executeScriptAction({ actionType: 'UNKNOWN_ACTION' })).toBe(false);
+    expect(logic.executeScriptAction({ actionType: 5 })).toBe(true); // NO_OP
 
     expect(logic.executeScriptAction({
       actionType: 'SET_COUNTER',

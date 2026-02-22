@@ -3831,6 +3831,7 @@ const SCRIPT_CONDITION_TYPE_ALIASES = new Map<string, string>([
 const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [1, 'SET_FLAG'],
   [2, 'SET_COUNTER'],
+  [5, 'NO_OP'],
   [6, 'SET_TIMER'],
   [15, 'INCREMENT_COUNTER'],
   [16, 'DECREMENT_COUNTER'],
@@ -5640,6 +5641,8 @@ export class GameLogicSubsystem implements Subsystem {
       this.coerceScriptConditionBoolean(readValue(index, keyNames), false);
 
     switch (actionType) {
+      case 'NO_OP':
+        return true;
       case 'SET_FLAG':
         return this.setScriptFlag(
           readString(0, ['flagName', 'flag']),
