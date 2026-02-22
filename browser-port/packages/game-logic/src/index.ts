@@ -32290,6 +32290,24 @@ export class GameLogicSubsystem implements Subsystem {
           ? profile.supplyWarehouseScanDistance * 2
           : profile.supplyWarehouseScanDistance;
       },
+      getRelationship: (sideA: string, sideB: string) => {
+        const left = this.normalizeSide(sideA);
+        const right = this.normalizeSide(sideB);
+        if (!left || !right) {
+          return 'neutral';
+        }
+        const rel = this.getTeamRelationshipBySides(left, right);
+        if (rel === RELATIONSHIP_ALLIES) {
+          return 'allies';
+        }
+        if (rel === RELATIONSHIP_NEUTRAL) {
+          return 'neutral';
+        }
+        return 'enemies';
+      },
+      getSidePlayerType: (side: string) => this.getSidePlayerType(side),
+      getEntityShroudStatus: (entity: MapEntity, side: string) => this.resolveEntityShroudStatusForSide(entity, side),
+      isSupplyTruckAvailable: (truck: MapEntity) => this.isChinookAvailableForSupplying(truck),
       moveEntityTo: (entityId: number, targetX: number, targetZ: number) => {
         this.submitCommand({ type: 'moveTo', entityId, targetX, targetZ });
       },

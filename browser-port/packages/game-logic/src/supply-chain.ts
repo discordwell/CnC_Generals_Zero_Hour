@@ -28,6 +28,9 @@ export const enum SupplyTruckAIState {
   WAITING = 5,
 }
 
+type SupplyChainRelationship = 'enemies' | 'neutral' | 'allies';
+type SupplyChainShroudStatus = 'CLEAR' | 'FOGGED' | 'SHROUDED';
+
 // ──── Profile interfaces (extracted from INI Behavior blocks) ──────────────
 export interface SupplyWarehouseProfile {
   startingBoxes: number;
@@ -54,6 +57,8 @@ export interface SupplyTruckState {
   targetWarehouseId: number | null;
   targetDepotId: number | null;
   actionDelayFinishFrame: number;
+  /** Source parity: SupplyTruckAIUpdate::m_preferredDock. */
+  preferredDockId: number | null;
 }
 
 // ──── Entity abstraction for supply chain logic ────────────────────────────
@@ -65,6 +70,8 @@ export interface SupplyChainEntity {
   destroyed: boolean;
   moving: boolean;
   moveTarget: { x: number; z: number } | null;
+  /** Optional object status flags from the simulation layer. */
+  objectStatusFlags?: ReadonlySet<string>;
 }
 
 // ──── Context interface (provided by GameLogicSubsystem) ───────────────────
@@ -95,6 +102,14 @@ export interface SupplyChainContext<TEntity extends SupplyChainEntity> {
   getSupplyTruckDepositBoost(truck: TEntity, profile: SupplyTruckProfile): number;
   /** Source parity: SupplyTruckAIUpdate::getWarehouseScanDistance (AI uses larger scan range). */
   getSupplyTruckScanDistance?: (truck: TEntity, profile: SupplyTruckProfile) => number;
+  /** Source parity: ActionManager::canTransferSuppliesAt uses relationship checks. */
+  getRelationship: (sideA: string, sideB: string) => SupplyChainRelationship;
+  /** Source parity: ActionManager::canTransferSuppliesAt shroud gating for human players. */
+  getSidePlayerType: (side: string) => 'HUMAN' | 'COMPUTER';
+  /** Source parity: ActionManager::canTransferSuppliesAt shroud gating. */
+  getEntityShroudStatus: (entity: TEntity, side: string) => SupplyChainShroudStatus;
+  /** Optional availability check (ex: Chinook supply availability). */
+  isSupplyTruckAvailable?: (truck: TEntity) => boolean;
 
   /** Issue a move-to command for an entity. */
   moveEntityTo(entityId: number, targetX: number, targetZ: number): void;
@@ -118,22 +133,125 @@ function distSquared(ax: number, az: number, bx: number, bz: number): number {
 
 const DOCK_PROXIMITY_THRESHOLD_SQ = 25 * 25; // 25 world-units arrival radius
 
+function hasObjectStatus(entity: SupplyChainEntity, flag: string): boolean {
+  return entity.objectStatusFlags ? entity.objectStatusFlags.has(flag) : false;
+}
+
+function isSupplyTransferShrouded<TEntity extends SupplyChainEntity>(
+  truck: TEntity,
+  dock: TEntity,
+  context: SupplyChainContext<TEntity>,
+): boolean {
+  const truckSide = context.normalizeSide(truck.side);
+  if (!truckSide) {
+    return false;
+  }
+  if (context.getSidePlayerType(truckSide) !== 'HUMAN') {
+    return false;
+  }
+  return context.getEntityShroudStatus(dock, truckSide) === 'SHROUDED';
+}
+
+/**
+ * Source parity: ActionManager::canTransferSuppliesAt.
+ */
+function canTransferSuppliesAt<TEntity extends SupplyChainEntity>(
+  truck: TEntity,
+  dock: TEntity,
+  state: SupplyTruckState,
+  context: SupplyChainContext<TEntity>,
+): boolean {
+  if (truck.destroyed || dock.destroyed) return false;
+  if (hasObjectStatus(truck, 'UNDER_CONSTRUCTION') || hasObjectStatus(dock, 'UNDER_CONSTRUCTION')) {
+    return false;
+  }
+  if (hasObjectStatus(dock, 'SOLD')) {
+    return false;
+  }
+
+  const isWarehouse = context.getWarehouseProfile(dock) !== null;
+  const isCenter = context.isSupplyCenter(dock);
+  if (!isWarehouse && !isCenter) {
+    return false;
+  }
+
+  if (context.isSupplyTruckAvailable && !context.isSupplyTruckAvailable(truck)) {
+    return false;
+  }
+
+  if (isWarehouse) {
+    const warehouseState = context.getWarehouseState(dock.id);
+    if (!warehouseState || warehouseState.currentBoxes <= 0) {
+      return false;
+    }
+    const truckSide = context.normalizeSide(truck.side);
+    const dockSide = context.normalizeSide(dock.side);
+    if (truckSide && dockSide) {
+      if (context.getRelationship(truckSide, dockSide) === 'enemies') {
+        return false;
+      }
+    }
+  }
+
+  if (isCenter) {
+    if (state.currentBoxes <= 0) {
+      return false;
+    }
+    const truckSide = context.normalizeSide(truck.side);
+    const dockSide = context.normalizeSide(dock.side);
+    if (!truckSide || !dockSide || dockSide !== truckSide) {
+      return false;
+    }
+  }
+
+  if (isSupplyTransferShrouded(truck, dock, context)) {
+    return false;
+  }
+
+  return true;
+}
+
+function computeRelativeCost<TEntity extends SupplyChainEntity>(
+  truck: TEntity,
+  dock: TEntity,
+  state: SupplyTruckState,
+  context: SupplyChainContext<TEntity>,
+): { cost: number; distanceSq: number } | null {
+  if (!canTransferSuppliesAt(truck, dock, state, context)) {
+    return null;
+  }
+  // TODO: DockUpdate::isClearToApproach uses approach slots; not modeled yet.
+  const distanceSq = distSquared(truck.x, truck.z, dock.x, dock.z);
+  return { cost: distanceSq, distanceSq };
+}
+
 // ──── Find nearest warehouse with boxes within scan distance ───────────────
 export function findNearestWarehouseWithBoxes<TEntity extends SupplyChainEntity>(
   truck: TEntity,
   scanDistance: number,
   context: SupplyChainContext<TEntity>,
+  state?: SupplyTruckState,
 ): TEntity | null {
+  const truckState = state ?? context.getTruckState(truck.id);
+  if (!truckState) {
+    return null;
+  }
+
+  if (truckState.preferredDockId !== null) {
+    const preferred = context.spawnedEntities.get(truckState.preferredDockId);
+    if (preferred && !preferred.destroyed && context.getWarehouseProfile(preferred)) {
+      if (canTransferSuppliesAt(truck, preferred, truckState, context)) {
+        return preferred;
+      }
+    }
+  }
+
   const scanDistSq = scanDistance * scanDistance;
   let bestEntity: TEntity | null = null;
-  let bestDistSq = Infinity;
-  const truckSide = context.normalizeSide(truck.side);
+  let bestCost = Infinity;
 
   for (const entity of context.spawnedEntities.values()) {
     if (entity.destroyed) {
-      continue;
-    }
-    if (context.normalizeSide(entity.side) !== truckSide) {
       continue;
     }
 
@@ -141,19 +259,20 @@ export function findNearestWarehouseWithBoxes<TEntity extends SupplyChainEntity>
     if (!profile) {
       continue;
     }
-
-    const warehouseState = context.getWarehouseState(entity.id);
-    if (!warehouseState || warehouseState.currentBoxes <= 0) {
-      continue;
-    }
     // Source parity: DockUpdateInterface::isDockCrippled — skip heavily damaged warehouses.
     if (context.isWarehouseDockCrippled(entity)) {
       continue;
     }
 
-    const dSq = distSquared(truck.x, truck.z, entity.x, entity.z);
-    if (dSq <= scanDistSq && dSq < bestDistSq) {
-      bestDistSq = dSq;
+    const cost = computeRelativeCost(truck, entity, truckState, context);
+    if (!cost) {
+      continue;
+    }
+    if (cost.distanceSq > scanDistSq) {
+      continue;
+    }
+    if (cost.cost < bestCost) {
+      bestCost = cost.cost;
       bestEntity = entity;
     }
   }
@@ -165,25 +284,39 @@ export function findNearestWarehouseWithBoxes<TEntity extends SupplyChainEntity>
 export function findNearestSupplyCenter<TEntity extends SupplyChainEntity>(
   truck: TEntity,
   context: SupplyChainContext<TEntity>,
+  state?: SupplyTruckState,
 ): TEntity | null {
+  const truckState = state ?? context.getTruckState(truck.id);
+  if (!truckState) {
+    return null;
+  }
+
+  if (truckState.preferredDockId !== null) {
+    const preferred = context.spawnedEntities.get(truckState.preferredDockId);
+    if (preferred && !preferred.destroyed && context.isSupplyCenter(preferred)) {
+      if (canTransferSuppliesAt(truck, preferred, truckState, context)) {
+        return preferred;
+      }
+    }
+  }
+
   let bestEntity: TEntity | null = null;
-  let bestDistSq = Infinity;
-  const truckSide = context.normalizeSide(truck.side);
+  let bestCost = Infinity;
 
   for (const entity of context.spawnedEntities.values()) {
     if (entity.destroyed) {
-      continue;
-    }
-    if (context.normalizeSide(entity.side) !== truckSide) {
       continue;
     }
     if (!context.isSupplyCenter(entity)) {
       continue;
     }
 
-    const dSq = distSquared(truck.x, truck.z, entity.x, entity.z);
-    if (dSq < bestDistSq) {
-      bestDistSq = dSq;
+    const cost = computeRelativeCost(truck, entity, truckState, context);
+    if (!cost) {
+      continue;
+    }
+    if (cost.cost < bestCost) {
+      bestCost = cost.cost;
       bestEntity = entity;
     }
   }
@@ -210,6 +343,7 @@ export function updateSupplyTruck<TEntity extends SupplyChainEntity>(
       targetWarehouseId: null,
       targetDepotId: null,
       actionDelayFinishFrame: 0,
+      preferredDockId: null,
     };
     context.setTruckState(truck.id, state);
   }
@@ -246,7 +380,7 @@ function tickIdle<TEntity extends SupplyChainEntity>(
 ): void {
   // If we have boxes, go deposit them.
   if (state.currentBoxes > 0) {
-    const depot = findNearestSupplyCenter(truck, context);
+    const depot = findNearestSupplyCenter(truck, context, state);
     if (depot) {
       state.targetDepotId = depot.id;
       state.aiState = SupplyTruckAIState.APPROACHING_DEPOT;
@@ -263,7 +397,7 @@ function tickIdle<TEntity extends SupplyChainEntity>(
   const scanDistance = context.getSupplyTruckScanDistance
     ? context.getSupplyTruckScanDistance(truck, truckProfile)
     : truckProfile.supplyWarehouseScanDistance;
-  const warehouse = findNearestWarehouseWithBoxes(truck, scanDistance, context);
+  const warehouse = findNearestWarehouseWithBoxes(truck, scanDistance, context, state);
   if (warehouse) {
     state.targetWarehouseId = warehouse.id;
     state.aiState = SupplyTruckAIState.APPROACHING_WAREHOUSE;
@@ -294,9 +428,13 @@ function tickApproachingWarehouse<TEntity extends SupplyChainEntity>(
     return;
   }
 
-  // Check if warehouse still has boxes.
-  const warehouseState = context.getWarehouseState(warehouse.id);
-  if (!warehouseState || warehouseState.currentBoxes <= 0) {
+  if (context.isWarehouseDockCrippled(warehouse)) {
+    state.targetWarehouseId = null;
+    state.aiState = SupplyTruckAIState.IDLE;
+    return;
+  }
+
+  if (!canTransferSuppliesAt(truck, warehouse, state, context)) {
     state.targetWarehouseId = null;
     state.aiState = SupplyTruckAIState.IDLE;
     return;
@@ -327,6 +465,26 @@ function tickGathering<TEntity extends SupplyChainEntity>(
   if (!warehouse || warehouse.destroyed) {
     state.targetWarehouseId = null;
     // Go deposit whatever we have.
+    if (state.currentBoxes > 0) {
+      transitionToDeposit(truck, state, context);
+    } else {
+      state.aiState = SupplyTruckAIState.IDLE;
+    }
+    return;
+  }
+
+  if (context.isWarehouseDockCrippled(warehouse)) {
+    state.targetWarehouseId = null;
+    if (state.currentBoxes > 0) {
+      transitionToDeposit(truck, state, context);
+    } else {
+      state.aiState = SupplyTruckAIState.IDLE;
+    }
+    return;
+  }
+
+  if (!canTransferSuppliesAt(truck, warehouse, state, context)) {
+    state.targetWarehouseId = null;
     if (state.currentBoxes > 0) {
       transitionToDeposit(truck, state, context);
     } else {
@@ -374,7 +532,7 @@ function transitionToDeposit<TEntity extends SupplyChainEntity>(
   state: SupplyTruckState,
   context: SupplyChainContext<TEntity>,
 ): void {
-  const depot = findNearestSupplyCenter(truck, context);
+  const depot = findNearestSupplyCenter(truck, context, state);
   if (depot) {
     state.targetDepotId = depot.id;
     state.aiState = SupplyTruckAIState.APPROACHING_DEPOT;
@@ -403,6 +561,16 @@ function tickApproachingDepot<TEntity extends SupplyChainEntity>(
     return;
   }
 
+  if (!canTransferSuppliesAt(truck, depot, state, context)) {
+    state.targetDepotId = null;
+    if (state.currentBoxes > 0) {
+      transitionToDeposit(truck, state, context);
+    } else {
+      state.aiState = SupplyTruckAIState.IDLE;
+    }
+    return;
+  }
+
   if (isNearTarget(truck, depot)) {
     state.aiState = SupplyTruckAIState.DEPOSITING;
     state.actionDelayFinishFrame = context.frameCounter;
@@ -428,6 +596,16 @@ function tickDepositing<TEntity extends SupplyChainEntity>(
   if (!depot || depot.destroyed) {
     state.targetDepotId = null;
     state.aiState = SupplyTruckAIState.IDLE;
+    return;
+  }
+
+  if (!canTransferSuppliesAt(truck, depot, state, context)) {
+    state.targetDepotId = null;
+    if (state.currentBoxes > 0) {
+      transitionToDeposit(truck, state, context);
+    } else {
+      state.aiState = SupplyTruckAIState.IDLE;
+    }
     return;
   }
 
