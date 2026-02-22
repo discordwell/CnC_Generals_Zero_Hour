@@ -3974,6 +3974,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [429, 'SET_CAVE_INDEX'],
   [430, 'NAMED_SET_HELD'],
   [431, 'NAMED_SET_TOPPLE_DIRECTION'],
+  [432, 'UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE'],
+  [433, 'TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6653,6 +6655,18 @@ export class GameLogicSubsystem implements Subsystem {
           direction?.y ?? 0,
         );
       }
+      case 'UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE':
+        return this.executeScriptMoveUnitTowardsNearestObjectType(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['objectType', 'templateName', 'type']),
+          readString(2, ['triggerName', 'trigger', 'areaName', 'area']),
+        );
+      case 'TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE':
+        return this.executeScriptMoveTeamTowardsNearestObjectType(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['objectType', 'templateName', 'type']),
+          readString(2, ['triggerName', 'trigger', 'areaName', 'area']),
+        );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -7626,6 +7640,168 @@ export class GameLogicSubsystem implements Subsystem {
         area.radius,
       );
     }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doMoveUnitTowardsNearest / doMoveTeamTowardsNearest.
+   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
+   */
+  private findNearestScriptMoveTargetByType(
+    sourceX: number,
+    sourceZ: number,
+    mapStatusEntity: MapEntity,
+    objectTypeName: string,
+    triggerName: string,
+  ): MapEntity | null {
+    const normalizedObjectType = objectTypeName.trim().toUpperCase();
+    if (!normalizedObjectType) {
+      return null;
+    }
+
+    const normalizedTriggerName = triggerName.trim().toUpperCase();
+    if (!normalizedTriggerName) {
+      return null;
+    }
+    const triggerRegions = this.mapTriggerRegions.filter(
+      (region) => region.nameUpper === normalizedTriggerName,
+    );
+    if (triggerRegions.length === 0) {
+      return null;
+    }
+
+    const sourceOffMap = this.isEntityOffMap(mapStatusEntity);
+    let bestTarget: MapEntity | null = null;
+    let bestDistanceSq = 0;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || this.isScriptEntityEffectivelyDead(candidate)) {
+        continue;
+      }
+      if (!this.areEquivalentTemplateNames(candidate.templateName, normalizedObjectType)) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (!this.isInsideAnyTriggerRegion(candidate, triggerRegions)) {
+        continue;
+      }
+
+      const dx = candidate.x - sourceX;
+      const dz = candidate.z - sourceZ;
+      const distanceSq = dx * dx + dz * dz;
+      if (!bestTarget || distanceSq < bestDistanceSq) {
+        bestTarget = candidate;
+        bestDistanceSq = distanceSq;
+      }
+    }
+
+    return bestTarget;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doMoveUnitTowardsNearest.
+   */
+  private executeScriptMoveUnitTowardsNearestObjectType(
+    entityId: number,
+    objectTypeName: string,
+    triggerName: string,
+  ): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return false;
+    }
+
+    const target = this.findNearestScriptMoveTargetByType(
+      entity.x,
+      entity.z,
+      entity,
+      objectTypeName,
+      triggerName,
+    );
+    if (!target) {
+      return false;
+    }
+
+    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
+    const interactionDistance = this.resolveEntityInteractionDistance(entity, target);
+    this.issueMoveTo(
+      entity.id,
+      target.x,
+      target.z,
+      interactionDistance,
+    );
+    if (entity.moveTarget === null) {
+      this.issueMoveTo(entity.id, target.x, target.z, interactionDistance, true);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doMoveTeamTowardsNearest.
+   */
+  private executeScriptMoveTeamTowardsNearestObjectType(
+    teamName: string,
+    objectTypeName: string,
+    triggerName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team);
+    let mapStatusEntity: MapEntity | null = null;
+    let sourceX = 0;
+    let sourceZ = 0;
+    let sourceCount = 0;
+    for (const member of teamMembers) {
+      if (member.destroyed) {
+        continue;
+      }
+      if (!member.canMove) {
+        continue;
+      }
+      if (!mapStatusEntity) {
+        mapStatusEntity = member;
+      }
+      sourceX += member.x;
+      sourceZ += member.z;
+      sourceCount += 1;
+    }
+
+    if (!mapStatusEntity || sourceCount <= 0) {
+      return false;
+    }
+
+    const target = this.findNearestScriptMoveTargetByType(
+      sourceX / sourceCount,
+      sourceZ / sourceCount,
+      mapStatusEntity,
+      objectTypeName,
+      triggerName,
+    );
+    if (!target) {
+      return false;
+    }
+
+    for (const member of teamMembers) {
+      if (member.destroyed || !member.canMove) {
+        return false;
+      }
+      this.setEntityLocomotorSet(member.id, LOCOMOTORSET_NORMAL);
+      const interactionDistance = this.resolveEntityInteractionDistance(member, target);
+      this.issueMoveTo(
+        member.id,
+        target.x,
+        target.z,
+        interactionDistance,
+      );
+      if (member.moveTarget === null) {
+        this.issueMoveTo(member.id, target.x, target.z, interactionDistance, true);
+      }
+    }
+
     return true;
   }
 

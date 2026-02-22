@@ -29056,6 +29056,97 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script move-towards-nearest-object-type actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('TargetBeacon', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 10), // id 1
+      makeMapObject('Ranger', 14, 10), // id 2
+      makeMapObject('TargetBeacon', 25, 10), // id 3 (nearest)
+      makeMapObject('TargetBeacon', 70, 70), // id 4 (farther)
+      makeMapObject('TargetBeacon', 118, 118), // id 5 (outside trigger)
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'MoveArea',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 96, y: 0, z: 0 },
+        { x: 96, y: 96, z: 0 },
+        { x: 0, y: 96, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    expect(logic.setScriptTeamMembers('MoveTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 432, // UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE
+      params: [1, 'TargetBeacon', 'MoveArea'],
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+    const unitOneAfterSingle = privateApi.spawnedEntities.get(1);
+    expect(unitOneAfterSingle?.moveTarget).not.toBeNull();
+    expect((unitOneAfterSingle?.movePath.length ?? 0) > 0).toBe(true);
+    const unitOneSingleFinal = unitOneAfterSingle?.movePath.at(-1);
+    expect(unitOneSingleFinal).toBeDefined();
+    expect(Math.hypot(unitOneSingleFinal!.x - 25, unitOneSingleFinal!.z - 10)).toBeLessThanOrEqual(20);
+
+    expect(logic.executeScriptAction({
+      actionType: 433, // TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE
+      params: ['MoveTeam', 'TargetBeacon', 'MoveArea'],
+    })).toBe(true);
+    const unitOneAfterTeam = privateApi.spawnedEntities.get(1);
+    const unitTwoAfterTeam = privateApi.spawnedEntities.get(2);
+    expect(unitOneAfterTeam?.moveTarget).not.toBeNull();
+    expect(unitTwoAfterTeam?.moveTarget).not.toBeNull();
+    const unitOneTeamFinal = unitOneAfterTeam?.movePath.at(-1);
+    const unitTwoTeamFinal = unitTwoAfterTeam?.movePath.at(-1);
+    expect(unitOneTeamFinal).toBeDefined();
+    expect(unitTwoTeamFinal).toBeDefined();
+    expect(Math.hypot(unitOneTeamFinal!.x - 25, unitOneTeamFinal!.z - 10)).toBeLessThanOrEqual(20);
+    expect(Math.hypot(unitTwoTeamFinal!.x - 25, unitTwoTeamFinal!.z - 10)).toBeLessThanOrEqual(20);
+
+    expect(logic.executeScriptAction({
+      actionType: 432,
+      params: [999, 'TargetBeacon', 'MoveArea'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 432,
+      params: [1, 'TargetBeacon', 'MissingArea'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 432,
+      params: [1, 'MissingType', 'MoveArea'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 433,
+      params: ['MissingTeam', 'TargetBeacon', 'MoveArea'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 433,
+      params: ['MoveTeam', 'TargetBeacon', 'MissingArea'],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
