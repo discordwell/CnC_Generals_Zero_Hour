@@ -28920,6 +28920,40 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptAudioVolumeOverrides()).toEqual([]);
   });
 
+  it('executes script named-set-held action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 430, // NAMED_SET_HELD
+      params: [1, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 430,
+      params: [1, 0],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 430,
+      params: [999, 1],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

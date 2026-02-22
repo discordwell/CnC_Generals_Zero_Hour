@@ -3969,6 +3969,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [426, 'AUDIO_RESTORE_VOLUME_TYPE'],
   [427, 'AUDIO_RESTORE_VOLUME_ALL_TYPE'],
   [428, 'INGAME_POPUP_MESSAGE'],
+  [430, 'NAMED_SET_HELD'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6530,6 +6531,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptUnitDestroyAllContained(
           readInteger(0, ['entityId', 'unitId', 'named']),
         );
+      case 'NAMED_SET_HELD':
+        return this.executeScriptNamedSetHeld(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readBoolean(1, ['held', 'value', 'enabled']),
+        );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -7568,6 +7574,23 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedSetHeld.
+   */
+  private executeScriptNamedSetHeld(entityId: number, held: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    if (held) {
+      entity.objectStatusFlags.add('DISABLED_HELD');
+    } else {
+      entity.objectStatusFlags.delete('DISABLED_HELD');
     }
     return true;
   }
