@@ -93,6 +93,8 @@ export interface SupplyChainContext<TEntity extends SupplyChainEntity> {
   depositCredits(side: string, amount: number): void;
   /** Source parity: SupplyCenterDockUpdate adds truck-specific boost on deposit. */
   getSupplyTruckDepositBoost(truck: TEntity, profile: SupplyTruckProfile): number;
+  /** Source parity: SupplyTruckAIUpdate::getWarehouseScanDistance (AI uses larger scan range). */
+  getSupplyTruckScanDistance?: (truck: TEntity, profile: SupplyTruckProfile) => number;
 
   /** Issue a move-to command for an entity. */
   moveEntityTo(entityId: number, targetX: number, targetZ: number): void;
@@ -258,7 +260,10 @@ function tickIdle<TEntity extends SupplyChainEntity>(
   }
 
   // Otherwise find a warehouse to gather from.
-  const warehouse = findNearestWarehouseWithBoxes(truck, truckProfile.supplyWarehouseScanDistance, context);
+  const scanDistance = context.getSupplyTruckScanDistance
+    ? context.getSupplyTruckScanDistance(truck, truckProfile)
+    : truckProfile.supplyWarehouseScanDistance;
+  const warehouse = findNearestWarehouseWithBoxes(truck, scanDistance, context);
   if (warehouse) {
     state.targetWarehouseId = warehouse.id;
     state.aiState = SupplyTruckAIState.APPROACHING_WAREHOUSE;

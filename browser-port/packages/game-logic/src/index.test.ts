@@ -8392,6 +8392,65 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(creditsAfter).toBeGreaterThanOrEqual(300);
   });
 
+  it('doubles supply warehouse scan distance for AI-controlled supply trucks', () => {
+    const runScenario = (playerType: 'HUMAN' | 'COMPUTER'): number | null => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+
+      const warehouseDef = makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+          StartingBoxes: 10,
+          DeleteWhenEmpty: false,
+        }),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      ]);
+
+      const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+        makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      ]);
+
+      const supplyTruckDef = makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+        makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+          MaxBoxes: 3,
+          SupplyCenterActionDelay: 0,
+          SupplyWarehouseActionDelay: 0,
+          SupplyWarehouseScanDistance: 100,
+        }),
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ]);
+
+      const registry = makeRegistry(makeBundle({
+        objects: [warehouseDef, supplyCenterDef, supplyTruckDef],
+      }));
+
+      const map = makeMap([
+        makeMapObject('SupplyWarehouse', 190, 10),
+        makeMapObject('SupplyCenter', 200, 10),
+        makeMapObject('SupplyTruck', 10, 10),
+      ], 64, 64);
+
+      logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+      logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType });
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+      logic.update(0);
+
+      for (let i = 0; i < 5; i++) {
+        logic.update(1 / 30);
+      }
+
+      const priv = logic as unknown as {
+        supplyTruckStates: Map<number, { targetWarehouseId: number | null }>;
+      };
+      return priv.supplyTruckStates.get(3)?.targetWarehouseId ?? null;
+    };
+
+    const humanTarget = runScenario('HUMAN');
+    const aiTarget = runScenario('COMPUTER');
+
+    expect(humanTarget).toBeNull();
+    expect(aiTarget).toBe(1);
+  });
+
   it('treats WorkerAIUpdate units as supply gatherers with supply truck delays/scan', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
@@ -32896,6 +32955,50 @@ describe('Script condition groundwork', () => {
       conditionType: 'NAMED_DESTROYED',
       params: ['<This Object>'],
     })).toBe(true);
+  });
+
+  it('resolves THIS_PLAYER tokens for player-side script params', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('PlayerUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('EnemyUnit', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('PlayerUnit', 10, 10),
+        makeMapObject('EnemyUnit', 20, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setSideCredits('America', 1000);
+    logic.setSideCredits('China', 500);
+    logic.setPlayerRelationship('America', 'China', 0);
+    logic.setPlayerRelationship('China', 'America', 0);
+    logic.setScriptCurrentPlayerSide('America');
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_CREDITS',
+      params: [1000, 'EQUAL', '<This Player>'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_CREDITS',
+      params: [500, 'EQUAL', "<This Player's Enemy>"],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_SET_MONEY',
+      params: ['<This Player>', 250],
+    })).toBe(true);
+    expect(logic.getSideCredits('America')).toBe(250);
   });
 
   it('evaluates script-team area and enter/exit conditions from member trigger transitions', () => {
