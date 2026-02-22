@@ -29166,15 +29166,19 @@ describe('Script condition groundwork', () => {
         makeObjectDef('TargetBeacon', 'Neutral', ['STRUCTURE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         ]),
+        makeObjectDef('AltTarget', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
       ],
     });
 
     const map = makeMap([
       makeMapObject('Ranger', 10, 10), // id 1
       makeMapObject('Ranger', 14, 10), // id 2
-      makeMapObject('TargetBeacon', 25, 10), // id 3 (nearest)
-      makeMapObject('TargetBeacon', 70, 70), // id 4 (farther)
-      makeMapObject('TargetBeacon', 118, 118), // id 5 (outside trigger)
+      makeMapObject('AltTarget', 18, 10), // id 3 (nearest list target)
+      makeMapObject('TargetBeacon', 25, 10), // id 4 (nearest)
+      makeMapObject('TargetBeacon', 70, 70), // id 5 (farther)
+      makeMapObject('TargetBeacon', 118, 118), // id 6 (outside trigger)
     ], 128, 128);
     map.triggers = [{
       id: 1,
@@ -29245,6 +29249,37 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 433,
       params: ['MoveTeam', 'TargetBeacon', 'MissingArea'],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 287, // OBJECTLIST_ADDOBJECTTYPE
+      params: ['MoveTargets', 'TargetBeacon'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 287,
+      params: ['MoveTargets', 'AltTarget'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 432,
+      params: [1, 'MoveTargets', 'MoveArea'],
+    })).toBe(true);
+    const unitOneAfterList = privateApi.spawnedEntities.get(1);
+    const unitOneListFinal = unitOneAfterList?.movePath.at(-1);
+    expect(unitOneListFinal).toBeDefined();
+    expect(Math.hypot(unitOneListFinal!.x - 18, unitOneListFinal!.z - 10)).toBeLessThanOrEqual(20);
+
+    expect(logic.executeScriptAction({
+      actionType: 288, // OBJECTLIST_REMOVEOBJECTTYPE
+      params: ['MoveTargets', 'TargetBeacon'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 288,
+      params: ['MoveTargets', 'AltTarget'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 432,
+      params: [1, 'MoveTargets', 'MoveArea'],
     })).toBe(false);
   });
 
@@ -31790,6 +31825,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('UnitA', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         ]),
+        makeObjectDef('UnitB', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
       ],
     });
 
@@ -31798,14 +31836,28 @@ describe('Script condition groundwork', () => {
       makeMap([
         makeMapObject('UnitA', 10, 10),
         makeMapObject('UnitA', 12, 10),
+        makeMapObject('UnitB', 14, 10),
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
 
+    expect(logic.executeScriptAction({
+      actionType: 287, // OBJECTLIST_ADDOBJECTTYPE
+      params: ['LossList', 'UnitA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 287,
+      params: ['LossList', 'UnitB'],
+    })).toBe(true);
+
     expect(logic.evaluateScriptPlayerLostObjectType({
       side: 'America',
       templateName: 'UnitA',
+    })).toBe(false);
+    expect(logic.evaluateScriptPlayerLostObjectType({
+      side: 'America',
+      templateName: 'LossList',
     })).toBe(false);
 
     const privateApi = logic as unknown as {
@@ -31821,7 +31873,15 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(logic.evaluateScriptPlayerLostObjectType({
       side: 'America',
+      templateName: 'LossList',
+    })).toBe(true);
+    expect(logic.evaluateScriptPlayerLostObjectType({
+      side: 'America',
       templateName: 'UnitA',
+    })).toBe(false);
+    expect(logic.evaluateScriptPlayerLostObjectType({
+      side: 'America',
+      templateName: 'LossList',
     })).toBe(false);
   });
 

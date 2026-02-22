@@ -4025,6 +4025,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [275, 'PLAYER_SET_RANKLEVELLIMIT'],
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
+  [287, 'OBJECTLIST_ADDOBJECTTYPE'],
+  [288, 'OBJECTLIST_REMOVEOBJECTTYPE'],
   [291, 'PLAYER_RELATES_PLAYER'],
   [293, 'RADAR_DISABLE'],
   [294, 'RADAR_ENABLE'],
@@ -4387,6 +4389,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraLookTowardWaypointState: ScriptCameraLookTowardWaypointState | null = null;
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
+  /** Source parity: ScriptEngine::m_allObjectTypeLists (script object-type groups). */
+  private readonly scriptObjectTypeListsByName = new Map<string, string[]>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
   private readonly scriptExistedEntityIds = new Set<number>();
   /** Source parity: Object::m_triggerInfo isInside snapshots keyed by entity id. */
@@ -7432,6 +7436,18 @@ export class GameLogicSubsystem implements Subsystem {
         rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
         return true;
       }
+      case 'OBJECTLIST_ADDOBJECTTYPE':
+        return this.executeScriptObjectTypeListMaintenance(
+          readString(0, ['listName', 'objectList', 'objectListName']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          true,
+        );
+      case 'OBJECTLIST_REMOVEOBJECTTYPE':
+        return this.executeScriptObjectTypeListMaintenance(
+          readString(0, ['listName', 'objectList', 'objectListName']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          false,
+        );
       case 'PLAYER_SCIENCE_AVAILABILITY':
         return this.setSideScienceAvailability(
           readString(0, ['side', 'playerName', 'player']),
@@ -9555,15 +9571,15 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNamed.
-   * TODO(source-parity): support ScriptEngine named-unit token resolution (unit-name to object lookup).
    */
   private executeScriptTeamAllUseCommandButtonOnNamed(
     teamName: string,
     commandButtonName: string,
-    targetEntityId: number,
+    targetEntityId: unknown,
   ): boolean {
     const team = this.getScriptTeamRecord(teamName);
-    const targetEntity = this.spawnedEntities.get(targetEntityId);
+    const resolvedTargetId = this.resolveScriptEntityId(targetEntityId);
+    const targetEntity = resolvedTargetId !== null ? this.spawnedEntities.get(resolvedTargetId) : null;
     if (!team || !targetEntity || targetEntity.destroyed) {
       return false;
     }
@@ -9703,8 +9719,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team) {
       return false;
     }
-    const normalizedTemplateName = templateName.trim().toUpperCase();
-    if (!normalizedTemplateName) {
+    const objectTypes = this.resolveScriptObjectTypeCandidatesForAction(templateName);
+    if (!objectTypes || objectTypes.length === 0) {
       return false;
     }
     return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, {
@@ -9713,7 +9729,8 @@ export class GameLogicSubsystem implements Subsystem {
       requireStructure: false,
       requireGarrisonable: false,
       requiredKindOf: null,
-      requiredTemplateName: normalizedTemplateName,
+      requiredTemplateName: null,
+      requiredTemplateNames: objectTypes,
     });
   }
 
@@ -9921,6 +9938,7 @@ export class GameLogicSubsystem implements Subsystem {
       requireGarrisonable: boolean;
       requiredKindOf: string | null;
       requiredTemplateName: string | null;
+      requiredTemplateNames?: string[] | null;
     },
   ): boolean {
     const teamMembers = this.getScriptTeamMemberEntities(team)
@@ -9948,8 +9966,18 @@ export class GameLogicSubsystem implements Subsystem {
 
     const sourceOffMap = this.isEntityOffMap(sourceEntity);
     const candidates: MapEntity[] = [];
-    const normalizedTemplateName = filter.requiredTemplateName?.trim().toUpperCase() ?? null;
+    const normalizedTemplateName = filter.requiredTemplateName
+      ? this.normalizeScriptObjectTypeName(filter.requiredTemplateName)
+      : null;
+    const requiredTemplateNames = filter.requiredTemplateNames
+      ? Array.from(new Set(filter.requiredTemplateNames
+        .map((name) => this.normalizeScriptObjectTypeName(name))
+        .filter(Boolean)))
+      : null;
     const requiredKindOf = filter.requiredKindOf?.trim().toUpperCase() ?? null;
+    if (requiredTemplateNames && requiredTemplateNames.length === 0) {
+      return false;
+    }
     for (const candidate of this.spawnedEntities.values()) {
       if (candidate.destroyed) {
         continue;
@@ -9976,7 +10004,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (requiredKindOf && !candidate.kindOf.has(requiredKindOf)) {
         continue;
       }
-      if (normalizedTemplateName && candidate.templateName.trim().toUpperCase() !== normalizedTemplateName) {
+      if (requiredTemplateNames && requiredTemplateNames.length > 0) {
+        if (!this.matchesScriptObjectTypeList(candidate.templateName, requiredTemplateNames)) {
+          continue;
+        }
+      } else if (normalizedTemplateName
+        && !this.areEquivalentTemplateNames(candidate.templateName, normalizedTemplateName)) {
         continue;
       }
 
@@ -10913,7 +10946,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doMoveUnitTowardsNearest / doMoveTeamTowardsNearest.
-   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
    */
   private findNearestScriptMoveTargetByType(
     sourceX: number,
@@ -10922,8 +10954,8 @@ export class GameLogicSubsystem implements Subsystem {
     objectTypeName: string,
     triggerName: string,
   ): MapEntity | null {
-    const normalizedObjectType = objectTypeName.trim().toUpperCase();
-    if (!normalizedObjectType) {
+    const objectTypes = this.resolveScriptObjectTypeCandidatesForAction(objectTypeName);
+    if (!objectTypes || objectTypes.length === 0) {
       return null;
     }
 
@@ -10945,7 +10977,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (candidate.destroyed || this.isScriptEntityEffectivelyDead(candidate)) {
         continue;
       }
-      if (!this.areEquivalentTemplateNames(candidate.templateName, normalizedObjectType)) {
+      if (!this.matchesScriptObjectTypeList(candidate.templateName, objectTypes)) {
         continue;
       }
       if (this.isEntityOffMap(candidate) !== sourceOffMap) {
@@ -11175,6 +11207,47 @@ export class GameLogicSubsystem implements Subsystem {
         entity.objectStatusFlags.delete('REPULSOR');
       }
     }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doObjectTypeListMaintenance.
+   */
+  private executeScriptObjectTypeListMaintenance(
+    listName: string,
+    objectTypeName: string,
+    addObject: boolean,
+  ): boolean {
+    const normalizedListName = this.normalizeScriptObjectTypeName(listName);
+    const normalizedObjectType = this.normalizeScriptObjectTypeName(objectTypeName);
+    if (!normalizedListName || !normalizedObjectType) {
+      return false;
+    }
+
+    let list = this.scriptObjectTypeListsByName.get(normalizedListName);
+    if (!list) {
+      if (!addObject) {
+        return false;
+      }
+      list = [];
+      this.scriptObjectTypeListsByName.set(normalizedListName, list);
+    }
+
+    if (addObject) {
+      if (!list.includes(normalizedObjectType)) {
+        list.push(normalizedObjectType);
+      }
+    } else {
+      const index = list.indexOf(normalizedObjectType);
+      if (index === -1) {
+        return false;
+      }
+      list.splice(index, 1);
+      if (list.length === 0) {
+        this.scriptObjectTypeListsByName.delete(normalizedListName);
+      }
+    }
+
     return true;
   }
 
@@ -11655,7 +11728,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamAttackedByType.
-   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
    */
   evaluateScriptTeamAttackedByType(filter: {
     teamName: string;
@@ -12847,11 +12919,17 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const objectDef = this.resolveObjectDefByTemplateName(filter.templateName);
-    if (!objectDef) {
+    const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.templateName);
+    if (objectTypes.length === 0) {
       return false;
     }
-    return this.canSideBuildUnitTemplate(normalizedSide, objectDef);
+    for (const objectType of objectTypes) {
+      const objectDef = this.resolveObjectDefByTemplateName(objectType);
+      if (objectDef && this.canSideBuildUnitTemplate(normalizedSide, objectDef)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -13261,7 +13339,6 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity subset: ScriptConditions::evaluateNamedAttackedByType.
    * Current subset matches direct template names from last damage source template.
-   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
    */
   evaluateScriptNamedAttackedByType(filter: {
     entityId: number;
@@ -13270,8 +13347,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!Number.isFinite(filter.entityId)) {
       return false;
     }
-    const normalizedObjectType = filter.objectType.trim().toUpperCase();
-    if (!normalizedObjectType) {
+    const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.objectType);
+    if (objectTypes.length === 0) {
       return false;
     }
     const entityId = Math.trunc(filter.entityId);
@@ -13283,7 +13360,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!lastSourceTemplate) {
       return false;
     }
-    return this.areEquivalentTemplateNames(lastSourceTemplate, normalizedObjectType);
+    return this.matchesScriptObjectTypeList(lastSourceTemplate, objectTypes);
   }
 
   /**
@@ -13386,7 +13463,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTypeSighted.
-   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
    */
   evaluateScriptTypeSighted(filter: {
     entityId: number;
@@ -13400,8 +13476,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!normalizedSide) {
       return false;
     }
-    const normalizedObjectType = filter.objectType.trim().toUpperCase();
-    if (!normalizedObjectType) {
+    const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.objectType);
+    if (objectTypes.length === 0) {
       return false;
     }
 
@@ -13427,7 +13503,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.isEntityOffMap(candidate) !== sourceOffMap) {
         continue;
       }
-      if (!this.areEquivalentTemplateNames(candidate.templateName, normalizedObjectType)) {
+      if (!this.matchesScriptObjectTypeList(candidate.templateName, objectTypes)) {
         continue;
       }
 
@@ -13861,8 +13937,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const normalizedSide = this.normalizeSide(filter.side);
-    const normalizedTemplateName = filter.templateName.trim().toUpperCase();
-    if (!normalizedSide || !normalizedTemplateName) {
+    const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.templateName);
+    if (!normalizedSide || objectTypes.length === 0) {
       if (cache) {
         cache.customData = -1;
         cache.customFrame = this.scriptObjectCountChangedFrame;
@@ -13870,7 +13946,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const objectCount = this.countScriptObjectsByTemplateForSide(normalizedSide, normalizedTemplateName);
+    const objectCount = this.countScriptObjectsByTemplateListForSide(normalizedSide, objectTypes);
     const comparison = this.compareScriptCount(filter.comparison, objectCount, filter.count);
     if (cache) {
       cache.customData = comparison ? 1 : -1;
@@ -13881,7 +13957,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluatePlayerUnitCondition.
-   * TODO(source-parity): support ScriptEngine object-type groups (getObjectTypes()).
    */
   evaluateScriptPlayerUnitCondition(filter: {
     side: string;
@@ -13948,8 +14023,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const normalizedSide = this.normalizeSide(filter.side);
-    const normalizedTemplateName = filter.templateName.trim().toUpperCase();
-    if (!normalizedSide || !normalizedTemplateName) {
+    const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.templateName);
+    if (!normalizedSide || objectTypes.length === 0) {
       return false;
     }
 
@@ -13969,7 +14044,7 @@ export class GameLogicSubsystem implements Subsystem {
     let objectCount = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (this.normalizeSide(entity.side) !== normalizedSide) continue;
-      if (!this.areEquivalentTemplateNames(entity.templateName, normalizedTemplateName)) continue;
+      if (!this.matchesScriptObjectTypeList(entity.templateName, objectTypes)) continue;
       if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
 
       // Source parity: count dead/inert objects only when the object is a crate.
@@ -14044,12 +14119,13 @@ export class GameLogicSubsystem implements Subsystem {
    */
   evaluateScriptPlayerLostObjectType(filter: { side: string; templateName: string }): boolean {
     const normalizedSide = this.normalizeSide(filter.side);
-    const normalizedTemplateName = filter.templateName.trim().toUpperCase();
-    if (!normalizedSide || !normalizedTemplateName) {
+    const normalizedTemplateName = this.normalizeScriptObjectTypeName(filter.templateName);
+    const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.templateName);
+    if (!normalizedSide || !normalizedTemplateName || objectTypes.length === 0) {
       return false;
     }
 
-    const objectCount = this.countScriptObjectsByTemplateForSide(normalizedSide, normalizedTemplateName);
+    const objectCount = this.countScriptObjectsByTemplateListForSide(normalizedSide, objectTypes);
     const key = `${normalizedSide}:${normalizedTemplateName}`;
     const previousCount = this.scriptObjectCountBySideAndType.get(key);
     if (previousCount === undefined) {
@@ -22501,6 +22577,46 @@ export class GameLogicSubsystem implements Subsystem {
     return name.trim();
   }
 
+  private normalizeScriptObjectTypeName(name: string): string {
+    return name.trim().toUpperCase();
+  }
+
+  private resolveScriptObjectTypeEntriesForCondition(objectTypeName: string): string[] {
+    const normalizedName = this.normalizeScriptObjectTypeName(objectTypeName);
+    if (!normalizedName) {
+      return [];
+    }
+    const list = this.scriptObjectTypeListsByName.get(normalizedName);
+    if (list && list.length > 0) {
+      return [...list];
+    }
+    return [normalizedName];
+  }
+
+  private resolveScriptObjectTypeCandidatesForAction(objectTypeName: string): string[] | null {
+    const normalizedName = this.normalizeScriptObjectTypeName(objectTypeName);
+    if (!normalizedName) {
+      return null;
+    }
+    if (this.resolveObjectDefByTemplateName(normalizedName)) {
+      return [normalizedName];
+    }
+    const list = this.scriptObjectTypeListsByName.get(normalizedName);
+    if (list && list.length > 0) {
+      return [...list];
+    }
+    return null;
+  }
+
+  private matchesScriptObjectTypeList(templateName: string, objectTypes: string[]): boolean {
+    for (const objectType of objectTypes) {
+      if (this.areEquivalentTemplateNames(templateName, objectType)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private resolveScriptEntityIdFromValue(value: unknown, allowDead: boolean): number | null {
     let entityId: number | null = null;
     let normalizedName: string | null = null;
@@ -23005,6 +23121,35 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (!this.areEquivalentTemplateNames(entity.templateName, normalizedTemplateName)) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  private countScriptObjectsByTemplateListForSide(normalizedSide: string, templateNames: string[]): number {
+    const normalizedTemplates = Array.from(new Set(
+      templateNames
+        .map((name) => this.normalizeScriptObjectTypeName(name))
+        .filter(Boolean),
+    ));
+    if (normalizedTemplates.length === 0) {
+      return 0;
+    }
+
+    let count = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+        continue;
+      }
+      if (!this.matchesScriptObjectTypeList(entity.templateName, normalizedTemplates)) {
         continue;
       }
       count += 1;
@@ -43330,6 +43475,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardWaypointState = null;
     this.thingTemplateBuildableOverrides.clear();
     this.scriptObjectCountBySideAndType.clear();
+    this.scriptObjectTypeListsByName.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptNamedEntitiesByName.clear();
     this.scriptTriggerMembershipByEntityId.clear();
