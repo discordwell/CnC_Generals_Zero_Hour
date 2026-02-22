@@ -3821,6 +3821,8 @@ interface ScriptTeamRecord {
   created: boolean;
   stateName: string;
   controllingSide: string | null;
+  /** Source parity subset: ScriptEngine sequential Team spin timer frame. */
+  spinUntilFrame: number;
   /** Source parity: TeamTemplateInfo::m_productionPriority. */
   productionPriority: number;
   /** Source parity: TeamTemplateInfo::m_productionPrioritySuccessIncrease. */
@@ -4074,6 +4076,17 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [461, 'SKIRMISH_BUILD_STRUCTURE_FLANK'],
   [462, 'SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE'],
   [463, 'SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT'],
+  [464, 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL'],
+  [465, 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL'],
+  [466, 'TEAM_SPIN_FOR_FRAMECOUNT'],
+  [467, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NAMED'],
+  [468, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT'],
+  [469, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_GARRISONED_BUILDING'],
+  [470, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_KINDOF'],
+  [471, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING'],
+  [472, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING_CLASS'],
+  [473, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE'],
+  [474, 'TEAM_PARTIAL_USE_COMMANDBUTTON'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4091,6 +4104,103 @@ const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
   'STINGERMISSILE',
   'STINGER',
   'TUNNELNETWORK',
+] as const;
+
+/**
+ * Source parity bridge: Common/System/Kindof.cpp `KindOfMaskType::s_bitNameList` with
+ * ALLOW_SURRENDER entries omitted (retail Generals/ZH behavior).
+ * TODO(source-parity): support ALLOW_SURRENDER build variant bit offsets.
+ */
+const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT = [
+  'OBSTACLE',
+  'SELECTABLE',
+  'IMMOBILE',
+  'CAN_ATTACK',
+  'STICK_TO_TERRAIN_SLOPE',
+  'CAN_CAST_REFLECTIONS',
+  'SHRUBBERY',
+  'STRUCTURE',
+  'INFANTRY',
+  'VEHICLE',
+  'AIRCRAFT',
+  'HUGE_VEHICLE',
+  'DOZER',
+  'HARVESTER',
+  'COMMANDCENTER',
+  'LINEBUILD',
+  'SALVAGER',
+  'WEAPON_SALVAGER',
+  'TRANSPORT',
+  'BRIDGE',
+  'LANDMARK_BRIDGE',
+  'BRIDGE_TOWER',
+  'PROJECTILE',
+  'PRELOAD',
+  'NO_GARRISON',
+  'WAVEGUIDE',
+  'WAVE_EFFECT',
+  'NO_COLLIDE',
+  'REPAIR_PAD',
+  'HEAL_PAD',
+  'STEALTH_GARRISON',
+  'CASH_GENERATOR',
+  'AIRFIELD',
+  'DRAWABLE_ONLY',
+  'MP_COUNT_FOR_VICTORY',
+  'REBUILD_HOLE',
+  'SCORE',
+  'SCORE_CREATE',
+  'SCORE_DESTROY',
+  'NO_HEAL_ICON',
+  'CAN_RAPPEL',
+  'PARACHUTABLE',
+  'CAN_BE_REPULSED',
+  'MOB_NEXUS',
+  'IGNORED_IN_GUI',
+  'CRATE',
+  'CAPTURABLE',
+  'CLEARED_BY_BUILD',
+  'SMALL_MISSILE',
+  'ALWAYS_VISIBLE',
+  'UNATTACKABLE',
+  'MINE',
+  'CLEANUP_HAZARD',
+  'PORTABLE_STRUCTURE',
+  'ALWAYS_SELECTABLE',
+  'ATTACK_NEEDS_LINE_OF_SIGHT',
+  'WALK_ON_TOP_OF_WALL',
+  'DEFENSIVE_WALL',
+  'FS_POWER',
+  'FS_FACTORY',
+  'FS_BASE_DEFENSE',
+  'FS_TECHNOLOGY',
+  'AIRCRAFT_PATH_AROUND',
+  'LOW_OVERLAPPABLE',
+  'FORCEATTACKABLE',
+  'AUTO_RALLYPOINT',
+  'TECH_BUILDING',
+  'POWERED',
+  'PRODUCED_AT_HELIPAD',
+  'DRONE',
+  'CAN_SEE_THROUGH_STRUCTURE',
+  'BALLISTIC_MISSILE',
+  'CLICK_THROUGH',
+  'SUPPLY_SOURCE_ON_PREVIEW',
+  'PARACHUTE',
+  'GARRISONABLE_UNTIL_DESTROYED',
+  'BOAT',
+  'IMMUNE_TO_CAPTURE',
+  'HULK',
+  'SHOW_PORTRAIT_WHEN_CONTROLLED',
+  'SPAWNS_ARE_THE_WEAPONS',
+  'CANNOT_BUILD_NEAR_SUPPLIES',
+  'SUPPLY_SOURCE',
+  'REVEAL_TO_ALL',
+  'DISGUISER',
+  'INERT',
+  'HERO',
+  'IGNORES_SELECT_ALL',
+  'DONT_AUTO_CRUSH_INFANTRY',
 ] as const;
 
 export class GameLogicSubsystem implements Subsystem {
@@ -6743,6 +6853,68 @@ export class GameLogicSubsystem implements Subsystem {
           readNumber(2, ['range']),
           readBoolean(3, ['allTeamMembers', 'allMembers', 'all']),
         );
+      case 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL':
+        return this.executeScriptSkirmishWaitForCommandButtonAvailability(
+          readString(1, ['teamName', 'team']),
+          readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          true,
+        );
+      case 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL':
+        return this.executeScriptSkirmishWaitForCommandButtonAvailability(
+          readString(1, ['teamName', 'team']),
+          readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          false,
+        );
+      case 'TEAM_SPIN_FOR_FRAMECOUNT':
+        return this.executeScriptTeamSpinForFramecount(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['frameCount', 'frames', 'waitFrames']),
+        );
+      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NAMED':
+        return this.executeScriptTeamAllUseCommandButtonOnNamed(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readInteger(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
+      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT':
+        return this.executeScriptTeamAllUseCommandButtonOnNearestEnemyUnit(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
+      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_GARRISONED_BUILDING':
+        return this.executeScriptTeamAllUseCommandButtonOnNearestGarrisonedBuilding(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
+      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_KINDOF':
+        return this.executeScriptTeamAllUseCommandButtonOnNearestKindOf(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readValue(2, ['kindOf', 'kindOfBit', 'kindOfType']),
+        );
+      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING':
+        return this.executeScriptTeamAllUseCommandButtonOnNearestEnemyBuilding(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
+      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING_CLASS':
+        return this.executeScriptTeamAllUseCommandButtonOnNearestEnemyBuildingClass(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readValue(2, ['kindOf', 'kindOfBit', 'kindOfType']),
+        );
+      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE':
+        return this.executeScriptTeamAllUseCommandButtonOnNearestObjectType(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readString(2, ['templateName', 'objectType', 'object', 'thingTemplate']),
+        );
+      case 'TEAM_PARTIAL_USE_COMMANDBUTTON':
+        return this.executeScriptTeamPartialUseCommandButton(
+          readNumber(0, ['percentage', 'percent']),
+          readString(1, ['teamName', 'team']),
+          readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8796,6 +8968,495 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return false;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine sequential handling of
+   * SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_{ALL|PARTIAL}.
+   */
+  private executeScriptSkirmishWaitForCommandButtonAvailability(
+    teamName: string,
+    commandButtonName: string,
+    allReady: boolean,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    return this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, allReady);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamSpinForFramecount.
+   * Stores Team sequential spin timer frame for ScriptEngine parity bridges.
+   */
+  private executeScriptTeamSpinForFramecount(teamName: string, waitForFrames: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const waitFrames = Math.max(0, Math.trunc(waitForFrames));
+    team.spinUntilFrame = this.frameCounter + waitFrames;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNamed.
+   * TODO(source-parity): support ScriptEngine named-unit token resolution (unit-name to object lookup).
+   */
+  private executeScriptTeamAllUseCommandButtonOnNamed(
+    teamName: string,
+    commandButtonName: string,
+    targetEntityId: number,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const targetEntity = this.spawnedEntities.get(targetEntityId);
+    if (!team || !targetEntity || targetEntity.destroyed) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonName, targetEntity);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestEnemy.
+   * TODO(source-parity): port full PartitionFilterValidCommandButtonTarget behavior.
+   */
+  private executeScriptTeamAllUseCommandButtonOnNearestEnemyUnit(
+    teamName: string,
+    commandButtonName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, {
+      allowEnemies: true,
+      allowNeutral: false,
+      requireStructure: false,
+      requireGarrisonable: false,
+      requiredKindOf: null,
+      requiredTemplateName: null,
+    });
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestGarrisonedBuilding.
+   * TODO(source-parity): port full PartitionFilterGarrisonable + ValidCommandButtonTarget behavior.
+   */
+  private executeScriptTeamAllUseCommandButtonOnNearestGarrisonedBuilding(
+    teamName: string,
+    commandButtonName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, {
+      allowEnemies: true,
+      allowNeutral: false,
+      requireStructure: true,
+      requireGarrisonable: true,
+      requiredKindOf: null,
+      requiredTemplateName: null,
+    });
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestKindof.
+   * TODO(source-parity): support ALLOW_SURRENDER kindof-bit offset variant.
+   */
+  private executeScriptTeamAllUseCommandButtonOnNearestKindOf(
+    teamName: string,
+    commandButtonName: string,
+    kindOfInput: unknown,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const kindOfName = this.resolveScriptKindOfNameFromInput(kindOfInput);
+    if (!kindOfName) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, {
+      allowEnemies: true,
+      allowNeutral: false,
+      requireStructure: false,
+      requireGarrisonable: false,
+      requiredKindOf: kindOfName,
+      requiredTemplateName: null,
+    });
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestBuilding.
+   * TODO(source-parity): port full PartitionFilterValidCommandButtonTarget behavior.
+   */
+  private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuilding(
+    teamName: string,
+    commandButtonName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, {
+      allowEnemies: true,
+      allowNeutral: false,
+      requireStructure: true,
+      requireGarrisonable: false,
+      requiredKindOf: null,
+      requiredTemplateName: null,
+    });
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestBuildingClass.
+   * TODO(source-parity): support ALLOW_SURRENDER kindof-bit offset variant.
+   */
+  private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuildingClass(
+    teamName: string,
+    commandButtonName: string,
+    kindOfInput: unknown,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const kindOfName = this.resolveScriptKindOfNameFromInput(kindOfInput);
+    if (!kindOfName) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, {
+      allowEnemies: true,
+      allowNeutral: false,
+      requireStructure: true,
+      requireGarrisonable: false,
+      requiredKindOf: kindOfName,
+      requiredTemplateName: null,
+    });
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestObjectType.
+   * TODO(source-parity): port full PartitionFilterThing + ValidCommandButtonTarget behavior.
+   */
+  private executeScriptTeamAllUseCommandButtonOnNearestObjectType(
+    teamName: string,
+    commandButtonName: string,
+    templateName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, {
+      allowEnemies: true,
+      allowNeutral: true,
+      requireStructure: false,
+      requireGarrisonable: false,
+      requiredKindOf: null,
+      requiredTemplateName: normalizedTemplateName,
+    });
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamPartialUseCommandButton.
+   * TODO(source-parity): port full CommandButton::isValidToUseOn(null target) semantics.
+   */
+  private executeScriptTeamPartialUseCommandButton(
+    percentage: number,
+    teamName: string,
+    commandButtonName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const registry = this.iniDataRegistry;
+    if (!team || !registry) {
+      return false;
+    }
+    if (!findCommandButtonDefByName(registry, commandButtonName)) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+
+    const candidates: Array<{ entity: MapEntity; commandButtonDef: CommandButtonDef }> = [];
+    for (const entity of teamMembers) {
+      const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonName);
+      for (const commandButtonDef of commandButtons) {
+        if (!this.isScriptCommandButtonUsableWithoutTarget(commandButtonDef)) {
+          continue;
+        }
+        candidates.push({ entity, commandButtonDef });
+        break;
+      }
+    }
+
+    const percentageValue = Number.isFinite(percentage) ? percentage : 0;
+    const toExecuteCount = Math.ceil((percentageValue / 100) * candidates.length);
+    if (toExecuteCount <= 0) {
+      return true;
+    }
+
+    let executedAny = false;
+    for (let index = 0; index < candidates.length && index < toExecuteCount; index += 1) {
+      const candidate = candidates[index]!;
+      if (this.executeScriptCommandButtonForEntity(candidate.entity, candidate.commandButtonDef, { kind: 'NONE' })) {
+        executedAny = true;
+      }
+    }
+    return executedAny || candidates.length === 0;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateSkirmishCommandButtonIsReady over explicit team members.
+   */
+  private evaluateScriptTeamCommandButtonIsReady(
+    team: ScriptTeamRecord,
+    commandButtonName: string,
+    allReady: boolean,
+  ): boolean {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
+    const specialPowerName = this.normalizeShortcutSpecialPowerName(
+      readStringField(commandButtonDef.fields, ['SpecialPower'])
+      ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
+      ?? '',
+    );
+    const upgradeName = readStringField(commandButtonDef.fields, ['Upgrade'])?.trim().toUpperCase() ?? '';
+    const upgradeDef = upgradeName ? findUpgradeDefByName(registry, upgradeName) ?? null : null;
+
+    if (!specialPowerName && !upgradeDef) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+
+      let ready: boolean | null = null;
+      if (specialPowerName) {
+        ready = this.evaluateScriptCommandButtonSpecialPowerReady(entity, specialPowerName);
+      } else if (upgradeDef) {
+        ready = this.evaluateScriptCommandButtonUpgradeReady(entity, upgradeDef);
+      }
+
+      if (ready === null) {
+        continue;
+      }
+
+      if (ready) {
+        if (!allReady) {
+          return true;
+        }
+      } else if (allReady) {
+        return false;
+      }
+    }
+
+    return allReady;
+  }
+
+  /**
+   * Source parity subset: team command-button nearest-target scans.
+   * TODO(source-parity): port full partition-manager filters and expensive iterators.
+   */
+  private executeScriptTeamCommandButtonOnNearestObject(
+    team: ScriptTeamRecord,
+    commandButtonName: string,
+    filter: {
+      allowEnemies: boolean;
+      allowNeutral: boolean;
+      requireStructure: boolean;
+      requireGarrisonable: boolean;
+      requiredKindOf: string | null;
+      requiredTemplateName: string | null;
+    },
+  ): boolean {
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (teamMembers.length === 0) {
+      return true;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    let sourceEntity: MapEntity | null = null;
+    for (const member of teamMembers) {
+      const commandButtons = this.findScriptEntityCommandButtonsByName(member, commandButtonName);
+      if (commandButtons.length > 0) {
+        sourceEntity = member;
+        break;
+      }
+    }
+    if (!sourceEntity) {
+      return false;
+    }
+
+    const sourceOffMap = this.isEntityOffMap(sourceEntity);
+    const candidates: MapEntity[] = [];
+    const normalizedTemplateName = filter.requiredTemplateName?.trim().toUpperCase() ?? null;
+    const requiredKindOf = filter.requiredKindOf?.trim().toUpperCase() ?? null;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+
+      const relation = this.getTeamRelationship(sourceEntity, candidate);
+      const relationAllowed = (filter.allowEnemies && relation === RELATIONSHIP_ENEMIES)
+        || (filter.allowNeutral && relation === RELATIONSHIP_NEUTRAL);
+      if (!relationAllowed) {
+        continue;
+      }
+
+      if (filter.requireStructure && !candidate.kindOf.has('STRUCTURE')) {
+        continue;
+      }
+      if (filter.requireGarrisonable) {
+        if (candidate.containProfile?.moduleType !== 'GARRISON' || candidate.containProfile.garrisonCapacity <= 0) {
+          continue;
+        }
+      }
+      if (requiredKindOf && !candidate.kindOf.has(requiredKindOf)) {
+        continue;
+      }
+      if (normalizedTemplateName && candidate.templateName.trim().toUpperCase() !== normalizedTemplateName) {
+        continue;
+      }
+
+      candidates.push(candidate);
+    }
+
+    candidates.sort((left, right) => {
+      const leftDx = left.x - center.x;
+      const leftDz = left.z - center.z;
+      const rightDx = right.x - center.x;
+      const rightDz = right.z - center.z;
+      const leftDistSqr = (leftDx * leftDx) + (leftDz * leftDz);
+      const rightDistSqr = (rightDx * rightDx) + (rightDz * rightDz);
+      if (leftDistSqr !== rightDistSqr) {
+        return leftDistSqr - rightDistSqr;
+      }
+      return left.id - right.id;
+    });
+
+    for (const candidate of candidates) {
+      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonName, candidate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: AIGroup::groupDoCommandButtonAtObject for script team members.
+   */
+  private executeScriptTeamCommandButtonAtObjectForAllMembers(
+    team: ScriptTeamRecord,
+    commandButtonName: string,
+    targetEntity: MapEntity,
+  ): boolean {
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (teamMembers.length === 0) {
+      return true;
+    }
+
+    let executedAny = false;
+    for (const entity of teamMembers) {
+      const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonName);
+      for (const commandButtonDef of commandButtons) {
+        if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
+          kind: 'OBJECT',
+          targetEntity,
+        })) {
+          executedAny = true;
+        }
+      }
+    }
+    return executedAny;
+  }
+
+  private isScriptCommandButtonUsableWithoutTarget(commandButtonDef: CommandButtonDef): boolean {
+    const commandTypeName = this.normalizeScriptCommandTypeName(
+      commandButtonDef.commandTypeName
+      ?? readStringField(commandButtonDef.fields, ['Command'])
+      ?? '',
+    );
+    if (!commandTypeName) {
+      return false;
+    }
+
+    switch (commandTypeName) {
+      case 'SPECIAL_POWER':
+      case 'SPECIAL_POWER_FROM_COMMAND_CENTER':
+      case 'SPECIAL_POWER_FROM_SHORTCUT':
+      case 'SPECIAL_POWER_CONSTRUCT':
+      case 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT': {
+        const optionMask = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+        return (optionMask & (SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET | SCRIPT_COMMAND_OPTION_NEED_TARGET_POS)) === 0;
+      }
+      case 'FIRE_WEAPON': {
+        const optionMask = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+        return (optionMask
+          & (
+            SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET
+            | SCRIPT_COMMAND_OPTION_NEED_TARGET_POS
+            | SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION
+          )) === 0;
+      }
+      case 'SWITCH_WEAPON':
+        return this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef) !== null;
+      case 'STOP':
+      case 'HACK_INTERNET':
+      case 'TOGGLE_OVERCHARGE':
+      case 'EXIT_CONTAINER':
+      case 'EVACUATE':
+      case 'EXECUTE_RAILED_TRANSPORT':
+      case 'BEACON_DELETE':
+      case 'SELL':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private resolveScriptKindOfNameFromInput(kindOfInput: unknown): string | null {
+    if (typeof kindOfInput === 'number' && Number.isFinite(kindOfInput)) {
+      const kindOfBit = Math.trunc(kindOfInput);
+      if (kindOfBit < 0) {
+        return null;
+      }
+      return SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT[kindOfBit] ?? null;
+    }
+    const token = this.coerceScriptConditionString(kindOfInput).trim().toUpperCase();
+    if (!token) {
+      return null;
+    }
+    if (token.startsWith('KINDOF_')) {
+      return token.slice('KINDOF_'.length);
+    }
+    return token;
   }
 
   /**
@@ -21757,6 +22418,7 @@ export class GameLogicSubsystem implements Subsystem {
       created: false,
       stateName: '',
       controllingSide: null,
+      spinUntilFrame: 0,
       productionPriority: 0,
       productionPrioritySuccessIncrease: 0,
       productionPriorityFailureDecrease: 0,

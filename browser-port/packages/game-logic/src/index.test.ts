@@ -29987,6 +29987,295 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script skirmish wait-for-command-button actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_NoTarget', {
+            SpecialPowerTemplate: 'ScriptPowerNoTarget',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptNoTarget', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerNoTarget',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptNoTarget',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerNoTarget', { ReloadTime: 10 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('ScriptCaster', 28, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('WaitTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_ScriptNoTarget'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 464, // SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL
+      params: ['America', 'WaitTeam', 'Command_ScriptNoTarget'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 465, // SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL
+      params: ['America', 'WaitTeam', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 464,
+      params: ['America', 'MissingTeam', 'Command_ScriptNoTarget'],
+    })).toBe(false);
+  });
+
+  it('executes script team spin-for-framecount action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('SpinTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      frameCounter: number;
+      scriptTeamsByName: Map<string, {
+        spinUntilFrame: number;
+      }>;
+    };
+    const beforeFrame = privateApi.frameCounter;
+
+    expect(logic.executeScriptAction({
+      actionType: 466, // TEAM_SPIN_FOR_FRAMECOUNT
+      params: ['SpinTeam', 45],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SPINTEAM')?.spinUntilFrame).toBe(beforeFrame + 45);
+
+    expect(logic.executeScriptAction({
+      actionType: 466,
+      params: ['MissingTeam', 45],
+    })).toBe(false);
+  });
+
+  it('executes team all-use command-button target actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('EnemyUnit', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('EnemyGarrison', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_Garrison', { ContainMax: 5 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('EnemyBuilding', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('EnemyPowerBuilding', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('SpecificTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptOnNamed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('ScriptCaster', 24, 20), // id 2
+        makeMapObject('EnemyUnit', 58, 20), // id 3
+        makeMapObject('EnemyGarrison', 68, 20), // id 4
+        makeMapObject('EnemyBuilding', 78, 20), // id 5
+        makeMapObject('EnemyPowerBuilding', 88, 20), // id 6
+        makeMapObject('SpecificTarget', 52, 48), // id 7
+      ], 196, 196),
+      makeRegistry(bundle),
+      makeHeightmap(196, 196),
+    );
+    expect(logic.setScriptTeamMembers('AllUseTeam', [1, 2])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 467, // TEAM_ALL_USE_COMMANDBUTTON_ON_NAMED
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 5],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(5);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(5);
+
+    expect(logic.executeScriptAction({
+      actionType: 468, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT
+      params: ['AllUseTeam', 'Command_ScriptOnNamed'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+
+    expect(logic.executeScriptAction({
+      actionType: 469, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_GARRISONED_BUILDING
+      params: ['AllUseTeam', 'Command_ScriptOnNamed'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(4);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(4);
+
+    expect(logic.executeScriptAction({
+      actionType: 470, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_KINDOF
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 'FS_POWER'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(6);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(6);
+
+    expect(logic.executeScriptAction({
+      actionType: 471, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING
+      params: ['AllUseTeam', 'Command_ScriptOnNamed'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(4);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(4);
+
+    expect(logic.executeScriptAction({
+      actionType: 472, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING_CLASS
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 'FS_POWER'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(6);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(6);
+
+    expect(logic.executeScriptAction({
+      actionType: 473, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 'SpecificTarget'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(7);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(7);
+
+    expect(logic.executeScriptAction({
+      actionType: 468,
+      params: ['AllUseTeam', 'Command_Missing'],
+    })).toBe(false);
+  });
+
+  it('executes script team-partial-use-command-button action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_NoTarget', {
+            SpecialPowerTemplate: 'ScriptPowerNoTarget',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptNoTarget', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerNoTarget',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptNoTarget',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerNoTarget', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('ScriptCaster', 28, 20), // id 2
+        makeMapObject('ScriptCaster', 36, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('PartialTeam', [1, 2, 3])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 474, // TEAM_PARTIAL_USE_COMMANDBUTTON
+      params: [50, 'PartialTeam', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
+      dispatchType: 'NO_TARGET',
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
+      dispatchType: 'NO_TARGET',
+    });
+    expect(logic.getEntityState(3)?.lastSpecialPowerDispatch).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 474,
+      params: [50, 'PartialTeam', 'Command_Missing'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 474,
+      params: [50, 'MissingTeam', 'Command_ScriptNoTarget'],
+    })).toBe(false);
+  });
+
   it('executes script skirmish-fire-special-power-at-most-cost action using source action id', () => {
     const bundle = makeBundle({
       objects: [
