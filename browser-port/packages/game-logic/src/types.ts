@@ -378,7 +378,12 @@ export interface EnterObjectCommand {
   type: 'enterObject';
   entityId: number;
   targetObjectId: number;
-  action: 'hijackVehicle' | 'convertToCarBomb' | 'sabotageBuilding' | 'repairVehicle';
+  action:
+    | 'hijackVehicle'
+    | 'convertToCarBomb'
+    | 'sabotageBuilding'
+    | 'repairVehicle'
+    | 'captureUnmannedFactionUnit';
 }
 
 export interface ConstructBuildingCommand {

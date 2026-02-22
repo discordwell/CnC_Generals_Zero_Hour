@@ -4087,6 +4087,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [472, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING_CLASS'],
   [473, 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE'],
   [474, 'TEAM_PARTIAL_USE_COMMANDBUTTON'],
+  [475, 'TEAM_CAPTURE_NEAREST_UNOWNED_FACTION_UNIT'],
+  [476, 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6915,6 +6917,15 @@ export class GameLogicSubsystem implements Subsystem {
           readString(1, ['teamName', 'team']),
           readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
         );
+      case 'TEAM_CAPTURE_NEAREST_UNOWNED_FACTION_UNIT':
+        return this.executeScriptTeamCaptureNearestUnownedFactionUnit(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS':
+        return this.executeScriptPlayerCreateTeamFromCapturedUnits(
+          readString(0, ['side', 'playerName', 'player']),
+          readString(1, ['teamName', 'team']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -9211,6 +9222,89 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return executedAny || candidates.length === 0;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamCaptureNearestUnownedFactionUnit.
+   * TODO(source-parity): port full AIGroup::groupEnter/partition filters for enterable targets.
+   */
+  private executeScriptTeamCaptureNearestUnownedFactionUnit(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const source = teamMembers[0]!;
+    let closestTarget: MapEntity | null = null;
+    let closestDistSqr = Number.POSITIVE_INFINITY;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate)) {
+        continue;
+      }
+      if (!this.entityHasObjectStatus(candidate, 'DISABLED_UNMANNED')) {
+        continue;
+      }
+
+      const relation = this.getTeamRelationship(source, candidate);
+      if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
+        continue;
+      }
+
+      const dx = candidate.x - center.x;
+      const dz = candidate.z - center.z;
+      const distSqr = (dx * dx) + (dz * dz);
+      if (distSqr < closestDistSqr) {
+        closestTarget = candidate;
+        closestDistSqr = distSqr;
+      }
+    }
+
+    if (!closestTarget) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of teamMembers) {
+      if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(entity, closestTarget)) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'enterObject',
+        entityId: entity.id,
+        targetObjectId: closestTarget.id,
+        action: 'captureUnmannedFactionUnit',
+      });
+      issuedAny = true;
+    }
+    return issuedAny;
+  }
+
+  /**
+   * Source parity: ScriptActions::doCreateTeamFromCapturedUnits.
+   * C++ implementation currently only validates the team and performs no further logic.
+   */
+  private executeScriptPlayerCreateTeamFromCapturedUnits(
+    playerName: string,
+    teamName: string,
+  ): boolean {
+    // Source parity: player parameter is currently unused by C++.
+    void playerName;
+    const team = this.getScriptTeamRecord(teamName);
+    return team !== null;
   }
 
   /**
@@ -24477,6 +24571,8 @@ export class GameLogicSubsystem implements Subsystem {
         return this.resolveSabotageBuildingProfile(source, target) !== null;
       case 'repairVehicle':
         return this.canExecuteRepairVehicleEnterAction(source, target);
+      case 'captureUnmannedFactionUnit':
+        return this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target);
       default:
         return false;
     }
@@ -26058,6 +26154,11 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (action === 'repairVehicle') {
       this.resolveRepairVehicleEnterAction(source, target);
+      return;
+    }
+
+    if (action === 'captureUnmannedFactionUnit') {
+      this.resolveCaptureUnmannedFactionUnitEnterAction(source, target);
     }
   }
 
@@ -26111,6 +26212,40 @@ export class GameLogicSubsystem implements Subsystem {
       lastRepairDockObjectId: 0,
       healthToAddPerFrame: 0,
     });
+  }
+
+  /**
+   * Source parity subset: AIGroup::groupEnter against unmanned faction units.
+   * TODO(source-parity): port generic Object::isEnterable/getInOrOn mechanics for all groupEnter targets.
+   */
+  private canExecuteCaptureUnmannedFactionUnitEnterAction(source: MapEntity, target: MapEntity): boolean {
+    if (!this.entityHasObjectStatus(target, 'DISABLED_UNMANNED')) {
+      return false;
+    }
+    const relation = this.getTeamRelationship(source, target);
+    if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: capture nearest unowned faction unit enter resolution.
+   */
+  private resolveCaptureUnmannedFactionUnitEnterAction(source: MapEntity, target: MapEntity): void {
+    if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target)) {
+      return;
+    }
+
+    const sourceSide = this.normalizeSide(source.side);
+    if (!sourceSide) {
+      return;
+    }
+
+    this.captureEntity(target.id, sourceSide);
+    target.objectStatusFlags.delete('DISABLED_UNMANNED');
+    this.refreshEntityCombatProfiles(target);
+    this.markEntityDestroyed(source.id, target.id);
   }
 
   private resolveHijackVehicleEnterAction(source: MapEntity, target: MapEntity): void {
