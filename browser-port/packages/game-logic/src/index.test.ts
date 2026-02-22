@@ -29422,6 +29422,88 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script idle-all/resume-supply-trucking actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_WarehouseDock', {
+            StartingBoxes: 20,
+            DeleteWhenEmpty: false,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+          makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+            MaxBoxes: 3,
+            SupplyCenterActionDelay: 0,
+            SupplyWarehouseActionDelay: 0,
+            SupplyWarehouseScanDistance: 500,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL SupplyTruckLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('SupplyTruckLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyWarehouse', 10, 10), // id 1
+        makeMapObject('SupplyCenter', 100, 10), // id 2
+        makeMapObject('SupplyTruck', 20, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'China', playerType: 'COMPUTER' });
+    logic.update(1 / 30);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+      }>;
+      sideUnitsShouldIdleOrResume: Map<string, boolean>;
+    };
+    const truck = privateApi.spawnedEntities.get(3)!;
+
+    for (let frame = 0; frame < 20; frame += 1) {
+      logic.update(1 / 30);
+    }
+    const beforeIdle = { x: truck.x, z: truck.z };
+
+    expect(logic.executeScriptAction({
+      actionType: 451, // IDLE_ALL_UNITS
+    })).toBe(true);
+    expect(privateApi.sideUnitsShouldIdleOrResume.get('america')).toBe(true);
+
+    for (let frame = 0; frame < 20; frame += 1) {
+      logic.update(1 / 30);
+    }
+    const idleDistance = Math.hypot(truck.x - beforeIdle.x, truck.z - beforeIdle.z);
+    expect(idleDistance).toBeLessThan(0.1);
+
+    expect(logic.executeScriptAction({
+      actionType: 452, // RESUME_SUPPLY_TRUCKING
+    })).toBe(true);
+    expect(privateApi.sideUnitsShouldIdleOrResume.get('america')).toBe(false);
+
+    for (let frame = 0; frame < 20; frame += 1) {
+      logic.update(1 / 30);
+    }
+    const resumedDistance = Math.hypot(truck.x - beforeIdle.x, truck.z - beforeIdle.z);
+    expect(resumedDistance).toBeGreaterThan(0.1);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

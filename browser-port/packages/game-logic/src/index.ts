@@ -4057,6 +4057,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [446, 'TEAM_USE_COMMANDBUTTON_ABILITY'],
   [447, 'NAMED_FLASH_WHITE'],
   [448, 'TEAM_FLASH_WHITE'],
+  [451, 'IDLE_ALL_UNITS'],
+  [452, 'RESUME_SUPPLY_TRUCKING'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4100,6 +4102,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly playerRelationshipOverrides = new Map<string, number>();
   private readonly sideCredits = new Map<string, number>();
   private readonly sidePlayerTypes = new Map<string, SidePlayerType>();
+  /** Source parity: Player::setUnitsShouldIdleOrResume script toggle. */
+  private readonly sideUnitsShouldIdleOrResume = new Map<string, boolean>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
   private readonly sideCashBountyPercent = new Map<string, number>();
   private readonly sideUpgradesInProduction = new Map<string, Set<string>>();
@@ -5681,6 +5685,9 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.sidePlayerTypes.set(normalizedSide, normalizedType);
+    if (normalizedType !== 'HUMAN') {
+      this.sideUnitsShouldIdleOrResume.delete(normalizedSide);
+    }
     return true;
   }
 
@@ -6612,6 +6619,10 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
         );
+      case 'IDLE_ALL_UNITS':
+        return this.executeScriptIdleAllUnits();
+      case 'RESUME_SUPPLY_TRUCKING':
+        return this.executeScriptResumeSupplyTrucking();
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8317,6 +8328,77 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return flashed;
+  }
+
+  private getScriptActionHumanSides(): Set<string> {
+    const sides = new Set<string>();
+    for (const [side, playerType] of this.sidePlayerTypes.entries()) {
+      if (playerType === 'HUMAN') {
+        sides.add(side);
+      }
+    }
+    return sides;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doIdleAllPlayerUnits(AsciiString::TheEmptyString).
+   * Marks human-player sides as idled and stops currently active movable units.
+   */
+  private executeScriptIdleAllUnits(): boolean {
+    const humanSides = this.getScriptActionHumanSides();
+    if (humanSides.size === 0) {
+      return true;
+    }
+
+    for (const side of humanSides) {
+      this.sideUnitsShouldIdleOrResume.set(side, true);
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+      const side = this.normalizeSide(entity.side);
+      if (!side || !humanSides.has(side)) {
+        continue;
+      }
+      this.applyCommand({ type: 'stop', entityId: entity.id });
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doResumeSupplyTruckingForIdleUnits(AsciiString::TheEmptyString).
+   * Clears the idle flag for human-player sides so supply-truck AI can resume.
+   */
+  private executeScriptResumeSupplyTrucking(): boolean {
+    const humanSides = this.getScriptActionHumanSides();
+    if (humanSides.size === 0) {
+      return true;
+    }
+
+    for (const side of humanSides) {
+      this.sideUnitsShouldIdleOrResume.set(side, false);
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.supplyTruckProfile) {
+        continue;
+      }
+      const side = this.normalizeSide(entity.side);
+      if (!side || !humanSides.has(side)) {
+        continue;
+      }
+      const state = this.supplyTruckStates.get(entity.id);
+      if (!state) {
+        continue;
+      }
+      state.aiState = SupplyTruckAIState.IDLE;
+      state.targetWarehouseId = null;
+      state.targetDepotId = null;
+      state.actionDelayFinishFrame = this.frameCounter;
+    }
+    return true;
   }
 
   private executeScriptNamedStop(entityId: number): boolean {
@@ -12526,6 +12608,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.thingTemplateBuildableOverrides.clear();
     this.sideCredits.clear();
     this.sidePlayerTypes.clear();
+    this.sideUnitsShouldIdleOrResume.clear();
     this.sideCashBountyPercent.clear();
     this.sideBattlePlanBonuses.clear();
     this.battlePlanParalyzedUntilFrame.clear();
@@ -27641,6 +27724,10 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (entity.supplyTruckProfile) {
+        const side = this.normalizeSide(entity.side);
+        if (side && this.sideUnitsShouldIdleOrResume.get(side)) {
+          continue;
+        }
         // Source parity: WorkerAIUpdate runs supply-truck logic only while not in dozer tasks.
         if (entity.dozerAIProfile
           && (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id))) {
@@ -40431,6 +40518,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideAttackedFrame.clear();
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
+    this.sideUnitsShouldIdleOrResume.clear();
     this.sideScriptAcquiredSciences.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptMidwaySpecialPowerEvents.clear();
