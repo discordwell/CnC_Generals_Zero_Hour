@@ -3856,6 +3856,13 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
+  [383, 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM'],
+  [384, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
+  [385, 'TEAM_REMOVE_ALL_OVERRIDE_RELATIONS'],
+  [388, 'TEAM_SET_OVERRIDE_RELATION_TO_PLAYER'],
+  [389, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER'],
+  [390, 'PLAYER_SET_OVERRIDE_RELATION_TO_TEAM'],
+  [391, 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -5706,6 +5713,16 @@ export class GameLogicSubsystem implements Subsystem {
       Math.trunc(readNumber(index, keyNames));
     const readBoolean = (index: number, keyNames: readonly string[] = []): boolean =>
       this.coerceScriptConditionBoolean(readValue(index, keyNames), false);
+    const readRelationship = (
+      index: number,
+      keyNames: readonly string[] = [],
+    ): ScriptRelationshipInput => {
+      const value = readValue(index, keyNames);
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return Math.trunc(value);
+      }
+      return this.coerceScriptConditionString(value) as ScriptRelationshipInput;
+    };
 
     switch (actionType) {
       case 'NO_OP':
@@ -5792,6 +5809,43 @@ export class GameLogicSubsystem implements Subsystem {
         return this.setScriptTeamControllingSide(
           readString(0, ['teamName', 'team']),
           readString(1, ['side', 'playerName', 'player']),
+        );
+      case 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM':
+        return this.setScriptTeamOverrideRelationToTeam(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
+          readRelationship(2, ['relationship', 'relation']),
+        );
+      case 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM':
+        return this.removeScriptTeamOverrideRelationToTeam(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
+        );
+      case 'TEAM_REMOVE_ALL_OVERRIDE_RELATIONS':
+        return this.removeScriptTeamAllOverrideRelations(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'TEAM_SET_OVERRIDE_RELATION_TO_PLAYER':
+        return this.setScriptTeamOverrideRelationToPlayer(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['otherPlayer', 'side', 'playerName', 'player']),
+          readRelationship(2, ['relationship', 'relation']),
+        );
+      case 'TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER':
+        return this.removeScriptTeamOverrideRelationToPlayer(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['otherPlayer', 'side', 'playerName', 'player']),
+        );
+      case 'PLAYER_SET_OVERRIDE_RELATION_TO_TEAM':
+        return this.setScriptPlayerOverrideRelationToTeam(
+          readString(0, ['side', 'playerName', 'player']),
+          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
+          readRelationship(2, ['relationship', 'relation']),
+        );
+      case 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM':
+        return this.removeScriptPlayerOverrideRelationToTeam(
+          readString(0, ['side', 'playerName', 'player']),
+          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
         );
       case 'PLAYER_SET_MONEY': {
         const side = readString(0, ['side', 'playerName', 'player']);
@@ -6560,6 +6614,107 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     team.controllingSide = normalizedSide;
+    return true;
+  }
+
+  private resolveScriptTeamSideForRelationship(teamName: string): string | null {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return null;
+    }
+    return this.resolveScriptTeamControllingSide(team);
+  }
+
+  private setScriptTeamOverrideRelationToTeam(
+    teamName: string,
+    otherTeamName: string,
+    relationshipInput: ScriptRelationshipInput,
+  ): boolean {
+    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
+    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
+    if (!sourceSide || !targetSide) {
+      return false;
+    }
+    const relationship = this.resolveScriptRelationshipInput(relationshipInput);
+    if (relationship === null) {
+      return false;
+    }
+    this.setTeamRelationship(sourceSide, targetSide, relationship);
+    return true;
+  }
+
+  private removeScriptTeamOverrideRelationToTeam(teamName: string, otherTeamName: string): boolean {
+    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
+    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
+    if (!sourceSide || !targetSide) {
+      return false;
+    }
+    this.removeTeamRelationship(sourceSide, targetSide);
+    return true;
+  }
+
+  private removeScriptTeamAllOverrideRelations(teamName: string): boolean {
+    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
+    if (!sourceSide) {
+      return false;
+    }
+    this.clearRelationshipOverridesForSourceSide(sourceSide);
+    return true;
+  }
+
+  private setScriptTeamOverrideRelationToPlayer(
+    teamName: string,
+    playerSide: string,
+    relationshipInput: ScriptRelationshipInput,
+  ): boolean {
+    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
+    const targetSide = this.normalizeSide(playerSide);
+    if (!sourceSide || !targetSide) {
+      return false;
+    }
+    const relationship = this.resolveScriptRelationshipInput(relationshipInput);
+    if (relationship === null) {
+      return false;
+    }
+    this.setTeamRelationship(sourceSide, targetSide, relationship);
+    return true;
+  }
+
+  private removeScriptTeamOverrideRelationToPlayer(teamName: string, playerSide: string): boolean {
+    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
+    const targetSide = this.normalizeSide(playerSide);
+    if (!sourceSide || !targetSide) {
+      return false;
+    }
+    this.removeTeamRelationship(sourceSide, targetSide);
+    return true;
+  }
+
+  private setScriptPlayerOverrideRelationToTeam(
+    playerSide: string,
+    otherTeamName: string,
+    relationshipInput: ScriptRelationshipInput,
+  ): boolean {
+    const sourceSide = this.normalizeSide(playerSide);
+    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
+    if (!sourceSide || !targetSide) {
+      return false;
+    }
+    const relationship = this.resolveScriptRelationshipInput(relationshipInput);
+    if (relationship === null) {
+      return false;
+    }
+    this.setPlayerRelationship(sourceSide, targetSide, relationship);
+    return true;
+  }
+
+  private removeScriptPlayerOverrideRelationToTeam(playerSide: string, otherTeamName: string): boolean {
+    const sourceSide = this.normalizeSide(playerSide);
+    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
+    if (!sourceSide || !targetSide) {
+      return false;
+    }
+    this.removePlayerRelationship(sourceSide, targetSide);
     return true;
   }
 
@@ -18426,6 +18581,15 @@ export class GameLogicSubsystem implements Subsystem {
     this.teamRelationshipOverrides.set(this.relationshipKey(source, target), relationship);
   }
 
+  removeTeamRelationship(sourceSide: string, targetSide: string): void {
+    const source = this.normalizeSide(sourceSide);
+    const target = this.normalizeSide(targetSide);
+    if (!source || !target) {
+      return;
+    }
+    this.teamRelationshipOverrides.delete(this.relationshipKey(source, target));
+  }
+
   setPlayerRelationship(sourceSide: string, targetSide: string, relationship: number): void {
     const source = this.normalizeSide(sourceSide);
     const target = this.normalizeSide(targetSide);
@@ -18436,6 +18600,33 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     this.playerRelationshipOverrides.set(this.relationshipKey(source, target), relationship);
+  }
+
+  removePlayerRelationship(sourceSide: string, targetSide: string): void {
+    const source = this.normalizeSide(sourceSide);
+    const target = this.normalizeSide(targetSide);
+    if (!source || !target) {
+      return;
+    }
+    this.playerRelationshipOverrides.delete(this.relationshipKey(source, target));
+  }
+
+  clearRelationshipOverridesForSourceSide(sourceSide: string): void {
+    const source = this.normalizeSide(sourceSide);
+    if (!source) {
+      return;
+    }
+    const keyPrefix = `${source}\u0000`;
+    for (const key of this.teamRelationshipOverrides.keys()) {
+      if (key.startsWith(keyPrefix)) {
+        this.teamRelationshipOverrides.delete(key);
+      }
+    }
+    for (const key of this.playerRelationshipOverrides.keys()) {
+      if (key.startsWith(keyPrefix)) {
+        this.playerRelationshipOverrides.delete(key);
+      }
+    }
   }
 
   clearTeamRelationshipOverrides(): void {

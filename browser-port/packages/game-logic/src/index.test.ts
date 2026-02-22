@@ -28398,6 +28398,86 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script relation-override actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('TankHunter', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10),
+        makeMapObject('TankHunter', 20, 20),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AlphaTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('BravoTeam', [2])).toBe(true);
+
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+    expect(logic.executeScriptAction({
+      actionType: 383, // TEAM_SET_OVERRIDE_RELATION_TO_TEAM
+      params: ['AlphaTeam', 'BravoTeam', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+
+    expect(logic.executeScriptAction({
+      actionType: 384, // TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM
+      params: ['AlphaTeam', 'BravoTeam'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 388, // TEAM_SET_OVERRIDE_RELATION_TO_PLAYER
+      params: ['AlphaTeam', 'China', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+    expect(logic.executeScriptAction({
+      actionType: 389, // TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER
+      params: ['AlphaTeam', 'China'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 390, // PLAYER_SET_OVERRIDE_RELATION_TO_TEAM
+      params: ['America', 'BravoTeam', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+    expect(logic.executeScriptAction({
+      actionType: 391, // PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM
+      params: ['America', 'BravoTeam'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 383, // TEAM_SET_OVERRIDE_RELATION_TO_TEAM
+      params: ['AlphaTeam', 'BravoTeam', 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 388, // TEAM_SET_OVERRIDE_RELATION_TO_PLAYER
+      params: ['AlphaTeam', 'China', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+    expect(logic.executeScriptAction({
+      actionType: 385, // TEAM_REMOVE_ALL_OVERRIDE_RELATIONS
+      params: ['AlphaTeam'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 383,
+      params: ['MissingTeam', 'BravoTeam', 0],
+    })).toBe(false);
+  });
+
   it('evaluates named-reached-waypoints-end from completed waypoint labels', () => {
     const bundle = makeBundle({
       objects: [
