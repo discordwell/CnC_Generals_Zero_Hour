@@ -28533,9 +28533,21 @@ describe('Script condition groundwork', () => {
       ],
     });
 
+    const map = makeMap([makeMapObject('Ranger', 10, 10)], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'CameraWaypointA',
+          position: { x: 64, y: 72, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      map,
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
@@ -28578,12 +28590,30 @@ describe('Script condition groundwork', () => {
     });
 
     expect(logic.executeScriptAction({
+      actionType: 411, // CAMERA_LOOK_TOWARD_WAYPOINT
+      params: ['CameraWaypointA', 2.5, 0.25, 0.75, 1],
+    })).toBe(true);
+    expect(logic.getScriptCameraLookTowardWaypointState()).toEqual({
+      waypointName: 'CameraWaypointA',
+      x: 64,
+      z: 72,
+      durationMs: 2500,
+      easeInMs: 250,
+      easeOutMs: 750,
+      reverseRotation: true,
+    });
+
+    expect(logic.executeScriptAction({
       actionType: 376,
       params: [999, 0, 100],
     })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 386,
       params: [999, 1, 0, 0, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 411,
+      params: ['MissingWaypoint', 1, 0, 0, 0],
     })).toBe(false);
 
     expect(logic.executeScriptAction({
@@ -28598,6 +28628,89 @@ describe('Script condition groundwork', () => {
     logic.update(1 / 30);
     expect(logic.getScriptCameraTetherState()).toBeNull();
     expect(logic.getScriptCameraLookTowardObjectState()).toBeNull();
+  });
+
+  it('executes script force-select and destroy-all-contained actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TransportTruck', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 600, InitialHealth: 600 }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 4,
+          }),
+        ]),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('MissileDefender', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TransportTruck', 10, 10), // id 1
+        makeMapObject('Passenger', 10, 10), // id 2
+        makeMapObject('Ranger', 20, 20), // id 3
+        makeMapObject('Ranger', 22, 20), // id 4
+        makeMapObject('MissileDefender', 24, 20), // id 5
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('SelectTeam', [3, 4, 5])).toBe(true);
+
+    logic.submitCommand({ type: 'select', entityId: 5 });
+    logic.update(0);
+    expect(logic.getLocalPlayerSelectionIds()).toEqual([5]);
+
+    expect(logic.executeScriptAction({
+      actionType: 410, // OBJECT_FORCE_SELECT
+      params: ['SelectTeam', 'Ranger', 0, ''],
+    })).toBe(true);
+    expect(logic.getLocalPlayerSelectionIds()).toEqual([3]);
+
+    expect(logic.executeScriptAction({
+      actionType: 410,
+      params: ['MissingTeam', 'Ranger', 0, ''],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 410,
+      params: ['SelectTeam', 'MissingType', 0, ''],
+    })).toBe(false);
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    for (let frame = 0; frame < 4; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+        destroyed: boolean;
+      }>;
+    };
+
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(logic.executeScriptAction({
+      actionType: 412, // UNIT_DESTROY_ALL_CONTAINED
+      params: [1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.destroyed).toBe(true);
+
+    logic.update(1 / 30);
+    expect(logic.getEntityState(2)).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 412,
+      params: [999],
+    })).toBe(false);
   });
 
   it('executes script team guard position/object actions using source action ids', () => {

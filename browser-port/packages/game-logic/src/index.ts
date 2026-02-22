@@ -3702,6 +3702,16 @@ interface ScriptCameraLookTowardObjectState {
   easeOutMs: number;
 }
 
+interface ScriptCameraLookTowardWaypointState {
+  waypointName: string;
+  x: number;
+  z: number;
+  durationMs: number;
+  easeInMs: number;
+  easeOutMs: number;
+  reverseRotation: boolean;
+}
+
 interface ScriptTeamRecord {
   nameUpper: string;
   memberEntityIds: Set<number>;
@@ -3901,6 +3911,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [391, 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
   [407, 'TEAM_GUARD_POSITION'],
   [408, 'TEAM_GUARD_OBJECT'],
+  [410, 'OBJECT_FORCE_SELECT'],
+  [411, 'CAMERA_LOOK_TOWARD_WAYPOINT'],
+  [412, 'UNIT_DESTROY_ALL_CONTAINED'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4019,6 +4032,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraDefaultViewState: ScriptCameraDefaultViewState | null = null;
   /** Source parity bridge: TacticalView rotateCameraTowardObject request from scripts. */
   private scriptCameraLookTowardObjectState: ScriptCameraLookTowardObjectState | null = null;
+  /** Source parity bridge: TacticalView rotateCameraTowardPosition request from scripts. */
+  private scriptCameraLookTowardWaypointState: ScriptCameraLookTowardWaypointState | null = null;
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
@@ -5826,6 +5841,47 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: mirrors ScriptActions::doRotateCameraTowardWaypoint.
+   * TODO(source-parity): forward this to TacticalView::rotateCameraTowardPosition.
+   */
+  setScriptCameraLookTowardWaypoint(
+    waypointName: string,
+    durationSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+    reverseRotation: boolean,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    if (
+      !Number.isFinite(durationSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.scriptCameraLookTowardWaypointState = {
+      waypointName: waypointName.trim(),
+      x: waypoint.x,
+      z: waypoint.z,
+      durationMs: durationSeconds * 1000,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+      reverseRotation,
+    };
+    return true;
+  }
+
+  getScriptCameraLookTowardWaypointState(): ScriptCameraLookTowardWaypointState | null {
+    if (!this.scriptCameraLookTowardWaypointState) {
+      return null;
+    }
+    return { ...this.scriptCameraLookTowardWaypointState };
+  }
+
+  /**
    * Source parity subset: ScriptActions::doVictory/doDefeat and timer start.
    * This port applies the local outcome immediately (without UI/end-game timer windows).
    */
@@ -6095,6 +6151,14 @@ export class GameLogicSubsystem implements Subsystem {
           readNumber(3, ['easeInSeconds', 'easeIn']),
           readNumber(4, ['easeOutSeconds', 'easeOut']),
         );
+      case 'CAMERA_LOOK_TOWARD_WAYPOINT':
+        return this.setScriptCameraLookTowardWaypoint(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['easeInSeconds', 'easeIn']),
+          readNumber(3, ['easeOutSeconds', 'easeOut']),
+          readBoolean(4, ['reverseRotation', 'reverse']),
+        );
       case 'TEAM_GUARD_POSITION':
         return this.executeScriptTeamGuardPosition(
           readString(0, ['teamName', 'team']),
@@ -6104,6 +6168,17 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamGuardObject(
           readString(0, ['teamName', 'team']),
           readInteger(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
+      case 'OBJECT_FORCE_SELECT':
+        return this.executeScriptObjectForceSelect(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['templateName', 'objectType', 'unitType']),
+          readBoolean(2, ['centerInView', 'center']),
+          readString(3, ['audioName', 'audio', 'sound']),
+        );
+      case 'UNIT_DESTROY_ALL_CONTAINED':
+        return this.executeScriptUnitDestroyAllContained(
+          readInteger(0, ['entityId', 'unitId', 'named']),
         );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
@@ -7050,6 +7125,72 @@ export class GameLogicSubsystem implements Subsystem {
         targetEntityId: target.id,
         guardMode: 0,
       });
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doForceObjectSelection.
+   * Selects the first matching object type in the team using C++ ID ordering.
+   * TODO(source-parity): mirror camera-centering and audio playback via TacticalView/Audio bridge.
+   */
+  private executeScriptObjectForceSelect(
+    teamName: string,
+    objectTypeName: string,
+    centerInView: boolean,
+    audioToPlay: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const objectTypeUpper = objectTypeName.trim().toUpperCase();
+    if (!objectTypeUpper) {
+      return false;
+    }
+
+    let bestGuess: MapEntity | null = null;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (entity.templateName.trim().toUpperCase() !== objectTypeUpper) {
+        continue;
+      }
+      if (!bestGuess || entity.id < bestGuess.id) {
+        bestGuess = entity;
+      }
+    }
+
+    if (!bestGuess) {
+      return false;
+    }
+
+    this.selectedEntityIds = [bestGuess.id];
+    this.selectedEntityId = bestGuess.id;
+    this.updateSelectionHighlight();
+    void centerInView;
+    void audioToPlay;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doDestroyAllContained.
+   * kill() applies UNRESISTABLE max-health damage for each contained unit.
+   */
+  private executeScriptUnitDestroyAllContained(containerEntityId: number): boolean {
+    const container = this.spawnedEntities.get(containerEntityId);
+    if (!container || container.destroyed) {
+      return false;
+    }
+
+    const containedIds = this.collectContainedEntityIds(container.id);
+    for (const passengerId of containedIds) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        continue;
+      }
+      this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
     }
     return true;
   }
@@ -10754,6 +10895,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
+    this.scriptCameraLookTowardWaypointState = null;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -38263,6 +38405,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
+    this.scriptCameraLookTowardWaypointState = null;
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();
