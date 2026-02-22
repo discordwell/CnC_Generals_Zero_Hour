@@ -3860,6 +3860,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [291, 'PLAYER_RELATES_PLAYER'],
   [296, 'LOCALDEFEAT'],
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
+  [299, 'DISABLE_INPUT'],
+  [300, 'ENABLE_INPUT'],
   [324, 'QUICKVICTORY'],
   [383, 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM'],
   [384, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
@@ -4080,6 +4082,8 @@ export class GameLogicSubsystem implements Subsystem {
 
   private isAttackMoveToMode = false;
   private previousAttackMoveToggleDown = false;
+  /** Source parity subset: ScriptActions::doDisableInput / doEnableInput local input gate. */
+  private scriptInputDisabled = false;
 
   private placementSummary: MapObjectPlacementSummary = {
     totalObjects: 0,
@@ -4310,6 +4314,7 @@ export class GameLogicSubsystem implements Subsystem {
       animationTime: this.animationTime,
       isAttackMoveToMode: this.isAttackMoveToMode,
       previousAttackMoveToggleDown: this.previousAttackMoveToggleDown,
+      scriptInputDisabled: this.scriptInputDisabled,
       config: this.config,
       commandQueue: this.commandQueue,
     });
@@ -4325,6 +4330,13 @@ export class GameLogicSubsystem implements Subsystem {
     input: InputState,
     camera: THREE.Camera,
   ): void {
+    if (this.scriptInputDisabled) {
+      // Source parity subset: disabled input blocks player command generation.
+      this.previousAttackMoveToggleDown = input.keysDown.has('a');
+      this.isAttackMoveToMode = false;
+      return;
+    }
+
     const attackMoveToggleDown = input.keysDown.has('a');
     if (attackMoveToggleDown && !this.previousAttackMoveToggleDown) {
       this.isAttackMoveToMode = !this.isAttackMoveToMode;
@@ -5698,6 +5710,20 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doDisableInput / doEnableInput.
+   */
+  setScriptInputDisabled(disabled: boolean): void {
+    this.scriptInputDisabled = disabled;
+    if (disabled) {
+      this.isAttackMoveToMode = false;
+    }
+  }
+
+  isScriptInputDisabled(): boolean {
+    return this.scriptInputDisabled;
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -5755,6 +5781,12 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DEFEAT':
       case 'LOCALDEFEAT':
         return this.setScriptLocalGameEndState(true);
+      case 'DISABLE_INPUT':
+        this.setScriptInputDisabled(true);
+        return true;
+      case 'ENABLE_INPUT':
+        this.setScriptInputDisabled(false);
+        return true;
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -10442,6 +10474,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.gameRandom.setSeed(1);
     this.isAttackMoveToMode = false;
     this.previousAttackMoveToggleDown = false;
+    this.scriptInputDisabled = false;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -37918,6 +37951,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptUIInteractions.clear();
     this.scriptActiveByName.clear();
     this.scriptSubroutineCalls.length = 0;
+    this.scriptInputDisabled = false;
     this.scriptCameraMovementFinished = true;
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();

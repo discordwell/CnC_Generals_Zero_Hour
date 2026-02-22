@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
 import type { IniBlock } from '@generals/core';
+import type { InputState } from '@generals/input';
 import {
   type ArmorDef,
   type CommandButtonDef,
@@ -217,6 +218,27 @@ function makeMapObject(
     flags: 0,
     position: { x, y, z: 0 },
     properties,
+  };
+}
+
+function makeInputState(overrides: Partial<InputState> = {}): InputState {
+  return {
+    keysDown: new Set<string>(),
+    keysPressed: new Set<string>(),
+    mouseX: 0,
+    mouseY: 0,
+    viewportWidth: 800,
+    viewportHeight: 600,
+    wheelDelta: 0,
+    middleMouseDown: false,
+    leftMouseDown: false,
+    rightMouseDown: false,
+    leftMouseClick: false,
+    rightMouseClick: false,
+    middleDragDx: 0,
+    middleDragDy: 0,
+    pointerInCanvas: true,
+    ...overrides,
   };
 }
 
@@ -28442,6 +28464,46 @@ describe('Script condition groundwork', () => {
     expect(localDefeatLogic.getGameEndState()).toMatchObject({
       status: 'DEFEAT',
     });
+  });
+
+  it('executes script input disable/enable actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene(), {
+      pickObjectByInput: () => 1,
+    });
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const camera = new THREE.PerspectiveCamera();
+
+    expect(logic.executeScriptAction({
+      actionType: 299, // DISABLE_INPUT
+    })).toBe(true);
+    expect(logic.isScriptInputDisabled()).toBe(true);
+    logic.handlePointerInput(makeInputState({
+      leftMouseClick: true,
+    }), camera);
+    logic.update(1 / 30);
+    expect(logic.getLocalPlayerSelectionIds()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 300, // ENABLE_INPUT
+    })).toBe(true);
+    expect(logic.isScriptInputDisabled()).toBe(false);
+    logic.handlePointerInput(makeInputState({
+      leftMouseClick: true,
+    }), camera);
+    logic.update(1 / 30);
+    expect(logic.getLocalPlayerSelectionIds()).toEqual([1]);
   });
 
   it('executes script relation-override actions using source action ids', () => {

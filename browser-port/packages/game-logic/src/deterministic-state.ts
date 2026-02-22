@@ -148,6 +148,7 @@ export interface DeterministicGameLogicCrcContext {
   animationTime: number;
   isAttackMoveToMode: boolean;
   previousAttackMoveToggleDown: boolean;
+  scriptInputDisabled: boolean;
   config: GameLogicConfigLike;
   commandQueue: readonly GameLogicCommand[];
 }
@@ -369,6 +370,7 @@ function writeDeterministicAiCrc(
   addFloat32Crc(context, crc, context.gameLogic.animationTime);
   crc.addUnsignedByte(context.gameLogic.isAttackMoveToMode ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.previousAttackMoveToggleDown ? 1 : 0);
+  crc.addUnsignedByte(context.gameLogic.scriptInputDisabled ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.config.renderUnknownObjects ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.config.attackUsesLineOfSight ? 1 : 0);
   addFloat32Crc(context, crc, context.gameLogic.config.defaultMoveSpeed);
