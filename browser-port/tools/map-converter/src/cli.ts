@@ -160,6 +160,7 @@ async function main(): Promise<void> {
     blendTileCount: parsed.blendTileCount,
     cliffStateData: parsed.cliffStateData ? uint8ArrayToBase64(parsed.cliffStateData) : undefined,
     cliffStateStride: parsed.cliffStateData ? parsed.cliffStateStride : undefined,
+    sidesList: parsed.sidesList,
   };
 
   const jsonStr = JSON.stringify(jsonOutput, null, 2);

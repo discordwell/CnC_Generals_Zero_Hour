@@ -27490,6 +27490,188 @@ describe('Script object-count + trigger groundwork', () => {
   });
 });
 
+describe('Map script execution', () => {
+  it('runs map scripts from sides list and resolves player-side names', () => {
+    const bundle = makeBundle({
+      objects: [],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+          skirmishDifficulty: 1,
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'InitScript',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: true,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: false,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 3, // CONDITION_TRUE
+                params: [],
+              }],
+            }],
+            actions: [{
+              actionType: 1, // SET_FLAG
+              params: [
+                { type: 5, intValue: 0, realValue: 0, stringValue: 'MissionFlag' },
+                { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+              ],
+            }, {
+              actionType: 154, // PLAYER_SET_MONEY
+              params: [
+                { type: 11, intValue: 0, realValue: 0, stringValue: 'Player_1' },
+                { type: 0, intValue: 1500, realValue: 0, stringValue: '' },
+              ],
+            }],
+            falseActions: [],
+          }],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'teamPlayer_1',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['MissionFlag', true],
+    })).toBe(true);
+    expect(logic.getSideCredits('America')).toBe(1500);
+  });
+
+  it('executes sequential scripts triggered by map scripts', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptUnit', 20, 20, {
+        objectName: 'ScriptUnitAlpha',
+        originalOwner: 'teamPlayer_1',
+      }),
+    ]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'StartSeq',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: true,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: false,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 3, // CONDITION_TRUE
+                params: [],
+              }],
+            }],
+            actions: [{
+              actionType: 392, // UNIT_EXECUTE_SEQUENTIAL_SCRIPT
+              params: [
+                { type: 14, intValue: 0, realValue: 0, stringValue: 'ScriptUnitAlpha' },
+                { type: 2, intValue: 0, realValue: 0, stringValue: 'SeqScript' },
+              ],
+            }],
+            falseActions: [],
+          }, {
+            name: 'SeqScript',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: false,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: true,
+            delayEvaluationSeconds: 0,
+            conditions: [],
+            actions: [{
+              actionType: 1, // SET_FLAG
+              params: [
+                { type: 5, intValue: 0, realValue: 0, stringValue: 'SeqFlag' },
+                { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+              ],
+            }],
+            falseActions: [],
+          }],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'teamPlayer_1',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['SeqFlag', true],
+    })).toBe(false);
+
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['SeqFlag', true],
+    })).toBe(true);
+  });
+});
+
 describe('Script condition groundwork', () => {
   it('evaluates player object-comparison and built-by-player conditions', () => {
     const bundle = makeBundle({

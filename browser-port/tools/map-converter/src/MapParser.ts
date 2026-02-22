@@ -14,6 +14,8 @@ import type { MapObject } from './MapObjectExtractor.js';
 import { WaypointExtractor } from './WaypointExtractor.js';
 import type { PolygonTrigger, WaypointLink, WaypointNode } from './WaypointExtractor.js';
 import { BlendTileExtractor } from './BlendTileExtractor.js';
+import { SidesListExtractor } from './SidesListExtractor.js';
+import type { MapSidesListJSON } from './SidesListExtractor.js';
 
 /** Complete parsed representation of a .map file. */
 export interface ParsedMap {
@@ -36,6 +38,8 @@ export interface ParsedMap {
   cliffStateData: Uint8Array | null;
   /** Bytes per row for `cliffStateData`. */
   cliffStateStride: number;
+  /** Optional SidesList payload containing sides, teams, and scripts. */
+  sidesList?: MapSidesListJSON;
 }
 
 /** Chunk label constants. */
@@ -45,6 +49,7 @@ const CHUNK_OBJECTS_LIST = 'ObjectsList';
 const CHUNK_OBJECT = 'Object';
 const CHUNK_POLYGON_TRIGGERS = 'PolygonTriggers';
 const CHUNK_WAYPOINTS_LIST = 'WaypointsList';
+const CHUNK_SIDES_LIST = 'SidesList';
 
 export class MapParser {
   /**
@@ -71,6 +76,7 @@ export class MapParser {
     const textureClasses: string[] = [];
     let cliffStateData: Uint8Array | null = null;
     let cliffStateStride = 0;
+    let sidesList: MapSidesListJSON | undefined;
 
     // Walk all chunks until end of buffer
     while (reader.position < reader.byteLength) {
@@ -123,6 +129,9 @@ export class MapParser {
           waypointLinks.push(...links);
           break;
         }
+        case CHUNK_SIDES_LIST:
+          sidesList = SidesListExtractor.extract(reader, chunk, idToName);
+          break;
 
         default:
           // Skip unknown chunks
@@ -157,6 +166,7 @@ export class MapParser {
       textureClasses,
       cliffStateData,
       cliffStateStride,
+      sidesList,
     };
   }
 

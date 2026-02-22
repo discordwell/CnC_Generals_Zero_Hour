@@ -47,6 +47,110 @@ export interface MapPoint {
   z: number;
 }
 
+/** Script parameter payload extracted from map script data. */
+export interface ScriptParameterJSON {
+  /** Numeric Script parameter type (Scripts.h Parameter::ParameterType). */
+  type: number;
+  /** Integer payload as stored in map script data. */
+  intValue: number;
+  /** Real payload as stored in map script data. */
+  realValue: number;
+  /** String payload as stored in map script data. */
+  stringValue: string;
+  /** Coordinate payload for COORD3D parameters. */
+  coord?: MapPoint;
+}
+
+/** Script condition payload extracted from map script data. */
+export interface ScriptConditionJSON {
+  /** Numeric Script condition type (Scripts.h Condition::ConditionType). */
+  conditionType: number;
+  /** Ordered parameter list from the condition definition. */
+  params: ScriptParameterJSON[];
+}
+
+/** Script action payload extracted from map script data. */
+export interface ScriptActionJSON {
+  /** Numeric Script action type (Scripts.h ScriptAction::ScriptActionType). */
+  actionType: number;
+  /** Ordered parameter list from the action definition. */
+  params: ScriptParameterJSON[];
+}
+
+/** Script OR clause containing a list of AND conditions. */
+export interface ScriptOrConditionJSON {
+  conditions: ScriptConditionJSON[];
+}
+
+/** Script definition extracted from map script data. */
+export interface ScriptJSON {
+  name: string;
+  comment: string;
+  conditionComment: string;
+  actionComment: string;
+  active: boolean;
+  oneShot: boolean;
+  easy: boolean;
+  normal: boolean;
+  hard: boolean;
+  subroutine: boolean;
+  delayEvaluationSeconds: number;
+  conditions: ScriptOrConditionJSON[];
+  actions: ScriptActionJSON[];
+  falseActions: ScriptActionJSON[];
+}
+
+/** Script group definition extracted from map script data. */
+export interface ScriptGroupJSON {
+  name: string;
+  active: boolean;
+  subroutine: boolean;
+  scripts: ScriptJSON[];
+}
+
+/** Script list for a single side. */
+export interface ScriptListJSON {
+  scripts: ScriptJSON[];
+  groups: ScriptGroupJSON[];
+}
+
+/** Build list entry extracted from a SidesList chunk. */
+export interface MapSideBuildListEntryJSON {
+  buildingName: string;
+  templateName: string;
+  location: MapPoint;
+  angle: number;
+  initiallyBuilt: boolean;
+  numRebuilds: number;
+  script?: string;
+  health?: number;
+  whiner?: boolean;
+  unsellable?: boolean;
+  repairable?: boolean;
+}
+
+/** Side entry extracted from a SidesList chunk. */
+export interface MapSideJSON {
+  /** Player dictionary extracted from the map (keys resolved to names). */
+  dict: Record<string, unknown>;
+  /** Build list entries for this side. */
+  buildList: MapSideBuildListEntryJSON[];
+  /** Script list associated with this side (if present). */
+  scripts?: ScriptListJSON;
+}
+
+/** Team entry extracted from a SidesList chunk. */
+export interface MapTeamJSON {
+  /** Team dictionary extracted from the map (keys resolved to names). */
+  dict: Record<string, unknown>;
+}
+
+/** Parsed SidesList data from a map. */
+export interface MapSidesListJSON {
+  sides: MapSideJSON[];
+  teams: MapTeamJSON[];
+}
+
 /** A polygon trigger region from the map. */
 export interface PolygonTriggerJSON {
   name: string;
@@ -115,6 +219,8 @@ export interface MapDataJSON {
    * Mirrors engine `flipStateWidth` (typically ceil(heightmap.width / 8)).
    */
   cliffStateStride?: number;
+  /** Optional SidesList payload containing sides, teams, and scripts. */
+  sidesList?: MapSidesListJSON;
 }
 
 // ============================================================================

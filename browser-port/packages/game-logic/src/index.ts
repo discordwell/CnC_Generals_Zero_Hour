@@ -29,6 +29,14 @@ import {
   type HeightmapGrid,
   type MapDataJSON,
   type MapObjectJSON,
+  type MapSidesListJSON,
+  type ScriptActionJSON,
+  type ScriptConditionJSON,
+  type ScriptGroupJSON,
+  type ScriptJSON,
+  type ScriptListJSON,
+  type ScriptOrConditionJSON,
+  type ScriptParameterJSON,
 } from '@generals/terrain';
 import type { InputState } from '@generals/input';
 import {
@@ -312,6 +320,10 @@ const SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER = 3;
 const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
 const SOURCE_FLASH_COLOR_WHITE = 0xffffff;
 const MAX_DYNAMIC_WATER = 64;
+const MAX_SPIN_COUNT = 20;
+const SCRIPT_DIFFICULTY_EASY = 0;
+const SCRIPT_DIFFICULTY_NORMAL = 1;
+const SCRIPT_DIFFICULTY_HARD = 2;
 
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
@@ -3835,12 +3847,65 @@ interface ScriptTeamRecord {
   created: boolean;
   stateName: string;
   controllingSide: string | null;
+  isSingleton: boolean;
+  maxInstances: number;
   /** Source parity: TeamTemplateInfo::m_productionPriority. */
   productionPriority: number;
   /** Source parity: TeamTemplateInfo::m_productionPrioritySuccessIncrease. */
   productionPrioritySuccessIncrease: number;
   /** Source parity: TeamTemplateInfo::m_productionPriorityFailureDecrease. */
   productionPriorityFailureDecrease: number;
+}
+
+interface MapScriptParameterRuntime {
+  type: number;
+  value: unknown;
+}
+
+interface MapScriptConditionRuntime {
+  conditionType: number;
+  params: MapScriptParameterRuntime[];
+  cacheId: string;
+}
+
+interface MapScriptOrConditionRuntime {
+  conditions: MapScriptConditionRuntime[];
+}
+
+interface MapScriptActionRuntime {
+  actionType: number;
+  params: MapScriptParameterRuntime[];
+}
+
+interface MapScriptRuntime {
+  name: string;
+  nameUpper: string;
+  active: boolean;
+  oneShot: boolean;
+  easy: boolean;
+  normal: boolean;
+  hard: boolean;
+  subroutine: boolean;
+  delayEvaluationSeconds: number;
+  frameToEvaluateAt: number;
+  conditionTeamNameUpper: string | null;
+  sourceSideIndex: number;
+  conditions: MapScriptOrConditionRuntime[];
+  actions: MapScriptActionRuntime[];
+  falseActions: MapScriptActionRuntime[];
+}
+
+interface MapScriptGroupRuntime {
+  name: string;
+  nameUpper: string;
+  active: boolean;
+  subroutine: boolean;
+  scripts: MapScriptRuntime[];
+}
+
+interface MapScriptListRuntime {
+  scripts: MapScriptRuntime[];
+  groups: MapScriptGroupRuntime[];
 }
 
 interface ScriptSequentialScriptState {
@@ -4002,6 +4067,91 @@ const SCRIPT_CONDITION_TYPE_ALIASES = new Map<string, string>([
   ['PLAYER_ALL_BUILD_FACILITIES_DESTROYED', 'PLAYER_ALL_BUILDFACILITIES_DESTROYED'],
   ['SKIRMISH_NAMED_AREA_EXISTS', 'SKIRMISH_NAMED_AREA_EXIST'],
 ]);
+
+/**
+ * Source parity: Parameter::ParameterType enum values from Scripts.h.
+ */
+const SCRIPT_PARAMETER_TYPE_INT = 0;
+const SCRIPT_PARAMETER_TYPE_REAL = 1;
+const SCRIPT_PARAMETER_TYPE_SCRIPT = 2;
+const SCRIPT_PARAMETER_TYPE_TEAM = 3;
+const SCRIPT_PARAMETER_TYPE_COUNTER = 4;
+const SCRIPT_PARAMETER_TYPE_FLAG = 5;
+const SCRIPT_PARAMETER_TYPE_COMPARISON = 6;
+const SCRIPT_PARAMETER_TYPE_WAYPOINT = 7;
+const SCRIPT_PARAMETER_TYPE_BOOLEAN = 8;
+const SCRIPT_PARAMETER_TYPE_TRIGGER_AREA = 9;
+const SCRIPT_PARAMETER_TYPE_TEXT_STRING = 10;
+const SCRIPT_PARAMETER_TYPE_SIDE = 11;
+const SCRIPT_PARAMETER_TYPE_SOUND = 12;
+const SCRIPT_PARAMETER_TYPE_SCRIPT_SUBROUTINE = 13;
+const SCRIPT_PARAMETER_TYPE_UNIT = 14;
+const SCRIPT_PARAMETER_TYPE_OBJECT_TYPE = 15;
+const SCRIPT_PARAMETER_TYPE_COORD3D = 16;
+const SCRIPT_PARAMETER_TYPE_ANGLE = 17;
+const SCRIPT_PARAMETER_TYPE_TEAM_STATE = 18;
+const SCRIPT_PARAMETER_TYPE_RELATION = 19;
+const SCRIPT_PARAMETER_TYPE_AI_MOOD = 20;
+const SCRIPT_PARAMETER_TYPE_DIALOG = 21;
+const SCRIPT_PARAMETER_TYPE_MUSIC = 22;
+const SCRIPT_PARAMETER_TYPE_MOVIE = 23;
+const SCRIPT_PARAMETER_TYPE_WAYPOINT_PATH = 24;
+const SCRIPT_PARAMETER_TYPE_LOCALIZED_TEXT = 25;
+const SCRIPT_PARAMETER_TYPE_BRIDGE = 26;
+const SCRIPT_PARAMETER_TYPE_KIND_OF = 27;
+const SCRIPT_PARAMETER_TYPE_ATTACK_PRIORITY_SET = 28;
+const SCRIPT_PARAMETER_TYPE_RADAR_EVENT_TYPE = 29;
+const SCRIPT_PARAMETER_TYPE_SPECIAL_POWER = 30;
+const SCRIPT_PARAMETER_TYPE_SCIENCE = 31;
+const SCRIPT_PARAMETER_TYPE_UPGRADE = 32;
+const SCRIPT_PARAMETER_TYPE_COMMANDBUTTON_ABILITY = 33;
+const SCRIPT_PARAMETER_TYPE_BOUNDARY = 34;
+const SCRIPT_PARAMETER_TYPE_BUILDABLE = 35;
+const SCRIPT_PARAMETER_TYPE_SURFACES_ALLOWED = 36;
+const SCRIPT_PARAMETER_TYPE_SHAKE_INTENSITY = 37;
+const SCRIPT_PARAMETER_TYPE_COMMAND_BUTTON = 38;
+const SCRIPT_PARAMETER_TYPE_FONT_NAME = 39;
+const SCRIPT_PARAMETER_TYPE_OBJECT_STATUS = 40;
+const SCRIPT_PARAMETER_TYPE_COMMANDBUTTON_ALL_ABILITIES = 41;
+const SCRIPT_PARAMETER_TYPE_SKIRMISH_WAYPOINT_PATH = 42;
+
+/**
+ * Source parity: ObjectStatusBits string table from ObjectStatusBits.h.
+ */
+const SCRIPT_OBJECT_STATUS_NAMES_BY_BIT_INDEX = [
+  'DESTROYED',
+  'CAN_ATTACK',
+  'UNDER_CONSTRUCTION',
+  'UNSELECTABLE',
+  'NO_COLLISIONS',
+  'NO_ATTACK',
+  'AIRBORNE_TARGET',
+  'PARACHUTING',
+  'REPULSOR',
+  'HIJACKED',
+  'AFLAME',
+  'BURNED',
+  'WET',
+  'IS_FIRING_WEAPON',
+  'IS_BRAKING',
+  'STEALTHED',
+  'DETECTED',
+  'CAN_STEALTH',
+  'SOLD',
+  'UNDERGOING_REPAIR',
+  'RECONSTRUCTING',
+  'MASKED',
+  'IS_ATTACKING',
+  'USING_ABILITY',
+  'IS_AIMING_WEAPON',
+  'NO_ATTACK_FROM_AI',
+  'IGNORING_STEALTH',
+  'IS_CARBOMB',
+] as const;
+
+const SCRIPT_OBJECT_STATUS_BIT_INDEX_BY_NAME = new Map<string, number>(
+  SCRIPT_OBJECT_STATUS_NAMES_BY_BIT_INDEX.map((name, index) => [name, index]),
+);
 
 /**
  * Source parity subset: ScriptAction::ScriptActionType identifiers used by current script-action
@@ -4261,6 +4411,10 @@ const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT = [
   'DONT_AUTO_CRUSH_INFANTRY',
 ] as const;
 
+const SCRIPT_KIND_OF_NAME_TO_BIT = new Map<string, number>(
+  SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.map((name, index) => [name, index]),
+);
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -4333,6 +4487,13 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptTeamsByName = new Map<string, ScriptTeamRecord>();
   /** Source parity: ScriptEngine sequential script queue. */
   private readonly scriptSequentialScripts: ScriptSequentialScriptState[] = [];
+  /** Source parity: ScriptEngine script lists loaded from map SidesList. */
+  private readonly mapScriptLists: MapScriptListRuntime[] = [];
+  private readonly mapScriptsByNameUpper = new Map<string, MapScriptRuntime>();
+  private readonly mapScriptGroupsByNameUpper = new Map<string, MapScriptGroupRuntime>();
+  private readonly scriptPlayerSideByName = new Map<string, string>();
+  private readonly mapScriptSideByIndex: string[] = [];
+  private readonly mapScriptDifficultyByIndex: number[] = [];
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
@@ -4582,6 +4743,8 @@ export class GameLogicSubsystem implements Subsystem {
       unresolvedObjects: 0,
     };
 
+    this.loadMapScripts(mapData);
+
     for (const mapObject of mapData.objects) {
       if ((mapObject.flags & OBJECT_DONT_RENDER_FLAG) !== 0) {
         this.placementSummary.skippedObjects++;
@@ -4676,6 +4839,430 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptObjectCountChangedFrame = 0;
 
     return this.placementSummary;
+  }
+
+  private loadMapScripts(mapData: MapDataJSON): void {
+    this.mapScriptLists.length = 0;
+    this.mapScriptsByNameUpper.clear();
+    this.mapScriptGroupsByNameUpper.clear();
+    this.scriptPlayerSideByName.clear();
+    this.mapScriptSideByIndex.length = 0;
+    this.mapScriptDifficultyByIndex.length = 0;
+
+    const sidesList = mapData.sidesList;
+    if (!sidesList) {
+      return;
+    }
+
+    for (let sideIndex = 0; sideIndex < sidesList.sides.length; sideIndex += 1) {
+      const side = sidesList.sides[sideIndex];
+      if (!side) {
+        continue;
+      }
+      const dict = side.dict ?? {};
+      const playerName = this.readScriptDictString(dict, 'playerName');
+      const playerFaction = this.readScriptDictString(dict, 'playerFaction');
+      const resolvedSide = this.resolveScriptSideFromPlayerFaction(playerFaction);
+      if (resolvedSide) {
+        this.mapScriptSideByIndex[sideIndex] = resolvedSide;
+      }
+      const normalizedPlayerName = playerName.trim().toUpperCase();
+      if (normalizedPlayerName && resolvedSide) {
+        this.scriptPlayerSideByName.set(normalizedPlayerName, resolvedSide);
+      }
+      const difficulty = this.readScriptDictNumber(dict, 'skirmishDifficulty');
+      this.mapScriptDifficultyByIndex[sideIndex] = difficulty !== null
+        ? Math.trunc(difficulty)
+        : SCRIPT_DIFFICULTY_NORMAL;
+    }
+
+    for (const teamEntry of sidesList.teams) {
+      const dict = teamEntry.dict ?? {};
+      const teamName = this.readScriptDictString(dict, 'teamName');
+      if (!teamName) {
+        continue;
+      }
+      const teamRecord = this.getOrCreateScriptTeamRecord(teamName);
+      if (!teamRecord) {
+        continue;
+      }
+
+      const teamOwner = this.readScriptDictString(dict, 'teamOwner');
+      const ownerKey = teamOwner.trim().toUpperCase();
+      if (ownerKey) {
+        const ownerSide = this.scriptPlayerSideByName.get(ownerKey);
+        if (ownerSide) {
+          teamRecord.controllingSide = ownerSide;
+        }
+      }
+
+      const isSingleton = this.readScriptDictBoolean(dict, 'teamIsSingleton');
+      if (isSingleton !== null) {
+        teamRecord.isSingleton = isSingleton;
+      }
+      const maxInstances = this.readScriptDictNumber(dict, 'teamMaxInstances');
+      if (maxInstances !== null) {
+        teamRecord.maxInstances = Math.trunc(maxInstances);
+      }
+      const productionPriority = this.readScriptDictNumber(dict, 'teamProductionPriority');
+      if (productionPriority !== null) {
+        teamRecord.productionPriority = Math.trunc(productionPriority);
+      }
+      const productionPrioritySuccessIncrease = this.readScriptDictNumber(
+        dict,
+        'teamProductionPrioritySuccessIncrease',
+      );
+      if (productionPrioritySuccessIncrease !== null) {
+        teamRecord.productionPrioritySuccessIncrease = Math.trunc(productionPrioritySuccessIncrease);
+      }
+      const productionPriorityFailureDecrease = this.readScriptDictNumber(
+        dict,
+        'teamProductionPriorityFailureDecrease',
+      );
+      if (productionPriorityFailureDecrease !== null) {
+        teamRecord.productionPriorityFailureDecrease = Math.trunc(productionPriorityFailureDecrease);
+      }
+    }
+
+    for (let sideIndex = 0; sideIndex < sidesList.sides.length; sideIndex += 1) {
+      const side = sidesList.sides[sideIndex];
+      if (!side || !side.scripts) {
+        this.mapScriptLists[sideIndex] = { scripts: [], groups: [] };
+        continue;
+      }
+      this.mapScriptLists[sideIndex] = this.createMapScriptListRuntime(side.scripts, sideIndex);
+    }
+  }
+
+  private readScriptDictString(dict: Record<string, unknown>, key: string): string {
+    const value = dict[key];
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === 'boolean') {
+      return value ? 'TRUE' : 'FALSE';
+    }
+    return '';
+  }
+
+  private readScriptDictNumber(dict: Record<string, unknown>, key: string): number | null {
+    const value = dict[key];
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+
+  private readScriptDictBoolean(dict: Record<string, unknown>, key: string): boolean | null {
+    const value = dict[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return null;
+      }
+      return value !== 0;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toUpperCase();
+      if (!normalized) {
+        return null;
+      }
+      if (normalized === 'TRUE' || normalized === 'YES' || normalized === 'ON' || normalized === '1') {
+        return true;
+      }
+      if (normalized === 'FALSE' || normalized === 'NO' || normalized === 'OFF' || normalized === '0') {
+        return false;
+      }
+    }
+    return null;
+  }
+
+  private resolveScriptSideFromPlayerFaction(playerFaction: string): string | null {
+    const trimmed = playerFaction.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const registry = this.iniDataRegistry;
+    const factionDef = registry ? registry.getFaction(trimmed) : undefined;
+    if (factionDef?.side) {
+      return this.normalizeSide(factionDef.side);
+    }
+    const normalized = this.normalizeSide(trimmed);
+    return normalized || null;
+  }
+
+  private createMapScriptListRuntime(scriptList: ScriptListJSON, sideIndex: number): MapScriptListRuntime {
+    const scripts: MapScriptRuntime[] = [];
+    for (const script of scriptList.scripts ?? []) {
+      scripts.push(this.createMapScriptRuntime(script, sideIndex));
+    }
+
+    const groups: MapScriptGroupRuntime[] = [];
+    for (const group of scriptList.groups ?? []) {
+      groups.push(this.createMapScriptGroupRuntime(group, sideIndex));
+    }
+
+    return { scripts, groups };
+  }
+
+  private createMapScriptGroupRuntime(group: ScriptGroupJSON, sideIndex: number): MapScriptGroupRuntime {
+    const name = group.name ?? '';
+    const nameUpper = name.trim().toUpperCase();
+    const scripts: MapScriptRuntime[] = [];
+    for (const script of group.scripts ?? []) {
+      scripts.push(this.createMapScriptRuntime(script, sideIndex));
+    }
+    const runtime: MapScriptGroupRuntime = {
+      name,
+      nameUpper,
+      active: group.active ?? true,
+      subroutine: group.subroutine ?? false,
+      scripts,
+    };
+    if (nameUpper) {
+      this.mapScriptGroupsByNameUpper.set(nameUpper, runtime);
+    }
+    return runtime;
+  }
+
+  private createMapScriptRuntime(script: ScriptJSON, sideIndex: number): MapScriptRuntime {
+    const name = script.name ?? '';
+    const nameUpper = name.trim().toUpperCase();
+    const conditions: MapScriptOrConditionRuntime[] = [];
+    const conditionList = script.conditions ?? [];
+    for (let orIndex = 0; orIndex < conditionList.length; orIndex += 1) {
+      const orCondition = conditionList[orIndex]!;
+      conditions.push(this.createMapScriptOrConditionRuntime(orCondition, sideIndex, nameUpper, orIndex));
+    }
+
+    const actions: MapScriptActionRuntime[] = [];
+    for (const action of script.actions ?? []) {
+      actions.push(this.createMapScriptActionRuntime(action));
+    }
+
+    const falseActions: MapScriptActionRuntime[] = [];
+    for (const action of script.falseActions ?? []) {
+      falseActions.push(this.createMapScriptActionRuntime(action));
+    }
+
+    const delaySeconds = Number.isFinite(script.delayEvaluationSeconds)
+      ? script.delayEvaluationSeconds
+      : 0;
+
+    const runtime: MapScriptRuntime = {
+      name,
+      nameUpper,
+      active: script.active ?? true,
+      oneShot: script.oneShot ?? false,
+      easy: script.easy ?? true,
+      normal: script.normal ?? true,
+      hard: script.hard ?? true,
+      subroutine: script.subroutine ?? false,
+      delayEvaluationSeconds: delaySeconds,
+      frameToEvaluateAt: 0,
+      conditionTeamNameUpper: null,
+      sourceSideIndex: sideIndex,
+      conditions,
+      actions,
+      falseActions,
+    };
+
+    this.checkMapScriptConditionsForTeamNames(runtime);
+
+    if (delaySeconds > 0) {
+      runtime.frameToEvaluateAt = this.gameRandom.nextRange(0, 2 * LOGIC_FRAME_RATE);
+    }
+
+    if (nameUpper) {
+      this.mapScriptsByNameUpper.set(nameUpper, runtime);
+    }
+
+    return runtime;
+  }
+
+  private createMapScriptOrConditionRuntime(
+    orCondition: ScriptOrConditionJSON,
+    sideIndex: number,
+    scriptNameUpper: string,
+    orIndex: number,
+  ): MapScriptOrConditionRuntime {
+    const conditions: MapScriptConditionRuntime[] = [];
+    for (let condIndex = 0; condIndex < (orCondition.conditions ?? []).length; condIndex += 1) {
+      const condition = orCondition.conditions[condIndex]!;
+      const cacheId = `MAPSCRIPT:${sideIndex}:${scriptNameUpper}:OR${orIndex}:COND${condIndex}`;
+      conditions.push(this.createMapScriptConditionRuntime(condition, cacheId));
+    }
+    return { conditions };
+  }
+
+  private createMapScriptConditionRuntime(
+    condition: ScriptConditionJSON,
+    cacheId: string,
+  ): MapScriptConditionRuntime {
+    const params: MapScriptParameterRuntime[] = [];
+    for (const param of condition.params ?? []) {
+      params.push(this.createMapScriptParameterRuntime(param));
+    }
+    return {
+      conditionType: condition.conditionType,
+      params,
+      cacheId,
+    };
+  }
+
+  private createMapScriptActionRuntime(action: ScriptActionJSON): MapScriptActionRuntime {
+    const params: MapScriptParameterRuntime[] = [];
+    for (const param of action.params ?? []) {
+      params.push(this.createMapScriptParameterRuntime(param));
+    }
+    return {
+      actionType: action.actionType,
+      params,
+    };
+  }
+
+  private createMapScriptParameterRuntime(param: ScriptParameterJSON): MapScriptParameterRuntime {
+    return {
+      type: param.type,
+      value: this.resolveMapScriptParameterValue(param),
+    };
+  }
+
+  private resolveMapScriptParameterValue(param: ScriptParameterJSON): unknown {
+    switch (param.type) {
+      case SCRIPT_PARAMETER_TYPE_COORD3D:
+        return param.coord ?? { x: 0, y: 0, z: 0 };
+      case SCRIPT_PARAMETER_TYPE_REAL:
+      case SCRIPT_PARAMETER_TYPE_ANGLE:
+        return Number.isFinite(param.realValue) ? param.realValue : 0;
+      case SCRIPT_PARAMETER_TYPE_BOOLEAN:
+        return param.intValue !== 0;
+      case SCRIPT_PARAMETER_TYPE_KIND_OF: {
+        const kindOf = this.normalizeScriptKindOfToken(param.stringValue);
+        if (kindOf) {
+          const bitIndex = SCRIPT_KIND_OF_NAME_TO_BIT.get(kindOf);
+          if (bitIndex !== undefined) {
+            return bitIndex;
+          }
+        }
+        return Math.trunc(param.intValue);
+      }
+      case SCRIPT_PARAMETER_TYPE_OBJECT_STATUS: {
+        const mask = this.resolveScriptObjectStatusMaskFromInput(param.stringValue);
+        if (mask !== null) {
+          return mask;
+        }
+        return Math.trunc(param.intValue);
+      }
+      case SCRIPT_PARAMETER_TYPE_OBJECT_TYPE:
+        return this.normalizeMapScriptObjectTypeParam(param.stringValue);
+      case SCRIPT_PARAMETER_TYPE_UPGRADE:
+        return this.normalizeMapScriptUpgradeParam(param.stringValue);
+      case SCRIPT_PARAMETER_TYPE_INT:
+      case SCRIPT_PARAMETER_TYPE_COMPARISON:
+      case SCRIPT_PARAMETER_TYPE_RELATION:
+      case SCRIPT_PARAMETER_TYPE_AI_MOOD:
+      case SCRIPT_PARAMETER_TYPE_RADAR_EVENT_TYPE:
+      case SCRIPT_PARAMETER_TYPE_BOUNDARY:
+      case SCRIPT_PARAMETER_TYPE_BUILDABLE:
+      case SCRIPT_PARAMETER_TYPE_SURFACES_ALLOWED:
+      case SCRIPT_PARAMETER_TYPE_SHAKE_INTENSITY:
+        return Math.trunc(param.intValue);
+      default:
+        return param.stringValue;
+    }
+  }
+
+  private normalizeScriptKindOfToken(rawValue: string): string | null {
+    const token = rawValue.trim().toUpperCase();
+    if (!token) {
+      return null;
+    }
+    const normalized = token.startsWith('KINDOF_') ? token.slice('KINDOF_'.length) : token;
+    if (normalized === 'CRUSHER' || normalized === 'CRUSHABLE' || normalized === 'OVERLAPPABLE') {
+      return 'OBSTACLE';
+    }
+    if (normalized === 'MISSILE') {
+      return 'SMALL_MISSILE';
+    }
+    return normalized;
+  }
+
+  private normalizeMapScriptObjectTypeParam(rawValue: string): string {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return '';
+    }
+    if (trimmed.startsWith('Fundamentalist')) {
+      return `GLA${trimmed.slice('Fundamentalist'.length)}`;
+    }
+    return trimmed;
+  }
+
+  private normalizeMapScriptUpgradeParam(rawValue: string): string {
+    const trimmed = rawValue.trim();
+    if (
+      trimmed === 'Upgrade_AmericaRangerCaptureBuilding'
+      || trimmed === 'Upgrade_ChinaRedguardCaptureBuilding'
+      || trimmed === 'Upgrade_GLARebelCaptureBuilding'
+    ) {
+      return 'Upgrade_InfantryCaptureBuilding';
+    }
+    return trimmed;
+  }
+
+  private checkMapScriptConditionsForTeamNames(script: MapScriptRuntime): void {
+    let singletonTeamName: string | null = null;
+    let multiTeamName: string | null = null;
+
+    for (const orCondition of script.conditions) {
+      for (const condition of orCondition.conditions) {
+        for (const param of condition.params) {
+          if (param.type !== SCRIPT_PARAMETER_TYPE_TEAM) {
+            continue;
+          }
+          const rawName = this.coerceScriptConditionString(param.value).trim();
+          if (!rawName) {
+            continue;
+          }
+          const teamNameUpper = rawName.toUpperCase();
+          const teamRecord = this.scriptTeamsByName.get(teamNameUpper);
+          if (!teamRecord) {
+            continue;
+          }
+          let isSingleton = teamRecord.isSingleton;
+          if (teamRecord.maxInstances < 2) {
+            isSingleton = true;
+          }
+          if (isSingleton) {
+            singletonTeamName = teamNameUpper;
+          } else if (!multiTeamName) {
+            multiTeamName = teamNameUpper;
+          } else if (multiTeamName !== teamNameUpper) {
+            // TODO(source-parity): ScriptEngine logs a warning for multiple non-singleton team refs.
+          }
+        }
+      }
+    }
+
+    if (multiTeamName) {
+      script.conditionTeamNameUpper = multiTeamName;
+    } else if (singletonTeamName) {
+      script.conditionTeamNameUpper = singletonTeamName;
+    }
   }
 
   private resolveRailedTransportWaypointData(mapData: MapDataJSON): RailedTransportWaypointData | null {
@@ -5056,10 +5643,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.processCountermeasureDiversions();
     this.updatePendingWeaponDamage();
     this.updateScriptTriggerTransitions();
+    this.executeMapScripts();
+    this.clearScriptUIInteractions();
+    this.updateScriptSequentialScripts();
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
     this.checkVictoryConditions();
-    this.clearScriptUIInteractions();
   }
 
   private updateScriptCountdownTimers(): void {
@@ -6246,6 +6835,16 @@ export class GameLogicSubsystem implements Subsystem {
     if (!normalizedName) {
       return false;
     }
+    const mapScript = this.mapScriptsByNameUpper.get(normalizedName);
+    if (mapScript) {
+      mapScript.active = active;
+      return true;
+    }
+    const mapGroup = this.mapScriptGroupsByNameUpper.get(normalizedName);
+    if (mapGroup) {
+      mapGroup.active = active;
+      return true;
+    }
     this.scriptActiveByName.set(normalizedName, active);
     return true;
   }
@@ -6257,6 +6856,14 @@ export class GameLogicSubsystem implements Subsystem {
     const normalizedName = scriptName.trim().toUpperCase();
     if (!normalizedName) {
       return false;
+    }
+    const mapScript = this.mapScriptsByNameUpper.get(normalizedName);
+    if (mapScript) {
+      return mapScript.active;
+    }
+    const mapGroup = this.mapScriptGroupsByNameUpper.get(normalizedName);
+    if (mapGroup) {
+      return mapGroup.active;
     }
     return this.scriptActiveByName.get(normalizedName) ?? true;
   }
@@ -6271,6 +6878,16 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     this.scriptSubroutineCalls.push(normalizedName);
+    const mapGroup = this.mapScriptGroupsByNameUpper.get(normalizedName);
+    if (mapGroup && mapGroup.subroutine && mapGroup.active) {
+      this.executeMapScriptGroup(mapGroup, true);
+      return true;
+    }
+    const mapScript = this.mapScriptsByNameUpper.get(normalizedName);
+    if (mapScript && mapScript.subroutine && mapScript.active) {
+      this.executeMapScript(mapScript, true);
+      return true;
+    }
     return true;
   }
 
@@ -12018,7 +12635,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   evaluateScriptTeamHasObjectStatus(filter: {
     teamName: string;
-    objectStatus: string;
+    objectStatus: unknown;
     entireTeam: boolean;
   }): boolean {
     const team = this.getScriptTeamRecord(filter.teamName);
@@ -12026,13 +12643,17 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const normalizedStatus = filter.objectStatus.trim().toUpperCase();
-    if (!normalizedStatus) {
+    const statusMask = this.resolveScriptObjectStatusMaskFromInput(filter.objectStatus);
+    const statusTokens = this.resolveScriptObjectStatusTokens(filter.objectStatus);
+    if ((!statusMask || statusMask === 0) && statusTokens.length === 0) {
       return false;
     }
 
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      const hasStatus = entity.objectStatusFlags.has(normalizedStatus);
+      const hasStatus = (
+        (statusMask !== null && statusMask !== 0 && this.entityHasAnyStatusMask(entity, statusMask))
+        || statusTokens.some((token) => this.entityHasObjectStatus(entity, token))
+      );
       if (filter.entireTeam && !hasStatus) {
         return false;
       }
@@ -13894,7 +14515,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   evaluateScriptUnitHasObjectStatus(filter: {
     entityId: number;
-    objectStatus: string;
+    objectStatus: unknown;
   }): boolean {
     if (!Number.isFinite(filter.entityId)) {
       return false;
@@ -13905,15 +14526,15 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const requestedStatuses = filter.objectStatus
-      .trim()
-      .split(/\s+/)
-      .filter((status) => status.length > 0);
-    if (requestedStatuses.length === 0) {
+    const statusMask = this.resolveScriptObjectStatusMaskFromInput(filter.objectStatus);
+    const statusTokens = this.resolveScriptObjectStatusTokens(filter.objectStatus);
+    if (statusMask !== null && statusMask !== 0 && this.entityHasAnyStatusMask(entity, statusMask)) {
+      return true;
+    }
+    if (statusTokens.length === 0) {
       return false;
     }
-
-    return requestedStatuses.some((status) => this.entityHasObjectStatus(entity, status));
+    return statusTokens.some((token) => this.entityHasObjectStatus(entity, token));
   }
 
   /**
@@ -17285,6 +17906,80 @@ export class GameLogicSubsystem implements Subsystem {
       return withoutPrefix.length > 0 ? withoutPrefix : null;
     }
     return normalized;
+  }
+
+  private resolveScriptObjectStatusMaskFromInput(value: unknown): number | null {
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return null;
+      }
+      return Math.trunc(value);
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const numeric = Number(trimmed);
+      if (Number.isFinite(numeric)) {
+        return Math.trunc(numeric);
+      }
+
+      let mask = 0;
+      let found = false;
+      for (const token of trimmed.split(/\s+/)) {
+        const normalized = this.normalizeObjectStatusName(token);
+        if (!normalized) {
+          continue;
+        }
+        const bitIndex = SCRIPT_OBJECT_STATUS_BIT_INDEX_BY_NAME.get(normalized);
+        if (bitIndex === undefined) {
+          continue;
+        }
+        mask |= 1 << bitIndex;
+        found = true;
+      }
+      return found ? mask : null;
+    }
+    return null;
+  }
+
+  private resolveScriptObjectStatusTokens(value: unknown): string[] {
+    if (typeof value !== 'string') {
+      return [];
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return [];
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return [];
+    }
+    return trimmed
+      .split(/\s+/)
+      .map((token) => this.normalizeObjectStatusName(token))
+      .filter((token): token is string => Boolean(token));
+  }
+
+  private entityHasAnyStatusMask(entity: MapEntity, statusMask: number): boolean {
+    const mask = Math.trunc(statusMask);
+    if (!Number.isFinite(mask) || mask === 0) {
+      return false;
+    }
+    for (let index = 0; index < SCRIPT_OBJECT_STATUS_NAMES_BY_BIT_INDEX.length; index += 1) {
+      if ((mask & (1 << index)) === 0) {
+        continue;
+      }
+      const statusName = SCRIPT_OBJECT_STATUS_NAMES_BY_BIT_INDEX[index];
+      if (!statusName) {
+        continue;
+      }
+      if (this.entityHasObjectStatus(entity, statusName)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private extractProductionProfile(objectDef: ObjectDef | undefined): ProductionProfile | null {
@@ -23495,6 +24190,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
       return this.resolveScriptSkirmishEnemySide(currentSide);
     }
+    const mappedSide = this.scriptPlayerSideByName.get(trimmed.toUpperCase());
+    if (mappedSide) {
+      return mappedSide;
+    }
     const normalized = this.normalizeSide(trimmed);
     return normalized || null;
   }
@@ -23575,12 +24274,26 @@ export class GameLogicSubsystem implements Subsystem {
       created: false,
       stateName: '',
       controllingSide: null,
+      isSingleton: true,
+      maxInstances: 0,
       productionPriority: 0,
       productionPrioritySuccessIncrease: 0,
       productionPriorityFailureDecrease: 0,
     };
     this.scriptTeamsByName.set(teamNameUpper, created);
     return created;
+  }
+
+  private assignEntityToScriptTeam(entity: MapEntity): void {
+    const ownerToken = this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined);
+    if (!ownerToken) {
+      return;
+    }
+    const team = this.scriptTeamsByName.get(ownerToken.toUpperCase());
+    if (!team) {
+      return;
+    }
+    team.memberEntityIds.add(entity.id);
   }
 
   private getScriptTeamMemberEntities(team: ScriptTeamRecord): MapEntity[] {
@@ -27006,6 +27719,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.set(entity.id, entity);
     this.scriptExistedEntityIds.add(entity.id);
     this.registerScriptNamedEntity(entity);
+    this.assignEntityToScriptTeam(entity);
     if (this.mapTriggerRegions.length > 0) {
       this.initializeScriptTriggerMembershipForEntity(entity);
     }
@@ -27930,6 +28644,345 @@ export class GameLogicSubsystem implements Subsystem {
       this.scriptTriggerExitedByEntityId.set(entity.id, exited);
       this.scriptTriggerEnterExitFrameByEntityId.set(entity.id, this.frameCounter);
     }
+  }
+
+  private executeMapScripts(): void {
+    if (this.mapScriptLists.length === 0) {
+      return;
+    }
+
+    const previousCurrentSide = this.scriptCurrentPlayerSide;
+    for (let sideIndex = 0; sideIndex < this.mapScriptLists.length; sideIndex += 1) {
+      const scriptList = this.mapScriptLists[sideIndex];
+      if (!scriptList) {
+        continue;
+      }
+      this.scriptCurrentPlayerSide = this.mapScriptSideByIndex[sideIndex] ?? null;
+      this.executeMapScriptList(scriptList);
+    }
+    this.scriptCurrentPlayerSide = previousCurrentSide;
+  }
+
+  private executeMapScriptList(scriptList: MapScriptListRuntime): void {
+    for (const script of scriptList.scripts) {
+      this.executeMapScript(script, false);
+    }
+    for (const group of scriptList.groups) {
+      if (!group.active || group.subroutine) {
+        continue;
+      }
+      this.executeMapScriptGroup(group, false);
+    }
+  }
+
+  private executeMapScriptGroup(group: MapScriptGroupRuntime, allowSubroutine: boolean): void {
+    for (const script of group.scripts) {
+      if (script.subroutine && !allowSubroutine) {
+        continue;
+      }
+      this.executeMapScript(script, allowSubroutine);
+    }
+  }
+
+  private executeMapScript(script: MapScriptRuntime, allowSubroutine: boolean): void {
+    if (!script.active) {
+      return;
+    }
+    if (script.subroutine && !allowSubroutine) {
+      return;
+    }
+
+    const difficulty = this.resolveMapScriptDifficultyForSide(script.sourceSideIndex);
+    if (difficulty === SCRIPT_DIFFICULTY_EASY && !script.easy) {
+      return;
+    }
+    if (difficulty === SCRIPT_DIFFICULTY_NORMAL && !script.normal) {
+      return;
+    }
+    if (difficulty === SCRIPT_DIFFICULTY_HARD && !script.hard) {
+      return;
+    }
+
+    if (this.frameCounter < script.frameToEvaluateAt) {
+      return;
+    }
+
+    if (script.delayEvaluationSeconds > 0) {
+      script.frameToEvaluateAt = this.frameCounter + Math.trunc(script.delayEvaluationSeconds * LOGIC_FRAME_RATE);
+    }
+
+    const previousConditionTeam = this.scriptConditionTeamNameUpper;
+    const previousConditionEntity = this.scriptConditionEntityId;
+    const previousCallingTeam = this.scriptCallingTeamNameUpper;
+    const previousCallingEntity = this.scriptCallingEntityId;
+
+    const conditionTeam = script.conditionTeamNameUpper
+      ? this.scriptTeamsByName.get(script.conditionTeamNameUpper)
+      : null;
+    const hasConditionTeamInstance = conditionTeam ? conditionTeam.memberEntityIds.size > 0 : false;
+
+    this.scriptConditionTeamNameUpper = hasConditionTeamInstance ? conditionTeam!.nameUpper : null;
+    this.scriptConditionEntityId = null;
+
+    if (this.evaluateMapScriptConditions(script)) {
+      this.executeMapScriptActions(script.actions);
+      if (script.oneShot) {
+        script.active = false;
+      }
+    } else if (script.falseActions.length > 0) {
+      this.executeMapScriptActions(script.falseActions);
+      if (!hasConditionTeamInstance && script.oneShot) {
+        script.active = false;
+      }
+    }
+
+    this.scriptConditionTeamNameUpper = previousConditionTeam;
+    this.scriptConditionEntityId = previousConditionEntity;
+    this.scriptCallingTeamNameUpper = previousCallingTeam;
+    this.scriptCallingEntityId = previousCallingEntity;
+  }
+
+  private resolveMapScriptDifficultyForSide(sideIndex: number): number {
+    const difficulty = this.mapScriptDifficultyByIndex[sideIndex];
+    if (
+      difficulty === SCRIPT_DIFFICULTY_EASY
+      || difficulty === SCRIPT_DIFFICULTY_NORMAL
+      || difficulty === SCRIPT_DIFFICULTY_HARD
+    ) {
+      return difficulty;
+    }
+    return SCRIPT_DIFFICULTY_NORMAL;
+  }
+
+  private evaluateMapScriptConditions(script: MapScriptRuntime): boolean {
+    let testValue = false;
+
+    for (const orCondition of script.conditions) {
+      if (orCondition.conditions.length === 0) {
+        continue;
+      }
+      let andTerm = true;
+      for (const condition of orCondition.conditions) {
+        if (
+          !this.evaluateScriptCondition({
+            conditionType: condition.conditionType,
+            params: condition.params.map((param) => param.value),
+            conditionCacheId: condition.cacheId,
+          })
+        ) {
+          andTerm = false;
+          break;
+        }
+      }
+      if (andTerm) {
+        testValue = true;
+        break;
+      }
+    }
+
+    return testValue;
+  }
+
+  private executeMapScriptActions(actions: MapScriptActionRuntime[]): void {
+    for (const action of actions) {
+      this.executeMapScriptAction(action);
+    }
+  }
+
+  private executeMapScriptAction(action: MapScriptActionRuntime): void {
+    void this.executeScriptAction({
+      actionType: action.actionType,
+      params: action.params.map((param) => param.value),
+    });
+  }
+
+  private updateScriptSequentialScripts(): void {
+    let lastIndex = -1;
+    let spinCount = 0;
+
+    for (let index = 0; index < this.scriptSequentialScripts.length; ) {
+      if (index === lastIndex) {
+        spinCount += 1;
+      } else {
+        spinCount = 0;
+      }
+      if (spinCount > MAX_SPIN_COUNT) {
+        index += 1;
+        continue;
+      }
+      lastIndex = index;
+
+      const seqScript = this.scriptSequentialScripts[index];
+      if (!seqScript) {
+        this.cleanupSequentialScriptAt(index, false);
+        continue;
+      }
+
+      const targetEntity = seqScript.objectId !== null ? this.spawnedEntities.get(seqScript.objectId) ?? null : null;
+      const team = seqScript.teamNameUpper
+        ? this.scriptTeamsByName.get(seqScript.teamNameUpper) ?? null
+        : null;
+      if (!targetEntity && !team) {
+        this.cleanupSequentialScriptAt(index, false);
+        continue;
+      }
+
+      const previousCurrentSide = this.scriptCurrentPlayerSide;
+      let scriptSide: string | null = null;
+      if (targetEntity) {
+        scriptSide = this.normalizeSide(targetEntity.side);
+      } else if (team) {
+        scriptSide = this.resolveScriptTeamControllingSide(team);
+      }
+      if (scriptSide && this.sidePlayerTypes.get(scriptSide) === 'COMPUTER') {
+        this.scriptCurrentPlayerSide = scriptSide;
+      } else {
+        this.scriptCurrentPlayerSide = null;
+      }
+
+      const isIdle = targetEntity
+        ? this.isScriptSequentialEntityIdle(targetEntity)
+        : (team ? this.isScriptSequentialTeamIdle(team) : false);
+      let itAdvanced = false;
+
+      if ((isIdle && seqScript.framesToWait < 1) || seqScript.framesToWait === 0) {
+        if (seqScript.dontAdvanceInstruction) {
+          seqScript.dontAdvanceInstruction = false;
+        } else {
+          seqScript.currentInstruction += 1;
+        }
+
+        const scriptRuntime = this.mapScriptsByNameUpper.get(seqScript.scriptNameUpper);
+        if (!scriptRuntime) {
+          this.cleanupSequentialScriptAt(index, false);
+          this.scriptCurrentPlayerSide = previousCurrentSide;
+          continue;
+        }
+
+        const action = scriptRuntime.actions[seqScript.currentInstruction] ?? null;
+        if (action) {
+          const previousConditionTeam = this.scriptConditionTeamNameUpper;
+          const previousConditionEntity = this.scriptConditionEntityId;
+          const previousCallingTeam = this.scriptCallingTeamNameUpper;
+          const previousCallingEntity = this.scriptCallingEntityId;
+
+          this.scriptConditionTeamNameUpper = team ? team.nameUpper : null;
+          this.scriptConditionEntityId = targetEntity ? targetEntity.id : null;
+          seqScript.framesToWait = -1;
+
+          const actionTypeName = this.resolveScriptActionTypeName(action.actionType);
+          if (
+            actionTypeName === 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL'
+            || actionTypeName === 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL'
+          ) {
+            const params = action.params.map((param) => param.value);
+            const teamName = this.coerceScriptConditionString(params[1]);
+            const commandButtonName = this.coerceScriptConditionString(params[2]);
+            const allReady = actionTypeName === 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL';
+            if (!this.executeScriptSkirmishWaitForCommandButtonAvailability(teamName, commandButtonName, allReady)) {
+              seqScript.dontAdvanceInstruction = true;
+            }
+          } else {
+            this.executeMapScriptAction(action);
+          }
+
+          this.scriptConditionTeamNameUpper = previousConditionTeam;
+          this.scriptConditionEntityId = previousConditionEntity;
+          this.scriptCallingTeamNameUpper = previousCallingTeam;
+          this.scriptCallingEntityId = previousCallingEntity;
+
+          if (seqScript.dontAdvanceInstruction) {
+            this.scriptCurrentPlayerSide = previousCurrentSide;
+            index += 1;
+            continue;
+          }
+
+          if (targetEntity && this.isScriptSequentialEntityIdle(targetEntity)) {
+            itAdvanced = true;
+          } else if (team && this.isScriptSequentialTeamIdle(team)) {
+            itAdvanced = true;
+          }
+
+          if (itAdvanced) {
+            if (targetEntity && targetEntity.destroyed) {
+              this.cleanupSequentialScriptAt(index, true);
+              this.scriptCurrentPlayerSide = previousCurrentSide;
+              continue;
+            }
+            if (team && this.isScriptSequentialTeamDead(team)) {
+              this.cleanupSequentialScriptAt(index, true);
+              this.scriptCurrentPlayerSide = previousCurrentSide;
+              continue;
+            }
+          }
+        } else {
+          if (seqScript.timesToLoop !== 0) {
+            const timesToLoop = seqScript.timesToLoop === -1 ? -1 : seqScript.timesToLoop - 1;
+            this.appendScriptSequentialScript({
+              scriptNameUpper: seqScript.scriptNameUpper,
+              objectId: seqScript.objectId,
+              teamNameUpper: seqScript.teamNameUpper,
+              currentInstruction: -1,
+              timesToLoop,
+              framesToWait: -1,
+              dontAdvanceInstruction: false,
+              nextScript: null,
+            });
+          }
+          this.cleanupSequentialScriptAt(index, false);
+          this.scriptCurrentPlayerSide = previousCurrentSide;
+          continue;
+        }
+      } else if (seqScript.framesToWait > 0) {
+        seqScript.framesToWait -= 1;
+      }
+
+      this.scriptCurrentPlayerSide = previousCurrentSide;
+
+      if (!itAdvanced) {
+        index += 1;
+      }
+    }
+  }
+
+  private cleanupSequentialScriptAt(index: number, cleanDanglers: boolean): void {
+    const seqScript = this.scriptSequentialScripts[index];
+    if (!seqScript) {
+      this.scriptSequentialScripts.splice(index, 1);
+      return;
+    }
+
+    if (cleanDanglers || !seqScript.nextScript) {
+      this.scriptSequentialScripts.splice(index, 1);
+      return;
+    }
+
+    this.scriptSequentialScripts[index] = seqScript.nextScript;
+  }
+
+  private isScriptSequentialEntityIdle(entity: MapEntity): boolean {
+    return !entity.moving
+      && entity.attackTargetEntityId === null
+      && entity.guardState === 'NONE'
+      && (!entity.specialAbilityState || entity.specialAbilityState.packState === 'NONE')
+      && entity.transportContainerId === null;
+  }
+
+  private isScriptSequentialTeamIdle(team: ScriptTeamRecord): boolean {
+    const members = this.getScriptTeamMemberEntities(team).filter((entity) => !entity.destroyed);
+    if (members.length === 0) {
+      return true;
+    }
+    return members.every((entity) => this.isScriptSequentialEntityIdle(entity));
+  }
+
+  private isScriptSequentialTeamDead(team: ScriptTeamRecord): boolean {
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (!entity.destroyed) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private findMapTriggerRegionsByName(triggerName: string): Array<{
@@ -43745,6 +44798,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCompletedMusic.length = 0;
     this.scriptTeamsByName.clear();
     this.scriptSequentialScripts.length = 0;
+    this.mapScriptLists.length = 0;
+    this.mapScriptsByNameUpper.clear();
+    this.mapScriptGroupsByNameUpper.clear();
+    this.scriptPlayerSideByName.clear();
+    this.mapScriptSideByIndex.length = 0;
+    this.mapScriptDifficultyByIndex.length = 0;
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();
