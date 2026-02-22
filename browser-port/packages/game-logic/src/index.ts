@@ -96,6 +96,7 @@ import {
   toByte,
 } from './ini-readers.js';
 import {
+  type BuildableStatus,
   extractProductionPrerequisiteGroups as extractProductionPrerequisiteGroupsImpl,
   resolveBuildableStatus as resolveBuildableStatusImpl,
 } from './production-prerequisites.js';
@@ -3925,6 +3926,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [413, 'RADAR_FORCE_ENABLE'],
   [414, 'RADAR_REVERT_TO_NORMAL'],
   [415, 'SCREEN_SHAKE'],
+  [416, 'TECHTREE_MODIFY_BUILDABILITY_OBJECT'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -3962,6 +3964,8 @@ export class GameLogicSubsystem implements Subsystem {
   private bridgeDamageStatesChangedFrame = -1;
   /** Source parity: BridgeInfo::damageStateChanged + curDamageState snapshot for this frame. */
   private readonly bridgeDamageStateByControlEntity = new Map<number, boolean>();
+  /** Source parity: GameLogic::m_thingTemplateBuildableOverrides script-action runtime overrides. */
+  private readonly thingTemplateBuildableOverrides = new Map<string, BuildableStatus>();
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
   private readonly sideCredits = new Map<string, number>();
@@ -6049,6 +6053,11 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'SCREEN_SHAKE':
         return this.setScriptScreenShake(readInteger(0, ['intensity', 'shakeType', 'cameraShakeType']));
+      case 'TECHTREE_MODIFY_BUILDABILITY_OBJECT':
+        return this.executeScriptModifyBuildableStatus(
+          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          this.coerceScriptBuildableStatus(readValue(1, ['buildableStatus', 'status', 'buildable'])),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -7280,6 +7289,24 @@ export class GameLogicSubsystem implements Subsystem {
       }
       this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
     }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doModifyBuildableStatus + GameLogic::setBuildableStatusOverride.
+   */
+  private executeScriptModifyBuildableStatus(templateName: string, buildableStatus: BuildableStatus): boolean {
+    const objectDef = this.resolveObjectDefByTemplateName(templateName);
+    if (!objectDef) {
+      return false;
+    }
+
+    const normalizedTemplateName = objectDef.name.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+
+    this.thingTemplateBuildableOverrides.set(normalizedTemplateName, buildableStatus);
     return true;
   }
 
@@ -10953,6 +10980,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.mapHeightmap = null;
     this.navigationGrid = null;
     this.iniDataRegistry = null;
+    this.thingTemplateBuildableOverrides.clear();
     this.sideCredits.clear();
     this.sidePlayerTypes.clear();
     this.sideCashBountyPercent.clear();
@@ -18656,6 +18684,35 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return defaultValue;
+  }
+
+  private coerceScriptBuildableStatus(value: unknown): BuildableStatus {
+    const numericStatus = this.coerceScriptConditionNumber(value);
+    if (numericStatus !== null) {
+      const normalizedStatus = Math.trunc(numericStatus);
+      if (normalizedStatus === 1) {
+        return 'IGNORE_PREREQUISITES';
+      }
+      if (normalizedStatus === 2) {
+        return 'NO';
+      }
+      if (normalizedStatus === 3) {
+        return 'ONLY_BY_AI';
+      }
+      return 'YES';
+    }
+
+    const token = this.coerceScriptConditionString(value).trim().toUpperCase();
+    if (token === 'IGNORE_PREREQUISITES') {
+      return 'IGNORE_PREREQUISITES';
+    }
+    if (token === 'NO') {
+      return 'NO';
+    }
+    if (token === 'ONLY_BY_AI') {
+      return 'ONLY_BY_AI';
+    }
+    return 'YES';
   }
 
   private resolveScriptConditionCacheId(
@@ -26729,7 +26786,11 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private resolveBuildableStatus(objectDef: ObjectDef): 'YES' | 'IGNORE_PREREQUISITES' | 'NO' | 'ONLY_BY_AI' {
+  private resolveBuildableStatus(objectDef: ObjectDef): BuildableStatus {
+    const overrideBuildableStatus = this.thingTemplateBuildableOverrides.get(objectDef.name.trim().toUpperCase());
+    if (overrideBuildableStatus !== undefined) {
+      return overrideBuildableStatus;
+    }
     return resolveBuildableStatusImpl(objectDef, (value) => this.extractIniValueTokens(value));
   }
 
@@ -38585,6 +38646,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
+    this.thingTemplateBuildableOverrides.clear();
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();

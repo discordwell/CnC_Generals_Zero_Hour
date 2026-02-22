@@ -28559,6 +28559,93 @@ describe('Script condition groundwork', () => {
     });
   });
 
+  it('executes script buildability-override action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [8, 0, 0],
+            ExitDelay: 0,
+          }),
+        ], {
+          CommandSet: 'CommandSet_WarFactory',
+        }),
+        makeObjectDef('BuildableUnit', 'America', ['VEHICLE'], [], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_BuildableUnit', {
+          Command: 'UNIT_BUILD',
+          Object: 'BuildableUnit',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_WarFactory', {
+          1: 'Command_BuildableUnit',
+        }),
+      ],
+    });
+
+    const createLogic = (): GameLogicSubsystem => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        makeMap([makeMapObject('WarFactory', 12, 12)], 64, 64),
+        makeRegistry(bundle),
+        makeHeightmap(64, 64),
+      );
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+      return logic;
+    };
+
+    const humanLogic = createLogic();
+    humanLogic.setSidePlayerType('America', 'HUMAN');
+
+    expect(humanLogic.executeScriptAction({
+      actionType: 416, // TECHTREE_MODIFY_BUILDABILITY_OBJECT
+      params: ['BuildableUnit', 2],
+    })).toBe(true);
+    humanLogic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+    humanLogic.update(1 / 30);
+    expect(humanLogic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+    expect(humanLogic.getSideCredits('America')).toBe(500);
+
+    expect(humanLogic.executeScriptAction({
+      actionType: 416,
+      params: ['BuildableUnit', 0],
+    })).toBe(true);
+    humanLogic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+    humanLogic.update(1 / 30);
+    expect(humanLogic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+    expect(humanLogic.getSideCredits('America')).toBe(400);
+
+    const aiOnlyLogic = createLogic();
+    aiOnlyLogic.setSidePlayerType('America', 'HUMAN');
+    expect(aiOnlyLogic.executeScriptAction({
+      actionType: 416,
+      params: ['BuildableUnit', 'ONLY_BY_AI'],
+    })).toBe(true);
+    aiOnlyLogic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+    aiOnlyLogic.update(1 / 30);
+    expect(aiOnlyLogic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+    expect(aiOnlyLogic.getSideCredits('America')).toBe(500);
+
+    aiOnlyLogic.setSidePlayerType('America', 'COMPUTER');
+    aiOnlyLogic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+    aiOnlyLogic.update(1 / 30);
+    expect(aiOnlyLogic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+    expect(aiOnlyLogic.getSideCredits('America')).toBe(400);
+
+    expect(aiOnlyLogic.executeScriptAction({
+      actionType: 416,
+      params: ['MissingTemplate', 2],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
