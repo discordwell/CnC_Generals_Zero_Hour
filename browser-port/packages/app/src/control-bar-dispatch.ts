@@ -354,6 +354,7 @@ export function dispatchIssuedControlBarCommands(
           (entityId) => ({
             type: 'stop',
             entityId,
+            commandSource: 'PLAYER',
           }),
           gameLogic,
         );

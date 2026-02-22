@@ -2483,6 +2483,7 @@ describe('dispatchIssuedControlBarCommands', () => {
       {
         type: 'stop',
         entityId: 23,
+        commandSource: 'PLAYER',
       },
     ]);
     expect(audioManager.playedEvents).toEqual([]);

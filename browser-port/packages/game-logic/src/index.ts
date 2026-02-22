@@ -9345,7 +9345,7 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'STOP':
-        this.applyCommand({ type: 'stop', entityId: sourceEntity.id });
+        this.applyCommand({ type: 'stop', entityId: sourceEntity.id, commandSource: 'SCRIPT' });
         return true;
       case 'ATTACK_MOVE':
         if (target.kind !== 'POSITION') {
@@ -10229,7 +10229,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed) {
       return false;
     }
-    this.applyCommand({ type: 'stop', entityId });
+    this.applyCommand({ type: 'stop', entityId, commandSource: 'SCRIPT' });
     this.setScriptSequentialTimerForEntity(entityId, frameCount);
     return true;
   }
@@ -10264,7 +10264,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed) {
         continue;
       }
-      this.applyCommand({ type: 'stop', entityId: entity.id });
+      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
     }
     this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
     return true;
@@ -11593,7 +11593,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!side || !humanSides.has(side)) {
         continue;
       }
-      this.applyCommand({ type: 'stop', entityId: entity.id });
+      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
     }
     return true;
   }
@@ -11628,6 +11628,7 @@ export class GameLogicSubsystem implements Subsystem {
       state.targetWarehouseId = null;
       state.targetDepotId = null;
       state.actionDelayFinishFrame = this.frameCounter;
+      state.forceBusy = false;
     }
     return true;
   }
@@ -11637,7 +11638,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed) {
       return false;
     }
-    this.applyCommand({ type: 'stop', entityId });
+    this.applyCommand({ type: 'stop', entityId, commandSource: 'SCRIPT' });
     return true;
   }
 
@@ -11650,7 +11651,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed) {
         continue;
       }
-      this.applyCommand({ type: 'stop', entityId: entity.id });
+      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
     }
     return true;
   }
@@ -25303,6 +25304,7 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'stop': {
+        const stopSource = command.commandSource ?? 'AI';
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
@@ -25314,6 +25316,9 @@ export class GameLogicSubsystem implements Subsystem {
           stopEntity.autoTargetScanNextFrame = this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES;
           stopEntity.guardState = 'NONE';
           stopEntity.guardAreaTriggerIndex = -1;
+        }
+        if (stopSource === 'PLAYER') {
+          this.setSupplyTruckForceBusy(command.entityId, true);
         }
         return;
       }
@@ -29327,6 +29332,49 @@ export class GameLogicSubsystem implements Subsystem {
     state.targetWarehouseId = null;
     state.targetDepotId = null;
     state.actionDelayFinishFrame = this.frameCounter;
+  }
+
+  private resolveSupplyTruckState(entityId: number): SupplyTruckState | null {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.supplyTruckProfile) {
+      return null;
+    }
+    let state = this.supplyTruckStates.get(entityId);
+    if (!state) {
+      state = {
+        aiState: SupplyTruckAIState.IDLE,
+        currentBoxes: 0,
+        targetWarehouseId: null,
+        targetDepotId: null,
+        actionDelayFinishFrame: 0,
+        preferredDockId: null,
+        forceBusy: false,
+      };
+      this.supplyTruckStates.set(entityId, state);
+    }
+    return state;
+  }
+
+  private setSupplyTruckForceBusy(entityId: number, enabled: boolean): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || !entity.supplyTruckProfile) {
+      return;
+    }
+    // Source parity: WorkerAIUpdate does not force-busy on player STOP.
+    if (this.isWorkerEntity(entity)) {
+      return;
+    }
+    const state = this.resolveSupplyTruckState(entityId);
+    if (!state) {
+      return;
+    }
+    state.forceBusy = enabled;
+    if (enabled) {
+      state.aiState = SupplyTruckAIState.IDLE;
+      state.targetWarehouseId = null;
+      state.targetDepotId = null;
+      state.actionDelayFinishFrame = this.frameCounter;
+    }
   }
 
   private resolveChinookPreferredHeight(entity: MapEntity): number {

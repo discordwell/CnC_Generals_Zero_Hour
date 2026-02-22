@@ -202,6 +202,7 @@ export interface FireWeaponCommand {
 export interface StopCommand {
   type: 'stop';
   entityId: number;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export interface BridgeDestroyedCommand {

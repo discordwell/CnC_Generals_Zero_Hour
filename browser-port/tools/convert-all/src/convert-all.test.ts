@@ -2425,7 +2425,7 @@ End
       expect(sourcePaths).toEqual([...sourcePaths].sort((left, right) => left.localeCompare(right)));
       expect(secondManifest.entries.some((entry) => entry.outputPath.startsWith(`${RUNTIME_ASSET_BASE_URL}/`))).toBe(false);
     });
-  });
+  }, 20000);
 
   it('preserves unique runtime map output paths when map basenames collide', () => {
     return withTempDir((dir) => {

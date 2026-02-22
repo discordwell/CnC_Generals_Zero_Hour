@@ -59,6 +59,8 @@ export interface SupplyTruckState {
   actionDelayFinishFrame: number;
   /** Source parity: SupplyTruckAIUpdate::m_preferredDock. */
   preferredDockId: number | null;
+  /** Source parity: SupplyTruckAIUpdate::m_forcePending (busy latch from player stop). */
+  forceBusy: boolean;
 }
 
 // ──── Entity abstraction for supply chain logic ────────────────────────────
@@ -344,8 +346,13 @@ export function updateSupplyTruck<TEntity extends SupplyChainEntity>(
       targetDepotId: null,
       actionDelayFinishFrame: 0,
       preferredDockId: null,
+      forceBusy: false,
     };
     context.setTruckState(truck.id, state);
+  }
+
+  if (state.forceBusy) {
+    return;
   }
 
   switch (state.aiState) {

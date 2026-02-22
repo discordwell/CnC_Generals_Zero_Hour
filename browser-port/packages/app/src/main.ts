@@ -2155,7 +2155,7 @@ async function startGame(
         const selIds = gameLogic.getLocalPlayerSelectionIds();
         if (selIds.length > 0) {
           for (const id of selIds) {
-            gameLogic.submitCommand({ type: 'stop', entityId: id });
+            gameLogic.submitCommand({ type: 'stop', entityId: id, commandSource: 'PLAYER' });
           }
         }
       }
