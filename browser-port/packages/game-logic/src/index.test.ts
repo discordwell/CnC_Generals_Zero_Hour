@@ -29504,6 +29504,72 @@ describe('Script condition groundwork', () => {
     expect(resumedDistance).toBeGreaterThan(0.1);
   });
 
+  it('executes script skirmish-build-building action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 2000 });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        constructionPercent: number;
+      }>;
+    };
+
+    // Source action depends on ScriptEngine current-player context.
+    expect(logic.executeScriptAction({
+      actionType: 449, // SKIRMISH_BUILD_BUILDING
+      params: ['USAPowerPlant'],
+    })).toBe(false);
+
+    expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 449, // SKIRMISH_BUILD_BUILDING
+      params: ['USAPowerPlant'],
+    })).toBe(true);
+
+    const constructedId = privateApi.pendingConstructionActions.get(1);
+    expect(constructedId).toBeDefined();
+    expect(privateApi.spawnedEntities.get(constructedId!)?.templateName).toBe('USAPowerPlant');
+    expect(privateApi.spawnedEntities.get(constructedId!)?.constructionPercent).toBe(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 449,
+      params: ['MissingTemplate'],
+    })).toBe(false);
+
+    logic.clearScriptCurrentPlayerSide();
+    expect(logic.executeScriptAction({
+      actionType: 449,
+      params: ['USAPowerPlant'],
+    })).toBe(false);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

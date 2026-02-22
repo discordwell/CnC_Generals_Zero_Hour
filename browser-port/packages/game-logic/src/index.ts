@@ -4059,6 +4059,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [446, 'TEAM_USE_COMMANDBUTTON_ABILITY'],
   [447, 'NAMED_FLASH_WHITE'],
   [448, 'TEAM_FLASH_WHITE'],
+  [449, 'SKIRMISH_BUILD_BUILDING'],
   [451, 'IDLE_ALL_UNITS'],
   [452, 'RESUME_SUPPLY_TRUCKING'],
   [453, 'NAMED_CUSTOM_COLOR'],
@@ -4307,6 +4308,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly skirmishAIStates = new Map<string, SkirmishAIState>();
   /** Source parity: Player::m_mpStartIndex (0-based start slot per side). */
   private readonly sideSkirmishStartIndex = new Map<string, number>();
+  /** Source parity subset: ScriptEngine::m_currentPlayer side bridge for script actions. */
+  private scriptCurrentPlayerSide: string | null = null;
   private readonly railedTransportStateByEntityId = new Map<number, RailedTransportRuntimeState>();
   private railedTransportWaypointIndex: RailedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
   // localPlayerSciencePurchasePoints removed — now lives in sideRankState.
@@ -4992,6 +4995,27 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
     return startIndex + 1;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::m_currentPlayer side bridge.
+   * Needed by script actions that operate on the current player (e.g. SKIRMISH_BUILD_BUILDING).
+   */
+  setScriptCurrentPlayerSide(side: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    this.scriptCurrentPlayerSide = normalizedSide;
+    return true;
+  }
+
+  clearScriptCurrentPlayerSide(): void {
+    this.scriptCurrentPlayerSide = null;
+  }
+
+  getScriptCurrentPlayerSide(): string | null {
+    return this.scriptCurrentPlayerSide;
   }
 
   getPlayerRelationshipByIndex(
@@ -6626,6 +6650,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamFlashWhite(
           readString(0, ['teamName', 'team']),
           readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
+        );
+      case 'SKIRMISH_BUILD_BUILDING':
+        return this.executeScriptSkirmishBuildBuilding(
+          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
       case 'IDLE_ALL_UNITS':
         return this.executeScriptIdleAllUnits();
@@ -8396,6 +8425,59 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doBuildBuilding -> Player::buildSpecificBuilding.
+   * Current-player script context is bridged via setScriptCurrentPlayerSide().
+   */
+  private executeScriptSkirmishBuildBuilding(
+    templateName: string,
+    explicitPlayerSide: string,
+  ): boolean {
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
+    if (!objectDef) {
+      return false;
+    }
+    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
+      return false;
+    }
+
+    const dozer = this.findScriptBuildDozerForTemplate(side, objectDef.name);
+    if (!dozer) {
+      return false;
+    }
+
+    const beforePending = this.pendingConstructionActions.get(dozer.id);
+    this.handleConstructBuildingCommand({
+      type: 'constructBuilding',
+      entityId: dozer.id,
+      templateName: objectDef.name,
+      targetPosition: [
+        dozer.x,
+        this.resolveGroundHeight(dozer.x, dozer.z),
+        dozer.z,
+      ],
+      angle: dozer.rotationY,
+    });
+
+    const afterPending = this.pendingConstructionActions.get(dozer.id);
+    return afterPending !== undefined && afterPending !== beforePending;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doPlayerRepairStructure -> Player::repairStructure.
    * In source this queues repair requests on AI players; non-AI players no-op.
    */
@@ -8433,6 +8515,31 @@ export class GameLogicSubsystem implements Subsystem {
     queued.add(building.id);
     this.updateScriptSideRepairQueues();
     return true;
+  }
+
+  private resolveScriptCurrentPlayerSide(explicitPlayerSide: string): string | null {
+    const normalizedExplicit = this.normalizeSide(explicitPlayerSide);
+    if (normalizedExplicit) {
+      return normalizedExplicit;
+    }
+    return this.scriptCurrentPlayerSide;
+  }
+
+  private findScriptBuildDozerForTemplate(side: string, templateName: string): MapEntity | null {
+    let bestDozer: MapEntity | null = null;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (this.normalizeSide(entity.side) !== side) continue;
+      if (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id)) continue;
+      if (!this.isEntityDozerCapable(entity)) continue;
+      if (!this.canEntityIssueBuildCommandForTemplate(entity, templateName, ['DOZER_CONSTRUCT', 'UNIT_BUILD'])) {
+        continue;
+      }
+      if (!bestDozer || entity.id < bestDozer.id) {
+        bestDozer = entity;
+      }
+    }
+    return bestDozer;
   }
 
   private getScriptActionHumanSides(): Set<string> {
@@ -12715,6 +12822,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sidePlayerTypes.clear();
     this.sideUnitsShouldIdleOrResume.clear();
     this.scriptSideRepairQueue.clear();
+    this.scriptCurrentPlayerSide = null;
     this.sideCashBountyPercent.clear();
     this.sideBattlePlanBonuses.clear();
     this.battlePlanParalyzedUntilFrame.clear();
@@ -40683,6 +40791,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.nextPlayerIndex = 0;
     this.skirmishAIStates.clear();
     this.sideSkirmishStartIndex.clear();
+    this.scriptCurrentPlayerSide = null;
     this.sideScoreState.clear();
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
