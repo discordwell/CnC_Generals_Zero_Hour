@@ -1579,6 +1579,12 @@ interface ChinookAIProfile {
   numRopes: number;
   perRopeDelayMinFrames: number;
   perRopeDelayMaxFrames: number;
+  ropeName: string;
+  ropeWidth: number;
+  ropeColor: readonly [number, number, number];
+  ropeWobbleLen: number;
+  ropeWobbleAmp: number;
+  ropeWobbleRate: number;
   minDropHeight: number;
   waitForRopesToDrop: boolean;
   rappelSpeed: number;
@@ -3469,6 +3475,13 @@ const HELICOPTER_GRAVITY = SOURCE_DEFAULT_GRAVITY;
 
 /** Source parity: ChinookAIUpdateModuleData constructor default for m_rappelSpeed. */
 const DEFAULT_CHINOOK_RAPPEL_SPEED = Math.abs(SOURCE_DEFAULT_GRAVITY) * LOGIC_FRAME_RATE * 0.5;
+/** Source parity: ChinookAIUpdateModuleData constructor defaults for rope rendering params. */
+const DEFAULT_CHINOOK_ROPE_NAME = 'GenericRope';
+const DEFAULT_CHINOOK_ROPE_WIDTH = 0.5;
+const DEFAULT_CHINOOK_ROPE_COLOR: readonly [number, number, number] = [0.9, 0.8, 0.7];
+const DEFAULT_CHINOOK_ROPE_WOBBLE_LEN = 10.0;
+const DEFAULT_CHINOOK_ROPE_WOBBLE_AMP = 1.0;
+const DEFAULT_CHINOOK_ROPE_WOBBLE_RATE = 0.1;
 
 /**
  * Source parity: EMPUpdate — electromagnetic pulse field that grows, disables nearby entities,
@@ -18780,10 +18793,32 @@ export class GameLogicSubsystem implements Subsystem {
         if (moduleType === 'CHINOOKAIUPDATE') {
           const perRopeDelayMinMs = readNumericField(block.fields, ['PerRopeDelayMin']) ?? 0x7fffffff;
           const perRopeDelayMaxMs = readNumericField(block.fields, ['PerRopeDelayMax']) ?? 0x7fffffff;
+          const ropeName = readStringField(block.fields, ['RopeName']) ?? DEFAULT_CHINOOK_ROPE_NAME;
+          const ropeWidth = readNumericField(block.fields, ['RopeWidth']) ?? DEFAULT_CHINOOK_ROPE_WIDTH;
+          const ropeColorValues = readNumericListField(block.fields, ['RopeColor']);
+          const ropeColor: readonly [number, number, number] = ropeColorValues && ropeColorValues.length >= 3
+            ? [
+              ropeColorValues[0] ?? DEFAULT_CHINOOK_ROPE_COLOR[0],
+              ropeColorValues[1] ?? DEFAULT_CHINOOK_ROPE_COLOR[1],
+              ropeColorValues[2] ?? DEFAULT_CHINOOK_ROPE_COLOR[2],
+            ]
+            : DEFAULT_CHINOOK_ROPE_COLOR;
+          const ropeWobbleLen = readNumericField(block.fields, ['RopeWobbleLen']) ?? DEFAULT_CHINOOK_ROPE_WOBBLE_LEN;
+          const ropeWobbleAmp = readNumericField(block.fields, ['RopeWobbleAmplitude']) ?? DEFAULT_CHINOOK_ROPE_WOBBLE_AMP;
+          const ropeWobbleRateRaw = readNumericField(block.fields, ['RopeWobbleRate']);
+          const ropeWobbleRate = ropeWobbleRateRaw != null
+            ? (ropeWobbleRateRaw * Math.PI / 180) / LOGIC_FRAME_RATE
+            : DEFAULT_CHINOOK_ROPE_WOBBLE_RATE;
           profile = {
             numRopes: Math.max(1, Math.trunc(readNumericField(block.fields, ['NumRopes']) ?? 4)),
             perRopeDelayMinFrames: this.msToLogicFrames(perRopeDelayMinMs),
             perRopeDelayMaxFrames: this.msToLogicFrames(perRopeDelayMaxMs),
+            ropeName,
+            ropeWidth,
+            ropeColor,
+            ropeWobbleLen,
+            ropeWobbleAmp,
+            ropeWobbleRate,
             minDropHeight: readNumericField(block.fields, ['MinDropHeight']) ?? 30.0,
             waitForRopesToDrop: readBooleanField(block.fields, ['WaitForRopesToDrop']) ?? true,
             rappelSpeed: readNumericField(block.fields, ['RappelSpeed']) ?? DEFAULT_CHINOOK_RAPPEL_SPEED,
