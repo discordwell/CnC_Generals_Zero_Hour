@@ -29570,6 +29570,112 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes skirmish approach-path actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('EnemyBarracks', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 5, 20), // id 1
+      makeMapObject('Ranger', 8, 22), // id 2
+      makeMapObject('EnemyBarracks', 110, 20), // id 3
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 10, name: 'Approach_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'ApproachPath2', biDirectional: false },
+        { id: 11, name: 'Approach_B', position: { x: 60, y: 20, z: 0 }, pathLabel1: 'ApproachPath2', biDirectional: false },
+        { id: 12, name: 'Approach_C', position: { x: 90, y: 20, z: 0 }, pathLabel1: 'ApproachPath2', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 10, waypoint2: 11 },
+        { waypoint1: 11, waypoint2: 12 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AttackTeam', [1, 2])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'China', playerType: 'HUMAN' });
+    expect(logic.setSkirmishPlayerStartPosition('America', 1)).toBe(true);
+    expect(logic.setSkirmishPlayerStartPosition('China', 2)).toBe(true);
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+
+    // Source actions depend on ScriptEngine current-player context.
+    expect(logic.executeScriptAction({
+      actionType: 454, // SKIRMISH_MOVE_TO_APPROACH_PATH
+      params: ['AttackTeam', 'ApproachPath'],
+    })).toBe(false);
+
+    expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 454, // SKIRMISH_MOVE_TO_APPROACH_PATH
+      params: ['AttackTeam', 'ApproachPath'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(1)?.movePath.length).toBeGreaterThan(0);
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBeGreaterThan(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 450, // SKIRMISH_FOLLOW_APPROACH_PATH
+      params: ['AttackTeam', 'ApproachPath', 0],
+    })).toBe(true);
+    expect(
+      privateApi.spawnedEntities.get(1)?.movePath.some((node) => Math.hypot(node.x - 60, node.z - 20) < 0.5),
+    ).toBe(true);
+    expect(
+      privateApi.spawnedEntities.get(1)?.movePath.some((node) => Math.hypot(node.x - 90, node.z - 20) < 0.5),
+    ).toBe(true);
+    expect(
+      privateApi.spawnedEntities.get(2)?.movePath.some((node) => Math.hypot(node.x - 60, node.z - 20) < 0.5),
+    ).toBe(true);
+    expect(
+      privateApi.spawnedEntities.get(2)?.movePath.some((node) => Math.hypot(node.x - 90, node.z - 20) < 0.5),
+    ).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 450,
+      params: ['MissingTeam', 'ApproachPath', 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 454,
+      params: ['AttackTeam', 'MissingPath'],
+    })).toBe(false);
+
+    logic.clearScriptCurrentPlayerSide();
+    expect(logic.executeScriptAction({
+      actionType: 450,
+      params: ['AttackTeam', 'ApproachPath', 0],
+    })).toBe(false);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

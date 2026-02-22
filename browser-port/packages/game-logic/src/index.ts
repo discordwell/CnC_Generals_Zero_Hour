@@ -4060,9 +4060,11 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [447, 'NAMED_FLASH_WHITE'],
   [448, 'TEAM_FLASH_WHITE'],
   [449, 'SKIRMISH_BUILD_BUILDING'],
+  [450, 'SKIRMISH_FOLLOW_APPROACH_PATH'],
   [451, 'IDLE_ALL_UNITS'],
   [452, 'RESUME_SUPPLY_TRUCKING'],
   [453, 'NAMED_CUSTOM_COLOR'],
+  [454, 'SKIRMISH_MOVE_TO_APPROACH_PATH'],
   [457, 'NAMED_RECEIVE_UPGRADE'],
   [458, 'PLAYER_REPAIR_NAMED_STRUCTURE'],
 ]);
@@ -6656,6 +6658,19 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
           readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
+      case 'SKIRMISH_FOLLOW_APPROACH_PATH':
+        return this.executeScriptTeamFollowSkirmishApproachPath(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointPathLabel', 'pathLabel', 'waypointPath']),
+          readBoolean(2, ['asTeam', 'asGroup']),
+          readString(3, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
+      case 'SKIRMISH_MOVE_TO_APPROACH_PATH':
+        return this.executeScriptTeamMoveToSkirmishApproachPath(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointPathLabel', 'pathLabel', 'waypointPath']),
+          readString(2, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
       case 'IDLE_ALL_UNITS':
         return this.executeScriptIdleAllUnits();
       case 'RESUME_SUPPLY_TRUCKING':
@@ -8540,6 +8555,294 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return bestDozer;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamFollowSkirmishApproachPath.
+   * Uses waypoint path labels suffixed with enemy MP start index (e.g. "AttackPath2").
+   */
+  private executeScriptTeamFollowSkirmishApproachPath(
+    teamName: string,
+    waypointPathLabel: string,
+    asTeam: boolean,
+    explicitPlayerSide: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const route = this.resolveScriptSkirmishApproachRoute(
+      waypointPathLabel,
+      side,
+      center.x,
+      center.z,
+    );
+    if (!route || route.length === 0) {
+      return false;
+    }
+
+    // TODO(source-parity): "asTeam" should use group-follow-as-team semantics instead of per-unit routes.
+    void asTeam;
+
+    let movedAny = false;
+    for (const entity of teamMembers) {
+      if (this.enqueueScriptWaypointRoute(entity, route)) {
+        movedAny = true;
+      }
+    }
+    return movedAny;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamMoveToSkirmishApproachPath.
+   * Moves each team member to the closest waypoint on the enemy-suffixed approach path.
+   */
+  private executeScriptTeamMoveToSkirmishApproachPath(
+    teamName: string,
+    waypointPathLabel: string,
+    explicitPlayerSide: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const route = this.resolveScriptSkirmishApproachRoute(
+      waypointPathLabel,
+      side,
+      center.x,
+      center.z,
+    );
+    if (!route || route.length === 0) {
+      return false;
+    }
+
+    const firstWaypoint = route[0]!;
+    let movedAny = false;
+    for (const entity of teamMembers) {
+      this.applyCommand({
+        type: 'moveTo',
+        entityId: entity.id,
+        targetX: firstWaypoint.x,
+        targetZ: firstWaypoint.z,
+      });
+      if (entity.moving) {
+        movedAny = true;
+      }
+    }
+    return movedAny;
+  }
+
+  private resolveScriptTeamCenter(
+    teamMembers: readonly MapEntity[],
+  ): { x: number; z: number } | null {
+    if (teamMembers.length === 0) {
+      return null;
+    }
+    let sumX = 0;
+    let sumZ = 0;
+    for (const member of teamMembers) {
+      sumX += member.x;
+      sumZ += member.z;
+    }
+    return {
+      x: sumX / teamMembers.length,
+      z: sumZ / teamMembers.length,
+    };
+  }
+
+  private resolveScriptSkirmishApproachRoute(
+    waypointPathLabel: string,
+    currentPlayerSide: string,
+    centerX: number,
+    centerZ: number,
+  ): Array<{ x: number; z: number }> | null {
+    const basePathLabel = waypointPathLabel.trim();
+    if (!basePathLabel) {
+      return null;
+    }
+
+    const enemySide = this.resolveScriptSkirmishEnemySide(currentPlayerSide);
+    if (!enemySide) {
+      return null;
+    }
+    const enemyStartPosition = this.getSkirmishPlayerStartPosition(enemySide);
+    if (enemyStartPosition === null) {
+      return null;
+    }
+
+    const waypointData = this.loadedMapData?.waypoints;
+    if (!waypointData) {
+      return null;
+    }
+
+    const fullPathLabel = `${basePathLabel}${enemyStartPosition}`.trim().toUpperCase();
+    if (!fullPathLabel) {
+      return null;
+    }
+
+    const routeNodes = waypointData.nodes.filter((node) => {
+      const labels = [node.pathLabel1, node.pathLabel2, node.pathLabel3];
+      for (const label of labels) {
+        if (label && label.trim().toUpperCase() === fullPathLabel) {
+          return true;
+        }
+      }
+      return false;
+    });
+    if (routeNodes.length === 0) {
+      return null;
+    }
+
+    let startNode = routeNodes[0]!;
+    let bestDistSqr = Infinity;
+    for (const node of routeNodes) {
+      const dx = node.position.x - centerX;
+      const dz = node.position.y - centerZ;
+      const distSqr = dx * dx + dz * dz;
+      if (distSqr < bestDistSqr) {
+        startNode = node;
+        bestDistSqr = distSqr;
+      }
+    }
+
+    const routeNodesById = new Map<number, (typeof routeNodes)[number]>();
+    for (const node of routeNodes) {
+      routeNodesById.set(node.id, node);
+    }
+
+    const outgoingById = new Map<number, number[]>();
+    for (const link of waypointData.links) {
+      if (!routeNodesById.has(link.waypoint1) || !routeNodesById.has(link.waypoint2)) {
+        continue;
+      }
+      let outgoing = outgoingById.get(link.waypoint1);
+      if (!outgoing) {
+        outgoing = [];
+        outgoingById.set(link.waypoint1, outgoing);
+      }
+      outgoing.push(link.waypoint2);
+    }
+
+    const route: Array<{ x: number; z: number }> = [];
+    const visited = new Set<number>();
+    let currentNode: (typeof routeNodes)[number] | undefined = startNode;
+    while (currentNode && !visited.has(currentNode.id)) {
+      route.push({
+        x: currentNode.position.x,
+        z: currentNode.position.y,
+      });
+      visited.add(currentNode.id);
+
+      const outgoing = outgoingById.get(currentNode.id);
+      if (!outgoing || outgoing.length === 0) {
+        break;
+      }
+
+      let nextNode: (typeof routeNodes)[number] | undefined;
+      for (const nextId of outgoing) {
+        if (visited.has(nextId)) {
+          continue;
+        }
+        nextNode = routeNodesById.get(nextId);
+        if (nextNode) {
+          break;
+        }
+      }
+      currentNode = nextNode;
+    }
+
+    return route.length > 0 ? route : null;
+  }
+
+  private resolveScriptSkirmishEnemySide(currentPlayerSide: string): string | null {
+    const normalizedCurrentSide = this.normalizeSide(currentPlayerSide);
+    if (!normalizedCurrentSide) {
+      return null;
+    }
+
+    const enemySides: string[] = [];
+    for (const side of this.collectKnownSides()) {
+      if (side === normalizedCurrentSide) {
+        continue;
+      }
+      if (this.getTeamRelationshipBySides(normalizedCurrentSide, side) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+      enemySides.push(side);
+    }
+
+    if (enemySides.length === 0) {
+      return null;
+    }
+
+    const humanEnemy = enemySides.find((side) => this.getSidePlayerType(side) === 'HUMAN');
+    if (humanEnemy) {
+      return humanEnemy;
+    }
+
+    return enemySides[0] ?? null;
+  }
+
+  private enqueueScriptWaypointRoute(
+    entity: MapEntity,
+    route: readonly { x: number; z: number }[],
+  ): boolean {
+    if (route.length === 0) {
+      return false;
+    }
+
+    const firstWaypoint = route[0]!;
+    this.applyCommand({
+      type: 'moveTo',
+      entityId: entity.id,
+      targetX: firstWaypoint.x,
+      targetZ: firstWaypoint.z,
+    });
+    if (!entity.moving) {
+      return false;
+    }
+
+    if (route.length > 1) {
+      for (let index = 1; index < route.length; index += 1) {
+        const waypoint = route[index]!;
+        entity.movePath.push({ x: waypoint.x, z: waypoint.z });
+      }
+    }
+    return true;
   }
 
   private getScriptActionHumanSides(): Set<string> {
