@@ -3779,6 +3779,11 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptTriggerExitedByEntityId = new Map<number, Set<number>>();
   /** Source parity: Object::m_enteredOrExitedFrame keyed by entity id. */
   private readonly scriptTriggerEnterExitFrameByEntityId = new Map<number, number>();
+  /**
+   * Source parity subset: AIUpdateInterface::getCompletedWaypoint path labels by entity.
+   * TODO(source-parity): feed this from script waypoint-path movement actions.
+   */
+  private readonly scriptCompletedWaypointPathsByEntityId = new Map<number, Set<string>>();
   /** Source parity: evaluateUnitHasEmptied transport-status cache keyed by entity id. */
   private readonly scriptTransportStatusByEntityId = new Map<number, { frameNumber: number; unitCount: number }>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
@@ -5356,6 +5361,56 @@ export class GameLogicSubsystem implements Subsystem {
       name: normalizedName,
       index: Math.trunc(index),
     });
+  }
+
+  /**
+   * Source parity subset: AIUpdateInterface::getCompletedWaypoint() notification.
+   * TODO(source-parity): drive this from script waypoint-path movement actions.
+   */
+  notifyScriptWaypointPathCompleted(entityId: number, waypointPathName: string): void {
+    if (!Number.isFinite(entityId)) {
+      return;
+    }
+    const normalizedPathName = this.normalizeScriptCompletionName(waypointPathName);
+    if (!normalizedPathName) {
+      return;
+    }
+    const normalizedEntityId = Math.trunc(entityId);
+    if (!this.spawnedEntities.has(normalizedEntityId)) {
+      return;
+    }
+    let completedPaths = this.scriptCompletedWaypointPathsByEntityId.get(normalizedEntityId);
+    if (!completedPaths) {
+      completedPaths = new Set<string>();
+      this.scriptCompletedWaypointPathsByEntityId.set(normalizedEntityId, completedPaths);
+    }
+    completedPaths.add(normalizedPathName);
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateNamedReachedWaypointsEnd.
+   * TODO(source-parity): populate completion labels from waypoint path follower AI.
+   */
+  evaluateScriptNamedReachedWaypointsEnd(filter: {
+    entityId: number;
+    waypointPathName: string;
+  }): boolean {
+    if (!Number.isFinite(filter.entityId)) {
+      return false;
+    }
+    const pathName = this.normalizeScriptCompletionName(filter.waypointPathName);
+    if (!pathName) {
+      return false;
+    }
+    const entityId = Math.trunc(filter.entityId);
+    if (!this.spawnedEntities.has(entityId)) {
+      return false;
+    }
+    const completedPaths = this.scriptCompletedWaypointPathsByEntityId.get(entityId);
+    if (!completedPaths) {
+      return false;
+    }
+    return completedPaths.has(pathName);
   }
 
   /**
@@ -18978,6 +19033,7 @@ export class GameLogicSubsystem implements Subsystem {
   private removeEntityFromWorld(entityId: number): void {
     if (this.spawnedEntities.delete(entityId)) {
       this.clearScriptTriggerTrackingForEntity(entityId);
+      this.scriptCompletedWaypointPathsByEntityId.delete(entityId);
       this.scriptTransportStatusByEntityId.delete(entityId);
       this.notifyScriptObjectCreationOrDestruction();
     }
@@ -35289,6 +35345,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptTriggerEnteredByEntityId.clear();
     this.scriptTriggerExitedByEntityId.clear();
     this.scriptTriggerEnterExitFrameByEntityId.clear();
+    this.scriptCompletedWaypointPathsByEntityId.clear();
     this.scriptTransportStatusByEntityId.clear();
     this.loadedMapData = null;
     this.navigationGrid = null;

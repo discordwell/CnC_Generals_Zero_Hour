@@ -27911,6 +27911,50 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 2 })).toBe(false);
   });
 
+  it('evaluates named-reached-waypoints-end from completed waypoint labels', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('UnitA', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'PatrolPathA',
+    })).toBe(false);
+
+    logic.notifyScriptWaypointPathCompleted(1, 'PatrolPathA');
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'PatrolPathA',
+    })).toBe(true);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'DifferentPath',
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'PatrolPathA',
+    })).toBe(false);
+  });
+
   it('evaluates named-area existence and in-area type/kind conditions', () => {
     const bundle = makeBundle({
       objects: [
