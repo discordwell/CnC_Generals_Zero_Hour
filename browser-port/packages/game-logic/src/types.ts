@@ -486,6 +486,11 @@ export interface GameLogicConfig {
    */
   pickObjectByInput?: (input: InputState, camera: THREE.Camera) => number | null;
   /**
+   * Source parity: View::isCameraMovementFinished consumed by script condition
+   * CAMERA_MOVEMENT_FINISHED.
+   */
+  isCameraMovementFinished?: () => boolean;
+  /**
    * Include unresolved objects as magenta placeholders.
    * If false, unresolved templates are skipped entirely.
    */

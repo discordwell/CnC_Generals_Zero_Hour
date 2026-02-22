@@ -3966,6 +3966,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptActiveByName = new Map<string, boolean>();
   /** Source parity subset: CALL_SUBROUTINE invocation queue (execution wiring is pending). */
   private readonly scriptSubroutineCalls: string[] = [];
+  /** Source parity: View::isCameraMovementFinished fallback state when no view callback is wired. */
+  private scriptCameraMovementFinished = true;
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
@@ -5659,6 +5661,14 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: mirrors TacticalView::isCameraMovementFinished state when
+   * renderer-side camera scripting is not yet directly wired.
+   */
+  setScriptCameraMovementFinished(finished: boolean): void {
+    this.scriptCameraMovementFinished = finished;
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -5988,8 +5998,7 @@ export class GameLogicSubsystem implements Subsystem {
           teamName: readString(0, ['teamName', 'team']),
         });
       case 'CAMERA_MOVEMENT_FINISHED':
-        // TODO(source-parity): route to TacticalView::isCameraMovementFinished once view scripting is wired.
-        return true;
+        return this.evaluateScriptCameraMovementFinished();
       case 'TEAM_HAS_UNITS':
         return this.evaluateScriptHasUnits({
           teamName: readString(0, ['teamName', 'team']),
@@ -18746,6 +18755,18 @@ export class GameLogicSubsystem implements Subsystem {
 
   private pickObjectByInput(input: InputState, camera: THREE.Camera): number | null {
     return this.config.pickObjectByInput?.(input, camera) ?? null;
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateCondition proxies TacticalView camera movement state.
+   * If a view callback is provided, use it; otherwise fall back to local script camera state.
+   */
+  private evaluateScriptCameraMovementFinished(): boolean {
+    const viewResult = this.config.isCameraMovementFinished?.();
+    if (typeof viewResult === 'boolean') {
+      return viewResult;
+    }
+    return this.scriptCameraMovementFinished;
   }
 
   private getMoveTargetFromMouse(input: InputState, camera: THREE.Camera): VectorXZ | null {
@@ -37663,6 +37684,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptUIInteractions.clear();
     this.scriptActiveByName.clear();
     this.scriptSubroutineCalls.length = 0;
+    this.scriptCameraMovementFinished = true;
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();

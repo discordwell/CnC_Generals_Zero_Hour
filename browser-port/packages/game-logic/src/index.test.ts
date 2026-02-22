@@ -27930,6 +27930,17 @@ describe('Script condition groundwork', () => {
 
     expect(logic.evaluateScriptCondition(null)).toBe(false);
     expect(logic.evaluateScriptCondition({ conditionType: 'UNKNOWN_CONDITION' })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'CAMERA_MOVEMENT_FINISHED',
+    })).toBe(true);
+    logic.setScriptCameraMovementFinished(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 9, // CAMERA_MOVEMENT_FINISHED
+    })).toBe(false);
+    logic.setScriptCameraMovementFinished(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'CAMERA_MOVEMENT_FINISHED',
+    })).toBe(true);
 
     expect(logic.evaluateScriptCondition({
       conditionType: 'PLAYER_HAS_CREDITS',
@@ -27977,6 +27988,38 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 5, // PLAYER_ALL_DESTROYED
       params: ['America'],
+    })).toBe(true);
+  });
+
+  it('evaluates CAMERA_MOVEMENT_FINISHED via TacticalView callback when provided', () => {
+    let cameraMovementFinished = true;
+    const logic = new GameLogicSubsystem(new THREE.Scene(), {
+      isCameraMovementFinished: () => cameraMovementFinished,
+    });
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'CAMERA_MOVEMENT_FINISHED',
+    })).toBe(true);
+
+    cameraMovementFinished = false;
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'CAMERA_MOVEMENT_FINISHED',
+    })).toBe(false);
+
+    // Callback parity: TacticalView state wins over local fallback.
+    logic.setScriptCameraMovementFinished(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 9, // CAMERA_MOVEMENT_FINISHED
+    })).toBe(false);
+
+    cameraMovementFinished = true;
+    expect(logic.evaluateScriptCondition({
+      conditionType: 9, // CAMERA_MOVEMENT_FINISHED
     })).toBe(true);
   });
 
