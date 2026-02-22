@@ -4062,6 +4062,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [451, 'IDLE_ALL_UNITS'],
   [452, 'RESUME_SUPPLY_TRUCKING'],
   [453, 'NAMED_CUSTOM_COLOR'],
+  [457, 'NAMED_RECEIVE_UPGRADE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6631,6 +6632,11 @@ export class GameLogicSubsystem implements Subsystem {
           readInteger(0, ['entityId', 'unitId', 'named', 'namedUnit']),
           readInteger(1, ['color', 'customColor']),
         );
+      case 'NAMED_RECEIVE_UPGRADE':
+        return this.executeScriptNamedReceiveUpgrade(
+          readInteger(0, ['entityId', 'unitId', 'named', 'namedUnit']),
+          readString(1, ['upgradeName', 'upgrade']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8352,6 +8358,32 @@ export class GameLogicSubsystem implements Subsystem {
     }
     entity.customIndicatorColor = Math.trunc(color) >>> 0;
     return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doUnitReceiveUpgrade.
+   * Gives a specific upgrade to a named unit immediately.
+   */
+  private executeScriptNamedReceiveUpgrade(entityId: number, upgradeName: string): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const normalizedUpgrade = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgrade || normalizedUpgrade === 'NONE') {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry || !findUpgradeDefByName(registry, normalizedUpgrade)) {
+      return false;
+    }
+
+    if (this.applyUpgradeToEntity(entityId, normalizedUpgrade)) {
+      return true;
+    }
+    return entity.completedUpgrades.has(normalizedUpgrade);
   }
 
   private getScriptActionHumanSides(): Set<string> {

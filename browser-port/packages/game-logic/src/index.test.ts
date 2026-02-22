@@ -29772,6 +29772,54 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named-receive-upgrade action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UpgradeTarget', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'ModelConditionUpgrade ModuleTag_Visual', {
+            TriggeredBy: 'Upgrade_ScriptVisual',
+            ConditionFlag: 'UPGRADE',
+          }),
+        ]),
+      ],
+      upgrades: [makeUpgradeDef('Upgrade_ScriptVisual', { Type: 'PLAYER', BuildTime: 0.1, BuildCost: 0 })],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('UpgradeTarget', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        completedUpgrades: Set<string>;
+        modelConditionFlags: Set<string>;
+      }>;
+    };
+    const entity = privateApi.spawnedEntities.get(1)!;
+    expect(entity.completedUpgrades.has('UPGRADE_SCRIPTVISUAL')).toBe(false);
+    expect(entity.modelConditionFlags.has('UPGRADE')).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 457, // NAMED_RECEIVE_UPGRADE
+      params: [1, 'Upgrade_ScriptVisual'],
+    })).toBe(true);
+    expect(entity.completedUpgrades.has('UPGRADE_SCRIPTVISUAL')).toBe(true);
+    expect(entity.modelConditionFlags.has('UPGRADE')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 457,
+      params: [1, 'Upgrade_Missing'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 457,
+      params: [999, 'Upgrade_ScriptVisual'],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
