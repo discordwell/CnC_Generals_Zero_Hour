@@ -3927,6 +3927,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [414, 'RADAR_REVERT_TO_NORMAL'],
   [415, 'SCREEN_SHAKE'],
   [416, 'TECHTREE_MODIFY_BUILDABILITY_OBJECT'],
+  [417, 'WAREHOUSE_SET_VALUE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6058,6 +6059,11 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
           this.coerceScriptBuildableStatus(readValue(1, ['buildableStatus', 'status', 'buildable'])),
         );
+      case 'WAREHOUSE_SET_VALUE':
+        return this.executeScriptWarehouseSetValue(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readInteger(1, ['cashValue', 'value', 'amount']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -7307,6 +7313,22 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.thingTemplateBuildableOverrides.set(normalizedTemplateName, buildableStatus);
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doSetWarehouseValue + SupplyWarehouseDockUpdate::setCashValue.
+   */
+  private executeScriptWarehouseSetValue(warehouseEntityId: number, cashValue: number): boolean {
+    const warehouse = this.spawnedEntities.get(warehouseEntityId);
+    if (!warehouse || warehouse.destroyed || !warehouse.supplyWarehouseProfile) {
+      return false;
+    }
+
+    const warehouseState = this.supplyWarehouseStates.get(warehouse.id)
+      ?? initializeWarehouseStateImpl(warehouse.supplyWarehouseProfile);
+    warehouseState.currentBoxes = Math.ceil(cashValue / DEFAULT_SUPPLY_BOX_VALUE);
+    this.supplyWarehouseStates.set(warehouse.id, warehouseState);
     return true;
   }
 

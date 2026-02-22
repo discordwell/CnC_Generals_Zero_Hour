@@ -28646,6 +28646,58 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script warehouse-set-value action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 8,
+            DeleteWhenEmpty: false,
+          }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyWarehouse', 10, 10),
+        makeMapObject('Ranger', 18, 10),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      supplyWarehouseStates: Map<number, { currentBoxes: number }>;
+    };
+    expect(privateApi.supplyWarehouseStates.get(1)?.currentBoxes).toBe(8);
+
+    expect(logic.executeScriptAction({
+      actionType: 417, // WAREHOUSE_SET_VALUE
+      params: [1, 250],
+    })).toBe(true);
+    expect(privateApi.supplyWarehouseStates.get(1)?.currentBoxes).toBe(3);
+
+    expect(logic.executeScriptAction({
+      actionType: 417,
+      params: [1, -150],
+    })).toBe(true);
+    expect(privateApi.supplyWarehouseStates.get(1)?.currentBoxes).toBe(-1);
+
+    expect(logic.executeScriptAction({
+      actionType: 417,
+      params: [2, 100],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 417,
+      params: [999, 100],
+    })).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
