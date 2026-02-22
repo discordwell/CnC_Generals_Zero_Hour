@@ -3694,6 +3694,14 @@ interface ScriptCameraDefaultViewState {
   maxHeight: number;
 }
 
+interface ScriptCameraLookTowardObjectState {
+  entityId: number;
+  durationMs: number;
+  holdMs: number;
+  easeInMs: number;
+  easeOutMs: number;
+}
+
 interface ScriptTeamRecord {
   nameUpper: string;
   memberEntityIds: Set<number>;
@@ -3886,6 +3894,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [383, 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM'],
   [384, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
   [385, 'TEAM_REMOVE_ALL_OVERRIDE_RELATIONS'],
+  [386, 'CAMERA_LOOK_TOWARD_OBJECT'],
   [388, 'TEAM_SET_OVERRIDE_RELATION_TO_PLAYER'],
   [389, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER'],
   [390, 'PLAYER_SET_OVERRIDE_RELATION_TO_TEAM'],
@@ -4006,6 +4015,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraTetherState: ScriptCameraTetherState | null = null;
   /** Source parity bridge: TacticalView default camera values set by scripts. */
   private scriptCameraDefaultViewState: ScriptCameraDefaultViewState | null = null;
+  /** Source parity bridge: TacticalView rotateCameraTowardObject request from scripts. */
+  private scriptCameraLookTowardObjectState: ScriptCameraLookTowardObjectState | null = null;
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
@@ -5773,6 +5784,46 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: mirrors ScriptActions::doRotateCameraTowardObject.
+   * TODO(source-parity): forward this to TacticalView::rotateCameraTowardObject.
+   */
+  setScriptCameraLookTowardObject(
+    entityId: number,
+    durationSeconds: number,
+    holdSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+  ): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (
+      !Number.isFinite(durationSeconds)
+      || !Number.isFinite(holdSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.scriptCameraLookTowardObjectState = {
+      entityId,
+      durationMs: durationSeconds * 1000,
+      holdMs: holdSeconds * 1000,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+    };
+    return true;
+  }
+
+  getScriptCameraLookTowardObjectState(): ScriptCameraLookTowardObjectState | null {
+    if (!this.scriptCameraLookTowardObjectState) {
+      return null;
+    }
+    return { ...this.scriptCameraLookTowardObjectState };
+  }
+
+  /**
    * Source parity subset: ScriptActions::doVictory/doDefeat and timer start.
    * This port applies the local outcome immediately (without UI/end-game timer windows).
    */
@@ -6033,6 +6084,14 @@ export class GameLogicSubsystem implements Subsystem {
           readNumber(0, ['pitch']),
           readNumber(1, ['angle']),
           readNumber(2, ['maxHeight', 'height']),
+        );
+      case 'CAMERA_LOOK_TOWARD_OBJECT':
+        return this.setScriptCameraLookTowardObject(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['holdSeconds', 'hold']),
+          readNumber(3, ['easeInSeconds', 'easeIn']),
+          readNumber(4, ['easeOutSeconds', 'easeOut']),
         );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
@@ -10633,6 +10692,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptRadarHidden = false;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
+    this.scriptCameraLookTowardObjectState = null;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -36867,6 +36927,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.scriptCameraTetherState?.entityId === entityId) {
         this.scriptCameraTetherState = null;
       }
+      if (this.scriptCameraLookTowardObjectState?.entityId === entityId) {
+        this.scriptCameraLookTowardObjectState = null;
+      }
       if (entity.parkingSpaceProducerId !== null) {
         const producer = this.spawnedEntities.get(entity.parkingSpaceProducerId);
         if (producer?.parkingPlaceProfile) {
@@ -38117,6 +38180,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraMovementFinished = true;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
+    this.scriptCameraLookTowardObjectState = null;
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();

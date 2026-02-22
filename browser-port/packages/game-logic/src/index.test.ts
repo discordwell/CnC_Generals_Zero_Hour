@@ -28566,8 +28566,24 @@ describe('Script condition groundwork', () => {
     });
 
     expect(logic.executeScriptAction({
+      actionType: 386, // CAMERA_LOOK_TOWARD_OBJECT
+      params: [1, 1.5, 0.75, 0.25, 0.5],
+    })).toBe(true);
+    expect(logic.getScriptCameraLookTowardObjectState()).toEqual({
+      entityId: 1,
+      durationMs: 1500,
+      holdMs: 750,
+      easeInMs: 250,
+      easeOutMs: 500,
+    });
+
+    expect(logic.executeScriptAction({
       actionType: 376,
       params: [999, 0, 100],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 386,
+      params: [999, 1, 0, 0, 0],
     })).toBe(false);
 
     expect(logic.executeScriptAction({
@@ -28581,6 +28597,7 @@ describe('Script condition groundwork', () => {
     privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
     logic.update(1 / 30);
     expect(logic.getScriptCameraTetherState()).toBeNull();
+    expect(logic.getScriptCameraLookTowardObjectState()).toBeNull();
   });
 
   it('executes script named/team stop actions using source action ids', () => {
