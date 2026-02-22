@@ -3842,6 +3842,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [150, 'RESTART_TIMER'],
   [151, 'ADD_TO_MSEC_TIMER'],
   [152, 'SUB_FROM_MSEC_TIMER'],
+  [154, 'PLAYER_SET_MONEY'],
+  [155, 'PLAYER_GIVE_MONEY'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -5599,7 +5601,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine action execution for counter/flag/timer actions.
+   * Source parity subset: ScriptEngine action execution for counter/flag/timer/team/money actions.
    * C++ reference: ScriptEngine::executeActions switch + setCounter/addCounter/subCounter/setFlag/setTimer.
    */
   executeScriptAction(action: unknown): boolean {
@@ -5697,6 +5699,22 @@ export class GameLogicSubsystem implements Subsystem {
           readString(1, ['counterName', 'counter']),
           this.secondsToScriptTimerFrames(-seconds),
         );
+      }
+      case 'PLAYER_SET_MONEY': {
+        const side = readString(0, ['side', 'playerName', 'player']);
+        if (!this.normalizeSide(side)) {
+          return false;
+        }
+        this.setSideCredits(side, readInteger(1, ['value', 'amount', 'money']));
+        return true;
+      }
+      case 'PLAYER_GIVE_MONEY': {
+        const side = readString(0, ['side', 'playerName', 'player']);
+        if (!this.normalizeSide(side)) {
+          return false;
+        }
+        this.addSideCredits(side, readInteger(1, ['value', 'amount', 'money']));
+        return true;
       }
       default:
         return false;

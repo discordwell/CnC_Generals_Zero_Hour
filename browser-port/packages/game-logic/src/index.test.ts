@@ -28112,6 +28112,23 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
 
     expect(logic.executeScriptAction({
+      actionType: 154, // PLAYER_SET_MONEY
+      params: ['America', 500],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_CREDITS',
+      params: ['America', 'GREATER_EQUAL', 500],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_GIVE_MONEY',
+      params: ['America', -125],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_CREDITS',
+      params: ['America', 'EQUAL', 375],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
       actionType: 6, // SET_TIMER
       params: ['ActionTimer', 2],
     })).toBe(true);
