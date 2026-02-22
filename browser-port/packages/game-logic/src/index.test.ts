@@ -28506,6 +28506,24 @@ describe('Script condition groundwork', () => {
     expect(logic.getLocalPlayerSelectionIds()).toEqual([1]);
   });
 
+  it('executes script radar disable/enable actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 293, // RADAR_DISABLE
+    })).toBe(true);
+    expect(logic.isScriptRadarHidden()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 294, // RADAR_ENABLE
+    })).toBe(true);
+    expect(logic.isScriptRadarHidden()).toBe(false);
+  });
+
   it('executes script relation-override actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

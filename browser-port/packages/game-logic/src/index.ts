@@ -3858,6 +3858,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
   [291, 'PLAYER_RELATES_PLAYER'],
+  [293, 'RADAR_DISABLE'],
+  [294, 'RADAR_ENABLE'],
   [296, 'LOCALDEFEAT'],
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
   [299, 'DISABLE_INPUT'],
@@ -4084,6 +4086,8 @@ export class GameLogicSubsystem implements Subsystem {
   private previousAttackMoveToggleDown = false;
   /** Source parity subset: ScriptActions::doDisableInput / doEnableInput local input gate. */
   private scriptInputDisabled = false;
+  /** Source parity subset: ScriptActions::doRadarDisable / doRadarEnable UI visibility flag. */
+  private scriptRadarHidden = false;
 
   private placementSummary: MapObjectPlacementSummary = {
     totalObjects: 0,
@@ -5724,6 +5728,17 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doRadarDisable / doRadarEnable.
+   */
+  setScriptRadarHidden(hidden: boolean): void {
+    this.scriptRadarHidden = hidden;
+  }
+
+  isScriptRadarHidden(): boolean {
+    return this.scriptRadarHidden;
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -5786,6 +5801,12 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'ENABLE_INPUT':
         this.setScriptInputDisabled(false);
+        return true;
+      case 'RADAR_DISABLE':
+        this.setScriptRadarHidden(true);
+        return true;
+      case 'RADAR_ENABLE':
+        this.setScriptRadarHidden(false);
         return true;
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
@@ -10475,6 +10496,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.isAttackMoveToMode = false;
     this.previousAttackMoveToggleDown = false;
     this.scriptInputDisabled = false;
+    this.scriptRadarHidden = false;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -37952,6 +37974,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptActiveByName.clear();
     this.scriptSubroutineCalls.length = 0;
     this.scriptInputDisabled = false;
+    this.scriptRadarHidden = false;
     this.scriptCameraMovementFinished = true;
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
