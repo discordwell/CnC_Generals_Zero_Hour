@@ -29837,6 +29837,156 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script skirmish-attack-nearest-group-with-value action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          BuildCost: 300,
+        }),
+        makeObjectDef('EnemyLight', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          BuildCost: 1000,
+        }),
+        makeObjectDef('EnemyValuableNear', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ], {
+          BuildCost: 1800,
+        }),
+        makeObjectDef('EnemyValuableFar', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          BuildCost: 2400,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 24, 20), // id 2
+        makeMapObject('EnemyLight', 70, 20), // id 3
+        makeMapObject('EnemyValuableNear', 70, 80), // id 4
+        makeMapObject('EnemyValuableFar', 180, 180), // id 5
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    expect(logic.setScriptTeamMembers('AttackValueTeam', [1, 2])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 462, // SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE
+      params: ['AttackValueTeam', 3, 1200], // GREATER_EQUAL 1200
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+    const unitOne = privateApi.spawnedEntities.get(1)!;
+    const unitTwo = privateApi.spawnedEntities.get(2)!;
+    expect(unitOne.moveTarget).not.toBeNull();
+    expect(unitTwo.moveTarget).not.toBeNull();
+    const finalOne = unitOne.movePath.at(-1);
+    const finalTwo = unitTwo.movePath.at(-1);
+    expect(finalOne).toBeDefined();
+    expect(finalTwo).toBeDefined();
+    expect(Math.hypot(finalOne!.x - 70, finalOne!.z - 80)).toBeLessThanOrEqual(35);
+    expect(Math.hypot(finalTwo!.x - 70, finalTwo!.z - 80)).toBeLessThanOrEqual(35);
+
+    expect(logic.executeScriptAction({
+      actionType: 462,
+      params: ['AttackValueTeam', 2, 1200], // EQUAL (unsupported in source subset)
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 462,
+      params: ['MissingTeam', 3, 1200],
+    })).toBe(false);
+  });
+
+  it('executes script command-button-on-most-valuable-object action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+          BuildCost: 300,
+        }),
+        makeObjectDef('EnemyCheap', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          BuildCost: 500,
+        }),
+        makeObjectDef('EnemyExpensive', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          BuildCost: 2000,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptOnNamed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('EnemyCheap', 60, 20), // id 2
+        makeMapObject('EnemyExpensive', 70, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AbilityValueTeam', [1])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 463, // SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT
+      params: ['AbilityValueTeam', 'Command_ScriptOnNamed', 200, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      targetEntityId: 3,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 463,
+      params: ['AbilityValueTeam', 'Command_Missing', 200, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 463,
+      params: ['MissingTeam', 'Command_ScriptOnNamed', 200, 0],
+    })).toBe(false);
+  });
+
   it('executes script skirmish-fire-special-power-at-most-cost action using source action id', () => {
     const bundle = makeBundle({
       objects: [

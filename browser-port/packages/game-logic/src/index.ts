@@ -4072,6 +4072,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [459, 'SKIRMISH_BUILD_BASE_DEFENSE_FLANK'],
   [460, 'SKIRMISH_BUILD_STRUCTURE_FRONT'],
   [461, 'SKIRMISH_BUILD_STRUCTURE_FLANK'],
+  [462, 'SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE'],
+  [463, 'SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6728,6 +6730,19 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
           readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
         );
+      case 'SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE':
+        return this.executeScriptSkirmishAttackNearestGroupWithValue(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['comparison']),
+          readInteger(2, ['value']),
+        );
+      case 'SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT':
+        return this.executeScriptSkirmishCommandButtonOnMostValuableObject(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readNumber(2, ['range']),
+          readBoolean(3, ['allTeamMembers', 'allMembers', 'all']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8596,6 +8611,191 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return this.executeScriptSkirmishBuildBuilding(templateName, side);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doSkirmishAttackNearestGroupWithValue.
+   * TODO(source-parity): port true partition-group value queries (getNearestGroupWithValue).
+   */
+  private executeScriptSkirmishAttackNearestGroupWithValue(
+    teamName: string,
+    comparison: number,
+    value: number,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    // Source parity: C++ only performs the query for GREATER_EQUAL and GREATER comparisons.
+    const GREATER_EQUAL = 3;
+    const GREATER = 4;
+    if (comparison !== GREATER_EQUAL && comparison !== GREATER) {
+      return false;
+    }
+
+    const source = teamMembers[0]!;
+    const sourceOffMap = this.isEntityOffMap(source);
+    let bestTarget: MapEntity | null = null;
+    let bestDistSqr = Number.POSITIVE_INFINITY;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (this.getTeamRelationship(source, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+
+      const objectDef = this.resolveObjectDefByTemplateName(candidate.templateName);
+      const candidateValue = objectDef
+        ? this.resolveObjectBuildCost(objectDef, candidate.side ?? '')
+        : 0;
+      if (comparison === GREATER_EQUAL && candidateValue < value) {
+        continue;
+      }
+      if (comparison === GREATER && candidateValue <= value) {
+        continue;
+      }
+
+      const dx = candidate.x - center.x;
+      const dz = candidate.z - center.z;
+      const distSqr = (dx * dx) + (dz * dz);
+      if (distSqr < bestDistSqr) {
+        bestTarget = candidate;
+        bestDistSqr = distSqr;
+      }
+    }
+
+    if (!bestTarget) {
+      return false;
+    }
+
+    let movedAny = false;
+    for (const entity of teamMembers) {
+      this.applyCommand({
+        type: 'attackMoveTo',
+        entityId: entity.id,
+        targetX: bestTarget.x,
+        targetZ: bestTarget.z,
+      });
+      if (entity.moveTarget !== null || entity.attackTargetPosition !== null) {
+        movedAny = true;
+      }
+    }
+    return movedAny;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doSkirmishCommandButtonOnMostValuable.
+   * TODO(source-parity): port PartitionFilterValidCommandButtonTarget + expensive-group iterator.
+   */
+  private executeScriptSkirmishCommandButtonOnMostValuableObject(
+    teamName: string,
+    abilityName: string,
+    range: number,
+    allTeamMembers: boolean,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const normalizedAbilityName = abilityName.trim();
+    if (!normalizedAbilityName) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    let sourceEntity: MapEntity | null = null;
+    let sourceButton: CommandButtonDef | null = null;
+    for (const member of teamMembers) {
+      const buttons = this.findScriptEntityCommandButtonsByName(member, normalizedAbilityName);
+      if (buttons.length <= 0) {
+        continue;
+      }
+      sourceEntity = member;
+      sourceButton = buttons[0] ?? null;
+      break;
+    }
+    if (!sourceEntity || !sourceButton) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    // Source parity: parameter is currently ignored by C++ implementation.
+    void allTeamMembers;
+
+    const searchRange = Number.isFinite(range) ? Math.max(0, range) : 0;
+    const searchRangeSqr = searchRange * searchRange;
+    const sourceOffMap = this.isEntityOffMap(sourceEntity);
+    const candidates: MapEntity[] = [];
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (this.getTeamRelationship(sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+
+      const dx = candidate.x - center.x;
+      const dz = candidate.z - center.z;
+      const distSqr = (dx * dx) + (dz * dz);
+      if (distSqr > searchRangeSqr) {
+        continue;
+      }
+
+      candidates.push(candidate);
+    }
+
+    candidates.sort((left, right) => {
+      const leftDef = this.resolveObjectDefByTemplateName(left.templateName);
+      const rightDef = this.resolveObjectDefByTemplateName(right.templateName);
+      const leftValue = leftDef ? this.resolveObjectBuildCost(leftDef, left.side ?? '') : 0;
+      const rightValue = rightDef ? this.resolveObjectBuildCost(rightDef, right.side ?? '') : 0;
+      if (rightValue !== leftValue) {
+        return rightValue - leftValue;
+      }
+      return left.id - right.id;
+    });
+
+    for (const candidate of candidates) {
+      const executed = this.executeScriptCommandButtonForEntity(
+        sourceEntity,
+        sourceButton,
+        { kind: 'OBJECT', targetEntity: candidate },
+      );
+      if (executed) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
