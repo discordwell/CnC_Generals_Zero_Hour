@@ -26378,6 +26378,13 @@ export class GameLogicSubsystem implements Subsystem {
     return kindOf.has('DOZER') || entity.dozerAIProfile !== null;
   }
 
+  private isWorkerEntity(entity: MapEntity): boolean {
+    if (!entity.dozerAIProfile || !entity.supplyTruckProfile) {
+      return false;
+    }
+    return entity.kindOf.has('INFANTRY');
+  }
+
   private handleConstructBuildingCommand(command: ConstructBuildingCommand): void {
     const constructor = this.spawnedEntities.get(command.entityId);
     if (!constructor || constructor.destroyed) {
@@ -26412,6 +26419,10 @@ export class GameLogicSubsystem implements Subsystem {
     const placementPositions = this.resolveConstructPlacementPositions(command, objectDef);
     if (placementPositions.length === 0) {
       return;
+    }
+
+    if (this.isWorkerEntity(constructor)) {
+      this.resetSupplyTruckState(constructor.id);
     }
 
     const buildCost = this.resolveObjectBuildCost(objectDef, side);
@@ -27304,6 +27315,10 @@ export class GameLogicSubsystem implements Subsystem {
     if (!dozer || !building || dozer.destroyed || building.destroyed) return;
     if (!this.canDozerRepairTarget(dozer, building)) return;
 
+    if (this.isWorkerEntity(dozer)) {
+      this.resetSupplyTruckState(dozer.id);
+    }
+
     // Source parity: DozerAIUpdate::privateResumeConstruction — if the building is
     // still under construction, resume building instead of repairing.
     if (building.constructionPercent !== CONSTRUCTION_COMPLETE
@@ -27498,6 +27513,11 @@ export class GameLogicSubsystem implements Subsystem {
 
       const hasTask = this.pendingConstructionActions.has(entity.id)
         || this.pendingRepairActions.has(entity.id);
+      if (this.isWorkerEntity(entity) && !hasTask) {
+        // Source parity: WorkerAIUpdate runs dozer logic only while in dozer tasks.
+        entity.dozerIdleTooLongTimestamp = this.frameCounter;
+        continue;
+      }
       const isIdle = !entity.moving
         && entity.moveTarget === null
         && entity.attackTargetEntityId === null
@@ -29060,6 +29080,17 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return pointInPolygon(worldX, worldZ, region.points);
+  }
+
+  private resetSupplyTruckState(entityId: number): void {
+    const state = this.supplyTruckStates.get(entityId);
+    if (!state) {
+      return;
+    }
+    state.aiState = SupplyTruckAIState.IDLE;
+    state.targetWarehouseId = null;
+    state.targetDepotId = null;
+    state.actionDelayFinishFrame = this.frameCounter;
   }
 
   private clearChinookSupplyBoxes(entityId: number): void {
@@ -31894,18 +31925,63 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.supplyTruckProfile) {
         const side = this.normalizeSide(entity.side);
         if (side && this.sideUnitsShouldIdleOrResume.get(side)) {
+          if (this.isWorkerEntity(entity)) {
+            this.setWorkerMineClearingDetail(entity, false);
+          }
           continue;
         }
         // Source parity: WorkerAIUpdate runs supply-truck logic only while not in dozer tasks.
         if (entity.dozerAIProfile
           && (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id))) {
+          if (this.isWorkerEntity(entity)) {
+            this.setWorkerMineClearingDetail(entity, false);
+          }
           continue;
         }
         if (!this.isChinookAvailableForSupplying(entity)) {
           continue;
         }
+        if (this.isWorkerEntity(entity)) {
+          this.setWorkerMineClearingDetail(entity, true);
+          this.dropWorkerSupplyBoxesIfClearingMines(entity);
+        }
         updateSupplyTruckImpl(entity, entity.supplyTruckProfile, supplyChainContext);
       }
+    }
+  }
+
+  private setWorkerMineClearingDetail(entity: MapEntity, enabled: boolean): void {
+    if (!this.isWorkerEntity(entity)) {
+      return;
+    }
+    const hasFlag = (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_MINE_CLEARING_DETAIL) !== 0;
+    if (enabled) {
+      entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_MINE_CLEARING_DETAIL;
+    } else {
+      entity.weaponSetFlagsMask &= ~WEAPON_SET_FLAG_MINE_CLEARING_DETAIL;
+    }
+    const nextHasFlag = (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_MINE_CLEARING_DETAIL) !== 0;
+    if (hasFlag !== nextHasFlag) {
+      this.refreshEntityCombatProfiles(entity);
+    }
+  }
+
+  private dropWorkerSupplyBoxesIfClearingMines(entity: MapEntity): void {
+    if (!this.isWorkerEntity(entity)) {
+      return;
+    }
+    if (!this.isEntityClearingMines(entity)) {
+      return;
+    }
+    const state = this.supplyTruckStates.get(entity.id);
+    if (!state || state.currentBoxes <= 0) {
+      return;
+    }
+    // Source parity: WorkerAIUpdate::aiDoCommand — drop boxes when clearing mines.
+    state.currentBoxes = 0;
+    if (state.aiState === SupplyTruckAIState.APPROACHING_DEPOT || state.aiState === SupplyTruckAIState.DEPOSITING) {
+      state.targetDepotId = null;
+      state.aiState = SupplyTruckAIState.IDLE;
     }
   }
 
