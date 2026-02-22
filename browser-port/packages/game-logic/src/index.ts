@@ -28227,6 +28227,10 @@ export class GameLogicSubsystem implements Subsystem {
 
     const targetKindOf = this.resolveEntityKindOfSet(target);
     if (sourceKindOf.has('AIRCRAFT')) {
+      const groundY = this.resolveGroundHeight(source.x, source.z) + source.baseHeight;
+      if (source.y <= groundY + 0.01) {
+        return false;
+      }
       if (!targetKindOf.has('AIRFIELD') && !targetKindOf.has('FS_AIRFIELD')) {
         return false;
       }
