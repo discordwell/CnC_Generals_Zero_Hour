@@ -28792,6 +28792,68 @@ describe('Script condition groundwork', () => {
     });
   });
 
+  it('executes script cinematic-text and popup actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 420, // DISPLAY_CINEMATIC_TEXT
+      params: ['MissionCinematicText', 'Arial - Size: 16 [Bold]', 7],
+    })).toBe(true);
+    expect(logic.getScriptCinematicTextState()).toEqual({
+      text: 'MissionCinematicText',
+      fontType: 'Arial - Size: 16 [Bold]',
+      timeSeconds: 7,
+      durationFrames: 210,
+      frame: 0,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 420,
+      params: ['MissionCinematicText2', 'Tahoma - Size: 14', 'invalid'],
+    })).toBe(true);
+    expect(logic.getScriptCinematicTextState()).toEqual({
+      text: 'MissionCinematicText2',
+      fontType: 'Tahoma - Size: 14',
+      timeSeconds: 0,
+      durationFrames: 0,
+      frame: 0,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 428, // INGAME_POPUP_MESSAGE
+      params: ['Primary objective updated', 120, 220, 360, 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 428,
+      params: ['Secondary objective available', 40, 60, 280, 0],
+    })).toBe(true);
+
+    expect(logic.drainScriptPopupMessages()).toEqual([
+      {
+        message: 'Primary objective updated',
+        x: 120,
+        y: 220,
+        width: 360,
+        pause: true,
+        frame: 0,
+      },
+      {
+        message: 'Secondary objective available',
+        x: 40,
+        y: 60,
+        width: 280,
+        pause: false,
+        frame: 0,
+      },
+    ]);
+    expect(logic.drainScriptPopupMessages()).toEqual([]);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

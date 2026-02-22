@@ -3723,6 +3723,23 @@ interface ScriptScreenShakeState {
   frame: number;
 }
 
+interface ScriptCinematicTextState {
+  text: string;
+  fontType: string;
+  timeSeconds: number;
+  durationFrames: number;
+  frame: number;
+}
+
+interface ScriptPopupMessageState {
+  message: string;
+  x: number;
+  y: number;
+  width: number;
+  pause: boolean;
+  frame: number;
+}
+
 interface ScriptRadarEventState {
   x: number;
   y: number;
@@ -3944,6 +3961,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [417, 'WAREHOUSE_SET_VALUE'],
   [418, 'OBJECT_CREATE_RADAR_EVENT'],
   [419, 'TEAM_CREATE_RADAR_EVENT'],
+  [420, 'DISPLAY_CINEMATIC_TEXT'],
+  [428, 'INGAME_POPUP_MESSAGE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4062,6 +4081,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptRadarForced = false;
   /** Source parity bridge: TacticalView::shake request from scripts. */
   private scriptScreenShakeState: ScriptScreenShakeState | null = null;
+  /** Source parity bridge: Display::setCinematicText from script action. */
+  private scriptCinematicTextState: ScriptCinematicTextState | null = null;
+  /** Source parity bridge: InGameUI::popupMessage script queue. */
+  private readonly scriptPopupMessages: ScriptPopupMessageState[] = [];
   /** Source parity bridge: Radar::createEvent script requests. */
   private readonly scriptRadarEvents: ScriptRadarEventState[] = [];
   /** Source parity: Radar::m_lastRadarEvent (excluding beacon pulse events). */
@@ -5996,6 +6019,64 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptScreenShakeState };
   }
 
+  /**
+   * Source parity bridge: ScriptActions::doDisplayCinematicText.
+   */
+  setScriptCinematicText(displayText: string, fontType: string, timeInSeconds: number): boolean {
+    if (!Number.isFinite(timeInSeconds)) {
+      return false;
+    }
+    const normalizedTimeSeconds = Math.trunc(timeInSeconds);
+    this.scriptCinematicTextState = {
+      text: displayText,
+      fontType,
+      timeSeconds: normalizedTimeSeconds,
+      durationFrames: normalizedTimeSeconds * LOGIC_FRAME_RATE,
+      frame: this.frameCounter,
+    };
+    return true;
+  }
+
+  getScriptCinematicTextState(): ScriptCinematicTextState | null {
+    if (!this.scriptCinematicTextState) {
+      return null;
+    }
+    return { ...this.scriptCinematicTextState };
+  }
+
+  /**
+   * Source parity bridge: ScriptActions::doInGamePopupMessage.
+   */
+  private enqueueScriptPopupMessage(
+    message: string,
+    x: number,
+    y: number,
+    width: number,
+    pause: boolean,
+  ): boolean {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width)) {
+      return false;
+    }
+    this.scriptPopupMessages.push({
+      message,
+      x: Math.trunc(x),
+      y: Math.trunc(y),
+      width: Math.trunc(width),
+      pause,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  drainScriptPopupMessages(): ScriptPopupMessageState[] {
+    if (this.scriptPopupMessages.length === 0) {
+      return [];
+    }
+    const messages = this.scriptPopupMessages.map((message) => ({ ...message }));
+    this.scriptPopupMessages.length = 0;
+    return messages;
+  }
+
   getScriptRadarEvents(): ScriptRadarEventState[] {
     this.pruneExpiredScriptRadarEvents();
     return this.scriptRadarEvents.map((event) => ({ ...event }));
@@ -6148,6 +6229,20 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamCreateRadarEvent(
           readString(0, ['teamName', 'team']),
           readInteger(1, ['eventType', 'type']),
+        );
+      case 'DISPLAY_CINEMATIC_TEXT':
+        return this.setScriptCinematicText(
+          readString(0, ['displayText', 'text', 'message']),
+          readString(1, ['fontType', 'font']),
+          readInteger(2, ['timeInSeconds', 'seconds', 'time']),
+        );
+      case 'INGAME_POPUP_MESSAGE':
+        return this.enqueueScriptPopupMessage(
+          readString(0, ['message', 'text']),
+          readInteger(1, ['x']),
+          readInteger(2, ['y']),
+          readInteger(3, ['width']),
+          readBoolean(4, ['pause']),
         );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
@@ -11161,6 +11256,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
     this.scriptScreenShakeState = null;
+    this.scriptCinematicTextState = null;
+    this.scriptPopupMessages.length = 0;
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraTetherState = null;
@@ -38794,6 +38891,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
     this.scriptScreenShakeState = null;
+    this.scriptCinematicTextState = null;
+    this.scriptPopupMessages.length = 0;
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraMovementFinished = true;
