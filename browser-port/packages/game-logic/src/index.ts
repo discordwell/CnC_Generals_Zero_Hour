@@ -3844,6 +3844,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [152, 'SUB_FROM_MSEC_TIMER'],
   [154, 'PLAYER_SET_MONEY'],
   [155, 'PLAYER_GIVE_MONEY'],
+  [276, 'PLAYER_GRANT_SCIENCE'],
+  [277, 'PLAYER_PURCHASE_SCIENCE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -5714,6 +5716,48 @@ export class GameLogicSubsystem implements Subsystem {
           return false;
         }
         this.addSideCredits(side, readInteger(1, ['value', 'amount', 'money']));
+        return true;
+      }
+      case 'PLAYER_GRANT_SCIENCE':
+        return this.grantSideScience(
+          readString(0, ['side', 'playerName', 'player']),
+          readString(1, ['scienceName', 'science']),
+        );
+      case 'PLAYER_PURCHASE_SCIENCE': {
+        const side = readString(0, ['side', 'playerName', 'player']);
+        const normalizedSide = this.normalizeSide(side);
+        if (!normalizedSide) {
+          return false;
+        }
+
+        const science = this.resolveScienceInternalName(readString(1, ['scienceName', 'science']));
+        if (!science) {
+          return false;
+        }
+
+        if (!this.canSidePurchaseScience(normalizedSide, science)) {
+          return false;
+        }
+
+        const registry = this.iniDataRegistry;
+        if (!registry) {
+          return false;
+        }
+        const scienceDef = findScienceDefByName(registry, science);
+        if (!scienceDef) {
+          return false;
+        }
+        const scienceCost = this.getSciencePurchaseCost(scienceDef);
+        if (scienceCost <= 0) {
+          return false;
+        }
+
+        if (!this.addScienceToSide(normalizedSide, science)) {
+          return false;
+        }
+
+        const rankState = this.getSideRankStateMap(normalizedSide);
+        rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
         return true;
       }
       default:

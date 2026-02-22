@@ -28204,6 +28204,74 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('executes script science grant/purchase actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_ALPHA', {
+          SciencePurchasePointCost: 2,
+          IsGrantable: 'Yes',
+        }),
+        makeScienceDef('SCIENCE_BETA', {
+          SciencePurchasePointCost: 3,
+          PrerequisiteSciences: 'SCIENCE_ALPHA',
+          IsGrantable: 'Yes',
+        }),
+        makeScienceDef('SCIENCE_NOT_GRANTABLE', {
+          SciencePurchasePointCost: 1,
+          IsGrantable: 'No',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CommandCenter', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      getSideRankStateMap: (side: string) => { sciencePurchasePoints: number };
+    };
+    privateApi.getSideRankStateMap('america').sciencePurchasePoints = 5;
+
+    expect(logic.executeScriptAction({
+      actionType: 276, // PLAYER_GRANT_SCIENCE
+      params: ['America', 'SCIENCE_ALPHA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_ACQUIRED_SCIENCE',
+      params: ['America', 'SCIENCE_ALPHA'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 277, // PLAYER_PURCHASE_SCIENCE
+      params: ['America', 'SCIENCE_BETA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_ACQUIRED_SCIENCE',
+      params: ['America', 'SCIENCE_BETA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_SCIENCEPURCHASEPOINTS',
+      params: ['America', 2],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_PURCHASE_SCIENCE',
+      params: ['America', 'SCIENCE_BETA'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_GRANT_SCIENCE',
+      params: ['America', 'SCIENCE_NOT_GRANTABLE'],
+    })).toBe(false);
+  });
+
   it('evaluates named-reached-waypoints-end from completed waypoint labels', () => {
     const bundle = makeBundle({
       objects: [
