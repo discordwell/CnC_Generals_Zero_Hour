@@ -28737,6 +28737,18 @@ describe('Script condition groundwork', () => {
       ],
       links: [],
     };
+    map.triggers = [{
+      id: 1,
+      name: 'GuardAreaA',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40, z: 0 },
+        { x: 60, y: 40, z: 0 },
+        { x: 60, y: 60, z: 0 },
+        { x: 40, y: 60, z: 0 },
+      ],
+    }];
 
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
@@ -28750,6 +28762,7 @@ describe('Script condition groundwork', () => {
       spawnedEntities: Map<number, {
         guardState: string;
         guardObjectId: number;
+        guardAreaTriggerIndex: number;
         guardPositionX: number;
         guardPositionZ: number;
       }>;
@@ -28771,6 +28784,19 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.guardObjectId).toBe(3);
 
     expect(logic.executeScriptAction({
+      actionType: 409, // TEAM_GUARD_AREA
+      params: ['GuardTeam', 'GuardAreaA'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(0);
+    expect(privateApi.spawnedEntities.get(2)?.guardObjectId).toBe(0);
+    expect(privateApi.spawnedEntities.get(1)?.guardAreaTriggerIndex).toBe(0);
+    expect(privateApi.spawnedEntities.get(2)?.guardAreaTriggerIndex).toBe(0);
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionX).toBe(50);
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionZ).toBe(50);
+    expect(privateApi.spawnedEntities.get(2)?.guardPositionX).toBe(50);
+    expect(privateApi.spawnedEntities.get(2)?.guardPositionZ).toBe(50);
+
+    expect(logic.executeScriptAction({
       actionType: 407,
       params: ['GuardTeam', 'MissingWaypoint'],
     })).toBe(false);
@@ -28785,6 +28811,14 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 408,
       params: ['MissingTeam', 3],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 409,
+      params: ['GuardTeam', 'MissingArea'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 409,
+      params: ['MissingTeam', 'GuardAreaA'],
     })).toBe(false);
   });
 

@@ -1725,6 +1725,8 @@ interface MapEntity {
   guardPositionZ: number;
   /** Entity ID being guarded (for GUARDTARGET_OBJECT). 0 = guarding a position. */
   guardObjectId: number;
+  /** Trigger-area index being guarded (for GUARDTARGET_AREA). -1 = no area guard. */
+  guardAreaTriggerIndex: number;
   /** Guard behavior variant (NORMAL / GUARD_WITHOUT_PURSUIT / GUARD_FLYING_UNITS_ONLY). */
   guardMode: number;
   /** Frame at which next guard-mode enemy scan is allowed. */
@@ -3911,6 +3913,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [391, 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
   [407, 'TEAM_GUARD_POSITION'],
   [408, 'TEAM_GUARD_OBJECT'],
+  [409, 'TEAM_GUARD_AREA'],
   [410, 'OBJECT_FORCE_SELECT'],
   [411, 'CAMERA_LOOK_TOWARD_WAYPOINT'],
   [412, 'UNIT_DESTROY_ALL_CONTAINED'],
@@ -6169,6 +6172,11 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readInteger(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
         );
+      case 'TEAM_GUARD_AREA':
+        return this.executeScriptTeamGuardArea(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['triggerName', 'trigger', 'areaName', 'area']),
+        );
       case 'OBJECT_FORCE_SELECT':
         return this.executeScriptObjectForceSelect(
           readString(0, ['teamName', 'team']),
@@ -7125,6 +7133,33 @@ export class GameLogicSubsystem implements Subsystem {
         targetEntityId: target.id,
         guardMode: 0,
       });
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamGuardArea.
+   * Uses trigger-area center/radius from PolygonTrigger and orders team members to guard that area.
+   */
+  private executeScriptTeamGuardArea(teamName: string, triggerName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const area = this.resolveScriptTriggerAreaByName(triggerName);
+    if (!team || !area) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.initGuardArea(
+        entity.id,
+        area.triggerIndex,
+        area.centerX,
+        area.centerZ,
+        0,
+        area.radius,
+      );
     }
     return true;
   }
@@ -11157,6 +11192,7 @@ export class GameLogicSubsystem implements Subsystem {
       guardPositionX: 0,
       guardPositionZ: 0,
       guardObjectId: 0,
+      guardAreaTriggerIndex: -1,
       guardMode: 0,
       guardNextScanFrame: 0,
       guardChaseExpireFrame: 0,
@@ -18754,6 +18790,38 @@ export class GameLogicSubsystem implements Subsystem {
     return null;
   }
 
+  private resolveScriptTriggerAreaByName(triggerName: string): {
+    triggerIndex: number;
+    centerX: number;
+    centerZ: number;
+    radius: number;
+  } | null {
+    const normalizedTriggerName = triggerName.trim().toUpperCase();
+    if (!normalizedTriggerName) {
+      return null;
+    }
+    const triggerIndex = this.mapTriggerRegions.findIndex(
+      (region) => region.nameUpper === normalizedTriggerName,
+    );
+    if (triggerIndex < 0) {
+      return null;
+    }
+
+    const trigger = this.mapTriggerRegions[triggerIndex]!;
+    const centerX = (trigger.minX + trigger.maxX) / 2;
+    const centerZ = (trigger.minZ + trigger.maxZ) / 2;
+    const halfWidth = (trigger.maxX - trigger.minX) / 2;
+    // Source parity: PolygonTrigger::updateBounds currently uses (hi.y + lo.y) / 2.
+    const halfHeight = (trigger.maxZ + trigger.minZ) / 2;
+    const radius = Math.sqrt((halfWidth * halfWidth) + (halfHeight * halfHeight));
+    return {
+      triggerIndex,
+      centerX,
+      centerZ,
+      radius,
+    };
+  }
+
   private getScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
     const teamNameUpper = this.normalizeScriptTeamName(teamName);
     if (!teamNameUpper) {
@@ -19675,6 +19743,7 @@ export class GameLogicSubsystem implements Subsystem {
           // Source parity: explicit stop resets auto-target scan timer and clears guard state.
           stopEntity.autoTargetScanNextFrame = this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES;
           stopEntity.guardState = 'NONE';
+          stopEntity.guardAreaTriggerIndex = -1;
         }
         return;
       }
@@ -28847,6 +28916,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.guardPositionX = targetX;
     entity.guardPositionZ = targetZ;
     entity.guardObjectId = 0;
+    entity.guardAreaTriggerIndex = -1;
     entity.guardMode = guardMode;
     entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
     entity.guardChaseExpireFrame = 0;
@@ -28879,6 +28949,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.guardPositionX = target.x;
     entity.guardPositionZ = target.z;
     entity.guardObjectId = targetObjectId;
+    entity.guardAreaTriggerIndex = -1;
     entity.guardMode = guardMode;
     entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
     entity.guardChaseExpireFrame = 0;
@@ -28887,6 +28958,43 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Move to the guarded object.
     this.issueMoveTo(entityId, target.x, target.z);
+  }
+
+  /**
+   * Initialize guard-area mode for an entity.
+   * Source parity: AIUpdateInterface::privateGuardArea stores area + center and enters AI_GUARD.
+   */
+  private initGuardArea(
+    entityId: number,
+    triggerIndex: number,
+    centerX: number,
+    centerZ: number,
+    guardMode: number,
+    areaRadius: number,
+  ): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return;
+    }
+
+    const isHuman = this.getSidePlayerType(entity.side) === 'HUMAN';
+    const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
+
+    entity.guardState = 'RETURNING';
+    entity.guardPositionX = centerX;
+    entity.guardPositionZ = centerZ;
+    entity.guardObjectId = 0;
+    entity.guardAreaTriggerIndex = triggerIndex;
+    entity.guardMode = guardMode;
+    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardChaseExpireFrame = 0;
+    entity.guardInnerRange = Math.max(0, areaRadius);
+    entity.guardOuterRange = Math.max(
+      Math.max(0, entity.visionRange * outerMod),
+      Math.max(0, areaRadius),
+    );
+
+    this.issueMoveTo(entityId, centerX, centerZ);
   }
 
   /**
@@ -28900,6 +29008,12 @@ export class GameLogicSubsystem implements Subsystem {
     range: number,
   ): MapEntity | null {
     const rangeSqr = range * range;
+    const guardArea = entity.guardAreaTriggerIndex >= 0
+      ? this.mapTriggerRegions[entity.guardAreaTriggerIndex] ?? null
+      : null;
+    if (entity.guardAreaTriggerIndex >= 0 && !guardArea) {
+      entity.guardAreaTriggerIndex = -1;
+    }
     let bestTarget: MapEntity | null = null;
     let bestDistanceSqr = Number.POSITIVE_INFINITY;
 
@@ -28911,6 +29025,9 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+      if (guardArea && !this.isPointInsideTriggerRegion(guardArea, candidate.x, candidate.z)) {
         continue;
       }
       // Source parity: GUARDMODE_GUARD_FLYING_UNITS_ONLY — only target air units.
@@ -28946,6 +29063,11 @@ export class GameLogicSubsystem implements Subsystem {
    * follows the guarded entity. For guard-position, returns the fixed point.
    */
   private resolveGuardAnchorPosition(entity: MapEntity): { x: number; z: number } | null {
+    if (entity.guardAreaTriggerIndex >= 0 && !this.mapTriggerRegions[entity.guardAreaTriggerIndex]) {
+      entity.guardAreaTriggerIndex = -1;
+      entity.guardState = 'NONE';
+      return null;
+    }
     if (entity.guardObjectId !== 0) {
       const guarded = this.spawnedEntities.get(entity.guardObjectId);
       if (!guarded || guarded.destroyed) {
