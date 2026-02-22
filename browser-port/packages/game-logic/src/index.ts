@@ -4069,6 +4069,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [456, 'SKIRMISH_FIRE_SPECIAL_POWER_AT_MOST_COST'],
   [457, 'NAMED_RECEIVE_UPGRADE'],
   [458, 'PLAYER_REPAIR_NAMED_STRUCTURE'],
+  [459, 'SKIRMISH_BUILD_BASE_DEFENSE_FLANK'],
+  [460, 'SKIRMISH_BUILD_STRUCTURE_FRONT'],
+  [461, 'SKIRMISH_BUILD_STRUCTURE_FLANK'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -6711,6 +6714,20 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['side', 'playerName', 'player']),
           readInteger(1, ['targetEntityId', 'entityId', 'targetBuildingId', 'unitId', 'named']),
         );
+      case 'SKIRMISH_BUILD_BASE_DEFENSE_FLANK':
+        return this.executeScriptSkirmishBuildBaseDefenseFlank(
+          readString(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
+      case 'SKIRMISH_BUILD_STRUCTURE_FRONT':
+        return this.executeScriptSkirmishBuildStructureFront(
+          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
+      case 'SKIRMISH_BUILD_STRUCTURE_FLANK':
+        return this.executeScriptSkirmishBuildStructureFlank(
+          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readString(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
       case 'DISABLE_SCRIPT':
@@ -8525,6 +8542,56 @@ export class GameLogicSubsystem implements Subsystem {
 
     const templateName = this.resolveScriptSkirmishDefenseTemplateName(side);
     if (!templateName) {
+      return false;
+    }
+
+    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doBuildBaseDefense(true).
+   * TODO(source-parity): port AISkirmishPlayer::buildAIBaseDefenseStructure flank ring placement.
+   */
+  private executeScriptSkirmishBuildBaseDefenseFlank(explicitPlayerSide: string): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const templateName = this.resolveScriptSkirmishDefenseTemplateName(side);
+    if (!templateName) {
+      return false;
+    }
+
+    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doBuildBaseStructure(..., false).
+   * TODO(source-parity): port AISkirmishPlayer front-defense geometric placement.
+   */
+  private executeScriptSkirmishBuildStructureFront(
+    templateName: string,
+    explicitPlayerSide: string,
+  ): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doBuildBaseStructure(..., true).
+   * TODO(source-parity): port AISkirmishPlayer flank-defense geometric placement.
+   */
+  private executeScriptSkirmishBuildStructureFlank(
+    templateName: string,
+    explicitPlayerSide: string,
+  ): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
       return false;
     }
 

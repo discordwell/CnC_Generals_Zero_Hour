@@ -29743,6 +29743,100 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script skirmish flank/structure build actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          CommandSet: 'DozerConstructSet',
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('PatriotBattery', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructPatriot', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'PatriotBattery',
+        }),
+        makeCommandButtonDef('Command_ConstructBarracks', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'USABarracks',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('DozerConstructSet', {
+          1: 'Command_ConstructPatriot',
+          2: 'Command_ConstructBarracks',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('USADozer', 60, 20), // id 2
+        makeMapObject('USADozer', 100, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 10000 });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 459, // SKIRMISH_BUILD_BASE_DEFENSE_FLANK
+    })).toBe(false);
+
+    expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 459, // SKIRMISH_BUILD_BASE_DEFENSE_FLANK
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 460, // SKIRMISH_BUILD_STRUCTURE_FRONT
+      params: ['USABarracks'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 461, // SKIRMISH_BUILD_STRUCTURE_FLANK
+      params: ['USABarracks'],
+    })).toBe(true);
+
+    const pendingIds = Array.from(privateApi.pendingConstructionActions.values());
+    const templates = pendingIds.map((id) => privateApi.spawnedEntities.get(id)?.templateName ?? '');
+    expect(templates).toContain('PatriotBattery');
+    expect(templates.filter((templateName) => templateName === 'USABarracks').length).toBeGreaterThanOrEqual(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 460,
+      params: ['MissingTemplate'],
+    })).toBe(false);
+    logic.clearScriptCurrentPlayerSide();
+    expect(logic.executeScriptAction({
+      actionType: 461,
+      params: ['USABarracks'],
+    })).toBe(false);
+  });
+
   it('executes script skirmish-fire-special-power-at-most-cost action using source action id', () => {
     const bundle = makeBundle({
       objects: [
