@@ -664,6 +664,9 @@ const GUARD_OUTER_MODIFIER_HUMAN = 1.5;
 const GUARD_INNER_MODIFIER_AI = 1.0;
 const GUARD_OUTER_MODIFIER_AI = 2.0;
 const GUARD_CHASE_UNIT_FRAMES = LOGIC_FRAME_RATE * 10; // 300 frames = 10s
+const MAX_SCRIPT_RADAR_EVENTS = 64;
+const SCRIPT_RADAR_EVENT_TTL_FRAMES = LOGIC_FRAME_RATE * 4;
+const RADAR_EVENT_BEACON_PULSE = 5;
 
 /**
  * Source parity: AIGuardMachine state IDs.
@@ -3720,6 +3723,17 @@ interface ScriptScreenShakeState {
   frame: number;
 }
 
+interface ScriptRadarEventState {
+  x: number;
+  y: number;
+  z: number;
+  eventType: number;
+  frame: number;
+  expireFrame: number;
+  sourceEntityId: number | null;
+  sourceTeamName: string | null;
+}
+
 interface ScriptTeamRecord {
   nameUpper: string;
   memberEntityIds: Set<number>;
@@ -3928,6 +3942,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [415, 'SCREEN_SHAKE'],
   [416, 'TECHTREE_MODIFY_BUILDABILITY_OBJECT'],
   [417, 'WAREHOUSE_SET_VALUE'],
+  [418, 'OBJECT_CREATE_RADAR_EVENT'],
+  [419, 'TEAM_CREATE_RADAR_EVENT'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4046,6 +4062,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptRadarForced = false;
   /** Source parity bridge: TacticalView::shake request from scripts. */
   private scriptScreenShakeState: ScriptScreenShakeState | null = null;
+  /** Source parity bridge: Radar::createEvent script requests. */
+  private readonly scriptRadarEvents: ScriptRadarEventState[] = [];
+  /** Source parity: Radar::m_lastRadarEvent (excluding beacon pulse events). */
+  private scriptLastRadarEventState: ScriptRadarEventState | null = null;
   /** Source parity bridge: TacticalView camera lock target for script tether actions. */
   private scriptCameraTetherState: ScriptCameraTetherState | null = null;
   /** Source parity bridge: TacticalView default camera values set by scripts. */
@@ -5976,6 +5996,61 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptScreenShakeState };
   }
 
+  getScriptRadarEvents(): ScriptRadarEventState[] {
+    this.pruneExpiredScriptRadarEvents();
+    return this.scriptRadarEvents.map((event) => ({ ...event }));
+  }
+
+  getScriptLastRadarEventState(): ScriptRadarEventState | null {
+    if (!this.scriptLastRadarEventState) {
+      return null;
+    }
+    return { ...this.scriptLastRadarEventState };
+  }
+
+  private pruneExpiredScriptRadarEvents(): void {
+    if (this.scriptRadarEvents.length === 0) {
+      return;
+    }
+    for (let index = this.scriptRadarEvents.length - 1; index >= 0; index -= 1) {
+      const event = this.scriptRadarEvents[index];
+      if (!event || event.expireFrame > this.frameCounter) {
+        continue;
+      }
+      this.scriptRadarEvents.splice(index, 1);
+    }
+  }
+
+  private recordScriptRadarEvent(
+    x: number,
+    y: number,
+    z: number,
+    eventType: number,
+    sourceEntityId: number | null,
+    sourceTeamName: string | null,
+  ): void {
+    this.pruneExpiredScriptRadarEvents();
+
+    if (this.scriptRadarEvents.length >= MAX_SCRIPT_RADAR_EVENTS) {
+      this.scriptRadarEvents.shift();
+    }
+
+    const state: ScriptRadarEventState = {
+      x,
+      y,
+      z,
+      eventType: Math.trunc(eventType),
+      frame: this.frameCounter,
+      expireFrame: this.frameCounter + SCRIPT_RADAR_EVENT_TTL_FRAMES,
+      sourceEntityId,
+      sourceTeamName,
+    };
+    this.scriptRadarEvents.push(state);
+    if (state.eventType !== RADAR_EVENT_BEACON_PULSE) {
+      this.scriptLastRadarEventState = state;
+    }
+  }
+
   /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
@@ -6063,6 +6138,16 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptWarehouseSetValue(
           readInteger(0, ['entityId', 'unitId', 'named']),
           readInteger(1, ['cashValue', 'value', 'amount']),
+        );
+      case 'OBJECT_CREATE_RADAR_EVENT':
+        return this.executeScriptObjectCreateRadarEvent(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readInteger(1, ['eventType', 'type']),
+        );
+      case 'TEAM_CREATE_RADAR_EVENT':
+        return this.executeScriptTeamCreateRadarEvent(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['eventType', 'type']),
         );
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
@@ -7329,6 +7414,50 @@ export class GameLogicSubsystem implements Subsystem {
       ?? initializeWarehouseStateImpl(warehouse.supplyWarehouseProfile);
     warehouseState.currentBoxes = Math.ceil(cashValue / DEFAULT_SUPPLY_BOX_VALUE);
     this.supplyWarehouseStates.set(warehouse.id, warehouseState);
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doObjectRadarCreateEvent.
+   */
+  private executeScriptObjectCreateRadarEvent(entityId: number, eventType: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    this.recordScriptRadarEvent(entity.x, entity.y, entity.z, eventType, entity.id, null);
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamRadarCreateEvent.
+   */
+  private executeScriptTeamCreateRadarEvent(teamName: string, eventType: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team);
+    const hasUnits = teamMembers.some((entity) => this.isScriptTeamMemberAliveForUnits(entity));
+    if (!hasUnits) {
+      return false;
+    }
+
+    const estimatePositionEntity = teamMembers[0];
+    if (!estimatePositionEntity) {
+      return false;
+    }
+
+    this.recordScriptRadarEvent(
+      estimatePositionEntity.x,
+      estimatePositionEntity.y,
+      estimatePositionEntity.z,
+      eventType,
+      estimatePositionEntity.id,
+      team.nameUpper,
+    );
     return true;
   }
 
@@ -11032,6 +11161,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
     this.scriptScreenShakeState = null;
+    this.scriptRadarEvents.length = 0;
+    this.scriptLastRadarEventState = null;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
@@ -38663,6 +38794,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
     this.scriptScreenShakeState = null;
+    this.scriptRadarEvents.length = 0;
+    this.scriptLastRadarEventState = null;
     this.scriptCameraMovementFinished = true;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;

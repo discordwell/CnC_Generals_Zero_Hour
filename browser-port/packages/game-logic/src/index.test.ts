@@ -28698,6 +28698,100 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script object/team radar-event actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('SupplyWarehouse', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 8,
+            DeleteWhenEmpty: false,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 16, 10), // id 2
+        makeMapObject('SupplyWarehouse', 22, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('StructureTeam', [3])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 418, // OBJECT_CREATE_RADAR_EVENT
+      params: [1, 3],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 419, // TEAM_CREATE_RADAR_EVENT
+      params: ['AlphaTeam', 4],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 419,
+      params: ['AlphaTeam', 5], // beacon pulse does not update "last event"
+    })).toBe(true);
+
+    const radarEvents = logic.getScriptRadarEvents();
+    expect(radarEvents).toHaveLength(3);
+    expect(radarEvents[0]).toMatchObject({
+      eventType: 3,
+      sourceEntityId: 1,
+      sourceTeamName: null,
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(radarEvents[1]).toMatchObject({
+      eventType: 4,
+      sourceEntityId: 1,
+      sourceTeamName: 'ALPHATEAM',
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(radarEvents[2]).toMatchObject({
+      eventType: 5,
+      sourceEntityId: 1,
+      sourceTeamName: 'ALPHATEAM',
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(logic.getScriptLastRadarEventState()).toMatchObject({
+      eventType: 4,
+      sourceEntityId: 1,
+      sourceTeamName: 'ALPHATEAM',
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 418,
+      params: [999, 4],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 419,
+      params: ['MissingTeam', 4],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 419,
+      params: ['StructureTeam', 4],
+    })).toBe(false);
+
+    for (let frame = 0; frame <= 120; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.getScriptRadarEvents()).toEqual([]);
+    expect(logic.getScriptLastRadarEventState()).toMatchObject({
+      eventType: 4,
+      sourceEntityId: 1,
+      sourceTeamName: 'ALPHATEAM',
+    });
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
