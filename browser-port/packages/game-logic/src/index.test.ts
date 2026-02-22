@@ -28057,6 +28057,119 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script counter/flag/timer actions using source action ids and params', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction(null)).toBe(false);
+    expect(logic.executeScriptAction({ actionType: 'UNKNOWN_ACTION' })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 'SET_COUNTER',
+      params: ['MissionCounter', 10],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 15, // INCREMENT_COUNTER
+      params: [5, 'MissionCounter'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 'DECREMENT_COUNTER',
+      params: [3, 'MissionCounter'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['MissionCounter', 'EQUAL', 12],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 1, // SET_FLAG
+      params: ['MissionFlag', 1],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['MissionFlag', 1],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 6, // SET_TIMER
+      params: ['ActionTimer', 2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 149, // STOP_TIMER
+      params: ['ActionTimer'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['ActionTimer', 'EQUAL', 2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 150, // RESTART_TIMER
+      params: ['ActionTimer'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['ActionTimer', 'EQUAL', 1],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 20, // SET_MILLISECOND_TIMER
+      params: ['SecondTimer', 1.5],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['SecondTimer', 'EQUAL', 45],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 151, // ADD_TO_MSEC_TIMER
+      params: [0.25, 'SecondTimer'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['SecondTimer', 'EQUAL', 53],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 152, // SUB_FROM_MSEC_TIMER
+      params: [0.25, 'SecondTimer'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['SecondTimer', 'EQUAL', 46],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 147, // SET_RANDOM_TIMER
+      params: ['RandomFrameTimer', 3, 5],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['RandomFrameTimer', 'GREATER_EQUAL', 3],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['RandomFrameTimer', 'LESS_EQUAL', 5],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 148, // SET_RANDOM_MSEC_TIMER
+      params: ['RandomSecondTimer', 1.0, 2.0],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['RandomSecondTimer', 'GREATER_EQUAL', 30],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'COUNTER',
+      params: ['RandomSecondTimer', 'LESS_EQUAL', 60],
+    })).toBe(true);
+  });
+
   it('evaluates named-reached-waypoints-end from completed waypoint labels', () => {
     const bundle = makeBundle({
       objects: [

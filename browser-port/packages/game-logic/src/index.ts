@@ -3824,6 +3824,32 @@ const SCRIPT_CONDITION_TYPE_ALIASES = new Map<string, string>([
   ['SKIRMISH_NAMED_AREA_EXISTS', 'SKIRMISH_NAMED_AREA_EXIST'],
 ]);
 
+/**
+ * Source parity subset: ScriptAction::ScriptActionType identifiers used by current script-action
+ * dispatch support. Numeric ids are from Scripts.h enum order.
+ */
+const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
+  [1, 'SET_FLAG'],
+  [2, 'SET_COUNTER'],
+  [6, 'SET_TIMER'],
+  [15, 'INCREMENT_COUNTER'],
+  [16, 'DECREMENT_COUNTER'],
+  [20, 'SET_MILLISECOND_TIMER'],
+  [147, 'SET_RANDOM_TIMER'],
+  [148, 'SET_RANDOM_MSEC_TIMER'],
+  [149, 'STOP_TIMER'],
+  [150, 'RESTART_TIMER'],
+  [151, 'ADD_TO_MSEC_TIMER'],
+  [152, 'SUB_FROM_MSEC_TIMER'],
+]);
+
+const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
+
+const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
+  ['ADD_TO_TIMER', 'ADD_TO_MSEC_TIMER'],
+  ['SUB_FROM_TIMER', 'SUB_FROM_MSEC_TIMER'],
+]);
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -5572,6 +5598,106 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptEngine action execution for counter/flag/timer actions.
+   * C++ reference: ScriptEngine::executeActions switch + setCounter/addCounter/subCounter/setFlag/setTimer.
+   */
+  executeScriptAction(action: unknown): boolean {
+    if (!action || typeof action !== 'object') {
+      return false;
+    }
+
+    const actionRecord = action as Record<string, unknown>;
+    const actionType = this.resolveScriptActionTypeName(actionRecord.actionType ?? actionRecord.type);
+    if (!actionType) {
+      return false;
+    }
+
+    const { paramsObject, paramsArray } = this.resolveScriptConditionParams(actionRecord);
+    const readValue = (index: number, keyNames: readonly string[] = []): unknown =>
+      this.resolveScriptConditionParamValue(actionRecord, paramsObject, paramsArray, index, keyNames);
+    const readString = (index: number, keyNames: readonly string[] = []): string =>
+      this.coerceScriptConditionString(readValue(index, keyNames));
+    const readNumber = (index: number, keyNames: readonly string[] = []): number =>
+      this.coerceScriptConditionNumber(readValue(index, keyNames)) ?? 0;
+    const readInteger = (index: number, keyNames: readonly string[] = []): number =>
+      Math.trunc(readNumber(index, keyNames));
+    const readBoolean = (index: number, keyNames: readonly string[] = []): boolean =>
+      this.coerceScriptConditionBoolean(readValue(index, keyNames), false);
+
+    switch (actionType) {
+      case 'SET_FLAG':
+        return this.setScriptFlag(
+          readString(0, ['flagName', 'flag']),
+          readBoolean(1, ['value', 'enabled']),
+        );
+      case 'SET_COUNTER':
+        return this.setScriptCounter(
+          readString(0, ['counterName', 'counter']),
+          readInteger(1, ['value']),
+        );
+      case 'INCREMENT_COUNTER':
+        return this.addScriptCounter(
+          readString(1, ['counterName', 'counter']),
+          readInteger(0, ['value']),
+        );
+      case 'DECREMENT_COUNTER':
+        return this.addScriptCounter(
+          readString(1, ['counterName', 'counter']),
+          -readInteger(0, ['value']),
+        );
+      case 'SET_TIMER':
+        return this.startScriptTimer(
+          readString(0, ['counterName', 'counter']),
+          readInteger(1, ['value', 'frames']),
+        );
+      case 'SET_RANDOM_TIMER': {
+        const minFrames = readInteger(1, ['value', 'minFrames']);
+        const maxFrames = readInteger(2, ['randomValue', 'maxFrames']);
+        return this.startScriptTimer(
+          readString(0, ['counterName', 'counter']),
+          this.resolveScriptRandomInt(minFrames, maxFrames),
+        );
+      }
+      case 'STOP_TIMER':
+        return this.pauseScriptTimer(readString(0, ['counterName', 'counter']));
+      case 'RESTART_TIMER':
+        return this.resumeScriptTimer(readString(0, ['counterName', 'counter']));
+      case 'SET_MILLISECOND_TIMER': {
+        const seconds = readNumber(1, ['value', 'seconds']);
+        return this.startScriptTimer(
+          readString(0, ['counterName', 'counter']),
+          this.secondsToScriptTimerFrames(seconds),
+        );
+      }
+      case 'SET_RANDOM_MSEC_TIMER': {
+        const minSeconds = readNumber(1, ['value', 'minSeconds']);
+        const maxSeconds = readNumber(2, ['randomValue', 'maxSeconds']);
+        const seconds = this.resolveScriptRandomReal(minSeconds, maxSeconds);
+        return this.startScriptTimer(
+          readString(0, ['counterName', 'counter']),
+          this.secondsToScriptTimerFrames(seconds),
+        );
+      }
+      case 'ADD_TO_MSEC_TIMER': {
+        const seconds = readNumber(0, ['value', 'seconds']);
+        return this.addScriptCounter(
+          readString(1, ['counterName', 'counter']),
+          this.secondsToScriptTimerFrames(seconds),
+        );
+      }
+      case 'SUB_FROM_MSEC_TIMER': {
+        const seconds = readNumber(0, ['value', 'seconds']);
+        return this.addScriptCounter(
+          readString(1, ['counterName', 'counter']),
+          this.secondsToScriptTimerFrames(-seconds),
+        );
+      }
+      default:
+        return false;
+    }
+  }
+
+  /**
    * Source parity: ScriptConditions::evaluateCondition dispatcher.
    * Accepts either positional parameter arrays (`params` / `parameters`) or named parameter objects.
    */
@@ -6162,7 +6288,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
 
       default:
-        // TODO(source-parity): COUNTER/FLAG/TIMER/script-sequential/camera movement conditions.
+        // TODO(source-parity): script-sequential and camera/view conditions.
         return false;
     }
   }
@@ -17272,6 +17398,55 @@ export class GameLogicSubsystem implements Subsystem {
     const created: ScriptConditionCacheState = { customData: 0, customFrame: 0 };
     this.scriptConditionCacheById.set(normalizedId, created);
     return created;
+  }
+
+  private resolveScriptActionTypeName(rawType: unknown): string | null {
+    if (typeof rawType === 'number') {
+      if (!Number.isFinite(rawType)) {
+        return null;
+      }
+      return SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.get(Math.trunc(rawType)) ?? null;
+    }
+
+    if (typeof rawType !== 'string') {
+      return null;
+    }
+
+    const normalized = rawType.trim().toUpperCase();
+    if (!normalized) {
+      return null;
+    }
+
+    const canonical = SCRIPT_ACTION_TYPE_ALIASES.get(normalized) ?? normalized;
+    if (!SCRIPT_ACTION_TYPE_NAME_SET.has(canonical)) {
+      return null;
+    }
+    return canonical;
+  }
+
+  private resolveScriptRandomInt(minValue: number, maxValue: number): number {
+    const min = Number.isFinite(minValue) ? Math.trunc(minValue) : 0;
+    const max = Number.isFinite(maxValue) ? Math.trunc(maxValue) : 0;
+    if (max <= min) {
+      return max;
+    }
+    return this.gameRandom.nextRange(min, max);
+  }
+
+  private resolveScriptRandomReal(minValue: number, maxValue: number): number {
+    const min = Number.isFinite(minValue) ? minValue : 0;
+    const max = Number.isFinite(maxValue) ? maxValue : 0;
+    if (max <= min) {
+      return max;
+    }
+    return min + this.gameRandom.nextFloat() * (max - min);
+  }
+
+  private secondsToScriptTimerFrames(seconds: number): number {
+    if (!Number.isFinite(seconds)) {
+      return 0;
+    }
+    return Math.ceil((seconds * 1000) / LOGIC_FRAME_MS);
   }
 
   private resolveScriptConditionTypeName(rawType: unknown): string | null {
