@@ -28524,6 +28524,65 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptRadarHidden()).toBe(false);
   });
 
+  it('executes script camera tether/default actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 376, // CAMERA_TETHER_NAMED
+      params: [1, 1, 250],
+    })).toBe(true);
+    expect(logic.getScriptCameraTetherState()).toEqual({
+      entityId: 1,
+      immediate: true,
+      play: 250,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 377, // CAMERA_STOP_TETHER_NAMED
+    })).toBe(true);
+    expect(logic.getScriptCameraTetherState()).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 378, // CAMERA_SET_DEFAULT
+      params: [35, 120, 500],
+    })).toBe(true);
+    expect(logic.getScriptCameraDefaultViewState()).toEqual({
+      pitch: 35,
+      angle: 120,
+      maxHeight: 500,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 376,
+      params: [999, 0, 100],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 376,
+      params: [1, 0, 100],
+    })).toBe(true);
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+    expect(logic.getScriptCameraTetherState()).toBeNull();
+  });
+
   it('executes script named/team stop actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

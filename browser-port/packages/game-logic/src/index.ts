@@ -3682,6 +3682,18 @@ interface ScriptMusicCompletedEvent {
   index: number;
 }
 
+interface ScriptCameraTetherState {
+  entityId: number;
+  immediate: boolean;
+  play: number;
+}
+
+interface ScriptCameraDefaultViewState {
+  pitch: number;
+  angle: number;
+  maxHeight: number;
+}
+
 interface ScriptTeamRecord {
   nameUpper: string;
   memberEntityIds: Set<number>;
@@ -3865,6 +3877,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
   [324, 'QUICKVICTORY'],
+  [376, 'CAMERA_TETHER_NAMED'],
+  [377, 'CAMERA_STOP_TETHER_NAMED'],
+  [378, 'CAMERA_SET_DEFAULT'],
   [379, 'NAMED_STOP'],
   [380, 'TEAM_STOP'],
   [381, 'TEAM_STOP_AND_DISBAND'],
@@ -3987,6 +4002,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptSubroutineCalls: string[] = [];
   /** Source parity: View::isCameraMovementFinished fallback state when no view callback is wired. */
   private scriptCameraMovementFinished = true;
+  /** Source parity bridge: TacticalView camera lock target for script tether actions. */
+  private scriptCameraTetherState: ScriptCameraTetherState | null = null;
+  /** Source parity bridge: TacticalView default camera values set by scripts. */
+  private scriptCameraDefaultViewState: ScriptCameraDefaultViewState | null = null;
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
@@ -5700,6 +5719,60 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: mirrors ScriptActions::doCameraTetherNamed.
+   * TODO(source-parity): wire this state to renderer TacticalView camera lock behavior.
+   */
+  setScriptCameraTether(entityId: number, immediate: boolean, play: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !Number.isFinite(play)) {
+      return false;
+    }
+    this.scriptCameraTetherState = {
+      entityId,
+      immediate,
+      play,
+    };
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doCameraStopTetherNamed.
+   */
+  clearScriptCameraTether(): void {
+    this.scriptCameraTetherState = null;
+  }
+
+  getScriptCameraTetherState(): ScriptCameraTetherState | null {
+    if (!this.scriptCameraTetherState) {
+      return null;
+    }
+    return { ...this.scriptCameraTetherState };
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doCameraSetDefault.
+   * TODO(source-parity): apply defaults through TacticalView when renderer bridge is available.
+   */
+  setScriptCameraDefaultView(pitch: number, angle: number, maxHeight: number): boolean {
+    if (!Number.isFinite(pitch) || !Number.isFinite(angle) || !Number.isFinite(maxHeight)) {
+      return false;
+    }
+    this.scriptCameraDefaultViewState = {
+      pitch,
+      angle,
+      maxHeight,
+    };
+    return true;
+  }
+
+  getScriptCameraDefaultViewState(): ScriptCameraDefaultViewState | null {
+    if (!this.scriptCameraDefaultViewState) {
+      return null;
+    }
+    return { ...this.scriptCameraDefaultViewState };
+  }
+
+  /**
    * Source parity subset: ScriptActions::doVictory/doDefeat and timer start.
    * This port applies the local outcome immediately (without UI/end-game timer windows).
    */
@@ -5946,6 +6019,21 @@ export class GameLogicSubsystem implements Subsystem {
         this.setPlayerRelationship(sourceSide, targetSide, relationship);
         return true;
       }
+      case 'CAMERA_TETHER_NAMED':
+        return this.setScriptCameraTether(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readInteger(1, ['immediate', 'snap', 'snapToUnit']) !== 0,
+          readNumber(2, ['play', 'lockDistance', 'distance']),
+        );
+      case 'CAMERA_STOP_TETHER_NAMED':
+        this.clearScriptCameraTether();
+        return true;
+      case 'CAMERA_SET_DEFAULT':
+        return this.setScriptCameraDefaultView(
+          readNumber(0, ['pitch']),
+          readNumber(1, ['angle']),
+          readNumber(2, ['maxHeight', 'height']),
+        );
       case 'NAMED_STOP':
         return this.executeScriptNamedStop(readInteger(0, ['entityId', 'unitId', 'named']));
       case 'TEAM_STOP':
@@ -10543,6 +10631,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.previousAttackMoveToggleDown = false;
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
+    this.scriptCameraTetherState = null;
+    this.scriptCameraDefaultViewState = null;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -36774,6 +36864,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (!entity) {
         continue;
       }
+      if (this.scriptCameraTetherState?.entityId === entityId) {
+        this.scriptCameraTetherState = null;
+      }
       if (entity.parkingSpaceProducerId !== null) {
         const producer = this.spawnedEntities.get(entity.parkingSpaceProducerId);
         if (producer?.parkingPlaceProfile) {
@@ -38022,6 +38115,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
     this.scriptCameraMovementFinished = true;
+    this.scriptCameraTetherState = null;
+    this.scriptCameraDefaultViewState = null;
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();
