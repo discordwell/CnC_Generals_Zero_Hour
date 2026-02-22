@@ -3851,6 +3851,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [275, 'PLAYER_SET_RANKLEVELLIMIT'],
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
+  [298, 'PLAYER_SCIENCE_AVAILABILITY'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -3908,6 +3909,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideScriptCompletedSpecialPowerEvents = new Map<string, ScriptNamedEvent[]>();
   /** Source parity: ScriptEngine::m_completedUpgrades script event list. */
   private readonly sideScriptCompletedUpgradeEvents = new Map<string, ScriptNamedEvent[]>();
+  /** Source parity: Player::m_sciencesDisabled + m_sciencesHidden, keyed by side then science. */
+  private readonly sideScienceAvailability = new Map<string, Map<string, LocalScienceAvailability>>();
   /** Source parity: ScriptEngine::m_completedVideo consumed by evaluateVideoHasCompleted. */
   private readonly scriptCompletedVideos: string[] = [];
   /**
@@ -5807,6 +5810,12 @@ export class GameLogicSubsystem implements Subsystem {
         rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
         return true;
       }
+      case 'PLAYER_SCIENCE_AVAILABILITY':
+        return this.setSideScienceAvailability(
+          readString(0, ['side', 'playerName', 'player']),
+          readString(1, ['scienceName', 'science']),
+          readString(2, ['availability', 'scienceAvailability', 'value']),
+        );
       default:
         return false;
     }
@@ -9428,6 +9437,63 @@ export class GameLogicSubsystem implements Subsystem {
     return availability !== 'disabled' && availability !== 'hidden';
   }
 
+  private normalizeScienceAvailability(value: string): LocalScienceAvailability | null {
+    const normalized = value.trim().toUpperCase();
+    if (!normalized) {
+      return null;
+    }
+    if (normalized === 'DISABLED') {
+      return 'disabled';
+    }
+    if (normalized === 'HIDDEN') {
+      return 'hidden';
+    }
+    if (normalized === 'AVAILABLE' || normalized === 'ENABLED') {
+      return 'enabled';
+    }
+    return null;
+  }
+
+  private setSideScienceAvailability(side: string, scienceName: string, availability: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const normalizedScience = this.resolveScienceInternalName(scienceName);
+    if (!normalizedScience) {
+      return false;
+    }
+
+    const normalizedAvailability = this.normalizeScienceAvailability(availability);
+    if (!normalizedAvailability) {
+      return false;
+    }
+
+    let sideAvailability = this.sideScienceAvailability.get(normalizedSide);
+    if (!sideAvailability) {
+      sideAvailability = new Map<string, LocalScienceAvailability>();
+      this.sideScienceAvailability.set(normalizedSide, sideAvailability);
+    }
+
+    if (normalizedAvailability === 'enabled') {
+      sideAvailability.delete(normalizedScience);
+    } else {
+      sideAvailability.set(normalizedScience, normalizedAvailability);
+    }
+
+    const localSide = this.resolveLocalPlayerSide();
+    if (localSide === normalizedSide) {
+      if (normalizedAvailability === 'enabled') {
+        this.localPlayerScienceAvailability.delete(normalizedScience);
+      } else {
+        this.localPlayerScienceAvailability.set(normalizedScience, normalizedAvailability);
+      }
+    }
+
+    return true;
+  }
+
   private canSidePurchaseScience(normalizedSide: string, normalizedScience: string): boolean {
     const registry = this.iniDataRegistry;
     if (!registry) {
@@ -9448,7 +9514,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // TODO(source-parity): apply per-side disabled/hidden science state here.
+    const sideAvailability = this.sideScienceAvailability.get(normalizedSide)?.get(canonicalScience);
+    if (sideAvailability === 'disabled' || sideAvailability === 'hidden') {
+      return false;
+    }
+
     for (const prerequisite of this.getSciencePrerequisites(scienceDef)) {
       if (!this.hasSideScience(normalizedSide, prerequisite)) {
         return false;
@@ -10083,6 +10153,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCompletedUpgrades.clear();
     this.sideKindOfProductionCostModifiers.clear();
     this.sideSciences.clear();
+    this.sideScienceAvailability.clear();
     this.sideScriptAcquiredSciences.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptMidwaySpecialPowerEvents.clear();

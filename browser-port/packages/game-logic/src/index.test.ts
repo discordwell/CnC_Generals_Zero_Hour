@@ -28264,6 +28264,10 @@ describe('Script condition groundwork', () => {
           PrerequisiteSciences: 'SCIENCE_ALPHA',
           IsGrantable: 'Yes',
         }),
+        makeScienceDef('SCIENCE_GAMMA', {
+          SciencePurchasePointCost: 1,
+          IsGrantable: 'Yes',
+        }),
         makeScienceDef('SCIENCE_NOT_GRANTABLE', {
           SciencePurchasePointCost: 1,
           IsGrantable: 'No',
@@ -28308,6 +28312,34 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 'PLAYER_PURCHASE_SCIENCE',
       params: ['America', 'SCIENCE_BETA'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_CAN_PURCHASE_SCIENCE',
+      params: ['America', 'SCIENCE_GAMMA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 298, // PLAYER_SCIENCE_AVAILABILITY
+      params: ['America', 'SCIENCE_GAMMA', 'Disabled'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_CAN_PURCHASE_SCIENCE',
+      params: ['America', 'SCIENCE_GAMMA'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_SCIENCE_AVAILABILITY',
+      params: ['America', 'SCIENCE_GAMMA', 'Available'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_CAN_PURCHASE_SCIENCE',
+      params: ['America', 'SCIENCE_GAMMA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_SCIENCE_AVAILABILITY',
+      params: ['America', 'SCIENCE_GAMMA', 'Hidden'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_CAN_PURCHASE_SCIENCE',
+      params: ['America', 'SCIENCE_GAMMA'],
     })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 'PLAYER_GRANT_SCIENCE',
