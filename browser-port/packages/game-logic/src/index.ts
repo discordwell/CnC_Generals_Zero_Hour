@@ -25463,6 +25463,12 @@ export class GameLogicSubsystem implements Subsystem {
       return true;
     }
 
+    if (command.type === 'combatDrop' && status !== 'FLYING') {
+      // Allow combat drop command to start while landed; takeoff will continue in update.
+      this.setChinookFlightStatus(entity, 'TAKING_OFF');
+      return false;
+    }
+
     if (command.type === 'exitContainer' || command.type === 'evacuate') {
       if (status !== 'LANDED') {
         this.pendingChinookCommandByEntityId.set(entity.id, command);
@@ -27296,6 +27302,14 @@ export class GameLogicSubsystem implements Subsystem {
     // Move passenger to transport if not close enough.
     const interactionDistance = this.resolveEntityInteractionDistance(passenger, transport);
     const distance = Math.hypot(transport.x - passenger.x, transport.z - passenger.z);
+    if (transport.chinookAIProfile && transport.chinookFlightStatus !== 'LANDED') {
+      if (distance > interactionDistance) {
+        this.issueMoveTo(passenger.id, transport.x, transport.z);
+      }
+      this.pendingTransportActions.set(passenger.id, transport.id);
+      this.setChinookFlightStatus(transport, 'LANDING');
+      return;
+    }
     if (distance > interactionDistance) {
       this.issueMoveTo(passenger.id, transport.x, transport.z);
       this.pendingTransportActions.set(passenger.id, transport.id);
@@ -27354,6 +27368,11 @@ export class GameLogicSubsystem implements Subsystem {
       const transport = this.spawnedEntities.get(transportId);
       if (!passenger || !transport || passenger.destroyed || transport.destroyed) {
         this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+
+      if (transport.chinookAIProfile && transport.chinookFlightStatus !== 'LANDED') {
+        this.setChinookFlightStatus(transport, 'LANDING');
         continue;
       }
 
@@ -43999,6 +44018,18 @@ export class GameLogicSubsystem implements Subsystem {
         targetY = groundY;
       } else if (chinookStatus === 'DOING_COMBAT_DROP') {
         targetY = groundY + Math.max(preferredHeight, minDropHeight);
+      }
+
+      const pendingCombatDrop = this.pendingCombatDropActions.get(entity.id);
+      if (pendingCombatDrop && pendingCombatDrop.targetObjectId !== null && chinookStatus !== 'LANDING') {
+        const target = this.spawnedEntities.get(pendingCombatDrop.targetObjectId);
+        if (target && !target.destroyed) {
+          const targetHeight = target.obstacleGeometry?.height
+            ?? target.nominalHeight
+            ?? target.baseHeight * 2;
+          const requiredHeight = Math.max(0, targetHeight) + minDropHeight;
+          targetY = Math.max(targetY, groundY + requiredHeight);
+        }
       }
 
       const dampingRaw = this.resolveChinookPreferredHeightDamping(entity);
