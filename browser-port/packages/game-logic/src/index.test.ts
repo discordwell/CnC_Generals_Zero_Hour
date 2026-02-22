@@ -28920,6 +28920,67 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptAudioVolumeOverrides()).toEqual([]);
   });
 
+  it('executes script set-cave-index action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('NeutralCaveA', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+          makeBlock('Behavior', 'CaveContain ModuleTag_Cave', { CaveIndex: 0 }),
+        ]),
+        makeObjectDef('NeutralCaveB', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+          makeBlock('Behavior', 'CaveContain ModuleTag_Cave', { CaveIndex: 1 }),
+        ]),
+        makeObjectDef('NeutralInfantry', 'Neutral', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('NeutralCaveA', 30, 30),
+        makeMapObject('NeutralCaveB', 70, 30),
+        makeMapObject('NeutralInfantry', 30, 30),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.getCaveContainIndex(1)).toBe(0);
+    expect(logic.getCaveContainIndex(2)).toBe(1);
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    logic.update(1 / 30);
+    expect(logic.getEntityState(3)?.statusFlags).toContain('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 429, // SET_CAVE_INDEX
+      params: [1, 2],
+    })).toBe(false);
+    expect(logic.getCaveContainIndex(1)).toBe(0);
+
+    logic.submitCommand({ type: 'exitContainer', entityId: 3 });
+    logic.update(1 / 30);
+    expect(logic.getEntityState(3)?.statusFlags).not.toContain('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 429,
+      params: [1, 2],
+    })).toBe(true);
+    expect(logic.getCaveContainIndex(1)).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 429,
+      params: [3, 4],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 429,
+      params: [999, 1],
+    })).toBe(false);
+  });
+
   it('executes script named-set-held action using source action id', () => {
     const bundle = makeBundle({
       objects: [

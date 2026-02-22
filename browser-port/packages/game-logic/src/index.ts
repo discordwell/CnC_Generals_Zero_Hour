@@ -1040,7 +1040,7 @@ interface ParkingPlaceProfile {
   reservedProductionIds: Set<number>;
 }
 
-type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL' | 'HEAL' | 'INTERNET_HACK';
+type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL' | 'CAVE' | 'HEAL' | 'INTERNET_HACK';
 
 interface ContainProfile {
   moduleType: ContainModuleType;
@@ -1059,6 +1059,8 @@ interface ContainProfile {
   /** Source parity: OpenContainModuleData::m_isBurnedDeathToUnits — death type for damage-to-contained.
    *  TRUE = BURNED, FALSE = NORMAL. Default: true (C++ default). */
   burnedDeathToUnits: boolean;
+  /** Source parity: CaveContainModuleData::m_caveIndexData. */
+  caveIndex?: number;
 }
 
 /**
@@ -3969,6 +3971,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [426, 'AUDIO_RESTORE_VOLUME_TYPE'],
   [427, 'AUDIO_RESTORE_VOLUME_ALL_TYPE'],
   [428, 'INGAME_POPUP_MESSAGE'],
+  [429, 'SET_CAVE_INDEX'],
   [430, 'NAMED_SET_HELD'],
   [431, 'NAMED_SET_TOPPLE_DIRECTION'],
 ]);
@@ -4161,6 +4164,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly pendingTunnelActions = new Map<number, number>();
   /** Source parity: TunnelTracker — per-side shared tunnel network state. */
   private readonly tunnelTrackers = new Map<string, TunnelTrackerState>();
+  /** Source parity: CaveSystem/TunnelTracker — per-cave-index shared cave network state. */
+  private readonly caveTrackers = new Map<number, TunnelTrackerState>();
+  /** Source parity: CaveContain::m_caveIndex runtime per-cave index. */
+  private readonly caveTrackerIndexByEntityId = new Map<number, number>();
   private readonly pendingCombatDropActions = new Map<number, PendingCombatDropActionState>();
   /** Source parity: ChinookCombatDropState — rappellers actively descending. */
   private readonly pendingChinookRappels = new Map<number, PendingChinookRappelState>();
@@ -6151,6 +6158,75 @@ export class GameLogicSubsystem implements Subsystem {
     return eventName.trim();
   }
 
+  getCaveContainIndex(entityId: number): number | null {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return null;
+    }
+    if (entity.containProfile?.moduleType !== 'CAVE') {
+      return null;
+    }
+    const trackerIndex = this.caveTrackerIndexByEntityId.get(entity.id);
+    if (trackerIndex !== undefined) {
+      return trackerIndex;
+    }
+    return entity.containProfile.caveIndex ?? 0;
+  }
+
+  private executeScriptSetCaveIndex(entityId: number, caveIndex: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const containProfile = entity.containProfile;
+    if (!containProfile || containProfile.moduleType !== 'CAVE') {
+      return false;
+    }
+
+    if (!Number.isFinite(caveIndex)) {
+      return false;
+    }
+    const newIndex = Math.trunc(caveIndex);
+    if (newIndex < 0) {
+      return false;
+    }
+
+    const oldIndex = this.caveTrackerIndexByEntityId.get(entity.id) ?? containProfile.caveIndex ?? 0;
+    if (!this.canSwitchCaveIndexToIndex(oldIndex, newIndex)) {
+      return false;
+    }
+
+    const oldTracker = this.unregisterTunnelEntity(entity);
+    if (oldTracker) {
+      this.removeTunnelNodeFromTracker(entity, oldTracker);
+    }
+
+    containProfile.caveIndex = newIndex;
+    const newTracker = this.resolveCaveTracker(newIndex);
+    if (!newTracker) {
+      return false;
+    }
+
+    this.caveTrackerIndexByEntityId.set(entity.id, newIndex);
+    newTracker.tunnelIds.add(entity.id);
+    return true;
+  }
+
+  private canSwitchCaveIndexToIndex(oldIndex: number, newIndex: number): boolean {
+    const oldTracker = this.resolveCaveTracker(oldIndex, false);
+    if (oldTracker && oldTracker.passengerIds.size > 0) {
+      return false;
+    }
+
+    const newTracker = this.resolveCaveTracker(newIndex, false);
+    if (newTracker && newTracker.passengerIds.size > 0) {
+      return false;
+    }
+
+    return true;
+  }
+
   getScriptNamedToppleDirection(entityId: number): { x: number; z: number } | null {
     const direction = this.scriptToppleDirectionByEntityId.get(entityId);
     if (!direction) {
@@ -6561,6 +6637,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptNamedSetHeld(
           readInteger(0, ['entityId', 'unitId', 'named']),
           readBoolean(1, ['held', 'value', 'enabled']),
+        );
+      case 'SET_CAVE_INDEX':
+        return this.executeScriptSetCaveIndex(
+          readInteger(0, ['entityId', 'unitId', 'named']),
+          readInteger(1, ['caveIndex', 'index', 'value']),
         );
       case 'NAMED_SET_TOPPLE_DIRECTION': {
         const direction = this.coerceScriptConditionCoord3(
@@ -13703,6 +13784,21 @@ export class GameLogicSubsystem implements Subsystem {
           timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
           damagePercentToUnits,
           burnedDeathToUnits,
+        };
+      } else if (moduleType === 'CAVECONTAIN') {
+        // Source parity: CaveContain — shared tunnel tracker keyed by CaveIndex.
+        const caveIndexRaw = readNumericField(block.fields, ['CaveIndex']);
+        const caveIndex = Number.isFinite(caveIndexRaw) ? Math.max(0, Math.trunc(caveIndexRaw)) : 0;
+        profile = {
+          moduleType: 'CAVE',
+          passengersAllowedToFire: false,
+          passengersAllowedToFireDefault: false,
+          garrisonCapacity: 0,
+          transportCapacity: 0,
+          timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
+          caveIndex,
         };
       } else if (moduleType === 'HEALCONTAIN') {
         // Source parity: HealContain — passengers healed inside, auto-ejected when full health.
@@ -21133,9 +21229,9 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    // Source parity: TunnelContain evacuate — exit all shared passengers from this tunnel.
-    if (container.containProfile?.moduleType === 'TUNNEL') {
-      const tracker = this.resolveTunnelTracker(container.side);
+    // Source parity: TunnelContain/CaveContain evacuate — exit all shared passengers from this node.
+    if (container.containProfile?.moduleType === 'TUNNEL' || container.containProfile?.moduleType === 'CAVE') {
+      const tracker = this.resolveTunnelTrackerForContainer(container);
       if (tracker) {
         for (const passengerId of Array.from(tracker.passengerIds)) {
           const passenger = this.spawnedEntities.get(passengerId);
@@ -22237,11 +22333,11 @@ export class GameLogicSubsystem implements Subsystem {
     const containProfile = transport.containProfile;
     if (!containProfile) return;
 
-    // Source parity: TunnelContain — route to tunnel-specific entry.
-    if (containProfile.moduleType === 'TUNNEL') {
+    // Source parity: TunnelContain/CaveContain — route to shared-network entry.
+    if (containProfile.moduleType === 'TUNNEL' || containProfile.moduleType === 'CAVE') {
       const kindOf = this.resolveEntityKindOfSet(passenger);
       if (kindOf.has('AIRCRAFT')) return;
-      const tracker = this.resolveTunnelTracker(transport.side);
+      const tracker = this.resolveTunnelTrackerForContainer(transport);
       if (!tracker || tracker.passengerIds.size >= this.config.maxTunnelCapacity) return;
 
       const interactionDistance = this.resolveEntityInteractionDistance(passenger, transport);
@@ -22327,6 +22423,7 @@ export class GameLogicSubsystem implements Subsystem {
       || profile.moduleType === 'OVERLORD'
       || profile.moduleType === 'HELIX'
       || profile.moduleType === 'TUNNEL'
+      || profile.moduleType === 'CAVE'
       || profile.moduleType === 'HEAL'
       || profile.moduleType === 'INTERNET_HACK';
   }
@@ -22693,6 +22790,7 @@ export class GameLogicSubsystem implements Subsystem {
   private removeEntityFromWorld(entityId: number): void {
     if (this.spawnedEntities.delete(entityId)) {
       this.scriptToppleDirectionByEntityId.delete(entityId);
+      this.caveTrackerIndexByEntityId.delete(entityId);
       this.clearScriptTriggerTrackingForEntity(entityId);
       this.scriptCompletedWaypointPathsByEntityId.delete(entityId);
       for (const team of this.scriptTeamsByName.values()) {
@@ -25598,17 +25696,65 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: CaveSystem::getTunnelTrackerForCaveIndex.
+   */
+  private resolveCaveTracker(caveIndex: number, createIfMissing = true): TunnelTrackerState | null {
+    if (!Number.isFinite(caveIndex)) {
+      return null;
+    }
+    const normalizedIndex = Math.trunc(caveIndex);
+    if (normalizedIndex < 0) {
+      return null;
+    }
+
+    let tracker = this.caveTrackers.get(normalizedIndex);
+    if (!tracker && createIfMissing) {
+      tracker = { tunnelIds: new Set(), passengerIds: new Set(), timeForFullHealFrames: 0 };
+      this.caveTrackers.set(normalizedIndex, tracker);
+    }
+    return tracker ?? null;
+  }
+
+  /**
+   * Source parity: TunnelContain uses side tracker, CaveContain uses cave-index tracker.
+   */
+  private resolveTunnelTrackerForContainer(container: MapEntity): TunnelTrackerState | null {
+    const containProfile = container.containProfile;
+    if (!containProfile) {
+      return null;
+    }
+    if (containProfile.moduleType === 'TUNNEL') {
+      return this.resolveTunnelTracker(container.side);
+    }
+    if (containProfile.moduleType === 'CAVE') {
+      const caveIndex = this.caveTrackerIndexByEntityId.get(container.id) ?? containProfile.caveIndex ?? 0;
+      return this.resolveCaveTracker(caveIndex);
+    }
+    return null;
+  }
+
+  /**
    * Register a tunnel-type building with the side's TunnelTracker.
    * Called after entity creation at all spawn points.
    */
   private registerTunnelEntity(entity: MapEntity): void {
-    if (!entity.containProfile || entity.containProfile.moduleType !== 'TUNNEL') return;
-    const tracker = this.resolveTunnelTracker(entity.side);
-    if (!tracker) return;
-    tracker.tunnelIds.add(entity.id);
-    // Use the most recently registered tunnel's heal rate.
-    if (entity.containProfile.timeForFullHealFrames > 0) {
-      tracker.timeForFullHealFrames = entity.containProfile.timeForFullHealFrames;
+    if (!entity.containProfile) return;
+    if (entity.containProfile.moduleType === 'TUNNEL') {
+      const tracker = this.resolveTunnelTracker(entity.side);
+      if (!tracker) return;
+      tracker.tunnelIds.add(entity.id);
+      // Use the most recently registered tunnel's heal rate.
+      if (entity.containProfile.timeForFullHealFrames > 0) {
+        tracker.timeForFullHealFrames = entity.containProfile.timeForFullHealFrames;
+      }
+      return;
+    }
+    if (entity.containProfile.moduleType === 'CAVE') {
+      const caveIndex = entity.containProfile.caveIndex ?? 0;
+      const tracker = this.resolveCaveTracker(caveIndex);
+      if (!tracker) return;
+      tracker.tunnelIds.add(entity.id);
+      this.caveTrackerIndexByEntityId.set(entity.id, caveIndex);
     }
   }
 
@@ -25616,18 +25762,29 @@ export class GameLogicSubsystem implements Subsystem {
    * Unregister a tunnel from the tracker. Returns the tracker for further handling.
    */
   private unregisterTunnelEntity(entity: MapEntity): TunnelTrackerState | null {
-    if (!entity.containProfile || entity.containProfile.moduleType !== 'TUNNEL') return null;
-    const tracker = this.resolveTunnelTracker(entity.side);
-    if (!tracker) return null;
-    tracker.tunnelIds.delete(entity.id);
-    return tracker;
+    if (!entity.containProfile) return null;
+    if (entity.containProfile.moduleType === 'TUNNEL') {
+      const tracker = this.resolveTunnelTracker(entity.side);
+      if (!tracker) return null;
+      tracker.tunnelIds.delete(entity.id);
+      return tracker;
+    }
+    if (entity.containProfile.moduleType === 'CAVE') {
+      const caveIndex = this.caveTrackerIndexByEntityId.get(entity.id) ?? entity.containProfile.caveIndex ?? 0;
+      const tracker = this.resolveCaveTracker(caveIndex, false);
+      this.caveTrackerIndexByEntityId.delete(entity.id);
+      if (!tracker) return null;
+      tracker.tunnelIds.delete(entity.id);
+      return tracker;
+    }
+    return null;
   }
 
   /**
    * Source parity: TunnelContain::onContaining — enter the shared tunnel network.
    */
   private enterTunnel(passenger: MapEntity, tunnel: MapEntity): void {
-    const tracker = this.resolveTunnelTracker(tunnel.side);
+    const tracker = this.resolveTunnelTrackerForContainer(tunnel);
     if (!tracker) return;
 
     // Source parity: TunnelTracker::isValidContainerFor — no aircraft.
@@ -25665,7 +25822,7 @@ export class GameLogicSubsystem implements Subsystem {
    * The passenger exits from the specified tunnel building.
    */
   private exitTunnel(passenger: MapEntity, exitTunnel: MapEntity): void {
-    const tracker = this.resolveTunnelTracker(exitTunnel.side);
+    const tracker = this.resolveTunnelTrackerForContainer(exitTunnel);
     if (tracker) {
       tracker.passengerIds.delete(passenger.id);
     }
@@ -25706,13 +25863,9 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: TunnelTracker::onTunnelDestroyed — handle tunnel death.
-   * If last tunnel: cave-in kills all passengers. Otherwise: reassign passengers to another tunnel.
+   * Source parity: TunnelTracker::onTunnelDestroyed.
    */
-  private handleTunnelDestroyed(entity: MapEntity): void {
-    const tracker = this.unregisterTunnelEntity(entity);
-    if (!tracker) return;
-
+  private removeTunnelNodeFromTracker(entity: MapEntity, tracker: TunnelTrackerState): void {
     if (tracker.tunnelIds.size === 0) {
       // Cave-in: last tunnel destroyed — kill all passengers.
       for (const passengerId of Array.from(tracker.passengerIds)) {
@@ -25738,6 +25891,16 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
     }
+  }
+
+  /**
+   * Source parity: TunnelTracker::onTunnelDestroyed — handle tunnel death.
+   * If last tunnel: cave-in kills all passengers. Otherwise: reassign passengers to another tunnel.
+   */
+  private handleTunnelDestroyed(entity: MapEntity): void {
+    const tracker = this.unregisterTunnelEntity(entity);
+    if (!tracker) return;
+    this.removeTunnelNodeFromTracker(entity, tracker);
   }
 
   /**
@@ -25948,7 +26111,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (distance > interactionDistance) continue;
 
       // Check capacity again.
-      const tracker = this.resolveTunnelTracker(tunnel.side);
+      const tracker = this.resolveTunnelTrackerForContainer(tunnel);
       if (!tracker || tracker.passengerIds.size >= this.config.maxTunnelCapacity) {
         this.pendingTunnelActions.delete(passengerId);
         continue;
@@ -26813,10 +26976,10 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (entity.tunnelContainerId !== null) {
-      // Remove from the side's tunnel tracker passenger list.
+      // Remove from the shared tunnel/cave tracker passenger list.
       const tunnel = this.spawnedEntities.get(entity.tunnelContainerId);
       if (tunnel) {
-        const tracker = this.resolveTunnelTracker(tunnel.side);
+        const tracker = this.resolveTunnelTrackerForContainer(tunnel);
         if (tracker) {
           tracker.passengerIds.delete(entity.id);
         }
@@ -36708,20 +36871,23 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity: TunnelTracker::onTunnelDestroyed — cave-in if last tunnel.
-    if (entity.containProfile?.moduleType === 'TUNNEL') {
+    if (entity.containProfile?.moduleType === 'TUNNEL' || entity.containProfile?.moduleType === 'CAVE') {
       this.handleTunnelDestroyed(entity);
     }
 
     // Source parity: OpenContain::onDie — apply damage to contained units before releasing (C++ line 862-866).
     // processDamageToContained: percentDamage * maxHealth as UNRESISTABLE, deathType BURNED or NORMAL.
     if (entity.containProfile && entity.containProfile.moduleType !== 'TUNNEL'
+        && entity.containProfile.moduleType !== 'CAVE'
         && entity.containProfile.damagePercentToUnits > 0) {
       this.processDamageToContained(entity);
     }
 
     // Source parity: Contain::onDie — release contained entities on container death.
     // Garrison, transport, helix, and overlord passengers are ejected at the container position.
-    if (entity.containProfile && entity.containProfile.moduleType !== 'TUNNEL') {
+    if (entity.containProfile
+        && entity.containProfile.moduleType !== 'TUNNEL'
+        && entity.containProfile.moduleType !== 'CAVE') {
       const passengerIds = this.collectContainedEntityIds(entityId);
       for (const passengerId of passengerIds) {
         const passenger = this.spawnedEntities.get(passengerId);
@@ -37863,7 +38029,7 @@ export class GameLogicSubsystem implements Subsystem {
         // Remove from tunnel tracker passenger list on final cleanup.
         const tunnel = this.spawnedEntities.get(entity.tunnelContainerId);
         if (tunnel) {
-          const tracker = this.resolveTunnelTracker(tunnel.side);
+          const tracker = this.resolveTunnelTrackerForContainer(tunnel);
           if (tracker) tracker.passengerIds.delete(entity.id);
         }
         entity.tunnelContainerId = null;
@@ -39047,6 +39213,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingTransportActions.clear();
     this.pendingTunnelActions.clear();
     this.tunnelTrackers.clear();
+    this.caveTrackers.clear();
+    this.caveTrackerIndexByEntityId.clear();
     this.pendingRepairActions.clear();
     this.pendingConstructionActions.clear();
     this.supplyWarehouseStates.clear();
