@@ -27881,6 +27881,36 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('consumes video/speech/audio/music script completion events', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.evaluateScriptVideoHasCompleted({ videoName: 'IntroMovie' })).toBe(false);
+    logic.notifyScriptVideoCompleted('IntroMovie');
+    expect(logic.evaluateScriptVideoHasCompleted({ videoName: 'IntroMovie' })).toBe(true);
+    expect(logic.evaluateScriptVideoHasCompleted({ videoName: 'IntroMovie' })).toBe(false);
+
+    expect(logic.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechLineA' })).toBe(false);
+    logic.notifyScriptSpeechCompleted('SpeechLineA');
+    expect(logic.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechLineA' })).toBe(true);
+    expect(logic.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechLineA' })).toBe(false);
+
+    expect(logic.evaluateScriptAudioHasCompleted({ audioName: 'AudioCueA' })).toBe(false);
+    logic.notifyScriptAudioCompleted('AudioCueA');
+    expect(logic.evaluateScriptAudioHasCompleted({ audioName: 'AudioCueA' })).toBe(true);
+    expect(logic.evaluateScriptAudioHasCompleted({ audioName: 'AudioCueA' })).toBe(false);
+
+    expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 2 })).toBe(false);
+    logic.notifyScriptMusicCompleted('TrackA', 2);
+    expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 1 })).toBe(false);
+    expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 2 })).toBe(true);
+    expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 2 })).toBe(false);
+  });
+
   it('evaluates named-area existence and in-area type/kind conditions', () => {
     const bundle = makeBundle({
       objects: [

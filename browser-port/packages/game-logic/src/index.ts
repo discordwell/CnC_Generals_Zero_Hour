@@ -3677,6 +3677,11 @@ interface ScriptNamedEvent {
   sourceEntityId: number;
 }
 
+interface ScriptMusicCompletedEvent {
+  name: string;
+  index: number;
+}
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -3725,6 +3730,20 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideScriptCompletedSpecialPowerEvents = new Map<string, ScriptNamedEvent[]>();
   /** Source parity: ScriptEngine::m_completedUpgrades script event list. */
   private readonly sideScriptCompletedUpgradeEvents = new Map<string, ScriptNamedEvent[]>();
+  /** Source parity: ScriptEngine::m_completedVideo consumed by evaluateVideoHasCompleted. */
+  private readonly scriptCompletedVideos: string[] = [];
+  /**
+   * Source parity subset: ScriptEngine::isSpeechComplete.
+   * TODO(source-parity): query audio lengths and frame deadlines like C++ m_testingSpeech.
+   */
+  private readonly scriptCompletedSpeech: string[] = [];
+  /**
+   * Source parity subset: ScriptEngine::isAudioComplete.
+   * TODO(source-parity): query audio lengths and frame deadlines like C++ m_testingAudio.
+   */
+  private readonly scriptCompletedAudio: string[] = [];
+  /** Source parity: Audio::hasMusicTrackCompleted consumed by evaluateMusicHasCompleted. */
+  private readonly scriptCompletedMusic: ScriptMusicCompletedEvent[] = [];
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
@@ -5288,6 +5307,119 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return count;
+  }
+
+  /**
+   * Source parity: ScriptEngine::notifyOfCompletedVideo.
+   */
+  notifyScriptVideoCompleted(videoName: string): void {
+    const normalizedName = this.normalizeScriptCompletionName(videoName);
+    if (!normalizedName) {
+      return;
+    }
+    this.scriptCompletedVideos.push(normalizedName);
+  }
+
+  /**
+   * Source parity subset: ScriptEngine speech completion notifications.
+   * TODO(source-parity): speech completion should be computed from audio length.
+   */
+  notifyScriptSpeechCompleted(speechName: string): void {
+    const normalizedName = this.normalizeScriptCompletionName(speechName);
+    if (!normalizedName) {
+      return;
+    }
+    this.scriptCompletedSpeech.push(normalizedName);
+  }
+
+  /**
+   * Source parity subset: ScriptEngine audio completion notifications.
+   * TODO(source-parity): audio completion should be computed from audio length.
+   */
+  notifyScriptAudioCompleted(audioName: string): void {
+    const normalizedName = this.normalizeScriptCompletionName(audioName);
+    if (!normalizedName) {
+      return;
+    }
+    this.scriptCompletedAudio.push(normalizedName);
+  }
+
+  /**
+   * Source parity: Audio::hasMusicTrackCompleted completion hook.
+   */
+  notifyScriptMusicCompleted(trackName: string, index: number): void {
+    const normalizedName = this.normalizeScriptCompletionName(trackName);
+    if (!normalizedName || !Number.isFinite(index)) {
+      return;
+    }
+    this.scriptCompletedMusic.push({
+      name: normalizedName,
+      index: Math.trunc(index),
+    });
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateVideoHasCompleted.
+   */
+  evaluateScriptVideoHasCompleted(filter: {
+    videoName: string;
+  }): boolean {
+    const normalizedName = this.normalizeScriptCompletionName(filter.videoName);
+    if (!normalizedName) {
+      return false;
+    }
+    return this.consumeScriptCompletedName(this.scriptCompletedVideos, normalizedName);
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateSpeechHasCompleted.
+   * TODO(source-parity): compute completion deadlines from audio metadata.
+   */
+  evaluateScriptSpeechHasCompleted(filter: {
+    speechName: string;
+  }): boolean {
+    const normalizedName = this.normalizeScriptCompletionName(filter.speechName);
+    if (!normalizedName) {
+      return false;
+    }
+    return this.consumeScriptCompletedName(this.scriptCompletedSpeech, normalizedName);
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateAudioHasCompleted.
+   * TODO(source-parity): compute completion deadlines from audio metadata.
+   */
+  evaluateScriptAudioHasCompleted(filter: {
+    audioName: string;
+  }): boolean {
+    const normalizedName = this.normalizeScriptCompletionName(filter.audioName);
+    if (!normalizedName) {
+      return false;
+    }
+    return this.consumeScriptCompletedName(this.scriptCompletedAudio, normalizedName);
+  }
+
+  /**
+   * Source parity: ScriptConditions::evaluateMusicHasCompleted.
+   */
+  evaluateScriptMusicHasCompleted(filter: {
+    musicName: string;
+    index: number;
+  }): boolean {
+    const normalizedName = this.normalizeScriptCompletionName(filter.musicName);
+    if (!normalizedName || !Number.isFinite(filter.index)) {
+      return false;
+    }
+    const index = Math.trunc(filter.index);
+    for (let eventIndex = 0; eventIndex < this.scriptCompletedMusic.length; eventIndex += 1) {
+      const event = this.scriptCompletedMusic[eventIndex]!;
+      if (event.name !== normalizedName || event.index !== index) {
+        continue;
+      }
+      this.scriptCompletedMusic.splice(eventIndex, 1);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -15657,6 +15789,21 @@ export class GameLogicSubsystem implements Subsystem {
     const normalizedCurrentCount = Number.isFinite(currentCount) ? Math.trunc(currentCount) : 0;
     const normalizedTargetCount = Number.isFinite(targetCount) ? Math.trunc(targetCount) : 0;
     return this.compareScriptNumeric(comparison, normalizedCurrentCount, normalizedTargetCount);
+  }
+
+  private normalizeScriptCompletionName(name: string): string {
+    return name.trim();
+  }
+
+  private consumeScriptCompletedName(list: string[], name: string): boolean {
+    for (let index = 0; index < list.length; index += 1) {
+      if (list[index] !== name) {
+        continue;
+      }
+      list.splice(index, 1);
+      return true;
+    }
+    return false;
   }
 
   private resolveScriptRelationshipInput(input: ScriptRelationshipInput): RelationshipValue | null {
@@ -35129,6 +35276,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideScriptMidwaySpecialPowerEvents.clear();
     this.sideScriptCompletedSpecialPowerEvents.clear();
     this.sideScriptCompletedUpgradeEvents.clear();
+    this.scriptCompletedVideos.length = 0;
+    this.scriptCompletedSpeech.length = 0;
+    this.scriptCompletedAudio.length = 0;
+    this.scriptCompletedMusic.length = 0;
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();
