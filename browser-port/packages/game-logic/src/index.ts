@@ -3917,6 +3917,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [410, 'OBJECT_FORCE_SELECT'],
   [411, 'CAMERA_LOOK_TOWARD_WAYPOINT'],
   [412, 'UNIT_DESTROY_ALL_CONTAINED'],
+  [413, 'RADAR_FORCE_ENABLE'],
+  [414, 'RADAR_REVERT_TO_NORMAL'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4029,6 +4031,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptSubroutineCalls: string[] = [];
   /** Source parity: View::isCameraMovementFinished fallback state when no view callback is wired. */
   private scriptCameraMovementFinished = true;
+  /** Source parity bridge: Radar::forceOn script control. */
+  private scriptRadarForced = false;
   /** Source parity bridge: TacticalView camera lock target for script tether actions. */
   private scriptCameraTetherState: ScriptCameraTetherState | null = null;
   /** Source parity bridge: TacticalView default camera values set by scripts. */
@@ -5927,6 +5931,17 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doRadarForceEnable / doRadarRevertNormal.
+   */
+  setScriptRadarForced(forced: boolean): void {
+    this.scriptRadarForced = forced;
+  }
+
+  isScriptRadarForced(): boolean {
+    return this.scriptRadarForced;
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -5995,6 +6010,12 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'RADAR_ENABLE':
         this.setScriptRadarHidden(false);
+        return true;
+      case 'RADAR_FORCE_ENABLE':
+        this.setScriptRadarForced(true);
+        return true;
+      case 'RADAR_REVERT_TO_NORMAL':
+        this.setScriptRadarForced(false);
         return true;
       case 'ENABLE_SCRIPT':
         return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
@@ -10927,6 +10948,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.previousAttackMoveToggleDown = false;
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
+    this.scriptRadarForced = false;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
@@ -38523,6 +38545,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptSubroutineCalls.length = 0;
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
+    this.scriptRadarForced = false;
     this.scriptCameraMovementFinished = true;
     this.scriptCameraTetherState = null;
     this.scriptCameraDefaultViewState = null;

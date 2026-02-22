@@ -28506,7 +28506,7 @@ describe('Script condition groundwork', () => {
     expect(logic.getLocalPlayerSelectionIds()).toEqual([1]);
   });
 
-  it('executes script radar disable/enable actions using source action ids', () => {
+  it('executes script radar disable/enable/force/revert actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
       makeMap([], 128, 128),
@@ -28522,6 +28522,15 @@ describe('Script condition groundwork', () => {
       actionType: 294, // RADAR_ENABLE
     })).toBe(true);
     expect(logic.isScriptRadarHidden()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 413, // RADAR_FORCE_ENABLE
+    })).toBe(true);
+    expect(logic.isScriptRadarForced()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 414, // RADAR_REVERT_TO_NORMAL
+    })).toBe(true);
+    expect(logic.isScriptRadarForced()).toBe(false);
   });
 
   it('executes script camera tether/default actions using source action ids', () => {
