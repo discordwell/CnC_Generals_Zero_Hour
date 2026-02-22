@@ -28075,6 +28075,10 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction(null)).toBe(false);
     expect(logic.executeScriptAction({ actionType: 'UNKNOWN_ACTION' })).toBe(false);
     expect(logic.executeScriptAction({ actionType: 5 })).toBe(true); // NO_OP
+    expect(logic.executeScriptAction({ actionType: 9, params: ['Subroutine_Mission'] })).toBe(true); // DISABLE_SCRIPT
+    expect(logic.isScriptActive('Subroutine_Mission')).toBe(false);
+    expect(logic.executeScriptAction({ actionType: 'ENABLE_SCRIPT', params: ['Subroutine_Mission'] })).toBe(true);
+    expect(logic.isScriptActive('Subroutine_Mission')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 'SET_COUNTER',

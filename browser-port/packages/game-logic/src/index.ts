@@ -3833,6 +3833,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [2, 'SET_COUNTER'],
   [5, 'NO_OP'],
   [6, 'SET_TIMER'],
+  [8, 'ENABLE_SCRIPT'],
+  [9, 'DISABLE_SCRIPT'],
   [15, 'INCREMENT_COUNTER'],
   [16, 'DECREMENT_COUNTER'],
   [20, 'SET_MILLISECOND_TIMER'],
@@ -3959,6 +3961,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptFlagsByName = new Map<string, boolean>();
   /** Source parity: ScriptEngine::m_uiInteractions one-frame signal names. */
   private readonly scriptUIInteractions = new Set<string>();
+  /** Source parity subset: Script/ScriptGroup active flags toggled by ENABLE_SCRIPT / DISABLE_SCRIPT. */
+  private readonly scriptActiveByName = new Map<string, boolean>();
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
@@ -5602,6 +5606,30 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptEngine::enableScript / disableScript.
+   * Stores script/group active state keyed by script name.
+   */
+  setScriptActive(scriptName: string, active: boolean): boolean {
+    const normalizedName = scriptName.trim().toUpperCase();
+    if (!normalizedName) {
+      return false;
+    }
+    this.scriptActiveByName.set(normalizedName, active);
+    return true;
+  }
+
+  /**
+   * Source parity subset: Script active-state query used by script action scaffolding.
+   */
+  isScriptActive(scriptName: string): boolean {
+    const normalizedName = scriptName.trim().toUpperCase();
+    if (!normalizedName) {
+      return false;
+    }
+    return this.scriptActiveByName.get(normalizedName) ?? true;
+  }
+
+  /**
    * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
@@ -5643,6 +5671,10 @@ export class GameLogicSubsystem implements Subsystem {
     switch (actionType) {
       case 'NO_OP':
         return true;
+      case 'ENABLE_SCRIPT':
+        return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
+      case 'DISABLE_SCRIPT':
+        return this.setScriptActive(readString(0, ['scriptName', 'script']), false);
       case 'SET_FLAG':
         return this.setScriptFlag(
           readString(0, ['flagName', 'flag']),
@@ -37598,6 +37630,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCountersByName.clear();
     this.scriptFlagsByName.clear();
     this.scriptUIInteractions.clear();
+    this.scriptActiveByName.clear();
     this.scriptObjectCountBySideAndType.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptTriggerMembershipByEntityId.clear();
