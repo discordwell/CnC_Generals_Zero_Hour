@@ -1109,6 +1109,18 @@ interface ParkingPlaceProfile {
   totalSpaces: number;
   occupiedSpaceEntityIds: Set<number>;
   reservedProductionIds: Set<number>;
+  /** Source parity: ParkingPlaceBehaviorModuleData::m_healAmount (per second). */
+  healAmountPerSecond: number;
+  /** Source parity: ParkingPlaceBehaviorModuleData::m_approachHeight. */
+  approachHeight: number;
+  /** Source parity: ParkingPlaceBehaviorModuleData::m_hasRunways. */
+  hasRunways: boolean;
+  /** Source parity: ParkingPlaceBehaviorModuleData::m_parkInHangars. */
+  parkInHangars: boolean;
+  /** Source parity: ParkingPlaceBehavior::m_healing list. */
+  healeeEntityIds: Set<number>;
+  /** Source parity: ParkingPlaceBehavior::m_nextHealFrame. */
+  nextHealFrame: number;
 }
 
 type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL' | 'CAVE' | 'HEAL' | 'INTERNET_HACK';
@@ -1758,6 +1770,8 @@ interface MapEntity {
   chinookFlightStatus: ChinookFlightStatus | null;
   /** Source parity: ChinookAIUpdate state entered frame. */
   chinookFlightStatusEnteredFrame: number;
+  /** Source parity: ChinookAIUpdate::m_airfieldForHealing. */
+  chinookHealingAirfieldId: number;
   repairDockProfile: RepairDockProfile | null;
   dozerAIProfile: DozerAIProfile | null;
   /** Source parity: DozerPrimaryIdleState::m_idleTooLongTimestamp. */
@@ -3482,6 +3496,8 @@ const DEFAULT_CHINOOK_ROPE_COLOR: readonly [number, number, number] = [0.9, 0.8,
 const DEFAULT_CHINOOK_ROPE_WOBBLE_LEN = 10.0;
 const DEFAULT_CHINOOK_ROPE_WOBBLE_AMP = 1.0;
 const DEFAULT_CHINOOK_ROPE_WOBBLE_RATE = 0.1;
+/** Source parity: ParkingPlaceBehavior HEAL_RATE_FRAMES = LOGICFRAMES_PER_SECOND / 5. */
+const PARKING_PLACE_HEAL_RATE_FRAMES = Math.max(1, Math.floor(LOGIC_FRAME_RATE / 5));
 
 /**
  * Source parity: EMPUpdate — electromagnetic pulse field that grows, disables nearby entities,
@@ -5607,6 +5623,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateFlammableEntities();
     this.updateFireSpread();
     this.updateHealing();
+    this.updateParkingPlaceHealing();
     this.updateMineBehavior();
     this.updateMineCollisions();
     this.updateDemoTraps();
@@ -16161,6 +16178,7 @@ export class GameLogicSubsystem implements Subsystem {
       chinookAIProfile,
       chinookFlightStatus: chinookAIProfile ? 'FLYING' : null,
       chinookFlightStatusEnteredFrame: chinookAIProfile ? this.frameCounter : 0,
+      chinookHealingAirfieldId: 0,
       repairDockProfile,
       dozerAIProfile,
       dozerIdleTooLongTimestamp: this.frameCounter,
@@ -18149,6 +18167,10 @@ export class GameLogicSubsystem implements Subsystem {
     let foundModule = false;
     let numRows = 0;
     let numCols = 0;
+    let approachHeight = 0;
+    let hasRunways = false;
+    let parkInHangars = false;
+    let healAmountPerSecond = 0;
 
     const visitBlock = (block: IniBlock): void => {
       if (block.type.toUpperCase() !== 'BEHAVIOR') {
@@ -18163,11 +18185,27 @@ export class GameLogicSubsystem implements Subsystem {
         foundModule = true;
         const rowsRaw = readNumericField(block.fields, ['NumRows']);
         const colsRaw = readNumericField(block.fields, ['NumCols']);
+        const approachHeightRaw = readNumericField(block.fields, ['ApproachHeight']);
+        const hasRunwaysRaw = readBooleanField(block.fields, ['HasRunways']);
+        const parkInHangarsRaw = readBooleanField(block.fields, ['ParkInHangars']);
+        const healAmountRaw = readNumericField(block.fields, ['HealAmountPerSecond']);
         if (rowsRaw !== null && Number.isFinite(rowsRaw)) {
           numRows = Math.max(0, Math.trunc(rowsRaw));
         }
         if (colsRaw !== null && Number.isFinite(colsRaw)) {
           numCols = Math.max(0, Math.trunc(colsRaw));
+        }
+        if (approachHeightRaw !== null && Number.isFinite(approachHeightRaw)) {
+          approachHeight = approachHeightRaw;
+        }
+        if (typeof hasRunwaysRaw === 'boolean') {
+          hasRunways = hasRunwaysRaw;
+        }
+        if (typeof parkInHangarsRaw === 'boolean') {
+          parkInHangars = parkInHangarsRaw;
+        }
+        if (healAmountRaw !== null && Number.isFinite(healAmountRaw)) {
+          healAmountPerSecond = healAmountRaw;
         }
       }
 
@@ -18188,6 +18226,12 @@ export class GameLogicSubsystem implements Subsystem {
       totalSpaces: numRows * numCols,
       occupiedSpaceEntityIds: new Set<number>(),
       reservedProductionIds: new Set<number>(),
+      healAmountPerSecond,
+      approachHeight,
+      hasRunways,
+      parkInHangars,
+      healeeEntityIds: new Set<number>(),
+      nextHealFrame: Number.POSITIVE_INFINITY,
     };
   }
 
@@ -25487,6 +25531,9 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
+    // Source parity: ChinookAIUpdate::aiDoCommand clears healing airfield on any command.
+    this.setChinookAirfieldForHealing(entity, 0);
+
     if (this.pendingCombatDropActions.has(entity.id)) {
       this.pendingChinookCommandByEntityId.set(entity.id, command);
       return true;
@@ -28158,10 +28205,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private canExecuteRepairVehicleEnterAction(source: MapEntity, target: MapEntity): boolean {
-    const targetProfile = target.repairDockProfile;
-    if (!targetProfile) {
-      return false;
-    }
     if (this.isEntityContained(source)) {
       return false;
     }
@@ -28176,6 +28219,25 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity subset: repair docks service ground vehicles.
     const sourceKindOf = this.resolveEntityKindOfSet(source);
     if (!sourceKindOf.has('VEHICLE')) {
+      return false;
+    }
+    if (source.health >= source.maxHealth) {
+      return false;
+    }
+
+    const targetKindOf = this.resolveEntityKindOfSet(target);
+    if (sourceKindOf.has('AIRCRAFT')) {
+      if (!targetKindOf.has('AIRFIELD') && !targetKindOf.has('FS_AIRFIELD')) {
+        return false;
+      }
+      return target.parkingPlaceProfile !== null;
+    }
+
+    const targetProfile = target.repairDockProfile;
+    if (!targetProfile) {
+      return false;
+    }
+    if (!targetKindOf.has('REPAIR_PAD')) {
       return false;
     }
 
@@ -28195,6 +28257,43 @@ export class GameLogicSubsystem implements Subsystem {
 
   private resolveRepairVehicleEnterAction(source: MapEntity, target: MapEntity): void {
     if (!this.canExecuteRepairVehicleEnterAction(source, target)) {
+      return;
+    }
+
+    const sourceKindOf = this.resolveEntityKindOfSet(source);
+    if (sourceKindOf.has('AIRCRAFT')) {
+      const targetKindOf = this.resolveEntityKindOfSet(target);
+      if (!targetKindOf.has('AIRFIELD') && !targetKindOf.has('FS_AIRFIELD')) {
+        return;
+      }
+
+      this.cancelEntityCommandPathActions(source.id);
+      this.clearAttackTarget(source.id);
+
+      if (source.chinookAIProfile) {
+        const status = source.chinookFlightStatus ?? 'FLYING';
+        if (status === 'LANDING' || status === 'LANDED') {
+          return;
+        }
+        this.setChinookAirfieldForHealing(source, target.id);
+        this.issueMoveTo(source.id, target.x, target.z);
+        this.setChinookFlightStatus(source, 'LANDING');
+        return;
+      }
+
+      if (source.jetAIState) {
+        if (source.jetAIState.state === 'LANDING') {
+          return;
+        }
+        source.jetAIState.producerX = target.x;
+        source.jetAIState.producerZ = target.z;
+        source.producerEntityId = target.id;
+        this.jetAITransition(source, source.jetAIState, 'RETURNING_FOR_LANDING');
+        this.issueMoveTo(source.id, target.x, target.z);
+        return;
+      }
+
+      this.issueMoveTo(source.id, target.x, target.z);
       return;
     }
 
@@ -29242,6 +29341,20 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const normal = entity.locomotorSets.get(LOCOMOTORSET_NORMAL);
     return normal ? normal.preferredHeightDamping : 1;
+  }
+
+  private setChinookAirfieldForHealing(entity: MapEntity, airfieldId: number): void {
+    const previousId = entity.chinookHealingAirfieldId;
+    if (previousId === airfieldId) {
+      return;
+    }
+    if (previousId !== 0) {
+      const previousAirfield = this.spawnedEntities.get(previousId);
+      if (previousAirfield?.parkingPlaceProfile) {
+        this.setParkingPlaceHealee(previousAirfield, entity, false);
+      }
+    }
+    entity.chinookHealingAirfieldId = airfieldId;
   }
 
   private setChinookFlightStatus(entity: MapEntity, status: ChinookFlightStatus): void {
@@ -30406,6 +30519,90 @@ export class GameLogicSubsystem implements Subsystem {
           const amount = healPct / LOGICFRAMES_PER_SECOND * target.maxHealth;
           this.attemptHealingFromSoleBenefactor(target, amount, entity.id, prof.scanDelayFrames);
         }
+      }
+    }
+  }
+
+  private setParkingPlaceHealee(airfield: MapEntity, healee: MapEntity, add: boolean): void {
+    const profile = airfield.parkingPlaceProfile;
+    if (!profile) {
+      return;
+    }
+    if (add) {
+      if (profile.healeeEntityIds.has(healee.id)) {
+        return;
+      }
+      // Ensure a healee is only registered with one parking place at a time.
+      for (const other of this.spawnedEntities.values()) {
+        if (other.id === airfield.id) continue;
+        const otherProfile = other.parkingPlaceProfile;
+        if (otherProfile) {
+          otherProfile.healeeEntityIds.delete(healee.id);
+        }
+      }
+      profile.healeeEntityIds.add(healee.id);
+      if (profile.healeeEntityIds.size === 1) {
+        profile.nextHealFrame = this.frameCounter + PARKING_PLACE_HEAL_RATE_FRAMES;
+      }
+      return;
+    }
+
+    if (profile.healeeEntityIds.delete(healee.id) && profile.healeeEntityIds.size === 0) {
+      profile.nextHealFrame = Number.POSITIVE_INFINITY;
+    }
+  }
+
+  private clearParkingPlaceHealee(healee: MapEntity): void {
+    for (const other of this.spawnedEntities.values()) {
+      const profile = other.parkingPlaceProfile;
+      if (!profile) continue;
+      if (profile.healeeEntityIds.delete(healee.id) && profile.healeeEntityIds.size === 0) {
+        profile.nextHealFrame = Number.POSITIVE_INFINITY;
+      }
+    }
+  }
+
+  /**
+   * Source parity: ParkingPlaceBehavior::update — heal parked aircraft.
+   * Uses HealAmountPerSecond applied every PARKING_PLACE_HEAL_RATE_FRAMES.
+   */
+  private updateParkingPlaceHealing(): void {
+    for (const airfield of this.spawnedEntities.values()) {
+      const profile = airfield.parkingPlaceProfile;
+      if (!profile) continue;
+      if (profile.healAmountPerSecond <= 0) continue;
+      if (profile.healeeEntityIds.size === 0) continue;
+      if (this.frameCounter < profile.nextHealFrame) continue;
+
+      profile.nextHealFrame = this.frameCounter + PARKING_PLACE_HEAL_RATE_FRAMES;
+      const healAmount = profile.healAmountPerSecond * (PARKING_PLACE_HEAL_RATE_FRAMES / LOGIC_FRAME_RATE);
+      if (healAmount <= 0) continue;
+
+      const toRemove: number[] = [];
+      for (const healeeId of profile.healeeEntityIds) {
+        const healee = this.spawnedEntities.get(healeeId);
+        if (!healee || healee.destroyed) {
+          toRemove.push(healeeId);
+          continue;
+        }
+        if (healee.health >= healee.maxHealth) {
+          continue;
+        }
+        const prevHealth = healee.health;
+        healee.health = Math.min(healee.maxHealth, healee.health + healAmount);
+        if (healee.health > prevHealth) {
+          this.clearPoisonFromEntity(healee);
+          if (healee.minefieldProfile) {
+            this.mineOnDamage(healee, airfield.id, 'HEALING');
+          }
+        }
+      }
+
+      for (const healeeId of toRemove) {
+        profile.healeeEntityIds.delete(healeeId);
+      }
+      if (profile.healeeEntityIds.size === 0) {
+        profile.nextHealFrame = Number.POSITIVE_INFINITY;
       }
     }
   }
@@ -35643,14 +35840,6 @@ export class GameLogicSubsystem implements Subsystem {
 
       switch (js.state) {
         case 'PARKED': {
-          // Airfield heals parked aircraft.
-          if (entity.health < entity.maxHealth && entity.maxHealth > 0) {
-            // Source parity: C++ uses ParkingPlaceBehavior with data-driven HealAmountPerSecond.
-            // Simplified: ~15% max health/sec (0.5%/frame at 30fps) ≈ 6.7s full heal.
-            const healRate = entity.maxHealth * 0.005;
-            entity.health = Math.min(entity.maxHealth, entity.health + healRate);
-          }
-
           // If there's a pending command, take off.
           if (js.pendingCommand) {
             this.jetAITransition(entity, js, 'TAKING_OFF');
@@ -35850,6 +36039,13 @@ export class GameLogicSubsystem implements Subsystem {
           break;
         }
       }
+
+      const airfield = this.spawnedEntities.get(entity.producerEntityId);
+      if (airfield?.parkingPlaceProfile) {
+        this.setParkingPlaceHealee(airfield, entity, !js.allowAirLoco);
+      } else {
+        this.clearParkingPlaceHealee(entity);
+      }
     }
   }
 
@@ -35869,6 +36065,22 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       const status = entity.chinookFlightStatus ?? 'FLYING';
+      const healingAirfieldId = entity.chinookHealingAirfieldId;
+      if (healingAirfieldId !== 0) {
+        const airfield = this.spawnedEntities.get(healingAirfieldId);
+        if (!airfield || airfield.destroyed || !airfield.parkingPlaceProfile) {
+          this.setChinookAirfieldForHealing(entity, 0);
+        } else if (
+          status === 'LANDED'
+          && !this.pendingChinookCommandByEntityId.has(entity.id)
+          && entity.health >= entity.maxHealth
+        ) {
+          this.setParkingPlaceHealee(airfield, entity, false);
+          this.setChinookFlightStatus(entity, 'TAKING_OFF');
+        } else {
+          this.setParkingPlaceHealee(airfield, entity, status === 'LANDED');
+        }
+      }
       if (status === 'TAKING_OFF' || status === 'LANDING' || status === 'DOING_COMBAT_DROP') {
         continue;
       }
@@ -35879,8 +36091,12 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      if (!waitingToEnterOrExit && status === 'LANDED' && !this.pendingChinookCommandByEntityId.has(entity.id)) {
-        // TODO(source-parity): respect airfield healing (m_airfieldForHealing) before takeoff.
+      if (
+        !waitingToEnterOrExit
+        && status === 'LANDED'
+        && !this.pendingChinookCommandByEntityId.has(entity.id)
+        && entity.chinookHealingAirfieldId === 0
+      ) {
         this.setChinookFlightStatus(entity, 'TAKING_OFF');
       }
     }
@@ -43871,6 +44087,10 @@ export class GameLogicSubsystem implements Subsystem {
         }
         entity.tunnelContainerId = null;
       }
+      if (entity.chinookHealingAirfieldId !== 0) {
+        this.setChinookAirfieldForHealing(entity, 0);
+      }
+      this.clearParkingPlaceHealee(entity);
       this.pendingChinookCommandByEntityId.delete(entityId);
       this.pendingCombatDropActions.delete(entityId);
       this.abortPendingChinookRappels(entityId);

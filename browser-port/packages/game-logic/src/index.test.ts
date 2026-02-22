@@ -24929,7 +24929,7 @@ describe('RepairDockUpdate', () => {
   function makeRepairDockBundle(timeForFullHealMs = 3000) {
     return makeBundle({
       objects: [
-        makeObjectDef('RepairDock', 'America', ['STRUCTURE'], [
+        makeObjectDef('RepairDock', 'America', ['STRUCTURE', 'REPAIR_PAD'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
           makeBlock('Behavior', 'RepairDockUpdate ModuleTag_Repair', {
             TimeForFullHeal: timeForFullHealMs,

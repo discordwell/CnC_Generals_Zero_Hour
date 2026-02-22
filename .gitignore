@@ -77,6 +77,9 @@ packages/
 !browser-port/packages/
 !browser-port/packages/**
 
+# Tooling artifacts inside node_modules
+node_modules/.vite/
+
 # Backup files
 *~
 *.bak
