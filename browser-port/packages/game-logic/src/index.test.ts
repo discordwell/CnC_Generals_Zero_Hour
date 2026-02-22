@@ -32849,6 +32849,55 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptIsDestroyed({ teamName: 'AlphaTeam' })).toBe(true);
   });
 
+  it('resolves THIS_TEAM and THIS_OBJECT via script context setters', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ContextUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ContextUnit', 10, 10)], 128, 128), // id 1
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.setScriptTeamMembers('AlphaTeam', [1]);
+    logic.setScriptConditionTeamContext('AlphaTeam');
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_HAS_UNITS',
+      params: ['<This Team>'],
+    })).toBe(true);
+
+    logic.setScriptCallingTeamContext('AlphaTeam');
+    expect(logic.executeScriptAction({
+      actionType: 'TEAM_SET_STATE',
+      params: ['<This Team>', 'PATROL'],
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamStateIs({ teamName: 'AlphaTeam', stateName: 'PATROL' })).toBe(true);
+
+    logic.setScriptConditionEntityContext(1);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'NAMED_NOT_DESTROYED',
+      params: ['<This Object>'],
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'NAMED_DESTROYED',
+      params: ['<This Object>'],
+    })).toBe(true);
+  });
+
   it('evaluates script-team area and enter/exit conditions from member trigger transitions', () => {
     const bundle = makeBundle({
       objects: [

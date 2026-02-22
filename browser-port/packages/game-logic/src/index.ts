@@ -710,6 +710,9 @@ const GUARD_OUTER_MODIFIER_AI = 2.0;
 const GUARD_CHASE_UNIT_FRAMES = LOGIC_FRAME_RATE * 10; // 300 frames = 10s
 const MAX_SCRIPT_RADAR_EVENTS = 64;
 const SCRIPT_RADAR_EVENT_TTL_FRAMES = LOGIC_FRAME_RATE * 4;
+const SCRIPT_THIS_TEAM = '<This Team>';
+const SCRIPT_THIS_OBJECT = '<This Object>';
+const SCRIPT_TEAM_THE_PLAYER = 'teamThePlayer';
 const RADAR_EVENT_BEACON_PULSE = 5;
 
 /**
@@ -4497,6 +4500,14 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSkirmishStartIndex = new Map<string, number>();
   /** Source parity subset: ScriptEngine::m_currentPlayer side bridge for script actions. */
   private scriptCurrentPlayerSide: string | null = null;
+  /** Source parity: ScriptEngine calling/condition team context for THIS_TEAM resolution. */
+  private scriptCallingTeamNameUpper: string | null = null;
+  private scriptConditionTeamNameUpper: string | null = null;
+  /** Source parity: ScriptEngine calling/condition object context for THIS_OBJECT resolution. */
+  private scriptCallingEntityId: number | null = null;
+  private scriptConditionEntityId: number | null = null;
+  /** Source parity bridge: TEAM_THE_PLAYER alias to local player's default team (if provided). */
+  private scriptLocalPlayerTeamNameUpper: string | null = null;
   private readonly railedTransportStateByEntityId = new Map<number, RailedTransportRuntimeState>();
   private railedTransportWaypointIndex: RailedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
   // localPlayerSciencePurchasePoints removed — now lives in sideRankState.
@@ -5218,6 +5229,112 @@ export class GameLogicSubsystem implements Subsystem {
 
   getScriptCurrentPlayerSide(): string | null {
     return this.scriptCurrentPlayerSide;
+  }
+
+  /**
+   * Source parity: ScriptEngine::m_callingTeam used for THIS_TEAM resolution.
+   */
+  setScriptCallingTeamContext(teamName: string | null): boolean {
+    if (teamName === null) {
+      this.scriptCallingTeamNameUpper = null;
+      return true;
+    }
+    const normalized = this.normalizeScriptTeamContextName(teamName);
+    if (!normalized) {
+      return false;
+    }
+    this.scriptCallingTeamNameUpper = normalized;
+    return true;
+  }
+
+  clearScriptCallingTeamContext(): void {
+    this.scriptCallingTeamNameUpper = null;
+  }
+
+  /**
+   * Source parity: ScriptEngine::m_conditionTeam used for THIS_TEAM resolution.
+   */
+  setScriptConditionTeamContext(teamName: string | null): boolean {
+    if (teamName === null) {
+      this.scriptConditionTeamNameUpper = null;
+      return true;
+    }
+    const normalized = this.normalizeScriptTeamContextName(teamName);
+    if (!normalized) {
+      return false;
+    }
+    this.scriptConditionTeamNameUpper = normalized;
+    return true;
+  }
+
+  clearScriptConditionTeamContext(): void {
+    this.scriptConditionTeamNameUpper = null;
+  }
+
+  /**
+   * Source parity: ScriptEngine::m_callingObject used for THIS_OBJECT resolution.
+   */
+  setScriptCallingEntityContext(entityId: number | null): boolean {
+    if (entityId === null) {
+      this.scriptCallingEntityId = null;
+      return true;
+    }
+    if (!Number.isFinite(entityId)) {
+      return false;
+    }
+    const normalizedId = Math.trunc(entityId);
+    if (!this.spawnedEntities.has(normalizedId)) {
+      return false;
+    }
+    this.scriptCallingEntityId = normalizedId;
+    return true;
+  }
+
+  clearScriptCallingEntityContext(): void {
+    this.scriptCallingEntityId = null;
+  }
+
+  /**
+   * Source parity: ScriptEngine::m_conditionObject used for THIS_OBJECT resolution.
+   */
+  setScriptConditionEntityContext(entityId: number | null): boolean {
+    if (entityId === null) {
+      this.scriptConditionEntityId = null;
+      return true;
+    }
+    if (!Number.isFinite(entityId)) {
+      return false;
+    }
+    const normalizedId = Math.trunc(entityId);
+    if (!this.spawnedEntities.has(normalizedId)) {
+      return false;
+    }
+    this.scriptConditionEntityId = normalizedId;
+    return true;
+  }
+
+  clearScriptConditionEntityContext(): void {
+    this.scriptConditionEntityId = null;
+  }
+
+  /**
+   * Source parity: TEAM_THE_PLAYER alias, seeded by callers when appropriate.
+   */
+  setScriptLocalPlayerTeamContext(teamName: string | null): boolean {
+    if (teamName === null) {
+      this.scriptLocalPlayerTeamNameUpper = null;
+      return true;
+    }
+    const normalized = this.normalizeScriptTeamContextName(teamName);
+    if (!normalized) {
+      return false;
+    }
+    this.scriptLocalPlayerTeamNameUpper = normalized;
+    return true;
+  }
+
+  clearScriptLocalPlayerTeamContext(): void {
+    this.scriptLocalPlayerTeamNameUpper = null;
   }
 
   getPlayerRelationshipByIndex(
@@ -9413,7 +9530,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamStopSequentialScript(teamName: string): boolean {
-    const teamNameUpper = this.normalizeScriptTeamName(teamName);
+    const teamNameUpper = this.resolveScriptTeamName(teamName);
     if (!teamNameUpper) {
       return false;
     }
@@ -11434,7 +11551,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   clearScriptTeam(teamName: string): boolean {
-    const teamNameUpper = this.normalizeScriptTeamName(teamName);
+    const teamNameUpper = this.resolveScriptTeamName(teamName);
     if (!teamNameUpper) {
       return false;
     }
@@ -22627,19 +22744,27 @@ export class GameLogicSubsystem implements Subsystem {
       if (!trimmed) {
         return null;
       }
-      const parsed = Number(trimmed);
-      if (Number.isFinite(parsed)) {
-        entityId = Math.trunc(parsed);
+      if (trimmed === SCRIPT_THIS_OBJECT) {
+        const contextId = this.resolveScriptContextEntityId();
+        if (contextId === null) {
+          return null;
+        }
+        entityId = contextId;
       } else {
-        normalizedName = this.normalizeScriptObjectName(trimmed);
-        if (!normalizedName) {
-          return null;
+        const parsed = Number(trimmed);
+        if (Number.isFinite(parsed)) {
+          entityId = Math.trunc(parsed);
+        } else {
+          normalizedName = this.normalizeScriptObjectName(trimmed);
+          if (!normalizedName) {
+            return null;
+          }
+          const mappedId = this.scriptNamedEntitiesByName.get(normalizedName);
+          if (mappedId === undefined) {
+            return null;
+          }
+          entityId = mappedId;
         }
-        const mappedId = this.scriptNamedEntitiesByName.get(normalizedName);
-        if (mappedId === undefined) {
-          return null;
-        }
-        entityId = mappedId;
       }
     }
     if (!entityId || entityId <= 0) {
@@ -22680,6 +22805,13 @@ export class GameLogicSubsystem implements Subsystem {
       const trimmed = value.trim();
       if (!trimmed) {
         return { entityId: null, didExist: false };
+      }
+      if (trimmed === SCRIPT_THIS_OBJECT) {
+        const contextId = this.resolveScriptContextEntityId();
+        if (contextId === null) {
+          return { entityId: null, didExist: false };
+        }
+        return this.resolveScriptEntityConditionRef(contextId);
       }
       const parsed = Number(trimmed);
       if (Number.isFinite(parsed)) {
@@ -23272,6 +23404,39 @@ export class GameLogicSubsystem implements Subsystem {
     return teamName.trim().toUpperCase();
   }
 
+  private normalizeScriptTeamContextName(teamName: string): string | null {
+    const trimmed = teamName.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed === SCRIPT_THIS_TEAM || trimmed === SCRIPT_TEAM_THE_PLAYER) {
+      return null;
+    }
+    return this.normalizeScriptTeamName(trimmed);
+  }
+
+  private resolveScriptContextTeamName(): string | null {
+    return this.scriptCallingTeamNameUpper ?? this.scriptConditionTeamNameUpper;
+  }
+
+  private resolveScriptTeamName(teamName: string): string | null {
+    const trimmed = teamName.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed === SCRIPT_THIS_TEAM) {
+      return this.resolveScriptContextTeamName();
+    }
+    if (trimmed === SCRIPT_TEAM_THE_PLAYER) {
+      return this.scriptLocalPlayerTeamNameUpper;
+    }
+    return this.normalizeScriptTeamName(trimmed);
+  }
+
+  private resolveScriptContextEntityId(): number | null {
+    return this.scriptCallingEntityId ?? this.scriptConditionEntityId;
+  }
+
   private resolveScriptWaypointPosition(waypointName: string): { x: number; z: number } | null {
     const normalizedWaypointName = waypointName.trim().toUpperCase();
     if (!normalizedWaypointName) {
@@ -23326,7 +23491,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private getScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
-    const teamNameUpper = this.normalizeScriptTeamName(teamName);
+    const teamNameUpper = this.resolveScriptTeamName(teamName);
     if (!teamNameUpper) {
       return null;
     }
@@ -23334,7 +23499,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private getOrCreateScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
-    const teamNameUpper = this.normalizeScriptTeamName(teamName);
+    const teamNameUpper = this.resolveScriptTeamName(teamName);
     if (!teamNameUpper) {
       return null;
     }
@@ -43430,6 +43595,11 @@ export class GameLogicSubsystem implements Subsystem {
     this.skirmishAIStates.clear();
     this.sideSkirmishStartIndex.clear();
     this.scriptCurrentPlayerSide = null;
+    this.scriptCallingTeamNameUpper = null;
+    this.scriptConditionTeamNameUpper = null;
+    this.scriptCallingEntityId = null;
+    this.scriptConditionEntityId = null;
+    this.scriptLocalPlayerTeamNameUpper = null;
     this.sideScoreState.clear();
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
