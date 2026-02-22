@@ -3842,6 +3842,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [150, 'RESTART_TIMER'],
   [151, 'ADD_TO_MSEC_TIMER'],
   [152, 'SUB_FROM_MSEC_TIMER'],
+  [153, 'TEAM_TRANSFER_TO_PLAYER'],
   [154, 'PLAYER_SET_MONEY'],
   [155, 'PLAYER_GIVE_MONEY'],
   [272, 'PLAYER_ADD_SKILLPOINTS'],
@@ -5708,6 +5709,11 @@ export class GameLogicSubsystem implements Subsystem {
           this.secondsToScriptTimerFrames(-seconds),
         );
       }
+      case 'TEAM_TRANSFER_TO_PLAYER':
+        return this.setScriptTeamControllingSide(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['side', 'playerName', 'player']),
+        );
       case 'PLAYER_SET_MONEY': {
         const side = readString(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {

@@ -28117,6 +28117,14 @@ describe('Script condition groundwork', () => {
       conditionType: 'TEAM_STATE_IS_NOT',
       params: ['AlphaTeam', 'ATTACKING'],
     })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 153, // TEAM_TRANSFER_TO_PLAYER
+      params: ['AlphaTeam', 'China'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['AlphaTeam', 'China'],
+    })).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 154, // PLAYER_SET_MONEY
