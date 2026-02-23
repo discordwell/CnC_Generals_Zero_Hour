@@ -36465,6 +36465,119 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptChooseVictimAlwaysUsesNormal()).toBe(false);
   });
 
+  it('executes script create-object actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptSpawnUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const map = makeMap([
+      makeMapObject('ScriptSpawnUnit', 10, 10, { ObjectName: 'NamedAlive' }), // id 1
+      makeMapObject('ScriptSpawnUnit', 12, 10, { ObjectName: 'NamedDead' }), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'SpawnPoint',
+          position: { x: 60, y: 70, z: 0 },
+          biDirectional: false,
+        },
+      ],
+      links: [],
+    };
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamControllingSide('SpawnTeam', 'China')).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number;
+        x: number;
+        y: number;
+        z: number;
+        side: string;
+        scriptName: string | null;
+        destroyed: boolean;
+        rotationY: number;
+        customIndicatorColor: number | null;
+      }>;
+      scriptTeamsByName: Map<string, {
+        memberEntityIds: Set<number>;
+      }>;
+      scriptNamedEntitiesByName: Map<string, number>;
+    };
+
+    const deadNamed = privateApi.spawnedEntities.get(2);
+    expect(deadNamed).toBeDefined();
+    deadNamed!.customIndicatorColor = 17;
+    expect(logic.executeScriptAction({
+      actionType: 73, // NAMED_KILL
+      params: [2],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.destroyed).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 23, // CREATE_OBJECT
+      params: ['ScriptSpawnUnit', 'SpawnTeam', { x: 40, y: 50, z: 2 }, 1.25],
+    })).toBe(true);
+    const createdAtCoord = privateApi.spawnedEntities.get(3);
+    expect(createdAtCoord).toBeDefined();
+    expect(createdAtCoord?.x).toBeCloseTo(40);
+    expect(createdAtCoord?.z).toBeCloseTo(50);
+    expect(createdAtCoord?.rotationY).toBeCloseTo(1.25);
+    expect(createdAtCoord?.side).toBe('china');
+
+    expect(logic.executeScriptAction({
+      actionType: 39, // CREATE_NAMED_ON_TEAM_AT_WAYPOINT
+      params: ['CreatedNamed', 'ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
+    })).toBe(true);
+    const createdNamedId = privateApi.scriptNamedEntitiesByName.get('CreatedNamed');
+    expect(createdNamedId).toBe(4);
+    const createdNamed = createdNamedId ? privateApi.spawnedEntities.get(createdNamedId) : undefined;
+    expect(createdNamed?.x).toBeCloseTo(60);
+    expect(createdNamed?.z).toBeCloseTo(70);
+    expect(createdNamed?.side).toBe('china');
+
+    expect(logic.executeScriptAction({
+      actionType: 40, // CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT
+      params: ['ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(5)?.scriptName).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 39,
+      params: ['NamedAlive', 'ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 39,
+      params: ['NamedDead', 'ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
+    })).toBe(true);
+    const transferredNameId = privateApi.scriptNamedEntitiesByName.get('NamedDead');
+    expect(transferredNameId).toBe(6);
+    expect(privateApi.spawnedEntities.get(6)?.customIndicatorColor).toBe(17);
+
+    expect(logic.executeScriptAction({
+      actionType: 23,
+      params: ['MissingTemplate', 'SpawnTeam', { x: 10, y: 10, z: 0 }, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 39,
+      params: ['MissingWaypoint', 'ScriptSpawnUnit', 'SpawnTeam', 'NoSuchWaypoint'],
+    })).toBe(false);
+
+    expect(Array.from(privateApi.scriptTeamsByName.get('SPAWNTEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
+      .toEqual([3, 4, 5, 6]);
+  });
+
   it('executes script damage/delete/kill actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

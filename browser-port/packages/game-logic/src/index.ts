@@ -4370,10 +4370,13 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [18, 'ROTATE_CAMERA'],
   [19, 'RESET_CAMERA'],
   [20, 'SET_MILLISECOND_TIMER'],
+  [23, 'CREATE_OBJECT'],
   [24, 'SUSPEND_BACKGROUND_SOUNDS'],
   [25, 'RESUME_BACKGROUND_SOUNDS'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
+  [39, 'CREATE_NAMED_ON_TEAM_AT_WAYPOINT'],
+  [40, 'CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT'],
   [52, 'NAMED_ENTER_NAMED'],
   [53, 'TEAM_ENTER_NAMED'],
   [54, 'NAMED_EXIT_ALL'],
@@ -9336,6 +9339,27 @@ export class GameLogicSubsystem implements Subsystem {
     switch (actionType) {
       case 'NO_OP':
         return true;
+      case 'CREATE_OBJECT':
+        return this.executeScriptCreateObjectAtPosition(
+          readString(0, ['templateName', 'objectType', 'thingName', 'unitType']),
+          readString(1, ['teamName', 'team']),
+          readValue(2, ['position', 'coord3D', 'coord']),
+          readNumber(3, ['angle', 'orientation', 'rotation']),
+        );
+      case 'CREATE_NAMED_ON_TEAM_AT_WAYPOINT':
+        return this.executeScriptCreateUnitOnTeamAtWaypoint(
+          readString(0, ['objectName', 'entityName', 'name', 'unitName', 'named']),
+          readString(1, ['templateName', 'objectType', 'thingName', 'unitType']),
+          readString(2, ['teamName', 'team']),
+          readString(3, ['waypointName', 'waypoint']),
+        );
+      case 'CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT':
+        return this.executeScriptCreateUnitOnTeamAtWaypoint(
+          '',
+          readString(0, ['templateName', 'objectType', 'thingName', 'unitType']),
+          readString(1, ['teamName', 'team']),
+          readString(2, ['waypointName', 'waypoint']),
+        );
       case 'VICTORY':
       case 'QUICKVICTORY':
         return this.setScriptLocalGameEndState(false);
@@ -16768,6 +16792,134 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return this.clearScriptTeam(sourceTeam.nameUpper);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doCreateObject.
+   * TODO(source-parity): BLAST_CRATER script creates should deform terrain and refresh pathfinding.
+   */
+  private executeScriptCreateObjectAtPosition(
+    templateName: string,
+    teamName: string,
+    position: unknown,
+    angleRadians: number,
+  ): boolean {
+    const coord3 = this.coerceScriptConditionCoord3(position);
+    if (!coord3) {
+      return false;
+    }
+    return this.executeScriptCreateObject(
+      '',
+      templateName,
+      teamName,
+      coord3.x,
+      coord3.y,
+      angleRadians,
+      coord3.z,
+    );
+  }
+
+  /**
+   * Source parity subset: ScriptActions::createUnitOnTeamAt.
+   */
+  private executeScriptCreateUnitOnTeamAtWaypoint(
+    objectName: string,
+    templateName: string,
+    teamName: string,
+    waypointName: string,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    return this.executeScriptCreateObject(
+      objectName,
+      templateName,
+      teamName,
+      waypoint.x,
+      waypoint.z,
+      0,
+    );
+  }
+
+  /**
+   * Source parity subset shared by ScriptActions::doCreateObject and createUnitOnTeamAt.
+   */
+  private executeScriptCreateObject(
+    objectName: string,
+    templateName: string,
+    teamName: string,
+    worldX: number,
+    worldZ: number,
+    angleRadians: number,
+    worldY?: number,
+  ): boolean {
+    const normalizedTemplateName = templateName.trim();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldZ) || !Number.isFinite(angleRadians)) {
+      return false;
+    }
+
+    const team = this.getScriptTeamRecord(teamName) ?? this.getOrCreateScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const normalizedObjectName = this.normalizeScriptObjectName(objectName);
+    const hasObjectName = normalizedObjectName.length > 0;
+    if (hasObjectName) {
+      const existingNamedEntity = this.resolveScriptNamedEntityByName(normalizedObjectName);
+      if (existingNamedEntity && !this.isScriptEntityEffectivelyDead(existingNamedEntity)) {
+        return false;
+      }
+    }
+
+    const teamSide = this.resolveScriptTeamControllingSide(team);
+    const created = this.spawnEntityFromTemplate(
+      normalizedTemplateName,
+      worldX,
+      worldZ,
+      angleRadians,
+      teamSide || undefined,
+    );
+    if (!created) {
+      return false;
+    }
+
+    if (hasObjectName) {
+      this.transferScriptObjectName(normalizedObjectName, created);
+    }
+    if (worldY !== undefined && Number.isFinite(worldY)) {
+      created.y = worldY + created.baseHeight;
+    }
+
+    team.memberEntityIds.add(created.id);
+    team.created = true;
+    if (!team.controllingSide) {
+      const createdSide = this.normalizeSide(created.side);
+      if (createdSide) {
+        team.controllingSide = createdSide;
+      }
+    }
+    return true;
+  }
+
+  private resolveScriptNamedEntityByName(objectName: string): MapEntity | null {
+    const normalizedObjectName = this.normalizeScriptObjectName(objectName);
+    if (!normalizedObjectName) {
+      return null;
+    }
+    const mappedId = this.scriptNamedEntitiesByName.get(normalizedObjectName);
+    if (mappedId === undefined) {
+      return null;
+    }
+    const entity = this.spawnedEntities.get(mappedId);
+    if (!entity || entity.scriptName !== normalizedObjectName) {
+      return null;
+    }
+    return entity;
   }
 
   /**
@@ -28637,6 +28789,7 @@ export class GameLogicSubsystem implements Subsystem {
     const existingId = this.scriptNamedEntitiesByName.get(normalizedName);
     if (existingId === undefined) {
       newEntity.scriptName = normalizedName;
+      this.scriptNamedEntitiesByName.set(normalizedName, newEntity.id);
       return;
     }
 
