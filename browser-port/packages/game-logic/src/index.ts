@@ -4399,6 +4399,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
   [119, 'CAMERA_FOLLOW_NAMED'],
+  [120, 'OVERSIZE_TERRAIN'],
   [121, 'CAMERA_FADE_ADD'],
   [122, 'CAMERA_FADE_SUBTRACT'],
   [123, 'CAMERA_FADE_SATURATE'],
@@ -5098,6 +5099,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptMusicVolumeScale = 1;
   /** Source parity bridge: Display::setBorderShroudLevel script control. */
   private scriptBorderShroudEnabled = true;
+  /** Source parity bridge: ScriptActions::doOversizeTheTerrain amount. */
+  private scriptTerrainOversizeAmount = 0;
   /** Source parity bridge: TacticalView::setGuardBandBias script override. */
   private scriptViewGuardbandBias: { x: number; y: number } | null = null;
   /** Source parity bridge: ScriptEngine choose-victim difficulty override flag. */
@@ -8894,6 +8897,14 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptBorderShroudEnabled;
   }
 
+  setScriptTerrainOversizeAmount(amount: number): void {
+    this.scriptTerrainOversizeAmount = Math.trunc(amount);
+  }
+
+  getScriptTerrainOversizeAmount(): number {
+    return this.scriptTerrainOversizeAmount;
+  }
+
   setScriptViewGuardbandBias(gbx: number, gby: number): void {
     this.scriptViewGuardbandBias = { x: gbx, y: gby };
   }
@@ -9467,6 +9478,10 @@ export class GameLogicSubsystem implements Subsystem {
         return this.setScriptCameraFollowNamed(
           readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
           readBoolean(1, ['snapToUnit', 'snap']),
+        );
+      case 'OVERSIZE_TERRAIN':
+        return this.executeScriptOversizeTerrain(
+          readInteger(0, ['amount', 'oversizeAmount', 'value']),
         );
       case 'CAMERA_STOP_FOLLOW':
         this.clearScriptCameraFollowNamed();
@@ -16385,6 +16400,18 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doOversizeTheTerrain.
+   * TODO(source-parity): apply oversize offset through renderer TacticalView bridge.
+   */
+  private executeScriptOversizeTerrain(amount: number): boolean {
+    if (!Number.isFinite(amount)) {
+      return false;
+    }
+    this.setScriptTerrainOversizeAmount(amount);
+    return true;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doResizeViewGuardband.
    * TODO(source-parity): forward this to TacticalView::setGuardBandBias renderer bridge.
    */
@@ -20209,6 +20236,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptSpeechVolumeScale = 1;
     this.scriptMusicVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
+    this.scriptTerrainOversizeAmount = 0;
     this.scriptViewGuardbandBias = null;
     this.scriptChooseVictimAlwaysUsesNormal = false;
     this.scriptToppleDirectionByEntityId.clear();
@@ -50739,6 +50767,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptSpeechVolumeScale = 1;
     this.scriptMusicVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
+    this.scriptTerrainOversizeAmount = 0;
     this.scriptViewGuardbandBias = null;
     this.scriptChooseVictimAlwaysUsesNormal = false;
     this.scriptToppleDirectionByEntityId.clear();

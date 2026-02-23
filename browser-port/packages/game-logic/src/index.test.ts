@@ -35924,6 +35924,28 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script oversize-terrain action using source action id', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.getScriptTerrainOversizeAmount()).toBe(0);
+    expect(logic.executeScriptAction({
+      actionType: 120, // OVERSIZE_TERRAIN
+      params: [4],
+    })).toBe(true);
+    expect(logic.getScriptTerrainOversizeAmount()).toBe(4);
+
+    expect(logic.executeScriptAction({
+      actionType: 120,
+      params: [-3],
+    })).toBe(true);
+    expect(logic.getScriptTerrainOversizeAmount()).toBe(-3);
+  });
+
   it('executes script train-held and object-sound actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
