@@ -4941,6 +4941,8 @@ const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'RESIZE_VIEW_GUARDBAND',
   'DELETE_ALL_UNMANNED',
   'CHOOSE_VICTIM_ALWAYS_USES_NORMAL',
+  'AI_PLAYER_BUILD_SUPPLY_CENTER',
+  'AI_PLAYER_BUILD_UPGRADE',
   'AI_PLAYER_BUILD_TYPE_NEAREST_TEAM',
   'CAMERA_ENABLE_SLAVE_MODE',
   'CAMERA_DISABLE_SLAVE_MODE',
@@ -5177,6 +5179,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSupplySourceAttackCheckFrame = new Map<string, number>();
   /** Source parity: AIPlayer::m_attackedSupplyCenter (last attacked economy object ID). */
   private readonly sideAttackedSupplySource = new Map<string, number>();
+  /** Source parity subset: AIPlayer::m_curWarehouseID (last warehouse chosen by buildBySupplies). */
+  private readonly scriptCurrentSupplyWarehouseBySide = new Map<string, number>();
   private readonly sideBattlePlanBonuses = new Map<string, SideBattlePlanBonuses>();
   private readonly battlePlanParalyzedUntilFrame = new Map<number, number>();
   private readonly playerSideByIndex = new Map<number, string>();
@@ -9728,6 +9732,12 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 281 && paramCount === 1) {
         // 281 also maps to TEAM_FOLLOW_WAYPOINTS_EXACT; 1-param signature is display text.
         actionType = 'DISPLAY_TEXT';
+      } else if (numericType === 285 && paramCount === 3) {
+        // 285 also maps to MOVIE_PLAY_FULLSCREEN; 3-param signature is AI player build by supplies.
+        actionType = 'AI_PLAYER_BUILD_SUPPLY_CENTER';
+      } else if (numericType === 286 && paramCount === 2) {
+        // 286 also maps to MOVIE_PLAY_RADAR; 2-param signature is AI player build upgrade.
+        actionType = 'AI_PLAYER_BUILD_UPGRADE';
       } else if (numericType === 319 && paramCount === 4) {
         // 319 also maps to SOUND_REMOVE_ALL_DISABLED; 4-param signature is setup camera.
         actionType = 'SETUP_CAMERA';
@@ -10783,6 +10793,17 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptSkirmishBuildBuilding(
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
           readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
+      case 'AI_PLAYER_BUILD_SUPPLY_CENTER':
+        return this.executeScriptAIPlayerBuildSupplyCenter(
+          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readInteger(2, ['minimumCash', 'cash', 'value']),
+        );
+      case 'AI_PLAYER_BUILD_UPGRADE':
+        return this.executeScriptAIPlayerBuildUpgrade(
+          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readString(1, ['upgradeName', 'upgrade']),
         );
       case 'AI_PLAYER_BUILD_TYPE_NEAREST_TEAM':
         return this.executeScriptAIPlayerBuildTypeNearestTeam(
@@ -13420,6 +13441,53 @@ export class GameLogicSubsystem implements Subsystem {
     return placementAngleDegrees * (Math.PI / 180);
   }
 
+  private tryScriptConstructBuildingWithWiggleSearch(
+    side: string,
+    objectDef: ObjectDef,
+    centerX: number,
+    centerZ: number,
+    angle: number,
+  ): boolean {
+    if (this.tryScriptConstructBuildingAtPosition(side, objectDef, centerX, centerZ, angle)) {
+      return true;
+    }
+
+    const supplyCenterCloseDistance = 20 * PATHFIND_CELL_SIZE;
+    for (
+      let positionOffset = 0;
+      positionOffset < 2 * supplyCenterCloseDistance;
+      positionOffset += 2 * PATHFIND_CELL_SIZE
+    ) {
+      const halfOffset = positionOffset * 0.5;
+      const minX = centerX - halfOffset;
+      const maxX = centerX + halfOffset;
+      const minZ = centerZ - halfOffset;
+      const maxZ = centerZ + halfOffset;
+
+      for (let x = minX; x <= maxX + 0.001; x += PATHFIND_CELL_SIZE) {
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, minZ, angle)) {
+          return true;
+        }
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, maxZ, angle)) {
+          return true;
+        }
+      }
+
+      const x = centerX - halfOffset;
+      for (let z = minZ; z <= maxZ + 0.001; z += PATHFIND_CELL_SIZE) {
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, z, angle)) {
+          return true;
+        }
+        const rightX = centerX + halfOffset;
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, rightX, z, angle)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   /**
    * Source parity subset: ScriptActions::doBuildObjectNearestTeam.
    * Mirrors AIPlayer::buildSpecificBuildingNearestTeam by trying the
@@ -13464,40 +13532,141 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const angle = this.resolveScriptBuildPlacementAngle(objectDef);
-    if (this.tryScriptConstructBuildingAtPosition(side, objectDef, location.x, location.z, angle)) {
-      return true;
+    return this.tryScriptConstructBuildingWithWiggleSearch(
+      side,
+      objectDef,
+      location.x,
+      location.z,
+      angle,
+    );
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doBuildSupplyCenter -> AIPlayer::buildBySupplies.
+   * Uses supply-source anchoring and source-style ring search for legal placement.
+   */
+  private executeScriptAIPlayerBuildSupplyCenter(
+    explicitPlayerSide: string,
+    templateName: string,
+    minimumCash: number,
+  ): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
     }
 
-    const supplyCenterCloseDistance = 20 * PATHFIND_CELL_SIZE;
-    for (
-      let positionOffset = 0;
-      positionOffset < 2 * supplyCenterCloseDistance;
-      positionOffset += 2 * PATHFIND_CELL_SIZE
-    ) {
-      const halfOffset = positionOffset * 0.5;
-      const minX = location.x - halfOffset;
-      const maxX = location.x + halfOffset;
-      const minZ = location.z - halfOffset;
-      const maxZ = location.z + halfOffset;
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return false;
+    }
 
-      for (let x = minX; x <= maxX + 0.001; x += PATHFIND_CELL_SIZE) {
-        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, minZ, angle)) {
-          return true;
-        }
-        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, maxZ, angle)) {
-          return true;
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
+    if (!objectDef) {
+      return false;
+    }
+    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
+      return false;
+    }
+
+    const isCashGenerator = this.normalizeKindOf(objectDef.kindOf).has('CASH_GENERATOR');
+    let sourceWarehouse = this.findScriptSupplySourceForSide(side, Math.trunc(minimumCash));
+
+    if (!isCashGenerator) {
+      const currentWarehouseId = this.scriptCurrentSupplyWarehouseBySide.get(side);
+      if (currentWarehouseId !== undefined) {
+        const currentWarehouse = this.spawnedEntities.get(currentWarehouseId);
+        if (currentWarehouse && !currentWarehouse.destroyed) {
+          sourceWarehouse = currentWarehouse;
         }
       }
+    }
+    if (!sourceWarehouse) {
+      return false;
+    }
 
-      const x = location.x - halfOffset;
-      for (let z = minZ; z <= maxZ + 0.001; z += PATHFIND_CELL_SIZE) {
-        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, z, angle)) {
-          return true;
-        }
-        const rightX = location.x + halfOffset;
-        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, rightX, z, angle)) {
-          return true;
-        }
+    const baseCenter = this.resolveAiBaseCenter(side);
+    const enemyCenter = this.resolveScriptEnemyBaseCenter(side);
+    let directionX = baseCenter ? sourceWarehouse.x - baseCenter.x : 0;
+    let directionZ = baseCenter ? sourceWarehouse.z - baseCenter.z : 0;
+    let radius = 3 * PATHFIND_CELL_SIZE;
+
+    if (!isCashGenerator) {
+      if (enemyCenter) {
+        directionX = sourceWarehouse.x - enemyCenter.x;
+        directionZ = sourceWarehouse.z - enemyCenter.z;
+      }
+      radius = this.resolveEntityMajorRadius(sourceWarehouse);
+    }
+
+    let targetX = sourceWarehouse.x;
+    let targetZ = sourceWarehouse.z;
+    const directionLength = Math.hypot(directionX, directionZ);
+    if (directionLength > 0.00001) {
+      directionX /= directionLength;
+      directionZ /= directionLength;
+      targetX -= directionX * radius;
+      targetZ -= directionZ * radius;
+    }
+
+    const angle = this.resolveScriptBuildPlacementAngle(objectDef);
+    const queued = this.tryScriptConstructBuildingWithWiggleSearch(side, objectDef, targetX, targetZ, angle);
+    if (queued) {
+      this.scriptCurrentSupplyWarehouseBySide.set(side, sourceWarehouse.id);
+    }
+    return queued;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doBuildUpgrade -> AIPlayer::buildUpgrade.
+   * Queues a player upgrade on the first side-owned eligible production structure.
+   */
+  private executeScriptAIPlayerBuildUpgrade(
+    explicitPlayerSide: string,
+    upgradeName: string,
+  ): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const normalizedUpgradeInput = upgradeName.trim().toUpperCase();
+    if (!normalizedUpgradeInput) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const upgradeDef = findUpgradeDefByName(registry, normalizedUpgradeInput);
+    if (!upgradeDef) {
+      return false;
+    }
+    if (resolveUpgradeType(upgradeDef) !== 'PLAYER') {
+      return false;
+    }
+
+    const normalizedUpgradeName = upgradeDef.name.trim().toUpperCase();
+    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
+      return false;
+    }
+
+    const eligibleFactories = Array.from(this.spawnedEntities.values())
+      .filter((entity) =>
+        !entity.destroyed
+        && this.normalizeSide(entity.side) === side
+        && !entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
+        && !entity.objectStatusFlags.has('SOLD')
+        && entity.productionProfile !== null)
+      .sort((left, right) => left.id - right.id);
+
+    for (const factory of eligibleFactories) {
+      if (this.queueUpgradeProduction(factory.id, normalizedUpgradeName)) {
+        return true;
       }
     }
 
@@ -53200,6 +53369,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideAttackedFrame.clear();
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
+    this.scriptCurrentSupplyWarehouseBySide.clear();
     this.sideUnitsShouldIdleOrResume.clear();
     this.sideCanBuildBaseByScript.clear();
     this.sideCanBuildUnitsByScript.clear();

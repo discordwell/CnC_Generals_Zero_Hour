@@ -33048,6 +33048,149 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes AI_PLAYER_BUILD_SUPPLY_CENTER using source collision id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('SupplyWarehouse', 'Neutral', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 30,
+          }),
+        ], {
+          GeometryMajorRadius: 8,
+          GeometryMinorRadius: 8,
+        }),
+        makeObjectDef('USASupplyCenter', 'America', ['STRUCTURE', 'CASH_GENERATOR'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('SupplyWarehouse', 90, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 3000 });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        x: number;
+        z: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 285, // AI_PLAYER_BUILD_SUPPLY_CENTER when 3 params
+      params: ['America', 'USASupplyCenter', 1000],
+    })).toBe(true);
+
+    const constructedId = privateApi.pendingConstructionActions.get(1);
+    expect(constructedId).toBeDefined();
+    expect(privateApi.spawnedEntities.get(constructedId!)?.templateName).toBe('USASupplyCenter');
+    expect(privateApi.spawnedEntities.get(constructedId!)?.x).toBeCloseTo(70, 6);
+    expect(privateApi.spawnedEntities.get(constructedId!)?.z).toBeCloseTo(40, 6);
+
+    expect(logic.executeScriptAction({
+      actionType: 285, // MOVIE_PLAY_FULLSCREEN when 1 param
+      params: ['IntroMovie'],
+    })).toBe(true);
+    expect(logic.drainScriptMoviePlaybackRequests()).toEqual([
+      {
+        movieName: 'IntroMovie',
+        playbackType: 'FULLSCREEN',
+        frame: 1,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 285,
+      params: ['America', 'MissingStructure', 1000],
+    })).toBe(false);
+  });
+
+  it('executes AI_PLAYER_BUILD_UPGRADE using source collision id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UpgradeFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 4,
+          }),
+        ], {
+          CommandSet: 'UpgradeFactoryCommandSet',
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ResearchCollisionUpgrade', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_CollisionTest',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('UpgradeFactoryCommandSet', {
+          1: 'Command_ResearchCollisionUpgrade',
+        }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_CollisionTest', {
+          Type: 'PLAYER',
+          BuildCost: 150,
+          BuildTime: 0.2,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('UpgradeFactory', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.update(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 286, // AI_PLAYER_BUILD_UPGRADE when 2 params
+      params: ['America', 'Upgrade_CollisionTest'],
+    })).toBe(true);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual(['UPGRADE_COLLISIONTEST']);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 286, // MOVIE_PLAY_RADAR when 1 param
+      params: ['RadarMovie'],
+    })).toBe(true);
+    expect(logic.drainScriptMoviePlaybackRequests()).toEqual([
+      {
+        movieName: 'RadarMovie',
+        playbackType: 'RADAR',
+        frame: 1,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 286,
+      params: ['America', 'MissingUpgrade'],
+    })).toBe(false);
+  });
+
   it('executes skirmish approach-path actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
