@@ -332,12 +332,14 @@ describe('dispatchIssuedControlBarCommands', () => {
         entityId: 8,
         targetEntityId: 77,
         guardMode: GuardMode.GUARDMODE_NORMAL,
+        commandSource: 'PLAYER',
       },
       {
         type: 'guardObject',
         entityId: 9,
         targetEntityId: 77,
         guardMode: GuardMode.GUARDMODE_NORMAL,
+        commandSource: 'PLAYER',
       },
     ]);
     expect(audioManager.playedEvents).toEqual(['UI_Guard']);
@@ -380,6 +382,7 @@ describe('dispatchIssuedControlBarCommands', () => {
         targetX: 40,
         targetZ: 60,
         guardMode: GuardMode.GUARDMODE_GUARD_WITHOUT_PURSUIT,
+        commandSource: 'PLAYER',
       },
     ]);
     expect(uiRuntime.messages).toEqual([]);
@@ -421,6 +424,7 @@ describe('dispatchIssuedControlBarCommands', () => {
         targetX: 90,
         targetZ: 110,
         guardMode: GuardMode.GUARDMODE_GUARD_FLYING_UNITS_ONLY,
+        commandSource: 'PLAYER',
       },
     ]);
     expect(uiRuntime.messages).toEqual([]);

@@ -391,12 +391,15 @@ function writeGameLogicCommandCrc(
   crc.addAsciiString(command.type);
   switch (command.type) {
     case 'select':
-    case 'stop':
     case 'bridgeDestroyed':
     case 'bridgeRepaired':
       addSignedIntCrc(context, crc, command.entityId);
       return;
     case 'clearSelection':
+      return;
+    case 'stop':
+      addSignedIntCrc(context, crc, command.entityId);
+      crc.addAsciiString(command.commandSource ?? 'AI');
       return;
     case 'selectEntities':
       writeSignedNumberArrayCrc(context, crc, command.entityIds, true);
@@ -405,23 +408,27 @@ function writeGameLogicCommandCrc(
       addSignedIntCrc(context, crc, command.entityId);
       addFloat32Crc(context, crc, command.targetX);
       addFloat32Crc(context, crc, command.targetZ);
+      crc.addAsciiString(command.commandSource ?? 'AI');
       return;
     case 'attackMoveTo':
       addSignedIntCrc(context, crc, command.entityId);
       addFloat32Crc(context, crc, command.targetX);
       addFloat32Crc(context, crc, command.targetZ);
       addFloat32Crc(context, crc, command.attackDistance);
+      crc.addAsciiString(command.commandSource ?? 'AI');
       return;
     case 'guardPosition':
       addSignedIntCrc(context, crc, command.entityId);
       addFloat32Crc(context, crc, command.targetX);
       addFloat32Crc(context, crc, command.targetZ);
       addSignedIntCrc(context, crc, command.guardMode);
+      crc.addAsciiString(command.commandSource ?? 'AI');
       return;
     case 'guardObject':
       addSignedIntCrc(context, crc, command.entityId);
       addSignedIntCrc(context, crc, command.targetEntityId);
       addSignedIntCrc(context, crc, command.guardMode);
+      crc.addAsciiString(command.commandSource ?? 'AI');
       return;
     case 'setRallyPoint':
       addSignedIntCrc(context, crc, command.entityId);

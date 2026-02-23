@@ -379,6 +379,7 @@ export function dispatchIssuedControlBarCommands(
             targetX,
             targetZ,
             attackDistance: gameLogic.getAttackMoveDistanceForEntity(entityId),
+            commandSource: 'PLAYER',
           }),
           gameLogic,
         );
@@ -402,6 +403,7 @@ export function dispatchIssuedControlBarCommands(
             entityId,
             targetX,
             targetZ,
+            commandSource: 'PLAYER',
           }),
           gameLogic,
         );
@@ -447,6 +449,7 @@ export function dispatchIssuedControlBarCommands(
               entityId,
               targetEntityId: command.targetObjectId!,
               guardMode,
+              commandSource: 'PLAYER',
             }),
             gameLogic,
           );
@@ -464,6 +467,7 @@ export function dispatchIssuedControlBarCommands(
               targetX,
               targetZ,
               guardMode,
+              commandSource: 'PLAYER',
             }),
             gameLogic,
           );
@@ -484,6 +488,7 @@ export function dispatchIssuedControlBarCommands(
             targetX: entityPosition[0],
             targetZ: entityPosition[2],
             guardMode,
+            commandSource: 'PLAYER',
           });
         }
         playCommandAudio();

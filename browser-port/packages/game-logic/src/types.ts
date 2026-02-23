@@ -145,6 +145,7 @@ export interface MoveToCommand {
   entityId: number;
   targetX: number;
   targetZ: number;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export interface AttackMoveToCommand {
@@ -153,6 +154,7 @@ export interface AttackMoveToCommand {
   targetX: number;
   targetZ: number;
   attackDistance: number;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export enum GuardMode {
@@ -167,6 +169,7 @@ export interface GuardPositionCommand {
   targetX: number;
   targetZ: number;
   guardMode: GuardMode;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export interface GuardObjectCommand {
@@ -174,6 +177,7 @@ export interface GuardObjectCommand {
   entityId: number;
   targetEntityId: number;
   guardMode: GuardMode;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export interface SetRallyPointCommand {
@@ -187,7 +191,7 @@ export interface AttackEntityCommand {
   type: 'attackEntity';
   entityId: number;
   targetEntityId: number;
-  commandSource?: 'PLAYER' | 'AI';
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export interface FireWeaponCommand {

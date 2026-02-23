@@ -5503,6 +5503,23 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
 
+        // Try docking if a supply truck right-clicks a valid supply dock.
+        if (
+          pickedEntityId !== null
+          && pickedEntityId !== selEntity.id
+          && selEntity.supplyTruckProfile
+        ) {
+          const targetEntity = this.spawnedEntities.get(pickedEntityId);
+          if (
+            targetEntity
+            && !targetEntity.destroyed
+            && this.canSupplyTruckDockAt(selEntity, targetEntity)
+          ) {
+            this.setSupplyTruckPreferredDock(selEntity, targetEntity);
+            continue;
+          }
+        }
+
         // Try attack if we clicked on an enemy.
         if (
           selEntity.attackWeapon
@@ -5519,6 +5536,7 @@ export class GameLogicSubsystem implements Subsystem {
               type: 'attackEntity',
               entityId: selEntity.id,
               targetEntityId: pickedEntityId,
+              commandSource: 'PLAYER',
             });
             continue;
           }
@@ -5552,6 +5570,7 @@ export class GameLogicSubsystem implements Subsystem {
               targetX: destX,
               targetZ: destZ,
               attackDistance,
+              commandSource: 'PLAYER',
             });
           } else {
             this.submitCommand({
@@ -5559,6 +5578,7 @@ export class GameLogicSubsystem implements Subsystem {
               entityId: selEntity.id,
               targetX: destX,
               targetZ: destZ,
+              commandSource: 'PLAYER',
             });
           }
         }
@@ -9356,6 +9376,7 @@ export class GameLogicSubsystem implements Subsystem {
           entityId: sourceEntity.id,
           targetX: target.targetX,
           targetZ: target.targetZ,
+          commandSource: 'SCRIPT',
         });
         return true;
       case 'SET_RALLY_POINT':
@@ -9379,6 +9400,7 @@ export class GameLogicSubsystem implements Subsystem {
             entityId: sourceEntity.id,
             targetEntityId: target.targetEntity.id,
             guardMode,
+            commandSource: 'SCRIPT',
           });
           return true;
         }
@@ -9389,6 +9411,7 @@ export class GameLogicSubsystem implements Subsystem {
             targetX: target.targetX,
             targetZ: target.targetZ,
             guardMode,
+            commandSource: 'SCRIPT',
           });
           return true;
         }
@@ -9958,6 +9981,7 @@ export class GameLogicSubsystem implements Subsystem {
         entityId: entity.id,
         targetX: bestTarget.x,
         targetZ: bestTarget.z,
+        commandSource: 'SCRIPT',
       });
       if (entity.moveTarget !== null || entity.attackTargetPosition !== null) {
         movedAny = true;
@@ -10219,6 +10243,7 @@ export class GameLogicSubsystem implements Subsystem {
       targetX: entity.x,
       targetZ: entity.z,
       guardMode: 0,
+      commandSource: 'SCRIPT',
     });
     this.setScriptSequentialTimerForEntity(entityId, frameCount);
     return true;
@@ -10249,6 +10274,7 @@ export class GameLogicSubsystem implements Subsystem {
         targetX: entity.x,
         targetZ: entity.z,
         guardMode: 0,
+        commandSource: 'SCRIPT',
       });
     }
     this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
@@ -11374,6 +11400,7 @@ export class GameLogicSubsystem implements Subsystem {
         entityId: entity.id,
         targetX: firstWaypoint.x,
         targetZ: firstWaypoint.z,
+        commandSource: 'SCRIPT',
       });
       if (entity.moving) {
         movedAny = true;
@@ -11547,6 +11574,7 @@ export class GameLogicSubsystem implements Subsystem {
       entityId: entity.id,
       targetX: firstWaypoint.x,
       targetZ: firstWaypoint.z,
+      commandSource: 'SCRIPT',
     });
     if (!entity.moving) {
       return false;
@@ -11676,6 +11704,7 @@ export class GameLogicSubsystem implements Subsystem {
         targetX: waypoint.x,
         targetZ: waypoint.z,
         guardMode: 0,
+        commandSource: 'SCRIPT',
       });
     }
     return true;
@@ -11700,6 +11729,7 @@ export class GameLogicSubsystem implements Subsystem {
         entityId: entity.id,
         targetEntityId: target.id,
         guardMode: 0,
+        commandSource: 'SCRIPT',
       });
     }
     return true;
@@ -25187,6 +25217,10 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'moveTo': {
+        const commandSource = command.commandSource ?? 'AI';
+        if (commandSource === 'PLAYER') {
+          this.setSupplyTruckForceBusy(command.entityId, true);
+        }
         const moveEntity = this.spawnedEntities.get(command.entityId);
         const moveJs = moveEntity?.jetAIState;
         if (moveJs) {
@@ -25208,6 +25242,10 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'attackMoveTo': {
+        const commandSource = command.commandSource ?? 'AI';
+        if (commandSource === 'PLAYER') {
+          this.setSupplyTruckForceBusy(command.entityId, true);
+        }
         const amEntity = this.spawnedEntities.get(command.entityId);
         const amJs = amEntity?.jetAIState;
         if (amJs) {
@@ -25236,11 +25274,17 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'guardPosition':
+        if ((command.commandSource ?? 'AI') === 'PLAYER') {
+          this.setSupplyTruckForceBusy(command.entityId, true);
+        }
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.initGuardPosition(command.entityId, command.targetX, command.targetZ, command.guardMode);
         return;
       case 'guardObject':
+        if ((command.commandSource ?? 'AI') === 'PLAYER') {
+          this.setSupplyTruckForceBusy(command.entityId, true);
+        }
         this.cancelEntityCommandPathActions(command.entityId);
         this.clearAttackTarget(command.entityId);
         this.initGuardObject(command.entityId, command.targetEntityId, command.guardMode);
@@ -25249,6 +25293,10 @@ export class GameLogicSubsystem implements Subsystem {
         this.setEntityRallyPoint(command.entityId, command.targetX, command.targetZ);
         return;
       case 'attackEntity': {
+        const commandSource = command.commandSource ?? 'PLAYER';
+        if (commandSource === 'PLAYER') {
+          this.setSupplyTruckForceBusy(command.entityId, true);
+        }
         const atkEntity = this.spawnedEntities.get(command.entityId);
         const atkJs = atkEntity?.jetAIState;
         if (atkJs) {
@@ -25268,16 +25316,16 @@ export class GameLogicSubsystem implements Subsystem {
         this.issueAttackEntity(
           command.entityId,
           command.targetEntityId,
-          command.commandSource ?? 'PLAYER',
+          commandSource,
         );
         // Source parity: TransportAIUpdate::privateAttackObject — propagate attack to passengers.
         if (atkEntity) {
           this.propagateTransportAttackToPassengers(
-            atkEntity, command.targetEntityId, command.commandSource ?? 'PLAYER',
+            atkEntity, command.targetEntityId, commandSource,
           );
         }
         // Source parity: AssaultTransportAIUpdate::aiDoCommand — begin assault on attack command.
-        if (atkEntity?.assaultTransportProfile && (command.commandSource ?? 'PLAYER') !== 'AI') {
+        if (atkEntity?.assaultTransportProfile && commandSource !== 'AI') {
           this.beginAssaultTransportAttack(atkEntity, command.targetEntityId, false);
         }
         return;
@@ -29377,6 +29425,93 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  /**
+   * Source parity: ActionManager::canTransferSuppliesAt (see Common/RTS/ActionManager.cpp).
+   */
+  private canSupplyTruckDockAt(source: MapEntity, dock: MapEntity): boolean {
+    if (!source.supplyTruckProfile) {
+      return false;
+    }
+    if (source.destroyed || dock.destroyed) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION')
+      || this.entityHasObjectStatus(dock, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(dock, 'SOLD')) {
+      return false;
+    }
+
+    const isWarehouse = !!dock.supplyWarehouseProfile;
+    const isCenter = dock.isSupplyCenter;
+    if (!isWarehouse && !isCenter) {
+      return false;
+    }
+
+    if (!this.isChinookAvailableForSupplying(source)) {
+      return false;
+    }
+
+    const state = this.resolveSupplyTruckState(source.id);
+    if (!state) {
+      return false;
+    }
+
+    if (isWarehouse) {
+      const warehouseState = this.supplyWarehouseStates.get(dock.id);
+      if (!warehouseState || warehouseState.currentBoxes <= 0) {
+        return false;
+      }
+      if (this.getTeamRelationship(source, dock) === RELATIONSHIP_ENEMIES) {
+        return false;
+      }
+    }
+
+    if (isCenter) {
+      if (state.currentBoxes <= 0) {
+        return false;
+      }
+      const truckSide = this.normalizeSide(source.side);
+      const dockSide = this.normalizeSide(dock.side);
+      if (!truckSide || !dockSide || dockSide !== truckSide) {
+        return false;
+      }
+    }
+
+    const truckSide = this.normalizeSide(source.side);
+    if (truckSide && this.getSidePlayerType(truckSide) === 'HUMAN') {
+      if (this.resolveEntityShroudStatusForSide(dock, truckSide) === 'SHROUDED') {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity: SupplyTruckAIUpdate::privateDock (cmdSource=player).
+   */
+  private setSupplyTruckPreferredDock(source: MapEntity, dock: MapEntity): void {
+    if (!source.supplyTruckProfile) {
+      return;
+    }
+    const state = this.resolveSupplyTruckState(source.id);
+    if (!state) {
+      return;
+    }
+    state.preferredDockId = dock.id;
+    state.forceBusy = false;
+    state.aiState = SupplyTruckAIState.IDLE;
+    state.targetWarehouseId = null;
+    state.targetDepotId = null;
+    state.actionDelayFinishFrame = this.frameCounter;
+
+    this.cancelEntityCommandPathActions(source.id);
+    this.clearAttackTarget(source.id);
+    this.issueMoveTo(source.id, dock.x, dock.z);
+  }
+
   private resolveChinookPreferredHeight(entity: MapEntity): number {
     const active = entity.locomotorSets.get(entity.activeLocomotorSet);
     if (active) {
@@ -32357,7 +32492,7 @@ export class GameLogicSubsystem implements Subsystem {
       getEntityShroudStatus: (entity: MapEntity, side: string) => this.resolveEntityShroudStatusForSide(entity, side),
       isSupplyTruckAvailable: (truck: MapEntity) => this.isChinookAvailableForSupplying(truck),
       moveEntityTo: (entityId: number, targetX: number, targetZ: number) => {
-        this.submitCommand({ type: 'moveTo', entityId, targetX, targetZ });
+        this.submitCommand({ type: 'moveTo', entityId, targetX, targetZ, commandSource: 'AI' });
       },
       destroyEntity: (entityId: number) => {
         this.markEntityDestroyed(entityId, -1);
