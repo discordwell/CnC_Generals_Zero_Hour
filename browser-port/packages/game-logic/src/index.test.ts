@@ -33326,7 +33326,6 @@ describe('Script condition groundwork', () => {
       targetX: null,
       targetZ: null,
     });
-
     expect(logic.executeScriptAction({
       actionType: 374, // NAMED_FIRE_SPECIAL_POWER_AT_NAMED (offset id)
       params: [1, 'ScriptPowerAtNamed', 2],
@@ -33580,6 +33579,18 @@ describe('Script condition groundwork', () => {
       targetX: null,
       targetZ: null,
     });
+    expect(logic.executeScriptAction({
+      actionType: 240, // NAMED_USE_COMMANDBUTTON_ABILITY (raw id)
+      params: [1, 'Command_ScriptNoTarget'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
+      dispatchType: 'NO_TARGET',
+      commandButtonId: 'Command_ScriptNoTarget',
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
 
     expect(logic.executeScriptAction({
       actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
@@ -33591,9 +33602,31 @@ describe('Script condition groundwork', () => {
       commandButtonId: 'Command_ScriptOnNamed',
       targetEntityId: 3,
     });
+    expect(logic.executeScriptAction({
+      actionType: 198, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED (raw id)
+      params: [1, 'Command_ScriptOnNamed', 3],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      commandButtonId: 'Command_ScriptOnNamed',
+      targetEntityId: 3,
+    });
 
     expect(logic.executeScriptAction({
       actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_ScriptAtWaypoint', 'AbilityWaypoint'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_ScriptAtWaypoint',
+      targetEntityId: null,
+      targetX: 96,
+      targetZ: 80,
+    });
+    expect(logic.executeScriptAction({
+      actionType: 199, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT (raw id)
       params: [1, 'Command_ScriptAtWaypoint', 'AbilityWaypoint'],
     })).toBe(true);
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
@@ -33621,9 +33654,45 @@ describe('Script condition groundwork', () => {
       commandButtonId: 'Command_ScriptOnNamed',
       targetEntityId: 3,
     });
+    expect(logic.executeScriptAction({
+      actionType: 238, // TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED (raw id)
+      params: ['AbilityTeam', 'Command_ScriptOnNamed', 3],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      commandButtonId: 'Command_ScriptOnNamed',
+      targetEntityId: 3,
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      commandButtonId: 'Command_ScriptOnNamed',
+      targetEntityId: 3,
+    });
 
     expect(logic.executeScriptAction({
       actionType: 444, // TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: ['AbilityTeam', 'Command_ScriptAtWaypoint', 'AbilityWaypoint'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_ScriptAtWaypoint',
+      targetEntityId: null,
+      targetX: 96,
+      targetZ: 80,
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_ScriptAtWaypoint',
+      targetEntityId: null,
+      targetX: 96,
+      targetZ: 80,
+    });
+    expect(logic.executeScriptAction({
+      actionType: 239, // TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT (raw id)
       params: ['AbilityTeam', 'Command_ScriptAtWaypoint', 'AbilityWaypoint'],
     })).toBe(true);
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
@@ -34013,6 +34082,18 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 542, // NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH
       params: [1, 'Command_PathPowerAllowed', 'pathalpha'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPATHPOWERALLOWED',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_PathPowerAllowed',
+      targetEntityId: null,
+      targetX: 30,
+      targetZ: 35,
+    });
+    expect(logic.executeScriptAction({
+      actionType: 337, // NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH (raw id)
+      params: [1, 'Command_PathPowerAllowed', 'PathAlpha'],
     })).toBe(true);
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
       specialPowerTemplateName: 'SCRIPTPATHPOWERALLOWED',
