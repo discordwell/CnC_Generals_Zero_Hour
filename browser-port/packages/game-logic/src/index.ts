@@ -3910,7 +3910,8 @@ interface ScriptCameraModifierRequestState {
     | 'FINAL_SPEED_MULTIPLIER'
     | 'ROLLING_AVERAGE'
     | 'FINAL_LOOK_TOWARD'
-    | 'LOOK_TOWARD';
+    | 'LOOK_TOWARD'
+    | 'MOVE_TO_SELECTION';
   waypointName: string | null;
   x: number | null;
   z: number | null;
@@ -4440,6 +4441,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [30, 'CAMERA_MOD_SET_ROLLING_AVERAGE'],
   [31, 'CAMERA_MOD_FINAL_LOOK_TOWARD'],
   [32, 'TEAM_ATTACK_TEAM'],
+  [34, 'MOVE_CAMERA_TO_SELECTION'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
   [38, 'MOVE_NAMED_UNIT_TO'],
@@ -8384,6 +8386,40 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private requestScriptCameraModMoveToSelection(): boolean {
+    let selectedCount = 0;
+    let sumX = 0;
+    let sumZ = 0;
+    for (const selectedId of this.selectedEntityIds) {
+      const entity = this.spawnedEntities.get(selectedId);
+      if (!entity || entity.destroyed) {
+        continue;
+      }
+      sumX += entity.x;
+      sumZ += entity.z;
+      selectedCount += 1;
+    }
+
+    if (selectedCount === 0) {
+      // Source parity: no-op when there is no current selection.
+      return true;
+    }
+
+    this.queueScriptCameraModifierRequest({
+      requestType: 'MOVE_TO_SELECTION',
+      waypointName: null,
+      x: sumX / selectedCount,
+      z: sumZ / selectedCount,
+      zoom: null,
+      pitch: null,
+      easeIn: null,
+      easeOut: null,
+      speedMultiplier: null,
+      rollingAverageFrames: null,
+    });
+    return true;
+  }
+
   drainScriptCameraModifierRequests(): ScriptCameraModifierRequestState[] {
     if (this.scriptCameraModifierRequests.length === 0) {
       return [];
@@ -10177,6 +10213,8 @@ export class GameLogicSubsystem implements Subsystem {
       case 'CAMERA_STOP_FOLLOW':
         this.clearScriptCameraFollowNamed();
         return true;
+      case 'MOVE_CAMERA_TO_SELECTION':
+        return this.requestScriptCameraModMoveToSelection();
       case 'CAMERA_MOD_FREEZE_TIME':
         this.requestScriptCameraModFreezeTime();
         return true;

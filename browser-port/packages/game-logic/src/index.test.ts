@@ -35460,6 +35460,12 @@ describe('Script condition groundwork', () => {
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
+    const selectionApi = logic as unknown as {
+      selectedEntityIds: number[];
+      selectedEntityId: number | null;
+    };
+    selectionApi.selectedEntityIds = [1];
+    selectionApi.selectedEntityId = 1;
 
     expect(logic.executeScriptAction({
       actionType: 171, // CAMERA_TETHER_NAMED (raw id)
@@ -35625,6 +35631,10 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 323, // PITCH_CAMERA (offset/collision id)
       params: [25, 1.75, 0.2, 0.4],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 34, // MOVE_CAMERA_TO_SELECTION
+      params: [],
     })).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 21, // CAMERA_MOD_FREEZE_TIME
@@ -35900,6 +35910,19 @@ describe('Script condition groundwork', () => {
     ]);
     expect(logic.drainScriptCameraModifierRequests()).toEqual([
       {
+        requestType: 'MOVE_TO_SELECTION',
+        waypointName: null,
+        x: 10,
+        z: 10,
+        zoom: null,
+        pitch: null,
+        easeIn: null,
+        easeOut: null,
+        speedMultiplier: null,
+        rollingAverageFrames: null,
+        frame: 0,
+      },
+      {
         requestType: 'FREEZE_TIME',
         waypointName: null,
         x: null,
@@ -36037,6 +36060,13 @@ describe('Script condition groundwork', () => {
       actionType: 114,
       params: ['CameraWaypointA', 300, 30, 'MissingWaypoint'],
     })).toBe(false);
+    selectionApi.selectedEntityIds = [];
+    selectionApi.selectedEntityId = null;
+    expect(logic.executeScriptAction({
+      actionType: 34,
+      params: [],
+    })).toBe(true);
+    expect(logic.drainScriptCameraModifierRequests()).toEqual([]);
 
     expect(logic.executeScriptAction({
       actionType: 376,
