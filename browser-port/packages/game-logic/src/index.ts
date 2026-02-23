@@ -5498,6 +5498,7 @@ export class GameLogicSubsystem implements Subsystem {
               type: 'repairBuilding',
               entityId: selEntity.id,
               targetBuildingId: pickedEntityId,
+              commandSource: 'PLAYER',
             });
             continue;
           }
@@ -27594,6 +27595,7 @@ export class GameLogicSubsystem implements Subsystem {
     const dozer = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
     if (!dozer || !building || dozer.destroyed || building.destroyed) return;
+    const commandSource = command.commandSource ?? 'PLAYER';
 
     if (this.isWorkerEntity(dozer)) {
       // Source parity: WorkerAIUpdate::newTask clears preferred dock when entering dozer tasks.
@@ -27602,7 +27604,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: DozerAIUpdate::privateResumeConstruction — if the building is
     // still under construction, resume building instead of repairing.
-    if (this.canDozerResumeConstructionTarget(dozer, building)) {
+    if (this.canDozerResumeConstructionTarget(dozer, building, commandSource)) {
       // Another dozer can resume. Claim it.
       building.builderId = dozer.id;
       this.pendingConstructionActions.set(dozer.id, building.id);
@@ -27611,7 +27613,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    if (!this.canDozerRepairTarget(dozer, building)) return;
+    if (!this.canDozerRepairTarget(dozer, building, commandSource)) return;
     if (!this.canDozerAcceptNewRepairTarget(dozer, building)) return;
 
     // Move dozer to building if not close enough.
@@ -27626,7 +27628,11 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity subset: ActionManager::canResumeConstructionOf.
    */
-  private canDozerResumeConstructionTarget(dozer: MapEntity, building: MapEntity): boolean {
+  private canDozerResumeConstructionTarget(
+    dozer: MapEntity,
+    building: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
     if (!this.isEntityDozerCapable(dozer)) {
       return false;
     }
@@ -27634,13 +27640,15 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const isUnderConstruction = building.objectStatusFlags.has('UNDER_CONSTRUCTION')
-      || building.constructionPercent !== CONSTRUCTION_COMPLETE;
+    const isUnderConstruction = building.objectStatusFlags.has('UNDER_CONSTRUCTION');
     if (!isUnderConstruction) {
       return false;
     }
 
     if (this.getTeamRelationship(dozer, building) !== RELATIONSHIP_ALLIES) {
+      return false;
+    }
+    if (this.isDozerActionTargetShrouded(dozer, building, commandSource)) {
       return false;
     }
 
@@ -27804,6 +27812,7 @@ export class GameLogicSubsystem implements Subsystem {
           type: 'repairBuilding',
           entityId: dozer.id,
           targetBuildingId: building.id,
+          commandSource: 'AI',
         });
         queuedBuildingIds.delete(buildingId);
       }
@@ -27822,7 +27831,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed) continue;
       if (this.normalizeSide(entity.side) !== side) continue;
       if (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id)) continue;
-      if (!this.canDozerRepairTarget(entity, building)) continue;
+      if (!this.canDozerRepairTarget(entity, building, 'AI')) continue;
 
       const dx = entity.x - building.x;
       const dz = entity.z - building.z;
@@ -27879,6 +27888,7 @@ export class GameLogicSubsystem implements Subsystem {
         type: 'repairBuilding',
         entityId: entity.id,
         targetBuildingId: target.id,
+        commandSource: 'AI',
       });
     }
   }
@@ -27890,7 +27900,7 @@ export class GameLogicSubsystem implements Subsystem {
     for (const candidate of this.spawnedEntities.values()) {
       if (candidate.id === dozer.id || candidate.destroyed) continue;
       if (!candidate.kindOf.has('STRUCTURE')) continue;
-      if (!this.canDozerRepairTarget(dozer, candidate)) continue;
+      if (!this.canDozerRepairTarget(dozer, candidate, 'AI')) continue;
 
       const dx = candidate.x - dozer.x;
       const dz = candidate.z - dozer.z;
@@ -27905,20 +27915,26 @@ export class GameLogicSubsystem implements Subsystem {
     return closest;
   }
 
-  private canDozerRepairTarget(dozer: MapEntity, building: MapEntity): boolean {
+  private canDozerRepairTarget(
+    dozer: MapEntity,
+    building: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
     if (!this.isEntityDozerCapable(dozer)) return false;
     if (this.isEntityContained(dozer)) return false;
     if (!building.kindOf.has('STRUCTURE')) return false;
     // Source parity: ActionManager::canRepairObject disallows bridge and bridge towers.
     if (building.kindOf.has('BRIDGE') || building.kindOf.has('BRIDGE_TOWER')) return false;
     if (building.objectStatusFlags.has('SOLD')) return false;
-    if (building.objectStatusFlags.has('UNDER_CONSTRUCTION')
-      || building.constructionPercent !== CONSTRUCTION_COMPLETE) return false;
-    if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) return false;
+    if (building.objectStatusFlags.has('UNDER_CONSTRUCTION')) return false;
+    if (building.health >= building.maxHealth) return false;
 
     const relationship = this.getTeamRelationship(dozer, building);
     // Source parity: canRepairObject allows allied/neutral structures, but not enemies.
     if (relationship === RELATIONSHIP_ENEMIES) {
+      return false;
+    }
+    if (this.isDozerActionTargetShrouded(dozer, building, commandSource)) {
       return false;
     }
 
@@ -27932,6 +27948,27 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return true;
+  }
+
+  /**
+   * Source parity: ActionManager::isObjectShroudedForAction.
+   */
+  private isDozerActionTargetShrouded(
+    dozer: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
+    if (commandSource !== 'PLAYER') {
+      return false;
+    }
+    const dozerSide = this.normalizeSide(dozer.side);
+    if (!dozerSide) {
+      return false;
+    }
+    if (this.getSidePlayerType(dozerSide) !== 'HUMAN') {
+      return false;
+    }
+    return this.resolveEntityShroudStatusForSide(target, dozerSide) === 'SHROUDED';
   }
 
   /**

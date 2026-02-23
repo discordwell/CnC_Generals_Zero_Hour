@@ -415,6 +415,7 @@ export interface RepairBuildingCommand {
   type: 'repairBuilding';
   entityId: number;
   targetBuildingId: number;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export interface EnterTransportCommand {

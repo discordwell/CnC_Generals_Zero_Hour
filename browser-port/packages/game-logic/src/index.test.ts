@@ -9422,9 +9422,21 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       makeHeightmap(64, 64),
     );
 
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        constructionPercent: number;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const civilianBuilding = priv.spawnedEntities.get(2)!;
+    civilianBuilding.constructionPercent = -1;
+    civilianBuilding.objectStatusFlags.delete('UNDER_CONSTRUCTION');
+
+    logic.setTeamRelationship('America', 'Civilian', 1);
+    logic.setTeamRelationship('Civilian', 'America', 1);
     logic.update(0);
     const before = logic.getEntityState(2)!.health;
-    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2, commandSource: 'AI' });
     logic.update(1 / 30);
     const after = logic.getEntityState(2)!.health;
     expect(after).toBeGreaterThan(before);
@@ -9549,7 +9561,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
     ], { GeometryMajorRadius: 8, GeometryMinorRadius: 8 });
 
-    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+    const buildingDef = makeObjectDef('CivilianBuilding', 'Civilian', ['STRUCTURE'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
     ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
 
@@ -9585,6 +9597,59 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     const healthAfter = logic.getEntityState(3)!.health;
 
     expect(healthAfter).toBe(healthBefore);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+  });
+
+  it('blocks player repair commands on shrouded targets', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], {
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+      VisionRange: 30,
+    });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 10, 10),      // id 1
+        makeMapObject('CivilianBuilding', 200, 200), // id 2
+      ], 256, 256),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(256, 256),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        constructionPercent: number;
+        objectStatusFlags: Set<string>;
+      }>;
+      pendingRepairActions: Map<number, number>;
+    };
+    const targetBuilding = priv.spawnedEntities.get(2)!;
+    targetBuilding.constructionPercent = -1;
+    targetBuilding.objectStatusFlags.delete('UNDER_CONSTRUCTION');
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.setTeamRelationship('America', 'Civilian', 1);
+    logic.setTeamRelationship('Civilian', 'America', 1);
+    logic.update(1 / 30);
+
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
     expect(priv.pendingRepairActions.has(1)).toBe(false);
   });
 
