@@ -31346,6 +31346,110 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptInfantryLightingOverride()).toBe(-1);
   });
 
+  it('executes visual-speed and hulk-lifetime override actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TimedHulkUnit', 'Neutral', ['VEHICLE', 'HULK'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'LifetimeUpdate ModuleTag_Lifetime', {
+            MinLifetime: 5000, // 150 frames
+            MaxLifetime: 5000,
+          }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SlowDeath', {
+            SinkDelay: 300, // 9 frames
+            SinkDelayVariance: 0,
+            DestructionDelay: 600, // 18 frames
+            DestructionDelayVariance: 0,
+            SinkRate: 0.5,
+            ProbabilityModifier: 10,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (
+        sourceEntityId: number | null,
+        target: unknown,
+        amount: number,
+        damageType: string,
+      ) => void;
+      spawnedEntities: Map<number, {
+        lifetimeDieFrame: number | null;
+        slowDeathState: {
+          sinkFrame: number;
+          midpointFrame: number;
+          destructionFrame: number;
+        } | null;
+      }>;
+    };
+
+    expect(logic.getScriptVisualSpeedMultiplier()).toBe(1);
+    expect(logic.executeScriptAction({
+      actionType: 22, // SET_VISUAL_SPEED_MULTIPLIER
+      params: [3],
+    })).toBe(true);
+    expect(logic.getScriptVisualSpeedMultiplier()).toBe(3);
+
+    expect(logic.getScriptHulkLifetimeOverrideFrames()).toBe(-1);
+    expect(logic.executeScriptAction({
+      actionType: 507, // SCRIPTING_OVERRIDE_HULK_LIFETIME
+      params: [2.5], // 75 frames
+    })).toBe(true);
+    expect(logic.getScriptHulkLifetimeOverrideFrames()).toBe(75);
+
+    expect(logic.executeScriptAction({
+      actionType: 23, // CREATE_OBJECT
+      params: ['TimedHulkUnit', 'HulkTeam', { x: 20, y: 0, z: 20 }, 0],
+    })).toBe(true);
+    const overrideHulk = privateApi.spawnedEntities.get(1);
+    expect(overrideHulk).toBeDefined();
+    expect(overrideHulk!.lifetimeDieFrame).toBe(75);
+
+    privateApi.applyWeaponDamageAmount(null, overrideHulk, 999, 'UNRESISTABLE');
+    expect(overrideHulk!.slowDeathState).not.toBeNull();
+    expect(overrideHulk!.slowDeathState!.sinkFrame).toBe(1);
+    expect(overrideHulk!.slowDeathState!.midpointFrame).toBe(16);
+    expect(overrideHulk!.slowDeathState!.destructionFrame).toBe(31);
+
+    expect(logic.executeScriptAction({
+      actionType: 507,
+      params: [-1], // reset override
+    })).toBe(true);
+    expect(logic.getScriptHulkLifetimeOverrideFrames()).toBe(-1);
+
+    expect(logic.executeScriptAction({
+      actionType: 23,
+      params: ['TimedHulkUnit', 'HulkTeam', { x: 24, y: 0, z: 24 }, 0],
+    })).toBe(true);
+    const defaultHulk = privateApi.spawnedEntities.get(2);
+    expect(defaultHulk).toBeDefined();
+    expect(defaultHulk!.lifetimeDieFrame).toBe(150);
+
+    privateApi.applyWeaponDamageAmount(null, defaultHulk, 999, 'UNRESISTABLE');
+    expect(defaultHulk!.slowDeathState).not.toBeNull();
+    expect(defaultHulk!.slowDeathState!.sinkFrame).toBe(9);
+    expect(defaultHulk!.slowDeathState!.destructionFrame).toBe(18);
+    expect(defaultHulk!.slowDeathState!.midpointFrame).toBeGreaterThanOrEqual(6);
+    expect(defaultHulk!.slowDeathState!.midpointFrame).toBeLessThanOrEqual(11);
+
+    // Source parity subset: map load clears script bridge values.
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    expect(logic.getScriptVisualSpeedMultiplier()).toBe(1);
+    expect(logic.getScriptHulkLifetimeOverrideFrames()).toBe(-1);
+  });
+
   it('executes script set-cave-index action using source action id', () => {
     const bundle = makeBundle({
       objects: [

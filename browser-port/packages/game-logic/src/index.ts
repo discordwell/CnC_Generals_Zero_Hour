@@ -4406,6 +4406,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [18, 'ROTATE_CAMERA'],
   [19, 'RESET_CAMERA'],
   [20, 'SET_MILLISECOND_TIMER'],
+  [22, 'SET_VISUAL_SPEED_MULTIPLIER'],
   [23, 'CREATE_OBJECT'],
   [24, 'SUSPEND_BACKGROUND_SOUNDS'],
   [25, 'RESUME_BACKGROUND_SOUNDS'],
@@ -4857,6 +4858,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [504, 'UNIT_AFFECT_OBJECT_PANEL_FLAGS'],
   [505, 'TEAM_AFFECT_OBJECT_PANEL_FLAGS'],
   [506, 'PLAYER_SELECT_SKILLSET'],
+  [507, 'SCRIPTING_OVERRIDE_HULK_LIFETIME'],
   [508, 'NAMED_FACE_NAMED'],
   [509, 'NAMED_FACE_WAYPOINT'],
   [510, 'TEAM_FACE_NAMED'],
@@ -5197,6 +5199,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptAmbientSoundsPaused = false;
   /** Source parity bridge: ScriptActions::MUSIC_SET_TRACK latest request. */
   private scriptMusicTrackState: ScriptMusicTrackState | null = null;
+  /** Source parity: TacticalView::setTimeMultiplier from SET_VISUAL_SPEED_MULTIPLIER. */
+  private scriptVisualSpeedMultiplier = 1;
+  /** Source parity: GameLogic::m_scriptHulkMaxLifetimeOverride in frames (-1 disables override). */
+  private scriptHulkLifetimeOverrideFrames = -1;
   /** Source parity: GlobalData::m_scriptOverrideInfantryLightScale script override. */
   private scriptInfantryLightingOverride = -1;
   /** Source parity: ScriptEngine::m_breezeInfo set by SET_TREE_SWAY. */
@@ -8910,6 +8916,40 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptActions::SET_VISUAL_SPEED_MULTIPLIER -> TacticalView::setTimeMultiplier.
+   */
+  private setScriptVisualSpeedMultiplier(multiplier: number): boolean {
+    if (!Number.isFinite(multiplier)) {
+      return false;
+    }
+    this.scriptVisualSpeedMultiplier = Math.trunc(multiplier);
+    return true;
+  }
+
+  getScriptVisualSpeedMultiplier(): number {
+    return this.scriptVisualSpeedMultiplier;
+  }
+
+  /**
+   * Source parity: ScriptActions::doOverrideHulkLifetime.
+   */
+  private setScriptHulkLifetimeOverrideSeconds(seconds: number): boolean {
+    if (!Number.isFinite(seconds)) {
+      return false;
+    }
+    if (seconds < 0) {
+      this.scriptHulkLifetimeOverrideFrames = -1;
+      return true;
+    }
+    this.scriptHulkLifetimeOverrideFrames = Math.trunc(seconds * LOGIC_FRAME_RATE);
+    return true;
+  }
+
+  getScriptHulkLifetimeOverrideFrames(): number {
+    return this.scriptHulkLifetimeOverrideFrames;
+  }
+
+  /**
    * Source parity: ScriptActions::doSetInfantryLightingOverride.
    */
   private setScriptInfantryLightingOverride(setting: number): boolean {
@@ -9974,6 +10014,10 @@ export class GameLogicSubsystem implements Subsystem {
           readBoolean(1, ['fadeOut', 'fadeout']),
           readBoolean(2, ['fadeIn', 'fadein']),
         );
+      case 'SET_VISUAL_SPEED_MULTIPLIER':
+        return this.setScriptVisualSpeedMultiplier(
+          readInteger(0, ['multiplier', 'timeMultiplier', 'value']),
+        );
       case 'SET_INFANTRY_LIGHTING_OVERRIDE':
         return this.setScriptInfantryLightingOverride(
           readNumber(0, ['setting', 'scale', 'value']),
@@ -10984,6 +11028,10 @@ export class GameLogicSubsystem implements Subsystem {
         return this.setSideScriptSkillset(
           readSide(0, ['side', 'playerName', 'player']),
           readInteger(1, ['skillset', 'value']),
+        );
+      case 'SCRIPTING_OVERRIDE_HULK_LIFETIME':
+        return this.setScriptHulkLifetimeOverrideSeconds(
+          readNumber(0, ['seconds', 'lifetimeSeconds', 'value']),
         );
       case 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE':
         return this.executeScriptCommandBarRemoveButtonObjectType(
@@ -22093,6 +22141,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptVisualSpeedMultiplier = 1;
+    this.scriptHulkLifetimeOverrideFrames = -1;
     this.scriptInfantryLightingOverride = -1;
     this.scriptBreezeState = {
       version: 0,
@@ -26994,6 +27044,13 @@ export class GameLogicSubsystem implements Subsystem {
       for (const block of objectDef.blocks) visitBlock(block);
     }
     if (minFrames === null || maxFrames === null) return null;
+
+    // Source parity: LifetimeUpdate constructor overrides hulk delay when script override is active.
+    const hasHulkKindOf = (objectDef.kindOf ?? []).some((kind) => kind.toUpperCase() === 'HULK');
+    if (hasHulkKindOf && this.scriptHulkLifetimeOverrideFrames !== -1) {
+      return this.frameCounter + Math.max(1, this.scriptHulkLifetimeOverrideFrames);
+    }
+
     // Source parity: delay = GameLogicRandomValue(min, max), minimum 1 frame.
     const delay = Math.max(1, minFrames === maxFrames
       ? minFrames : this.gameRandom.nextRange(minFrames, maxFrames));
@@ -48452,18 +48509,29 @@ export class GameLogicSubsystem implements Subsystem {
     const profile = entity.slowDeathProfiles[selectedIndex]!;
 
     // Calculate frame timings.
-    const sinkDelay = profile.sinkDelay + (profile.sinkDelayVariance > 0
-      ? this.gameRandom.nextRange(0, profile.sinkDelayVariance) : 0);
-    const destructionDelay = profile.destructionDelay + (profile.destructionDelayVariance > 0
-      ? this.gameRandom.nextRange(0, profile.destructionDelayVariance) : 0);
-    const sinkFrame = this.frameCounter + sinkDelay;
-    const destructionFrame = this.frameCounter + Math.max(1, destructionDelay);
+    const hulkOverrideActive = entity.kindOf.has('HULK') && this.scriptHulkLifetimeOverrideFrames !== -1;
+    let sinkFrame: number;
+    let midpointFrame: number;
+    let destructionFrame: number;
+    if (hulkOverrideActive) {
+      // Source parity: SlowDeathBehavior::onDie uses fixed rapid timing when hulk override is active.
+      sinkFrame = this.frameCounter + 1;
+      midpointFrame = this.frameCounter + Math.floor(LOGIC_FRAME_RATE / 2) + 1;
+      destructionFrame = this.frameCounter + LOGIC_FRAME_RATE + 1;
+    } else {
+      const sinkDelay = profile.sinkDelay + (profile.sinkDelayVariance > 0
+        ? this.gameRandom.nextRange(0, profile.sinkDelayVariance) : 0);
+      const destructionDelay = profile.destructionDelay + (profile.destructionDelayVariance > 0
+        ? this.gameRandom.nextRange(0, profile.destructionDelayVariance) : 0);
+      sinkFrame = this.frameCounter + sinkDelay;
+      destructionFrame = this.frameCounter + Math.max(1, destructionDelay);
 
-    // Source parity: midpoint is randomly placed between 35-65% of destruction time.
-    const midpointBegin = Math.floor(destructionDelay * SLOW_DEATH_BEGIN_MIDPOINT_RATIO);
-    const midpointEnd = Math.floor(destructionDelay * SLOW_DEATH_END_MIDPOINT_RATIO);
-    const midpointFrame = this.frameCounter + (midpointBegin < midpointEnd
-      ? this.gameRandom.nextRange(midpointBegin, midpointEnd) : midpointBegin);
+      // Source parity: midpoint is randomly placed between 35-65% of destruction time.
+      const midpointBegin = Math.floor(destructionDelay * SLOW_DEATH_BEGIN_MIDPOINT_RATIO);
+      const midpointEnd = Math.floor(destructionDelay * SLOW_DEATH_END_MIDPOINT_RATIO);
+      midpointFrame = this.frameCounter + (midpointBegin < midpointEnd
+        ? this.gameRandom.nextRange(midpointBegin, midpointEnd) : midpointBegin);
+    }
 
     entity.slowDeathState = {
       profileIndex: selectedIndex,
@@ -52676,6 +52744,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptVisualSpeedMultiplier = 1;
+    this.scriptHulkLifetimeOverrideFrames = -1;
     this.scriptInfantryLightingOverride = -1;
     this.scriptBreezeState = {
       version: 0,
