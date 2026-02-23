@@ -733,6 +733,13 @@ const SCRIPT_THIS_PLAYER_ENEMY = "<This Player's Enemy>";
 const SCRIPT_THE_PLAYER = 'ThePlayer';
 const SCRIPT_TEAM_THE_PLAYER = 'teamThePlayer';
 const RADAR_EVENT_BEACON_PULSE = 5;
+const SCRIPT_SKIRMISH_PATH_CENTER_LABEL = 'CENTER';
+const SCRIPT_SKIRMISH_PATH_FLANK_LABEL = 'FLANK';
+const SCRIPT_SKIRMISH_PATH_BACKDOOR_LABEL = 'BACKDOOR';
+const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ANGLE = Math.PI / 3;
+const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ATTEMPTS = 64;
+// Source parity: AIData::m_skirmishBaseDefenseExtraDistance (defaults to 0 in TAiData ctor).
+const SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE = 0;
 
 /**
  * Source parity: AIGuardMachine state IDs.
@@ -4183,6 +4190,23 @@ interface ScriptHuntState {
   nextEnemyScanFrame: number;
 }
 
+interface ScriptSkirmishBaseDefenseState {
+  curFrontBaseDefense: number;
+  curFlankBaseDefense: number;
+  curFrontLeftDefenseAngle: number;
+  curFrontRightDefenseAngle: number;
+  curLeftFlankLeftDefenseAngle: number;
+  curLeftFlankRightDefenseAngle: number;
+  curRightFlankLeftDefenseAngle: number;
+  curRightFlankRightDefenseAngle: number;
+}
+
+interface ScriptBaseCenterAndRadius {
+  centerX: number;
+  centerZ: number;
+  radius: number;
+}
+
 interface DynamicWaterUpdateState {
   waterIndex: number;
   targetHeight: number;
@@ -5194,6 +5218,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideAttackedSupplySource = new Map<string, number>();
   /** Source parity subset: AIPlayer::m_curWarehouseID (last warehouse chosen by buildBySupplies). */
   private readonly scriptCurrentSupplyWarehouseBySide = new Map<string, number>();
+  /** Source parity: AISkirmishPlayer base-defense angle/counter state keyed by side. */
+  private readonly scriptSkirmishBaseDefenseStateBySide = new Map<string, ScriptSkirmishBaseDefenseState>();
+  /** Source parity subset: AISkirmishPlayer::m_baseCenter/m_baseRadius cached per side. */
+  private readonly scriptSkirmishBaseCenterAndRadiusBySide = new Map<string, ScriptBaseCenterAndRadius>();
   private readonly sideBattlePlanBonuses = new Map<string, SideBattlePlanBonuses>();
   private readonly battlePlanParalyzedUntilFrame = new Map<number, number>();
   private readonly playerSideByIndex = new Map<number, string>();
@@ -13742,6 +13770,198 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: AISkirmishPlayer::buildAIBaseDefenseStructure.
+   * Places front/flank defenses around the base-radius ring, alternating angles.
+   */
+  private executeScriptSkirmishBuildBaseDefenseStructureForSide(
+    side: string,
+    templateName: string,
+    flank: boolean,
+  ): boolean {
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
+    if (!objectDef) {
+      return false;
+    }
+    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
+      return false;
+    }
+
+    const baseCenterAndRadius = this.resolveCachedSkirmishBaseCenterAndRadius(side);
+    if (!baseCenterAndRadius) {
+      // TODO(source-parity): compute center/radius from AI build-list locations when build-list tracking is ported.
+      return this.executeScriptSkirmishBuildBuilding(objectDef.name, side);
+    }
+
+    const defenseState = this.getOrCreateScriptSkirmishBaseDefenseState(side);
+    const startPosition = this.resolveScriptSkirmishStartPositionOneBased(side);
+    const normalizedPathLabel = flank
+      ? `${(defenseState.curFlankBaseDefense & 1) !== 0 ? SCRIPT_SKIRMISH_PATH_FLANK_LABEL : SCRIPT_SKIRMISH_PATH_BACKDOOR_LABEL}${startPosition}`
+      : `${SCRIPT_SKIRMISH_PATH_CENTER_LABEL}${startPosition}`;
+
+    let goalX = baseCenterAndRadius.centerX;
+    let goalZ = baseCenterAndRadius.centerZ;
+    const route = this.resolveScriptWaypointRouteByNormalizedLabel(
+      normalizedPathLabel,
+      baseCenterAndRadius.centerX,
+      baseCenterAndRadius.centerZ,
+    );
+    if (route && route.length > 0) {
+      goalX = route[0]!.x;
+      goalZ = route[0]!.z;
+    } else if (flank) {
+      return false;
+    } else {
+      const enemySide = this.resolveScriptSkirmishEnemySide(side);
+      const bounds = enemySide
+        ? this.getScriptSideStructureBounds(enemySide)
+        : { loX: 0, loZ: 0, hiX: 0, hiZ: 0 };
+      goalX = bounds.loX + ((bounds.hiX - bounds.loX) * 0.5);
+      goalZ = bounds.loZ + ((bounds.hiZ - bounds.loZ) * 0.5);
+    }
+
+    let offsetX = goalX - baseCenterAndRadius.centerX;
+    let offsetZ = goalZ - baseCenterAndRadius.centerZ;
+    const offsetLength = Math.hypot(offsetX, offsetZ);
+    if (offsetLength > 0.00001) {
+      offsetX /= offsetLength;
+      offsetZ /= offsetLength;
+    } else {
+      offsetX = 0;
+      offsetZ = 0;
+    }
+
+    const defenseDistance = baseCenterAndRadius.radius + this.resolveSkirmishBaseDefenseExtraDistance();
+    offsetX *= defenseDistance;
+    offsetZ *= defenseDistance;
+
+    const structureRadius = this.resolveObjectDefBoundingCircleRadius2D(objectDef);
+    const baseCircumference = 2 * Math.PI * defenseDistance;
+    if (baseCircumference <= 0 || !Number.isFinite(baseCircumference)) {
+      return false;
+    }
+
+    const angleOffset = 2 * Math.PI * ((structureRadius * 4) / baseCircumference);
+    if (!Number.isFinite(angleOffset) || angleOffset <= 0) {
+      return false;
+    }
+
+    const placeAngle = this.resolveScriptBuildPlacementAngle(objectDef);
+    for (let attempt = 0; attempt < SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ATTEMPTS; attempt += 1) {
+      let angle = 0;
+      if (flank) {
+        const selector = defenseState.curFlankBaseDefense >> 1;
+        if ((defenseState.curFlankBaseDefense & 1) !== 0) {
+          if ((selector & 1) !== 0) {
+            defenseState.curLeftFlankRightDefenseAngle -= angleOffset;
+            angle = defenseState.curLeftFlankRightDefenseAngle;
+          } else {
+            angle = defenseState.curLeftFlankLeftDefenseAngle;
+            defenseState.curLeftFlankLeftDefenseAngle += angleOffset;
+          }
+        } else if ((selector & 1) !== 0) {
+          defenseState.curRightFlankRightDefenseAngle -= angleOffset;
+          angle = defenseState.curRightFlankRightDefenseAngle;
+        } else {
+          angle = defenseState.curRightFlankLeftDefenseAngle;
+          defenseState.curRightFlankLeftDefenseAngle += angleOffset;
+        }
+      } else {
+        const selector = defenseState.curFrontBaseDefense;
+        if ((selector & 1) !== 0) {
+          defenseState.curFrontRightDefenseAngle -= angleOffset;
+          angle = defenseState.curFrontRightDefenseAngle;
+        } else {
+          angle = defenseState.curFrontLeftDefenseAngle;
+          defenseState.curFrontLeftDefenseAngle += angleOffset;
+        }
+      }
+
+      if (angle > SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ANGLE) {
+        return false;
+      }
+
+      const sinAngle = Math.sin(angle);
+      const cosAngle = Math.cos(angle);
+      const buildX = baseCenterAndRadius.centerX + (offsetX * cosAngle - offsetZ * sinAngle);
+      const buildZ = baseCenterAndRadius.centerZ + (offsetZ * cosAngle + offsetX * sinAngle);
+
+      if (flank) {
+        defenseState.curFlankBaseDefense += 1;
+      } else {
+        defenseState.curFrontBaseDefense += 1;
+      }
+
+      if (this.tryScriptConstructBuildingAtPosition(side, objectDef, buildX, buildZ, placeAngle)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private getOrCreateScriptSkirmishBaseDefenseState(side: string): ScriptSkirmishBaseDefenseState {
+    let state = this.scriptSkirmishBaseDefenseStateBySide.get(side);
+    if (state) {
+      return state;
+    }
+
+    state = {
+      curFrontBaseDefense: 0,
+      curFlankBaseDefense: 0,
+      curFrontLeftDefenseAngle: 0,
+      curFrontRightDefenseAngle: 0,
+      curLeftFlankLeftDefenseAngle: 0,
+      curLeftFlankRightDefenseAngle: 0,
+      curRightFlankLeftDefenseAngle: 0,
+      curRightFlankRightDefenseAngle: 0,
+    };
+    this.scriptSkirmishBaseDefenseStateBySide.set(side, state);
+    return state;
+  }
+
+  private resolveScriptSkirmishStartPositionOneBased(side: string): number {
+    const startPosition = this.getSkirmishPlayerStartPosition(side);
+    if (startPosition === null || !Number.isFinite(startPosition) || startPosition <= 0) {
+      // Source parity: Player::getMpStartIndex defaults to 0 (=> 1 when one-based).
+      return 1;
+    }
+    return Math.trunc(startPosition);
+  }
+
+  private resolveSkirmishBaseDefenseExtraDistance(): number {
+    return SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
+  }
+
+  private resolveCachedSkirmishBaseCenterAndRadius(side: string): ScriptBaseCenterAndRadius | null {
+    const cached = this.scriptSkirmishBaseCenterAndRadiusBySide.get(side);
+    if (cached) {
+      return cached;
+    }
+
+    const computed = this.resolveAiBaseCenterAndRadius(side);
+    if (!computed) {
+      return null;
+    }
+
+    const state: ScriptBaseCenterAndRadius = {
+      centerX: computed.centerX,
+      centerZ: computed.centerZ,
+      radius: computed.radius,
+    };
+    this.scriptSkirmishBaseCenterAndRadiusBySide.set(side, state);
+    return state;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doBuildBaseDefense(false).
    * Chooses a defense structure from the current player's dozer build options.
    */
@@ -13756,12 +13976,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, false);
   }
 
   /**
    * Source parity subset: ScriptActions::doBuildBaseDefense(true).
-   * TODO(source-parity): port AISkirmishPlayer::buildAIBaseDefenseStructure flank ring placement.
    */
   private executeScriptSkirmishBuildBaseDefenseFlank(explicitPlayerSide: string): boolean {
     const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
@@ -13774,12 +13993,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, true);
   }
 
   /**
    * Source parity subset: ScriptActions::doBuildBaseStructure(..., false).
-   * TODO(source-parity): port AISkirmishPlayer front-defense geometric placement.
    */
   private executeScriptSkirmishBuildStructureFront(
     templateName: string,
@@ -13790,12 +14008,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, false);
   }
 
   /**
    * Source parity subset: ScriptActions::doBuildBaseStructure(..., true).
-   * TODO(source-parity): port AISkirmishPlayer flank-defense geometric placement.
    */
   private executeScriptSkirmishBuildStructureFlank(
     templateName: string,
@@ -13806,7 +14023,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    return this.executeScriptSkirmishBuildBuilding(templateName, side);
+    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, true);
   }
 
   /**
@@ -40518,6 +40735,21 @@ export class GameLogicSubsystem implements Subsystem {
     return MAP_XY_FACTOR / 2;
   }
 
+  /**
+   * Source parity: GeometryInfo::getBoundingCircleRadius() (2D footprint version).
+   * SPHERE/CYLINDER use majorRadius; BOX uses sqrt(majorRadius^2 + minorRadius^2).
+   */
+  private resolveObjectDefBoundingCircleRadius2D(objectDef: ObjectDef): number {
+    const obstacleGeometry = this.resolveObstacleGeometry(objectDef);
+    if (!obstacleGeometry) {
+      return MAP_XY_FACTOR / 2;
+    }
+    if (obstacleGeometry.shape === 'box') {
+      return Math.hypot(obstacleGeometry.majorRadius, obstacleGeometry.minorRadius);
+    }
+    return obstacleGeometry.majorRadius;
+  }
+
   private spawnConstructedObject(
     constructor: MapEntity,
     objectDef: ObjectDef,
@@ -48278,21 +48510,65 @@ export class GameLogicSubsystem implements Subsystem {
    * of all buildings owned by the given side.
    */
   private resolveAiBaseCenter(side: string | null): { x: number; z: number } | null {
-    if (!side) return null;
+    const centerAndRadius = this.resolveAiBaseCenterAndRadius(side);
+    if (!centerAndRadius) {
+      return null;
+    }
+    return {
+      x: centerAndRadius.centerX,
+      z: centerAndRadius.centerZ,
+    };
+  }
+
+  /**
+   * Source parity subset: AIPlayer::computeCenterAndRadiusOfBase.
+   * C++ computes this from AI build-list locations; this port computes from live side-owned structures.
+   */
+  private resolveAiBaseCenterAndRadius(
+    side: string | null,
+  ): { centerX: number; centerZ: number; radius: number } | null {
+    if (!side) {
+      return null;
+    }
+
+    const ownedBuildings: MapEntity[] = [];
     let totalX = 0;
     let totalZ = 0;
-    let count = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.category !== 'building') continue;
       const entitySide = entity.side ? this.normalizeSide(entity.side) : null;
       if (entitySide !== side) continue;
+      ownedBuildings.push(entity);
       totalX += entity.x;
       totalZ += entity.z;
-      count++;
     }
-    if (count === 0) return null;
-    return { x: totalX / count, z: totalZ / count };
+    if (ownedBuildings.length === 0) {
+      return null;
+    }
+
+    const centerX = totalX / ownedBuildings.length;
+    const centerZ = totalZ / ownedBuildings.length;
+
+    let maxRadSqr = 0;
+    for (const entity of ownedBuildings) {
+      const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+      const buildingRadius = objectDef
+        ? this.resolveObjectDefBoundingCircleRadius2D(objectDef)
+        : this.resolveEntityMajorRadius(entity);
+      const dx = Math.abs(entity.x - centerX) + (buildingRadius * 0.4);
+      const dz = Math.abs(entity.z - centerZ) + (buildingRadius * 0.4);
+      const radSqr = (dx * dx) + (dz * dz);
+      if (radSqr > maxRadSqr) {
+        maxRadSqr = radSqr;
+      }
+    }
+
+    return {
+      centerX,
+      centerZ,
+      radius: Math.sqrt(maxRadSqr),
+    };
   }
 
   /**
@@ -53601,6 +53877,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
     this.scriptCurrentSupplyWarehouseBySide.clear();
+    this.scriptSkirmishBaseDefenseStateBySide.clear();
+    this.scriptSkirmishBaseCenterAndRadiusBySide.clear();
     this.sideUnitsShouldIdleOrResume.clear();
     this.sideCanBuildBaseByScript.clear();
     this.sideCanBuildUnitsByScript.clear();

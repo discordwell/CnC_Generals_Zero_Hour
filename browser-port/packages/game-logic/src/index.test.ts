@@ -33544,17 +33544,30 @@ describe('Script condition groundwork', () => {
       ],
     });
 
+    const map = makeMap([
+      makeMapObject('USADozer', 20, 20), // id 1
+      makeMapObject('USADozer', 60, 20), // id 2
+      makeMapObject('USADozer', 100, 20), // id 3
+      makeMapObject('USABarracks', 30, 110), // id 4
+      makeMapObject('USABarracks', 90, 110), // id 5
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 201, name: 'Center1_Node', position: { x: 60, y: 60, z: 0 }, pathLabel1: 'Center1', biDirectional: false },
+        { id: 202, name: 'Backdoor1_Node', position: { x: 110, y: 70, z: 0 }, pathLabel1: 'Backdoor1', biDirectional: false },
+        { id: 203, name: 'Flank1_Node', position: { x: 10, y: 70, z: 0 }, pathLabel1: 'Flank1', biDirectional: false },
+      ],
+      links: [],
+    };
+
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([
-        makeMapObject('USADozer', 20, 20), // id 1
-        makeMapObject('USADozer', 60, 20), // id 2
-        makeMapObject('USADozer', 100, 20), // id 3
-      ], 128, 128),
+      map,
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 10000 });
+    expect(logic.setSkirmishPlayerStartPosition('America', 1)).toBe(true);
     logic.update(0);
 
     const privateApi = logic as unknown as {
@@ -33570,11 +33583,11 @@ describe('Script condition groundwork', () => {
 
     expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
     expect(logic.executeScriptAction({
-      actionType: 459, // SKIRMISH_BUILD_BASE_DEFENSE_FLANK
-    })).toBe(true);
-    expect(logic.executeScriptAction({
       actionType: 460, // SKIRMISH_BUILD_STRUCTURE_FRONT
       params: ['USABarracks'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 459, // SKIRMISH_BUILD_BASE_DEFENSE_FLANK
     })).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 461, // SKIRMISH_BUILD_STRUCTURE_FLANK
@@ -33595,6 +33608,188 @@ describe('Script condition groundwork', () => {
       actionType: 461,
       params: ['USABarracks'],
     })).toBe(false);
+  });
+
+  it('places skirmish base defenses on center/backdoor/flank approach vectors', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          CommandSet: 'DozerConstructSet',
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('PatriotBattery', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructPatriot', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'PatriotBattery',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('DozerConstructSet', {
+          1: 'Command_ConstructPatriot',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('USADozer', 58, 130), // id 1
+      makeMapObject('USADozer', 62, 130), // id 2
+      makeMapObject('USADozer', 66, 130), // id 3
+      makeMapObject('USABarracks', 30, 120), // id 4
+      makeMapObject('USABarracks', 90, 120), // id 5
+      makeMapObject('USABarracks', 60, 200), // id 6
+    ], 256, 256);
+    map.waypoints = {
+      nodes: [
+        { id: 101, name: 'Center1_A', position: { x: 60, y: 40, z: 0 }, pathLabel1: 'Center1', biDirectional: false },
+        { id: 102, name: 'Backdoor1_A', position: { x: 150, y: 147, z: 0 }, pathLabel1: 'Backdoor1', biDirectional: false },
+        { id: 103, name: 'Flank1_A', position: { x: 10, y: 147, z: 0 }, pathLabel1: 'Flank1', biDirectional: false },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 15000 });
+    expect(logic.setSkirmishPlayerStartPosition('America', 1)).toBe(true);
+    expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        x: number;
+        z: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 455, // SKIRMISH_BUILD_BASE_DEFENSE_FRONT
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 459, // SKIRMISH_BUILD_BASE_DEFENSE_FLANK (first = Backdoor)
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 459, // SKIRMISH_BUILD_BASE_DEFENSE_FLANK (second = Flank)
+    })).toBe(true);
+
+    const frontId = privateApi.pendingConstructionActions.get(1);
+    const backdoorId = privateApi.pendingConstructionActions.get(2);
+    const flankId = privateApi.pendingConstructionActions.get(3);
+    expect(frontId).toBeDefined();
+    expect(backdoorId).toBeDefined();
+    expect(flankId).toBeDefined();
+
+    const front = privateApi.spawnedEntities.get(frontId!);
+    const backdoor = privateApi.spawnedEntities.get(backdoorId!);
+    const flank = privateApi.spawnedEntities.get(flankId!);
+    expect(front?.templateName).toBe('PatriotBattery');
+    expect(backdoor?.templateName).toBe('PatriotBattery');
+    expect(flank?.templateName).toBe('PatriotBattery');
+
+    // Base center from the three seed structures is approximately (60, 146.67).
+    expect(front!.z).toBeLessThan(120); // Center1 vector points toward the front.
+    expect(backdoor!.x).toBeGreaterThan(95); // First flank build uses Backdoor1.
+    expect(flank!.x).toBeLessThan(25); // Second flank build alternates to Flank1.
+  });
+
+  it('uses enemy structure bounds fallback for front skirmish structure builds when center path is missing', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          CommandSet: 'DozerConstructSet',
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('EnemyBarracks', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructBarracks', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'USABarracks',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('DozerConstructSet', {
+          1: 'Command_ConstructBarracks',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 58, 130), // id 1
+        makeMapObject('USABarracks', 30, 120), // id 2
+        makeMapObject('USABarracks', 90, 120), // id 3
+        makeMapObject('USABarracks', 60, 200), // id 4
+        makeMapObject('EnemyBarracks', 180, 145), // id 5
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 15000 });
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        x: number;
+        z: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 460, // SKIRMISH_BUILD_STRUCTURE_FRONT
+      params: ['USABarracks'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 461, // SKIRMISH_BUILD_STRUCTURE_FLANK should fail when no flank/backdoor path exists.
+      params: ['USABarracks'],
+    })).toBe(false);
+
+    const buildId = privateApi.pendingConstructionActions.get(1);
+    expect(buildId).toBeDefined();
+    const built = privateApi.spawnedEntities.get(buildId!);
+    expect(built?.templateName).toBe('USABarracks');
+    expect(built!.x).toBeGreaterThan(90); // Fallback should bias toward enemy structure center.
   });
 
   it('executes script skirmish-attack-nearest-group-with-value action using source action id', () => {
