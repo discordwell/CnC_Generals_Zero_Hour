@@ -30852,6 +30852,68 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script special-power-display actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.isScriptSpecialPowerDisplayEnabled()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 156, // DISABLE_SPECIAL_POWER_DISPLAY (raw id)
+    })).toBe(true);
+    expect(logic.isScriptSpecialPowerDisplayEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 362, // ENABLE_SPECIAL_POWER_DISPLAY (offset id)
+    })).toBe(true);
+    expect(logic.isScriptSpecialPowerDisplayEnabled()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 158, // NAMED_HIDE_SPECIAL_POWER_DISPLAY (raw id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.getScriptHiddenSpecialPowerDisplayEntityIds()).toEqual([1]);
+
+    expect(logic.executeScriptAction({
+      actionType: 364, // NAMED_SHOW_SPECIAL_POWER_DISPLAY (offset id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.getScriptHiddenSpecialPowerDisplayEntityIds()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 363, // NAMED_HIDE_SPECIAL_POWER_DISPLAY (offset id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.getScriptHiddenSpecialPowerDisplayEntityIds()).toEqual([1]);
+
+    expect(logic.executeScriptAction({
+      actionType: 159, // NAMED_SHOW_SPECIAL_POWER_DISPLAY (raw id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.getScriptHiddenSpecialPowerDisplayEntityIds()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 158,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 159,
+      params: [999],
+    })).toBe(false);
+  });
+
   it('executes script sound/audio-control actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

@@ -4266,6 +4266,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [153, 'TEAM_TRANSFER_TO_PLAYER'],
   [154, 'PLAYER_SET_MONEY'],
   [155, 'PLAYER_GIVE_MONEY'],
+  [156, 'DISABLE_SPECIAL_POWER_DISPLAY'],
+  [157, 'ENABLE_SPECIAL_POWER_DISPLAY'],
+  [158, 'NAMED_HIDE_SPECIAL_POWER_DISPLAY'],
+  [159, 'NAMED_SHOW_SPECIAL_POWER_DISPLAY'],
   [160, 'DISPLAY_COUNTDOWN_TIMER'],
   [161, 'HIDE_COUNTDOWN_TIMER'],
   [162, 'ENABLE_COUNTDOWN_TIMER_DISPLAY'],
@@ -4331,6 +4335,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [322, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
+  [361, 'DISABLE_SPECIAL_POWER_DISPLAY'],
+  [362, 'ENABLE_SPECIAL_POWER_DISPLAY'],
+  [363, 'NAMED_HIDE_SPECIAL_POWER_DISPLAY'],
+  [364, 'NAMED_SHOW_SPECIAL_POWER_DISPLAY'],
   [365, 'DISPLAY_COUNTDOWN_TIMER'],
   [366, 'HIDE_COUNTDOWN_TIMER'],
   [367, 'ENABLE_COUNTDOWN_TIMER_DISPLAY'],
@@ -4739,6 +4747,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptDisplayedCounters = new Map<string, ScriptDisplayedCounterState>();
   /** Source parity bridge: InGameUI::showNamedTimerDisplay global timer visibility. */
   private scriptNamedTimerDisplayEnabled = true;
+  /** Source parity bridge: InGameUI::setSuperweaponDisplayEnabledByScript global gate. */
+  private scriptSpecialPowerDisplayEnabled = true;
+  /** Source parity bridge: InGameUI hide/show object superweapon display by script. */
+  private readonly scriptHiddenSpecialPowerDisplayEntityIds = new Set<number>();
   /** Source parity bridge: Audio::setAudioEventEnabled script toggles. */
   private readonly scriptDisabledAudioEventNames = new Set<string>();
   /** Source parity bridge: Audio::setAudioEventVolumeOverride script overrides. */
@@ -7559,6 +7571,34 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptNamedTimerDisplayEnabled;
   }
 
+  private setScriptSpecialPowerDisplayEnabled(enabled: boolean): void {
+    this.scriptSpecialPowerDisplayEnabled = enabled;
+  }
+
+  isScriptSpecialPowerDisplayEnabled(): boolean {
+    return this.scriptSpecialPowerDisplayEnabled;
+  }
+
+  private setScriptNamedSpecialPowerDisplayHidden(entityId: number, hidden: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (hidden) {
+      this.scriptHiddenSpecialPowerDisplayEntityIds.add(entity.id);
+    } else {
+      this.scriptHiddenSpecialPowerDisplayEntityIds.delete(entity.id);
+    }
+    return true;
+  }
+
+  getScriptHiddenSpecialPowerDisplayEntityIds(): number[] {
+    if (this.scriptHiddenSpecialPowerDisplayEntityIds.size === 0) {
+      return [];
+    }
+    return [...this.scriptHiddenSpecialPowerDisplayEntityIds.values()].sort((left, right) => left - right);
+  }
+
   getScriptDisplayedCounters(): ScriptDisplayedCounterState[] {
     if (this.scriptDisplayedCounters.size === 0) {
       return [];
@@ -8077,6 +8117,22 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'HIDE_COUNTDOWN_TIMER':
         return this.hideScriptDisplayedCounter(readString(0, ['timerName', 'counterName', 'counter']));
+      case 'DISABLE_SPECIAL_POWER_DISPLAY':
+        this.setScriptSpecialPowerDisplayEnabled(false);
+        return true;
+      case 'ENABLE_SPECIAL_POWER_DISPLAY':
+        this.setScriptSpecialPowerDisplayEnabled(true);
+        return true;
+      case 'NAMED_HIDE_SPECIAL_POWER_DISPLAY':
+        return this.setScriptNamedSpecialPowerDisplayHidden(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          true,
+        );
+      case 'NAMED_SHOW_SPECIAL_POWER_DISPLAY':
+        return this.setScriptNamedSpecialPowerDisplayHidden(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          false,
+        );
       case 'ENABLE_COUNTDOWN_TIMER_DISPLAY':
         this.setScriptNamedTimerDisplayEnabled(true);
         return true;
@@ -17720,6 +17776,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptPopupMessages.length = 0;
     this.scriptDisplayedCounters.clear();
     this.scriptNamedTimerDisplayEnabled = true;
+    this.scriptSpecialPowerDisplayEnabled = true;
+    this.scriptHiddenSpecialPowerDisplayEntityIds.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
     this.scriptAudioRemovalRequests.length = 0;
@@ -48014,6 +48072,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptPopupMessages.length = 0;
     this.scriptDisplayedCounters.clear();
     this.scriptNamedTimerDisplayEnabled = true;
+    this.scriptSpecialPowerDisplayEnabled = true;
+    this.scriptHiddenSpecialPowerDisplayEntityIds.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
     this.scriptAudioRemovalRequests.length = 0;
