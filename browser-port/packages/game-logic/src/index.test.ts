@@ -8501,6 +8501,174 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideCredits('GLA')).toBeGreaterThanOrEqual(300);
   });
 
+  it('clears worker preferred dock when entering a repair dozer task', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const warehouseDef = makeObjectDef('SupplyWarehouse', 'GLA', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+        StartingBoxes: 10,
+        DeleteWhenEmpty: false,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const workerDef = makeObjectDef('GLAWorker', 'GLA', ['INFANTRY', 'DOZER', 'HARVESTER'], [
+      makeBlock('Behavior', 'WorkerAIUpdate ModuleTag_WorkerAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+        RepairHealthPercentPerSecond: '2%',
+        BoredTime: 3000,
+        BoredRange: 250,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const damagedStructureDef = makeObjectDef('GLADamagedStructure', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ]);
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GLAWorker', 20, 20),         // id 1
+        makeMapObject('SupplyWarehouse', 10, 10),   // id 2
+        makeMapObject('GLADamagedStructure', 20, 20), // id 3
+      ], 128, 128),
+      makeRegistry(makeBundle({
+        objects: [warehouseDef, workerDef, damagedStructureDef],
+      })),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'GLA', amount: 1000 });
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      supplyTruckStates: Map<number, {
+        aiState: number;
+        currentBoxes: number;
+        targetWarehouseId: number | null;
+        targetDepotId: number | null;
+        actionDelayFinishFrame: number;
+        preferredDockId: number | null;
+        forceBusy: boolean;
+      }>;
+      pendingRepairActions: Map<number, number>;
+    };
+
+    priv.supplyTruckStates.set(1, {
+      aiState: 0,
+      currentBoxes: 0,
+      targetWarehouseId: null,
+      targetDepotId: null,
+      actionDelayFinishFrame: 0,
+      preferredDockId: 2,
+      forceBusy: false,
+    });
+
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 3 });
+    logic.update(0);
+
+    expect(priv.pendingRepairActions.get(1)).toBe(3);
+    expect(priv.supplyTruckStates.get(1)?.preferredDockId).toBeNull();
+  });
+
+  it('clears worker preferred dock when entering a build dozer task', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const warehouseDef = makeObjectDef('SupplyWarehouse', 'GLA', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_SupplyDock', {
+        StartingBoxes: 10,
+        DeleteWhenEmpty: false,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const workerDef = makeObjectDef('GLAWorker', 'GLA', ['INFANTRY', 'DOZER', 'HARVESTER'], [
+      makeBlock('Behavior', 'WorkerAIUpdate ModuleTag_WorkerAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+        RepairHealthPercentPerSecond: '2%',
+        BoredTime: 3000,
+        BoredRange: 250,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], {
+      CommandSet: 'WorkerConstructSet',
+    });
+
+    const buildableDef = makeObjectDef('GLAShack', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], {
+      BuildCost: 300,
+      BuildTime: 1.0,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [warehouseDef, workerDef, buildableDef],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructShack', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'GLAShack',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('WorkerConstructSet', {
+          1: 'Command_ConstructShack',
+        }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GLAWorker', 20, 20),       // id 1
+        makeMapObject('SupplyWarehouse', 10, 10), // id 2
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'GLA', amount: 1000 });
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      supplyTruckStates: Map<number, {
+        aiState: number;
+        currentBoxes: number;
+        targetWarehouseId: number | null;
+        targetDepotId: number | null;
+        actionDelayFinishFrame: number;
+        preferredDockId: number | null;
+        forceBusy: boolean;
+      }>;
+      pendingConstructionActions: Map<number, number>;
+    };
+
+    priv.supplyTruckStates.set(1, {
+      aiState: 0,
+      currentBoxes: 0,
+      targetWarehouseId: null,
+      targetDepotId: null,
+      actionDelayFinishFrame: 0,
+      preferredDockId: 2,
+      forceBusy: false,
+    });
+
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'GLAShack',
+      targetPosition: [40, 0, 20],
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(0);
+
+    expect(priv.pendingConstructionActions.has(1)).toBe(true);
+    expect(priv.supplyTruckStates.get(1)?.preferredDockId).toBeNull();
+  });
+
   it('applies ChinookAIUpdate UpgradedSupplyBoost when Upgrade_AmericaSupplyLines is completed', () => {
     const runScenario = (withUpgrade: boolean): number => {
       const logic = new GameLogicSubsystem(new THREE.Scene());

@@ -26642,7 +26642,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (this.isWorkerEntity(constructor)) {
-      this.resetSupplyTruckState(constructor.id);
+      // Source parity: WorkerAIUpdate::newTask clears preferred dock when entering dozer tasks.
+      this.resetSupplyTruckState(constructor.id, true);
     }
 
     const buildCost = this.resolveObjectBuildCost(objectDef, side);
@@ -27549,7 +27550,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!this.canDozerRepairTarget(dozer, building)) return;
 
     if (this.isWorkerEntity(dozer)) {
-      this.resetSupplyTruckState(dozer.id);
+      // Source parity: WorkerAIUpdate::newTask clears preferred dock when entering dozer tasks.
+      this.resetSupplyTruckState(dozer.id, true);
     }
 
     // Source parity: DozerAIUpdate::privateResumeConstruction — if the building is
@@ -29371,7 +29373,7 @@ export class GameLogicSubsystem implements Subsystem {
     return pointInPolygon(worldX, worldZ, region.points);
   }
 
-  private resetSupplyTruckState(entityId: number): void {
+  private resetSupplyTruckState(entityId: number, clearPreferredDock = false): void {
     const state = this.supplyTruckStates.get(entityId);
     if (!state) {
       return;
@@ -29380,6 +29382,9 @@ export class GameLogicSubsystem implements Subsystem {
     state.targetWarehouseId = null;
     state.targetDepotId = null;
     state.actionDelayFinishFrame = this.frameCounter;
+    if (clearPreferredDock) {
+      state.preferredDockId = null;
+    }
   }
 
   private resolveSupplyTruckState(entityId: number): SupplyTruckState | null {
