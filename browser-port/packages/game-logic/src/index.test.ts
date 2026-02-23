@@ -29648,6 +29648,52 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptRadarForced()).toBe(false);
   });
 
+  it('executes script EVA and options UI toggle actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.isScriptEvaEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 498, // EVA_SET_ENABLED_DISABLED (offset id)
+      params: [0],
+    })).toBe(true);
+    expect(logic.isScriptEvaEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 293, // ID collision path: 293 + 1 param => EVA_SET_ENABLED_DISABLED
+      params: [1],
+    })).toBe(true);
+    expect(logic.isScriptEvaEnabled()).toBe(true);
+
+    expect(logic.isScriptOcclusionModeEnabled()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 499, // OPTIONS_SET_OCCLUSION_MODE (offset id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.isScriptOcclusionModeEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 294, // ID collision path: 294 + 1 param => OPTIONS_SET_OCCLUSION_MODE
+      params: [0],
+    })).toBe(true);
+    expect(logic.isScriptOcclusionModeEnabled()).toBe(false);
+
+    expect(logic.isScriptDrawIconUIEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 500, // OPTIONS_SET_DRAWICON_UI_MODE (offset id)
+      params: [0],
+    })).toBe(true);
+    expect(logic.isScriptDrawIconUIEnabled()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 295, // OPTIONS_SET_DRAWICON_UI_MODE (raw id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.isScriptDrawIconUIEnabled()).toBe(true);
+  });
+
   it('executes script screen-shake action using source action id', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

@@ -4246,6 +4246,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [290, 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT'],
   [292, 'TEAM_SET_STEALTH_ENABLED'],
   [291, 'PLAYER_RELATES_PLAYER'],
+  [295, 'OPTIONS_SET_DRAWICON_UI_MODE'],
   [293, 'RADAR_DISABLE'],
   [294, 'RADAR_ENABLE'],
   [296, 'LOCALDEFEAT'],
@@ -4362,6 +4363,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [495, 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT'],
   [496, 'NAMED_SET_STEALTH_ENABLED'],
   [497, 'TEAM_SET_STEALTH_ENABLED'],
+  [498, 'EVA_SET_ENABLED_DISABLED'],
+  [499, 'OPTIONS_SET_OCCLUSION_MODE'],
+  [500, 'OPTIONS_SET_DRAWICON_UI_MODE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4768,6 +4772,12 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptInputDisabled = false;
   /** Source parity subset: ScriptActions::doRadarDisable / doRadarEnable UI visibility flag. */
   private scriptRadarHidden = false;
+  /** Source parity: ScriptActions::doEvaEnabledDisabled. */
+  private scriptEvaEnabled = true;
+  /** Source parity: ScriptActions::doSetOcclusionMode -> GameLogic::setShowBehindBuildingMarkers. */
+  private scriptOcclusionModeEnabled = false;
+  /** Source parity: ScriptActions::doSetDrawIconUIMode -> GameLogic::setDrawIconUI. */
+  private scriptDrawIconUIEnabled = true;
   /** Source parity: TerrainLogic::setActiveBoundary state from MAP_SWITCH_BORDER script action. */
   private scriptActiveBoundaryIndex: number | null = null;
 
@@ -7194,6 +7204,39 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptActions::doEvaEnabledDisabled.
+   */
+  setScriptEvaEnabled(enabled: boolean): void {
+    this.scriptEvaEnabled = enabled;
+  }
+
+  isScriptEvaEnabled(): boolean {
+    return this.scriptEvaEnabled;
+  }
+
+  /**
+   * Source parity: ScriptActions::doSetOcclusionMode.
+   */
+  setScriptOcclusionModeEnabled(enabled: boolean): void {
+    this.scriptOcclusionModeEnabled = enabled;
+  }
+
+  isScriptOcclusionModeEnabled(): boolean {
+    return this.scriptOcclusionModeEnabled;
+  }
+
+  /**
+   * Source parity: ScriptActions::doSetDrawIconUIMode.
+   */
+  setScriptDrawIconUIEnabled(enabled: boolean): void {
+    this.scriptDrawIconUIEnabled = enabled;
+  }
+
+  isScriptDrawIconUIEnabled(): boolean {
+    return this.scriptDrawIconUIEnabled;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doRadarForceEnable / doRadarRevertNormal.
    */
   setScriptRadarForced(forced: boolean): void {
@@ -7548,17 +7591,23 @@ export class GameLogicSubsystem implements Subsystem {
     const { paramsObject, paramsArray } = this.resolveScriptConditionParams(actionRecord);
     const rawActionType = actionRecord.actionType ?? actionRecord.type;
     let actionType = this.resolveScriptActionTypeName(rawActionType);
-    if (typeof rawActionType === 'number'
-      && Number.isFinite(rawActionType)
-      && Math.trunc(rawActionType) === 291) {
-      // Source parity: Script chunks may collide on numeric id 291 across script-set variants.
-      // ScriptAction::ParseAction rematches by internal-name key; without that key we disambiguate
-      // by signature (2 params => NAMED_SET_STEALTH_ENABLED, 3 params => PLAYER_RELATES_PLAYER).
+    if (typeof rawActionType === 'number' && Number.isFinite(rawActionType)) {
+      const numericType = Math.trunc(rawActionType);
       const paramCount = paramsArray.length > 0
         ? paramsArray.length
         : (paramsObject ? Object.keys(paramsObject).length : 0);
-      if (paramCount === 2) {
+
+      // Source parity: Script chunks may collide on numeric id 291 across script-set variants.
+      // ScriptAction::ParseAction rematches by internal-name key; without that key we disambiguate
+      // by signature (2 params => NAMED_SET_STEALTH_ENABLED, 3 params => PLAYER_RELATES_PLAYER).
+      if (numericType === 291 && paramCount === 2) {
         actionType = 'NAMED_SET_STEALTH_ENABLED';
+      } else if (numericType === 293 && paramCount === 1) {
+        // 293 also maps to RADAR_DISABLE in another script set; 1-param signature is EVA toggle.
+        actionType = 'EVA_SET_ENABLED_DISABLED';
+      } else if (numericType === 294 && paramCount === 1) {
+        // 294 also maps to RADAR_ENABLE in another script set; 1-param signature is occlusion toggle.
+        actionType = 'OPTIONS_SET_OCCLUSION_MODE';
       }
     }
     if (!actionType) {
@@ -8240,6 +8289,15 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readBoolean(1, ['enabled', 'stealthEnabled', 'value']),
         );
+      case 'EVA_SET_ENABLED_DISABLED':
+        this.setScriptEvaEnabled(readBoolean(0, ['enabled', 'evaEnabled', 'value']));
+        return true;
+      case 'OPTIONS_SET_OCCLUSION_MODE':
+        this.setScriptOcclusionModeEnabled(readBoolean(0, ['enabled', 'occlusionEnabled', 'value']));
+        return true;
+      case 'OPTIONS_SET_DRAWICON_UI_MODE':
+        this.setScriptDrawIconUIEnabled(readBoolean(0, ['enabled', 'drawIconUIEnabled', 'value']));
+        return true;
       case 'NAMED_SET_REPULSOR':
         return this.executeScriptNamedSetRepulsor(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -16265,6 +16323,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
+    this.scriptEvaEnabled = true;
+    this.scriptOcclusionModeEnabled = false;
+    this.scriptDrawIconUIEnabled = true;
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
@@ -44646,6 +44707,8 @@ export class GameLogicSubsystem implements Subsystem {
     entityId: number | null = null,
     detail: string | null = null,
   ): void {
+    if (!this.scriptEvaEnabled) return;
+
     const cooldownKey = `${type}:${side}:${relationship}`;
     const nextAllowed = this.evaCooldowns.get(cooldownKey) ?? 0;
     if (this.frameCounter < nextAllowed) return;
@@ -46227,6 +46290,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
+    this.scriptEvaEnabled = true;
+    this.scriptOcclusionModeEnabled = false;
+    this.scriptDrawIconUIEnabled = true;
     this.scriptActiveBoundaryIndex = null;
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
