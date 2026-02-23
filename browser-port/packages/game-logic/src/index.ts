@@ -14414,26 +14414,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    if (teamMembers.length === 0) {
+    const resolved = this.resolveScriptTeamCommandButtonSource(team, normalizedAbilityName);
+    if (!resolved) {
       return false;
     }
-
-    let sourceEntity: MapEntity | null = null;
-    let sourceButton: CommandButtonDef | null = null;
-    for (const member of teamMembers) {
-      const buttons = this.findScriptEntityCommandButtonsByName(member, normalizedAbilityName);
-      if (buttons.length <= 0) {
-        continue;
-      }
-      sourceEntity = member;
-      sourceButton = buttons[0] ?? null;
-      break;
-    }
-    if (!sourceEntity || !sourceButton) {
-      return false;
-    }
+    const { teamMembers, sourceEntity, commandButtonDef } = resolved;
 
     const center = this.resolveScriptTeamCenter(teamMembers);
     if (!center) {
@@ -14454,7 +14439,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.isEntityOffMap(candidate) !== sourceOffMap) {
         continue;
       }
-      if (this.getTeamRelationship(sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
+      if (this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
         continue;
       }
 
@@ -14462,6 +14447,13 @@ export class GameLogicSubsystem implements Subsystem {
       const dz = candidate.z - center.z;
       const distSqr = (dx * dx) + (dz * dz);
       if (distSqr > searchRangeSqr) {
+        continue;
+      }
+
+      if (!this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
+        kind: 'OBJECT',
+        targetEntity: candidate,
+      }, true)) {
         continue;
       }
 
@@ -14480,12 +14472,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
 
     for (const candidate of candidates) {
-      const executed = this.executeScriptCommandButtonForEntity(
-        sourceEntity,
-        sourceButton,
-        { kind: 'OBJECT', targetEntity: candidate },
-      );
-      if (executed) {
+      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonDef.name, candidate)) {
         return true;
       }
     }
@@ -14801,6 +14788,57 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private resolveScriptTeamCommandButtonSource(
+    team: ScriptTeamRecord,
+    commandButtonName: string,
+  ): {
+    teamMembers: MapEntity[];
+    sourceEntity: MapEntity;
+    commandButtonDef: CommandButtonDef;
+  } | null {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return null;
+    }
+
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
+      return null;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (teamMembers.length === 0) {
+      return null;
+    }
+
+    for (const member of teamMembers) {
+      const memberButtons = this.findScriptEntityCommandButtonsByName(member, commandButtonDef.name);
+      if (memberButtons.length > 0) {
+        return {
+          teamMembers,
+          sourceEntity: member,
+          commandButtonDef,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private getScriptTeamCandidateRelationship(
+    team: ScriptTeamRecord,
+    sourceEntity: MapEntity,
+    candidate: MapEntity,
+  ): number {
+    const teamSide = this.resolveScriptTeamControllingSide(team);
+    const candidateSide = this.normalizeSide(candidate.side ?? '');
+    if (teamSide && candidateSide) {
+      return this.getTeamRelationshipBySides(teamSide, candidateSide);
+    }
+    return this.getTeamRelationship(sourceEntity, candidate);
+  }
+
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNamed.
    */
@@ -14815,12 +14853,23 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team || !targetEntity || targetEntity.destroyed) {
       return false;
     }
-    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonName, targetEntity);
+    const resolved = this.resolveScriptTeamCommandButtonSource(team, commandButtonName);
+    if (!resolved) {
+      return false;
+    }
+    if (!this.executeScriptCommandButtonForEntity(
+      resolved.sourceEntity,
+      resolved.commandButtonDef,
+      { kind: 'OBJECT', targetEntity },
+      true,
+    )) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, resolved.commandButtonDef.name, targetEntity);
   }
 
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestEnemy.
-   * TODO(source-parity): port full PartitionFilterValidCommandButtonTarget behavior.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestEnemyUnit(
     teamName: string,
@@ -14842,7 +14891,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestGarrisonedBuilding.
-   * TODO(source-parity): port full PartitionFilterGarrisonable + ValidCommandButtonTarget behavior.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestGarrisonedBuilding(
     teamName: string,
@@ -14890,7 +14938,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestBuilding.
-   * TODO(source-parity): port full PartitionFilterValidCommandButtonTarget behavior.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuilding(
     teamName: string,
@@ -14938,7 +14985,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestObjectType.
-   * TODO(source-parity): port full PartitionFilterThing + ValidCommandButtonTarget behavior.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestObjectType(
     teamName: string,
@@ -14977,27 +15023,24 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team || !registry) {
       return false;
     }
-    if (!findCommandButtonDefByName(registry, commandButtonName)) {
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
       return false;
     }
 
     const teamMembers = this.getScriptTeamMemberEntities(team)
       .filter((entity) => !entity.destroyed);
 
-    const candidates: Array<{ entity: MapEntity; commandButtonDef: CommandButtonDef }> = [];
+    const candidates: MapEntity[] = [];
     for (const entity of teamMembers) {
-      const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonName);
-      for (const commandButtonDef of commandButtons) {
-        if (!this.executeScriptCommandButtonForEntity(entity, commandButtonDef, { kind: 'NONE' }, true)) {
-          continue;
-        }
-        candidates.push({ entity, commandButtonDef });
-        break;
+      if (!this.executeScriptCommandButtonForEntity(entity, commandButtonDef, { kind: 'NONE' }, true)) {
+        continue;
       }
+      candidates.push(entity);
     }
 
     const percentageValue = Number.isFinite(percentage) ? percentage : 0;
-    const toExecuteCount = Math.ceil((percentageValue / 100) * candidates.length);
+    const toExecuteCount = Math.max(0, Math.trunc((percentageValue / 100) * candidates.length));
     if (toExecuteCount <= 0) {
       return true;
     }
@@ -15005,7 +15048,7 @@ export class GameLogicSubsystem implements Subsystem {
     let executedAny = false;
     for (let index = 0; index < candidates.length && index < toExecuteCount; index += 1) {
       const candidate = candidates[index]!;
-      if (this.executeScriptCommandButtonForEntity(candidate.entity, candidate.commandButtonDef, { kind: 'NONE' })) {
+      if (this.executeScriptCommandButtonForEntity(candidate, commandButtonDef, { kind: 'NONE' })) {
         executedAny = true;
       }
     }
@@ -15155,7 +15198,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: team command-button nearest-target scans.
-   * TODO(source-parity): port full partition-manager filters and expensive iterators.
    */
   private executeScriptTeamCommandButtonOnNearestObject(
     team: ScriptTeamRecord,
@@ -15170,28 +15212,14 @@ export class GameLogicSubsystem implements Subsystem {
       requiredTemplateNames?: string[] | null;
     },
   ): boolean {
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    if (teamMembers.length === 0) {
-      return true;
+    const resolved = this.resolveScriptTeamCommandButtonSource(team, commandButtonName);
+    if (!resolved) {
+      return false;
     }
+    const { teamMembers, sourceEntity, commandButtonDef } = resolved;
 
     const center = this.resolveScriptTeamCenter(teamMembers);
     if (!center) {
-      return false;
-    }
-
-    let sourceEntity: MapEntity | null = null;
-    let sourceCommandButtons: CommandButtonDef[] = [];
-    for (const member of teamMembers) {
-      const commandButtons = this.findScriptEntityCommandButtonsByName(member, commandButtonName);
-      if (commandButtons.length > 0) {
-        sourceEntity = member;
-        sourceCommandButtons = commandButtons;
-        break;
-      }
-    }
-    if (!sourceEntity || sourceCommandButtons.length <= 0) {
       return false;
     }
 
@@ -15217,7 +15245,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const relation = this.getTeamRelationship(sourceEntity, candidate);
+      const relation = this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate);
       const relationAllowed = (filter.allowEnemies && relation === RELATIONSHIP_ENEMIES)
         || (filter.allowNeutral && relation === RELATIONSHIP_NEUTRAL);
       if (!relationAllowed) {
@@ -15244,17 +15272,10 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      let sourceCanUseCommandButtonOnCandidate = false;
-      for (const commandButtonDef of sourceCommandButtons) {
-        if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
-          kind: 'OBJECT',
-          targetEntity: candidate,
-        }, true)) {
-          sourceCanUseCommandButtonOnCandidate = true;
-          break;
-        }
-      }
-      if (!sourceCanUseCommandButtonOnCandidate) {
+      if (!this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
+        kind: 'OBJECT',
+        targetEntity: candidate,
+      }, true)) {
         continue;
       }
 
@@ -15275,7 +15296,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
 
     for (const candidate of candidates) {
-      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonName, candidate)) {
+      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonDef.name, candidate)) {
         return true;
       }
     }
@@ -15290,6 +15311,15 @@ export class GameLogicSubsystem implements Subsystem {
     commandButtonName: string,
     targetEntity: MapEntity,
   ): boolean {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
     const teamMembers = this.getScriptTeamMemberEntities(team)
       .filter((entity) => !entity.destroyed);
     if (teamMembers.length === 0) {
@@ -15298,14 +15328,11 @@ export class GameLogicSubsystem implements Subsystem {
 
     let executedAny = false;
     for (const entity of teamMembers) {
-      const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonName);
-      for (const commandButtonDef of commandButtons) {
-        if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
-          kind: 'OBJECT',
-          targetEntity,
-        })) {
-          executedAny = true;
-        }
+      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
+        kind: 'OBJECT',
+        targetEntity,
+      })) {
+        executedAny = true;
       }
     }
     return executedAny;

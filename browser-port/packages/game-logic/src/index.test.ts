@@ -34948,6 +34948,67 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('uses team controlling-side affiliation for nearest-enemy command-button scans', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_TargetAny', {
+            SpecialPowerTemplate: 'ScriptPowerTargetAny',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('CivilianTarget', 'Civilian', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptTargetAny', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerTargetAny',
+          Options: 'NEED_TARGET_ENEMY_OBJECT NEED_TARGET_NEUTRAL_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptTargetAny',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerTargetAny', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('CivilianTarget', 40, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('AllUseTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamControllingSide('AllUseTeam', 'China')).toBe(true);
+    logic.setTeamRelationship('China', 'Civilian', 0); // enemies
+
+    expect(logic.executeScriptAction({
+      actionType: 468, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT
+      params: ['AllUseTeam', 'Command_ScriptTargetAny'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+
+    // With controlling side reset to the source unit's own side (America), target is neutral
+    // and no longer qualifies for nearest-enemy scans.
+    expect(logic.setScriptTeamControllingSide('AllUseTeam', null)).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 468,
+      params: ['AllUseTeam', 'Command_ScriptTargetAny'],
+    })).toBe(false);
+  });
+
   it('executes script team-partial-use-command-button action using source action id', () => {
     const bundle = makeBundle({
       objects: [
@@ -34993,14 +35054,13 @@ describe('Script condition groundwork', () => {
       params: [50, 'PartialTeam', 'Command_ScriptNoTarget'],
     })).toBe(true);
 
+    // Source parity: ScriptActions::doTeamPartialUseCommandButton truncates
+    // percentage*objectCount to Int (no ceil), so 50% of 3 executes 1 unit.
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
       specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
       dispatchType: 'NO_TARGET',
     });
-    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
-      specialPowerTemplateName: 'SCRIPTPOWERNOTARGET',
-      dispatchType: 'NO_TARGET',
-    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
     expect(logic.getEntityState(3)?.lastSpecialPowerDispatch).toBeNull();
 
     expect(logic.executeScriptAction({
