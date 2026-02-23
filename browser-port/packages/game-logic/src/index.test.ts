@@ -31476,6 +31476,72 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script map-reveal-all and map-shroud-all actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaScout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 0 }),
+        makeObjectDef('GLAScout', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaScout', 16, 16),
+        makeMapObject('GLAScout', 240, 240),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'GLA', playerType: 'COMPUTER' });
+    logic.update(1 / 30);
+
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_SHROUDED);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 102, // MAP_REVEAL_ALL (raw id)
+      params: ['MissingPlayerName'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_FOGGED);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 146, // MAP_SHROUD_ALL (raw id)
+      params: ['MissingPlayerName'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 307, // MAP_REVEAL_ALL (offset/collision id)
+      params: ['MissingPlayerName'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_FOGGED);
+
+    expect(logic.executeScriptAction({
+      actionType: 351, // MAP_SHROUD_ALL (offset id)
+      params: ['MissingPlayerName'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 102,
+      params: ['GLA'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_FOGGED);
+    expect(logic.executeScriptAction({
+      actionType: 146,
+      params: ['GLA'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+  });
+
   it('executes script map-reveal-all-perm actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

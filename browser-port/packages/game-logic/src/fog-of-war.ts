@@ -96,6 +96,36 @@ export class FogOfWarGrid {
   }
 
   /**
+   * Source parity: PartitionManager::revealMapForPlayer.
+   * Marks the entire map as explored without adding permanent lookers.
+   */
+  revealMapForPlayer(playerIndex: number): void {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS) {
+      return;
+    }
+    const seen = this.everSeen[playerIndex];
+    if (!seen) {
+      return;
+    }
+    seen.fill(1);
+  }
+
+  /**
+   * Source parity: PartitionManager::shroudMapForPlayer.
+   * Re-applies full shroud over explored terrain.
+   */
+  shroudMapForPlayer(playerIndex: number): void {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS) {
+      return;
+    }
+    const seen = this.everSeen[playerIndex];
+    if (!seen) {
+      return;
+    }
+    seen.fill(0);
+  }
+
+  /**
    * Source parity: PartitionManager::revealMapForPlayerPermanently.
    * Adds a persistent looker to every cell so shroud generation no longer covers the map.
    */

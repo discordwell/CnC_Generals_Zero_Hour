@@ -4332,6 +4332,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [97, 'SOUND_AMBIENT_PAUSE'],
   [98, 'SOUND_AMBIENT_RESUME'],
   [99, 'MUSIC_SET_TRACK'],
+  [102, 'MAP_REVEAL_ALL'],
   [114, 'SETUP_CAMERA'],
   [115, 'CAMERA_LETTERBOX_BEGIN'],
   [116, 'CAMERA_LETTERBOX_END'],
@@ -4341,6 +4342,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [132, 'CAMERA_STOP_FOLLOW'],
   [139, 'SHOW_MILITARY_CAPTION'],
   [144, 'MUSIC_SET_VOLUME'],
+  [146, 'MAP_SHROUD_ALL'],
   [147, 'SET_RANDOM_TIMER'],
   [148, 'SET_RANDOM_MSEC_TIMER'],
   [149, 'STOP_TIMER'],
@@ -4523,6 +4525,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [324, 'QUICKVICTORY'],
   [337, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
   [344, 'SHOW_MILITARY_CAPTION'],
+  [351, 'MAP_SHROUD_ALL'],
   [361, 'DISABLE_SPECIAL_POWER_DISPLAY'],
   [362, 'ENABLE_SPECIAL_POWER_DISPLAY'],
   [363, 'NAMED_HIDE_SPECIAL_POWER_DISPLAY'],
@@ -8694,6 +8697,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 304 && paramCount === 3) {
         // 304 also maps to NAMED_FACE_WAYPOINT; 3-param signature is music track change.
         actionType = 'MUSIC_SET_TRACK';
+      } else if (numericType === 307 && paramCount === 1) {
+        // 307 also maps to COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE; 1-param signature is map reveal all.
+        actionType = 'MAP_REVEAL_ALL';
       } else if (numericType === 337 && paramCount === 0) {
         // 337 also maps to NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH; 0-param signature is camera stop follow.
         actionType = 'CAMERA_STOP_FOLLOW';
@@ -9630,6 +9636,10 @@ export class GameLogicSubsystem implements Subsystem {
           readString(1, ['objectType', 'templateName', 'type']),
           readString(2, ['triggerName', 'trigger', 'areaName', 'area']),
         );
+      case 'MAP_REVEAL_ALL':
+        return this.executeScriptRevealMapEntire(
+          readString(0, ['side', 'playerName', 'player']),
+        );
       case 'MAP_REVEAL_ALL_PERM':
         return this.executeScriptRevealMapEntirePermanently(
           true,
@@ -9638,6 +9648,10 @@ export class GameLogicSubsystem implements Subsystem {
       case 'MAP_REVEAL_ALL_UNDO_PERM':
         return this.executeScriptRevealMapEntirePermanently(
           false,
+          readString(0, ['side', 'playerName', 'player']),
+        );
+      case 'MAP_SHROUD_ALL':
+        return this.executeScriptShroudMapEntire(
           readString(0, ['side', 'playerName', 'player']),
         );
       case 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT':
@@ -34327,6 +34341,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doRevealMapEntire.
+   * - If playerName resolves to a known player side and is not empty: apply to that player.
+   * - Otherwise: apply to all human players.
+   */
+  private executeScriptRevealMapEntire(playerName: string): boolean {
+    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
+    if (targetSide) {
+      this.setMapRevealEntireForSide(targetSide);
+      return true;
+    }
+
+    for (const side of this.collectScriptHumanSides()) {
+      this.setMapRevealEntireForSide(side);
+    }
+    return true;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doRevealMapEntirePermanently.
    * - If playerName resolves to a known player side and is not empty: apply to that player.
    * - Otherwise: apply to all human players.
@@ -34340,6 +34372,22 @@ export class GameLogicSubsystem implements Subsystem {
 
     for (const side of this.collectScriptHumanSides()) {
       this.setMapRevealEntirePermanentlyForSide(side, reveal);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doShroudMapEntire.
+   */
+  private executeScriptShroudMapEntire(playerName: string): boolean {
+    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
+    if (targetSide) {
+      this.setMapShroudEntireForSide(targetSide);
+      return true;
+    }
+
+    for (const side of this.collectScriptHumanSides()) {
+      this.setMapShroudEntireForSide(side);
     }
     return true;
   }
@@ -34468,6 +34516,30 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     grid.undoRevealMapForPlayerPermanently(playerIndex);
+  }
+
+  private setMapRevealEntireForSide(side: string): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return;
+    }
+    const playerIndex = this.resolvePlayerIndexForSide(side);
+    if (playerIndex < 0) {
+      return;
+    }
+    grid.revealMapForPlayer(playerIndex);
+  }
+
+  private setMapShroudEntireForSide(side: string): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return;
+    }
+    const playerIndex = this.resolvePlayerIndexForSide(side);
+    if (playerIndex < 0) {
+      return;
+    }
+    grid.shroudMapForPlayer(playerIndex);
   }
 
   private resolveScriptRevealMapTargetSide(playerName: string): string | null {
