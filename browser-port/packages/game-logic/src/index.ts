@@ -4403,6 +4403,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [65, 'PLAYER_ENABLE_BASE_CONSTRUCTION'],
   [66, 'PLAYER_ENABLE_FACTORIES'],
   [67, 'PLAYER_ENABLE_UNIT_CONSTRUCTION'],
+  [69, 'BUILD_TEAM'],
   [70, 'NAMED_DAMAGE'],
   [71, 'NAMED_DELETE'],
   [72, 'TEAM_DELETE'],
@@ -4505,6 +4506,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [174, 'NAMED_STOP'],
   [175, 'TEAM_STOP'],
   [176, 'TEAM_STOP_AND_DISBAND'],
+  [177, 'RECRUIT_TEAM'],
   [178, 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM'],
   [179, 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM'],
   [180, 'TEAM_REMOVE_ALL_OVERRIDE_RELATIONS'],
@@ -9464,6 +9466,10 @@ export class GameLogicSubsystem implements Subsystem {
           readSide(0, ['side', 'playerName', 'player']),
           true,
         );
+      case 'BUILD_TEAM':
+        return this.executeScriptBuildTeam(
+          readString(0, ['teamName', 'team']),
+        );
       case 'CREATE_OBJECT':
         return this.executeScriptCreateObjectAtPosition(
           readString(0, ['templateName', 'objectType', 'thingName', 'unitType']),
@@ -10797,6 +10803,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamStop(readString(0, ['teamName', 'team']));
       case 'TEAM_STOP_AND_DISBAND':
         return this.executeScriptTeamStopAndDisband(readString(0, ['teamName', 'team']));
+      case 'RECRUIT_TEAM':
+        return this.executeScriptRecruitTeam(
+          readString(0, ['teamName', 'team']),
+          readNumber(1, ['recruitRadius', 'radius']),
+        );
       case 'PLAYER_SET_MONEY': {
         const side = readSide(0, ['side', 'playerName', 'player']);
         if (!this.normalizeSide(side)) {
@@ -17584,6 +17595,32 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.clearScriptTeam(teamName);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doBuildTeam.
+   * TODO(source-parity): wire TeamFactory/AI production to materialize team members.
+   */
+  private executeScriptBuildTeam(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.created = true;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doRecruitTeam.
+   * TODO(source-parity): wire AI recruit pipeline to collect nearby units into team instances.
+   */
+  private executeScriptRecruitTeam(teamName: string, _recruitRadius: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.created = true;
+    return true;
   }
 
   /**

@@ -37067,6 +37067,53 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script build/recruit team actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmericaInfantry', 10, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.setScriptTeamCreated('BuildTeam', false)).toBe(true);
+    expect(logic.setScriptTeamCreated('RecruitTeam', false)).toBe(true);
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, {
+        created: boolean;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 69, // BUILD_TEAM
+      params: ['BuildTeam'],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('BUILDTEAM')?.created).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 177, // RECRUIT_TEAM
+      params: ['RecruitTeam', 120],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('RECRUITTEAM')?.created).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 69,
+      params: ['MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 177,
+      params: ['MissingTeam', 120],
+    })).toBe(false);
+  });
+
   it('executes script damage/delete/kill actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
