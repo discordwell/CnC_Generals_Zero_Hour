@@ -3871,6 +3871,12 @@ interface ScriptDisplayedCounterState {
   frame: number;
 }
 
+interface ScriptAudioRemovalRequestState {
+  eventName: string | null;
+  removeDisabledOnly: boolean;
+  frame: number;
+}
+
 interface ScriptRadarEventState {
   x: number;
   y: number;
@@ -4275,6 +4281,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [316, 'SPEECH_SET_VOLUME'],
   [317, 'DISABLE_BORDER_SHROUD'],
   [318, 'ENABLE_BORDER_SHROUD'],
+  [320, 'SOUND_REMOVE_ALL_DISABLED'],
+  [321, 'SOUND_REMOVE_TYPE'],
   [324, 'QUICKVICTORY'],
   [376, 'CAMERA_TETHER_NAMED'],
   [377, 'CAMERA_STOP_TETHER_NAMED'],
@@ -4401,6 +4409,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [521, 'SPEECH_SET_VOLUME'],
   [522, 'DISABLE_BORDER_SHROUD'],
   [523, 'ENABLE_BORDER_SHROUD'],
+  [525, 'SOUND_REMOVE_ALL_DISABLED'],
+  [526, 'SOUND_REMOVE_TYPE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4659,6 +4669,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptDisabledAudioEventNames = new Set<string>();
   /** Source parity bridge: Audio::setAudioEventVolumeOverride script overrides. */
   private readonly scriptAudioVolumeOverrides = new Map<string, number>();
+  /** Source parity bridge: Audio::removeDisabledEvents / removeAudioEvent requests. */
+  private readonly scriptAudioRemovalRequests: ScriptAudioRemovalRequestState[] = [];
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SOUND). */
   private scriptSoundVolumeScale = 1;
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SPEECH). */
@@ -7506,6 +7518,36 @@ export class GameLogicSubsystem implements Subsystem {
       .map(([eventName, volumeScale]) => ({ eventName, volumeScale }));
   }
 
+  private requestScriptAudioRemoveAllDisabled(): void {
+    this.scriptAudioRemovalRequests.push({
+      eventName: null,
+      removeDisabledOnly: true,
+      frame: this.frameCounter,
+    });
+  }
+
+  private requestScriptAudioRemoveType(eventName: string): boolean {
+    const normalizedName = this.normalizeScriptAudioEventName(eventName);
+    if (!normalizedName) {
+      return false;
+    }
+    this.scriptAudioRemovalRequests.push({
+      eventName: normalizedName,
+      removeDisabledOnly: false,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  drainScriptAudioRemovalRequests(): ScriptAudioRemovalRequestState[] {
+    if (this.scriptAudioRemovalRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptAudioRemovalRequests.map((request) => ({ ...request }));
+    this.scriptAudioRemovalRequests.length = 0;
+    return requests;
+  }
+
   setScriptSoundVolumeScale(newVolumePercent: number): void {
     this.scriptSoundVolumeScale = this.clampScriptVolumeScale(newVolumePercent);
   }
@@ -7876,6 +7918,13 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'SOUND_ENABLE_ALL':
         return this.setScriptAudioEventEnabled('', true);
+      case 'SOUND_REMOVE_ALL_DISABLED':
+        this.requestScriptAudioRemoveAllDisabled();
+        return true;
+      case 'SOUND_REMOVE_TYPE':
+        return this.requestScriptAudioRemoveType(
+          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
+        );
       case 'AUDIO_OVERRIDE_VOLUME_TYPE':
         return this.setScriptAudioEventVolumeOverride(
           readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
@@ -16714,6 +16763,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDisplayedCounters.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
+    this.scriptAudioRemovalRequests.length = 0;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
@@ -46694,6 +46744,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDisplayedCounters.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
+    this.scriptAudioRemovalRequests.length = 0;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;

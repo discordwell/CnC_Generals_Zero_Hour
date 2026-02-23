@@ -30461,6 +30461,34 @@ describe('Script condition groundwork', () => {
       actionType: 427, // AUDIO_RESTORE_VOLUME_ALL_TYPE
     })).toBe(true);
     expect(logic.getScriptAudioVolumeOverrides()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 320, // SOUND_REMOVE_ALL_DISABLED (raw id)
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 525, // SOUND_REMOVE_ALL_DISABLED (offset id)
+    })).toBe(true);
+    expect(logic.drainScriptAudioRemovalRequests()).toEqual([
+      { eventName: null, removeDisabledOnly: true, frame: 0 },
+      { eventName: null, removeDisabledOnly: true, frame: 0 },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 321, // SOUND_REMOVE_TYPE (raw id)
+      params: ['MissionAlert'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 526, // SOUND_REMOVE_TYPE (offset id)
+      params: ['SecondaryAlert'],
+    })).toBe(true);
+    expect(logic.drainScriptAudioRemovalRequests()).toEqual([
+      { eventName: 'MissionAlert', removeDisabledOnly: false, frame: 0 },
+      { eventName: 'SecondaryAlert', removeDisabledOnly: false, frame: 0 },
+    ]);
+    expect(logic.executeScriptAction({
+      actionType: 321,
+      params: [''],
+    })).toBe(false);
   });
 
   it('executes script set-cave-index action using source action id', () => {
