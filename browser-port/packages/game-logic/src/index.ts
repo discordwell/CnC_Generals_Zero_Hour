@@ -1643,6 +1643,8 @@ interface MapEntity {
   isImmobile: boolean;
   noCollisions: boolean;
   isIndestructible: boolean;
+  /** Source parity: Object::setReceivingDifficultyBonus runtime gate. */
+  receivingDifficultyBonus: boolean;
   /** Source parity: ScriptActions::changeObjectPanelFlagForSingleObject "AI Recruitable". */
   scriptAiRecruitable: boolean;
   /** Source parity: KeepObjectDie — prevents entity removal on death, keeps as rubble. */
@@ -4281,6 +4283,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [316, 'SPEECH_SET_VOLUME'],
   [317, 'DISABLE_BORDER_SHROUD'],
   [318, 'ENABLE_BORDER_SHROUD'],
+  [319, 'OBJECT_ALLOW_BONUSES'],
   [320, 'SOUND_REMOVE_ALL_DISABLED'],
   [321, 'SOUND_REMOVE_TYPE'],
   [324, 'QUICKVICTORY'],
@@ -4409,6 +4412,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [521, 'SPEECH_SET_VOLUME'],
   [522, 'DISABLE_BORDER_SHROUD'],
   [523, 'ENABLE_BORDER_SHROUD'],
+  [524, 'OBJECT_ALLOW_BONUSES'],
   [525, 'SOUND_REMOVE_ALL_DISABLED'],
   [526, 'SOUND_REMOVE_TYPE'],
 ]);
@@ -4624,6 +4628,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptScoringEnabled = true;
   /** Source parity: ScriptActions::excludePlayerFromScoreScreen per-player hidden set. */
   private readonly sideScoreScreenExcluded = new Set<string>();
+  /** Source parity: ScriptEngine::setObjectsShouldReceiveDifficultyBonus. */
+  private scriptObjectsReceiveDifficultyBonus = true;
   /** Source parity: Player::m_attackedBy + m_attackedFrame. */
   private readonly sideAttackedBy = new Map<string, Set<string>>();
   private readonly sideAttackedFrame = new Map<string, number>();
@@ -6842,6 +6848,17 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptScoringEnabled;
   }
 
+  setScriptObjectsReceiveDifficultyBonus(enabled: boolean): void {
+    this.scriptObjectsReceiveDifficultyBonus = enabled;
+    for (const entity of this.spawnedEntities.values()) {
+      entity.receivingDifficultyBonus = enabled;
+    }
+  }
+
+  isScriptObjectsReceiveDifficultyBonusEnabled(): boolean {
+    return this.scriptObjectsReceiveDifficultyBonus;
+  }
+
   private setSideExcludedFromScoreScreen(side: string, excluded: boolean): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
@@ -7849,6 +7866,9 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'ENABLE_BORDER_SHROUD':
         this.setScriptBorderShroudEnabled(true);
+        return true;
+      case 'OBJECT_ALLOW_BONUSES':
+        this.setScriptObjectsReceiveDifficultyBonus(readBoolean(0, ['enabled', 'value', 'allowBonuses']));
         return true;
       case 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN':
         return this.setSideExcludedFromScoreScreen(
@@ -16728,6 +16748,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideScriptSkillset.clear();
     this.scriptScoringEnabled = true;
     this.sideScoreScreenExcluded.clear();
+    this.scriptObjectsReceiveDifficultyBonus = true;
     this.sideBattlePlanBonuses.clear();
     this.battlePlanParalyzedUntilFrame.clear();
     this.sideUpgradesInProduction.clear();
@@ -16915,6 +16936,7 @@ export class GameLogicSubsystem implements Subsystem {
       isImmobile,
       noCollisions: false,
       isIndestructible: false,
+      receivingDifficultyBonus: this.scriptObjectsReceiveDifficultyBonus,
       scriptAiRecruitable: true,
       keepObjectOnDeath: this.hasKeepObjectDie(objectDef),
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
@@ -46698,6 +46720,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideScoreState.clear();
     this.scriptScoringEnabled = true;
     this.sideScoreScreenExcluded.clear();
+    this.scriptObjectsReceiveDifficultyBonus = true;
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
     this.sideSupplySourceAttackCheckFrame.clear();

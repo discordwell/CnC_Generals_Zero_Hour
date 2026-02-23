@@ -29764,6 +29764,43 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptBorderShroudEnabled()).toBe(true);
   });
 
+  it('executes script object-allow-bonuses action using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { receivingDifficultyBonus: boolean }>;
+    };
+    expect(logic.isScriptObjectsReceiveDifficultyBonusEnabled()).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.receivingDifficultyBonus).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 319, // OBJECT_ALLOW_BONUSES (raw id)
+      params: [0],
+    })).toBe(true);
+    expect(logic.isScriptObjectsReceiveDifficultyBonusEnabled()).toBe(false);
+    expect(privateApi.spawnedEntities.get(1)?.receivingDifficultyBonus).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 524, // OBJECT_ALLOW_BONUSES (offset id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.isScriptObjectsReceiveDifficultyBonusEnabled()).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.receivingDifficultyBonus).toBe(true);
+  });
+
   it('executes script victory/defeat actions using source action ids', () => {
     const createLogic = (): GameLogicSubsystem => {
       const logic = new GameLogicSubsystem(new THREE.Scene());
