@@ -36635,6 +36635,87 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script recruitability/collect/merge actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaInfantry', 10, 10), // id 1 source team
+        makeMapObject('AmericaInfantry', 12, 10), // id 2 source team
+        makeMapObject('ChinaInfantry', 14, 10), // id 3 target team
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('SourceTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamControllingSide('SourceTeam', 'America')).toBe(true);
+    expect(logic.setScriptTeamMembers('TargetTeam', [3])).toBe(true);
+    expect(logic.setScriptTeamControllingSide('TargetTeam', 'China')).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { side: string }>;
+      scriptTeamsByName: Map<string, {
+        recruitableOverride: boolean | null;
+        memberEntityIds: Set<number>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 91, // TEAM_AVAILABLE_FOR_RECRUITMENT
+      params: ['SourceTeam', 0],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCETEAM')?.recruitableOverride).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 91,
+      params: ['SourceTeam', 1],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCETEAM')?.recruitableOverride).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 91,
+      params: ['MissingTeam', 1],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 92, // TEAM_COLLECT_NEARBY_FOR_TEAM
+      params: ['SourceTeam'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 92,
+      params: ['MissingTeam'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 93, // TEAM_MERGE_INTO_TEAM
+      params: ['SourceTeam', 'TargetTeam'],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.has('SOURCETEAM')).toBe(false);
+    expect(Array.from(privateApi.scriptTeamsByName.get('TARGETTEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
+      .toEqual([1, 2, 3]);
+    expect(privateApi.spawnedEntities.get(1)?.side).toBe('china');
+    expect(privateApi.spawnedEntities.get(2)?.side).toBe('china');
+    expect(privateApi.spawnedEntities.get(3)?.side).toBe('China');
+
+    expect(logic.executeScriptAction({
+      actionType: 93,
+      params: ['MissingSource', 'TargetTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 93,
+      params: ['TargetTeam', 'MissingTarget'],
+    })).toBe(false);
+  });
+
   it('executes script movie and letterbox actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

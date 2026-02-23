@@ -4029,6 +4029,8 @@ interface ScriptTeamRecord {
   memberEntityIds: Set<number>;
   created: boolean;
   stateName: string;
+  /** Source parity: Team::setRecruitable explicit override state. */
+  recruitableOverride: boolean | null;
   controllingSide: string | null;
   isSingleton: boolean;
   maxInstances: number;
@@ -4400,6 +4402,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [88, 'RADAR_DISABLE'],
   [89, 'RADAR_ENABLE'],
   [90, 'MAP_REVEAL_AT_WAYPOINT'],
+  [91, 'TEAM_AVAILABLE_FOR_RECRUITMENT'],
+  [92, 'TEAM_COLLECT_NEARBY_FOR_TEAM'],
+  [93, 'TEAM_MERGE_INTO_TEAM'],
   [94, 'DISABLE_INPUT'],
   [95, 'ENABLE_INPUT'],
   [97, 'SOUND_AMBIENT_PAUSE'],
@@ -9740,6 +9745,20 @@ export class GameLogicSubsystem implements Subsystem {
         return this.setSideExcludedFromScoreScreen(
           readSide(0, ['side', 'playerName', 'player']),
           true,
+        );
+      case 'TEAM_AVAILABLE_FOR_RECRUITMENT':
+        return this.executeScriptTeamAvailableForRecruitment(
+          readString(0, ['teamName', 'team']),
+          readBoolean(1, ['availability', 'recruitable', 'enabled', 'value']),
+        );
+      case 'TEAM_COLLECT_NEARBY_FOR_TEAM':
+        return this.executeScriptTeamCollectNearbyForTeam(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'TEAM_MERGE_INTO_TEAM':
+        return this.executeScriptTeamMergeIntoTeam(
+          readString(0, ['sourceTeamName', 'sourceTeam', 'teamName', 'team']),
+          readString(1, ['targetTeamName', 'targetTeam', 'otherTeam']),
         );
       case 'TEAM_GUARD_SUPPLY_CENTER':
         return this.executeScriptTeamGuardSupplyCenter(
@@ -16697,6 +16716,58 @@ export class GameLogicSubsystem implements Subsystem {
       team.nameUpper,
     );
     return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamAvailableForRecruitment.
+   */
+  private executeScriptTeamAvailableForRecruitment(teamName: string, availability: boolean): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    team.recruitableOverride = availability;
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doCollectNearbyForTeam.
+   * C++ is currently unimplemented (debug crash stub), so this is a deliberate no-op.
+   */
+  private executeScriptTeamCollectNearbyForTeam(_teamName: string): boolean {
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doMergeTeamIntoTeam.
+   */
+  private executeScriptTeamMergeIntoTeam(sourceTeamName: string, targetTeamName: string): boolean {
+    const sourceTeam = this.getScriptTeamRecord(sourceTeamName);
+    const targetTeam = this.getScriptTeamRecord(targetTeamName);
+    if (!sourceTeam || !targetTeam) {
+      return false;
+    }
+    if (sourceTeam.nameUpper === targetTeam.nameUpper) {
+      return true;
+    }
+
+    const mergedEntityIds = new Set<number>(targetTeam.memberEntityIds);
+    const targetSide = this.resolveScriptTeamControllingSide(targetTeam);
+    for (const entityId of sourceTeam.memberEntityIds) {
+      mergedEntityIds.add(entityId);
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed || !targetSide) {
+        continue;
+      }
+      this.transferScriptEntityToSide(entity, targetSide);
+    }
+    targetTeam.memberEntityIds = mergedEntityIds;
+    targetTeam.created = true;
+    if (targetTeam.recruitableOverride === null && sourceTeam.recruitableOverride !== null) {
+      targetTeam.recruitableOverride = sourceTeam.recruitableOverride;
+    }
+
+    return this.clearScriptTeam(sourceTeam.nameUpper);
   }
 
   /**
@@ -29258,6 +29329,7 @@ export class GameLogicSubsystem implements Subsystem {
       memberEntityIds: new Set<number>(),
       created: false,
       stateName: '',
+      recruitableOverride: null,
       controllingSide: null,
       isSingleton: true,
       maxInstances: 0,
