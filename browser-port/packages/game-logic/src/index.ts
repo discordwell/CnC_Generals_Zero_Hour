@@ -4020,6 +4020,23 @@ interface ScriptMusicTrackState {
   frame: number;
 }
 
+interface ScriptBreezeState {
+  version: number;
+  direction: number;
+  directionX: number;
+  directionY: number;
+  intensity: number;
+  lean: number;
+  breezePeriodFrames: number;
+  randomness: number;
+}
+
+interface ScriptDebugMessageRequestState {
+  message: string;
+  crashRequested: boolean;
+  frame: number;
+}
+
 interface ScriptRadarEventState {
   x: number;
   y: number;
@@ -4455,6 +4472,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [97, 'SOUND_AMBIENT_PAUSE'],
   [98, 'SOUND_AMBIENT_RESUME'],
   [99, 'MUSIC_SET_TRACK'],
+  [100, 'SET_TREE_SWAY'],
+  [101, 'DEBUG_STRING'],
   [102, 'MAP_REVEAL_ALL'],
   [103, 'TEAM_GARRISON_SPECIFIC_BUILDING'],
   [104, 'EXIT_SPECIFIC_BUILDING'],
@@ -4883,6 +4902,7 @@ const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'TEAM_SET_UNMANNED_STATUS',
   'NAMED_SET_BOOBYTRAPPED',
   'TEAM_SET_BOOBYTRAPPED',
+  'DEBUG_CRASH_BOX',
 ]);
 
 const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
@@ -5173,6 +5193,19 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptAmbientSoundsPaused = false;
   /** Source parity bridge: ScriptActions::MUSIC_SET_TRACK latest request. */
   private scriptMusicTrackState: ScriptMusicTrackState | null = null;
+  /** Source parity: ScriptEngine::m_breezeInfo set by SET_TREE_SWAY. */
+  private scriptBreezeState: ScriptBreezeState = {
+    version: 0,
+    direction: 0,
+    directionX: 0,
+    directionY: 1,
+    intensity: 0,
+    lean: 0,
+    breezePeriodFrames: 1,
+    randomness: 0,
+  };
+  /** Source parity subset: DEBUG_STRING/DEBUG_CRASH_BOX script messages. */
+  private readonly scriptDebugMessageRequests: ScriptDebugMessageRequestState[] = [];
   /** Source parity bridge: ScriptActions::doCameraSetAudibleDistance (engine-side no-op). */
   private scriptCameraAudibleDistance = 0;
   /** Source parity bridge: ScriptActions::SET_FPS_LIMIT current max-FPS setting. */
@@ -8870,6 +8903,63 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptMusicTrackState };
   }
 
+  /**
+   * Source parity: ScriptEngine::setSway.
+   */
+  private executeScriptSetTreeSway(
+    direction: number,
+    intensity: number,
+    lean: number,
+    breezePeriodFrames: number,
+    randomness: number,
+  ): boolean {
+    if (
+      !Number.isFinite(direction)
+      || !Number.isFinite(intensity)
+      || !Number.isFinite(lean)
+      || !Number.isFinite(breezePeriodFrames)
+      || !Number.isFinite(randomness)
+    ) {
+      return false;
+    }
+
+    this.scriptBreezeState.version += 1;
+    this.scriptBreezeState.direction = direction;
+    this.scriptBreezeState.directionX = Math.sin(direction);
+    this.scriptBreezeState.directionY = Math.cos(direction);
+    this.scriptBreezeState.intensity = intensity;
+    this.scriptBreezeState.lean = lean;
+    this.scriptBreezeState.breezePeriodFrames = Math.max(1, Math.trunc(breezePeriodFrames));
+    this.scriptBreezeState.randomness = randomness;
+    return true;
+  }
+
+  getScriptBreezeState(): ScriptBreezeState {
+    return { ...this.scriptBreezeState };
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doDebugString / doDebugCrashBox.
+   * TODO(source-parity): route to runtime debug UI and internal crash-box handling.
+   */
+  private executeScriptDebugMessage(message: string, crashRequested: boolean): boolean {
+    this.scriptDebugMessageRequests.push({
+      message,
+      crashRequested,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  drainScriptDebugMessageRequests(): ScriptDebugMessageRequestState[] {
+    if (this.scriptDebugMessageRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptDebugMessageRequests.map((request) => ({ ...request }));
+    this.scriptDebugMessageRequests.length = 0;
+    return requests;
+  }
+
   setScriptCameraAudibleDistance(audibleDistance: number): void {
     if (!Number.isFinite(audibleDistance)) {
       return;
@@ -9243,6 +9333,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (numericType === 212 && paramCount === 1) {
         // 212 also maps to WAREHOUSE_SET_VALUE in another script set; 1-param signature is sound effect.
         actionType = 'PLAY_SOUND_EFFECT';
+      } else if (numericType === 216 && paramCount === 1) {
+        // 216 also maps to PLAY_SOUND_EFFECT_AT in another script set; 1-param signature is debug crash box.
+        actionType = 'DEBUG_CRASH_BOX';
       } else if (numericType === 219 && paramCount === 5) {
         // 219 also maps to SOUND_ENABLE_ALL in another script set; 5-param signature is camera move.
         actionType = 'MOVE_CAMERA_TO';
@@ -9851,6 +9944,24 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['musicName', 'trackName', 'track']),
           readBoolean(1, ['fadeOut', 'fadeout']),
           readBoolean(2, ['fadeIn', 'fadein']),
+        );
+      case 'SET_TREE_SWAY':
+        return this.executeScriptSetTreeSway(
+          readNumber(0, ['direction', 'windDirection', 'angle']),
+          readNumber(1, ['intensity', 'sway', 'swayAmount']),
+          readNumber(2, ['lean', 'leanAmount']),
+          readInteger(3, ['breezePeriodFrames', 'periodFrames', 'frames']),
+          readNumber(4, ['randomness', 'variation']),
+        );
+      case 'DEBUG_STRING':
+        return this.executeScriptDebugMessage(
+          readString(0, ['debugString', 'text', 'message']),
+          false,
+        );
+      case 'DEBUG_CRASH_BOX':
+        return this.executeScriptDebugMessage(
+          readString(0, ['debugString', 'text', 'message']),
+          true,
         );
       case 'TEAM_GARRISON_SPECIFIC_BUILDING':
         return this.executeScriptTeamGarrisonSpecificBuilding(
@@ -21939,6 +22050,17 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptBreezeState = {
+      version: 0,
+      direction: 0,
+      directionX: 0,
+      directionY: 1,
+      intensity: 0,
+      lean: 0,
+      breezePeriodFrames: 1,
+      randomness: 0,
+    };
+    this.scriptDebugMessageRequests.length = 0;
     this.scriptCameraAudibleDistance = 0;
     this.scriptFramesPerSecondLimit = 0;
     this.scriptUseFpsLimit = false;
@@ -52510,6 +52632,17 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptBreezeState = {
+      version: 0,
+      direction: 0,
+      directionX: 0,
+      directionY: 1,
+      intensity: 0,
+      lean: 0,
+      breezePeriodFrames: 1,
+      randomness: 0,
+    };
+    this.scriptDebugMessageRequests.length = 0;
     this.scriptCameraAudibleDistance = 0;
     this.scriptFramesPerSecondLimit = 0;
     this.scriptUseFpsLimit = false;

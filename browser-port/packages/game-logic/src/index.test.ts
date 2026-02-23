@@ -31227,6 +31227,69 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script tree-sway and debug actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 100, // SET_TREE_SWAY
+      params: [Math.PI / 2, 0.6, 0.3, 0, 0.2],
+    })).toBe(true);
+    const swayState = logic.getScriptBreezeState();
+    expect(swayState.version).toBe(1);
+    expect(swayState.direction).toBeCloseTo(Math.PI / 2);
+    expect(swayState.directionX).toBeCloseTo(1);
+    expect(swayState.directionY).toBeCloseTo(0);
+    expect(swayState.intensity).toBeCloseTo(0.6);
+    expect(swayState.lean).toBeCloseTo(0.3);
+    expect(swayState.breezePeriodFrames).toBe(1);
+    expect(swayState.randomness).toBeCloseTo(0.2);
+
+    expect(logic.executeScriptAction({
+      actionType: 101, // DEBUG_STRING
+      params: ['Script debug'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 216, // DEBUG_CRASH_BOX via offset/collision id + 1-param signature
+      params: ['Crash debug'],
+    })).toBe(true);
+    expect(logic.drainScriptDebugMessageRequests()).toEqual([
+      {
+        message: 'Script debug',
+        crashRequested: false,
+        frame: 0,
+      },
+      {
+        message: 'Crash debug',
+        crashRequested: true,
+        frame: 0,
+      },
+    ]);
+    expect(logic.drainScriptDebugMessageRequests()).toEqual([]);
+
+    // Source parity subset: loading a map clears script bridge state.
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+    expect(logic.getScriptBreezeState()).toEqual({
+      version: 0,
+      direction: 0,
+      directionX: 0,
+      directionY: 1,
+      intensity: 0,
+      lean: 0,
+      breezePeriodFrames: 1,
+      randomness: 0,
+    });
+    expect(logic.drainScriptDebugMessageRequests()).toEqual([]);
+  });
+
   it('executes script set-cave-index action using source action id', () => {
     const bundle = makeBundle({
       objects: [
