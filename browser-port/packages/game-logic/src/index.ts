@@ -3901,6 +3901,28 @@ interface ScriptCameraActionRequestState {
   frame: number;
 }
 
+interface ScriptCameraModifierRequestState {
+  requestType:
+    | 'FREEZE_TIME'
+    | 'FREEZE_ANGLE'
+    | 'FINAL_ZOOM'
+    | 'FINAL_PITCH'
+    | 'FINAL_SPEED_MULTIPLIER'
+    | 'ROLLING_AVERAGE'
+    | 'FINAL_LOOK_TOWARD'
+    | 'LOOK_TOWARD';
+  waypointName: string | null;
+  x: number | null;
+  z: number | null;
+  zoom: number | null;
+  pitch: number | null;
+  easeIn: number | null;
+  easeOut: number | null;
+  speedMultiplier: number | null;
+  rollingAverageFrames: number | null;
+  frame: number;
+}
+
 interface ScriptCameraFilterRequestState {
   requestType: 'MOTION_BLUR' | 'MOTION_BLUR_JUMP' | 'MOTION_BLUR_FOLLOW' | 'MOTION_BLUR_END_FOLLOW';
   zoomIn: boolean | null;
@@ -4406,10 +4428,17 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [18, 'ROTATE_CAMERA'],
   [19, 'RESET_CAMERA'],
   [20, 'SET_MILLISECOND_TIMER'],
+  [21, 'CAMERA_MOD_FREEZE_TIME'],
   [22, 'SET_VISUAL_SPEED_MULTIPLIER'],
   [23, 'CREATE_OBJECT'],
   [24, 'SUSPEND_BACKGROUND_SOUNDS'],
   [25, 'RESUME_BACKGROUND_SOUNDS'],
+  [26, 'CAMERA_MOD_SET_FINAL_ZOOM'],
+  [27, 'CAMERA_MOD_SET_FINAL_PITCH'],
+  [28, 'CAMERA_MOD_FREEZE_ANGLE'],
+  [29, 'CAMERA_MOD_SET_FINAL_SPEED_MULTIPLIER'],
+  [30, 'CAMERA_MOD_SET_ROLLING_AVERAGE'],
+  [31, 'CAMERA_MOD_FINAL_LOOK_TOWARD'],
   [32, 'TEAM_ATTACK_TEAM'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
@@ -4908,6 +4937,7 @@ const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'TEAM_SET_UNMANNED_STATUS',
   'NAMED_SET_BOOBYTRAPPED',
   'TEAM_SET_BOOBYTRAPPED',
+  'CAMERA_MOD_LOOK_TOWARD',
   'DEBUG_CRASH_BOX',
 ]);
 
@@ -5258,6 +5288,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraLookTowardWaypointState: ScriptCameraLookTowardWaypointState | null = null;
   /** Source parity bridge: TacticalView camera action requests consumed by renderer integration. */
   private readonly scriptCameraActionRequests: ScriptCameraActionRequestState[] = [];
+  /** Source parity bridge: TacticalView camera modifier requests during movement actions. */
+  private readonly scriptCameraModifierRequests: ScriptCameraModifierRequestState[] = [];
   /** Source parity bridge: ScriptActions::doBlackWhiteMode active-state mirror. */
   private scriptCameraBlackWhiteEnabled = false;
   /** Source parity bridge: ScriptActions::doBlackWhiteMode renderer requests. */
@@ -8205,6 +8237,162 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
+  private queueScriptCameraModifierRequest(
+    request: Omit<ScriptCameraModifierRequestState, 'frame'>,
+  ): void {
+    this.scriptCameraModifierRequests.push({
+      ...request,
+      frame: this.frameCounter,
+    });
+  }
+
+  private requestScriptCameraModFreezeTime(): void {
+    this.queueScriptCameraModifierRequest({
+      requestType: 'FREEZE_TIME',
+      waypointName: null,
+      x: null,
+      z: null,
+      zoom: null,
+      pitch: null,
+      easeIn: null,
+      easeOut: null,
+      speedMultiplier: null,
+      rollingAverageFrames: null,
+    });
+  }
+
+  private requestScriptCameraModFreezeAngle(): void {
+    this.queueScriptCameraModifierRequest({
+      requestType: 'FREEZE_ANGLE',
+      waypointName: null,
+      x: null,
+      z: null,
+      zoom: null,
+      pitch: null,
+      easeIn: null,
+      easeOut: null,
+      speedMultiplier: null,
+      rollingAverageFrames: null,
+    });
+  }
+
+  private requestScriptCameraModFinalZoom(zoom: number, easeIn: number, easeOut: number): boolean {
+    if (!Number.isFinite(zoom) || !Number.isFinite(easeIn) || !Number.isFinite(easeOut)) {
+      return false;
+    }
+    this.queueScriptCameraModifierRequest({
+      requestType: 'FINAL_ZOOM',
+      waypointName: null,
+      x: null,
+      z: null,
+      zoom,
+      pitch: null,
+      easeIn,
+      easeOut,
+      speedMultiplier: null,
+      rollingAverageFrames: null,
+    });
+    return true;
+  }
+
+  private requestScriptCameraModFinalPitch(pitch: number, easeIn: number, easeOut: number): boolean {
+    if (!Number.isFinite(pitch) || !Number.isFinite(easeIn) || !Number.isFinite(easeOut)) {
+      return false;
+    }
+    this.queueScriptCameraModifierRequest({
+      requestType: 'FINAL_PITCH',
+      waypointName: null,
+      x: null,
+      z: null,
+      zoom: null,
+      pitch,
+      easeIn,
+      easeOut,
+      speedMultiplier: null,
+      rollingAverageFrames: null,
+    });
+    return true;
+  }
+
+  private requestScriptCameraModFinalSpeedMultiplier(speedMultiplier: number): void {
+    this.queueScriptCameraModifierRequest({
+      requestType: 'FINAL_SPEED_MULTIPLIER',
+      waypointName: null,
+      x: null,
+      z: null,
+      zoom: null,
+      pitch: null,
+      easeIn: null,
+      easeOut: null,
+      speedMultiplier: Math.trunc(speedMultiplier),
+      rollingAverageFrames: null,
+    });
+  }
+
+  private requestScriptCameraModRollingAverage(rollingAverageFrames: number): void {
+    this.queueScriptCameraModifierRequest({
+      requestType: 'ROLLING_AVERAGE',
+      waypointName: null,
+      x: null,
+      z: null,
+      zoom: null,
+      pitch: null,
+      easeIn: null,
+      easeOut: null,
+      speedMultiplier: null,
+      rollingAverageFrames: Math.max(1, Math.trunc(rollingAverageFrames)),
+    });
+  }
+
+  private requestScriptCameraModFinalLookToward(waypointName: string): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    this.queueScriptCameraModifierRequest({
+      requestType: 'FINAL_LOOK_TOWARD',
+      waypointName: waypointName.trim(),
+      x: waypoint.x,
+      z: waypoint.z,
+      zoom: null,
+      pitch: null,
+      easeIn: null,
+      easeOut: null,
+      speedMultiplier: null,
+      rollingAverageFrames: null,
+    });
+    return true;
+  }
+
+  private requestScriptCameraModLookToward(waypointName: string): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    this.queueScriptCameraModifierRequest({
+      requestType: 'LOOK_TOWARD',
+      waypointName: waypointName.trim(),
+      x: waypoint.x,
+      z: waypoint.z,
+      zoom: null,
+      pitch: null,
+      easeIn: null,
+      easeOut: null,
+      speedMultiplier: null,
+      rollingAverageFrames: null,
+    });
+    return true;
+  }
+
+  drainScriptCameraModifierRequests(): ScriptCameraModifierRequestState[] {
+    if (this.scriptCameraModifierRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptCameraModifierRequests.map((request) => ({ ...request }));
+    this.scriptCameraModifierRequests.length = 0;
+    return requests;
+  }
+
   private requestScriptCameraBlackWhiteMode(enabled: boolean, fadeFrames: number): void {
     const normalizedFadeFrames = Number.isFinite(fadeFrames) ? Math.trunc(fadeFrames) : 0;
 
@@ -9402,6 +9590,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (numericType === 212 && paramCount === 1) {
         // 212 also maps to WAREHOUSE_SET_VALUE in another script set; 1-param signature is sound effect.
         actionType = 'PLAY_SOUND_EFFECT';
+      } else if (numericType === 32 && paramCount === 1) {
+        // 32 also maps to TEAM_ATTACK_TEAM in another script set; 1-param signature is camera-mod look toward.
+        actionType = 'CAMERA_MOD_LOOK_TOWARD';
       } else if (numericType === 216 && paramCount === 1) {
         // 216 also maps to PLAY_SOUND_EFFECT_AT in another script set; 1-param signature is debug crash box.
         actionType = 'DEBUG_CRASH_BOX';
@@ -9986,6 +10177,42 @@ export class GameLogicSubsystem implements Subsystem {
       case 'CAMERA_STOP_FOLLOW':
         this.clearScriptCameraFollowNamed();
         return true;
+      case 'CAMERA_MOD_FREEZE_TIME':
+        this.requestScriptCameraModFreezeTime();
+        return true;
+      case 'CAMERA_MOD_FREEZE_ANGLE':
+        this.requestScriptCameraModFreezeAngle();
+        return true;
+      case 'CAMERA_MOD_SET_FINAL_ZOOM':
+        return this.requestScriptCameraModFinalZoom(
+          readNumber(0, ['zoom', 'finalZoom']),
+          readNumber(1, ['easeIn', 'easeInPercent']),
+          readNumber(2, ['easeOut', 'easeOutPercent']),
+        );
+      case 'CAMERA_MOD_SET_FINAL_PITCH':
+        return this.requestScriptCameraModFinalPitch(
+          readNumber(0, ['pitch', 'finalPitch']),
+          readNumber(1, ['easeIn', 'easeInPercent']),
+          readNumber(2, ['easeOut', 'easeOutPercent']),
+        );
+      case 'CAMERA_MOD_SET_FINAL_SPEED_MULTIPLIER':
+        this.requestScriptCameraModFinalSpeedMultiplier(
+          readInteger(0, ['multiplier', 'timeMultiplier', 'value']),
+        );
+        return true;
+      case 'CAMERA_MOD_SET_ROLLING_AVERAGE':
+        this.requestScriptCameraModRollingAverage(
+          readInteger(0, ['framesToAverage', 'rollingAverageFrames', 'frames']),
+        );
+        return true;
+      case 'CAMERA_MOD_FINAL_LOOK_TOWARD':
+        return this.requestScriptCameraModFinalLookToward(
+          readString(0, ['waypointName', 'waypoint']),
+        );
+      case 'CAMERA_MOD_LOOK_TOWARD':
+        return this.requestScriptCameraModLookToward(
+          readString(0, ['waypointName', 'waypoint']),
+        );
       case 'SUSPEND_BACKGROUND_SOUNDS':
         this.setScriptBackgroundSoundsPaused(true);
         return true;
@@ -22175,6 +22402,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
     this.scriptCameraActionRequests.length = 0;
+    this.scriptCameraModifierRequests.length = 0;
     this.scriptCameraBlackWhiteEnabled = false;
     this.scriptCameraBlackWhiteRequests.length = 0;
     this.scriptCameraFadeRequests.length = 0;
@@ -52779,6 +53007,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
     this.scriptCameraActionRequests.length = 0;
+    this.scriptCameraModifierRequests.length = 0;
     this.scriptCameraBlackWhiteEnabled = false;
     this.scriptCameraBlackWhiteRequests.length = 0;
     this.scriptCameraFadeRequests.length = 0;
