@@ -28311,6 +28311,89 @@ describe('Map script execution', () => {
     expect(logic.getSideCredits('America')).toBe(1500);
   });
 
+  it('iterates non-singleton condition-team instances for one-shot map script execution', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptUnit', 20, 20), // id 1
+      makeMapObject('ScriptUnit', 24, 20), // id 2
+    ]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'PrototypeLoopScript',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: true,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: false,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 10, // TEAM_HAS_UNITS
+                params: [
+                  { type: 3, intValue: 0, realValue: 0, stringValue: 'AlphaProto' },
+                ],
+              }],
+            }],
+            actions: [{
+              actionType: 76, // DISPLAY_TEXT
+              params: [
+                { type: 10, intValue: 0, realValue: 0, stringValue: 'PrototypeLoop' },
+              ],
+            }],
+            falseActions: [],
+          }],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'AlphaProto',
+          teamOwner: 'Player_1',
+          teamIsSingleton: false,
+          teamMaxInstances: 3,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+
+    logic.update(1 / 30);
+    expect(logic.drainScriptDisplayMessages().map((message) => message.text))
+      .toEqual(['PrototypeLoop', 'PrototypeLoop']);
+
+    logic.update(1 / 30);
+    expect(logic.drainScriptDisplayMessages()).toEqual([]);
+  });
+
   it('executes sequential scripts triggered by map scripts', () => {
     const bundle = makeBundle({
       objects: [
@@ -41170,6 +41253,47 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 'NAMED_DESTROYED',
       params: ['<This Object>'],
+    })).toBe(true);
+  });
+
+  it('evaluates TEAM_HAS_UNITS with TeamPrototype fan-out and THIS_TEAM precedence', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ContextUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ContextUnit', 10, 10), // id 1
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_HAS_UNITS',
+      params: ['AlphaProto'],
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_HAS_UNITS',
+      params: ['AlphaProto'],
+    })).toBe(false);
+
+    logic.clearScriptConditionTeamContext();
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_HAS_UNITS',
+      params: ['AlphaProto'],
     })).toBe(true);
   });
 

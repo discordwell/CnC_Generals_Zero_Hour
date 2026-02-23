@@ -4090,6 +4090,8 @@ interface ScriptRadarEventState {
 
 interface ScriptTeamRecord {
   nameUpper: string;
+  /** Source parity: Team::getName() / TeamPrototype name binding for instance resolution. */
+  prototypeNameUpper: string;
   memberEntityIds: Set<number>;
   created: boolean;
   stateName: string;
@@ -5222,6 +5224,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptCompletedMusic: ScriptMusicCompletedEvent[] = [];
   /** Source parity subset: ScriptEngine team registry keyed by uppercase team name. */
   private readonly scriptTeamsByName = new Map<string, ScriptTeamRecord>();
+  /** Source parity: TeamPrototype -> Team instance list ordering for getTeamNamed/executeScript semantics. */
+  private readonly scriptTeamInstanceNamesByPrototypeName = new Map<string, string[]>();
   /** Source parity subset: AIAttackAreaState runtime keyed by attacker entity id. */
   private readonly scriptAttackAreaStateByEntityId = new Map<number, ScriptAttackAreaState>();
   /** Source parity subset: AIHuntState runtime keyed by hunting entity id. */
@@ -12484,7 +12488,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: explicit script-team membership assignment.
-   * TODO(source-parity): support TeamPrototype instance resolution and THIS_TEAM semantics.
    */
   setScriptTeamMembers(teamName: string, entityIds: readonly number[]): boolean {
     const team = this.getOrCreateScriptTeamRecord(teamName);
@@ -12505,6 +12508,26 @@ export class GameLogicSubsystem implements Subsystem {
     }
     team.memberEntityIds = nextMembers;
     team.created = true;
+    return true;
+  }
+
+  /**
+   * Source parity support: bind a script-team record to a TeamPrototype name.
+   */
+  setScriptTeamPrototype(teamName: string, prototypeTeamName: string): boolean {
+    const team = this.getOrCreateScriptTeamRecord(teamName);
+    const prototypeRecord = this.getOrCreateScriptTeamRecord(prototypeTeamName);
+    if (!team || !prototypeRecord) {
+      return false;
+    }
+    const prototypeNameUpper = prototypeRecord.nameUpper;
+    if (team.prototypeNameUpper === prototypeNameUpper) {
+      return true;
+    }
+
+    this.unregisterScriptTeamPrototypeInstance(team);
+    team.prototypeNameUpper = prototypeNameUpper;
+    this.registerScriptTeamPrototypeInstance(team);
     return true;
   }
 
@@ -19427,7 +19450,7 @@ export class GameLogicSubsystem implements Subsystem {
    * TODO(source-parity): wire TeamFactory/AI production to materialize team members.
    */
   private executeScriptBuildTeam(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const team = this.getScriptTeamPrototypeRecord(teamName);
     if (!team) {
       return false;
     }
@@ -19440,7 +19463,7 @@ export class GameLogicSubsystem implements Subsystem {
    * TODO(source-parity): wire AI recruit pipeline to collect nearby units into team instances.
    */
   private executeScriptRecruitTeam(teamName: string, _recruitRadius: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const team = this.getScriptTeamPrototypeRecord(teamName);
     if (!team) {
       return false;
     }
@@ -19717,13 +19740,25 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   clearScriptTeam(teamName: string): boolean {
-    const teamNameUpper = this.resolveScriptTeamName(teamName);
-    if (!teamNameUpper) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
+    const teamNameUpper = team.nameUpper;
+    this.unregisterScriptTeamPrototypeInstance(team);
     const removed = this.scriptTeamsByName.delete(teamNameUpper);
     if (removed) {
       this.removeAllSequentialScriptsForTeam(teamNameUpper);
+      this.scriptTeamCreatedReadyFrameByName.delete(teamNameUpper);
+      if (this.scriptCallingTeamNameUpper === teamNameUpper) {
+        this.scriptCallingTeamNameUpper = null;
+      }
+      if (this.scriptConditionTeamNameUpper === teamNameUpper) {
+        this.scriptConditionTeamNameUpper = null;
+      }
+      if (this.scriptLocalPlayerTeamNameUpper === teamNameUpper) {
+        this.scriptLocalPlayerTeamNameUpper = null;
+      }
     }
     return removed;
   }
@@ -19963,18 +19998,34 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateHasUnits.
-   * TODO(source-parity): support full ScriptEngine team instance resolution.
    */
   evaluateScriptHasUnits(filter: {
     teamName: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const desiredTeamToken = filter.teamName.trim();
+    if (!desiredTeamToken) {
       return false;
     }
 
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (this.isScriptTeamMemberAliveForUnits(entity)) {
+    // Source parity: explicit <This Team> resolves through getTeamNamed context.
+    if (desiredTeamToken === SCRIPT_THIS_TEAM) {
+      const thisTeam = this.getScriptTeamRecord(desiredTeamToken);
+      return thisTeam ? this.doesScriptTeamHaveAnyUnits(thisTeam) : false;
+    }
+
+    const desiredTeamNameUpper = this.normalizeScriptTeamName(desiredTeamToken);
+
+    // Source parity: if the current THIS_TEAM has the same Team::getName(),
+    // evaluate that specific instance first.
+    const thisTeam = this.getScriptTeamRecord(SCRIPT_THIS_TEAM);
+    if (thisTeam && this.isScriptTeamNameMatch(thisTeam, desiredTeamNameUpper)) {
+      return this.doesScriptTeamHaveAnyUnits(thisTeam);
+    }
+
+    // Source parity: when not tied to THIS_TEAM, evaluate all instances of the
+    // referenced TeamPrototype and return true if any instance has units.
+    for (const team of this.getScriptTeamInstancesByPrototypeName(desiredTeamNameUpper)) {
+      if (this.doesScriptTeamHaveAnyUnits(team)) {
         return true;
       }
     }
@@ -31871,8 +31922,21 @@ export class GameLogicSubsystem implements Subsystem {
     return this.normalizeScriptTeamName(trimmed);
   }
 
+  private resolveScriptContextTeamRecord(): ScriptTeamRecord | null {
+    if (this.scriptCallingTeamNameUpper) {
+      const calling = this.scriptTeamsByName.get(this.scriptCallingTeamNameUpper) ?? null;
+      if (calling) {
+        return calling;
+      }
+    }
+    if (this.scriptConditionTeamNameUpper) {
+      return this.scriptTeamsByName.get(this.scriptConditionTeamNameUpper) ?? null;
+    }
+    return null;
+  }
+
   private resolveScriptContextTeamName(): string | null {
-    return this.scriptCallingTeamNameUpper ?? this.scriptConditionTeamNameUpper;
+    return this.resolveScriptContextTeamRecord()?.nameUpper ?? null;
   }
 
   private resolveScriptTeamName(teamName: string): string | null {
@@ -31887,6 +31951,56 @@ export class GameLogicSubsystem implements Subsystem {
       return this.scriptLocalPlayerTeamNameUpper;
     }
     return this.normalizeScriptTeamName(trimmed);
+  }
+
+  private registerScriptTeamPrototypeInstance(team: ScriptTeamRecord): void {
+    const prototypeNameUpper = team.prototypeNameUpper;
+    let instanceNames = this.scriptTeamInstanceNamesByPrototypeName.get(prototypeNameUpper);
+    if (!instanceNames) {
+      instanceNames = [];
+      this.scriptTeamInstanceNamesByPrototypeName.set(prototypeNameUpper, instanceNames);
+    }
+    if (!instanceNames.includes(team.nameUpper)) {
+      instanceNames.push(team.nameUpper);
+    }
+  }
+
+  private unregisterScriptTeamPrototypeInstance(team: ScriptTeamRecord): void {
+    const instanceNames = this.scriptTeamInstanceNamesByPrototypeName.get(team.prototypeNameUpper);
+    if (!instanceNames) {
+      return;
+    }
+    const index = instanceNames.indexOf(team.nameUpper);
+    if (index >= 0) {
+      instanceNames.splice(index, 1);
+    }
+    if (instanceNames.length === 0) {
+      this.scriptTeamInstanceNamesByPrototypeName.delete(team.prototypeNameUpper);
+    }
+  }
+
+  private getScriptTeamInstancesByPrototypeName(prototypeNameUpper: string): ScriptTeamRecord[] {
+    const instanceNames = this.scriptTeamInstanceNamesByPrototypeName.get(prototypeNameUpper);
+    if (!instanceNames || instanceNames.length === 0) {
+      return [];
+    }
+    const teams: ScriptTeamRecord[] = [];
+    for (const instanceName of instanceNames) {
+      const team = this.scriptTeamsByName.get(instanceName);
+      if (!team) {
+        continue;
+      }
+      // Source parity: TeamPrototype iteration only considers active instances.
+      if (!team.created && team.memberEntityIds.size === 0) {
+        continue;
+      }
+      teams.push(team);
+    }
+    return teams;
+  }
+
+  private isScriptTeamNameMatch(team: ScriptTeamRecord, desiredNameUpper: string): boolean {
+    return team.nameUpper === desiredNameUpper || team.prototypeNameUpper === desiredNameUpper;
   }
 
   private resolveScriptContextEntityId(): number | null {
@@ -32003,6 +32117,49 @@ export class GameLogicSubsystem implements Subsystem {
     if (!teamNameUpper) {
       return null;
     }
+
+    // Source parity: ScriptEngine::getTeamNamed prefers the active calling/condition
+    // context team when its Team::getName() matches the requested token.
+    if (this.scriptCallingTeamNameUpper) {
+      const callingTeam = this.scriptTeamsByName.get(this.scriptCallingTeamNameUpper) ?? null;
+      if (callingTeam && this.isScriptTeamNameMatch(callingTeam, teamNameUpper)) {
+        return callingTeam;
+      }
+    }
+    if (this.scriptConditionTeamNameUpper) {
+      const conditionTeam = this.scriptTeamsByName.get(this.scriptConditionTeamNameUpper) ?? null;
+      if (conditionTeam && this.isScriptTeamNameMatch(conditionTeam, teamNameUpper)) {
+        return conditionTeam;
+      }
+    }
+
+    const prototypeInstances = this.getScriptTeamInstancesByPrototypeName(teamNameUpper);
+    if (prototypeInstances.length > 0) {
+      const prototypeRecord = this.scriptTeamsByName.get(teamNameUpper) ?? prototypeInstances[0]!;
+      let singleton = prototypeRecord.isSingleton;
+      if (prototypeRecord.maxInstances < 2) {
+        singleton = true;
+      }
+
+      // Source parity: singleton team names resolve to the first active instance.
+      if (singleton) {
+        for (const team of prototypeInstances) {
+          if (team.created || team.memberEntityIds.size > 0) {
+            return team;
+          }
+        }
+      }
+      return prototypeInstances[0] ?? null;
+    }
+
+    return this.scriptTeamsByName.get(teamNameUpper) ?? null;
+  }
+
+  private getScriptTeamPrototypeRecord(teamName: string): ScriptTeamRecord | null {
+    const teamNameUpper = this.resolveScriptTeamName(teamName);
+    if (!teamNameUpper) {
+      return null;
+    }
     return this.scriptTeamsByName.get(teamNameUpper) ?? null;
   }
 
@@ -32017,6 +32174,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const created: ScriptTeamRecord = {
       nameUpper: teamNameUpper,
+      prototypeNameUpper: teamNameUpper,
       memberEntityIds: new Set<number>(),
       created: false,
       stateName: '',
@@ -32030,6 +32188,7 @@ export class GameLogicSubsystem implements Subsystem {
       productionPriorityFailureDecrease: 0,
     };
     this.scriptTeamsByName.set(teamNameUpper, created);
+    this.registerScriptTeamPrototypeInstance(created);
     return created;
   }
 
@@ -32075,6 +32234,15 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return true;
+  }
+
+  private doesScriptTeamHaveAnyUnits(team: ScriptTeamRecord): boolean {
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptTeamMemberAliveForUnits(entity)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private resolveScriptTeamControllingSide(team: ScriptTeamRecord): string | null {
@@ -36934,23 +37102,40 @@ export class GameLogicSubsystem implements Subsystem {
     const previousCallingTeam = this.scriptCallingTeamNameUpper;
     const previousCallingEntity = this.scriptCallingEntityId;
 
-    const conditionTeam = script.conditionTeamNameUpper
-      ? this.scriptTeamsByName.get(script.conditionTeamNameUpper)
-      : null;
-    const hasConditionTeamInstance = conditionTeam ? conditionTeam.memberEntityIds.size > 0 : false;
+    const conditionTeamInstances = script.conditionTeamNameUpper
+      ? this.getScriptTeamInstancesByPrototypeName(script.conditionTeamNameUpper)
+      : [];
 
-    this.scriptConditionTeamNameUpper = hasConditionTeamInstance ? conditionTeam!.nameUpper : null;
-    this.scriptConditionEntityId = null;
+    if (conditionTeamInstances.length > 0) {
+      // Source parity: ScriptEngine::executeScript iterates all instances of the
+      // selected condition-team prototype and evaluates each one.
+      for (const conditionTeam of conditionTeamInstances) {
+        this.scriptConditionTeamNameUpper = conditionTeam.nameUpper;
+        this.scriptConditionEntityId = null;
 
-    if (this.evaluateMapScriptConditions(script)) {
-      this.executeMapScriptActions(script.actions);
-      if (script.oneShot) {
-        script.active = false;
+        if (this.evaluateMapScriptConditions(script)) {
+          this.executeMapScriptActions(script.actions);
+          if (script.oneShot) {
+            script.active = false;
+          }
+        } else if (script.falseActions.length > 0) {
+          this.executeMapScriptActions(script.falseActions);
+        }
       }
-    } else if (script.falseActions.length > 0) {
-      this.executeMapScriptActions(script.falseActions);
-      if (!hasConditionTeamInstance && script.oneShot) {
-        script.active = false;
+    } else {
+      this.scriptConditionTeamNameUpper = null;
+      this.scriptConditionEntityId = null;
+
+      if (this.evaluateMapScriptConditions(script)) {
+        this.executeMapScriptActions(script.actions);
+        if (script.oneShot) {
+          script.active = false;
+        }
+      } else if (script.falseActions.length > 0) {
+        this.executeMapScriptActions(script.falseActions);
+        if (script.oneShot) {
+          script.active = false;
+        }
       }
     }
 
@@ -54174,6 +54359,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCompletedAudio.length = 0;
     this.scriptCompletedMusic.length = 0;
     this.scriptTeamsByName.clear();
+    this.scriptTeamInstanceNamesByPrototypeName.clear();
     this.scriptAttackAreaStateByEntityId.clear();
     this.scriptHuntStateByEntityId.clear();
     this.scriptSequentialScripts.length = 0;
