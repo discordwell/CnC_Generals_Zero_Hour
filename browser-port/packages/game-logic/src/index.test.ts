@@ -9331,6 +9331,70 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(creditsAfter).toBe(creditsBefore);
   });
 
+  it('ignores duplicate repair command on current target and allows switching targets', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '5%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),    // id 1
+        makeMapObject('USABarracks', 20, 20), // id 2
+        makeMapObject('USABarracks', 24, 20), // id 3
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        dozerRepairTaskOrderFrame: number;
+      }>;
+      pendingRepairActions: Map<number, number>;
+    };
+
+    // Keep both buildings damaged to avoid task auto-completion during the test.
+    priv.spawnedEntities.get(2)!.health = 500;
+    priv.spawnedEntities.get(3)!.health = 500;
+
+    logic.update(0);
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+
+    const firstRepairOrderFrame = priv.spawnedEntities.get(1)!.dozerRepairTaskOrderFrame;
+    expect(priv.pendingRepairActions.get(1)).toBe(2);
+
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Duplicate command against the current target should be ignored.
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+    expect(priv.pendingRepairActions.get(1)).toBe(2);
+    expect(priv.spawnedEntities.get(1)!.dozerRepairTaskOrderFrame).toBe(firstRepairOrderFrame);
+
+    // Switching to a different target should still be accepted.
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 3 });
+    logic.update(1 / 30);
+    expect(priv.pendingRepairActions.get(1)).toBe(3);
+    expect(priv.spawnedEntities.get(1)!.dozerRepairTaskOrderFrame).toBeGreaterThan(firstRepairOrderFrame);
+  });
+
   it('idle dozer auto-seeks nearby repairs after bored time', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

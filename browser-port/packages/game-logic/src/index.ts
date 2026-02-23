@@ -27595,6 +27595,7 @@ export class GameLogicSubsystem implements Subsystem {
     const building = this.spawnedEntities.get(command.targetBuildingId);
     if (!dozer || !building || dozer.destroyed || building.destroyed) return;
     if (!this.canDozerRepairTarget(dozer, building)) return;
+    if (!this.canDozerAcceptNewRepairTarget(dozer, building)) return;
 
     if (this.isWorkerEntity(dozer)) {
       // Source parity: WorkerAIUpdate::newTask clears preferred dock when entering dozer tasks.
@@ -27621,6 +27622,36 @@ export class GameLogicSubsystem implements Subsystem {
     }
     this.pendingRepairActions.set(dozer.id, building.id);
     dozer.dozerRepairTaskOrderFrame = this.frameCounter;
+  }
+
+  /**
+   * Source parity: DozerAIUpdate::canAcceptNewRepair / WorkerAIUpdate::canAcceptNewRepair.
+   * Duplicate repair orders on the same current target are ignored.
+   */
+  private canDozerAcceptNewRepairTarget(dozer: MapEntity, target: MapEntity): boolean {
+    if (this.getDozerCurrentTask(dozer) !== 'REPAIR') {
+      return true;
+    }
+
+    const currentRepairTargetId = this.pendingRepairActions.get(dozer.id);
+    if (!currentRepairTargetId) {
+      return true;
+    }
+    if (currentRepairTargetId === target.id) {
+      return false;
+    }
+
+    const currentRepairTarget = this.spawnedEntities.get(currentRepairTargetId);
+    if (!currentRepairTarget || currentRepairTarget.destroyed) {
+      return true;
+    }
+
+    if (currentRepairTarget.kindOf.has('BRIDGE_TOWER') && target.kindOf.has('BRIDGE_TOWER')) {
+      // TODO(source-parity): reject switching between towers on the same bridge once
+      // bridge-tower bridge-ID linkage is ported.
+    }
+
+    return true;
   }
 
   /**
