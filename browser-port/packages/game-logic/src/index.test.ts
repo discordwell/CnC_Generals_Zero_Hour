@@ -29574,6 +29574,32 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script player-select-skillset action using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 301, // PLAYER_SELECT_SKILLSET (raw id)
+      params: ['America', 3],
+    })).toBe(true);
+    expect(logic.getSideScriptSkillset('America')).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 506, // PLAYER_SELECT_SKILLSET (offset id)
+      params: ['America', 1],
+    })).toBe(true);
+    expect(logic.getSideScriptSkillset('America')).toBe(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 301,
+      params: ['', 2],
+    })).toBe(false);
+  });
+
   it('executes script scoring-toggle and score-screen exclusion actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

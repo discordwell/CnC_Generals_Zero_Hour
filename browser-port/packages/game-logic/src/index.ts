@@ -4265,6 +4265,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
+  [301, 'PLAYER_SELECT_SKILLSET'],
   [310, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [311, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [313, 'ENABLE_SCORING'],
@@ -4389,6 +4390,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [502, 'OPTIONS_SET_PARTICLE_CAP_MODE'],
   [504, 'UNIT_AFFECT_OBJECT_PANEL_FLAGS'],
   [505, 'TEAM_AFFECT_OBJECT_PANEL_FLAGS'],
+  [506, 'PLAYER_SELECT_SKILLSET'],
   [515, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [516, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [518, 'ENABLE_SCORING'],
@@ -4557,6 +4559,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideCashBountyPercent = new Map<string, number>();
   /** Source parity: Player::m_skillPointsModifier (multiplies awarded rank points before apply). */
   private readonly sideSkillPointsModifier = new Map<string, number>();
+  /** Source parity: Player::friend_setSkillset per-player script-selected AI skillset. */
+  private readonly sideScriptSkillset = new Map<string, number>();
   private readonly sideUpgradesInProduction = new Map<string, Set<string>>();
   private readonly sideCompletedUpgrades = new Map<string, Set<string>>();
   private readonly sideKindOfProductionCostModifiers = new Map<string, KindOfProductionCostModifier[]>();
@@ -8457,6 +8461,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.setSideSkillPointsModifier(
           readSide(0, ['side', 'playerName', 'player']),
           readNumber(1, ['modifier', 'experienceModifier', 'value']),
+        );
+      case 'PLAYER_SELECT_SKILLSET':
+        return this.setSideScriptSkillset(
+          readSide(0, ['side', 'playerName', 'player']),
+          readInteger(1, ['skillset', 'value']),
         );
       case 'UNIT_AFFECT_OBJECT_PANEL_FLAGS':
         return this.executeScriptAffectObjectPanelFlagsUnit(
@@ -16218,6 +16227,26 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptActions::doAffectPlayerSkillset decrements incoming 1-based skillset.
+   */
+  private setSideScriptSkillset(side: string, skillset: number): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide || !Number.isFinite(skillset)) {
+      return false;
+    }
+    this.sideScriptSkillset.set(normalizedSide, Math.trunc(skillset) - 1);
+    return true;
+  }
+
+  getSideScriptSkillset(side: string): number | null {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return null;
+    }
+    return this.sideScriptSkillset.get(normalizedSide) ?? null;
+  }
+
+  /**
    * Source parity: Player::addSkillPoints — award player-level skill points from kills.
    * Returns true if a rank level-up occurred.
    */
@@ -16620,6 +16649,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCurrentPlayerSide = null;
     this.sideCashBountyPercent.clear();
     this.sideSkillPointsModifier.clear();
+    this.sideScriptSkillset.clear();
     this.scriptScoringEnabled = true;
     this.sideScoreScreenExcluded.clear();
     this.sideBattlePlanBonuses.clear();
@@ -46597,6 +46627,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideAttackedSupplySource.clear();
     this.sideUnitsShouldIdleOrResume.clear();
     this.sideSkillPointsModifier.clear();
+    this.sideScriptSkillset.clear();
     this.sideScriptAcquiredSciences.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptMidwaySpecialPowerEvents.clear();
