@@ -18378,8 +18378,16 @@ export class GameLogicSubsystem implements Subsystem {
     if (targetTeam.recruitableOverride === null && sourceTeam.recruitableOverride !== null) {
       targetTeam.recruitableOverride = sourceTeam.recruitableOverride;
     }
+    sourceTeam.memberEntityIds = new Set<number>();
+    sourceTeam.created = false;
+    this.scriptTeamCreatedReadyFrameByName.delete(sourceTeam.nameUpper);
 
-    return this.clearScriptTeam(sourceTeam.nameUpper);
+    // Source parity bridge: Team::deleteTeam empties members but singleton teams persist.
+    // Non-prototype synthetic instances are removed after transfer.
+    if (sourceTeam.nameUpper !== sourceTeam.prototypeNameUpper) {
+      return this.clearScriptTeam(sourceTeam.nameUpper);
+    }
+    return true;
   }
 
   /**

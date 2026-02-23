@@ -39292,7 +39292,9 @@ describe('Script condition groundwork', () => {
       actionType: 93, // TEAM_MERGE_INTO_TEAM
       params: ['SourceTeam', 'TargetTeam'],
     })).toBe(true);
-    expect(privateApi.scriptTeamsByName.has('SOURCETEAM')).toBe(false);
+    expect(privateApi.scriptTeamsByName.has('SOURCETEAM')).toBe(true);
+    expect(Array.from(privateApi.scriptTeamsByName.get('SOURCETEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
+      .toEqual([]);
     expect(Array.from(privateApi.scriptTeamsByName.get('TARGETTEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
       .toEqual([1, 2, 3]);
     expect(privateApi.spawnedEntities.get(1)?.side).toBe('china');
@@ -40002,7 +40004,9 @@ describe('Script condition groundwork', () => {
       params: ['AlphaTeam'],
     })).toBe(true);
 
-    expect(privateApi.scriptTeamsByName.has('ALPHATEAM')).toBe(false);
+    expect(privateApi.scriptTeamsByName.has('ALPHATEAM')).toBe(true);
+    expect(Array.from(privateApi.scriptTeamsByName.get('ALPHATEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
+      .toEqual([]);
     expect(Array.from(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.memberEntityIds ?? []).sort((a, b) => a - b))
       .toEqual([1, 2]);
     expect(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.recruitableOverride).toBe(true);
