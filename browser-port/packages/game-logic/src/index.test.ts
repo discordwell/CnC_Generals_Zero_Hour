@@ -32227,6 +32227,95 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team-wander/team-panic actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL NormalLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER WanderLoco', {}),
+          makeBlock('LocomotorSet', 'SET_PANIC PanicLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('NormalLoco', 50),
+        makeLocomotorDef('WanderLoco', 70),
+        makeLocomotorDef('PanicLoco', 90),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 20), // id 1
+      makeMapObject('Ranger', 14, 22), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 11, name: 'Path_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'PanicPath', biDirectional: false },
+        { id: 12, name: 'Path_B', position: { x: 45, y: 20, z: 0 }, pathLabel1: 'PanicPath', biDirectional: false },
+        { id: 13, name: 'Path_C', position: { x: 70, y: 20, z: 0 }, pathLabel1: 'PanicPath', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 11, waypoint2: 12 },
+        { waypoint1: 12, waypoint2: 13 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('PathTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        activeLocomotorSet: string;
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 112, // TEAM_WANDER
+      params: ['PathTeam', 'PanicPath'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_WANDER');
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_WANDER');
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(1)?.movePath.length).toBeGreaterThan(0);
+    expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBeGreaterThan(0);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+
+    expect(logic.executeScriptAction({
+      actionType: 113, // TEAM_PANIC
+      params: ['PathTeam', 'PanicPath'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_PANIC');
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_PANIC');
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(1)?.movePath.length).toBeGreaterThan(0);
+    expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBeGreaterThan(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 112,
+      params: ['MissingTeam', 'PanicPath'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 112,
+      params: ['PathTeam', 'MissingPath'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 113,
+      params: ['PathTeam', 'MissingPath'],
+    })).toBe(false);
+  });
+
   it('executes script team-priority actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

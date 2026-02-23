@@ -4391,6 +4391,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [109, 'NAMED_EXIT_BUILDING'],
   [110, 'PLAYER_GARRISON_ALL_BUILDINGS'],
   [111, 'PLAYER_EXIT_ALL_BUILDINGS'],
+  [112, 'TEAM_WANDER'],
+  [113, 'TEAM_PANIC'],
   [114, 'SETUP_CAMERA'],
   [115, 'CAMERA_LETTERBOX_BEGIN'],
   [116, 'CAMERA_LETTERBOX_END'],
@@ -9534,6 +9536,16 @@ export class GameLogicSubsystem implements Subsystem {
       case 'PLAYER_EXIT_ALL_BUILDINGS':
         return this.executeScriptPlayerExitAllBuildings(
           readSide(0, ['side', 'playerName', 'player']),
+        );
+      case 'TEAM_WANDER':
+        return this.executeScriptTeamWander(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
+        );
+      case 'TEAM_PANIC':
+        return this.executeScriptTeamPanic(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
         );
       case 'MOVE_CAMERA_TO':
         return this.requestScriptMoveCameraTo(
@@ -15992,6 +16004,68 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamWander.
+   * Uses per-entity nearest waypoint resolution and SET_WANDER locomotor.
+   */
+  private executeScriptTeamWander(teamName: string, waypointPathLabel: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let movedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+      const route = this.resolveScriptWaypointRouteByPathLabel(
+        waypointPathLabel,
+        entity.x,
+        entity.z,
+      );
+      if (!route || route.length === 0) {
+        return movedAny;
+      }
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
+      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+        movedAny = true;
+      }
+    }
+    return movedAny;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamPanic.
+   * Uses per-entity nearest waypoint resolution and SET_PANIC locomotor.
+   */
+  private executeScriptTeamPanic(teamName: string, waypointPathLabel: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let movedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+      const route = this.resolveScriptWaypointRouteByPathLabel(
+        waypointPathLabel,
+        entity.x,
+        entity.z,
+      );
+      if (!route || route.length === 0) {
+        return movedAny;
+      }
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
+      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+        movedAny = true;
+      }
+    }
+    return movedAny;
   }
 
   /**
