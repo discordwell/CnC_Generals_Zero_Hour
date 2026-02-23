@@ -35134,6 +35134,167 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptCameraLookTowardObjectState()).toBeNull();
   });
 
+  it('executes script skybox and camera-motion-blur actions using source action ids', () => {
+    const map = makeMap([], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'BlurWaypoint',
+          position: { x: 40, y: 52, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.isScriptSkyboxEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 127, // DRAW_SKYBOX_BEGIN (raw id)
+    })).toBe(true);
+    expect(logic.isScriptSkyboxEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 128, // DRAW_SKYBOX_END (raw id)
+    })).toBe(true);
+    expect(logic.isScriptSkyboxEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 332, // DRAW_SKYBOX_BEGIN (offset id)
+    })).toBe(true);
+    expect(logic.isScriptSkyboxEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 333, // DRAW_SKYBOX_END (offset id)
+    })).toBe(true);
+    expect(logic.isScriptSkyboxEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 133, // CAMERA_MOTION_BLUR (raw id)
+      params: [1, 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 338, // CAMERA_MOTION_BLUR (offset id)
+      params: [0, 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 134, // CAMERA_MOTION_BLUR_JUMP (raw id)
+      params: ['BlurWaypoint', 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 339, // CAMERA_MOTION_BLUR_JUMP (offset id)
+      params: ['BlurWaypoint', 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 135, // CAMERA_MOTION_BLUR_FOLLOW (raw id)
+      params: [2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 340, // CAMERA_MOTION_BLUR_FOLLOW (offset id)
+      params: [4],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 136, // CAMERA_MOTION_BLUR_END_FOLLOW (raw id)
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 341, // CAMERA_MOTION_BLUR_END_FOLLOW (offset id)
+    })).toBe(true);
+
+    expect(logic.drainScriptCameraFilterRequests()).toEqual([
+      {
+        requestType: 'MOTION_BLUR',
+        zoomIn: true,
+        saturate: false,
+        waypointName: null,
+        x: null,
+        z: null,
+        followMode: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOTION_BLUR',
+        zoomIn: false,
+        saturate: true,
+        waypointName: null,
+        x: null,
+        z: null,
+        followMode: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOTION_BLUR_JUMP',
+        zoomIn: null,
+        saturate: true,
+        waypointName: 'BlurWaypoint',
+        x: 40,
+        z: 52,
+        followMode: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOTION_BLUR_JUMP',
+        zoomIn: null,
+        saturate: false,
+        waypointName: 'BlurWaypoint',
+        x: 40,
+        z: 52,
+        followMode: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOTION_BLUR_FOLLOW',
+        zoomIn: null,
+        saturate: null,
+        waypointName: null,
+        x: null,
+        z: null,
+        followMode: 2,
+        frame: 0,
+      },
+      {
+        requestType: 'MOTION_BLUR_FOLLOW',
+        zoomIn: null,
+        saturate: null,
+        waypointName: null,
+        x: null,
+        z: null,
+        followMode: 4,
+        frame: 0,
+      },
+      {
+        requestType: 'MOTION_BLUR_END_FOLLOW',
+        zoomIn: null,
+        saturate: null,
+        waypointName: null,
+        x: null,
+        z: null,
+        followMode: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOTION_BLUR_END_FOLLOW',
+        zoomIn: null,
+        saturate: null,
+        waypointName: null,
+        x: null,
+        z: null,
+        followMode: null,
+        frame: 0,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 134,
+      params: ['MissingWaypoint', 1],
+    })).toBe(false);
+    expect(logic.drainScriptCameraFilterRequests()).toEqual([]);
+  });
+
   it('executes script movie and letterbox actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

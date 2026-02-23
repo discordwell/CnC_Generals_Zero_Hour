@@ -3888,6 +3888,17 @@ interface ScriptCameraActionRequestState {
   frame: number;
 }
 
+interface ScriptCameraFilterRequestState {
+  requestType: 'MOTION_BLUR' | 'MOTION_BLUR_JUMP' | 'MOTION_BLUR_FOLLOW' | 'MOTION_BLUR_END_FOLLOW';
+  zoomIn: boolean | null;
+  saturate: boolean | null;
+  waypointName: string | null;
+  x: number | null;
+  z: number | null;
+  followMode: number | null;
+  frame: number;
+}
+
 interface ScriptScreenShakeState {
   intensity: number;
   frame: number;
@@ -4340,7 +4351,13 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
   [119, 'CAMERA_FOLLOW_NAMED'],
+  [127, 'DRAW_SKYBOX_BEGIN'],
+  [128, 'DRAW_SKYBOX_END'],
   [132, 'CAMERA_STOP_FOLLOW'],
+  [133, 'CAMERA_MOTION_BLUR'],
+  [134, 'CAMERA_MOTION_BLUR_JUMP'],
+  [135, 'CAMERA_MOTION_BLUR_FOLLOW'],
+  [136, 'CAMERA_MOTION_BLUR_END_FOLLOW'],
   [139, 'SHOW_MILITARY_CAPTION'],
   [140, 'CAMERA_SET_AUDIBLE_DISTANCE'],
   [143, 'SET_FPS_LIMIT'],
@@ -4528,7 +4545,13 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [322, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
+  [332, 'DRAW_SKYBOX_BEGIN'],
+  [333, 'DRAW_SKYBOX_END'],
   [337, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
+  [338, 'CAMERA_MOTION_BLUR'],
+  [339, 'CAMERA_MOTION_BLUR_JUMP'],
+  [340, 'CAMERA_MOTION_BLUR_FOLLOW'],
+  [341, 'CAMERA_MOTION_BLUR_END_FOLLOW'],
   [344, 'SHOW_MILITARY_CAPTION'],
   [345, 'CAMERA_SET_AUDIBLE_DISTANCE'],
   [351, 'MAP_SHROUD_ALL'],
@@ -5003,6 +5026,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraLookTowardWaypointState: ScriptCameraLookTowardWaypointState | null = null;
   /** Source parity bridge: TacticalView camera action requests consumed by renderer integration. */
   private readonly scriptCameraActionRequests: ScriptCameraActionRequestState[] = [];
+  /** Source parity bridge: ScriptActions::doSkyBox renderer toggle. */
+  private scriptSkyboxEnabled = false;
+  /** Source parity bridge: camera motion-blur requests consumed by renderer integration. */
+  private readonly scriptCameraFilterRequests: ScriptCameraFilterRequestState[] = [];
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::m_allObjectTypeLists (script object-type groups). */
@@ -7899,6 +7926,83 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
+  setScriptSkyboxEnabled(enabled: boolean): void {
+    this.scriptSkyboxEnabled = enabled;
+  }
+
+  isScriptSkyboxEnabled(): boolean {
+    return this.scriptSkyboxEnabled;
+  }
+
+  private queueScriptCameraFilterRequest(request: Omit<ScriptCameraFilterRequestState, 'frame'>): void {
+    this.scriptCameraFilterRequests.push({
+      ...request,
+      frame: this.frameCounter,
+    });
+  }
+
+  private requestScriptCameraMotionBlur(zoomIn: boolean, saturate: boolean): void {
+    this.queueScriptCameraFilterRequest({
+      requestType: 'MOTION_BLUR',
+      zoomIn,
+      saturate,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: null,
+    });
+  }
+
+  private requestScriptCameraMotionBlurJump(waypointName: string, saturate: boolean): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    this.queueScriptCameraFilterRequest({
+      requestType: 'MOTION_BLUR_JUMP',
+      zoomIn: null,
+      saturate,
+      waypointName: waypointName.trim(),
+      x: waypoint.x,
+      z: waypoint.z,
+      followMode: null,
+    });
+    return true;
+  }
+
+  private requestScriptCameraMotionBlurFollow(followMode: number): void {
+    this.queueScriptCameraFilterRequest({
+      requestType: 'MOTION_BLUR_FOLLOW',
+      zoomIn: null,
+      saturate: null,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: Math.trunc(followMode),
+    });
+  }
+
+  private requestScriptCameraMotionBlurEndFollow(): void {
+    this.queueScriptCameraFilterRequest({
+      requestType: 'MOTION_BLUR_END_FOLLOW',
+      zoomIn: null,
+      saturate: null,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: null,
+    });
+  }
+
+  drainScriptCameraFilterRequests(): ScriptCameraFilterRequestState[] {
+    if (this.scriptCameraFilterRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptCameraFilterRequests.map((request) => ({ ...request }));
+    this.scriptCameraFilterRequests.length = 0;
+    return requests;
+  }
+
   /**
    * Source parity subset: ScriptActions::doVictory/doDefeat and timer start.
    * This port applies the local outcome immediately (without UI/end-game timer windows).
@@ -8873,6 +8977,31 @@ export class GameLogicSubsystem implements Subsystem {
         this.setScriptFramesPerSecondLimit(
           readInteger(0, ['fpsLimit', 'framesPerSecondLimit', 'value']),
         );
+        return true;
+      case 'DRAW_SKYBOX_BEGIN':
+        this.setScriptSkyboxEnabled(true);
+        return true;
+      case 'DRAW_SKYBOX_END':
+        this.setScriptSkyboxEnabled(false);
+        return true;
+      case 'CAMERA_MOTION_BLUR':
+        this.requestScriptCameraMotionBlur(
+          readBoolean(0, ['zoomIn', 'zoom', 'value']),
+          readBoolean(1, ['saturate', 'value']),
+        );
+        return true;
+      case 'CAMERA_MOTION_BLUR_JUMP':
+        return this.requestScriptCameraMotionBlurJump(
+          readString(0, ['waypointName', 'waypoint']),
+          readBoolean(1, ['saturate', 'value']),
+        );
+      case 'CAMERA_MOTION_BLUR_FOLLOW':
+        this.requestScriptCameraMotionBlurFollow(
+          readInteger(0, ['mode', 'filterMode', 'value']),
+        );
+        return true;
+      case 'CAMERA_MOTION_BLUR_END_FOLLOW':
+        this.requestScriptCameraMotionBlurEndFollow();
         return true;
       case 'CAMERA_LETTERBOX_BEGIN':
         this.setScriptLetterboxEnabled(true);
@@ -18801,6 +18930,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
     this.scriptCameraActionRequests.length = 0;
+    this.scriptSkyboxEnabled = false;
+    this.scriptCameraFilterRequests.length = 0;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -49250,6 +49381,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
     this.scriptCameraActionRequests.length = 0;
+    this.scriptSkyboxEnabled = false;
+    this.scriptCameraFilterRequests.length = 0;
     this.thingTemplateBuildableOverrides.clear();
     this.commandSetButtonSlotOverrides.clear();
     this.scriptObjectCountBySideAndType.clear();
