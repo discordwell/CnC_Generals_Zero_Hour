@@ -10,36 +10,31 @@ Generals/ZH C++ source, without heuristic substitutions.
 ## Current Baseline
 
 - Branch target: `main`
-- Test baseline: `1660` passing (`npx vitest run`)
-- Recent completed slices:
-  - Trigger-transition cache invalidation parity for area/value/unit-type/unit-kind script conditions
-  - Team area `surfacesAllowed` locomotor-mask parity
-  - Skirmish command-button-ready team-member parity
-  - Shared tunnel/cave tracker capacity parity for named free-container-slot condition
+- Test baseline: `1666` passing (`npx vitest run`)
+- Recently completed slices:
+  - Script team instance-resolution parity (`getTeamNamed` context precedence + condition-team iteration + `TEAM_HAS_UNITS` prototype fan-out)
+  - Team command-button target filtering parity (source command-button source + controlling-side affiliation checks)
+  - Script-facing TeamFactory lifecycle subset (`doBuildTeam`/`doRecruitTeam` non-singleton materialization + max-instance handling + delay behavior)
+  - `TEAM_STOP_AND_DISBAND` parity bridge (recruitable override + merge into controlling-player default team)
+  - `teamThePlayer` alias fallback to map `SidesList` default-team mapping (`team<playerName>`)
 
 ## Remaining High-Impact Slices
 
-1. Script team instance-resolution parity
-- Port `ScriptEngine::getTeamNamed` semantics in TypeScript:
-  - `<This Team>` resolves calling-team first, then condition-team
-  - explicit team-name lookups prefer current calling/condition team when names match
-  - team-prototype resolution behavior for singleton/non-singleton access
-- Port `ScriptEngine::executeScript` condition-team iteration semantics for non-singleton team refs.
-- Port `ScriptConditions::evaluateHasUnits` multi-instance behavior (prototype fan-out).
+1. Skirmish nearest-group-with-value parity
+- Port `ScriptActions::doSkirmishAttackNearestGroupWithValue` from object-value approximation
+  to source `PartitionManager::getNearestGroupWithValue` semantics.
+- Keep comparison handling and destination selection aligned to source behavior.
 
-2. Team command-button target filtering parity
-- Port remaining `ScriptActions.cpp` target scan behavior for:
-  - nearest enemy / nearest building / nearest garrisoned building
-  - nearest kind-of / nearest object type
-  - skirmish command-button-on-most-valuable
-- Mirror `PartitionFilterValidCommandButtonTarget` gate behavior and same-map filtering.
+2. Skirmish command-button-on-most-valuable partition parity
+- Replace current candidate scan/sort approximation with source iterator behavior:
+  `iterateObjectsInRange(..., ITER_SORTED_EXPENSIVE_TO_CHEAP)` +
+  `PartitionFilterValidCommandButtonTarget` semantics.
+- Preserve existing source-command-button-source and same-map filters.
 
-3. TeamFactory/recruit lifecycle parity (script-facing subset)
-- Port script-facing lifecycle expectations around:
-  - `doBuildTeam`
-  - `doRecruitTeam`
-  - `evaluateTeamCreated`
-- Keep implementation bound to source behavior; avoid synthetic AI heuristics.
+3. Team created lifecycle parity tightening
+- Align `evaluateTeamCreated`/`created` transitions closer to `Team::setActive` + `Team::updateState`
+  one-frame semantics where feasible in the current script-facing architecture.
+- Keep delay behavior wired through script base-construction-speed controls.
 
 ## Execution Rules
 
@@ -53,4 +48,4 @@ Generals/ZH C++ source, without heuristic substitutions.
   - `GeneralsMD/Code/GameEngine/Source/GameLogic/ScriptEngine/ScriptEngine.cpp`
   - `GeneralsMD/Code/GameEngine/Source/GameLogic/ScriptEngine/ScriptConditions.cpp`
   - `GeneralsMD/Code/GameEngine/Source/GameLogic/ScriptEngine/ScriptActions.cpp`
-
+  - `GeneralsMD/Code/GameEngine/Source/GameLogic/AI/AIPlayer.cpp`

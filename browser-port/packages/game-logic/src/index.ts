@@ -19862,6 +19862,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (removed) {
       this.removeAllSequentialScriptsForTeam(teamNameUpper);
       this.scriptTeamCreatedReadyFrameByName.delete(teamNameUpper);
+      for (const [side, defaultTeamNameUpper] of this.scriptDefaultTeamNameBySide) {
+        if (defaultTeamNameUpper === teamNameUpper) {
+          this.scriptDefaultTeamNameBySide.delete(side);
+        }
+      }
       if (this.scriptCallingTeamNameUpper === teamNameUpper) {
         this.scriptCallingTeamNameUpper = null;
       }
@@ -20119,13 +20124,16 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity: explicit <This Team> resolves through getTeamNamed context.
-    if (desiredTeamToken === SCRIPT_THIS_TEAM) {
-      const thisTeam = this.getScriptTeamRecord(desiredTeamToken);
-      return thisTeam ? this.doesScriptTeamHaveAnyUnits(thisTeam) : false;
+    const desiredTeamNameUpper = this.resolveScriptTeamName(desiredTeamToken);
+    if (!desiredTeamNameUpper) {
+      return false;
     }
 
-    const desiredTeamNameUpper = this.normalizeScriptTeamName(desiredTeamToken);
+    // Source parity: explicit <This Team> / teamThePlayer resolve through getTeamNamed context.
+    if (desiredTeamToken === SCRIPT_THIS_TEAM || desiredTeamToken === SCRIPT_TEAM_THE_PLAYER) {
+      const resolvedTeam = this.getScriptTeamRecord(desiredTeamToken);
+      return resolvedTeam ? this.doesScriptTeamHaveAnyUnits(resolvedTeam) : false;
+    }
 
     // Source parity: if the current THIS_TEAM has the same Team::getName(),
     // evaluate that specific instance first.
@@ -32060,7 +32068,14 @@ export class GameLogicSubsystem implements Subsystem {
       return this.resolveScriptContextTeamName();
     }
     if (trimmed === SCRIPT_TEAM_THE_PLAYER) {
-      return this.scriptLocalPlayerTeamNameUpper;
+      if (this.scriptLocalPlayerTeamNameUpper) {
+        return this.scriptLocalPlayerTeamNameUpper;
+      }
+      const localSide = this.resolveLocalPlayerSide();
+      if (!localSide) {
+        return null;
+      }
+      return this.scriptDefaultTeamNameBySide.get(localSide) ?? null;
     }
     return this.normalizeScriptTeamName(trimmed);
   }

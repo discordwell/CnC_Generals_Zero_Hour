@@ -41427,6 +41427,53 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptIsDestroyed({ teamName: 'AlphaTeam' })).toBe(true);
   });
 
+  it('resolves teamThePlayer to the local side default team from map SidesList data', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('LocalUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([makeMapObject('LocalUnit', 10, 10, {
+      originalOwner: 'teamPlayer_1',
+    })], 128, 128);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'teamPlayer_1',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    expect(logic.setScriptTeamMembers('teamPlayer_1', [1])).toBe(true);
+
+    expect(logic.evaluateScriptHasUnits({ teamName: 'teamThePlayer' })).toBe(true);
+    expect(logic.clearScriptTeam('teamPlayer_1')).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'teamThePlayer' })).toBe(false);
+  });
+
   it('resolves THIS_TEAM and THIS_OBJECT via script context setters', () => {
     const bundle = makeBundle({
       objects: [
