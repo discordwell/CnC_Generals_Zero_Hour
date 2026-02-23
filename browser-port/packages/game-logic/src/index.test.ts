@@ -36839,6 +36839,21 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
     expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).not.toBeNull();
 
+    teamHunter1!.attackTargetEntityId = null;
+    teamHunter2!.attackTargetEntityId = null;
+    namedHunter!.attackTargetEntityId = null;
+    teamHunter1!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    teamHunter2!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    namedHunter!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    expect(logic.executeScriptAction({
+      actionType: 96, // PLAYER_HUNT
+      params: ['America'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(9)?.attackTargetEntityId).not.toBeNull();
+
     expect(logic.executeScriptAction({
       actionType: 47,
       params: [1, 'MissingArea'],
@@ -36866,6 +36881,10 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 60,
       params: ['MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 96,
+      params: ['MissingSide'],
     })).toBe(false);
   });
 

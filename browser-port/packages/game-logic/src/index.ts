@@ -4422,6 +4422,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [93, 'TEAM_MERGE_INTO_TEAM'],
   [94, 'DISABLE_INPUT'],
   [95, 'ENABLE_INPUT'],
+  [96, 'PLAYER_HUNT'],
   [97, 'SOUND_AMBIENT_PAUSE'],
   [98, 'SOUND_AMBIENT_RESUME'],
   [99, 'MUSIC_SET_TRACK'],
@@ -5306,6 +5307,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSkirmishStartIndex = new Map<string, number>();
   /** Source parity subset: ScriptEngine::m_currentPlayer side bridge for script actions. */
   private scriptCurrentPlayerSide: string | null = null;
+  /** Source parity subset: Player::m_unitsShouldHunt from PLAYER_HUNT script action. */
+  private readonly scriptSidesUnitsShouldHunt = new Set<string>();
   /** Source parity: ScriptEngine calling/condition team context for THIS_TEAM resolution. */
   private scriptCallingTeamNameUpper: string | null = null;
   private scriptConditionTeamNameUpper: string | null = null;
@@ -9407,6 +9410,10 @@ export class GameLogicSubsystem implements Subsystem {
       case 'TEAM_HUNT':
         return this.executeScriptTeamHunt(
           readString(0, ['teamName', 'team']),
+        );
+      case 'PLAYER_HUNT':
+        return this.executeScriptPlayerHunt(
+          readSide(0, ['side', 'playerName', 'player']),
         );
       case 'CREATE_OBJECT':
         return this.executeScriptCreateObjectAtPosition(
@@ -17259,6 +17266,43 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doPlayerHunt -> Player::setUnitsShouldHunt(true).
+   * TODO(source-parity): integrate persistent m_unitsShouldHunt behavior with full AI hunt states.
+   */
+  private executeScriptPlayerHunt(side: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.collectScriptKnownSides().has(normalizedSide)) {
+      return false;
+    }
+
+    this.scriptSidesUnitsShouldHunt.add(normalizedSide);
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (this.isScriptEntityEffectivelyDead(entity) && !this.isBeaconEntity(entity)) {
+        continue;
+      }
+
+      const disqualifyingKindOf = this.resolveEntityKindOfSet(entity);
+      if (
+        disqualifyingKindOf.has('DOZER')
+        || disqualifyingKindOf.has('HARVESTER')
+        || disqualifyingKindOf.has('IGNORES_SELECT_ALL')
+      ) {
+        continue;
+      }
+
+      this.executeScriptNamedHunt(entity.id);
+    }
+    return true;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doCreateObject.
    * TODO(source-parity): BLAST_CRATER script creates should deform terrain and refresh pathfinding.
    */
@@ -21373,6 +21417,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideUnitsShouldIdleOrResume.clear();
     this.scriptSideRepairQueue.clear();
     this.scriptCurrentPlayerSide = null;
+    this.scriptSidesUnitsShouldHunt.clear();
     this.sideCashBountyPercent.clear();
     this.sideSkillPointsModifier.clear();
     this.sideScriptSkillset.clear();
@@ -51893,6 +51938,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.skirmishAIStates.clear();
     this.sideSkirmishStartIndex.clear();
     this.scriptCurrentPlayerSide = null;
+    this.scriptSidesUnitsShouldHunt.clear();
     this.scriptCallingTeamNameUpper = null;
     this.scriptConditionTeamNameUpper = null;
     this.scriptCallingEntityId = null;
