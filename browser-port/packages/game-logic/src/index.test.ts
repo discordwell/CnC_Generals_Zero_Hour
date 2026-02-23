@@ -29661,6 +29661,66 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team-guard-supply-center action using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('SupplyWarehouseRich', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 8, // 800 cash
+            DeleteWhenEmpty: false,
+          }),
+        ]),
+        makeObjectDef('SupplyWarehousePoor', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 2, // 200 cash
+            DeleteWhenEmpty: false,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('SupplyWarehouseRich', 35, 10), // id 2
+        makeMapObject('SupplyWarehousePoor', 75, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('SupplyGuardTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { guardObjectId: number }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 312, // TEAM_GUARD_SUPPLY_CENTER (raw id)
+      params: ['SupplyGuardTeam', 600],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 517, // TEAM_GUARD_SUPPLY_CENTER (offset id)
+      params: ['SupplyGuardTeam', 100],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 312,
+      params: ['SupplyGuardTeam', 5000],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
+    expect(logic.executeScriptAction({
+      actionType: 312,
+      params: ['MissingTeam', 100],
+    })).toBe(false);
+  });
+
   it('executes script volume and border-shroud actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

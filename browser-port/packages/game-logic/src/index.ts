@@ -4268,6 +4268,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [301, 'PLAYER_SELECT_SKILLSET'],
   [310, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [311, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
+  [312, 'TEAM_GUARD_SUPPLY_CENTER'],
   [313, 'ENABLE_SCORING'],
   [314, 'DISABLE_SCORING'],
   [315, 'SOUND_SET_VOLUME'],
@@ -4393,6 +4394,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [506, 'PLAYER_SELECT_SKILLSET'],
   [515, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [516, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
+  [517, 'TEAM_GUARD_SUPPLY_CENTER'],
   [518, 'ENABLE_SCORING'],
   [519, 'DISABLE_SCORING'],
   [520, 'SOUND_SET_VOLUME'],
@@ -7810,6 +7812,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.setSideExcludedFromScoreScreen(
           readSide(0, ['side', 'playerName', 'player']),
           true,
+        );
+      case 'TEAM_GUARD_SUPPLY_CENTER':
+        return this.executeScriptTeamGuardSupplyCenter(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['supplies', 'minimumCash', 'value']),
         );
       case 'DISABLE_INPUT':
         this.setScriptInputDisabled(true);
@@ -12243,6 +12250,26 @@ export class GameLogicSubsystem implements Subsystem {
       });
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doGuardSupplyCenter.
+   * Resolves the controlling side's best supply source by minimum cash and guards it.
+   */
+  private executeScriptTeamGuardSupplyCenter(teamName: string, minimumCash: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (!controllingSide) {
+      return false;
+    }
+    const supplySource = this.findScriptSupplySourceForSide(controllingSide, minimumCash);
+    if (!supplySource) {
+      return false;
+    }
+    return this.executeScriptTeamGuardObject(team.nameUpper, supplySource.id);
   }
 
   /**
