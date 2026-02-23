@@ -408,27 +408,27 @@ function writeGameLogicCommandCrc(
       addSignedIntCrc(context, crc, command.entityId);
       addFloat32Crc(context, crc, command.targetX);
       addFloat32Crc(context, crc, command.targetZ);
-      crc.addAsciiString(command.commandSource ?? 'AI');
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
       return;
     case 'attackMoveTo':
       addSignedIntCrc(context, crc, command.entityId);
       addFloat32Crc(context, crc, command.targetX);
       addFloat32Crc(context, crc, command.targetZ);
       addFloat32Crc(context, crc, command.attackDistance);
-      crc.addAsciiString(command.commandSource ?? 'AI');
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
       return;
     case 'guardPosition':
       addSignedIntCrc(context, crc, command.entityId);
       addFloat32Crc(context, crc, command.targetX);
       addFloat32Crc(context, crc, command.targetZ);
       addSignedIntCrc(context, crc, command.guardMode);
-      crc.addAsciiString(command.commandSource ?? 'AI');
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
       return;
     case 'guardObject':
       addSignedIntCrc(context, crc, command.entityId);
       addSignedIntCrc(context, crc, command.targetEntityId);
       addSignedIntCrc(context, crc, command.guardMode);
-      crc.addAsciiString(command.commandSource ?? 'AI');
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
       return;
     case 'setRallyPoint':
       addSignedIntCrc(context, crc, command.entityId);

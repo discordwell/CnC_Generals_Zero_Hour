@@ -6732,6 +6732,69 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([2]);
   });
 
+  it('keeps dozer construction task on AI move commands and cancels it on player move commands', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], []),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          BuildTime: 10,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Dozer', 8, 8)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [40, 0, 40],
+      angle: 0,
+      lineEndPosition: null,
+    });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, { builderId: number; destroyed: boolean }>;
+    };
+
+    const buildingId = privateApi.pendingConstructionActions.get(1);
+    expect(buildingId).toBeDefined();
+    expect(privateApi.spawnedEntities.get(buildingId!)?.builderId).toBe(1);
+
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 1,
+      targetX: 50,
+      targetZ: 50,
+      commandSource: 'AI',
+    });
+    logic.update(0);
+
+    expect(privateApi.pendingConstructionActions.get(1)).toBe(buildingId);
+    expect(privateApi.spawnedEntities.get(buildingId!)?.builderId).toBe(1);
+
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 1,
+      targetX: 60,
+      targetZ: 60,
+      commandSource: 'PLAYER',
+    });
+    logic.update(0);
+
+    expect(privateApi.pendingConstructionActions.has(1)).toBe(false);
+    expect(privateApi.spawnedEntities.get(buildingId!)?.builderId).toBe(0);
+  });
+
   it('rejects constructBuilding when dozer command-set buttons do not expose the template', () => {
     const bundle = makeBundle({
       objects: [

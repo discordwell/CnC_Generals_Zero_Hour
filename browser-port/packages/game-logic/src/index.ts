@@ -25217,10 +25217,11 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       }
       case 'moveTo': {
-        const commandSource = command.commandSource ?? 'AI';
+        const commandSource = command.commandSource ?? 'PLAYER';
         if (commandSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
+        const dozerTaskCancelMode = commandSource === 'PLAYER' ? 'current' : 'none';
         const moveEntity = this.spawnedEntities.get(command.entityId);
         const moveJs = moveEntity?.jetAIState;
         if (moveJs) {
@@ -25236,16 +25237,17 @@ export class GameLogicSubsystem implements Subsystem {
             return;
           }
         }
-        this.cancelEntityCommandPathActions(command.entityId);
+        this.cancelEntityCommandPathActions(command.entityId, dozerTaskCancelMode);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(command.entityId, command.targetX, command.targetZ);
         return;
       }
       case 'attackMoveTo': {
-        const commandSource = command.commandSource ?? 'AI';
+        const commandSource = command.commandSource ?? 'PLAYER';
         if (commandSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
+        const dozerTaskCancelMode = commandSource === 'PLAYER' ? 'current' : 'none';
         const amEntity = this.spawnedEntities.get(command.entityId);
         const amJs = amEntity?.jetAIState;
         if (amJs) {
@@ -25259,7 +25261,7 @@ export class GameLogicSubsystem implements Subsystem {
             return;
           }
         }
-        this.cancelEntityCommandPathActions(command.entityId);
+        this.cancelEntityCommandPathActions(command.entityId, dozerTaskCancelMode);
         this.clearAttackTarget(command.entityId);
         this.issueMoveTo(
           command.entityId,
@@ -25273,22 +25275,32 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return;
       }
-      case 'guardPosition':
-        if ((command.commandSource ?? 'AI') === 'PLAYER') {
+      case 'guardPosition': {
+        const guardSource = command.commandSource ?? 'PLAYER';
+        if (guardSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
-        this.cancelEntityCommandPathActions(command.entityId);
+        this.cancelEntityCommandPathActions(
+          command.entityId,
+          guardSource === 'PLAYER' ? 'current' : 'none',
+        );
         this.clearAttackTarget(command.entityId);
         this.initGuardPosition(command.entityId, command.targetX, command.targetZ, command.guardMode);
         return;
-      case 'guardObject':
-        if ((command.commandSource ?? 'AI') === 'PLAYER') {
+      }
+      case 'guardObject': {
+        const guardSource = command.commandSource ?? 'PLAYER';
+        if (guardSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
-        this.cancelEntityCommandPathActions(command.entityId);
+        this.cancelEntityCommandPathActions(
+          command.entityId,
+          guardSource === 'PLAYER' ? 'current' : 'none',
+        );
         this.clearAttackTarget(command.entityId);
         this.initGuardObject(command.entityId, command.targetEntityId, command.guardMode);
         return;
+      }
       case 'setRallyPoint':
         this.setEntityRallyPoint(command.entityId, command.targetX, command.targetZ);
         return;
@@ -25312,7 +25324,10 @@ export class GameLogicSubsystem implements Subsystem {
             return;
           }
         }
-        this.cancelEntityCommandPathActions(command.entityId);
+        this.cancelEntityCommandPathActions(
+          command.entityId,
+          commandSource === 'PLAYER' ? 'current' : 'none',
+        );
         this.issueAttackEntity(
           command.entityId,
           command.targetEntityId,
@@ -25353,7 +25368,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'stop': {
         const stopSource = command.commandSource ?? 'AI';
-        this.cancelEntityCommandPathActions(command.entityId);
+        this.cancelEntityCommandPathActions(
+          command.entityId,
+          stopSource === 'PLAYER' ? 'current' : 'none',
+        );
         this.clearAttackTarget(command.entityId);
         this.stopEntity(command.entityId);
         // Source parity: AssaultTransportAIUpdate::aiDoCommand(AICMD_IDLE) — recall all members.
@@ -26126,7 +26144,10 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private cancelEntityCommandPathActions(entityId: number): void {
+  private cancelEntityCommandPathActions(
+    entityId: number,
+    cancelDozerTaskMode: 'all' | 'current' | 'none' = 'all',
+  ): void {
     this.cancelRailedTransportTransit(entityId);
     this.hackInternetStateByEntityId.delete(entityId);
     this.hackInternetPendingCommandByEntityId.delete(entityId);
@@ -26136,16 +26157,42 @@ export class GameLogicSubsystem implements Subsystem {
     this.clearChinookCombatDropIgnoredObstacle(entityId);
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
-    this.pendingRepairActions.delete(entityId);
-    const dozer = this.spawnedEntities.get(entityId);
-    if (dozer) {
-      dozer.dozerRepairTaskOrderFrame = 0;
+    if (cancelDozerTaskMode === 'all') {
+      this.pendingRepairActions.delete(entityId);
+      const dozer = this.spawnedEntities.get(entityId);
+      if (dozer) {
+        dozer.dozerRepairTaskOrderFrame = 0;
+      }
+    } else if (cancelDozerTaskMode === 'current') {
+      this.cancelCurrentDozerTask(entityId);
     }
     this.clearScriptWanderInPlace(entityId);
-    // Source parity: DozerAIUpdate::cancelTask — clear active construction assignment.
-    this.cancelDozerConstructionTask(entityId);
+    if (cancelDozerTaskMode === 'all') {
+      // Source parity: DozerAIUpdate::cancelTask — clear active construction assignment.
+      this.cancelDozerConstructionTask(entityId);
+    }
     // Source parity: SpecialAbilityUpdate — cancel any active special ability.
     this.cancelActiveSpecialAbility(entityId);
+  }
+
+  /**
+   * Source parity: WorkerAIUpdate::aiDoCommand default branch cancels only getCurrentTask
+   * for player-issued commands, not every queued dozer task.
+   */
+  private cancelCurrentDozerTask(dozerId: number): void {
+    const dozer = this.spawnedEntities.get(dozerId);
+    if (!dozer) {
+      return;
+    }
+    const currentTask = this.getDozerCurrentTask(dozer);
+    if (currentTask === 'REPAIR') {
+      this.pendingRepairActions.delete(dozerId);
+      this.clearDozerTaskOrder(dozer, 'REPAIR');
+      return;
+    }
+    if (currentTask === 'BUILD') {
+      this.cancelDozerConstructionTask(dozerId);
+    }
   }
 
   /**
