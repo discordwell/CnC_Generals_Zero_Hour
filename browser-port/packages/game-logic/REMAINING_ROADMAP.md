@@ -15,6 +15,7 @@ Generals/ZH C++ source, without heuristic substitutions.
   - Script team instance-resolution parity (`getTeamNamed` context precedence + condition-team iteration + `TEAM_HAS_UNITS` prototype fan-out)
   - Team command-button target filtering parity (source command-button source + controlling-side affiliation checks)
   - Script-facing TeamFactory lifecycle subset (`doBuildTeam`/`doRecruitTeam` non-singleton materialization + max-instance handling + delay behavior)
+  - Scripted `TEAM_CREATED` lifecycle tightening (build/recruit readiness now emits one-frame created pulse)
   - `TEAM_STOP_AND_DISBAND` parity bridge (recruitable override + merge into controlling-player default team)
   - `teamThePlayer` alias fallback to map `SidesList` default-team mapping (`team<playerName>`)
 
@@ -30,11 +31,6 @@ Generals/ZH C++ source, without heuristic substitutions.
   `iterateObjectsInRange(..., ITER_SORTED_EXPENSIVE_TO_CHEAP)` +
   `PartitionFilterValidCommandButtonTarget` semantics.
 - Preserve existing source-command-button-source and same-map filters.
-
-3. Team created lifecycle parity tightening
-- Align `evaluateTeamCreated`/`created` transitions closer to `Team::setActive` + `Team::updateState`
-  one-frame semantics where feasible in the current script-facing architecture.
-- Keep delay behavior wired through script base-construction-speed controls.
 
 ## Execution Rules
 
