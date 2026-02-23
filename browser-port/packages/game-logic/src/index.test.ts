@@ -29721,6 +29721,60 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team-guard-in-tunnel-network action using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GLATunnelNetwork', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'TunnelContain ModuleTag_Tunnel', {}),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene(), { maxTunnelCapacity: 10 });
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GLATunnelNetwork', 50, 50), // id 1
+        makeMapObject('Ranger', 50, 50), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('TunnelGuardTeam', [2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 322, // TEAM_GUARD_IN_TUNNEL_NETWORK (raw id)
+      params: ['TunnelGuardTeam'],
+    })).toBe(true);
+    expect(logic.getEntityState(2)?.statusFlags).toContain('DISABLED_HELD');
+
+    logic.submitCommand({ type: 'exitContainer', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 527, // TEAM_GUARD_IN_TUNNEL_NETWORK (offset id)
+      params: ['TunnelGuardTeam'],
+    })).toBe(true);
+    expect(logic.getEntityState(2)?.statusFlags).toContain('DISABLED_HELD');
+
+    logic.submitCommand({ type: 'exitContainer', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.executeScriptAction({
+      actionType: 323, // ID-collision path: 323 + 1 param => TEAM_GUARD_IN_TUNNEL_NETWORK
+      params: ['TunnelGuardTeam'],
+    })).toBe(true);
+    expect(logic.getEntityState(2)?.statusFlags).toContain('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 322,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script volume and border-shroud actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

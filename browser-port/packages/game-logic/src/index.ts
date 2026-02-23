@@ -4289,6 +4289,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [319, 'OBJECT_ALLOW_BONUSES'],
   [320, 'SOUND_REMOVE_ALL_DISABLED'],
   [321, 'SOUND_REMOVE_TYPE'],
+  [322, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
+  [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
   [376, 'CAMERA_TETHER_NAMED'],
   [377, 'CAMERA_STOP_TETHER_NAMED'],
@@ -4420,6 +4422,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [524, 'OBJECT_ALLOW_BONUSES'],
   [525, 'SOUND_REMOVE_ALL_DISABLED'],
   [526, 'SOUND_REMOVE_TYPE'],
+  [527, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
+  [528, 'QUICKVICTORY'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -7809,6 +7813,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 300 && paramCount === 3) {
         // 300 also maps to ENABLE_INPUT in another script set; 3-param signature is team panel flags.
         actionType = 'TEAM_AFFECT_OBJECT_PANEL_FLAGS';
+      } else if (numericType === 323 && paramCount === 1) {
+        // Source-script variants may serialize TEAM_GUARD_IN_TUNNEL_NETWORK as 323.
+        actionType = 'TEAM_GUARD_IN_TUNNEL_NETWORK';
       }
     }
     if (!actionType) {
@@ -7886,6 +7893,10 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamGuardSupplyCenter(
           readString(0, ['teamName', 'team']),
           readInteger(1, ['supplies', 'minimumCash', 'value']),
+        );
+      case 'TEAM_GUARD_IN_TUNNEL_NETWORK':
+        return this.executeScriptTeamGuardInTunnelNetwork(
+          readString(0, ['teamName', 'team']),
         );
       case 'DISABLE_INPUT':
         this.setScriptInputDisabled(true);
@@ -12357,6 +12368,68 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.executeScriptTeamGuardObject(team.nameUpper, supplySource.id);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamGuardInTunnelNetwork.
+   * Orders each team member into the nearest friendly tunnel-network node.
+   */
+  private executeScriptTeamGuardInTunnelNetwork(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || this.isEntityContained(entity)) {
+        continue;
+      }
+      const tunnel = this.findNearestFriendlyTunnelNetworkForEntity(entity);
+      if (!tunnel) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'enterTransport',
+        entityId: entity.id,
+        targetTransportId: tunnel.id,
+      });
+      issuedAny = true;
+    }
+    return issuedAny;
+  }
+
+  private findNearestFriendlyTunnelNetworkForEntity(entity: MapEntity): MapEntity | null {
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (!normalizedSide) {
+      return null;
+    }
+
+    let bestTunnel: MapEntity | null = null;
+    let bestDistanceSq = Infinity;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (candidate.containProfile?.moduleType !== 'TUNNEL') {
+        continue;
+      }
+      if (this.normalizeSide(candidate.side) !== normalizedSide) {
+        continue;
+      }
+      const tracker = this.resolveTunnelTrackerForContainer(candidate);
+      if (!tracker || tracker.passengerIds.size >= this.config.maxTunnelCapacity) {
+        continue;
+      }
+      const dx = candidate.x - entity.x;
+      const dz = candidate.z - entity.z;
+      const distanceSq = (dx * dx) + (dz * dz);
+      if (!bestTunnel || distanceSq < bestDistanceSq) {
+        bestTunnel = candidate;
+        bestDistanceSq = distanceSq;
+      }
+    }
+    return bestTunnel;
   }
 
   /**
