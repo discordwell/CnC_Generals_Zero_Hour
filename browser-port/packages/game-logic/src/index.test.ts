@@ -41779,6 +41779,7 @@ describe('Script condition groundwork', () => {
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
+    logic.setScriptTeamMembers('PowerTeam', [1, 2]);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
@@ -41787,11 +41788,13 @@ describe('Script condition groundwork', () => {
 
     expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
       side: 'America',
+      teamName: 'PowerTeam',
       commandButtonName: 'Command_ParticleCannon',
       allReady: true,
     })).toBe(false);
     expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
       side: 'America',
+      teamName: 'PowerTeam',
       commandButtonName: 'Command_ParticleCannon',
       allReady: false,
     })).toBe(true);
@@ -41799,6 +41802,7 @@ describe('Script condition groundwork', () => {
     privateApi.spawnedEntities.get(2)!.objectStatusFlags.delete('DISABLED_EMP');
     expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
       side: 'America',
+      teamName: 'PowerTeam',
       commandButtonName: 'Command_ParticleCannon',
       allReady: true,
     })).toBe(true);
@@ -41831,10 +41835,12 @@ describe('Script condition groundwork', () => {
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
+    logic.setScriptTeamMembers('UpgradeTeam', [1]);
 
     logic.setSideCredits('America', 0);
     expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
       side: 'America',
+      teamName: 'UpgradeTeam',
       commandButtonName: 'Command_UpgradeA',
       allReady: false,
     })).toBe(false);
@@ -41842,9 +41848,54 @@ describe('Script condition groundwork', () => {
     logic.setSideCredits('America', 1000);
     expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
       side: 'America',
+      teamName: 'UpgradeTeam',
       commandButtonName: 'Command_UpgradeA',
       allReady: false,
     })).toBe(true);
+  });
+
+  it('evaluates skirmish command-button readiness from explicit team members only', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ReadyLab', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ], { CommandSet: 'CommandSet_UpgradeLab' }),
+        makeObjectDef('NotReadyLab', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ]),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_A', { BuildCost: 500, Type: 'PLAYER' }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_UpgradeA', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_A',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_UpgradeLab', { '1': 'Command_UpgradeA' }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ReadyLab', 20, 20), // id 1
+        makeMapObject('NotReadyLab', 30, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setScriptTeamMembers('OnlyNotReady', [2]);
+
+    logic.setSideCredits('America', 600);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      teamName: 'OnlyNotReady',
+      commandButtonName: 'Command_UpgradeA',
+      allReady: false,
+    })).toBe(false);
   });
 
   it('evaluates skirmish value-in-area and tech-building distance conditions', () => {

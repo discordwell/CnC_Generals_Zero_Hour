@@ -12386,12 +12386,14 @@ export class GameLogicSubsystem implements Subsystem {
       case 'SKIRMISH_COMMAND_BUTTON_READY_ALL':
         return this.evaluateScriptSkirmishCommandButtonIsReady({
           side: readSide(0, ['side']),
+          teamName: readString(1, ['teamName', 'team']),
           commandButtonName: readString(2, ['commandButtonName', 'commandButton']),
           allReady: true,
         });
       case 'SKIRMISH_COMMAND_BUTTON_READY_PARTIAL':
         return this.evaluateScriptSkirmishCommandButtonIsReady({
           side: readSide(0, ['side']),
+          teamName: readString(1, ['teamName', 'team']),
           commandButtonName: readString(2, ['commandButtonName', 'commandButton']),
           allReady: false,
         });
@@ -20999,69 +21001,21 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: ScriptConditions::evaluateSkirmishCommandButtonIsReady.
-   * TODO(source-parity): team-level iteration is pending ScriptEngine team tracking; this
-   * currently scans side-owned entities.
+   * Uses explicit script-team members; skirmish-player parameter is unused in C++.
    */
   evaluateScriptSkirmishCommandButtonIsReady(filter: {
     side: string;
+    teamName: string;
     commandButtonName: string;
     allReady: boolean;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
-    if (!normalizedSide) {
+    // Source parity: pSkirmishPlayerParm is ignored in C++.
+    void filter.side;
+    const team = this.getScriptTeamRecord(filter.teamName);
+    if (!team) {
       return false;
     }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const commandButtonDef = findCommandButtonDefByName(registry, filter.commandButtonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    const specialPowerName = this.normalizeShortcutSpecialPowerName(
-      readStringField(commandButtonDef.fields, ['SpecialPower'])
-      ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
-      ?? '',
-    );
-    const upgradeName = readStringField(commandButtonDef.fields, ['Upgrade'])?.trim().toUpperCase() ?? '';
-    const upgradeDef = upgradeName ? findUpgradeDefByName(registry, upgradeName) ?? null : null;
-
-    if (!specialPowerName && !upgradeDef) {
-      return false;
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-
-      let ready: boolean | null = null;
-      if (specialPowerName) {
-        ready = this.evaluateScriptCommandButtonSpecialPowerReady(entity, specialPowerName);
-      } else if (upgradeDef) {
-        ready = this.evaluateScriptCommandButtonUpgradeReady(entity, upgradeDef);
-      }
-
-      if (ready === null) {
-        continue;
-      }
-
-      if (ready) {
-        if (!filter.allReady) {
-          return true;
-        }
-      } else if (filter.allReady) {
-        return false;
-      }
-    }
-
-    return filter.allReady;
+    return this.evaluateScriptTeamCommandButtonIsReady(team, filter.commandButtonName, filter.allReady);
   }
 
   /**
