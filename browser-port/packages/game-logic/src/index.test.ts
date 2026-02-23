@@ -30790,6 +30790,68 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script countdown-timer display actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.isScriptNamedTimerDisplayEnabled()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 160, // DISPLAY_COUNTDOWN_TIMER (raw id)
+      params: ['MissionTimer', 'MissionTimerText'],
+    })).toBe(true);
+    expect(logic.getScriptDisplayedCounters()).toEqual([
+      {
+        counterName: 'MissionTimer',
+        counterText: 'MissionTimerText',
+        isCountdown: true,
+        frame: 0,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 365, // DISPLAY_COUNTDOWN_TIMER (offset id)
+      params: ['MissionTimer', 'MissionTimerText2'],
+    })).toBe(true);
+    expect(logic.getScriptDisplayedCounters()).toEqual([
+      {
+        counterName: 'MissionTimer',
+        counterText: 'MissionTimerText2',
+        isCountdown: true,
+        frame: 0,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 368, // DISABLE_COUNTDOWN_TIMER_DISPLAY (offset id)
+    })).toBe(true);
+    expect(logic.isScriptNamedTimerDisplayEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 162, // ENABLE_COUNTDOWN_TIMER_DISPLAY (raw id)
+    })).toBe(true);
+    expect(logic.isScriptNamedTimerDisplayEnabled()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 161, // HIDE_COUNTDOWN_TIMER (raw id)
+      params: ['MissionTimer'],
+    })).toBe(true);
+    expect(logic.getScriptDisplayedCounters()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 160,
+      params: ['', 'InvalidTimerName'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 366, // HIDE_COUNTDOWN_TIMER (offset id)
+      params: [''],
+    })).toBe(false);
+  });
+
   it('executes script sound/audio-control actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
