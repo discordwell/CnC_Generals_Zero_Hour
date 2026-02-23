@@ -4396,6 +4396,13 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [58, 'TEAM_GUARD'],
   [59, 'NAMED_HUNT'],
   [60, 'TEAM_HUNT'],
+  [61, 'PLAYER_SELL_EVERYTHING'],
+  [62, 'PLAYER_DISABLE_BASE_CONSTRUCTION'],
+  [63, 'PLAYER_DISABLE_FACTORIES'],
+  [64, 'PLAYER_DISABLE_UNIT_CONSTRUCTION'],
+  [65, 'PLAYER_ENABLE_BASE_CONSTRUCTION'],
+  [66, 'PLAYER_ENABLE_FACTORIES'],
+  [67, 'PLAYER_ENABLE_UNIT_CONSTRUCTION'],
   [70, 'NAMED_DAMAGE'],
   [71, 'NAMED_DELETE'],
   [72, 'TEAM_DELETE'],
@@ -5001,6 +5008,12 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sidePlayerTypes = new Map<string, SidePlayerType>();
   /** Source parity: Player::setUnitsShouldIdleOrResume script toggle. */
   private readonly sideUnitsShouldIdleOrResume = new Map<string, boolean>();
+  /** Source parity subset: Player::setCanBuildBase script toggle by side. */
+  private readonly sideCanBuildBaseByScript = new Map<string, boolean>();
+  /** Source parity subset: Player::setCanBuildUnits script toggle by side. */
+  private readonly sideCanBuildUnitsByScript = new Map<string, boolean>();
+  /** Source parity subset: Player::setObjectsEnabled per-side disabled template names. */
+  private readonly sideDisabledObjectTemplatesByScript = new Map<string, Set<string>>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
   private readonly sideCashBountyPercent = new Map<string, number>();
   /** Source parity: Player::m_skillPointsModifier (multiplies awarded rank points before apply). */
@@ -9414,6 +9427,42 @@ export class GameLogicSubsystem implements Subsystem {
       case 'PLAYER_HUNT':
         return this.executeScriptPlayerHunt(
           readSide(0, ['side', 'playerName', 'player']),
+        );
+      case 'PLAYER_SELL_EVERYTHING':
+        return this.executeScriptPlayerSellEverything(
+          readSide(0, ['side', 'playerName', 'player']),
+        );
+      case 'PLAYER_DISABLE_BASE_CONSTRUCTION':
+        return this.executeScriptPlayerSetBaseConstructionEnabled(
+          readSide(0, ['side', 'playerName', 'player']),
+          false,
+        );
+      case 'PLAYER_DISABLE_FACTORIES':
+        return this.executeScriptPlayerSetObjectTemplateEnabled(
+          readSide(0, ['side', 'playerName', 'player']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          false,
+        );
+      case 'PLAYER_DISABLE_UNIT_CONSTRUCTION':
+        return this.executeScriptPlayerSetUnitConstructionEnabled(
+          readSide(0, ['side', 'playerName', 'player']),
+          false,
+        );
+      case 'PLAYER_ENABLE_BASE_CONSTRUCTION':
+        return this.executeScriptPlayerSetBaseConstructionEnabled(
+          readSide(0, ['side', 'playerName', 'player']),
+          true,
+        );
+      case 'PLAYER_ENABLE_FACTORIES':
+        return this.executeScriptPlayerSetObjectTemplateEnabled(
+          readSide(0, ['side', 'playerName', 'player']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          true,
+        );
+      case 'PLAYER_ENABLE_UNIT_CONSTRUCTION':
+        return this.executeScriptPlayerSetUnitConstructionEnabled(
+          readSide(0, ['side', 'playerName', 'player']),
+          true,
         );
       case 'CREATE_OBJECT':
         return this.executeScriptCreateObjectAtPosition(
@@ -17303,6 +17352,99 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doPlayerSellEverything.
+   */
+  private executeScriptPlayerSellEverything(side: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.collectScriptKnownSides().has(normalizedSide)) {
+      return false;
+    }
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      const kindOf = this.resolveEntityKindOfSet(entity);
+      if (!kindOf.has('STRUCTURE') && !kindOf.has('COMMANDCENTER') && !kindOf.has('FS_POWER')) {
+        continue;
+      }
+      this.applyCommand({ type: 'sell', entityId: entity.id });
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doPlayerDisableBaseConstruction / doPlayerEnableBaseConstruction.
+   */
+  private executeScriptPlayerSetBaseConstructionEnabled(side: string, enabled: boolean): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.collectScriptKnownSides().has(normalizedSide)) {
+      return false;
+    }
+    this.sideCanBuildBaseByScript.set(normalizedSide, enabled);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doPlayerDisableUnitConstruction / doPlayerEnableUnitConstruction.
+   */
+  private executeScriptPlayerSetUnitConstructionEnabled(side: string, enabled: boolean): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.collectScriptKnownSides().has(normalizedSide)) {
+      return false;
+    }
+    this.sideCanBuildUnitsByScript.set(normalizedSide, enabled);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doPlayerDisableFactories / doPlayerEnableFactories.
+   */
+  private executeScriptPlayerSetObjectTemplateEnabled(
+    side: string,
+    templateName: string,
+    enabled: boolean,
+  ): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.collectScriptKnownSides().has(normalizedSide)) {
+      return false;
+    }
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+
+    let disabledTemplates = this.sideDisabledObjectTemplatesByScript.get(normalizedSide);
+    if (!disabledTemplates) {
+      disabledTemplates = new Set<string>();
+      this.sideDisabledObjectTemplatesByScript.set(normalizedSide, disabledTemplates);
+    }
+
+    if (enabled) {
+      disabledTemplates.delete(normalizedTemplateName);
+      if (disabledTemplates.size === 0) {
+        this.sideDisabledObjectTemplatesByScript.delete(normalizedSide);
+      }
+    } else {
+      disabledTemplates.add(normalizedTemplateName);
+    }
+
+    return true;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doCreateObject.
    * TODO(source-parity): BLAST_CRATER script creates should deform terrain and refresh pathfinding.
    */
@@ -21415,6 +21557,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCredits.clear();
     this.sidePlayerTypes.clear();
     this.sideUnitsShouldIdleOrResume.clear();
+    this.sideCanBuildBaseByScript.clear();
+    this.sideCanBuildUnitsByScript.clear();
+    this.sideDisabledObjectTemplatesByScript.clear();
     this.scriptSideRepairQueue.clear();
     this.scriptCurrentPlayerSide = null;
     this.scriptSidesUnitsShouldHunt.clear();
@@ -39583,11 +39728,31 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private canSideBuildUnitTemplate(side: string, unitDef: ObjectDef): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    const kindOf = this.normalizeKindOf(unitDef.kindOf);
+    const canBuildBase = this.sideCanBuildBaseByScript.get(normalizedSide);
+    if (canBuildBase === false && kindOf.has('STRUCTURE')) {
+      return false;
+    }
+    const canBuildUnits = this.sideCanBuildUnitsByScript.get(normalizedSide);
+    if (canBuildUnits === false && !kindOf.has('STRUCTURE')) {
+      return false;
+    }
+
+    const disabledTemplates = this.sideDisabledObjectTemplatesByScript.get(normalizedSide);
+    if (disabledTemplates?.has(unitDef.name.trim().toUpperCase())) {
+      return false;
+    }
+
     const buildableStatus = this.resolveBuildableStatus(unitDef);
     if (buildableStatus === 'NO') {
       return false;
     }
-    if (buildableStatus === 'ONLY_BY_AI' && this.getSidePlayerType(side) !== 'COMPUTER') {
+    if (buildableStatus === 'ONLY_BY_AI' && this.getSidePlayerType(normalizedSide) !== 'COMPUTER') {
       return false;
     }
     if (buildableStatus === 'IGNORE_PREREQUISITES') {
@@ -39598,7 +39763,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (prereqGroup.objectAlternatives.length > 0) {
         let objectSatisfied = false;
         for (const alternativeName of prereqGroup.objectAlternatives) {
-          if (this.countActiveEntitiesOfTemplateForSide(side, alternativeName) > 0) {
+          if (this.countActiveEntitiesOfTemplateForSide(normalizedSide, alternativeName) > 0) {
             objectSatisfied = true;
             break;
           }
@@ -39610,7 +39775,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       if (prereqGroup.scienceRequirements.length > 0) {
         for (const requiredScience of prereqGroup.scienceRequirements) {
-          if (!this.hasSideScience(side, requiredScience)) {
+          if (!this.hasSideScience(normalizedSide, requiredScience)) {
             return false;
           }
         }
@@ -51953,6 +52118,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
     this.sideUnitsShouldIdleOrResume.clear();
+    this.sideCanBuildBaseByScript.clear();
+    this.sideCanBuildUnitsByScript.clear();
+    this.sideDisabledObjectTemplatesByScript.clear();
     this.sideSkillPointsModifier.clear();
     this.sideScriptSkillset.clear();
     this.sideScriptAcquiredSciences.clear();

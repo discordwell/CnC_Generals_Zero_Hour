@@ -36888,6 +36888,185 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script player sell/build toggles actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [8, 0, 0],
+            ExitDelay: 0,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          CommandSet: 'CommandSet_WarFactory',
+        }),
+        makeObjectDef('BuildableUnit', 'America', ['VEHICLE'], [], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+        makeObjectDef('BuildableStructure', 'America', ['STRUCTURE'], [], {
+          BuildCost: 300,
+          BuildTime: 0.1,
+        }),
+        makeObjectDef('AmericaPowerPlant', 'America', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('ChinaPowerPlant', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_BuildableUnit', {
+          Command: 'UNIT_BUILD',
+          Object: 'BuildableUnit',
+        }),
+        makeCommandButtonDef('Command_BuildableStructure', {
+          Command: 'UNIT_BUILD',
+          Object: 'BuildableStructure',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_WarFactory', {
+          1: 'Command_BuildableUnit',
+          2: 'Command_BuildableStructure',
+        }),
+      ],
+    });
+
+    const createLogic = (): GameLogicSubsystem => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        makeMap([
+          makeMapObject('WarFactory', 12, 12), // id 1
+          makeMapObject('AmericaPowerPlant', 20, 12), // id 2
+          makeMapObject('ChinaPowerPlant', 28, 12), // id 3
+        ], 64, 64),
+        makeRegistry(bundle),
+        makeHeightmap(64, 64),
+      );
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 2000 });
+      logic.setTeamRelationship('America', 'China', 0);
+      logic.setTeamRelationship('China', 'America', 0);
+      return logic;
+    };
+
+    {
+      const logic = createLogic();
+      expect(logic.executeScriptAction({
+        actionType: 64, // PLAYER_DISABLE_UNIT_CONSTRUCTION
+        params: ['America'],
+      })).toBe(true);
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+      logic.update(1 / 30);
+      expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+      expect(logic.getSideCredits('America')).toBe(2000);
+
+      expect(logic.executeScriptAction({
+        actionType: 67, // PLAYER_ENABLE_UNIT_CONSTRUCTION
+        params: ['America'],
+      })).toBe(true);
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+      logic.update(1 / 30);
+      expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+      expect(logic.getSideCredits('America')).toBe(1900);
+    }
+
+    {
+      const logic = createLogic();
+      expect(logic.executeScriptAction({
+        actionType: 62, // PLAYER_DISABLE_BASE_CONSTRUCTION
+        params: ['America'],
+      })).toBe(true);
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableStructure' });
+      logic.update(1 / 30);
+      expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+      expect(logic.getSideCredits('America')).toBe(2000);
+
+      expect(logic.executeScriptAction({
+        actionType: 65, // PLAYER_ENABLE_BASE_CONSTRUCTION
+        params: ['America'],
+      })).toBe(true);
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableStructure' });
+      logic.update(1 / 30);
+      expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+      expect(logic.getSideCredits('America')).toBe(1700);
+    }
+
+    {
+      const logic = createLogic();
+      expect(logic.executeScriptAction({
+        actionType: 63, // PLAYER_DISABLE_FACTORIES
+        params: ['America', 'BuildableUnit'],
+      })).toBe(true);
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+      logic.update(1 / 30);
+      expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+      expect(logic.getSideCredits('America')).toBe(2000);
+
+      expect(logic.executeScriptAction({
+        actionType: 66, // PLAYER_ENABLE_FACTORIES
+        params: ['America', 'BuildableUnit'],
+      })).toBe(true);
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+      logic.update(1 / 30);
+      expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+      expect(logic.getSideCredits('America')).toBe(1900);
+    }
+
+    {
+      const logic = createLogic();
+      const privateApi = logic as unknown as {
+        spawnedEntities: Map<number, {
+          objectStatusFlags: Set<string>;
+        }>;
+      };
+
+      expect(logic.executeScriptAction({
+        actionType: 61, // PLAYER_SELL_EVERYTHING
+        params: ['America'],
+      })).toBe(true);
+      expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SOLD')).toBe(true);
+      expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('SOLD')).toBe(false);
+    }
+
+    const invalidLogic = createLogic();
+    expect(invalidLogic.executeScriptAction({
+      actionType: 61,
+      params: ['MissingSide'],
+    })).toBe(false);
+    expect(invalidLogic.executeScriptAction({
+      actionType: 62,
+      params: ['MissingSide'],
+    })).toBe(false);
+    expect(invalidLogic.executeScriptAction({
+      actionType: 63,
+      params: ['America', ''],
+    })).toBe(false);
+    expect(invalidLogic.executeScriptAction({
+      actionType: 63,
+      params: ['MissingSide', 'BuildableUnit'],
+    })).toBe(false);
+    expect(invalidLogic.executeScriptAction({
+      actionType: 64,
+      params: ['MissingSide'],
+    })).toBe(false);
+    expect(invalidLogic.executeScriptAction({
+      actionType: 65,
+      params: ['MissingSide'],
+    })).toBe(false);
+    expect(invalidLogic.executeScriptAction({
+      actionType: 66,
+      params: ['MissingSide', 'BuildableUnit'],
+    })).toBe(false);
+    expect(invalidLogic.executeScriptAction({
+      actionType: 67,
+      params: ['MissingSide'],
+    })).toBe(false);
+  });
+
   it('executes script damage/delete/kill actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
