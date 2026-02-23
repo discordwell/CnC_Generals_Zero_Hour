@@ -36536,7 +36536,7 @@ describe('Script condition groundwork', () => {
     expect(createdAtCoord?.side).toBe('china');
 
     expect(logic.executeScriptAction({
-      actionType: 39, // CREATE_NAMED_ON_TEAM_AT_WAYPOINT
+      actionType: 40, // CREATE_NAMED_ON_TEAM_AT_WAYPOINT
       params: ['CreatedNamed', 'ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
     })).toBe(true);
     const createdNamedId = privateApi.scriptNamedEntitiesByName.get('CreatedNamed');
@@ -36547,18 +36547,18 @@ describe('Script condition groundwork', () => {
     expect(createdNamed?.side).toBe('china');
 
     expect(logic.executeScriptAction({
-      actionType: 40, // CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT
+      actionType: 41, // CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT
       params: ['ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(5)?.scriptName).toBeNull();
 
     expect(logic.executeScriptAction({
-      actionType: 39,
+      actionType: 40,
       params: ['NamedAlive', 'ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
     })).toBe(false);
 
     expect(logic.executeScriptAction({
-      actionType: 39,
+      actionType: 40,
       params: ['NamedDead', 'ScriptSpawnUnit', 'SpawnTeam', 'SpawnPoint'],
     })).toBe(true);
     const transferredNameId = privateApi.scriptNamedEntitiesByName.get('NamedDead');
@@ -36570,12 +36570,132 @@ describe('Script condition groundwork', () => {
       params: ['MissingTemplate', 'SpawnTeam', { x: 10, y: 10, z: 0 }, 0],
     })).toBe(false);
     expect(logic.executeScriptAction({
-      actionType: 39,
+      actionType: 40,
       params: ['MissingWaypoint', 'ScriptSpawnUnit', 'SpawnTeam', 'NoSuchWaypoint'],
     })).toBe(false);
 
     expect(Array.from(privateApi.scriptTeamsByName.get('SPAWNTEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
       .toEqual([3, 4, 5, 6]);
+  });
+
+  it('executes script damage/move/attack team actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfLoco', 80),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          AttackRange: 200,
+          DelayBetweenShots: 1000,
+          WeaponSpeed: 9999,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const map = makeMap([
+      makeMapObject('AmericaInfantry', 10, 10), // id 1 attacker
+      makeMapObject('AmericaInfantry', 12, 10), // id 2 attacker
+      makeMapObject('ChinaInfantry', 70, 10), // id 3 victim
+      makeMapObject('ChinaInfantry', 72, 10), // id 4 victim
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 1, name: 'MoveA', position: { x: 40, y: 40, z: 0 }, biDirectional: false },
+        { id: 2, name: 'MoveB', position: { x: 90, y: 35, z: 0 }, biDirectional: false },
+      ],
+      links: [],
+    };
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    expect(logic.setScriptTeamMembers('Attackers', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('Victims', [3, 4])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        moving: boolean;
+        movePath: Array<{ x: number; z: number }>;
+        attackTargetEntityId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 12, // DAMAGE_MEMBERS_OF_TEAM
+      params: ['Victims', 25],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.health).toBeCloseTo(75);
+    expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(75);
+    expect(logic.executeScriptAction({
+      actionType: 12,
+      params: ['MissingTeam', 25],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 13, // MOVE_TEAM_TO
+      params: ['Attackers', 'MoveA'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moving).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.moving).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.movePath.length).toBeGreaterThan(0);
+    expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBeGreaterThan(0);
+    expect(logic.executeScriptAction({
+      actionType: 13,
+      params: ['Attackers', 'MissingWaypoint'],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 38, // MOVE_NAMED_UNIT_TO
+      params: [3, 'MoveB'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.moving).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.movePath.length).toBeGreaterThan(0);
+    expect(logic.executeScriptAction({
+      actionType: 38,
+      params: [999, 'MoveB'],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 39, // NAMED_ATTACK_NAMED
+      params: [1, 3],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(3);
+    expect(logic.executeScriptAction({
+      actionType: 39,
+      params: [1, 999],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 32, // TEAM_ATTACK_TEAM
+      params: ['Attackers', 'Victims'],
+    })).toBe(true);
+    const teamAttackTarget1 = privateApi.spawnedEntities.get(1)?.attackTargetEntityId;
+    const teamAttackTarget2 = privateApi.spawnedEntities.get(2)?.attackTargetEntityId;
+    expect([3, 4]).toContain(teamAttackTarget1);
+    expect([3, 4]).toContain(teamAttackTarget2);
+    expect(logic.executeScriptAction({
+      actionType: 32,
+      params: ['MissingTeam', 'Victims'],
+    })).toBe(false);
   });
 
   it('executes script damage/delete/kill actions using source action ids', () => {
