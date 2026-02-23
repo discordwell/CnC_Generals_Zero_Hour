@@ -3919,6 +3919,21 @@ interface ScriptCameraFadeRequestState {
   frame: number;
 }
 
+interface ScriptCameraSlaveModeState {
+  thingTemplateName: string;
+  boneName: string;
+}
+
+interface ScriptCameraShakerRequestState {
+  waypointName: string;
+  x: number;
+  z: number;
+  amplitude: number;
+  durationSeconds: number;
+  radius: number;
+  frame: number;
+}
+
 interface ScriptScreenShakeState {
   intensity: number;
   frame: number;
@@ -4767,6 +4782,9 @@ const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'RESIZE_VIEW_GUARDBAND',
   'DELETE_ALL_UNMANNED',
   'CHOOSE_VICTIM_ALWAYS_USES_NORMAL',
+  'CAMERA_ENABLE_SLAVE_MODE',
+  'CAMERA_DISABLE_SLAVE_MODE',
+  'CAMERA_ADD_SHAKER_AT',
   'SET_TRAIN_HELD',
   'NAMED_SET_UNMANNED_STATUS',
   'TEAM_SET_UNMANNED_STATUS',
@@ -5080,6 +5098,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraTetherState: ScriptCameraTetherState | null = null;
   /** Source parity bridge: TacticalView lock-follow target from CAMERA_FOLLOW_NAMED actions. */
   private scriptCameraFollowState: ScriptCameraFollowState | null = null;
+  /** Source parity bridge: TacticalView camera slave mode state from scripts. */
+  private scriptCameraSlaveModeState: ScriptCameraSlaveModeState | null = null;
   /** Source parity bridge: TacticalView default camera values set by scripts. */
   private scriptCameraDefaultViewState: ScriptCameraDefaultViewState | null = null;
   /** Source parity bridge: TacticalView rotateCameraTowardObject request from scripts. */
@@ -5098,6 +5118,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptSkyboxEnabled = false;
   /** Source parity bridge: camera motion-blur requests consumed by renderer integration. */
   private readonly scriptCameraFilterRequests: ScriptCameraFilterRequestState[] = [];
+  /** Source parity bridge: TacticalView::Add_Camera_Shake requests from scripts. */
+  private readonly scriptCameraShakerRequests: ScriptCameraShakerRequestState[] = [];
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::m_allObjectTypeLists (script object-type groups). */
@@ -7614,6 +7636,37 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: ScriptActions::doC3CameraEnableSlaveMode.
+   * TODO(source-parity): forward this state to TacticalView::cameraEnableSlaveMode.
+   */
+  setScriptCameraSlaveMode(thingTemplateName: string, boneName: string): boolean {
+    const normalizedThingTemplateName = thingTemplateName.trim();
+    const normalizedBoneName = boneName.trim();
+    if (!normalizedThingTemplateName || !normalizedBoneName) {
+      return false;
+    }
+    this.scriptCameraSlaveModeState = {
+      thingTemplateName: normalizedThingTemplateName,
+      boneName: normalizedBoneName,
+    };
+    return true;
+  }
+
+  /**
+   * Source parity bridge: ScriptActions::doC3CameraDisableSlaveMode.
+   */
+  clearScriptCameraSlaveMode(): void {
+    this.scriptCameraSlaveModeState = null;
+  }
+
+  getScriptCameraSlaveModeState(): ScriptCameraSlaveModeState | null {
+    if (!this.scriptCameraSlaveModeState) {
+      return null;
+    }
+    return { ...this.scriptCameraSlaveModeState };
+  }
+
+  /**
    * Source parity bridge: mirrors ScriptActions::doCameraSetDefault.
    * TODO(source-parity): apply defaults through TacticalView when renderer bridge is available.
    */
@@ -8132,6 +8185,48 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const requests = this.scriptCameraFilterRequests.map((request) => ({ ...request }));
     this.scriptCameraFilterRequests.length = 0;
+    return requests;
+  }
+
+  /**
+   * Source parity bridge: ScriptActions::doC3CameraShake.
+   * TODO(source-parity): forward this request to TacticalView::Add_Camera_Shake.
+   */
+  private requestScriptCameraAddShaker(
+    waypointName: string,
+    amplitude: number,
+    durationSeconds: number,
+    radius: number,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    if (
+      !Number.isFinite(amplitude)
+      || !Number.isFinite(durationSeconds)
+      || !Number.isFinite(radius)
+    ) {
+      return false;
+    }
+    this.scriptCameraShakerRequests.push({
+      waypointName: waypointName.trim(),
+      x: waypoint.x,
+      z: waypoint.z,
+      amplitude,
+      durationSeconds,
+      radius,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  drainScriptCameraShakerRequests(): ScriptCameraShakerRequestState[] {
+    if (this.scriptCameraShakerRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptCameraShakerRequests.map((request) => ({ ...request }));
+    this.scriptCameraShakerRequests.length = 0;
     return requests;
   }
 
@@ -9048,6 +9143,15 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 329 && paramCount === 1) {
         // 329 also maps to CAMERA_FADE_MULTIPLY in another script set; 1-param signature is choose victim always uses normal.
         actionType = 'CHOOSE_VICTIM_ALWAYS_USES_NORMAL';
+      } else if (numericType === 330 && paramCount === 2) {
+        // 330 also maps to CAMERA_BW_MODE_BEGIN in another script set; 2-param signature is camera enable slave mode.
+        actionType = 'CAMERA_ENABLE_SLAVE_MODE';
+      } else if (numericType === 331 && paramCount === 0) {
+        // 331 also maps to CAMERA_BW_MODE_END in another script set; 0-param signature is camera disable slave mode.
+        actionType = 'CAMERA_DISABLE_SLAVE_MODE';
+      } else if (numericType === 332 && paramCount === 4) {
+        // 332 also maps to DRAW_SKYBOX_BEGIN in another script set; 4-param signature is camera add shaker.
+        actionType = 'CAMERA_ADD_SHAKER_AT';
       } else if (numericType === 333 && paramCount === 2) {
         // 333 also maps to DRAW_SKYBOX_END in another script set; 2-param signature is set train held.
         actionType = 'SET_TRAIN_HELD';
@@ -9300,6 +9404,21 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DRAW_SKYBOX_END':
         this.setScriptSkyboxEnabled(false);
         return true;
+      case 'CAMERA_ENABLE_SLAVE_MODE':
+        return this.setScriptCameraSlaveMode(
+          readString(0, ['thingTemplateName', 'templateName', 'objectType']),
+          readString(1, ['boneName', 'bone']),
+        );
+      case 'CAMERA_DISABLE_SLAVE_MODE':
+        this.clearScriptCameraSlaveMode();
+        return true;
+      case 'CAMERA_ADD_SHAKER_AT':
+        return this.requestScriptCameraAddShaker(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['amplitude', 'intensity']),
+          readNumber(2, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(3, ['radius']),
+        );
       case 'SET_TRAIN_HELD':
         return this.executeScriptSetTrainHeld(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -19519,6 +19638,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptLastRadarEventState = null;
     this.scriptCameraTetherState = null;
     this.scriptCameraFollowState = null;
+    this.scriptCameraSlaveModeState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
@@ -19528,6 +19648,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraFadeRequests.length = 0;
     this.scriptSkyboxEnabled = false;
     this.scriptCameraFilterRequests.length = 0;
+    this.scriptCameraShakerRequests.length = 0;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -49984,12 +50105,15 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptSpeechVolumeScale = 1;
     this.scriptMusicVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
+    this.scriptViewGuardbandBias = null;
+    this.scriptChooseVictimAlwaysUsesNormal = false;
     this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraMovementFinished = true;
     this.scriptCameraTetherState = null;
     this.scriptCameraFollowState = null;
+    this.scriptCameraSlaveModeState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
@@ -49999,6 +50123,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraFadeRequests.length = 0;
     this.scriptSkyboxEnabled = false;
     this.scriptCameraFilterRequests.length = 0;
+    this.scriptCameraShakerRequests.length = 0;
     this.thingTemplateBuildableOverrides.clear();
     this.commandSetButtonSlotOverrides.clear();
     this.scriptObjectCountBySideAndType.clear();

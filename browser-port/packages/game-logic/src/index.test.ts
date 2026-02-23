@@ -35329,6 +35329,85 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptCameraFilterRequests()).toEqual([]);
   });
 
+  it('executes script camera-slave and camera-shaker actions using source id collisions', () => {
+    const map = makeMap([], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'ShakeWaypoint',
+          position: { x: 40, y: 60, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 330, // CAMERA_BW_MODE_BEGIN collision path when 1 param
+      params: [8],
+    })).toBe(true);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(true);
+
+    expect(logic.getScriptCameraSlaveModeState()).toBeNull();
+    expect(logic.executeScriptAction({
+      actionType: 330, // CAMERA_ENABLE_SLAVE_MODE when 2 params
+      params: ['CineTank', 'TurretBone'],
+    })).toBe(true);
+    expect(logic.getScriptCameraSlaveModeState()).toEqual({
+      thingTemplateName: 'CineTank',
+      boneName: 'TurretBone',
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 331, // CAMERA_BW_MODE_END collision path when 1 param
+      params: [4],
+    })).toBe(true);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 331, // CAMERA_DISABLE_SLAVE_MODE when 0 params
+      params: [],
+    })).toBe(true);
+    expect(logic.getScriptCameraSlaveModeState()).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 332, // DRAW_SKYBOX_BEGIN collision path when 0 params
+      params: [],
+    })).toBe(true);
+    expect(logic.isScriptSkyboxEnabled()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 332, // CAMERA_ADD_SHAKER_AT when 4 params
+      params: ['ShakeWaypoint', 2.5, 1.75, 120],
+    })).toBe(true);
+    expect(logic.drainScriptCameraShakerRequests()).toEqual([
+      {
+        waypointName: 'ShakeWaypoint',
+        x: 40,
+        z: 60,
+        amplitude: 2.5,
+        durationSeconds: 1.75,
+        radius: 120,
+        frame: 0,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 332,
+      params: ['MissingWaypoint', 1, 1, 1],
+    })).toBe(false);
+    expect(logic.drainScriptCameraBlackWhiteRequests()).toEqual([
+      { enabled: true, fadeFrames: 8, frame: 0 },
+      { enabled: false, fadeFrames: 4, frame: 0 },
+    ]);
+  });
+
   it('executes script unmanned and boobytrap actions using source action id collisions', () => {
     const map = makeMap([
       makeMapObject('TrapTarget', 12, 12), // id 1
