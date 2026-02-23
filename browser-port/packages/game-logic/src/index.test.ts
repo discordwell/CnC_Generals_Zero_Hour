@@ -41245,6 +41245,135 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'BravoTeam', triggerName: 'TeamZone' })).toBe(true);
   });
 
+  it('applies surfaces-allowed filtering for team area and transition conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamMover', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('TeamMover', 20, 20), // id 1 (ground)
+      makeMapObject('TeamMover', 24, 20), // id 2 (air)
+    ], 128, 128);
+    map.triggers = [{
+      name: 'TeamZone',
+      id: 1,
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40 },
+        { x: 80, y: 40 },
+        { x: 80, y: 80 },
+        { x: 40, y: 80 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setScriptTeamMembers('SurfaceTeam', [1, 2]);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number; locomotorSurfaceMask: number }>;
+    };
+    const groundMember = privateApi.spawnedEntities.get(1)!;
+    const airMember = privateApi.spawnedEntities.get(2)!;
+    groundMember.locomotorSurfaceMask = 1; // LOCOMOTORSURFACE_GROUND
+    airMember.locomotorSurfaceMask = 8; // LOCOMOTORSURFACE_AIR
+
+    // Move air-only member in.
+    airMember.x = 50;
+    airMember.z = 50;
+    logic.update(0);
+
+    expect(logic.evaluateScriptTeamInsideAreaPartially({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 1,
+    })).toBe(true);
+
+    expect(logic.evaluateScriptTeamInsideAreaPartially({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 2,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 2,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 2,
+    })).toBe(false);
+
+    expect(logic.evaluateScriptTeamInsideAreaPartially({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 3,
+    })).toBe(true);
+
+    expect(logic.evaluateScriptTeamEnteredAreaPartially({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamEnteredAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamEnteredAreaPartially({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 2,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamEnteredAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 2,
+    })).toBe(true);
+
+    // Move air-only member back out.
+    airMember.x = 24;
+    airMember.z = 20;
+    logic.update(0);
+
+    expect(logic.evaluateScriptTeamExitedAreaPartially({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 1,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamExitedAreaPartially({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 2,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({
+      teamName: 'SurfaceTeam',
+      triggerName: 'TeamZone',
+      surfacesAllowed: 2,
+    })).toBe(true);
+  });
+
   it('evaluates unit-has-emptied with previous-frame transport count parity', () => {
     const bundle = makeBundle({
       objects: [

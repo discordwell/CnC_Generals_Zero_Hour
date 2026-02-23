@@ -380,6 +380,7 @@ const LOCOMOTORSET_TAXIING = 'SET_TAXIING';
 const LOCOMOTORSET_SUPERSONIC = 'SET_SUPERSONIC';
 const LOCOMOTORSET_SLUGGISH = 'SET_SLUGGISH';
 const NO_SURFACES = 0;
+const LOCOMOTORSURFACE_GROUND = 1 << 0;
 const SOURCE_LOCOMOTOR_SET_NAMES = new Set<string>([
   LOCOMOTORSET_NORMAL,
   LOCOMOTORSET_NORMAL_UPGRADED,
@@ -20196,14 +20197,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamInsideAreaEntirely.
-   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
    */
   evaluateScriptTeamInsideAreaEntirely(filter: {
     teamName: string;
     triggerName: string;
     surfacesAllowed?: number;
   }): boolean {
-    void filter.surfacesAllowed;
     const team = this.getScriptTeamRecord(filter.teamName);
     if (!team) {
       return false;
@@ -20226,6 +20225,9 @@ export class GameLogicSubsystem implements Subsystem {
     let anyConsidered = false;
     let anyOutside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+        continue;
+      }
       if (this.isScriptEntityEffectivelyDead(entity)) {
         continue;
       }
@@ -20244,14 +20246,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamInsideAreaPartially.
-   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
    */
   evaluateScriptTeamInsideAreaPartially(filter: {
     teamName: string;
     triggerName: string;
     surfacesAllowed?: number;
   }): boolean {
-    void filter.surfacesAllowed;
     const team = this.getScriptTeamRecord(filter.teamName);
     if (!team) {
       return false;
@@ -20270,6 +20270,9 @@ export class GameLogicSubsystem implements Subsystem {
     let anyInside = false;
     let anyOutside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+        continue;
+      }
       if (this.isScriptEntityEffectivelyDead(entity)) {
         continue;
       }
@@ -20303,14 +20306,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaEntirely.
-   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
    */
   evaluateScriptTeamEnteredAreaEntirely(filter: {
     teamName: string;
     triggerName: string;
     surfacesAllowed?: number;
   }): boolean {
-    void filter.surfacesAllowed;
     const team = this.getScriptTeamRecord(filter.teamName);
     if (!team) {
       return false;
@@ -20332,6 +20333,9 @@ export class GameLogicSubsystem implements Subsystem {
     let entered = false;
     let outside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+        continue;
+      }
       if (this.isScriptEntityEffectivelyDead(entity)) {
         continue;
       }
@@ -20351,14 +20355,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaPartially.
-   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
    */
   evaluateScriptTeamEnteredAreaPartially(filter: {
     teamName: string;
     triggerName: string;
     surfacesAllowed?: number;
   }): boolean {
-    void filter.surfacesAllowed;
     const team = this.getScriptTeamRecord(filter.teamName);
     if (!team) {
       return false;
@@ -20378,6 +20380,9 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+        continue;
+      }
       if (this.isScriptEntityEffectivelyDead(entity)) {
         continue;
       }
@@ -20393,14 +20398,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamExitedAreaEntirely.
-   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
    */
   evaluateScriptTeamExitedAreaEntirely(filter: {
     teamName: string;
     triggerName: string;
     surfacesAllowed?: number;
   }): boolean {
-    void filter.surfacesAllowed;
     const team = this.getScriptTeamRecord(filter.teamName);
     if (!team) {
       return false;
@@ -20423,6 +20426,9 @@ export class GameLogicSubsystem implements Subsystem {
     let exited = false;
     let inside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+        continue;
+      }
       if (this.isScriptEntityEffectivelyDead(entity)) {
         continue;
       }
@@ -20443,14 +20449,12 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamExitedAreaPartially.
-   * TODO(source-parity): apply locomotor surface filtering (whichToConsider mask).
    */
   evaluateScriptTeamExitedAreaPartially(filter: {
     teamName: string;
     triggerName: string;
     surfacesAllowed?: number;
   }): boolean {
-    void filter.surfacesAllowed;
     const team = this.getScriptTeamRecord(filter.teamName);
     if (!team) {
       return false;
@@ -20470,6 +20474,9 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+        continue;
+      }
       if (this.isScriptEntityEffectivelyDead(entity)) {
         continue;
       }
@@ -32132,6 +32139,21 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return false;
+  }
+
+  private doesScriptSurfaceMaskMatchEntity(
+    entity: Pick<MapEntity, 'locomotorSurfaceMask'>,
+    surfacesAllowed: number | undefined,
+  ): boolean {
+    // Source parity: Team.cpp::locoSetMatches remaps SURFACES_ALLOWED
+    // bits (1=ground, 2=air) into locomotor surface bits.
+    const rawSurfaceFlags = Number.isFinite(surfacesAllowed) ? Math.trunc(surfacesAllowed) : 3;
+    const scriptSurfaceMask = (rawSurfaceFlags & 0x01) | ((rawSurfaceFlags & 0x02) << 2);
+    const locomotorMask = entity.locomotorSurfaceMask !== NO_SURFACES
+      ? entity.locomotorSurfaceMask
+      // Source parity: units without AI locomotors are treated as ground movers.
+      : LOCOMOTORSURFACE_GROUND;
+    return (scriptSurfaceMask & locomotorMask) !== 0;
   }
 
   private didScriptSideEntityEnterOrExitRecently(side: string): boolean {
