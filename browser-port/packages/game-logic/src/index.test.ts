@@ -9287,6 +9287,50 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(after - before).toBeCloseTo(5, 4);
   });
 
+  it('repairs structures even when side credits are zero', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [dozerDef, buildingDef],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),
+        makeMapObject('USABarracks', 20, 20),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    logic.update(0);
+
+    const creditsBefore = logic.getSideCredits('America');
+    const healthBefore = logic.getEntityState(2)!.health;
+
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+
+    const healthAfter = logic.getEntityState(2)!.health;
+    const creditsAfter = logic.getSideCredits('America');
+
+    expect(healthAfter).toBeGreaterThan(healthBefore);
+    expect(creditsAfter).toBe(creditsBefore);
+  });
+
   it('idle dozer auto-seeks nearby repairs after bored time', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

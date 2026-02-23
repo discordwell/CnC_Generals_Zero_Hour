@@ -27626,7 +27626,6 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: BuildAssistant repair update — dozers repair buildings over time.
    * Repair rate comes from DozerAIUpdate/WorkerAIUpdate RepairHealthPercentPerSecond.
-   * Repair still consumes build-cost-based credits over time.
    */
   private getDozerCurrentTask(dozer: MapEntity): 'BUILD' | 'REPAIR' | null {
     const hasBuild = this.pendingConstructionActions.has(dozer.id);
@@ -27655,8 +27654,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updatePendingRepairActions(): void {
-    const REPAIR_COST_RATE = 0.005 / 30; // 0.5% of build cost per second at 30fps
-
     for (const [dozerId, buildingId] of this.pendingRepairActions.entries()) {
       const dozer = this.spawnedEntities.get(dozerId);
       const building = this.spawnedEntities.get(buildingId);
@@ -27688,18 +27685,6 @@ export class GameLogicSubsystem implements Subsystem {
         dozer.movePath = [];
       }
 
-      // Check player can afford repair.
-      const dozerSide = this.normalizeSide(dozer.side);
-      if (!dozerSide) {
-        this.pendingRepairActions.delete(dozerId);
-        this.clearDozerTaskOrder(dozer, 'REPAIR');
-        continue;
-      }
-      const credits = this.sideCredits.get(dozerSide) ?? 0;
-      const buildCost = building.maxHealth; // Approximate — use maxHealth as fallback for build cost
-      const frameCost = REPAIR_COST_RATE * buildCost;
-      if (credits < frameCost) continue; // Can't afford this frame
-
       const repairHealthPercentPerSecond = dozer.dozerAIProfile?.repairHealthPercentPerSecond ?? 0.02;
       if (repairHealthPercentPerSecond <= 0) {
         continue;
@@ -27716,9 +27701,6 @@ export class GameLogicSubsystem implements Subsystem {
         this.clearDozerTaskOrder(dozer, 'REPAIR');
         continue;
       }
-
-      // Deduct repair cost only when healing was accepted.
-      this.sideCredits.set(dozerSide, credits - frameCost);
     }
   }
 
