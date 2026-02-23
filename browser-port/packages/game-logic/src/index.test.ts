@@ -33218,6 +33218,142 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named special-power countdown actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerCountdownCaster', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_Countdown', {
+            SpecialPowerTemplate: 'ScriptPowerCountdown',
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerCountdown', { ReloadTime: 0 }),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('SpecialPowerCountdownCaster', 10, 10)], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'CountdownWaypoint',
+          position: { x: 40, y: 40, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const isReady = (): boolean => logic.evaluateScriptSkirmishSpecialPowerIsReady({
+      side: 'America',
+      specialPowerName: 'ScriptPowerCountdown',
+    });
+
+    expect(isReady()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 166, // NAMED_SET_SPECIAL_POWER_COUNTDOWN (raw id)
+      params: [1, 'ScriptPowerCountdown', 3],
+    })).toBe(true);
+    expect(isReady()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 167, // NAMED_ADD_SPECIAL_POWER_COUNTDOWN (raw id)
+      params: [1, 'ScriptPowerCountdown', 1],
+    })).toBe(true);
+    expect(isReady()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 369, // NAMED_STOP_SPECIAL_POWER_COUNTDOWN (offset id)
+      params: [1, 'ScriptPowerCountdown'],
+    })).toBe(true);
+    for (let frame = 0; frame < 200; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 165, // NAMED_START_SPECIAL_POWER_COUNTDOWN (raw id)
+      params: [1, 'ScriptPowerCountdown'],
+    })).toBe(true);
+    for (let frame = 0; frame < 119; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(false);
+    for (let frame = 0; frame < 2; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 371, // NAMED_SET_SPECIAL_POWER_COUNTDOWN (offset id)
+      params: [1, 'ScriptPowerCountdown', 2],
+    })).toBe(true);
+    for (let frame = 0; frame < 59; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(false);
+    for (let frame = 0; frame < 2; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 372, // NAMED_ADD_SPECIAL_POWER_COUNTDOWN (offset id)
+      params: [1, 'ScriptPowerCountdown', 1],
+    })).toBe(true);
+    for (let frame = 0; frame < 28; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(false);
+    for (let frame = 0; frame < 2; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 164, // NAMED_STOP_SPECIAL_POWER_COUNTDOWN (raw id)
+      params: [1, 'ScriptPowerCountdown'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 371,
+      params: [1, 'ScriptPowerCountdown', 1],
+    })).toBe(true);
+    for (let frame = 0; frame < 120; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 370, // NAMED_START_SPECIAL_POWER_COUNTDOWN (offset id)
+      params: [1, 'ScriptPowerCountdown'],
+    })).toBe(true);
+    for (let frame = 0; frame < 29; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(false);
+    for (let frame = 0; frame < 2; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(isReady()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 166,
+      params: [999, 'ScriptPowerCountdown', 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 166,
+      params: [1, 'MissingPower', 1],
+    })).toBe(false);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

@@ -151,8 +151,6 @@ import {
 import {
   routeIssueSpecialPowerCommand as routeIssueSpecialPowerCommandImpl,
   resolveSharedShortcutSpecialPowerReadyFrame as resolveSharedShortcutSpecialPowerReadyFrameImpl,
-  resolveShortcutSpecialPowerSourceEntityReadyFrameBySource as
-    resolveShortcutSpecialPowerSourceEntityReadyFrameBySourceImpl,
   setSpecialPowerReadyFrame as setSpecialPowerReadyFrameImpl,
 } from './special-power-routing.js';
 import {
@@ -3896,6 +3894,11 @@ interface ScriptDisplayedCounterState {
   frame: number;
 }
 
+interface ScriptSpecialPowerPauseState {
+  pausedCount: number;
+  pausedOnFrame: number;
+}
+
 interface ScriptAudioRemovalRequestState {
   eventName: string | null;
   removeDisabledOnly: boolean;
@@ -4263,6 +4266,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [153, 'TEAM_TRANSFER_TO_PLAYER'],
   [154, 'PLAYER_SET_MONEY'],
   [155, 'PLAYER_GIVE_MONEY'],
+  [164, 'NAMED_STOP_SPECIAL_POWER_COUNTDOWN'],
+  [165, 'NAMED_START_SPECIAL_POWER_COUNTDOWN'],
+  [166, 'NAMED_SET_SPECIAL_POWER_COUNTDOWN'],
+  [167, 'NAMED_ADD_SPECIAL_POWER_COUNTDOWN'],
   [168, 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT'],
   [169, 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED'],
   [271, 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS'],
@@ -4320,6 +4327,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [322, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
+  [369, 'NAMED_STOP_SPECIAL_POWER_COUNTDOWN'],
+  [370, 'NAMED_START_SPECIAL_POWER_COUNTDOWN'],
+  [371, 'NAMED_SET_SPECIAL_POWER_COUNTDOWN'],
+  [372, 'NAMED_ADD_SPECIAL_POWER_COUNTDOWN'],
   [373, 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT'],
   [374, 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED'],
   [376, 'CAMERA_TETHER_NAMED'],
@@ -4689,6 +4700,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly localPlayerScienceAvailability = new Map<string, LocalScienceAvailability>();
   private readonly shortcutSpecialPowerSourceByName = new Map<string, Map<number, number>>();
   private readonly shortcutSpecialPowerNamesByEntityId = new Map<number, Set<string>>();
+  private readonly pausedShortcutSpecialPowerByName = new Map<string, Map<number, ScriptSpecialPowerPauseState>>();
   private readonly sharedShortcutSpecialPowerReadyFrames = new Map<string, number>();
   /** Source parity: ScriptEngine::notifyOfObjectCreationOrDestruction dirty version. */
   private scriptObjectTopologyVersion = 0;
@@ -6425,6 +6437,14 @@ export class GameLogicSubsystem implements Subsystem {
       if (sourcesForPower.size === 0) {
         this.shortcutSpecialPowerSourceByName.delete(specialPowerName);
       }
+
+      const pausedBySource = this.pausedShortcutSpecialPowerByName.get(specialPowerName);
+      if (pausedBySource) {
+        pausedBySource.delete(normalizedSourceEntityId);
+        if (pausedBySource.size === 0) {
+          this.pausedShortcutSpecialPowerByName.delete(specialPowerName);
+        }
+      }
     }
     this.shortcutSpecialPowerNamesByEntityId.delete(normalizedSourceEntityId);
   }
@@ -6471,11 +6491,15 @@ export class GameLogicSubsystem implements Subsystem {
 
     const staleEntityIds: number[] = [];
     let bestReadyFrame: number | null = null;
-    for (const [entityId, readyFrame] of sourcesForPower.entries()) {
+    for (const [entityId] of sourcesForPower.entries()) {
       if (!this.spawnedEntities.has(entityId)) {
         staleEntityIds.push(entityId);
         continue;
       }
+      const readyFrame = this.resolveSpecialPowerReadyFrameForSourceEntity(
+        normalizedSpecialPowerName,
+        entityId,
+      );
       if (bestReadyFrame === null || readyFrame < bestReadyFrame) {
         bestReadyFrame = readyFrame;
       }
@@ -8129,6 +8153,30 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptSkirmishFireSpecialPowerAtMostCost(
           readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
           readString(1, ['specialPowerName', 'specialPower']),
+        );
+      case 'NAMED_STOP_SPECIAL_POWER_COUNTDOWN':
+        return this.executeScriptNamedStopSpecialPowerCountdown(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['specialPowerName', 'specialPower']),
+          true,
+        );
+      case 'NAMED_START_SPECIAL_POWER_COUNTDOWN':
+        return this.executeScriptNamedStopSpecialPowerCountdown(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['specialPowerName', 'specialPower']),
+          false,
+        );
+      case 'NAMED_SET_SPECIAL_POWER_COUNTDOWN':
+        return this.executeScriptNamedSetSpecialPowerCountdown(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['specialPowerName', 'specialPower']),
+          readInteger(2, ['timeInSeconds', 'seconds', 'duration']),
+        );
+      case 'NAMED_ADD_SPECIAL_POWER_COUNTDOWN':
+        return this.executeScriptNamedAddSpecialPowerCountdown(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['specialPowerName', 'specialPower']),
+          readInteger(2, ['timeInSeconds', 'seconds', 'duration']),
         );
       case 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT':
         return this.executeScriptNamedFireSpecialPowerAtWaypoint(
@@ -11741,40 +11789,200 @@ export class GameLogicSubsystem implements Subsystem {
     return token;
   }
 
+  private resolveScriptNamedSpecialPowerSource(
+    entityId: number,
+    specialPowerName: string,
+  ): {
+    sourceEntity: MapEntity;
+    specialPowerToken: string;
+    normalizedSpecialPowerName: string;
+    isSharedSynced: boolean;
+  } | null {
+    const sourceEntity = this.spawnedEntities.get(entityId);
+    if (!sourceEntity || sourceEntity.destroyed) {
+      return null;
+    }
+
+    const specialPowerToken = specialPowerName.trim();
+    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
+    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
+      return null;
+    }
+
+    const specialPowerDef = this.resolveSpecialPowerDefByName(normalizedSpecialPowerName);
+    if (!specialPowerDef) {
+      return null;
+    }
+    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
+      return null;
+    }
+
+    return {
+      sourceEntity,
+      specialPowerToken,
+      normalizedSpecialPowerName,
+      isSharedSynced: readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true,
+    };
+  }
+
   /**
-   * Source parity: ScriptActions::doSkirmishFireSpecialPowerAtMostCost.
-   * Resolves the enemy's most-costly area and fires the named special power at that location.
+   * Source parity: ScriptActions::doNamedStopSpecialPowerCountdown.
+   * Mirrors SpecialPowerModule::pauseCountdown pause counter semantics.
+   */
+  private executeScriptNamedStopSpecialPowerCountdown(
+    entityId: number,
+    specialPowerName: string,
+    stop: boolean,
+  ): boolean {
+    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
+    if (!resolved) {
+      return false;
+    }
+
+    // Source parity: SharedNSync ready frame lookup bypasses module pause state.
+    if (resolved.isSharedSynced) {
+      return true;
+    }
+
+    let pausedBySource = this.pausedShortcutSpecialPowerByName.get(resolved.normalizedSpecialPowerName);
+    if (stop) {
+      if (!pausedBySource) {
+        pausedBySource = new Map<number, ScriptSpecialPowerPauseState>();
+        this.pausedShortcutSpecialPowerByName.set(resolved.normalizedSpecialPowerName, pausedBySource);
+      }
+
+      const state = pausedBySource.get(resolved.sourceEntity.id) ?? {
+        pausedCount: 0,
+        pausedOnFrame: this.frameCounter,
+      };
+      if (state.pausedCount === 0) {
+        state.pausedOnFrame = this.frameCounter;
+      }
+      state.pausedCount += 1;
+      pausedBySource.set(resolved.sourceEntity.id, state);
+      return true;
+    }
+
+    if (!pausedBySource) {
+      return true;
+    }
+    const state = pausedBySource.get(resolved.sourceEntity.id);
+    if (!state || state.pausedCount <= 0) {
+      return true;
+    }
+
+    state.pausedCount -= 1;
+    if (state.pausedCount > 0) {
+      pausedBySource.set(resolved.sourceEntity.id, state);
+      return true;
+    }
+
+    const pausedFrames = Math.max(0, this.frameCounter - state.pausedOnFrame);
+    const rawReadyFrame = this.resolveSpecialPowerReadyFrameForSourceEntityRaw(
+      resolved.normalizedSpecialPowerName,
+      resolved.sourceEntity.id,
+    );
+    this.setSpecialPowerReadyFrame(
+      resolved.normalizedSpecialPowerName,
+      resolved.sourceEntity.id,
+      false,
+      rawReadyFrame + pausedFrames,
+    );
+
+    pausedBySource.delete(resolved.sourceEntity.id);
+    if (pausedBySource.size === 0) {
+      this.pausedShortcutSpecialPowerByName.delete(resolved.normalizedSpecialPowerName);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedSetSpecialPowerCountdown.
+   */
+  private executeScriptNamedSetSpecialPowerCountdown(
+    entityId: number,
+    specialPowerName: string,
+    seconds: number,
+  ): boolean {
+    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
+    if (!resolved) {
+      return false;
+    }
+
+    const frames = LOGIC_FRAME_RATE * Math.trunc(seconds);
+    this.setSpecialPowerReadyFrame(
+      resolved.normalizedSpecialPowerName,
+      resolved.sourceEntity.id,
+      resolved.isSharedSynced,
+      this.frameCounter + frames,
+    );
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedAddSpecialPowerCountdown.
+   */
+  private executeScriptNamedAddSpecialPowerCountdown(
+    entityId: number,
+    specialPowerName: string,
+    seconds: number,
+  ): boolean {
+    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
+    if (!resolved) {
+      return false;
+    }
+
+    const frames = LOGIC_FRAME_RATE * Math.trunc(seconds);
+    if (resolved.isSharedSynced) {
+      const currentReadyFrame = resolveSharedShortcutSpecialPowerReadyFrameImpl(
+        resolved.normalizedSpecialPowerName,
+        this.frameCounter,
+        this.sharedShortcutSpecialPowerReadyFrames,
+        this.normalizeShortcutSpecialPowerName.bind(this),
+      );
+      this.setSpecialPowerReadyFrame(
+        resolved.normalizedSpecialPowerName,
+        resolved.sourceEntity.id,
+        true,
+        currentReadyFrame + frames,
+      );
+      return true;
+    }
+
+    const currentReadyFrame = this.resolveSpecialPowerReadyFrameForSourceEntity(
+      resolved.normalizedSpecialPowerName,
+      resolved.sourceEntity.id,
+    );
+    this.setSpecialPowerReadyFrame(
+      resolved.normalizedSpecialPowerName,
+      resolved.sourceEntity.id,
+      false,
+      currentReadyFrame + frames,
+    );
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedFireSpecialPowerAtWaypoint.
    */
   private executeScriptNamedFireSpecialPowerAtWaypoint(
     entityId: number,
     specialPowerName: string,
     waypointName: string,
   ): boolean {
-    const sourceEntity = this.spawnedEntities.get(entityId);
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!sourceEntity || sourceEntity.destroyed || !waypoint) {
-      return false;
-    }
-
-    const specialPowerToken = specialPowerName.trim();
-    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
-    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
-      return false;
-    }
-    if (!this.resolveSpecialPowerDefByName(normalizedSpecialPowerName)) {
-      return false;
-    }
-    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
+    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
+    if (!resolved || !waypoint) {
       return false;
     }
 
     this.applyCommand({
       type: 'issueSpecialPower',
       commandButtonId: '',
-      specialPowerName: specialPowerToken,
+      specialPowerName: resolved.specialPowerToken,
       commandOption: SCRIPT_COMMAND_OPTION_NEED_TARGET_POS,
-      issuingEntityIds: [sourceEntity.id],
-      sourceEntityId: sourceEntity.id,
+      issuingEntityIds: [resolved.sourceEntity.id],
+      sourceEntityId: resolved.sourceEntity.id,
       targetEntityId: null,
       targetX: waypoint.x,
       targetZ: waypoint.z,
@@ -11790,31 +11998,19 @@ export class GameLogicSubsystem implements Subsystem {
     specialPowerName: string,
     targetEntityId: number,
   ): boolean {
-    const sourceEntity = this.spawnedEntities.get(entityId);
+    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
     const targetEntity = this.spawnedEntities.get(targetEntityId);
-    if (!sourceEntity || sourceEntity.destroyed || !targetEntity || targetEntity.destroyed) {
-      return false;
-    }
-
-    const specialPowerToken = specialPowerName.trim();
-    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
-    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
-      return false;
-    }
-    if (!this.resolveSpecialPowerDefByName(normalizedSpecialPowerName)) {
-      return false;
-    }
-    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
+    if (!resolved || !targetEntity || targetEntity.destroyed) {
       return false;
     }
 
     this.applyCommand({
       type: 'issueSpecialPower',
       commandButtonId: '',
-      specialPowerName: specialPowerToken,
+      specialPowerName: resolved.specialPowerToken,
       commandOption: SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET,
-      issuingEntityIds: [sourceEntity.id],
-      sourceEntityId: sourceEntity.id,
+      issuingEntityIds: [resolved.sourceEntity.id],
+      sourceEntityId: resolved.sourceEntity.id,
       targetEntityId: targetEntity.id,
       targetX: null,
       targetZ: null,
@@ -26196,7 +26392,7 @@ export class GameLogicSubsystem implements Subsystem {
     return this.canAffordUpgrade(ownerSide, buildCost);
   }
 
-  private resolveSpecialPowerReadyFrameForSourceEntity(
+  private resolveSpecialPowerReadyFrameForSourceEntityRaw(
     normalizedSpecialPowerName: string,
     sourceEntityId: number,
   ): number {
@@ -26209,6 +26405,26 @@ export class GameLogicSubsystem implements Subsystem {
       return this.frameCounter;
     }
     return Math.max(0, Math.trunc(readyFrame!));
+  }
+
+  private resolveSpecialPowerReadyFrameForSourceEntity(
+    normalizedSpecialPowerName: string,
+    sourceEntityId: number,
+  ): number {
+    const readyFrame = this.resolveSpecialPowerReadyFrameForSourceEntityRaw(
+      normalizedSpecialPowerName,
+      sourceEntityId,
+    );
+    const pausedBySource = this.pausedShortcutSpecialPowerByName.get(normalizedSpecialPowerName);
+    if (!pausedBySource) {
+      return readyFrame;
+    }
+    const pauseState = pausedBySource.get(sourceEntityId);
+    if (!pauseState || pauseState.pausedCount <= 0) {
+      return readyFrame;
+    }
+    const pausedFrames = Math.max(0, this.frameCounter - pauseState.pausedOnFrame);
+    return readyFrame + pausedFrames;
   }
 
   private normalizeSide(side?: string): string {
@@ -26258,6 +26474,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     this.shortcutSpecialPowerSourceByName.delete(normalizedSpecialPowerName);
+    this.pausedShortcutSpecialPowerByName.delete(normalizedSpecialPowerName);
   }
 
   private normalizeControllingPlayerToken(token?: string): string | null {
@@ -27389,15 +27606,16 @@ export class GameLogicSubsystem implements Subsystem {
           normalizeShortcutSpecialPowerName,
         )
       ),
-      resolveSourceReadyFrameBySource: (specialPowerName, sourceEntityId) => (
-        resolveShortcutSpecialPowerSourceEntityReadyFrameBySourceImpl(
-          specialPowerName,
+      resolveSourceReadyFrameBySource: (specialPowerName, sourceEntityId) => {
+        const normalizedSpecialPowerName = normalizeShortcutSpecialPowerName(specialPowerName);
+        if (!normalizedSpecialPowerName) {
+          return this.frameCounter;
+        }
+        return this.resolveSpecialPowerReadyFrameForSourceEntity(
+          normalizedSpecialPowerName,
           sourceEntityId,
-          this.frameCounter,
-          this.shortcutSpecialPowerSourceByName,
-          normalizeShortcutSpecialPowerName,
-        )
-      ),
+        );
+      },
       setReadyFrame: this.setSpecialPowerReadyFrame.bind(this),
       getTeamRelationship: this.getTeamRelationship.bind(this),
       onIssueSpecialPowerNoTarget: this.onIssueSpecialPowerNoTarget.bind(this),
