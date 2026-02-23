@@ -34980,6 +34980,76 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script cameo/named/team flash actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 18, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('FlashTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        scriptFlashCount: number;
+        scriptFlashColor: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 453, // NAMED_CUSTOM_COLOR
+      params: [1, 0x123456],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 77, // CAMEO_FLASH
+      params: ['Command_TestButton', 1],
+    })).toBe(true);
+    expect(logic.drainScriptCameoFlashRequests()).toEqual([
+      { commandButtonName: 'Command_TestButton', flashCount: 2, frame: 0 },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 78, // NAMED_FLASH
+      params: [1, 2],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashColor).toBe(0x123456);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(4);
+
+    expect(logic.executeScriptAction({
+      actionType: 79, // TEAM_FLASH
+      params: ['FlashTeam', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashColor).toBe(0x123456);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashColor).toBe(0xffffff);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(2);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 77,
+      params: ['', 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 78,
+      params: [999, 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 79,
+      params: ['MissingTeam', 1],
+    })).toBe(false);
+  });
+
   it('executes script named-custom-color action using source action id', () => {
     const bundle = makeBundle({
       objects: [

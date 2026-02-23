@@ -3971,6 +3971,12 @@ interface ScriptDisplayMessageState {
   frame: number;
 }
 
+interface ScriptCameoFlashRequestState {
+  commandButtonName: string;
+  flashCount: number;
+  frame: number;
+}
+
 interface ScriptDisplayedCounterState {
   counterName: string;
   counterText: string;
@@ -4374,6 +4380,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [57, 'NAMED_GUARD'],
   [58, 'TEAM_GUARD'],
   [76, 'DISPLAY_TEXT'],
+  [77, 'CAMEO_FLASH'],
+  [78, 'NAMED_FLASH'],
+  [79, 'TEAM_FLASH'],
   [80, 'MOVIE_PLAY_FULLSCREEN'],
   [81, 'MOVIE_PLAY_RADAR'],
   [82, 'SOUND_PLAY_NAMED'],
@@ -5067,6 +5076,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptMoviePlaybackRequests: ScriptMoviePlaybackRequestState[] = [];
   /** Source parity bridge: InGameUI message/caption requests from scripts. */
   private readonly scriptDisplayMessages: ScriptDisplayMessageState[] = [];
+  /** Source parity bridge: ControlBar cameo flash requests from scripts. */
+  private readonly scriptCameoFlashRequests: ScriptCameoFlashRequestState[] = [];
   /** Source parity bridge: InGameUI::addNamedTimer / removeNamedTimer script counters. */
   private readonly scriptDisplayedCounters = new Map<string, ScriptDisplayedCounterState>();
   /** Source parity bridge: Display::enableLetterBox script toggle. */
@@ -8552,6 +8563,34 @@ export class GameLogicSubsystem implements Subsystem {
     return messages;
   }
 
+  private requestScriptCameoFlash(commandButtonName: string, timeInSeconds: number): boolean {
+    const normalizedButtonName = commandButtonName.trim();
+    if (!normalizedButtonName || !Number.isFinite(timeInSeconds)) {
+      return false;
+    }
+    const frames = Math.max(0, Math.trunc(LOGIC_FRAME_RATE * timeInSeconds));
+    let flashCount = Math.max(0, Math.trunc(frames / DRAWABLE_FRAMES_PER_FLASH));
+    // Source parity: make flash count even so the cameo returns to its original state.
+    if ((flashCount & 1) === 1) {
+      flashCount += 1;
+    }
+    this.scriptCameoFlashRequests.push({
+      commandButtonName: normalizedButtonName,
+      flashCount,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  drainScriptCameoFlashRequests(): ScriptCameoFlashRequestState[] {
+    if (this.scriptCameoFlashRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptCameoFlashRequests.map((request) => ({ ...request }));
+    this.scriptCameoFlashRequests.length = 0;
+    return requests;
+  }
+
   setScriptLetterboxEnabled(enabled: boolean): void {
     this.scriptLetterboxEnabled = enabled;
   }
@@ -9351,6 +9390,21 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DISPLAY_TEXT':
         return this.enqueueScriptDisplayText(
           readString(0, ['displayText', 'text', 'message']),
+        );
+      case 'CAMEO_FLASH':
+        return this.requestScriptCameoFlash(
+          readString(0, ['commandButtonName', 'buttonName', 'button']),
+          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
+        );
+      case 'NAMED_FLASH':
+        return this.executeScriptNamedFlash(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
+        );
+      case 'TEAM_FLASH':
+        return this.executeScriptTeamFlash(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
         );
       case 'SHOW_MILITARY_CAPTION':
         return this.enqueueScriptMilitaryCaption(
@@ -12340,6 +12394,52 @@ export class GameLogicSubsystem implements Subsystem {
     entity.scriptFlashColor = color;
     entity.scriptFlashCount = flashCount;
     return true;
+  }
+
+  private resolveScriptEntityFlashColor(entity: MapEntity): number {
+    if (entity.customIndicatorColor !== null) {
+      return entity.customIndicatorColor >>> 0;
+    }
+    // TODO(source-parity): use per-side indicator color when UI player colors are wired.
+    return SOURCE_FLASH_COLOR_WHITE;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedFlash.
+   * TODO(source-parity): use drawable indicator color from side colors when available.
+   */
+  private executeScriptNamedFlash(entityId: number, timeInSeconds: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    return this.applyScriptEntityFlash(
+      entity,
+      timeInSeconds,
+      this.resolveScriptEntityFlashColor(entity),
+    );
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamFlash.
+   * TODO(source-parity): use drawable indicator color from side colors when available.
+   */
+  private executeScriptTeamFlash(teamName: string, timeInSeconds: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let flashed = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.applyScriptEntityFlash(entity, timeInSeconds, this.resolveScriptEntityFlashColor(entity))) {
+        flashed = true;
+      }
+    }
+    return flashed;
   }
 
   private executeScriptNamedFlashWhite(entityId: number, timeInSeconds: number): boolean {
@@ -20370,6 +20470,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptPopupMessages.length = 0;
     this.scriptMoviePlaybackRequests.length = 0;
     this.scriptDisplayMessages.length = 0;
+    this.scriptCameoFlashRequests.length = 0;
     this.scriptDisplayedCounters.clear();
     this.scriptLetterboxEnabled = false;
     this.scriptNamedTimerDisplayEnabled = true;
@@ -50901,6 +51002,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptPopupMessages.length = 0;
     this.scriptMoviePlaybackRequests.length = 0;
     this.scriptDisplayMessages.length = 0;
+    this.scriptCameoFlashRequests.length = 0;
     this.scriptDisplayedCounters.clear();
     this.scriptLetterboxEnabled = false;
     this.scriptNamedTimerDisplayEnabled = true;
