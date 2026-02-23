@@ -31595,6 +31595,97 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script transport enter/exit-all actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            ContainMax: 4,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopTransport', 20, 20), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2
+        makeMapObject('Ranger', 22, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('RideTeam', [2, 3])).toBe(true);
+    expect(logic.setScriptTeamMembers('TransportTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 53, // TEAM_ENTER_NAMED
+      params: ['RideTeam', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 54, // NAMED_EXIT_ALL
+      params: [1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 53,
+      params: ['RideTeam', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 55, // TEAM_EXIT_ALL
+      params: ['TransportTeam'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [999, 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 53,
+      params: ['MissingTeam', 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 54,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 55,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script named-set-topple-direction action using source action id', () => {
     const bundle = makeBundle({
       objects: [

@@ -4366,6 +4366,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [25, 'RESUME_BACKGROUND_SOUNDS'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
+  [52, 'NAMED_ENTER_NAMED'],
+  [53, 'TEAM_ENTER_NAMED'],
+  [54, 'NAMED_EXIT_ALL'],
+  [55, 'TEAM_EXIT_ALL'],
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
   [76, 'DISPLAY_TEXT'],
   [80, 'MOVIE_PLAY_FULLSCREEN'],
@@ -9811,6 +9815,24 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
         );
+      case 'NAMED_ENTER_NAMED':
+        return this.executeScriptNamedEnterNamed(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'sourceEntityId']),
+          readEntityId(1, ['targetEntityId', 'entityId', 'unitId', 'named', 'transportId']),
+        );
+      case 'TEAM_ENTER_NAMED':
+        return this.executeScriptTeamEnterNamed(
+          readString(0, ['teamName', 'team']),
+          readEntityId(1, ['targetEntityId', 'entityId', 'unitId', 'named', 'transportId']),
+        );
+      case 'NAMED_EXIT_ALL':
+        return this.executeScriptNamedExitAll(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'transportId']),
+        );
+      case 'TEAM_EXIT_ALL':
+        return this.executeScriptTeamExitAll(
+          readString(0, ['teamName', 'team']),
+        );
       case 'NAMED_FOLLOW_WAYPOINTS':
         return this.executeScriptNamedFollowWaypoints(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -15250,6 +15272,78 @@ export class GameLogicSubsystem implements Subsystem {
       targetTransportId: container.id,
     });
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedEnterNamed.
+   */
+  private executeScriptNamedEnterNamed(entityId: number, targetContainerEntityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    const container = this.spawnedEntities.get(targetContainerEntityId);
+    if (!entity || !container || entity.destroyed || container.destroyed) {
+      return false;
+    }
+    return this.issueScriptEnterContainer(entity, container);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamEnterNamed.
+   */
+  private executeScriptTeamEnterNamed(teamName: string, targetContainerEntityId: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const container = this.spawnedEntities.get(targetContainerEntityId);
+    if (!team || !container || container.destroyed) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.issueScriptEnterContainer(entity, container)) {
+        issuedAny = true;
+      }
+    }
+    return issuedAny;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedExitAll.
+   */
+  private executeScriptNamedExitAll(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !entity.containProfile) {
+      return false;
+    }
+    this.applyCommand({
+      type: 'evacuate',
+      entityId: entity.id,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamExitAll (groupEvacuate).
+   */
+  private executeScriptTeamExitAll(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.containProfile) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'evacuate',
+        entityId: entity.id,
+      });
+      issuedAny = true;
+    }
+    return issuedAny;
   }
 
   private findScriptNearestGarrisonBuilding(
