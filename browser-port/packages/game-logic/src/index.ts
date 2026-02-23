@@ -4327,6 +4327,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [86, 'PLAYER_RELATES_PLAYER'],
   [88, 'RADAR_DISABLE'],
   [89, 'RADAR_ENABLE'],
+  [90, 'MAP_REVEAL_AT_WAYPOINT'],
   [94, 'DISABLE_INPUT'],
   [95, 'ENABLE_INPUT'],
   [97, 'SOUND_AMBIENT_PAUSE'],
@@ -8714,6 +8715,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 294 && paramCount === 1) {
         // 294 also maps to RADAR_ENABLE in another script set; 1-param signature is occlusion toggle.
         actionType = 'OPTIONS_SET_OCCLUSION_MODE';
+      } else if (numericType === 295 && paramCount === 3) {
+        // 295 also maps to OPTIONS_SET_DRAWICON_UI_MODE; 3-param signature is map reveal at waypoint.
+        actionType = 'MAP_REVEAL_AT_WAYPOINT';
       } else if (numericType === 299 && paramCount === 3) {
         // 299 also maps to DISABLE_INPUT in another script set; 3-param signature is unit panel flags.
         actionType = 'UNIT_AFFECT_OBJECT_PANEL_FLAGS';
@@ -9635,6 +9639,12 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readString(1, ['objectType', 'templateName', 'type']),
           readString(2, ['triggerName', 'trigger', 'areaName', 'area']),
+        );
+      case 'MAP_REVEAL_AT_WAYPOINT':
+        return this.executeScriptRevealMapAtWaypoint(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['radius', 'radiusToReveal']),
+          readString(2, ['side', 'playerName', 'player']),
         );
       case 'MAP_REVEAL_ALL':
         return this.executeScriptRevealMapEntire(
@@ -34345,6 +34355,34 @@ export class GameLogicSubsystem implements Subsystem {
    * - If playerName resolves to a known player side and is not empty: apply to that player.
    * - Otherwise: apply to all human players.
    */
+  private executeScriptRevealMapAtWaypoint(
+    waypointName: string,
+    radiusToReveal: number,
+    playerName: string,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    const radius = Number.isFinite(radiusToReveal) ? Math.max(0, radiusToReveal) : 0;
+
+    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
+    if (targetSide) {
+      this.setMapRevealAtWaypointForSide(targetSide, waypoint.x, waypoint.z, radius);
+      return true;
+    }
+
+    for (const side of this.collectScriptHumanSides()) {
+      this.setMapRevealAtWaypointForSide(side, waypoint.x, waypoint.z, radius);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doRevealMapEntire.
+   * - If playerName resolves to a known player side and is not empty: apply to that player.
+   * - Otherwise: apply to all human players.
+   */
   private executeScriptRevealMapEntire(playerName: string): boolean {
     const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
     if (targetSide) {
@@ -34528,6 +34566,20 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     grid.revealMapForPlayer(playerIndex);
+  }
+
+  private setMapRevealAtWaypointForSide(side: string, worldX: number, worldZ: number, radius: number): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return;
+    }
+    const playerIndex = this.resolvePlayerIndexForSide(side);
+    if (playerIndex < 0) {
+      return;
+    }
+    // Source parity: doShroudReveal + undoShroudReveal ("quick look").
+    grid.addLooker(playerIndex, worldX, worldZ, radius);
+    grid.removeLooker(playerIndex, worldX, worldZ, radius);
   }
 
   private setMapShroudEntireForSide(side: string): void {

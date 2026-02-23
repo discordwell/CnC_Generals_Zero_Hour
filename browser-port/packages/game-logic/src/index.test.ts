@@ -31476,6 +31476,72 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script map-reveal-at-waypoint actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaScout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 0 }),
+        makeObjectDef('GLAScout', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 0 }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericaScout', 16, 16),
+      makeMapObject('GLAScout', 240, 240),
+    ], 256, 256);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 77,
+          name: 'RevealSpot',
+          position: { x: 220, y: 220, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'GLA', playerType: 'COMPUTER' });
+    logic.update(1 / 30);
+
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_SHROUDED);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 90, // MAP_REVEAL_AT_WAYPOINT (raw id)
+      params: ['RevealSpot', 40, 'MissingPlayerName'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_FOGGED);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 295, // MAP_REVEAL_AT_WAYPOINT (offset/collision id)
+      params: ['RevealSpot', 40, 'MissingPlayerName'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_FOGGED);
+
+    expect(logic.executeScriptAction({
+      actionType: 90,
+      params: ['RevealSpot', 40, 'GLA'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_FOGGED);
+
+    expect(logic.executeScriptAction({
+      actionType: 90,
+      params: ['MissingWaypoint', 40, 'America'],
+    })).toBe(false);
+  });
+
   it('executes script map-reveal-all and map-shroud-all actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
