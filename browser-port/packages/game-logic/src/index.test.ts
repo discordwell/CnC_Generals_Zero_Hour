@@ -35011,6 +35011,47 @@ describe('Script condition groundwork', () => {
     ]);
   });
 
+  it('executes script display-text and military-caption actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 76, // DISPLAY_TEXT (raw id)
+      params: ['MissionTextA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 281, // DISPLAY_TEXT (offset/collision id)
+      params: ['MissionTextB'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 139, // SHOW_MILITARY_CAPTION (raw id)
+      params: ['MilitaryCaptionA', 3000],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 344, // SHOW_MILITARY_CAPTION (offset id)
+      params: ['MilitaryCaptionB', 1500],
+    })).toBe(true);
+    expect(logic.drainScriptDisplayMessages()).toEqual([
+      { messageType: 'DISPLAY_TEXT', text: 'MissionTextA', duration: null, frame: 0 },
+      { messageType: 'DISPLAY_TEXT', text: 'MissionTextB', duration: null, frame: 0 },
+      { messageType: 'MILITARY_CAPTION', text: 'MilitaryCaptionA', duration: 3000, frame: 0 },
+      { messageType: 'MILITARY_CAPTION', text: 'MilitaryCaptionB', duration: 1500, frame: 0 },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 76,
+      params: [''],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 139,
+      params: ['', 3000],
+    })).toBe(false);
+  });
+
   it('executes script force-select and destroy-all-contained actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

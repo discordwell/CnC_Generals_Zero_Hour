@@ -3911,6 +3911,13 @@ interface ScriptMoviePlaybackRequestState {
   frame: number;
 }
 
+interface ScriptDisplayMessageState {
+  messageType: 'DISPLAY_TEXT' | 'MILITARY_CAPTION';
+  text: string;
+  duration: number | null;
+  frame: number;
+}
+
 interface ScriptDisplayedCounterState {
   counterName: string;
   counterText: string;
@@ -4307,6 +4314,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
+  [76, 'DISPLAY_TEXT'],
   [80, 'MOVIE_PLAY_FULLSCREEN'],
   [81, 'MOVIE_PLAY_RADAR'],
   [82, 'SOUND_PLAY_NAMED'],
@@ -4324,6 +4332,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [116, 'CAMERA_LETTERBOX_END'],
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
+  [139, 'SHOW_MILITARY_CAPTION'],
   [144, 'MUSIC_SET_VOLUME'],
   [147, 'SET_RANDOM_TIMER'],
   [148, 'SET_RANDOM_MSEC_TIMER'],
@@ -4506,6 +4515,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
   [337, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
+  [344, 'SHOW_MILITARY_CAPTION'],
   [361, 'DISABLE_SPECIAL_POWER_DISPLAY'],
   [362, 'ENABLE_SPECIAL_POWER_DISPLAY'],
   [363, 'NAMED_HIDE_SPECIAL_POWER_DISPLAY'],
@@ -4919,6 +4929,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptPopupMessages: ScriptPopupMessageState[] = [];
   /** Source parity bridge: Display/InGameUI movie playback requests from scripts. */
   private readonly scriptMoviePlaybackRequests: ScriptMoviePlaybackRequestState[] = [];
+  /** Source parity bridge: InGameUI message/caption requests from scripts. */
+  private readonly scriptDisplayMessages: ScriptDisplayMessageState[] = [];
   /** Source parity bridge: InGameUI::addNamedTimer / removeNamedTimer script counters. */
   private readonly scriptDisplayedCounters = new Map<string, ScriptDisplayedCounterState>();
   /** Source parity bridge: Display::enableLetterBox script toggle. */
@@ -8041,6 +8053,46 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
+  private enqueueScriptDisplayText(displayText: string): boolean {
+    const normalizedText = displayText.trim();
+    if (!normalizedText) {
+      return false;
+    }
+    this.scriptDisplayMessages.push({
+      messageType: 'DISPLAY_TEXT',
+      text: normalizedText,
+      duration: null,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  private enqueueScriptMilitaryCaption(captionText: string, duration: number): boolean {
+    if (!Number.isFinite(duration)) {
+      return false;
+    }
+    const normalizedText = captionText.trim();
+    if (!normalizedText) {
+      return false;
+    }
+    this.scriptDisplayMessages.push({
+      messageType: 'MILITARY_CAPTION',
+      text: normalizedText,
+      duration: Math.trunc(duration),
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  drainScriptDisplayMessages(): ScriptDisplayMessageState[] {
+    if (this.scriptDisplayMessages.length === 0) {
+      return [];
+    }
+    const messages = this.scriptDisplayMessages.map((message) => ({ ...message }));
+    this.scriptDisplayMessages.length = 0;
+    return messages;
+  }
+
   setScriptLetterboxEnabled(enabled: boolean): void {
     this.scriptLetterboxEnabled = enabled;
   }
@@ -8583,6 +8635,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 230 && paramCount === 0) {
         // 230 also maps to MAP_REVEAL_ALL_UNDO_PERM; 0-param signature is background sound resume.
         actionType = 'RESUME_BACKGROUND_SOUNDS';
+      } else if (numericType === 281 && paramCount === 1) {
+        // 281 also maps to TEAM_FOLLOW_WAYPOINTS_EXACT; 1-param signature is display text.
+        actionType = 'DISPLAY_TEXT';
       } else if (numericType === 319 && paramCount === 4) {
         // 319 also maps to SOUND_REMOVE_ALL_DISABLED; 4-param signature is setup camera.
         actionType = 'SETUP_CAMERA';
@@ -8699,6 +8754,15 @@ export class GameLogicSubsystem implements Subsystem {
         return this.requestScriptMoviePlayback(
           readString(0, ['movieName', 'movie']),
           'RADAR',
+        );
+      case 'DISPLAY_TEXT':
+        return this.enqueueScriptDisplayText(
+          readString(0, ['displayText', 'text', 'message']),
+        );
+      case 'SHOW_MILITARY_CAPTION':
+        return this.enqueueScriptMilitaryCaption(
+          readString(0, ['captionText', 'briefing', 'text', 'message']),
+          readNumber(1, ['duration', 'durationMs', 'milliseconds', 'time']),
         );
       case 'CAMERA_LETTERBOX_BEGIN':
         this.setScriptLetterboxEnabled(true);
@@ -18570,6 +18634,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
     this.scriptMoviePlaybackRequests.length = 0;
+    this.scriptDisplayMessages.length = 0;
     this.scriptDisplayedCounters.clear();
     this.scriptLetterboxEnabled = false;
     this.scriptNamedTimerDisplayEnabled = true;
@@ -48875,6 +48940,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
     this.scriptMoviePlaybackRequests.length = 0;
+    this.scriptDisplayMessages.length = 0;
     this.scriptDisplayedCounters.clear();
     this.scriptLetterboxEnabled = false;
     this.scriptNamedTimerDisplayEnabled = true;
