@@ -31250,6 +31250,10 @@ describe('Script condition groundwork', () => {
     expect(swayState.randomness).toBeCloseTo(0.2);
 
     expect(logic.executeScriptAction({
+      actionType: 0, // DEBUG_MESSAGE_BOX
+      params: ['Pause debug'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
       actionType: 101, // DEBUG_STRING
       params: ['Script debug'],
     })).toBe(true);
@@ -31259,13 +31263,21 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(logic.drainScriptDebugMessageRequests()).toEqual([
       {
+        message: 'Pause debug',
+        crashRequested: false,
+        pauseRequested: true,
+        frame: 0,
+      },
+      {
         message: 'Script debug',
         crashRequested: false,
+        pauseRequested: false,
         frame: 0,
       },
       {
         message: 'Crash debug',
         crashRequested: true,
+        pauseRequested: false,
         frame: 0,
       },
     ]);

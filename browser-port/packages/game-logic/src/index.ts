@@ -4034,6 +4034,7 @@ interface ScriptBreezeState {
 interface ScriptDebugMessageRequestState {
   message: string;
   crashRequested: boolean;
+  pauseRequested: boolean;
   frame: number;
 }
 
@@ -4384,6 +4385,7 @@ const SCRIPT_OBJECT_STATUS_BIT_INDEX_BY_NAME = new Map<string, number>(
  * dispatch support. Numeric ids are from Scripts.h enum order.
  */
 const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
+  [0, 'DEBUG_MESSAGE_BOX'],
   [1, 'SET_FLAG'],
   [2, 'SET_COUNTER'],
   [3, 'VICTORY'],
@@ -8942,10 +8944,15 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doDebugString / doDebugCrashBox.
    * TODO(source-parity): route to runtime debug UI and internal crash-box handling.
    */
-  private executeScriptDebugMessage(message: string, crashRequested: boolean): boolean {
+  private executeScriptDebugMessage(
+    message: string,
+    crashRequested: boolean,
+    pauseRequested: boolean,
+  ): boolean {
     this.scriptDebugMessageRequests.push({
       message,
       crashRequested,
+      pauseRequested,
       frame: this.frameCounter,
     });
     return true;
@@ -9957,10 +9964,18 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptDebugMessage(
           readString(0, ['debugString', 'text', 'message']),
           false,
+          false,
         );
       case 'DEBUG_CRASH_BOX':
         return this.executeScriptDebugMessage(
           readString(0, ['debugString', 'text', 'message']),
+          true,
+          false,
+        );
+      case 'DEBUG_MESSAGE_BOX':
+        return this.executeScriptDebugMessage(
+          readString(0, ['debugString', 'text', 'message']),
+          false,
           true,
         );
       case 'TEAM_GARRISON_SPECIFIC_BUILDING':
