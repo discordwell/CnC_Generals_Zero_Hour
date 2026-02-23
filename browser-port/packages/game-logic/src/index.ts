@@ -1754,6 +1754,8 @@ interface MapEntity {
   scriptFlashCount: number;
   /** Source parity: Drawable::m_flashColor as packed RGB integer. */
   scriptFlashColor: number;
+  /** Source parity subset: Drawable ambient sound toggle from script actions. */
+  scriptAmbientSoundEnabled: boolean;
   /** Source parity: Object::m_customIndicatorColor override set by script action. */
   customIndicatorColor: number | null;
   commandSetStringOverride: string | null;
@@ -4581,6 +4583,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [331, 'CAMERA_BW_MODE_END'],
   [332, 'DRAW_SKYBOX_BEGIN'],
   [333, 'DRAW_SKYBOX_END'],
+  [335, 'ENABLE_OBJECT_SOUND'],
+  [336, 'DISABLE_OBJECT_SOUND'],
   [337, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
   [338, 'CAMERA_MOTION_BLUR'],
   [339, 'CAMERA_MOTION_BLUR_JUMP'],
@@ -4759,6 +4763,7 @@ const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
  * collisions in map script chunks (ScriptAction::ParseAction + ActionTemplate internal names).
  */
 const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
+  'SET_TRAIN_HELD',
   'NAMED_SET_UNMANNED_STATUS',
   'TEAM_SET_UNMANNED_STATUS',
   'NAMED_SET_BOOBYTRAPPED',
@@ -9007,6 +9012,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 324 && paramCount === 2) {
         // 324 also maps to QUICKVICTORY; 2-param signature is camera follow named.
         actionType = 'CAMERA_FOLLOW_NAMED';
+      } else if (numericType === 333 && paramCount === 2) {
+        // 333 also maps to DRAW_SKYBOX_END in another script set; 2-param signature is set train held.
+        actionType = 'SET_TRAIN_HELD';
       } else if (numericType === 303 && paramCount === 0) {
         // 303 also maps to NAMED_FACE_NAMED; 0-param signature is ambient sound resume.
         actionType = 'SOUND_AMBIENT_RESUME';
@@ -9241,6 +9249,11 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DRAW_SKYBOX_END':
         this.setScriptSkyboxEnabled(false);
         return true;
+      case 'SET_TRAIN_HELD':
+        return this.executeScriptSetTrainHeld(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readBoolean(1, ['held', 'enabled', 'value']),
+        );
       case 'CAMERA_MOTION_BLUR':
         this.requestScriptCameraMotionBlur(
           readBoolean(0, ['zoomIn', 'zoom', 'value']),
@@ -9286,6 +9299,16 @@ export class GameLogicSubsystem implements Subsystem {
       case 'SOUND_AMBIENT_RESUME':
         this.setScriptAmbientSoundsPaused(false);
         return true;
+      case 'ENABLE_OBJECT_SOUND':
+        return this.executeScriptSetObjectAmbientSound(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          true,
+        );
+      case 'DISABLE_OBJECT_SOUND':
+        return this.executeScriptSetObjectAmbientSound(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          false,
+        );
       case 'MUSIC_SET_TRACK':
         return this.setScriptMusicTrack(
           readString(0, ['musicName', 'trackName', 'track']),
@@ -15388,6 +15411,44 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: ScriptActions::doNamedSetTrainHeld.
+   * Applies held state for entities that expose rail-transport behavior.
+   */
+  private executeScriptSetTrainHeld(entityId: number, held: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    if (!this.extractRailedTransportProfile(objectDef ?? undefined)) {
+      return false;
+    }
+
+    if (!this.executeScriptNamedSetHeld(entityId, held)) {
+      return false;
+    }
+    if (held) {
+      this.cancelEntityCommandPathActions(entityId);
+      this.stopEntity(entityId);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doEnableObjectSound.
+   * TODO(source-parity): forward this flag to drawable/audio ambient channel playback.
+   */
+  private executeScriptSetObjectAmbientSound(entityId: number, enabled: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    entity.scriptAmbientSoundEnabled = enabled;
+    return true;
+  }
+
+  /**
    * Source parity: ScriptActions::doModifyBuildableStatus + GameLogic::setBuildableStatusOverride.
    */
   private executeScriptModifyBuildableStatus(templateName: string, buildableStatus: BuildableStatus): boolean {
@@ -19509,6 +19570,7 @@ export class GameLogicSubsystem implements Subsystem {
       modelConditionFlags: new Set<string>(),
       scriptFlashCount: 0,
       scriptFlashColor: 0,
+      scriptAmbientSoundEnabled: true,
       customIndicatorColor: null,
       commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,

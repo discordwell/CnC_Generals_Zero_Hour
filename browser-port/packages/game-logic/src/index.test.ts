@@ -35470,6 +35470,87 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script train-held and object-sound actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TrainCar', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+          makeBlock('Behavior', 'RailedTransportAIUpdate ModuleTag_Rail', {
+            PathPrefixName: 'TrainRoute',
+          }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TrainCar', 12, 12), // id 1
+        makeMapObject('Ranger', 18, 12), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        objectStatusFlags: Set<string>;
+        scriptAmbientSoundEnabled: boolean;
+      }>;
+    };
+
+    expect(logic.isScriptSkyboxEnabled()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 332, // DRAW_SKYBOX_BEGIN
+      params: [],
+    })).toBe(true);
+    expect(logic.isScriptSkyboxEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 333, // DRAW_SKYBOX_END collision path when no params
+      params: [],
+    })).toBe(true);
+    expect(logic.isScriptSkyboxEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 333, // SET_TRAIN_HELD collision path when 2 params
+      params: [1, 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('DISABLED_HELD')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 333,
+      params: [1, 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('DISABLED_HELD')).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 333,
+      params: [2, 1],
+    })).toBe(false);
+
+    expect(privateApi.spawnedEntities.get(1)?.scriptAmbientSoundEnabled).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 336, // DISABLE_OBJECT_SOUND
+      params: [1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAmbientSoundEnabled).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 335, // ENABLE_OBJECT_SOUND
+      params: [1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAmbientSoundEnabled).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 335,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 336,
+      params: [999],
+    })).toBe(false);
+  });
+
   it('executes script freeze-time and weather actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
