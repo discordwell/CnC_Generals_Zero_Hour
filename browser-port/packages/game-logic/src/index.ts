@@ -4371,6 +4371,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [54, 'NAMED_EXIT_ALL'],
   [55, 'TEAM_EXIT_ALL'],
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
+  [57, 'NAMED_GUARD'],
+  [58, 'TEAM_GUARD'],
   [76, 'DISPLAY_TEXT'],
   [80, 'MOVIE_PLAY_FULLSCREEN'],
   [81, 'MOVIE_PLAY_RADAR'],
@@ -9833,6 +9835,14 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamExitAll(
           readString(0, ['teamName', 'team']),
         );
+      case 'NAMED_GUARD':
+        return this.executeScriptNamedGuard(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+        );
+      case 'TEAM_GUARD':
+        return this.executeScriptTeamGuard(
+          readString(0, ['teamName', 'team']),
+        );
       case 'NAMED_FOLLOW_WAYPOINTS':
         return this.executeScriptNamedFollowWaypoints(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -14748,6 +14758,55 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedGuard.
+   * Orders the unit to guard its current location using normal guard mode.
+   */
+  private executeScriptNamedGuard(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return false;
+    }
+    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
+    this.applyCommand({
+      type: 'guardPosition',
+      entityId: entity.id,
+      targetX: entity.x,
+      targetZ: entity.z,
+      guardMode: 0,
+      commandSource: 'SCRIPT',
+    });
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamGuard.
+   * Orders each team member to guard its own current position.
+   */
+  private executeScriptTeamGuard(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'guardPosition',
+        entityId: entity.id,
+        targetX: entity.x,
+        targetZ: entity.z,
+        guardMode: 0,
+        commandSource: 'SCRIPT',
+      });
+      issuedAny = true;
+    }
+    return issuedAny;
   }
 
   /**

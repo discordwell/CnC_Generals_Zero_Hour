@@ -36708,6 +36708,63 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named/team guard actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 14, 12), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('GuardTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        guardState: string;
+        guardPositionX: number;
+        guardPositionZ: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 57, // NAMED_GUARD
+      params: [1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionX).toBeCloseTo(10, 5);
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionZ).toBeCloseTo(10, 5);
+
+    expect(logic.executeScriptAction({
+      actionType: 58, // TEAM_GUARD
+      params: ['GuardTeam'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionX).toBeCloseTo(10, 5);
+    expect(privateApi.spawnedEntities.get(1)?.guardPositionZ).toBeCloseTo(10, 5);
+    expect(privateApi.spawnedEntities.get(2)?.guardPositionX).toBeCloseTo(14, 5);
+    expect(privateApi.spawnedEntities.get(2)?.guardPositionZ).toBeCloseTo(12, 5);
+
+    expect(logic.executeScriptAction({
+      actionType: 57,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 58,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script team guard position/object actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
