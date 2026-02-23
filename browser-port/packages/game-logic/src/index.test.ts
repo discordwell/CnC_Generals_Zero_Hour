@@ -37180,6 +37180,10 @@ describe('Script condition groundwork', () => {
     const privateApi = logic as unknown as {
       applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
       sideTeamBuildDelaySecondsByScript: Map<string, number>;
+      scriptAttackPrioritySetsByName: Map<string, {
+        defaultPriority: number;
+        templatePriorityByName: Map<string, number>;
+      }>;
       scriptTeamsByName: Map<string, {
         attackPrioritySetName: string;
       }>;
@@ -37195,8 +37199,34 @@ describe('Script condition groundwork', () => {
       actionType: 42, // NAMED_APPLY_ATTACK_PRIORITY_SET
       params: [1, 'AntiVehicleSet'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('');
+
+    expect(logic.executeScriptAction({
+      actionType: 131, // SET_DEFAULT_ATTACK_PRIORITY
+      params: ['AntiVehicleSet', 3],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 129, // SET_ATTACK_PRIORITY_THING
+      params: ['AntiVehicleSet', 'ChinaInfantry', 10],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 130, // SET_ATTACK_PRIORITY_KIND_OF
+      params: ['AntiVehicleSet', 9999, 6],
+    })).toBe(true);
+    expect(privateApi.scriptAttackPrioritySetsByName.get('ANTIVEHICLESET')?.defaultPriority).toBe(3);
+    expect(privateApi.scriptAttackPrioritySetsByName.get('ANTIVEHICLESET')
+      ?.templatePriorityByName.get('CHINAINFANTRY')).toBe(10);
+
+    expect(logic.executeScriptAction({
+      actionType: 42, // NAMED_APPLY_ATTACK_PRIORITY_SET
+      params: [1, 'AntiVehicleSet'],
+    })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('ANTIVEHICLESET');
 
+    expect(logic.executeScriptAction({
+      actionType: 131, // SET_DEFAULT_ATTACK_PRIORITY
+      params: ['InfantryFirst', 2],
+    })).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 43, // TEAM_APPLY_ATTACK_PRIORITY_SET
       params: ['AlphaTeam', 'InfantryFirst'],
@@ -37254,6 +37284,18 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 42,
       params: [999, 'AnySet'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 129,
+      params: ['AntiVehicleSet', 'MissingType', 5],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 130,
+      params: ['', 1, 5],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 131,
+      params: ['', 2],
     })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 43,

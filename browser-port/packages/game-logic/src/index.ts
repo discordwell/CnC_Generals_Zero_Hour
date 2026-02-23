@@ -710,6 +710,7 @@ const BEZIER_ARC_LENGTH_TOLERANCE = 1.0;
 const AUTO_TARGET_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE * 2;
 const SCRIPT_AI_ATTITUDE_PASSIVE = 1;
 const SCRIPT_AI_ATTITUDE_NORMAL = 2;
+const SCRIPT_ATTACK_PRIORITY_DEFAULT = 1;
 
 /**
  * Source parity: TAiData guard parameters. Real values come from AIData.ini;
@@ -4050,6 +4051,12 @@ interface ScriptTeamRecord {
   productionPriorityFailureDecrease: number;
 }
 
+interface ScriptAttackPrioritySetRecord {
+  nameUpper: string;
+  defaultPriority: number;
+  templatePriorityByName: Map<string, number>;
+}
+
 interface MapScriptParameterRuntime {
   type: number;
   value: unknown;
@@ -4475,6 +4482,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [126, 'CAMERA_BW_MODE_END'],
   [127, 'DRAW_SKYBOX_BEGIN'],
   [128, 'DRAW_SKYBOX_END'],
+  [129, 'SET_ATTACK_PRIORITY_THING'],
+  [130, 'SET_ATTACK_PRIORITY_KIND_OF'],
+  [131, 'SET_DEFAULT_ATTACK_PRIORITY'],
   [132, 'CAMERA_STOP_FOLLOW'],
   [133, 'CAMERA_MOTION_BLUR'],
   [134, 'CAMERA_MOTION_BLUR_JUMP'],
@@ -5219,6 +5229,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::m_allObjectTypeLists (script object-type groups). */
   private readonly scriptObjectTypeListsByName = new Map<string, string[]>();
+  /** Source parity: ScriptEngine::m_attackPriorityInfo named sets (excluding default slot). */
+  private readonly scriptAttackPrioritySetsByName = new Map<string, ScriptAttackPrioritySetRecord>();
   /** Source parity: ScriptEngine::didUnitExist history keyed by object id in this port. */
   private readonly scriptExistedEntityIds = new Set<number>();
   /** Source parity: Object::m_triggerInfo isInside snapshots keyed by entity id. */
@@ -9738,6 +9750,23 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DRAW_SKYBOX_END':
         this.setScriptSkyboxEnabled(false);
         return true;
+      case 'SET_ATTACK_PRIORITY_THING':
+        return this.executeScriptSetAttackPriorityThing(
+          readString(0, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readInteger(2, ['priority', 'value']),
+        );
+      case 'SET_ATTACK_PRIORITY_KIND_OF':
+        return this.executeScriptSetAttackPriorityKindOf(
+          readString(0, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
+          readInteger(1, ['kindOfBit', 'kindOf', 'kind', 'kindOfIndex']),
+          readInteger(2, ['priority', 'value']),
+        );
+      case 'SET_DEFAULT_ATTACK_PRIORITY':
+        return this.executeScriptSetDefaultAttackPriority(
+          readString(0, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
+          readInteger(1, ['defaultPriority', 'priority', 'value']),
+        );
       case 'CAMERA_ENABLE_SLAVE_MODE':
         return this.setScriptCameraSlaveMode(
           readString(0, ['thingTemplateName', 'templateName', 'objectType']),
@@ -17503,22 +17532,133 @@ export class GameLogicSubsystem implements Subsystem {
     return attackPrioritySetName.trim().toUpperCase();
   }
 
+  private getOrCreateScriptAttackPrioritySetRecord(
+    attackPrioritySetName: string,
+  ): ScriptAttackPrioritySetRecord | null {
+    const normalizedSetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
+    if (!normalizedSetName) {
+      return null;
+    }
+
+    const existing = this.scriptAttackPrioritySetsByName.get(normalizedSetName);
+    if (existing) {
+      return existing;
+    }
+
+    const created: ScriptAttackPrioritySetRecord = {
+      nameUpper: normalizedSetName,
+      defaultPriority: SCRIPT_ATTACK_PRIORITY_DEFAULT,
+      templatePriorityByName: new Map<string, number>(),
+    };
+    this.scriptAttackPrioritySetsByName.set(normalizedSetName, created);
+    return created;
+  }
+
+  private resolveScriptAttackPrioritySetNameForApply(attackPrioritySetName: string): string {
+    const normalizedSetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
+    if (!normalizedSetName) {
+      return '';
+    }
+    return this.scriptAttackPrioritySetsByName.has(normalizedSetName)
+      ? normalizedSetName
+      : '';
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::setPriorityThing.
+   */
+  private executeScriptSetAttackPriorityThing(
+    attackPrioritySetName: string,
+    objectTypeName: string,
+    priority: number,
+  ): boolean {
+    const info = this.getOrCreateScriptAttackPrioritySetRecord(attackPrioritySetName);
+    if (!info) {
+      return false;
+    }
+
+    const objectTypes = this.resolveScriptObjectTypeCandidatesForAction(objectTypeName);
+    if (!objectTypes || objectTypes.length === 0) {
+      return false;
+    }
+
+    const nextPriority = Math.trunc(priority);
+    for (const objectType of objectTypes) {
+      const normalizedObjectType = this.normalizeScriptObjectTypeName(objectType);
+      if (!normalizedObjectType || !this.resolveObjectDefByTemplateName(normalizedObjectType)) {
+        return false;
+      }
+      info.templatePriorityByName.set(normalizedObjectType, nextPriority);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::setPriorityKind.
+   */
+  private executeScriptSetAttackPriorityKindOf(
+    attackPrioritySetName: string,
+    kindOfBit: number,
+    priority: number,
+  ): boolean {
+    const info = this.getOrCreateScriptAttackPrioritySetRecord(attackPrioritySetName);
+    if (!info) {
+      return false;
+    }
+
+    const kindOfName = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT[Math.trunc(kindOfBit)] ?? null;
+    if (!kindOfName) {
+      return true;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const nextPriority = Math.trunc(priority);
+    for (const objectDef of registry.objects ?? []) {
+      if (!this.normalizeKindOf(objectDef.kindOf).has(kindOfName)) {
+        continue;
+      }
+      const normalizedTemplateName = this.normalizeScriptObjectTypeName(objectDef.name);
+      if (!normalizedTemplateName) {
+        continue;
+      }
+      info.templatePriorityByName.set(normalizedTemplateName, nextPriority);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptEngine::setPriorityDefault.
+   */
+  private executeScriptSetDefaultAttackPriority(
+    attackPrioritySetName: string,
+    defaultPriority: number,
+  ): boolean {
+    const info = this.getOrCreateScriptAttackPrioritySetRecord(attackPrioritySetName);
+    if (!info) {
+      return false;
+    }
+    info.defaultPriority = Math.trunc(defaultPriority);
+    return true;
+  }
+
   /**
    * Source parity subset: ScriptActions::updateNamedAttackPrioritySet.
-   * TODO(source-parity): resolve AttackPriorityInfo lookup/default fallback table.
    */
   private executeScriptNamedApplyAttackPrioritySet(entityId: number, attackPrioritySetName: string): boolean {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || entity.destroyed) {
       return false;
     }
-    entity.scriptAttackPrioritySetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
+    entity.scriptAttackPrioritySetName = this.resolveScriptAttackPrioritySetNameForApply(attackPrioritySetName);
     return true;
   }
 
   /**
    * Source parity subset: ScriptActions::updateTeamAttackPrioritySet.
-   * TODO(source-parity): resolve AttackPriorityInfo lookup/default fallback table.
    */
   private executeScriptTeamApplyAttackPrioritySet(teamName: string, attackPrioritySetName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -17526,7 +17666,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const normalizedSetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
+    const normalizedSetName = this.resolveScriptAttackPrioritySetNameForApply(attackPrioritySetName);
     if (normalizedSetName) {
       team.attackPrioritySetName = normalizedSetName;
     }
@@ -52401,6 +52541,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.commandSetButtonSlotOverrides.clear();
     this.scriptObjectCountBySideAndType.clear();
     this.scriptObjectTypeListsByName.clear();
+    this.scriptAttackPrioritySetsByName.clear();
     this.scriptExistedEntityIds.clear();
     this.scriptNamedEntitiesByName.clear();
     this.scriptTriggerMembershipByEntityId.clear();
