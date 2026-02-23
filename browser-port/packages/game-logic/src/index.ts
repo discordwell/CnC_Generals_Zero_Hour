@@ -4366,6 +4366,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [134, 'CAMERA_MOTION_BLUR_JUMP'],
   [135, 'CAMERA_MOTION_BLUR_FOLLOW'],
   [136, 'CAMERA_MOTION_BLUR_END_FOLLOW'],
+  [137, 'FREEZE_TIME'],
+  [138, 'UNFREEZE_TIME'],
   [139, 'SHOW_MILITARY_CAPTION'],
   [140, 'CAMERA_SET_AUDIBLE_DISTANCE'],
   [143, 'SET_FPS_LIMIT'],
@@ -4562,6 +4564,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [339, 'CAMERA_MOTION_BLUR_JUMP'],
   [340, 'CAMERA_MOTION_BLUR_FOLLOW'],
   [341, 'CAMERA_MOTION_BLUR_END_FOLLOW'],
+  [342, 'SHOW_WEATHER'],
+  [343, 'UNFREEZE_TIME'],
   [344, 'SHOW_MILITARY_CAPTION'],
   [345, 'CAMERA_SET_AUDIBLE_DISTANCE'],
   [351, 'MAP_SHROUD_ALL'],
@@ -5194,6 +5198,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptDrawIconUIEnabled = true;
   /** Source parity: ScriptActions::doSetDynamicLODMode -> GameLogic::setShowDynamicLOD. */
   private scriptDynamicLodEnabled = true;
+  /** Source parity: ScriptEngine::m_freezeByScript toggled by FREEZE_TIME / UNFREEZE_TIME. */
+  private scriptTimeFrozenByScript = false;
+  /** Source parity bridge: ScriptActions::doWeather -> SnowManager visibility toggle. */
+  private scriptWeatherVisible = true;
   /** Source parity: TerrainLogic::setActiveBoundary state from MAP_SWITCH_BORDER script action. */
   private scriptActiveBoundaryIndex: number | null = null;
 
@@ -8063,6 +8071,22 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  setScriptTimeFrozenByScript(frozen: boolean): void {
+    this.scriptTimeFrozenByScript = frozen;
+  }
+
+  isScriptTimeFrozenByScript(): boolean {
+    return this.scriptTimeFrozenByScript;
+  }
+
+  setScriptWeatherVisible(visible: boolean): void {
+    this.scriptWeatherVisible = visible;
+  }
+
+  isScriptWeatherVisible(): boolean {
+    return this.scriptWeatherVisible;
+  }
+
   /**
    * Source parity subset: ScriptActions::doDisableInput / doEnableInput.
    */
@@ -8891,6 +8915,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 337 && paramCount === 0) {
         // 337 also maps to NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH; 0-param signature is camera stop follow.
         actionType = 'CAMERA_STOP_FOLLOW';
+      } else if (numericType === 342 && paramCount === 0) {
+        // 342 also maps to SHOW_WEATHER; 0-param signature is FREEZE_TIME from offset script-set ids.
+        actionType = 'FREEZE_TIME';
       } else if (numericType === 348 && paramCount === 1) {
         // 348 also maps to PLAYER_SET_MONEY; 1-param signature is FPS limit.
         actionType = 'SET_FPS_LIMIT';
@@ -8967,6 +8994,15 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DEFEAT':
       case 'LOCALDEFEAT':
         return this.setScriptLocalGameEndState(true);
+      case 'FREEZE_TIME':
+        this.setScriptTimeFrozenByScript(true);
+        return true;
+      case 'UNFREEZE_TIME':
+        this.setScriptTimeFrozenByScript(false);
+        return true;
+      case 'SHOW_WEATHER':
+        this.setScriptWeatherVisible(readBoolean(0, ['showWeather', 'visible', 'enabled', 'value']));
+        return true;
       case 'ENABLE_SCORING':
         this.setScriptScoringEnabled(true);
         return true;
@@ -18952,6 +18988,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptOcclusionModeEnabled = false;
     this.scriptDrawIconUIEnabled = true;
     this.scriptDynamicLodEnabled = true;
+    this.scriptTimeFrozenByScript = false;
+    this.scriptWeatherVisible = true;
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
@@ -49403,6 +49441,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptOcclusionModeEnabled = false;
     this.scriptDrawIconUIEnabled = true;
     this.scriptDynamicLodEnabled = true;
+    this.scriptTimeFrozenByScript = false;
+    this.scriptWeatherVisible = true;
     this.scriptActiveBoundaryIndex = null;
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;

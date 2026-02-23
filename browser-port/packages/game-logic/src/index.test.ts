@@ -35329,6 +35329,52 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptCameraFilterRequests()).toEqual([]);
   });
 
+  it('executes script freeze-time and weather actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.isScriptTimeFrozenByScript()).toBe(false);
+    expect(logic.isScriptWeatherVisible()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 137, // FREEZE_TIME (raw id)
+    })).toBe(true);
+    expect(logic.isScriptTimeFrozenByScript()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 342, // FREEZE_TIME (offset/collision id when no params)
+      params: [],
+    })).toBe(true);
+    expect(logic.isScriptTimeFrozenByScript()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 138, // UNFREEZE_TIME (raw id)
+    })).toBe(true);
+    expect(logic.isScriptTimeFrozenByScript()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 343, // UNFREEZE_TIME (offset id)
+    })).toBe(true);
+    expect(logic.isScriptTimeFrozenByScript()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 342, // SHOW_WEATHER (raw id when params are present)
+      params: [0],
+    })).toBe(true);
+    expect(logic.isScriptWeatherVisible()).toBe(false);
+    expect(logic.isScriptTimeFrozenByScript()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 342,
+      params: [1],
+    })).toBe(true);
+    expect(logic.isScriptWeatherVisible()).toBe(true);
+  });
+
   it('executes script movie and letterbox actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
