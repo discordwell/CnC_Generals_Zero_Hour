@@ -1782,6 +1782,8 @@ interface MapEntity {
    */
   currentSpeed: number;
   moveTarget: VectorXZ | null;
+  /** Source parity: Locomotor::m_closeEnoughDist override from script stopping-distance actions. */
+  scriptStoppingDistanceOverride: number | null;
   pathfindGoalCell: { x: number; z: number } | null;
   pathfindPosCell: { x: number; z: number } | null;
   supplyWarehouseProfile: SupplyWarehouseProfile | null;
@@ -4384,6 +4386,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [138, 'UNFREEZE_TIME'],
   [139, 'SHOW_MILITARY_CAPTION'],
   [140, 'CAMERA_SET_AUDIBLE_DISTANCE'],
+  [141, 'SET_STOPPING_DISTANCE'],
+  [142, 'NAMED_SET_STOPPING_DISTANCE'],
   [143, 'SET_FPS_LIMIT'],
   [144, 'MUSIC_SET_VOLUME'],
   [145, 'MAP_SHROUD_AT_WAYPOINT'],
@@ -4586,6 +4590,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [343, 'UNFREEZE_TIME'],
   [344, 'SHOW_MILITARY_CAPTION'],
   [345, 'CAMERA_SET_AUDIBLE_DISTANCE'],
+  [346, 'SET_STOPPING_DISTANCE'],
+  [347, 'NAMED_SET_STOPPING_DISTANCE'],
   [351, 'MAP_SHROUD_ALL'],
   [361, 'DISABLE_SPECIAL_POWER_DISPLAY'],
   [362, 'ENABLE_SPECIAL_POWER_DISPLAY'],
@@ -8138,6 +8144,42 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptWeatherVisible;
   }
 
+  private applyScriptStoppingDistanceToEntity(entity: MapEntity, stoppingDistance: number): boolean {
+    if (!entity.canMove || entity.locomotorSets.size === 0) {
+      return false;
+    }
+    if (!Number.isFinite(stoppingDistance) || stoppingDistance < 0.5) {
+      return true;
+    }
+    entity.scriptStoppingDistanceOverride = stoppingDistance;
+    return true;
+  }
+
+  private executeScriptNamedSetStoppingDistance(entityId: number, stoppingDistance: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    return this.applyScriptStoppingDistanceToEntity(entity, stoppingDistance);
+  }
+
+  private executeScriptSetStoppingDistance(teamName: string, stoppingDistance: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      // Source parity: return immediately when encountering a member without an active locomotor.
+      if (!this.applyScriptStoppingDistanceToEntity(entity, stoppingDistance)) {
+        return true;
+      }
+    }
+    return true;
+  }
+
   /**
    * Source parity subset: ScriptActions::doDisableInput / doEnableInput.
    */
@@ -9103,6 +9145,16 @@ export class GameLogicSubsystem implements Subsystem {
           readNumber(0, ['audibleDistance', 'distance', 'value']),
         );
         return true;
+      case 'SET_STOPPING_DISTANCE':
+        return this.executeScriptSetStoppingDistance(
+          readString(0, ['teamName', 'team']),
+          readNumber(1, ['stoppingDistance', 'distance', 'value']),
+        );
+      case 'NAMED_SET_STOPPING_DISTANCE':
+        return this.executeScriptNamedSetStoppingDistance(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+          readNumber(1, ['stoppingDistance', 'distance', 'value']),
+        );
       case 'SET_FPS_LIMIT':
         this.setScriptFramesPerSecondLimit(
           readInteger(0, ['fpsLimit', 'framesPerSecondLimit', 'value']),
@@ -19359,6 +19411,7 @@ export class GameLogicSubsystem implements Subsystem {
       speed: locomotorProfile.movementSpeed > 0 ? locomotorProfile.movementSpeed : this.config.defaultMoveSpeed,
       currentSpeed: 0,
       moveTarget: null,
+      scriptStoppingDistanceOverride: null,
       pathfindGoalCell: null,
       pathfindPosCell: (posCellX !== null && posCellZ !== null) ? { x: posCellX, z: posCellZ } : null,
       supplyWarehouseProfile,
@@ -48504,6 +48557,19 @@ export class GameLogicSubsystem implements Subsystem {
       const dx = entity.moveTarget.x - entity.x;
       const dz = entity.moveTarget.z - entity.z;
       const distance = Math.hypot(dx, dz);
+
+      const isFinalPathNode = entity.pathIndex >= entity.movePath.length - 1;
+      const stoppingDistanceOverride = isFinalPathNode
+        ? (entity.scriptStoppingDistanceOverride ?? 0)
+        : 0;
+      if (stoppingDistanceOverride >= 0.5 && distance <= stoppingDistanceOverride) {
+        entity.moving = false;
+        entity.moveTarget = null;
+        entity.movePath = [];
+        entity.pathfindGoalCell = null;
+        entity.currentSpeed = 0;
+        continue;
+      }
 
       if (distance < 0.001) {
         entity.pathIndex += 1;

@@ -35651,6 +35651,98 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptFramesPerSecondLimit()).toBe(0);
   });
 
+  it('executes script stopping-distance actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL ScriptLoco', {}),
+        ], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+      ],
+      locomotors: [makeLocomotorDef('ScriptLoco', 30)],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('StopTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+        moving: boolean;
+        scriptStoppingDistanceOverride: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 141, // SET_STOPPING_DISTANCE (raw id)
+      params: ['StopTeam', 8],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 346, // SET_STOPPING_DISTANCE (offset id)
+      params: ['StopTeam', 12],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(12);
+    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(12);
+
+    expect(logic.executeScriptAction({
+      actionType: 142, // NAMED_SET_STOPPING_DISTANCE (raw id)
+      params: [1, 6],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 347, // NAMED_SET_STOPPING_DISTANCE (offset id)
+      params: [2, 4],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(6);
+    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(4);
+
+    expect(logic.executeScriptAction({
+      actionType: 142,
+      params: [1, 0.25], // < 0.5 should be ignored (source parity)
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(6);
+
+    expect(logic.executeScriptAction({
+      actionType: 141,
+      params: ['MissingTeam', 5],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 142,
+      params: [999, 5],
+    })).toBe(false);
+
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 1,
+      targetX: 80,
+      targetZ: 10,
+    });
+    for (let frame = 0; frame < 300; frame += 1) {
+      logic.update(1 / 30);
+      if (!privateApi.spawnedEntities.get(1)?.moving) {
+        break;
+      }
+    }
+
+    const moved = privateApi.spawnedEntities.get(1)!;
+    expect(moved.moving).toBe(false);
+    const distanceToTarget = Math.hypot(moved.x - 80, moved.z - 10);
+    expect(distanceToTarget).toBeLessThanOrEqual(6.1);
+    expect(distanceToTarget).toBeGreaterThan(0.1);
+  });
+
   it('executes script force-select and destroy-all-contained actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
