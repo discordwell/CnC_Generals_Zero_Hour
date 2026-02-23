@@ -4209,7 +4209,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [15, 'INCREMENT_COUNTER'],
   [16, 'DECREMENT_COUNTER'],
   [20, 'SET_MILLISECOND_TIMER'],
+  [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
+  [56, 'NAMED_FOLLOW_WAYPOINTS'],
   [147, 'SET_RANDOM_TIMER'],
   [148, 'SET_RANDOM_MSEC_TIMER'],
   [149, 'STOP_TIMER'],
@@ -4229,6 +4231,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [278, 'TEAM_HUNT_WITH_COMMAND_BUTTON'],
   [279, 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL'],
   [280, 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'],
+  [281, 'TEAM_FOLLOW_WAYPOINTS_EXACT'],
+  [282, 'NAMED_FOLLOW_WAYPOINTS_EXACT'],
   [477, 'PLAYER_ADD_SKILLPOINTS'],
   [478, 'PLAYER_ADD_RANKLEVEL'],
   [479, 'PLAYER_SET_RANKLEVEL'],
@@ -4284,6 +4288,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [412, 'UNIT_DESTROY_ALL_CONTAINED'],
   [413, 'RADAR_FORCE_ENABLE'],
   [414, 'RADAR_REVERT_TO_NORMAL'],
+  [241, 'TEAM_FOLLOW_WAYPOINTS'],
+  [261, 'NAMED_FOLLOW_WAYPOINTS'],
   [415, 'SCREEN_SHAKE'],
   [416, 'TECHTREE_MODIFY_BUILDABILITY_OBJECT'],
   [417, 'WAREHOUSE_SET_VALUE'],
@@ -4347,6 +4353,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [476, 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS'],
   [484, 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL'],
   [485, 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'],
+  [486, 'TEAM_FOLLOW_WAYPOINTS_EXACT'],
+  [487, 'NAMED_FOLLOW_WAYPOINTS_EXACT'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4627,9 +4635,14 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptTriggerEnterExitFrameByEntityId = new Map<number, number>();
   /**
    * Source parity subset: AIUpdateInterface::getCompletedWaypoint path labels by entity.
-   * TODO(source-parity): feed this from script waypoint-path movement actions.
    */
   private readonly scriptCompletedWaypointPathsByEntityId = new Map<number, Set<string>>();
+  /** Tracks script-issued waypoint-path goals until completion/abort. */
+  private readonly scriptPendingWaypointPathByEntityId = new Map<number, {
+    pathName: string;
+    finalX: number;
+    finalZ: number;
+  }>();
   /** Source parity: evaluateUnitHasEmptied transport-status cache keyed by entity id. */
   private readonly scriptTransportStatusByEntityId = new Map<number, { frameNumber: number; unitCount: number }>();
   /** Source parity: ScriptEngine::m_namedObjects (name → last-known entity id). */
@@ -5717,6 +5730,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProjectileFlightCollisions();
     this.processCountermeasureDiversions();
     this.updatePendingWeaponDamage();
+    this.updateScriptWaypointPathCompletions();
     this.updateScriptTriggerTransitions();
     this.executeMapScripts();
     this.clearScriptUIInteractions();
@@ -7682,6 +7696,32 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamUseCommandButtonAbility(
           readString(0, ['teamName', 'team']),
           readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
+      case 'NAMED_FOLLOW_WAYPOINTS':
+        return this.executeScriptNamedFollowWaypoints(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
+          false,
+        );
+      case 'TEAM_FOLLOW_WAYPOINTS':
+        return this.executeScriptTeamFollowWaypoints(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
+          readBoolean(2, ['asTeam', 'asGroup']),
+          false,
+        );
+      case 'NAMED_FOLLOW_WAYPOINTS_EXACT':
+        return this.executeScriptNamedFollowWaypoints(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
+          true,
+        );
+      case 'TEAM_FOLLOW_WAYPOINTS_EXACT':
+        return this.executeScriptTeamFollowWaypoints(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
+          readBoolean(2, ['asTeam', 'asGroup']),
+          true,
         );
       case 'NAMED_FLASH_WHITE':
         return this.executeScriptNamedFlashWhite(
@@ -11285,6 +11325,82 @@ export class GameLogicSubsystem implements Subsystem {
     return this.resolveScriptCurrentPlayerSideFromContext();
   }
 
+  /**
+   * Source parity subset: ScriptActions::doNamedFollowWaypoints / doNamedFollowWaypointsExact.
+   */
+  private executeScriptNamedFollowWaypoints(
+    entityId: number,
+    waypointPathLabel: string,
+    exact: boolean,
+  ): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed || !entity.canMove) {
+      return false;
+    }
+
+    const route = this.resolveScriptWaypointRouteByPathLabel(
+      waypointPathLabel,
+      entity.x,
+      entity.z,
+    );
+    if (!route || route.length === 0) {
+      return false;
+    }
+
+    // TODO(source-parity): exact-follow uses aiFollowWaypointPathExact and can preserve
+    // tighter corner traversal than this shared route queue implementation.
+    void exact;
+    return this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamFollowWaypoints / doTeamFollowWaypointsExact.
+   */
+  private executeScriptTeamFollowWaypoints(
+    teamName: string,
+    waypointPathLabel: string,
+    asTeam: boolean,
+    exact: boolean,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const route = this.resolveScriptWaypointRouteByPathLabel(
+      waypointPathLabel,
+      center.x,
+      center.z,
+    );
+    if (!route || route.length === 0) {
+      return false;
+    }
+
+    // TODO(source-parity): "asTeam" and exact-follow variants should use group-level
+    // waypoint followers (groupFollowWaypointPath{AsTeam}{Exact}) instead of per-unit queues.
+    void asTeam;
+    void exact;
+
+    let movedAny = false;
+    for (const entity of teamMembers) {
+      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+        movedAny = true;
+      }
+    }
+    return movedAny;
+  }
+
   private findScriptBuildDozerForTemplate(side: string, templateName: string): MapEntity | null {
     let bestDozer: MapEntity | null = null;
     for (const entity of this.spawnedEntities.values()) {
@@ -11490,20 +11606,39 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    const waypointData = this.loadedMapData?.waypoints;
-    if (!waypointData) {
-      return null;
-    }
-
     const fullPathLabel = `${basePathLabel}${enemyStartPosition}`.trim().toUpperCase();
     if (!fullPathLabel) {
+      return null;
+    }
+    return this.resolveScriptWaypointRouteByNormalizedLabel(fullPathLabel, centerX, centerZ);
+  }
+
+  private resolveScriptWaypointRouteByPathLabel(
+    waypointPathLabel: string,
+    centerX: number,
+    centerZ: number,
+  ): Array<{ x: number; z: number }> | null {
+    const normalizedPathLabel = waypointPathLabel.trim().toUpperCase();
+    if (!normalizedPathLabel) {
+      return null;
+    }
+    return this.resolveScriptWaypointRouteByNormalizedLabel(normalizedPathLabel, centerX, centerZ);
+  }
+
+  private resolveScriptWaypointRouteByNormalizedLabel(
+    normalizedPathLabel: string,
+    centerX: number,
+    centerZ: number,
+  ): Array<{ x: number; z: number }> | null {
+    const waypointData = this.loadedMapData?.waypoints;
+    if (!waypointData) {
       return null;
     }
 
     const routeNodes = waypointData.nodes.filter((node) => {
       const labels = [node.pathLabel1, node.pathLabel2, node.pathLabel3];
       for (const label of labels) {
-        if (label && label.trim().toUpperCase() === fullPathLabel) {
+        if (label && label.trim().toUpperCase() === normalizedPathLabel) {
           return true;
         }
       }
@@ -11606,6 +11741,7 @@ export class GameLogicSubsystem implements Subsystem {
   private enqueueScriptWaypointRoute(
     entity: MapEntity,
     route: readonly { x: number; z: number }[],
+    completionPathName?: string,
   ): boolean {
     if (route.length === 0) {
       return false;
@@ -11620,6 +11756,7 @@ export class GameLogicSubsystem implements Subsystem {
       commandSource: 'SCRIPT',
     });
     if (!entity.moving) {
+      this.scriptPendingWaypointPathByEntityId.delete(entity.id);
       return false;
     }
 
@@ -11629,7 +11766,48 @@ export class GameLogicSubsystem implements Subsystem {
         entity.movePath.push({ x: waypoint.x, z: waypoint.z });
       }
     }
+
+    const normalizedPathName = completionPathName
+      ? this.normalizeScriptCompletionName(completionPathName)
+      : '';
+    if (normalizedPathName) {
+      const finalWaypoint = route[route.length - 1]!;
+      this.scriptPendingWaypointPathByEntityId.set(entity.id, {
+        pathName: normalizedPathName,
+        finalX: finalWaypoint.x,
+        finalZ: finalWaypoint.z,
+      });
+    } else {
+      this.scriptPendingWaypointPathByEntityId.delete(entity.id);
+    }
     return true;
+  }
+
+  private updateScriptWaypointPathCompletions(): void {
+    for (const [entityId, pendingPath] of this.scriptPendingWaypointPathByEntityId.entries()) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        this.scriptPendingWaypointPathByEntityId.delete(entityId);
+        continue;
+      }
+
+      if (entity.moving || entity.movePath.length > 0 || entity.moveTarget !== null) {
+        continue;
+      }
+
+      const completionDistance = Math.max(
+        MAP_XY_FACTOR,
+        this.resolveEntityMajorRadius(entity) + MAP_XY_FACTOR * 0.5,
+      );
+      const distanceToGoal = Math.hypot(
+        entity.x - pendingPath.finalX,
+        entity.z - pendingPath.finalZ,
+      );
+      if (distanceToGoal <= completionDistance) {
+        this.notifyScriptWaypointPathCompleted(entity.id, pendingPath.pathName);
+      }
+      this.scriptPendingWaypointPathByEntityId.delete(entityId);
+    }
   }
 
   private getScriptActionHumanSides(): Set<string> {
@@ -28172,6 +28350,7 @@ export class GameLogicSubsystem implements Subsystem {
       this.caveTrackerIndexByEntityId.delete(entityId);
       this.clearScriptTriggerTrackingForEntity(entityId);
       this.scriptCompletedWaypointPathsByEntityId.delete(entityId);
+      this.scriptPendingWaypointPathByEntityId.delete(entityId);
       for (const team of this.scriptTeamsByName.values()) {
         team.memberEntityIds.delete(entityId);
       }
@@ -45869,6 +46048,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptTriggerExitedByEntityId.clear();
     this.scriptTriggerEnterExitFrameByEntityId.clear();
     this.scriptCompletedWaypointPathsByEntityId.clear();
+    this.scriptPendingWaypointPathByEntityId.clear();
     this.scriptTransportStatusByEntityId.clear();
     this.dynamicWaterUpdates.length = 0;
     this.loadedMapData = null;

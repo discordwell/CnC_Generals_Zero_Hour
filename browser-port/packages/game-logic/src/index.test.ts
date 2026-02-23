@@ -30831,6 +30831,145 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes follow-waypoints actions using raw and offset source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 16, 20), // id 1
+      makeMapObject('Ranger', 18, 22), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 21, name: 'Patrol_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'PatrolPathA', biDirectional: false },
+        { id: 22, name: 'Patrol_B', position: { x: 45, y: 20, z: 0 }, pathLabel1: 'PatrolPathA', biDirectional: false },
+        { id: 23, name: 'Patrol_C', position: { x: 70, y: 20, z: 0 }, pathLabel1: 'PatrolPathA', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 21, waypoint2: 22 },
+        { waypoint1: 22, waypoint2: 23 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('PatrolTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        moveTarget: { x: number; z: number } | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 36, // TEAM_FOLLOW_WAYPOINTS (raw id)
+      params: ['PatrolTeam', 'PatrolPathA', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 241, // TEAM_FOLLOW_WAYPOINTS (offset id)
+      params: ['PatrolTeam', 'PatrolPathA', 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 56, // NAMED_FOLLOW_WAYPOINTS (raw id)
+      params: [1, 'PatrolPathA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 261, // NAMED_FOLLOW_WAYPOINTS (offset id)
+      params: [2, 'PatrolPathA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 281, // TEAM_FOLLOW_WAYPOINTS_EXACT (raw id)
+      params: ['PatrolTeam', 'PatrolPathA', 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 486, // TEAM_FOLLOW_WAYPOINTS_EXACT (offset id)
+      params: ['PatrolTeam', 'PatrolPathA', 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 282, // NAMED_FOLLOW_WAYPOINTS_EXACT (raw id)
+      params: [1, 'PatrolPathA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 487, // NAMED_FOLLOW_WAYPOINTS_EXACT (offset id)
+      params: [2, 'PatrolPathA'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 36,
+      params: ['MissingTeam', 'PatrolPathA', 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 56,
+      params: [1, 'MissingPath'],
+    })).toBe(false);
+  });
+
+  it('records waypoint-path completion from follow-waypoints actions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 18, 20), // id 1
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 31, name: 'Route_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'RouteAlpha', biDirectional: false },
+        { id: 32, name: 'Route_B', position: { x: 40, y: 20, z: 0 }, pathLabel1: 'RouteAlpha', biDirectional: false },
+        { id: 33, name: 'Route_C', position: { x: 60, y: 20, z: 0 }, pathLabel1: 'RouteAlpha', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 31, waypoint2: 32 },
+        { waypoint1: 32, waypoint2: 33 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 56, // NAMED_FOLLOW_WAYPOINTS (raw id)
+      params: [1, 'RouteAlpha'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 80; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'RouteAlpha',
+    })).toBe(true);
+  });
+
   it('executes script skirmish-build-base-defense-front action using source action id', () => {
     const bundle = makeBundle({
       objects: [
