@@ -33552,6 +33552,109 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes source waypoint-path command-button action for CAN_USE_WAYPOINTS special powers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptPathCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_PathAllowed', {
+            SpecialPowerTemplate: 'ScriptPathPowerAllowed',
+          }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_PathBlocked', {
+            SpecialPowerTemplate: 'ScriptPathPowerBlocked',
+          }),
+        ], {
+          CommandSet: 'ScriptPathCasterCommandSet',
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_PathPowerAllowed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPathPowerAllowed',
+          Options: 'NEED_TARGET_POS CAN_USE_WAYPOINTS',
+        }),
+        makeCommandButtonDef('Command_PathPowerBlocked', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPathPowerBlocked',
+          Options: 'NEED_TARGET_POS',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptPathCasterCommandSet', {
+          1: 'Command_PathPowerAllowed',
+          2: 'Command_PathPowerBlocked',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPathPowerAllowed', { ReloadTime: 0 }),
+        makeSpecialPowerDef('ScriptPathPowerBlocked', { ReloadTime: 0 }),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('ScriptPathCaster', 28, 35)], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'PathNodeFar',
+          position: { x: 90, y: 90, z: 0 },
+          pathLabel1: 'PathAlpha',
+        },
+        {
+          id: 2,
+          name: 'PathNodeNear',
+          position: { x: 30, y: 35, z: 0 },
+          pathLabel1: 'PathAlpha',
+        },
+        {
+          id: 3,
+          name: 'PathNodeMid',
+          position: { x: 60, y: 35, z: 0 },
+          pathLabel1: 'PathAlpha',
+        },
+      ],
+      links: [
+        { waypoint1: 2, waypoint2: 3 },
+        { waypoint1: 3, waypoint2: 1 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 542, // NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH
+      params: [1, 'Command_PathPowerAllowed', 'pathalpha'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPATHPOWERALLOWED',
+      dispatchType: 'POSITION',
+      commandButtonId: 'Command_PathPowerAllowed',
+      targetEntityId: null,
+      targetX: 30,
+      targetZ: 35,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 542,
+      params: [1, 'Command_PathPowerBlocked', 'PathAlpha'],
+    })).toBe(false);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      commandButtonId: 'Command_PathPowerAllowed',
+      targetX: 30,
+      targetZ: 35,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 542,
+      params: [1, 'Command_PathPowerAllowed', 'MissingPath'],
+    })).toBe(false);
+  });
+
   it('executes script flash-white actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

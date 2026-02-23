@@ -331,6 +331,7 @@ const SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT = 0x00000004;
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_POS = 0x00000020;
 const SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION = 0x00001000;
+const SCRIPT_COMMAND_OPTION_CAN_USE_WAYPOINTS = 0x00400000;
 const SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET = SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT
   | SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT
   | SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT;
@@ -356,7 +357,7 @@ const SCRIPT_COMMAND_OPTION_NAME_TO_MASK = new Map<string, number>([
   ['SCRIPT_ONLY', 0x00080000],
   ['IGNORES_UNDERPOWERED', 0x00100000],
   ['USES_MINE_CLEARING_WEAPONSET', 0x00200000],
-  ['CAN_USE_WAYPOINTS', 0x00400000],
+  ['CAN_USE_WAYPOINTS', SCRIPT_COMMAND_OPTION_CAN_USE_WAYPOINTS],
   ['MUST_BE_STOPPED', 0x00800000],
 ]);
 
@@ -4453,6 +4454,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [526, 'SOUND_REMOVE_TYPE'],
   [527, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [528, 'QUICKVICTORY'],
+  [542, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -8033,6 +8035,12 @@ export class GameLogicSubsystem implements Subsystem {
           readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
           readString(2, ['waypointName', 'waypoint']),
         );
+      case 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH':
+        return this.executeScriptNamedUseCommandButtonAbilityUsingWaypointPath(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+          readString(2, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
+        );
       case 'TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED':
         return this.executeScriptTeamUseCommandButtonAbilityOnNamed(
           readString(0, ['teamName', 'team']),
@@ -10308,6 +10316,67 @@ export class GameLogicSubsystem implements Subsystem {
         executed = true;
       }
     }
+    return executed;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath.
+   * C++ routes through Object::doCommandButtonUsingWaypoints, which currently supports
+   * special powers with CAN_USE_WAYPOINTS. Full waypoint-following special-power locomotion
+   * is pending; this subset targets the closest waypoint on the path.
+   */
+  private executeScriptNamedUseCommandButtonAbilityUsingWaypointPath(
+    entityId: number,
+    commandButtonName: string,
+    waypointPathName: string,
+  ): boolean {
+    const sourceEntity = this.spawnedEntities.get(entityId);
+    if (!sourceEntity || sourceEntity.destroyed) {
+      return false;
+    }
+
+    const route = this.resolveScriptWaypointRouteByPathLabel(waypointPathName, sourceEntity.x, sourceEntity.z);
+    if (!route || route.length === 0) {
+      return false;
+    }
+
+    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
+    if (commandButtons.length === 0) {
+      return false;
+    }
+
+    const closestWaypoint = route[0]!;
+    let executed = false;
+    for (const commandButtonDef of commandButtons) {
+      const commandTypeName = this.normalizeScriptCommandTypeName(
+        commandButtonDef.commandTypeName
+        ?? readStringField(commandButtonDef.fields, ['Command'])
+        ?? '',
+      );
+      if (
+        commandTypeName !== 'SPECIAL_POWER'
+        && commandTypeName !== 'SPECIAL_POWER_FROM_COMMAND_CENTER'
+        && commandTypeName !== 'SPECIAL_POWER_FROM_SHORTCUT'
+        && commandTypeName !== 'SPECIAL_POWER_CONSTRUCT'
+        && commandTypeName !== 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT'
+      ) {
+        continue;
+      }
+
+      const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+      if ((commandOption & SCRIPT_COMMAND_OPTION_CAN_USE_WAYPOINTS) === 0) {
+        continue;
+      }
+
+      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
+        kind: 'POSITION',
+        targetX: closestWaypoint.x,
+        targetZ: closestWaypoint.z,
+      })) {
+        executed = true;
+      }
+    }
+
     return executed;
   }
 
