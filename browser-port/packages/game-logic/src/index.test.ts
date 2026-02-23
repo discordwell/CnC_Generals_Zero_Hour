@@ -36549,6 +36549,74 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script ownership-transfer actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AmericaBeacon', 'America', ['BEACON'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaInfantry', 10, 10), // id 1 transfer candidate
+        makeMapObject('AmericaBeacon', 12, 10), // id 2 excluded from player transfer
+        makeMapObject('ChinaInfantry', 14, 10), // id 3 destination-side baseline
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setSideCredits('America', 500);
+    logic.setSideCredits('China', 200);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        side: string;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 84, // PLAYER_TRANSFER_OWNERSHIP_PLAYER
+      params: ['America', 'China'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.side).toBe('china');
+    expect(privateApi.spawnedEntities.get(2)?.side).toBe('America');
+    expect(privateApi.spawnedEntities.get(3)?.side).toBe('China');
+    expect(logic.getSideCredits('America')).toBe(0);
+    expect(logic.getSideCredits('China')).toBe(700);
+
+    expect(logic.executeScriptAction({
+      actionType: 85, // NAMED_TRANSFER_OWNERSHIP_PLAYER
+      params: [2, 'China'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.side).toBe('china');
+
+    expect(logic.executeScriptAction({
+      actionType: 84,
+      params: ['MissingSide', 'China'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 84,
+      params: ['China', 'MissingSide'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 85,
+      params: [999, 'China'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 85,
+      params: [1, 'MissingSide'],
+    })).toBe(false);
+  });
+
   it('executes script movie and letterbox actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
