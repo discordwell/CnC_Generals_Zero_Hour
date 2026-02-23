@@ -4941,6 +4941,7 @@ const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'RESIZE_VIEW_GUARDBAND',
   'DELETE_ALL_UNMANNED',
   'CHOOSE_VICTIM_ALWAYS_USES_NORMAL',
+  'AI_PLAYER_BUILD_TYPE_NEAREST_TEAM',
   'CAMERA_ENABLE_SLAVE_MODE',
   'CAMERA_DISABLE_SLAVE_MODE',
   'CAMERA_ADD_SHAKER_AT',
@@ -9790,6 +9791,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 342 && paramCount === 0) {
         // 342 also maps to SHOW_WEATHER; 0-param signature is FREEZE_TIME from offset script-set ids.
         actionType = 'FREEZE_TIME';
+      } else if (numericType === 343 && paramCount === 3) {
+        // 343 also maps to UNFREEZE_TIME; 3-param signature is AI player build nearest team.
+        actionType = 'AI_PLAYER_BUILD_TYPE_NEAREST_TEAM';
       } else if (numericType === 348 && paramCount === 1) {
         // 348 also maps to PLAYER_SET_MONEY; 1-param signature is FPS limit.
         actionType = 'SET_FPS_LIMIT';
@@ -10779,6 +10783,12 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptSkirmishBuildBuilding(
           readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
           readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
+        );
+      case 'AI_PLAYER_BUILD_TYPE_NEAREST_TEAM':
+        return this.executeScriptAIPlayerBuildTypeNearestTeam(
+          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readString(2, ['teamName', 'team']),
         );
       case 'SKIRMISH_FOLLOW_APPROACH_PATH':
         return this.executeScriptTeamFollowSkirmishApproachPath(
@@ -13371,6 +13381,127 @@ export class GameLogicSubsystem implements Subsystem {
       return true;
     }
     return entity.completedUpgrades.has(normalizedUpgrade);
+  }
+
+  private tryScriptConstructBuildingAtPosition(
+    side: string,
+    objectDef: ObjectDef,
+    worldX: number,
+    worldZ: number,
+    angle: number,
+  ): boolean {
+    const dozer = this.findScriptBuildDozerForTemplate(side, objectDef.name);
+    if (!dozer) {
+      return false;
+    }
+
+    const beforePending = this.pendingConstructionActions.get(dozer.id);
+    this.handleConstructBuildingCommand({
+      type: 'constructBuilding',
+      entityId: dozer.id,
+      templateName: objectDef.name,
+      targetPosition: [
+        worldX,
+        this.resolveGroundHeight(worldX, worldZ),
+        worldZ,
+      ],
+      angle,
+    });
+
+    const afterPending = this.pendingConstructionActions.get(dozer.id);
+    return afterPending !== undefined && afterPending !== beforePending;
+  }
+
+  private resolveScriptBuildPlacementAngle(objectDef: ObjectDef): number {
+    const placementAngleDegrees = readNumericField(objectDef.fields, ['PlacementViewAngle']) ?? 0;
+    if (!Number.isFinite(placementAngleDegrees)) {
+      return 0;
+    }
+    return placementAngleDegrees * (Math.PI / 180);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doBuildObjectNearestTeam.
+   * Mirrors AIPlayer::buildSpecificBuildingNearestTeam by trying the
+   * target team center first, then expanding along square rings.
+   */
+  private executeScriptAIPlayerBuildTypeNearestTeam(
+    explicitPlayerSide: string,
+    templateName: string,
+    teamName: string,
+  ): boolean {
+    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
+    if (!side) {
+      return false;
+    }
+
+    const normalizedTemplateName = templateName.trim().toUpperCase();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
+    if (!objectDef) {
+      return false;
+    }
+    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
+      return false;
+    }
+
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    const location = this.resolveScriptTeamCenter(teamMembers);
+    if (!location) {
+      return false;
+    }
+
+    const angle = this.resolveScriptBuildPlacementAngle(objectDef);
+    if (this.tryScriptConstructBuildingAtPosition(side, objectDef, location.x, location.z, angle)) {
+      return true;
+    }
+
+    const supplyCenterCloseDistance = 20 * PATHFIND_CELL_SIZE;
+    for (
+      let positionOffset = 0;
+      positionOffset < 2 * supplyCenterCloseDistance;
+      positionOffset += 2 * PATHFIND_CELL_SIZE
+    ) {
+      const halfOffset = positionOffset * 0.5;
+      const minX = location.x - halfOffset;
+      const maxX = location.x + halfOffset;
+      const minZ = location.z - halfOffset;
+      const maxZ = location.z + halfOffset;
+
+      for (let x = minX; x <= maxX + 0.001; x += PATHFIND_CELL_SIZE) {
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, minZ, angle)) {
+          return true;
+        }
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, maxZ, angle)) {
+          return true;
+        }
+      }
+
+      const x = location.x - halfOffset;
+      for (let z = minZ; z <= maxZ + 0.001; z += PATHFIND_CELL_SIZE) {
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, x, z, angle)) {
+          return true;
+        }
+        const rightX = location.x + halfOffset;
+        if (this.tryScriptConstructBuildingAtPosition(side, objectDef, rightX, z, angle)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   /**

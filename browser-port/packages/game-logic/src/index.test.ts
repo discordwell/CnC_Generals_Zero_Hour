@@ -32975,6 +32975,79 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes AI_PLAYER_BUILD_TYPE_NEAREST_TEAM using source collision id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+          PlacementViewAngle: 90,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('Ranger', 90, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 2000 });
+    logic.update(0);
+    expect(logic.setScriptTeamMembers('ForwardTeam', [2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        x: number;
+        z: number;
+        rotationY: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 137, // FREEZE_TIME
+    })).toBe(true);
+    expect(logic.isScriptTimeFrozenByScript()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 343, // UNFREEZE_TIME when no params
+      params: [],
+    })).toBe(true);
+    expect(logic.isScriptTimeFrozenByScript()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 343, // AI_PLAYER_BUILD_TYPE_NEAREST_TEAM when 3 params
+      params: ['America', 'USAPowerPlant', 'ForwardTeam'],
+    })).toBe(true);
+
+    const constructedId = privateApi.pendingConstructionActions.get(1);
+    expect(constructedId).toBeDefined();
+    expect(privateApi.spawnedEntities.get(constructedId!)?.templateName).toBe('USAPowerPlant');
+    expect(privateApi.spawnedEntities.get(constructedId!)?.x).toBeCloseTo(90, 6);
+    expect(privateApi.spawnedEntities.get(constructedId!)?.z).toBeCloseTo(20, 6);
+    expect(privateApi.spawnedEntities.get(constructedId!)?.rotationY).toBeCloseTo(Math.PI / 2, 6);
+
+    expect(logic.executeScriptAction({
+      actionType: 343,
+      params: ['America', 'USAPowerPlant', 'MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes skirmish approach-path actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
