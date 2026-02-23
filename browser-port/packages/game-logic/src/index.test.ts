@@ -35241,6 +35241,55 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script camera-audible-distance and fps-limit actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+    logic.setSideCredits('America', 1000);
+
+    expect(logic.getScriptCameraAudibleDistance()).toBe(0);
+    expect(logic.getScriptFramesPerSecondLimit()).toBe(0);
+    expect(logic.isScriptFpsLimitEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 140, // CAMERA_SET_AUDIBLE_DISTANCE (raw id)
+      params: [220],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 345, // CAMERA_SET_AUDIBLE_DISTANCE (offset id)
+      params: [330],
+    })).toBe(true);
+    expect(logic.getScriptCameraAudibleDistance()).toBe(330);
+
+    expect(logic.executeScriptAction({
+      actionType: 143, // SET_FPS_LIMIT (raw id)
+      params: [45],
+    })).toBe(true);
+    expect(logic.isScriptFpsLimitEnabled()).toBe(true);
+    expect(logic.getScriptFramesPerSecondLimit()).toBe(45);
+
+    expect(logic.executeScriptAction({
+      actionType: 348, // SET_FPS_LIMIT (offset/collision id with 1 param)
+      params: [72],
+    })).toBe(true);
+    expect(logic.getScriptFramesPerSecondLimit()).toBe(72);
+
+    expect(logic.executeScriptAction({
+      actionType: 348, // PLAYER_SET_MONEY (offset/collision id with 2 params)
+      params: ['America', 250],
+    })).toBe(true);
+    expect(logic.getSideCredits('America')).toBe(250);
+
+    expect(logic.executeScriptAction({
+      actionType: 143,
+      params: [0],
+    })).toBe(true);
+    expect(logic.getScriptFramesPerSecondLimit()).toBe(0);
+  });
+
   it('executes script force-select and destroy-all-contained actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

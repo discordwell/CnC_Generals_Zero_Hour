@@ -4342,6 +4342,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [119, 'CAMERA_FOLLOW_NAMED'],
   [132, 'CAMERA_STOP_FOLLOW'],
   [139, 'SHOW_MILITARY_CAPTION'],
+  [140, 'CAMERA_SET_AUDIBLE_DISTANCE'],
+  [143, 'SET_FPS_LIMIT'],
   [144, 'MUSIC_SET_VOLUME'],
   [145, 'MAP_SHROUD_AT_WAYPOINT'],
   [146, 'MAP_SHROUD_ALL'],
@@ -4518,6 +4520,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [316, 'SPEECH_SET_VOLUME'],
   [317, 'DISABLE_BORDER_SHROUD'],
   [318, 'ENABLE_BORDER_SHROUD'],
+  [348, 'PLAYER_SET_MONEY'],
   [349, 'MUSIC_SET_VOLUME'],
   [319, 'OBJECT_ALLOW_BONUSES'],
   [320, 'SOUND_REMOVE_ALL_DISABLED'],
@@ -4527,6 +4530,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [324, 'QUICKVICTORY'],
   [337, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
   [344, 'SHOW_MILITARY_CAPTION'],
+  [345, 'CAMERA_SET_AUDIBLE_DISTANCE'],
   [351, 'MAP_SHROUD_ALL'],
   [361, 'DISABLE_SPECIAL_POWER_DISPLAY'],
   [362, 'ENABLE_SPECIAL_POWER_DISPLAY'],
@@ -4967,6 +4971,12 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptAmbientSoundsPaused = false;
   /** Source parity bridge: ScriptActions::MUSIC_SET_TRACK latest request. */
   private scriptMusicTrackState: ScriptMusicTrackState | null = null;
+  /** Source parity bridge: ScriptActions::doCameraSetAudibleDistance (engine-side no-op). */
+  private scriptCameraAudibleDistance = 0;
+  /** Source parity bridge: ScriptActions::SET_FPS_LIMIT current max-FPS setting. */
+  private scriptFramesPerSecondLimit = 0;
+  /** Source parity: GlobalData::m_useFpsLimit flag toggled by SET_FPS_LIMIT. */
+  private scriptUseFpsLimit = false;
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SOUND). */
   private scriptSoundVolumeScale = 1;
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SPEECH). */
@@ -8340,6 +8350,35 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptMusicTrackState };
   }
 
+  setScriptCameraAudibleDistance(audibleDistance: number): void {
+    if (!Number.isFinite(audibleDistance)) {
+      return;
+    }
+    this.scriptCameraAudibleDistance = audibleDistance;
+  }
+
+  getScriptCameraAudibleDistance(): number {
+    return this.scriptCameraAudibleDistance;
+  }
+
+  setScriptFramesPerSecondLimit(fpsLimit: number): void {
+    if (!Number.isFinite(fpsLimit)) {
+      return;
+    }
+    // Source parity: 0 resolves to GlobalData::m_framesPerSecondLimit (0 by default).
+    const normalizedLimit = Math.trunc(fpsLimit);
+    this.scriptFramesPerSecondLimit = normalizedLimit === 0 ? 0 : normalizedLimit;
+    this.scriptUseFpsLimit = true;
+  }
+
+  getScriptFramesPerSecondLimit(): number {
+    return this.scriptFramesPerSecondLimit;
+  }
+
+  isScriptFpsLimitEnabled(): boolean {
+    return this.scriptUseFpsLimit;
+  }
+
   /**
    * Source parity bridge: ScriptActions::doSoundEnableType.
    */
@@ -8705,6 +8744,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 337 && paramCount === 0) {
         // 337 also maps to NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH; 0-param signature is camera stop follow.
         actionType = 'CAMERA_STOP_FOLLOW';
+      } else if (numericType === 348 && paramCount === 1) {
+        // 348 also maps to PLAYER_SET_MONEY; 1-param signature is FPS limit.
+        actionType = 'SET_FPS_LIMIT';
       } else if (numericType === 350 && paramCount === 3) {
         // 350 also maps to PLAYER_GIVE_MONEY; 3-param signature is map shroud at waypoint.
         actionType = 'MAP_SHROUD_AT_WAYPOINT';
@@ -8822,6 +8864,16 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['captionText', 'briefing', 'text', 'message']),
           readNumber(1, ['duration', 'durationMs', 'milliseconds', 'time']),
         );
+      case 'CAMERA_SET_AUDIBLE_DISTANCE':
+        this.setScriptCameraAudibleDistance(
+          readNumber(0, ['audibleDistance', 'distance', 'value']),
+        );
+        return true;
+      case 'SET_FPS_LIMIT':
+        this.setScriptFramesPerSecondLimit(
+          readInteger(0, ['fpsLimit', 'framesPerSecondLimit', 'value']),
+        );
+        return true;
       case 'CAMERA_LETTERBOX_BEGIN':
         this.setScriptLetterboxEnabled(true);
         return true;
@@ -18733,6 +18785,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptCameraAudibleDistance = 0;
+    this.scriptFramesPerSecondLimit = 0;
+    this.scriptUseFpsLimit = false;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
     this.scriptMusicVolumeScale = 1;
@@ -49178,6 +49233,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptCameraAudibleDistance = 0;
+    this.scriptFramesPerSecondLimit = 0;
+    this.scriptUseFpsLimit = false;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
     this.scriptMusicVolumeScale = 1;
