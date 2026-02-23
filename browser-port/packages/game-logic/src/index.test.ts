@@ -31309,6 +31309,77 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named-set-evac-left-or-right action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TransportTruck', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 600, InitialHealth: 600 }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 4,
+          }),
+        ], {
+          GeometryMajorRadius: 6,
+          GeometryMinorRadius: 3,
+        }),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TransportTruck', 40, 40), // id 1
+        makeMapObject('Passenger', 40, 40), // id 2
+        makeMapObject('Passenger', 40, 40), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+      }>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    const container = privateApi.spawnedEntities.get(1)!;
+    expect(logic.executeScriptAction({
+      actionType: 334, // NAMED_SET_EVAC_LEFT_OR_RIGHT
+      params: [1, 1],
+    })).toBe(true);
+    logic.submitCommand({ type: 'exitContainer', entityId: 2 });
+    logic.update(1 / 30);
+    const leftPassenger = privateApi.spawnedEntities.get(2)!;
+    expect(leftPassenger.z).toBeGreaterThan(container.z);
+
+    expect(logic.executeScriptAction({
+      actionType: 334,
+      params: [1, 2],
+    })).toBe(true);
+    logic.submitCommand({ type: 'exitContainer', entityId: 3 });
+    logic.update(1 / 30);
+    const rightPassenger = privateApi.spawnedEntities.get(3)!;
+    expect(rightPassenger.z).toBeLessThan(container.z);
+
+    expect(logic.executeScriptAction({
+      actionType: 334,
+      params: [2, 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 334,
+      params: [999, 1],
+    })).toBe(false);
+  });
+
   it('executes script named-set-topple-direction action using source action id', () => {
     const bundle = makeBundle({
       objects: [

@@ -1720,6 +1720,8 @@ interface MapEntity {
   rallyPoint: VectorXZ | null;
   parkingPlaceProfile: ParkingPlaceProfile | null;
   containProfile: ContainProfile | null;
+  /** Source parity: ContainModule::m_evacDisposition (0 default, 1 left, 2 right). */
+  scriptEvacDisposition: number;
   queueProductionExitDelayFramesRemaining: number;
   queueProductionExitBurstRemaining: number;
   parkingSpaceProducerId: number | null;
@@ -4598,6 +4600,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [331, 'CAMERA_BW_MODE_END'],
   [332, 'DRAW_SKYBOX_BEGIN'],
   [333, 'DRAW_SKYBOX_END'],
+  [334, 'NAMED_SET_EVAC_LEFT_OR_RIGHT'],
   [335, 'ENABLE_OBJECT_SOUND'],
   [336, 'DISABLE_OBJECT_SOUND'],
   [337, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
@@ -10243,6 +10246,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptUnitDestroyAllContained(
           readEntityId(0, ['entityId', 'unitId', 'named']),
         );
+      case 'NAMED_SET_EVAC_LEFT_OR_RIGHT':
+        return this.executeScriptNamedSetEvacLeftOrRight(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readInteger(1, ['leftOrRight', 'evacDisposition', 'value']),
+        );
       case 'NAMED_SET_HELD':
         return this.executeScriptNamedSetHeld(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -15105,6 +15113,25 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptActions::doNamedSetGarrisonEvacDisposition.
+   * Only dispositions 1 (left) and 2 (right) are special; all other values revert to default.
+   */
+  private executeScriptNamedSetEvacLeftOrRight(entityId: number, disposition: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (!entity.containProfile) {
+      return false;
+    }
+    const normalizedDisposition = Math.trunc(disposition);
+    entity.scriptEvacDisposition = normalizedDisposition === 1 || normalizedDisposition === 2
+      ? normalizedDisposition
+      : 0;
+    return true;
+  }
+
+  /**
    * Source parity: ScriptActions::doNamedSetUnmanned / doTeamSetUnmanned shared object mutation.
    */
   private setScriptEntityUnmanned(entity: MapEntity): void {
@@ -19862,6 +19889,7 @@ export class GameLogicSubsystem implements Subsystem {
       rallyPoint: null,
       parkingPlaceProfile,
       containProfile,
+      scriptEvacDisposition: 0,
       queueProductionExitDelayFramesRemaining: 0,
       queueProductionExitBurstRemaining: queueProductionExitProfile?.initialBurst ?? 0,
       parkingSpaceProducerId: null,
@@ -30019,6 +30047,50 @@ export class GameLogicSubsystem implements Subsystem {
     return state;
   }
 
+  /**
+   * Source parity subset: GarrisonContain evacuation side override (left/right).
+   * Mirrors the local door/walk target generation used by m_evacDisposition.
+   */
+  private resolveContainerEvacuationPositions(
+    container: MapEntity,
+    defaultTargetX: number,
+    defaultTargetZ: number,
+  ): { spawnX: number; spawnZ: number; targetX: number; targetZ: number } {
+    if (container.scriptEvacDisposition !== 1 && container.scriptEvacDisposition !== 2) {
+      return {
+        spawnX: container.x,
+        spawnZ: container.z,
+        targetX: defaultTargetX,
+        targetZ: defaultTargetZ,
+      };
+    }
+
+    const scalar = container.scriptEvacDisposition === 1 ? 1 : -1;
+    const majorRadius = Math.max(
+      container.obstacleGeometry?.majorRadius ?? container.geometryMajorRadius,
+      MAP_XY_FACTOR / 2,
+    );
+    const minorRadius = Math.max(
+      container.obstacleGeometry?.minorRadius ?? majorRadius,
+      MAP_XY_FACTOR / 4,
+    );
+    const randomReal = (min: number, max: number): number => min + this.gameRandom.nextFloat() * (max - min);
+
+    const doorLocalX = randomReal(-majorRadius / 4, majorRadius / 4);
+    const doorLocalZ = randomReal(minorRadius / 2, minorRadius * 2) * scalar;
+    const walkLocalX = randomReal(-majorRadius, majorRadius);
+    const walkLocalZ = minorRadius * 10 * scalar;
+    const cosTheta = Math.cos(container.rotationY);
+    const sinTheta = Math.sin(container.rotationY);
+
+    return {
+      spawnX: container.x + (doorLocalX * cosTheta) - (doorLocalZ * sinTheta),
+      spawnZ: container.z + (doorLocalX * sinTheta) + (doorLocalZ * cosTheta),
+      targetX: container.x + (walkLocalX * cosTheta) - (walkLocalZ * sinTheta),
+      targetZ: container.z + (walkLocalX * sinTheta) + (walkLocalZ * cosTheta),
+    };
+  }
+
   private handleExitContainerCommand(entityId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || entity.destroyed) {
@@ -30070,13 +30142,18 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.cancelEntityCommandPathActions(entity.id);
     this.releaseEntityFromContainer(entity);
-    entity.x = container.x;
-    entity.z = container.z;
+    const evacuation = this.resolveContainerEvacuationPositions(
+      container,
+      container.x + MAP_XY_FACTOR,
+      container.z,
+    );
+    entity.x = evacuation.spawnX;
+    entity.z = evacuation.spawnZ;
     entity.y = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
     this.updatePathfindPosCell(entity);
 
     if (entity.canMove) {
-      this.issueMoveTo(entity.id, container.x + MAP_XY_FACTOR, container.z);
+      this.issueMoveTo(entity.id, evacuation.targetX, evacuation.targetZ);
     }
   }
 
@@ -37375,12 +37452,18 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       this.releaseEntityFromContainer(passenger);
-      passenger.x = container.x;
-      passenger.z = container.z;
+      const evacuation = this.resolveContainerEvacuationPositions(container, targetX, targetZ);
+      passenger.x = evacuation.spawnX;
+      passenger.z = evacuation.spawnZ;
       passenger.y = this.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
       this.updatePathfindPosCell(passenger);
 
-      this.issueDroppedPassengerCommand(passenger, targetX, targetZ, targetObjectId);
+      this.issueDroppedPassengerCommand(
+        passenger,
+        evacuation.targetX,
+        evacuation.targetZ,
+        targetObjectId,
+      );
     }
   }
 
