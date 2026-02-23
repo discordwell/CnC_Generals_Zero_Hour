@@ -4877,6 +4877,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [526, 'SOUND_REMOVE_TYPE'],
   [527, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [528, 'QUICKVICTORY'],
+  [529, 'SET_INFANTRY_LIGHTING_OVERRIDE'],
+  [530, 'RESET_INFANTRY_LIGHTING_OVERRIDE'],
   [542, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
 ]);
 
@@ -5195,6 +5197,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptAmbientSoundsPaused = false;
   /** Source parity bridge: ScriptActions::MUSIC_SET_TRACK latest request. */
   private scriptMusicTrackState: ScriptMusicTrackState | null = null;
+  /** Source parity: GlobalData::m_scriptOverrideInfantryLightScale script override. */
+  private scriptInfantryLightingOverride = -1;
   /** Source parity: ScriptEngine::m_breezeInfo set by SET_TREE_SWAY. */
   private scriptBreezeState: ScriptBreezeState = {
     version: 0,
@@ -8906,6 +8910,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptActions::doSetInfantryLightingOverride.
+   */
+  private setScriptInfantryLightingOverride(setting: number): boolean {
+    if (!Number.isFinite(setting)) {
+      return false;
+    }
+    if (setting !== -1 && setting <= 0) {
+      return false;
+    }
+    this.scriptInfantryLightingOverride = setting;
+    return true;
+  }
+
+  getScriptInfantryLightingOverride(): number {
+    return this.scriptInfantryLightingOverride;
+  }
+
+  /**
    * Source parity: ScriptEngine::setSway.
    */
   private executeScriptSetTreeSway(
@@ -9952,6 +9974,12 @@ export class GameLogicSubsystem implements Subsystem {
           readBoolean(1, ['fadeOut', 'fadeout']),
           readBoolean(2, ['fadeIn', 'fadein']),
         );
+      case 'SET_INFANTRY_LIGHTING_OVERRIDE':
+        return this.setScriptInfantryLightingOverride(
+          readNumber(0, ['setting', 'scale', 'value']),
+        );
+      case 'RESET_INFANTRY_LIGHTING_OVERRIDE':
+        return this.setScriptInfantryLightingOverride(-1);
       case 'SET_TREE_SWAY':
         return this.executeScriptSetTreeSway(
           readNumber(0, ['direction', 'windDirection', 'angle']),
@@ -22065,6 +22093,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptInfantryLightingOverride = -1;
     this.scriptBreezeState = {
       version: 0,
       direction: 0,
@@ -52647,6 +52676,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptBackgroundSoundsPaused = false;
     this.scriptAmbientSoundsPaused = false;
     this.scriptMusicTrackState = null;
+    this.scriptInfantryLightingOverride = -1;
     this.scriptBreezeState = {
       version: 0,
       direction: 0,

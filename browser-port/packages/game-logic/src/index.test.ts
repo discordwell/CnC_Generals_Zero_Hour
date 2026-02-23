@@ -31302,6 +31302,50 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptDebugMessageRequests()).toEqual([]);
   });
 
+  it('executes script infantry-lighting override actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.getScriptInfantryLightingOverride()).toBe(-1);
+    expect(logic.executeScriptAction({
+      actionType: 529, // SET_INFANTRY_LIGHTING_OVERRIDE
+      params: [0.75],
+    })).toBe(true);
+    expect(logic.getScriptInfantryLightingOverride()).toBeCloseTo(0.75);
+
+    expect(logic.executeScriptAction({
+      actionType: 530, // RESET_INFANTRY_LIGHTING_OVERRIDE
+      params: [],
+    })).toBe(true);
+    expect(logic.getScriptInfantryLightingOverride()).toBe(-1);
+
+    expect(logic.executeScriptAction({
+      actionType: 529,
+      params: [0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 529,
+      params: [-0.5],
+    })).toBe(false);
+    expect(logic.getScriptInfantryLightingOverride()).toBe(-1);
+
+    // Source parity subset: loading a map clears script bridge state.
+    expect(logic.executeScriptAction({
+      actionType: 529,
+      params: [1.1],
+    })).toBe(true);
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+    expect(logic.getScriptInfantryLightingOverride()).toBe(-1);
+  });
+
   it('executes script set-cave-index action using source action id', () => {
     const bundle = makeBundle({
       objects: [
