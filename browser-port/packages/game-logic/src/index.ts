@@ -4250,6 +4250,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [293, 'RADAR_DISABLE'],
   [294, 'RADAR_ENABLE'],
   [296, 'LOCALDEFEAT'],
+  [297, 'OPTIONS_SET_PARTICLE_CAP_MODE'],
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
@@ -4366,6 +4367,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [498, 'EVA_SET_ENABLED_DISABLED'],
   [499, 'OPTIONS_SET_OCCLUSION_MODE'],
   [500, 'OPTIONS_SET_DRAWICON_UI_MODE'],
+  [502, 'OPTIONS_SET_PARTICLE_CAP_MODE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4778,6 +4780,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptOcclusionModeEnabled = false;
   /** Source parity: ScriptActions::doSetDrawIconUIMode -> GameLogic::setDrawIconUI. */
   private scriptDrawIconUIEnabled = true;
+  /** Source parity: ScriptActions::doSetDynamicLODMode -> GameLogic::setShowDynamicLOD. */
+  private scriptDynamicLodEnabled = true;
   /** Source parity: TerrainLogic::setActiveBoundary state from MAP_SWITCH_BORDER script action. */
   private scriptActiveBoundaryIndex: number | null = null;
 
@@ -7237,6 +7241,17 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ScriptActions::doSetDynamicLODMode.
+   */
+  setScriptDynamicLodEnabled(enabled: boolean): void {
+    this.scriptDynamicLodEnabled = enabled;
+  }
+
+  isScriptDynamicLodEnabled(): boolean {
+    return this.scriptDynamicLodEnabled;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doRadarForceEnable / doRadarRevertNormal.
    */
   setScriptRadarForced(forced: boolean): void {
@@ -8297,6 +8312,9 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'OPTIONS_SET_DRAWICON_UI_MODE':
         this.setScriptDrawIconUIEnabled(readBoolean(0, ['enabled', 'drawIconUIEnabled', 'value']));
+        return true;
+      case 'OPTIONS_SET_PARTICLE_CAP_MODE':
+        this.setScriptDynamicLodEnabled(readBoolean(0, ['enabled', 'particleCapEnabled', 'value']));
         return true;
       case 'NAMED_SET_REPULSOR':
         return this.executeScriptNamedSetRepulsor(
@@ -16326,6 +16344,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptEvaEnabled = true;
     this.scriptOcclusionModeEnabled = false;
     this.scriptDrawIconUIEnabled = true;
+    this.scriptDynamicLodEnabled = true;
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
@@ -46293,6 +46312,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptEvaEnabled = true;
     this.scriptOcclusionModeEnabled = false;
     this.scriptDrawIconUIEnabled = true;
+    this.scriptDynamicLodEnabled = true;
     this.scriptActiveBoundaryIndex = null;
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;

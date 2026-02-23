@@ -29694,6 +29694,27 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptDrawIconUIEnabled()).toBe(true);
   });
 
+  it('executes script particle-cap toggle action using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.isScriptDynamicLodEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 297, // OPTIONS_SET_PARTICLE_CAP_MODE (raw id)
+      params: [0],
+    })).toBe(true);
+    expect(logic.isScriptDynamicLodEnabled()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 502, // OPTIONS_SET_PARTICLE_CAP_MODE (offset id)
+      params: [1],
+    })).toBe(true);
+    expect(logic.isScriptDynamicLodEnabled()).toBe(true);
+  });
+
   it('executes script screen-shake action using source action id', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
