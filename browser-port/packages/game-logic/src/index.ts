@@ -27869,12 +27869,23 @@ export class GameLogicSubsystem implements Subsystem {
   private canDozerRepairTarget(dozer: MapEntity, building: MapEntity): boolean {
     if (!this.isEntityDozerCapable(dozer)) return false;
     if (!building.kindOf.has('STRUCTURE')) return false;
+    // Source parity: ActionManager::canRepairObject disallows bridge and bridge towers.
+    if (building.kindOf.has('BRIDGE') || building.kindOf.has('BRIDGE_TOWER')) return false;
     if (building.objectStatusFlags.has('SOLD')) return false;
     if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) return false;
 
-    const dozerSide = this.normalizeSide(dozer.side);
-    const buildingSide = this.normalizeSide(building.side);
-    if (dozerSide !== buildingSide) return false;
+    const relationship = this.getTeamRelationship(dozer, building);
+    const isUnderConstruction = building.objectStatusFlags.has('UNDER_CONSTRUCTION')
+      || building.constructionPercent !== CONSTRUCTION_COMPLETE;
+
+    // Source parity: canResumeConstructionOf requires allies; canRepairObject allows neutral.
+    if (isUnderConstruction) {
+      if (relationship !== RELATIONSHIP_ALLIES) {
+        return false;
+      }
+    } else if (relationship === RELATIONSHIP_ENEMIES) {
+      return false;
+    }
 
     // Source parity: don't pile onto a target currently repaired by another dozer.
     if (

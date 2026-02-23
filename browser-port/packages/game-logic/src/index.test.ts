@@ -9395,6 +9395,83 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.spawnedEntities.get(1)!.dozerRepairTaskOrderFrame).toBeGreaterThan(firstRepairOrderFrame);
   });
 
+  it('allows dozers to repair neutral structures', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const neutralBuildingDef = makeObjectDef('CivilianBuilding', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),
+        makeMapObject('CivilianBuilding', 20, 20),
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, neutralBuildingDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    logic.update(0);
+    const before = logic.getEntityState(2)!.health;
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+    const after = logic.getEntityState(2)!.health;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('rejects bridge tower targets for dozer repair commands', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const bridgeTowerDef = makeObjectDef('BridgeTower', 'America', ['STRUCTURE', 'BRIDGE_TOWER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),  // id 1
+        makeMapObject('BridgeTower', 20, 20), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, bridgeTowerDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      pendingRepairActions: Map<number, number>;
+    };
+
+    logic.update(0);
+    const before = logic.getEntityState(2)!.health;
+
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+
+    const after = logic.getEntityState(2)!.health;
+    expect(after).toBe(before);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+  });
+
   it('idle dozer auto-seeks nearby repairs after bored time', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
