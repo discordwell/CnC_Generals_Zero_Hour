@@ -37446,6 +37446,84 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('uses choose-victim difficulty policy for TEAM_ATTACK_TEAM and honors normal-override flag', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfLoco', 80),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          AttackRange: 220,
+          DelayBetweenShots: 1000,
+          WeaponSpeed: 9999,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaInfantry', 10, 10), // id 1 attacker (near victim 3)
+        makeMapObject('AmericaInfantry', 210, 10), // id 2 attacker (near victim 4)
+        makeMapObject('ChinaInfantry', 20, 10), // id 3 victim
+        makeMapObject('ChinaInfantry', 220, 10), // id 4 victim
+      ], 512, 512),
+      makeRegistry(bundle),
+      makeHeightmap(512, 512),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    expect(logic.setScriptTeamMembers('Attackers', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('Victims', [3, 4])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      mapScriptSideByIndex: string[];
+      mapScriptDifficultyByIndex: number[];
+      spawnedEntities: Map<number, {
+        attackTargetEntityId: number | null;
+      }>;
+    };
+
+    // Hard difficulty -> all attackers should choose the same victim (team common target behavior).
+    privateApi.mapScriptSideByIndex[0] = 'america';
+    privateApi.mapScriptDifficultyByIndex[0] = 2; // SCRIPT_DIFFICULTY_HARD
+    expect(logic.executeScriptAction({
+      actionType: 32, // TEAM_ATTACK_TEAM
+      params: ['Attackers', 'Victims'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(3);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBe(3);
+
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
+
+    // Override forces NORMAL difficulty -> each attacker chooses nearest victim instead.
+    expect(logic.executeScriptAction({
+      actionType: 329, // CHOOSE_VICTIM_ALWAYS_USES_NORMAL
+      params: [true],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 32,
+      params: ['Attackers', 'Victims'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(3);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBe(4);
+  });
+
   it('executes script attack-area/hunt/load-transports actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

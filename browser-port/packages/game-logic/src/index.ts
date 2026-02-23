@@ -17944,6 +17944,35 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: AIAttackSquadState::chooseVictim difficulty policy.
+   * Script choose-victim override forces NORMAL behavior regardless of side setting.
+   */
+  private resolveScriptChooseVictimDifficultyForEntity(
+    entity: MapEntity,
+    commandSource: AttackCommandSource,
+  ): number {
+    let difficulty = SCRIPT_DIFFICULTY_NORMAL;
+
+    const entitySide = this.normalizeSide(entity.side);
+    if (entitySide) {
+      const sideIndex = this.mapScriptSideByIndex.findIndex((side) => side === entitySide);
+      if (sideIndex >= 0) {
+        difficulty = this.resolveMapScriptDifficultyForSide(sideIndex);
+      }
+    }
+
+    if (commandSource === 'PLAYER') {
+      difficulty = SCRIPT_DIFFICULTY_HARD;
+    }
+
+    if (this.scriptChooseVictimAlwaysUsesNormal) {
+      difficulty = SCRIPT_DIFFICULTY_NORMAL;
+    }
+
+    return difficulty;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doAttack(team, team).
    */
   private executeScriptTeamAttackTeam(attackerTeamName: string, victimTeamName: string): boolean {
@@ -17963,15 +17992,24 @@ export class GameLogicSubsystem implements Subsystem {
       if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
         continue;
       }
+
       let bestVictim: MapEntity | null = null;
-      let bestDistSq = Number.POSITIVE_INFINITY;
-      for (const victim of victims) {
-        const dx = victim.x - attacker.x;
-        const dz = victim.z - attacker.z;
-        const distSq = (dx * dx) + (dz * dz);
-        if (distSq < bestDistSq) {
-          bestVictim = victim;
-          bestDistSq = distSq;
+      const difficulty = this.resolveScriptChooseVictimDifficultyForEntity(attacker, 'SCRIPT');
+      if (difficulty === SCRIPT_DIFFICULTY_EASY) {
+        const pick = this.gameRandom.nextRange(0, victims.length - 1);
+        bestVictim = victims[pick] ?? null;
+      } else if (difficulty === SCRIPT_DIFFICULTY_HARD) {
+        bestVictim = victims[0] ?? null;
+      } else {
+        let bestDistSq = Number.POSITIVE_INFINITY;
+        for (const victim of victims) {
+          const dx = victim.x - attacker.x;
+          const dz = victim.z - attacker.z;
+          const distSq = (dx * dx) + (dz * dz);
+          if (distSq < bestDistSq) {
+            bestVictim = victim;
+            bestDistSq = distSq;
+          }
         }
       }
       if (!bestVictim) {
@@ -19225,8 +19263,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doChooseVictimAlwaysUsesNormal.
-   * TODO(source-parity): wire this flag into choose-victim targeting heuristics.
+   * Source parity: ScriptActions::doChooseVictimAlwaysUsesNormal.
    */
   private executeScriptChooseVictimAlwaysUsesNormal(enabled: boolean): boolean {
     this.setScriptChooseVictimAlwaysUsesNormal(enabled);
