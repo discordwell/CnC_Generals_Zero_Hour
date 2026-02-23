@@ -3841,6 +3841,11 @@ interface ScriptCameraTetherState {
   play: number;
 }
 
+interface ScriptCameraFollowState {
+  entityId: number;
+  snapToUnit: boolean;
+}
+
 interface ScriptCameraDefaultViewState {
   pitch: number;
   angle: number;
@@ -4332,6 +4337,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [116, 'CAMERA_LETTERBOX_END'],
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
+  [119, 'CAMERA_FOLLOW_NAMED'],
+  [132, 'CAMERA_STOP_FOLLOW'],
   [139, 'SHOW_MILITARY_CAPTION'],
   [144, 'MUSIC_SET_VOLUME'],
   [147, 'SET_RANDOM_TIMER'],
@@ -4971,6 +4978,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptLastRadarEventState: ScriptRadarEventState | null = null;
   /** Source parity bridge: TacticalView camera lock target for script tether actions. */
   private scriptCameraTetherState: ScriptCameraTetherState | null = null;
+  /** Source parity bridge: TacticalView lock-follow target from CAMERA_FOLLOW_NAMED actions. */
+  private scriptCameraFollowState: ScriptCameraFollowState | null = null;
   /** Source parity bridge: TacticalView default camera values set by scripts. */
   private scriptCameraDefaultViewState: ScriptCameraDefaultViewState | null = null;
   /** Source parity bridge: TacticalView rotateCameraTowardObject request from scripts. */
@@ -7462,6 +7471,35 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: mirrors ScriptActions::doCameraFollowNamed.
+   */
+  setScriptCameraFollowNamed(entityId: number, snapToUnit: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    this.scriptCameraFollowState = {
+      entityId,
+      snapToUnit,
+    };
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doStopCameraFollowUnit.
+   */
+  clearScriptCameraFollowNamed(): void {
+    this.scriptCameraFollowState = null;
+  }
+
+  getScriptCameraFollowState(): ScriptCameraFollowState | null {
+    if (!this.scriptCameraFollowState) {
+      return null;
+    }
+    return { ...this.scriptCameraFollowState };
+  }
+
+  /**
    * Source parity bridge: mirrors ScriptActions::doCameraSetDefault.
    * TODO(source-parity): apply defaults through TacticalView when renderer bridge is available.
    */
@@ -8647,12 +8685,18 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 323 && paramCount === 4) {
         // 323 also maps to QUICKVICTORY/TEAM_GUARD_IN_TUNNEL_NETWORK; 4-param signature is pitch camera.
         actionType = 'PITCH_CAMERA';
+      } else if (numericType === 324 && paramCount === 2) {
+        // 324 also maps to QUICKVICTORY; 2-param signature is camera follow named.
+        actionType = 'CAMERA_FOLLOW_NAMED';
       } else if (numericType === 303 && paramCount === 0) {
         // 303 also maps to NAMED_FACE_NAMED; 0-param signature is ambient sound resume.
         actionType = 'SOUND_AMBIENT_RESUME';
       } else if (numericType === 304 && paramCount === 3) {
         // 304 also maps to NAMED_FACE_WAYPOINT; 3-param signature is music track change.
         actionType = 'MUSIC_SET_TRACK';
+      } else if (numericType === 337 && paramCount === 0) {
+        // 337 also maps to NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH; 0-param signature is camera stop follow.
+        actionType = 'CAMERA_STOP_FOLLOW';
       } else if (numericType === 321 && paramCount === 0) {
         // 321 also maps to SOUND_REMOVE_TYPE; 0-param signature is letterbox end.
         actionType = 'CAMERA_LETTERBOX_END';
@@ -8769,6 +8813,14 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'CAMERA_LETTERBOX_END':
         this.setScriptLetterboxEnabled(false);
+        return true;
+      case 'CAMERA_FOLLOW_NAMED':
+        return this.setScriptCameraFollowNamed(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+          readBoolean(1, ['snapToUnit', 'snap']),
+        );
+      case 'CAMERA_STOP_FOLLOW':
+        this.clearScriptCameraFollowNamed();
         return true;
       case 'SUSPEND_BACKGROUND_SOUNDS':
         this.setScriptBackgroundSoundsPaused(true);
@@ -18655,6 +18707,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
     this.scriptCameraTetherState = null;
+    this.scriptCameraFollowState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
@@ -47600,6 +47653,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.scriptCameraTetherState?.entityId === entityId) {
         this.scriptCameraTetherState = null;
       }
+      if (this.scriptCameraFollowState?.entityId === entityId) {
+        this.scriptCameraFollowState = null;
+      }
       if (this.scriptCameraLookTowardObjectState?.entityId === entityId) {
         this.scriptCameraLookTowardObjectState = null;
       }
@@ -48962,6 +49018,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptLastRadarEventState = null;
     this.scriptCameraMovementFinished = true;
     this.scriptCameraTetherState = null;
+    this.scriptCameraFollowState = null;
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;

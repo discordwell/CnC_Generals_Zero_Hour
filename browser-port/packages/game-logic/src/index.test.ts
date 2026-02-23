@@ -34614,6 +34614,39 @@ describe('Script condition groundwork', () => {
     });
 
     expect(logic.executeScriptAction({
+      actionType: 119, // CAMERA_FOLLOW_NAMED (raw id)
+      params: [1, 1],
+    })).toBe(true);
+    expect(logic.getScriptCameraFollowState()).toEqual({
+      entityId: 1,
+      snapToUnit: true,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 324, // CAMERA_FOLLOW_NAMED (offset/collision id)
+      params: [1, 0],
+    })).toBe(true);
+    expect(logic.getScriptCameraFollowState()).toEqual({
+      entityId: 1,
+      snapToUnit: false,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 132, // CAMERA_STOP_FOLLOW (raw id)
+    })).toBe(true);
+    expect(logic.getScriptCameraFollowState()).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 119,
+      params: [1, 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 337, // CAMERA_STOP_FOLLOW (offset/collision id)
+      params: [],
+    })).toBe(true);
+    expect(logic.getScriptCameraFollowState()).toBeNull();
+
+    expect(logic.executeScriptAction({
       actionType: 14, // MOVE_CAMERA_TO (raw id)
       params: ['CameraWaypointA', 2, 0.5, 0.25, 0.75],
     })).toBe(true);
@@ -34923,6 +34956,10 @@ describe('Script condition groundwork', () => {
       params: ['MissingWaypoint', 1, 0, 0, 0],
     })).toBe(false);
     expect(logic.executeScriptAction({
+      actionType: 119,
+      params: [999, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
       actionType: 14,
       params: ['MissingWaypoint', 1, 0, 0, 0],
     })).toBe(false);
@@ -34935,6 +34972,10 @@ describe('Script condition groundwork', () => {
       actionType: 376,
       params: [1, 0, 100],
     })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 119,
+      params: [1, 0],
+    })).toBe(true);
     const privateApi = logic as unknown as {
       applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
       spawnedEntities: Map<number, unknown>;
@@ -34942,6 +34983,7 @@ describe('Script condition groundwork', () => {
     privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
     logic.update(1 / 30);
     expect(logic.getScriptCameraTetherState()).toBeNull();
+    expect(logic.getScriptCameraFollowState()).toBeNull();
     expect(logic.getScriptCameraLookTowardObjectState()).toBeNull();
   });
 
