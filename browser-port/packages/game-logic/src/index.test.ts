@@ -31043,6 +31043,70 @@ describe('Script condition groundwork', () => {
       },
     ]);
 
+    expect(logic.isScriptBackgroundSoundsPaused()).toBe(false);
+    expect(logic.isScriptAmbientSoundsPaused()).toBe(false);
+    expect(logic.getScriptMusicTrackState()).toBeNull();
+    expect(logic.getScriptMusicVolumeScale()).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 24, // SUSPEND_BACKGROUND_SOUNDS (raw id)
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 229, // SUSPEND_BACKGROUND_SOUNDS (offset/collision id)
+    })).toBe(true);
+    expect(logic.isScriptBackgroundSoundsPaused()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 25, // RESUME_BACKGROUND_SOUNDS (raw id)
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 230, // RESUME_BACKGROUND_SOUNDS (offset/collision id)
+    })).toBe(true);
+    expect(logic.isScriptBackgroundSoundsPaused()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 97, // SOUND_AMBIENT_PAUSE (raw id)
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 302, // SOUND_AMBIENT_PAUSE (offset id)
+    })).toBe(true);
+    expect(logic.isScriptAmbientSoundsPaused()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 98, // SOUND_AMBIENT_RESUME (raw id)
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 303, // SOUND_AMBIENT_RESUME (offset/collision id)
+      params: [],
+    })).toBe(true);
+    expect(logic.isScriptAmbientSoundsPaused()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 99, // MUSIC_SET_TRACK (raw id)
+      params: ['BattleTrackA', 1, 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 304, // MUSIC_SET_TRACK (offset/collision id)
+      params: ['BattleTrackB', 0, 1],
+    })).toBe(true);
+    expect(logic.getScriptMusicTrackState()).toEqual({
+      trackName: 'BattleTrackB',
+      fadeOut: false,
+      fadeIn: true,
+      frame: 0,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 144, // MUSIC_SET_VOLUME (raw id)
+      params: [40],
+    })).toBe(true);
+    expect(logic.getScriptMusicVolumeScale()).toBe(0.4);
+    expect(logic.executeScriptAction({
+      actionType: 349, // MUSIC_SET_VOLUME (offset id)
+      params: [75],
+    })).toBe(true);
+    expect(logic.getScriptMusicVolumeScale()).toBe(0.75);
+
     expect(logic.executeScriptAction({
       actionType: 422, // SOUND_DISABLE_TYPE
       params: ['MissionAlert'],
@@ -31138,6 +31202,10 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 83,
       params: ['', 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 99,
+      params: ['', 1, 1],
     })).toBe(false);
   });
 

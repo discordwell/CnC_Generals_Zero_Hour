@@ -3934,6 +3934,13 @@ interface ScriptAudioPlaybackRequestState {
   frame: number;
 }
 
+interface ScriptMusicTrackState {
+  trackName: string;
+  fadeOut: boolean;
+  fadeIn: boolean;
+  frame: number;
+}
+
 interface ScriptRadarEventState {
   x: number;
   y: number;
@@ -4289,6 +4296,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [18, 'ROTATE_CAMERA'],
   [19, 'RESET_CAMERA'],
   [20, 'SET_MILLISECOND_TIMER'],
+  [24, 'SUSPEND_BACKGROUND_SOUNDS'],
+  [25, 'RESUME_BACKGROUND_SOUNDS'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
@@ -4299,9 +4308,13 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [89, 'RADAR_ENABLE'],
   [94, 'DISABLE_INPUT'],
   [95, 'ENABLE_INPUT'],
+  [97, 'SOUND_AMBIENT_PAUSE'],
+  [98, 'SOUND_AMBIENT_RESUME'],
+  [99, 'MUSIC_SET_TRACK'],
   [114, 'SETUP_CAMERA'],
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
+  [144, 'MUSIC_SET_VOLUME'],
   [147, 'SET_RANDOM_TIMER'],
   [148, 'SET_RANDOM_MSEC_TIMER'],
   [149, 'STOP_TIMER'],
@@ -4457,6 +4470,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
   [301, 'PLAYER_SELECT_SKILLSET'],
+  [302, 'SOUND_AMBIENT_PAUSE'],
   [303, 'NAMED_FACE_NAMED'],
   [304, 'NAMED_FACE_WAYPOINT'],
   [305, 'TEAM_FACE_NAMED'],
@@ -4472,6 +4486,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [316, 'SPEECH_SET_VOLUME'],
   [317, 'DISABLE_BORDER_SHROUD'],
   [318, 'ENABLE_BORDER_SHROUD'],
+  [349, 'MUSIC_SET_VOLUME'],
   [319, 'OBJECT_ALLOW_BONUSES'],
   [320, 'SOUND_REMOVE_ALL_DISABLED'],
   [321, 'SOUND_REMOVE_TYPE'],
@@ -4906,10 +4921,18 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptAudioRemovalRequests: ScriptAudioRemovalRequestState[] = [];
   /** Source parity bridge: ScriptActions audio-play requests consumed by renderer/audio bridge. */
   private readonly scriptAudioPlaybackRequests: ScriptAudioPlaybackRequestState[] = [];
+  /** Source parity bridge: ScriptActions::SUSPEND/RESUME_BACKGROUND_SOUNDS. */
+  private scriptBackgroundSoundsPaused = false;
+  /** Source parity bridge: ScriptActions::SOUND_AMBIENT_PAUSE/RESUME. */
+  private scriptAmbientSoundsPaused = false;
+  /** Source parity bridge: ScriptActions::MUSIC_SET_TRACK latest request. */
+  private scriptMusicTrackState: ScriptMusicTrackState | null = null;
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SOUND). */
   private scriptSoundVolumeScale = 1;
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SPEECH). */
   private scriptSpeechVolumeScale = 1;
+  /** Source parity bridge: ScriptActions::doAudioSetVolume(MUSIC). */
+  private scriptMusicVolumeScale = 1;
   /** Source parity bridge: Display::setBorderShroudLevel script control. */
   private scriptBorderShroudEnabled = true;
   /** Source parity bridge: ScriptEngine::m_toppleDirections keyed by named entity. */
@@ -8139,6 +8162,43 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
+  setScriptBackgroundSoundsPaused(paused: boolean): void {
+    this.scriptBackgroundSoundsPaused = paused;
+  }
+
+  isScriptBackgroundSoundsPaused(): boolean {
+    return this.scriptBackgroundSoundsPaused;
+  }
+
+  setScriptAmbientSoundsPaused(paused: boolean): void {
+    this.scriptAmbientSoundsPaused = paused;
+  }
+
+  isScriptAmbientSoundsPaused(): boolean {
+    return this.scriptAmbientSoundsPaused;
+  }
+
+  private setScriptMusicTrack(trackName: string, fadeOut: boolean, fadeIn: boolean): boolean {
+    const normalizedTrackName = this.normalizeScriptAudioEventName(trackName);
+    if (!normalizedTrackName) {
+      return false;
+    }
+    this.scriptMusicTrackState = {
+      trackName: normalizedTrackName,
+      fadeOut,
+      fadeIn,
+      frame: this.frameCounter,
+    };
+    return true;
+  }
+
+  getScriptMusicTrackState(): ScriptMusicTrackState | null {
+    if (!this.scriptMusicTrackState) {
+      return null;
+    }
+    return { ...this.scriptMusicTrackState };
+  }
+
   /**
    * Source parity bridge: ScriptActions::doSoundEnableType.
    */
@@ -8239,6 +8299,14 @@ export class GameLogicSubsystem implements Subsystem {
 
   getScriptSpeechVolumeScale(): number {
     return this.scriptSpeechVolumeScale;
+  }
+
+  setScriptMusicVolumeScale(newVolumePercent: number): void {
+    this.scriptMusicVolumeScale = this.clampScriptVolumeScale(newVolumePercent);
+  }
+
+  getScriptMusicVolumeScale(): number {
+    return this.scriptMusicVolumeScale;
   }
 
   setScriptBorderShroudEnabled(enabled: boolean): void {
@@ -8463,6 +8531,12 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 224 && paramCount === 4) {
         // 224 also maps to SET_CAVE_INDEX; 4-param signature is camera reset.
         actionType = 'RESET_CAMERA';
+      } else if (numericType === 229 && paramCount === 0) {
+        // 229 also maps to MAP_REVEAL_ALL_PERM; 0-param signature is background sound pause.
+        actionType = 'SUSPEND_BACKGROUND_SOUNDS';
+      } else if (numericType === 230 && paramCount === 0) {
+        // 230 also maps to MAP_REVEAL_ALL_UNDO_PERM; 0-param signature is background sound resume.
+        actionType = 'RESUME_BACKGROUND_SOUNDS';
       } else if (numericType === 319 && paramCount === 4) {
         // 319 also maps to SOUND_REMOVE_ALL_DISABLED; 4-param signature is setup camera.
         actionType = 'SETUP_CAMERA';
@@ -8472,6 +8546,12 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 323 && paramCount === 4) {
         // 323 also maps to QUICKVICTORY/TEAM_GUARD_IN_TUNNEL_NETWORK; 4-param signature is pitch camera.
         actionType = 'PITCH_CAMERA';
+      } else if (numericType === 303 && paramCount === 0) {
+        // 303 also maps to NAMED_FACE_NAMED; 0-param signature is ambient sound resume.
+        actionType = 'SOUND_AMBIENT_RESUME';
+      } else if (numericType === 304 && paramCount === 3) {
+        // 304 also maps to NAMED_FACE_WAYPOINT; 3-param signature is music track change.
+        actionType = 'MUSIC_SET_TRACK';
       } else if (numericType === 291 && paramCount === 2) {
         actionType = 'NAMED_SET_STEALTH_ENABLED';
       } else if (numericType === 293 && paramCount === 1) {
@@ -8561,6 +8641,24 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['speechName', 'audioName', 'sound']),
           readBoolean(1, ['allowOverlap', 'overlap']),
         );
+      case 'SUSPEND_BACKGROUND_SOUNDS':
+        this.setScriptBackgroundSoundsPaused(true);
+        return true;
+      case 'RESUME_BACKGROUND_SOUNDS':
+        this.setScriptBackgroundSoundsPaused(false);
+        return true;
+      case 'SOUND_AMBIENT_PAUSE':
+        this.setScriptAmbientSoundsPaused(true);
+        return true;
+      case 'SOUND_AMBIENT_RESUME':
+        this.setScriptAmbientSoundsPaused(false);
+        return true;
+      case 'MUSIC_SET_TRACK':
+        return this.setScriptMusicTrack(
+          readString(0, ['musicName', 'trackName', 'track']),
+          readBoolean(1, ['fadeOut', 'fadeout']),
+          readBoolean(2, ['fadeIn', 'fadein']),
+        );
       case 'MOVE_CAMERA_TO':
         return this.requestScriptMoveCameraTo(
           readString(0, ['waypointName', 'waypoint']),
@@ -8617,6 +8715,9 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'SPEECH_SET_VOLUME':
         this.setScriptSpeechVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
+        return true;
+      case 'MUSIC_SET_VOLUME':
+        this.setScriptMusicVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
         return true;
       case 'DISABLE_BORDER_SHROUD':
         this.setScriptBorderShroudEnabled(false);
@@ -18411,8 +18512,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptAudioVolumeOverrides.clear();
     this.scriptAudioRemovalRequests.length = 0;
     this.scriptAudioPlaybackRequests.length = 0;
+    this.scriptBackgroundSoundsPaused = false;
+    this.scriptAmbientSoundsPaused = false;
+    this.scriptMusicTrackState = null;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
+    this.scriptMusicVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
     this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
@@ -48710,8 +48815,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptAudioVolumeOverrides.clear();
     this.scriptAudioRemovalRequests.length = 0;
     this.scriptAudioPlaybackRequests.length = 0;
+    this.scriptBackgroundSoundsPaused = false;
+    this.scriptAmbientSoundsPaused = false;
+    this.scriptMusicTrackState = null;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
+    this.scriptMusicVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
     this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
