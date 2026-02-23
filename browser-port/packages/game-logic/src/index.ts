@@ -149,6 +149,7 @@ import {
   withdrawSideCredits as withdrawSideCreditsImpl,
 } from './side-credits.js';
 import {
+  isSpecialPowerObjectRelationshipAllowed,
   routeIssueSpecialPowerCommand as routeIssueSpecialPowerCommandImpl,
   resolveSharedShortcutSpecialPowerReadyFrame as resolveSharedShortcutSpecialPowerReadyFrameImpl,
   setSpecialPowerReadyFrame as setSpecialPowerReadyFrameImpl,
@@ -5000,9 +5001,8 @@ const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
 ] as const;
 
 /**
- * Source parity bridge: Common/System/Kindof.cpp `KindOfMaskType::s_bitNameList` with
- * ALLOW_SURRENDER entries omitted (retail Generals/ZH behavior).
- * TODO(source-parity): support ALLOW_SURRENDER build variant bit offsets.
+ * Source parity bridge: Common/System/Kindof.cpp `KindOfMaskType::s_bitNameList`
+ * in retail (non-ALLOW_SURRENDER) builds.
  */
 const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT = [
   'OBSTACLE',
@@ -5100,6 +5100,31 @@ const SCRIPT_KIND_OF_NAME_TO_BIT = new Map<string, number>(
   SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.map((name, index) => [name, index]),
 );
 
+/**
+ * Source parity bridge: Common/System/Kindof.cpp `KindOfMaskType::s_bitNameList`
+ * in ALLOW_SURRENDER builds.
+ */
+const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER = [
+  ...SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.slice(0, 15),
+  'PRISON',
+  'COLLECTS_PRISON_BOUNTY',
+  'POW_TRUCK',
+  ...SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.slice(15, 42),
+  'CAN_SURRENDER',
+  ...SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.slice(42),
+] as const;
+
+const SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER = new Map<string, number>(
+  SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER.map((name, index) => [name, index]),
+);
+
+const SCRIPT_KIND_OF_ALLOW_SURRENDER_NAMES = new Set<string>([
+  'PRISON',
+  'COLLECTS_PRISON_BOUNTY',
+  'POW_TRUCK',
+  'CAN_SURRENDER',
+]);
+
 export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
@@ -5116,10 +5141,18 @@ export class GameLogicSubsystem implements Subsystem {
   private animationTime = 0;
   private selectedEntityId: number | null = null;
   private selectedEntityIds: readonly number[] = [];
+  /** Source parity: InGameUI::getFrameSelectionChanged for NAMED_SELECTED condition caching. */
+  private scriptSelectionChangedFrame = -1;
   private loadedMapData: MapDataJSON | null = null;
   private mapHeightmap: HeightmapGrid | null = null;
   private navigationGrid: NavigationGrid | null = null;
   private iniDataRegistry: IniDataRegistry | null = null;
+  /**
+   * Source parity bridge: active KindOf bit-name layout (retail or ALLOW_SURRENDER variant)
+   * used when map script KIND_OF parameters are numeric.
+   */
+  private scriptKindOfNamesBySourceBit: readonly string[] = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT;
+  private scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
   /** Source parity: TheGlobalData->m_weaponBonusSet — global weapon bonus table from GameData.ini. */
   private globalWeaponBonusTable: WeaponBonusTable = { entries: new Map() };
   private readonly commandQueue: GameLogicCommand[] = [];
@@ -5146,6 +5179,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideCanBuildUnitsByScript = new Map<string, boolean>();
   /** Source parity subset: Player::setTeamDelaySeconds from script action. */
   private readonly sideTeamBuildDelaySecondsByScript = new Map<string, number>();
+  /** Source parity subset: delayed Team::isCreated toggles scheduled from TeamFactory-side delays. */
+  private readonly scriptTeamCreatedReadyFrameByName = new Map<string, number>();
   /** Source parity subset: Player::setObjectsEnabled per-side disabled template names. */
   private readonly sideDisabledObjectTemplatesByScript = new Map<string, Set<string>>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
@@ -5558,6 +5593,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.loadedMapData = mapData;
     this.mapHeightmap = heightmap;
     this.iniDataRegistry = iniDataRegistry;
+    this.configureScriptKindOfBitLayout(iniDataRegistry);
 
     // Source parity: TheGlobalData->m_weaponBonusSet — build from GameData.ini entries.
     const gameDataConfig = iniDataRegistry.getGameData();
@@ -5990,8 +6026,8 @@ export class GameLogicSubsystem implements Subsystem {
       case SCRIPT_PARAMETER_TYPE_KIND_OF: {
         const kindOf = this.normalizeScriptKindOfToken(param.stringValue);
         if (kindOf) {
-          const bitIndex = SCRIPT_KIND_OF_NAME_TO_BIT.get(kindOf);
-          if (bitIndex !== undefined) {
+          const bitIndex = this.resolveScriptKindOfBitFromName(kindOf);
+          if (bitIndex !== null) {
             return bitIndex;
           }
         }
@@ -6036,6 +6072,63 @@ export class GameLogicSubsystem implements Subsystem {
       return 'SMALL_MISSILE';
     }
     return normalized;
+  }
+
+  private configureScriptKindOfBitLayout(iniDataRegistry: IniDataRegistry): void {
+    let useAllowSurrenderLayout = false;
+    for (const objectDef of iniDataRegistry.objects.values()) {
+      const kindOf = this.normalizeKindOf(objectDef.kindOf);
+      for (const kindOfName of SCRIPT_KIND_OF_ALLOW_SURRENDER_NAMES) {
+        if (kindOf.has(kindOfName)) {
+          useAllowSurrenderLayout = true;
+          break;
+        }
+      }
+      if (useAllowSurrenderLayout) {
+        break;
+      }
+    }
+
+    if (useAllowSurrenderLayout) {
+      this.scriptKindOfNamesBySourceBit = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER;
+      this.scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER;
+      return;
+    }
+
+    this.scriptKindOfNamesBySourceBit = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT;
+    this.scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
+  }
+
+  private resolveScriptKindOfBitFromName(kindOfName: string): number | null {
+    const direct = this.scriptKindOfNameToBit.get(kindOfName);
+    if (direct !== undefined) {
+      return direct;
+    }
+
+    const alternate = this.scriptKindOfNamesBySourceBit === SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT
+      ? SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER.get(kindOfName)
+      : SCRIPT_KIND_OF_NAME_TO_BIT.get(kindOfName);
+    return alternate ?? null;
+  }
+
+  private resolveScriptKindOfNameFromSourceBit(kindOfBit: number): string | null {
+    if (!Number.isFinite(kindOfBit)) {
+      return null;
+    }
+    const normalizedBit = Math.trunc(kindOfBit);
+    if (normalizedBit < 0) {
+      return null;
+    }
+
+    const direct = this.scriptKindOfNamesBySourceBit[normalizedBit] ?? null;
+    if (direct) {
+      return direct;
+    }
+
+    const alternate = this.scriptKindOfNamesBySourceBit === SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT
+      ? SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER[normalizedBit] ?? null
+      : SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT[normalizedBit] ?? null;
+    return alternate;
   }
 
   private normalizeMapScriptObjectTypeParam(rawValue: string): string {
@@ -6507,6 +6600,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingWeaponDamage();
     this.updateScriptWaypointPathCompletions();
     this.updateScriptTriggerTransitions();
+    this.updatePendingScriptTeamCreated();
     this.executeMapScripts();
     this.clearScriptUIInteractions();
     this.updateScriptSequentialScripts();
@@ -6536,6 +6630,23 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       entity.scriptFlashCount = Math.max(0, entity.scriptFlashCount - 1);
+    }
+  }
+
+  private updatePendingScriptTeamCreated(): void {
+    if (this.scriptTeamCreatedReadyFrameByName.size === 0) {
+      return;
+    }
+
+    for (const [teamNameUpper, readyFrame] of this.scriptTeamCreatedReadyFrameByName) {
+      if (this.frameCounter < readyFrame) {
+        continue;
+      }
+      const team = this.scriptTeamsByName.get(teamNameUpper);
+      if (team) {
+        team.created = true;
+      }
+      this.scriptTeamCreatedReadyFrameByName.delete(teamNameUpper);
     }
   }
 
@@ -11949,7 +12060,7 @@ export class GameLogicSubsystem implements Subsystem {
         if (entityId === null) {
           return false;
         }
-        return this.evaluateScriptNamedSelected({ entityId });
+        return this.evaluateScriptNamedSelected({ entityId, conditionCacheId });
       }
       case 'NAMED_ENTERED_AREA': {
         const entityId = readEntityId(0, ['entityId']);
@@ -12411,6 +12522,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     team.created = created;
+    this.scriptTeamCreatedReadyFrameByName.delete(team.nameUpper);
     return true;
   }
 
@@ -12672,6 +12784,73 @@ export class GameLogicSubsystem implements Subsystem {
     return normalized || null;
   }
 
+  private resolveScriptCommandButtonSharedSpecialPowerReadyFrame(specialPowerName: string): number {
+    return resolveSharedShortcutSpecialPowerReadyFrameImpl(
+      specialPowerName,
+      this.frameCounter,
+      this.sharedShortcutSpecialPowerReadyFrames,
+      this.normalizeShortcutSpecialPowerName.bind(this),
+    );
+  }
+
+  private validateScriptSpecialPowerCommandButtonExecution(
+    sourceEntity: MapEntity,
+    commandButtonDef: CommandButtonDef,
+    target: ScriptCommandButtonTarget,
+  ): {
+    specialPowerName: string;
+    normalizedSpecialPowerName: string;
+    commandOption: number;
+  } | null {
+    const specialPowerName = readStringField(commandButtonDef.fields, ['SpecialPower'])
+      ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
+      ?? '';
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!specialPowerName || !normalizedSpecialPowerName) {
+      return null;
+    }
+    const specialPowerDef = this.resolveSpecialPowerDefByName(normalizedSpecialPowerName);
+    if (!specialPowerDef) {
+      return null;
+    }
+    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
+      return null;
+    }
+
+    const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+    const needsObjectTarget = (commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
+    const needsTargetPosition = (commandOption & SCRIPT_COMMAND_OPTION_NEED_TARGET_POS) !== 0;
+
+    if (target.kind === 'NONE') {
+      if (needsObjectTarget || needsTargetPosition) {
+        return null;
+      }
+    } else if (target.kind === 'OBJECT') {
+      if (!needsObjectTarget) {
+        return null;
+      }
+      if (!isSpecialPowerObjectRelationshipAllowed(commandOption, this.getTeamRelationship(sourceEntity, target.targetEntity))) {
+        return null;
+      }
+    } else if (!needsTargetPosition) {
+      return null;
+    }
+
+    const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
+    const readyFrame = isSharedSynced
+      ? this.resolveScriptCommandButtonSharedSpecialPowerReadyFrame(normalizedSpecialPowerName)
+      : this.resolveSpecialPowerReadyFrameForSourceEntity(normalizedSpecialPowerName, sourceEntity.id);
+    if (this.frameCounter < readyFrame) {
+      return null;
+    }
+
+    return {
+      specialPowerName,
+      normalizedSpecialPowerName,
+      commandOption,
+    };
+  }
+
   private resolveScriptCommandButtonHuntMode(commandButtonDef: CommandButtonDef): CommandButtonHuntMode {
     const commandTypeName = this.normalizeScriptCommandTypeName(
       commandButtonDef.commandTypeName
@@ -12827,6 +13006,7 @@ export class GameLogicSubsystem implements Subsystem {
     sourceEntity: MapEntity,
     commandButtonDef: CommandButtonDef,
     target: ScriptCommandButtonTarget,
+    validateOnly = false,
   ): boolean {
     const commandTypeName = this.normalizeScriptCommandTypeName(
       commandButtonDef.commandTypeName
@@ -12843,9 +13023,8 @@ export class GameLogicSubsystem implements Subsystem {
       case 'SPECIAL_POWER_FROM_SHORTCUT':
       case 'SPECIAL_POWER_CONSTRUCT':
       case 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT': {
-        const specialPowerName = readStringField(commandButtonDef.fields, ['SpecialPower'])
-          ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate']);
-        if (!specialPowerName) {
+        const validated = this.validateScriptSpecialPowerCommandButtonExecution(sourceEntity, commandButtonDef, target);
+        if (!validated) {
           return false;
         }
 
@@ -12859,11 +13038,15 @@ export class GameLogicSubsystem implements Subsystem {
           targetZ = target.targetZ;
         }
 
+        if (validateOnly) {
+          return true;
+        }
+
         this.applyCommand({
           type: 'issueSpecialPower',
           commandButtonId: commandButtonDef.name,
-          specialPowerName,
-          commandOption: this.resolveScriptCommandButtonOptionMask(commandButtonDef),
+          specialPowerName: validated.specialPowerName,
+          commandOption: validated.commandOption,
           issuingEntityIds: [sourceEntity.id],
           sourceEntityId: sourceEntity.id,
           targetEntityId,
@@ -12877,6 +13060,9 @@ export class GameLogicSubsystem implements Subsystem {
         const upgradeName = this.resolveScriptCommandButtonUpgradeName(commandButtonDef);
         if (!upgradeName) {
           return false;
+        }
+        if (validateOnly) {
+          return true;
         }
         this.applyCommand({
           type: 'queueUpgradeProduction',
@@ -12896,6 +13082,9 @@ export class GameLogicSubsystem implements Subsystem {
           if (commandTypeName !== 'DOZER_CONSTRUCT') {
             return false;
           }
+          if (validateOnly) {
+            return true;
+          }
           this.applyCommand({
             type: 'constructBuilding',
             entityId: sourceEntity.id,
@@ -12911,6 +13100,10 @@ export class GameLogicSubsystem implements Subsystem {
           return false;
         }
 
+        if (validateOnly) {
+          return true;
+        }
+
         this.applyCommand({
           type: 'queueUnitProduction',
           entityId: sourceEntity.id,
@@ -12919,11 +13112,17 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'STOP':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'stop', entityId: sourceEntity.id, commandSource: 'SCRIPT' });
         return true;
       case 'ATTACK_MOVE':
         if (target.kind !== 'POSITION') {
           return false;
+        }
+        if (validateOnly) {
+          return true;
         }
         this.applyCommand({
           type: 'attackMoveTo',
@@ -12937,6 +13136,9 @@ export class GameLogicSubsystem implements Subsystem {
         if (target.kind !== 'POSITION') {
           return false;
         }
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({
           type: 'setRallyPoint',
           entityId: sourceEntity.id,
@@ -12949,6 +13151,9 @@ export class GameLogicSubsystem implements Subsystem {
       case 'GUARD_FLYING_UNITS_ONLY': {
         const guardMode = this.resolveScriptGuardModeForCommandType(commandTypeName);
         if (target.kind === 'OBJECT') {
+          if (validateOnly) {
+            return true;
+          }
           this.applyCommand({
             type: 'guardObject',
             entityId: sourceEntity.id,
@@ -12959,6 +13164,9 @@ export class GameLogicSubsystem implements Subsystem {
           return true;
         }
         if (target.kind === 'POSITION') {
+          if (validateOnly) {
+            return true;
+          }
           this.applyCommand({
             type: 'guardPosition',
             entityId: sourceEntity.id,
@@ -13006,6 +13214,10 @@ export class GameLogicSubsystem implements Subsystem {
           targetPosition = [target.targetX, 0, target.targetZ];
         }
 
+        if (validateOnly) {
+          return true;
+        }
+
         this.applyCommand({
           type: 'fireWeapon',
           entityId: sourceEntity.id,
@@ -13021,6 +13233,9 @@ export class GameLogicSubsystem implements Subsystem {
         if (weaponSlot === null) {
           return false;
         }
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({
           type: 'switchWeapon',
           entityId: sourceEntity.id,
@@ -13029,24 +13244,45 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'HACK_INTERNET':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'hackInternet', entityId: sourceEntity.id });
         return true;
       case 'TOGGLE_OVERCHARGE':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'toggleOvercharge', entityId: sourceEntity.id });
         return true;
       case 'EXIT_CONTAINER':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'exitContainer', entityId: sourceEntity.id });
         return true;
       case 'EVACUATE':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'evacuate', entityId: sourceEntity.id });
         return true;
       case 'EXECUTE_RAILED_TRANSPORT':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'executeRailedTransport', entityId: sourceEntity.id });
         return true;
       case 'BEACON_DELETE':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'beaconDelete', entityId: sourceEntity.id });
         return true;
       case 'SELL':
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({ type: 'sell', entityId: sourceEntity.id });
         return true;
       case 'COMBATDROP': {
@@ -13056,6 +13292,9 @@ export class GameLogicSubsystem implements Subsystem {
           : null;
         if (targetObjectId === null && targetPosition === null) {
           return false;
+        }
+        if (validateOnly) {
+          return true;
         }
         this.applyCommand({
           type: 'combatDrop',
@@ -13071,6 +13310,9 @@ export class GameLogicSubsystem implements Subsystem {
         if (target.kind !== 'OBJECT') {
           return false;
         }
+        if (validateOnly) {
+          return true;
+        }
         this.applyCommand({
           type: 'enterObject',
           entityId: sourceEntity.id,
@@ -13085,6 +13327,9 @@ export class GameLogicSubsystem implements Subsystem {
       case 'PLACE_BEACON':
         if (target.kind !== 'POSITION') {
           return false;
+        }
+        if (validateOnly) {
+          return true;
         }
         this.applyCommand({
           type: 'placeBeacon',
@@ -14588,7 +14833,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestKindof.
-   * TODO(source-parity): support ALLOW_SURRENDER kindof-bit offset variant.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestKindOf(
     teamName: string,
@@ -14637,7 +14881,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestBuildingClass.
-   * TODO(source-parity): support ALLOW_SURRENDER kindof-bit offset variant.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuildingClass(
     teamName: string,
@@ -14692,7 +14935,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamPartialUseCommandButton.
-   * TODO(source-parity): port full CommandButton::isValidToUseOn(null target) semantics.
    */
   private executeScriptTeamPartialUseCommandButton(
     percentage: number,
@@ -14715,7 +14957,7 @@ export class GameLogicSubsystem implements Subsystem {
     for (const entity of teamMembers) {
       const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonName);
       for (const commandButtonDef of commandButtons) {
-        if (!this.isScriptCommandButtonUsableWithoutTarget(commandButtonDef)) {
+        if (!this.executeScriptCommandButtonForEntity(entity, commandButtonDef, { kind: 'NONE' }, true)) {
           continue;
         }
         candidates.push({ entity, commandButtonDef });
@@ -14909,14 +15151,16 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     let sourceEntity: MapEntity | null = null;
+    let sourceCommandButtons: CommandButtonDef[] = [];
     for (const member of teamMembers) {
       const commandButtons = this.findScriptEntityCommandButtonsByName(member, commandButtonName);
       if (commandButtons.length > 0) {
         sourceEntity = member;
+        sourceCommandButtons = commandButtons;
         break;
       }
     }
-    if (!sourceEntity) {
+    if (!sourceEntity || sourceCommandButtons.length <= 0) {
       return false;
     }
 
@@ -14966,6 +15210,20 @@ export class GameLogicSubsystem implements Subsystem {
         }
       } else if (normalizedTemplateName
         && !this.areEquivalentTemplateNames(candidate.templateName, normalizedTemplateName)) {
+        continue;
+      }
+
+      let sourceCanUseCommandButtonOnCandidate = false;
+      for (const commandButtonDef of sourceCommandButtons) {
+        if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
+          kind: 'OBJECT',
+          targetEntity: candidate,
+        }, true)) {
+          sourceCanUseCommandButtonOnCandidate = true;
+          break;
+        }
+      }
+      if (!sourceCanUseCommandButtonOnCandidate) {
         continue;
       }
 
@@ -15022,57 +15280,9 @@ export class GameLogicSubsystem implements Subsystem {
     return executedAny;
   }
 
-  private isScriptCommandButtonUsableWithoutTarget(commandButtonDef: CommandButtonDef): boolean {
-    const commandTypeName = this.normalizeScriptCommandTypeName(
-      commandButtonDef.commandTypeName
-      ?? readStringField(commandButtonDef.fields, ['Command'])
-      ?? '',
-    );
-    if (!commandTypeName) {
-      return false;
-    }
-
-    switch (commandTypeName) {
-      case 'SPECIAL_POWER':
-      case 'SPECIAL_POWER_FROM_COMMAND_CENTER':
-      case 'SPECIAL_POWER_FROM_SHORTCUT':
-      case 'SPECIAL_POWER_CONSTRUCT':
-      case 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT': {
-        const optionMask = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
-        return (optionMask & (SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET | SCRIPT_COMMAND_OPTION_NEED_TARGET_POS)) === 0;
-      }
-      case 'FIRE_WEAPON': {
-        const optionMask = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
-        return (optionMask
-          & (
-            SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET
-            | SCRIPT_COMMAND_OPTION_NEED_TARGET_POS
-            | SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION
-          )) === 0;
-      }
-      case 'SWITCH_WEAPON':
-        return this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef) !== null;
-      case 'STOP':
-      case 'HACK_INTERNET':
-      case 'TOGGLE_OVERCHARGE':
-      case 'EXIT_CONTAINER':
-      case 'EVACUATE':
-      case 'EXECUTE_RAILED_TRANSPORT':
-      case 'BEACON_DELETE':
-      case 'SELL':
-        return true;
-      default:
-        return false;
-    }
-  }
-
   private resolveScriptKindOfNameFromInput(kindOfInput: unknown): string | null {
     if (typeof kindOfInput === 'number' && Number.isFinite(kindOfInput)) {
-      const kindOfBit = Math.trunc(kindOfInput);
-      if (kindOfBit < 0) {
-        return null;
-      }
-      return SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT[kindOfBit] ?? null;
+      return this.resolveScriptKindOfNameFromSourceBit(kindOfInput);
     }
     const token = this.coerceScriptConditionString(kindOfInput).trim().toUpperCase();
     if (!token) {
@@ -18917,7 +19127,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const kindOfName = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT[Math.trunc(kindOfBit)] ?? null;
+    const kindOfName = this.resolveScriptKindOfNameFromSourceBit(kindOfBit);
     if (!kindOfName) {
       return true;
     }
@@ -18928,7 +19138,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const nextPriority = Math.trunc(priority);
-    for (const objectDef of registry.objects ?? []) {
+    for (const objectDef of registry.objects.values()) {
       if (!this.normalizeKindOf(objectDef.kindOf).has(kindOfName)) {
         continue;
       }
@@ -18994,7 +19204,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::updateBaseConstructionSpeed.
-   * TODO(source-parity): apply Player::m_teamDelaySeconds to TeamFactory scheduling.
    */
   private executeScriptSetBaseConstructionSpeed(side: string, delayInSeconds: number): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -19214,12 +19423,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team) {
       return false;
     }
-    const controllingSide = this.resolveScriptTeamControllingSide(team);
-    if (controllingSide) {
-      // Source parity placeholder: TeamFactory build delay lives on the controlling player.
-      void this.sideTeamBuildDelaySecondsByScript.get(controllingSide);
-    }
-    team.created = true;
+    this.scheduleScriptTeamCreatedByConfiguredDelay(team);
     return true;
   }
 
@@ -19232,13 +19436,25 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team) {
       return false;
     }
-    const controllingSide = this.resolveScriptTeamControllingSide(team);
-    if (controllingSide) {
-      // Source parity placeholder: TeamFactory build delay lives on the controlling player.
-      void this.sideTeamBuildDelaySecondsByScript.get(controllingSide);
-    }
-    team.created = true;
+    this.scheduleScriptTeamCreatedByConfiguredDelay(team);
     return true;
+  }
+
+  private scheduleScriptTeamCreatedByConfiguredDelay(team: ScriptTeamRecord): void {
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    const delaySeconds = controllingSide
+      ? Math.max(0, Math.trunc(this.sideTeamBuildDelaySecondsByScript.get(controllingSide) ?? 0))
+      : 0;
+    const delayFrames = delaySeconds * LOGIC_FRAME_RATE;
+
+    if (delayFrames <= 0) {
+      team.created = true;
+      this.scriptTeamCreatedReadyFrameByName.delete(team.nameUpper);
+      return;
+    }
+
+    team.created = false;
+    this.scriptTeamCreatedReadyFrameByName.set(team.nameUpper, this.frameCounter + delayFrames);
   }
 
   /**
@@ -20328,20 +20544,32 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateNamedSelected.
-   * TODO(source-parity): condition cache invalidation by UI selection-change frame.
    */
   evaluateScriptNamedSelected(filter: {
     entityId: number;
+    conditionCacheId?: string;
   }): boolean {
     if (!Number.isFinite(filter.entityId)) {
       return false;
     }
+    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    let anyChanges = cache === null || cache.customData === 0;
+    if (cache && this.scriptSelectionChangedFrame + 1 >= this.frameCounter) {
+      anyChanges = true;
+    }
+    if (!anyChanges && cache) {
+      return cache.customData === 1;
+    }
+
     const entityId = Math.trunc(filter.entityId);
     const entity = this.spawnedEntities.get(entityId);
-    if (!entity) {
-      return false;
+    const selected = entity ? entity.selected : false;
+
+    if (cache) {
+      cache.customData = selected ? 1 : -1;
+      cache.customFrame = this.scriptSelectionChangedFrame;
     }
-    return entity.selected;
+    return selected;
   }
 
   /**
@@ -23203,10 +23431,13 @@ export class GameLogicSubsystem implements Subsystem {
     this.selectedEntityId = null;
     this.nextId = 1;
     this.animationTime = 0;
+    this.scriptSelectionChangedFrame = -1;
     this.loadedMapData = null;
     this.mapHeightmap = null;
     this.navigationGrid = null;
     this.iniDataRegistry = null;
+    this.scriptKindOfNamesBySourceBit = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT;
+    this.scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
     this.thingTemplateBuildableOverrides.clear();
     this.sideCredits.clear();
     this.sidePlayerTypes.clear();
@@ -23214,6 +23445,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCanBuildBaseByScript.clear();
     this.sideCanBuildUnitsByScript.clear();
     this.sideTeamBuildDelaySecondsByScript.clear();
+    this.scriptTeamCreatedReadyFrameByName.clear();
     this.sideDisabledObjectTemplatesByScript.clear();
     this.scriptSideRepairQueue.clear();
     this.scriptCurrentPlayerSide = null;
@@ -32626,16 +32858,24 @@ export class GameLogicSubsystem implements Subsystem {
 
     switch (command.type) {
       case 'clearSelection': {
+        const hadSelection = this.selectedEntityIds.length > 0 || this.selectedEntityId !== null;
         this.selectedEntityIds = [];
         this.selectedEntityId = null;
         this.clearEntitySelectionState();
+        if (hadSelection) {
+          this.markScriptSelectionChanged();
+        }
         return;
       }
       case 'selectEntities': {
         const nextSelectionIds = this.filterValidSelectionIds(command.entityIds);
+        const changed = !this.selectionIdsEqual(this.selectedEntityIds, nextSelectionIds);
         this.selectedEntityIds = nextSelectionIds;
         this.selectedEntityId = nextSelectionIds[0] ?? null;
         this.updateSelectionHighlight();
+        if (changed) {
+          this.markScriptSelectionChanged();
+        }
         return;
       }
       case 'select': {
@@ -32643,9 +32883,13 @@ export class GameLogicSubsystem implements Subsystem {
         if (!picked || picked.destroyed) return;
         // Source parity: Object::isSelectable — UNSELECTABLE or MASKED status prevents player selection.
         if (this.entityHasObjectStatus(picked, 'UNSELECTABLE') || this.entityHasObjectStatus(picked, 'MASKED')) return;
+        const changed = this.selectedEntityIds.length !== 1 || this.selectedEntityIds[0] !== command.entityId;
         this.selectedEntityIds = [command.entityId];
         this.selectedEntityId = command.entityId;
         this.updateSelectionHighlight();
+        if (changed) {
+          this.markScriptSelectionChanged();
+        }
         return;
       }
       case 'moveTo': {
@@ -53779,6 +54023,22 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private selectionIdsEqual(left: readonly number[], right: readonly number[]): boolean {
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private markScriptSelectionChanged(): void {
+    this.scriptSelectionChangedFrame = this.frameCounter;
+  }
+
   private removeEntityFromSelection(entityId: number): void {
     let changed = false;
     if (this.selectedEntityId === entityId) {
@@ -53796,6 +54056,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (changed) {
+      this.markScriptSelectionChanged();
       this.updateSelectionHighlight();
     }
   }
@@ -53889,6 +54150,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCanBuildBaseByScript.clear();
     this.sideCanBuildUnitsByScript.clear();
     this.sideTeamBuildDelaySecondsByScript.clear();
+    this.scriptTeamCreatedReadyFrameByName.clear();
     this.sideDisabledObjectTemplatesByScript.clear();
     this.sideSkillPointsModifier.clear();
     this.sideScriptSkillset.clear();
@@ -54017,6 +54279,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnedEntities.clear();
     this.selectedEntityIds = [];
     this.selectedEntityId = null;
+    this.scriptSelectionChangedFrame = -1;
     this.defeatedSides.clear();
     this.gameEndFrame = null;
   }

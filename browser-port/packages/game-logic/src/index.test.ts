@@ -28827,6 +28827,51 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedSelected({ entityId: 1 })).toBe(false);
   });
 
+  it('invalidates named-selected condition cache only when selection changes', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Scout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Scout', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const evaluateCached = (): boolean => logic.evaluateScriptCondition({
+      conditionType: 'NAMED_SELECTED',
+      params: [1],
+      conditionCacheId: 'named-selected-cache',
+    });
+
+    expect(evaluateCached()).toBe(false);
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { selected: boolean }>;
+    };
+    privateApi.spawnedEntities.get(1)!.selected = true;
+    expect(evaluateCached()).toBe(false);
+
+    logic.submitCommand({ type: 'select', entityId: 1 });
+    logic.update(0);
+    expect(evaluateCached()).toBe(true);
+    logic.update(0);
+    logic.update(0);
+
+    privateApi.spawnedEntities.get(1)!.selected = false;
+    expect(evaluateCached()).toBe(true);
+
+    logic.submitCommand({ type: 'clearSelection' });
+    logic.update(0);
+    expect(evaluateCached()).toBe(false);
+  });
+
   it('evaluates multiplayer allied-victory/allied-defeat/player-defeat conditions', () => {
     const bundle = makeBundle({
       objects: [
@@ -34663,6 +34708,159 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('supports ALLOW_SURRENDER kindof bit offsets for script kindof actions', () => {
+    const makeKindOfBundle = (includeAllowSurrenderKindOf: boolean) => makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('EnemyPowerBuilding', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        ...(includeAllowSurrenderKindOf
+          ? [makeObjectDef('SurrenderMarker', 'Civilian', ['PRISON'], [
+            makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          ])]
+          : []),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptOnNamed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const allowLogic = new GameLogicSubsystem(new THREE.Scene());
+    allowLogic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('EnemyPowerBuilding', 40, 20), // id 2
+      ], 128, 128),
+      makeRegistry(makeKindOfBundle(true)),
+      makeHeightmap(128, 128),
+    );
+    expect(allowLogic.setScriptTeamMembers('AllUseTeam', [1])).toBe(true);
+    allowLogic.setTeamRelationship('America', 'China', 0);
+
+    expect(allowLogic.executeScriptAction({
+      actionType: 470, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_KINDOF
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 62], // ALLOW_SURRENDER bit index for FS_POWER
+    })).toBe(true);
+    expect(allowLogic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+
+    expect(allowLogic.executeScriptAction({
+      actionType: 130, // SET_ATTACK_PRIORITY_KIND_OF
+      params: ['PowerSet', 62, 9],
+    })).toBe(true);
+    const allowPrivate = allowLogic as unknown as {
+      scriptAttackPrioritySetsByName: Map<string, {
+        templatePriorityByName: Map<string, number>;
+      }>;
+    };
+    expect(
+      allowPrivate.scriptAttackPrioritySetsByName
+        .get('POWERSET')
+        ?.templatePriorityByName
+        .get('ENEMYPOWERBUILDING'),
+    ).toBe(9);
+
+    const retailLogic = new GameLogicSubsystem(new THREE.Scene());
+    retailLogic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('EnemyPowerBuilding', 40, 20), // id 2
+      ], 128, 128),
+      makeRegistry(makeKindOfBundle(false)),
+      makeHeightmap(128, 128),
+    );
+    expect(retailLogic.setScriptTeamMembers('AllUseTeam', [1])).toBe(true);
+    retailLogic.setTeamRelationship('America', 'China', 0);
+
+    expect(retailLogic.executeScriptAction({
+      actionType: 470,
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 58], // retail bit index for FS_POWER
+    })).toBe(true);
+    expect(retailLogic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+  });
+
+  it('returns false for nearest-kindof command-button actions when source command button is on cooldown', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('EnemyPowerBuilding', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptOnNamed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 10 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('EnemyPowerBuilding', 40, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AllUseTeam', [1])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 470, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_KINDOF
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 'FS_POWER'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+
+    // Source parity: PartitionFilterValidCommandButtonTarget rejects candidates while button is cooling down.
+    expect(logic.executeScriptAction({
+      actionType: 470,
+      params: ['AllUseTeam', 'Command_ScriptOnNamed', 'FS_POWER'],
+    })).toBe(false);
+  });
+
   it('executes script team-partial-use-command-button action using source action id', () => {
     const bundle = makeBundle({
       objects: [
@@ -38370,6 +38568,58 @@ describe('Script condition groundwork', () => {
       actionType: 177,
       params: ['MissingTeam', 120],
     })).toBe(false);
+  });
+
+  it('applies base-construction-speed delay to build/recruit team created state', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmericaInfantry', 10, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.setScriptTeamMembers('DelayTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamControllingSide('DelayTeam', 'America')).toBe(true);
+    expect(logic.setScriptTeamCreated('DelayTeam', false)).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 44, // SET_BASE_CONSTRUCTION_SPEED
+      params: ['America', 1],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 69, // BUILD_TEAM
+      params: ['DelayTeam'],
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(false);
+
+    for (let i = 0; i < 29; i += 1) {
+      logic.update(0);
+    }
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(false);
+
+    logic.update(0);
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(true);
+
+    expect(logic.setScriptTeamCreated('DelayTeam', false)).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 177, // RECRUIT_TEAM
+      params: ['DelayTeam', 120],
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(false);
+
+    for (let i = 0; i < 30; i += 1) {
+      logic.update(0);
+    }
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(true);
   });
 
   it('executes script camera-move-home action using source action id', () => {
