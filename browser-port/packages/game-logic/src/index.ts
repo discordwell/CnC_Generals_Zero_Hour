@@ -5237,6 +5237,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly mapScriptsByNameUpper = new Map<string, MapScriptRuntime>();
   private readonly mapScriptGroupsByNameUpper = new Map<string, MapScriptGroupRuntime>();
   private readonly scriptPlayerSideByName = new Map<string, string>();
+  /** Source parity: SidesList::isPlayerDefaultTeam mapping (team<playerName>). */
+  private readonly scriptDefaultTeamNameBySide = new Map<string, string>();
   private readonly mapScriptSideByIndex: string[] = [];
   private readonly mapScriptDifficultyByIndex: number[] = [];
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
@@ -5724,6 +5726,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.mapScriptsByNameUpper.clear();
     this.mapScriptGroupsByNameUpper.clear();
     this.scriptPlayerSideByName.clear();
+    this.scriptDefaultTeamNameBySide.clear();
     this.mapScriptSideByIndex.length = 0;
     this.mapScriptDifficultyByIndex.length = 0;
 
@@ -5764,6 +5767,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!teamRecord) {
         continue;
       }
+      const teamNameUpper = teamRecord.nameUpper;
 
       const teamOwner = this.readScriptDictString(dict, 'teamOwner');
       const ownerKey = teamOwner.trim().toUpperCase();
@@ -5771,6 +5775,15 @@ export class GameLogicSubsystem implements Subsystem {
         const ownerSide = this.scriptPlayerSideByName.get(ownerKey);
         if (ownerSide) {
           teamRecord.controllingSide = ownerSide;
+          // Source parity: SidesList::isPlayerDefaultTeam marks "team<playerName>" as
+          // the owning player's default team.
+          if (
+            teamNameUpper.startsWith('TEAM')
+            && teamNameUpper.slice('TEAM'.length) === ownerKey
+            && !this.scriptDefaultTeamNameBySide.has(ownerSide)
+          ) {
+            this.scriptDefaultTeamNameBySide.set(ownerSide, teamNameUpper);
+          }
         }
       }
 
@@ -19460,16 +19473,34 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamStop(team, TRUE) in ScriptActions.cpp.
-   * Stops all current members and disbands the script team record.
-   * TODO(source-parity): set recruitable flag and merge into controlling player's default
-   * team once full Team/AI group internals are ported.
+   * Stops all current members, marks them recruitable, and merges them into
+   * the controlling player's default team when available.
    */
   private executeScriptTeamStopAndDisband(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
     const stopped = this.executeScriptTeamStop(teamName);
     if (!stopped) {
       return false;
     }
-    return this.clearScriptTeam(teamName);
+
+    // Source parity bridge: doTeamStop(team, TRUE) marks members recruitable before merge.
+    team.recruitableOverride = true;
+
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (controllingSide) {
+      const defaultTeamNameUpper = this.scriptDefaultTeamNameBySide.get(controllingSide) ?? null;
+      if (defaultTeamNameUpper && defaultTeamNameUpper !== team.nameUpper) {
+        if (this.executeScriptTeamMergeIntoTeam(team.nameUpper, defaultTeamNameUpper)) {
+          return true;
+        }
+      }
+    }
+
+    return this.clearScriptTeam(team.nameUpper);
   }
 
   /**
@@ -54460,6 +54491,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.mapScriptsByNameUpper.clear();
     this.mapScriptGroupsByNameUpper.clear();
     this.scriptPlayerSideByName.clear();
+    this.scriptDefaultTeamNameBySide.clear();
     this.mapScriptSideByIndex.length = 0;
     this.mapScriptDifficultyByIndex.length = 0;
     this.scriptObjectTopologyVersion = 0;

@@ -39936,6 +39936,78 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('merges TEAM_STOP_AND_DISBAND members into the controlling player default team', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 10),
+      makeMapObject('Ranger', 14, 10),
+    ], 128, 128);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'teamPlayer_1',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+        },
+      }, {
+        dict: {
+          teamName: 'AlphaTeam',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, {
+        recruitableOverride: boolean | null;
+        memberEntityIds: Set<number>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 176, // TEAM_STOP_AND_DISBAND
+      params: ['AlphaTeam'],
+    })).toBe(true);
+
+    expect(privateApi.scriptTeamsByName.has('ALPHATEAM')).toBe(false);
+    expect(Array.from(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.memberEntityIds ?? []).sort((a, b) => a - b))
+      .toEqual([1, 2]);
+    expect(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.recruitableOverride).toBe(true);
+  });
+
   it('executes script relation-override actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
