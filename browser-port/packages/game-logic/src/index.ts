@@ -4382,6 +4382,11 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [39, 'NAMED_ATTACK_NAMED'],
   [40, 'CREATE_NAMED_ON_TEAM_AT_WAYPOINT'],
   [41, 'CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT'],
+  [47, 'NAMED_ATTACK_AREA'],
+  [48, 'NAMED_ATTACK_TEAM'],
+  [49, 'TEAM_ATTACK_AREA'],
+  [50, 'TEAM_ATTACK_NAMED'],
+  [51, 'TEAM_LOAD_TRANSPORTS'],
   [52, 'NAMED_ENTER_NAMED'],
   [53, 'TEAM_ENTER_NAMED'],
   [54, 'NAMED_EXIT_ALL'],
@@ -4389,6 +4394,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
   [57, 'NAMED_GUARD'],
   [58, 'TEAM_GUARD'],
+  [59, 'NAMED_HUNT'],
+  [60, 'TEAM_HUNT'],
   [70, 'NAMED_DAMAGE'],
   [71, 'NAMED_DELETE'],
   [72, 'TEAM_DELETE'],
@@ -9368,6 +9375,38 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptNamedAttackNamed(
           readEntityId(0, ['entityId', 'unitId', 'named', 'attackerEntityId', 'attackerUnitId']),
           readEntityId(1, ['targetEntityId', 'otherEntityId', 'victimEntityId', 'targetUnitId']),
+        );
+      case 'NAMED_ATTACK_AREA':
+        return this.executeScriptNamedAttackArea(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'attackerEntityId', 'attackerUnitId']),
+          readString(1, ['triggerName', 'trigger', 'areaName', 'area']),
+        );
+      case 'NAMED_ATTACK_TEAM':
+        return this.executeScriptNamedAttackTeam(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'attackerEntityId', 'attackerUnitId']),
+          readString(1, ['victimTeamName', 'targetTeamName', 'teamName', 'team']),
+        );
+      case 'TEAM_ATTACK_AREA':
+        return this.executeScriptTeamAttackArea(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['triggerName', 'trigger', 'areaName', 'area']),
+        );
+      case 'TEAM_ATTACK_NAMED':
+        return this.executeScriptTeamAttackNamed(
+          readString(0, ['attackerTeamName', 'sourceTeamName', 'teamName', 'team']),
+          readEntityId(1, ['targetEntityId', 'entityId', 'victimEntityId', 'targetUnitId', 'named']),
+        );
+      case 'TEAM_LOAD_TRANSPORTS':
+        return this.executeScriptTeamLoadTransports(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'NAMED_HUNT':
+        return this.executeScriptNamedHunt(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+        );
+      case 'TEAM_HUNT':
+        return this.executeScriptTeamHunt(
+          readString(0, ['teamName', 'team']),
         );
       case 'CREATE_OBJECT':
         return this.executeScriptCreateObjectAtPosition(
@@ -16941,6 +16980,281 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.cancelEntityCommandPathActions(attacker.id);
     this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+    return true;
+  }
+
+  private findScriptClosestEnemyInTriggerArea(attacker: MapEntity, triggerIndex: number): MapEntity | null {
+    const trigger = this.mapTriggerRegions[triggerIndex];
+    if (!trigger) {
+      return null;
+    }
+
+    let bestVictim: MapEntity | null = null;
+    let bestDistanceSq = Number.POSITIVE_INFINITY;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || candidate.id === attacker.id || !candidate.canTakeDamage) {
+        continue;
+      }
+      if (!this.isPointInsideTriggerRegion(trigger, candidate.x, candidate.z)) {
+        continue;
+      }
+      if (this.getTeamRelationship(attacker, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+      if (
+        candidate.objectStatusFlags.has('STEALTHED')
+        && !candidate.objectStatusFlags.has('DETECTED')
+      ) {
+        continue;
+      }
+      if (!this.canAttackerTargetEntity(attacker, candidate, 'SCRIPT')) {
+        continue;
+      }
+
+      const dx = candidate.x - attacker.x;
+      const dz = candidate.z - attacker.z;
+      const distanceSq = (dx * dx) + (dz * dz);
+      if (distanceSq >= bestDistanceSq) {
+        continue;
+      }
+
+      bestVictim = candidate;
+      bestDistanceSq = distanceSq;
+    }
+    return bestVictim;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedAttackArea.
+   * TODO(source-parity): port persistent AIAttackAreaState area-scanning behavior.
+   */
+  private executeScriptNamedAttackArea(attackerEntityId: number, triggerName: string): boolean {
+    const attacker = this.spawnedEntities.get(attackerEntityId);
+    const area = this.resolveScriptTriggerAreaByName(triggerName);
+    if (!attacker || attacker.destroyed || !area) {
+      return false;
+    }
+
+    this.cancelEntityCommandPathActions(attacker.id);
+    this.clearAttackTarget(attacker.id);
+    const victim = this.findScriptClosestEnemyInTriggerArea(attacker, area.triggerIndex);
+    if (victim) {
+      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedAttackTeam.
+   */
+  private executeScriptNamedAttackTeam(attackerEntityId: number, victimTeamName: string): boolean {
+    const attacker = this.spawnedEntities.get(attackerEntityId);
+    const victimTeam = this.getScriptTeamRecord(victimTeamName);
+    if (!attacker || attacker.destroyed || !victimTeam) {
+      return false;
+    }
+
+    const victims = this.getScriptTeamMemberEntities(victimTeam)
+      .filter((entity) => !entity.destroyed && !this.isScriptEntityEffectivelyDead(entity));
+
+    this.cancelEntityCommandPathActions(attacker.id);
+    this.clearAttackTarget(attacker.id);
+    if (victims.length === 0) {
+      return true;
+    }
+
+    let bestVictim: MapEntity | null = null;
+    let bestDistanceSq = Number.POSITIVE_INFINITY;
+    for (const victim of victims) {
+      const dx = victim.x - attacker.x;
+      const dz = victim.z - attacker.z;
+      const distanceSq = (dx * dx) + (dz * dz);
+      if (distanceSq < bestDistanceSq) {
+        bestVictim = victim;
+        bestDistanceSq = distanceSq;
+      }
+    }
+
+    if (bestVictim) {
+      this.issueAttackEntity(attacker.id, bestVictim.id, 'SCRIPT');
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamAttackArea.
+   */
+  private executeScriptTeamAttackArea(attackerTeamName: string, triggerName: string): boolean {
+    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
+    const area = this.resolveScriptTriggerAreaByName(triggerName);
+    if (!attackerTeam || !area) {
+      return false;
+    }
+
+    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
+      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
+        continue;
+      }
+      this.cancelEntityCommandPathActions(attacker.id);
+      this.clearAttackTarget(attacker.id);
+      const victim = this.findScriptClosestEnemyInTriggerArea(attacker, area.triggerIndex);
+      if (victim) {
+        this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamAttackNamed.
+   */
+  private executeScriptTeamAttackNamed(attackerTeamName: string, victimEntityId: number): boolean {
+    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
+    const victim = this.spawnedEntities.get(victimEntityId);
+    if (!attackerTeam || !victim || victim.destroyed) {
+      return false;
+    }
+
+    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
+      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
+        continue;
+      }
+      this.cancelEntityCommandPathActions(attacker.id);
+      this.clearAttackTarget(attacker.id);
+      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+    }
+
+    return true;
+  }
+
+  private resolveScriptEntityTransportSlotCount(entity: MapEntity): number {
+    const registry = this.iniDataRegistry;
+    if (registry) {
+      const objectDef = findObjectDefByName(registry, entity.templateName);
+      if (objectDef) {
+        const configuredSlotCount = readNumericField(objectDef.fields, ['TransportSlotCount']);
+        if (configuredSlotCount !== null && Number.isFinite(configuredSlotCount)) {
+          return Math.max(0, Math.trunc(configuredSlotCount));
+        }
+      }
+    }
+
+    // Source parity subset: transport-slot parsing is not fully wired for all template paths yet.
+    return (entity.kindOf.has('INFANTRY') || entity.kindOf.has('VEHICLE') || entity.kindOf.has('PORTABLE_STRUCTURE'))
+      ? 1
+      : 0;
+  }
+
+  private solveScriptFastPartitionAssignments(
+    entries: Array<{ entityId: number; size: number }>,
+    spaces: Array<{ entityId: number; capacity: number }>,
+  ): Array<{ entryEntityId: number; spaceEntityId: number }> {
+    const sortedEntries = [...entries].sort((a, b) => b.size - a.size);
+    const remainingSpaces = [...spaces]
+      .map((space) => ({ ...space }))
+      .sort((a, b) => b.capacity - a.capacity);
+
+    const assignments: Array<{ entryEntityId: number; spaceEntityId: number }> = [];
+    for (const entry of sortedEntries) {
+      for (const space of remainingSpaces) {
+        if (entry.size > space.capacity) {
+          continue;
+        }
+        space.capacity -= entry.size;
+        assignments.push({
+          entryEntityId: entry.entityId,
+          spaceEntityId: space.entityId,
+        });
+        break;
+      }
+    }
+    return assignments;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doLoadAllTransports.
+   * Uses PartitionSolver fast mode to assign team members to team transports.
+   */
+  private executeScriptTeamLoadTransports(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const entries: Array<{ entityId: number; size: number }> = [];
+    const spaces: Array<{ entityId: number; capacity: number }> = [];
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (entity.kindOf.has('TRANSPORT')) {
+        if (!entity.containProfile) {
+          continue;
+        }
+        spaces.push({
+          entityId: entity.id,
+          capacity: Math.max(0, this.resolveScriptContainerCapacity(entity)),
+        });
+      } else {
+        entries.push({
+          entityId: entity.id,
+          size: this.resolveScriptEntityTransportSlotCount(entity),
+        });
+      }
+    }
+
+    if (entries.length === 0 || spaces.length === 0) {
+      return true;
+    }
+
+    const assignments = this.solveScriptFastPartitionAssignments(entries, spaces);
+    for (const assignment of assignments) {
+      const unit = this.spawnedEntities.get(assignment.entryEntityId);
+      const transport = this.spawnedEntities.get(assignment.spaceEntityId);
+      if (!unit || !transport || unit.destroyed || transport.destroyed) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'enterTransport',
+        entityId: unit.id,
+        targetTransportId: transport.id,
+      });
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedHunt.
+   * TODO(source-parity): port full AI hunt state machine transitions.
+   */
+  private executeScriptNamedHunt(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    this.clearCommandButtonHuntForEntity(entity);
+    this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'AI' });
+    entity.autoTargetScanNextFrame = this.frameCounter;
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamHunt.
+   * TODO(source-parity): port full AIGroup::groupHunt behavior.
+   */
+  private executeScriptTeamHunt(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.executeScriptNamedHunt(entity.id);
+    }
     return true;
   }
 

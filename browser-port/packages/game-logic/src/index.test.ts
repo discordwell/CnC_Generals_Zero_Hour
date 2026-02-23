@@ -36698,6 +36698,177 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script attack-area/hunt/load-transports actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 1 }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfLoco', 80),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          AttackRange: 220,
+          DelayBetweenShots: 1000,
+          WeaponSpeed: 9999,
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericaInfantry', 10, 10), // id 1 attacker
+      makeMapObject('AmericaInfantry', 12, 10), // id 2 attacker
+      makeMapObject('ChinaInfantry', 50, 50), // id 3 inside attack area
+      makeMapObject('ChinaInfantry', 55, 52), // id 4 inside attack area
+      makeMapObject('ChinaInfantry', 90, 90), // id 5 named attack victim
+      makeMapObject('TroopTransport', 20, 20), // id 6 transport
+      makeMapObject('AmericaInfantry', 20, 20), // id 7 load passenger
+      makeMapObject('AmericaInfantry', 20, 20), // id 8 load passenger
+      makeMapObject('AmericaInfantry', 30, 30), // id 9 named hunt attacker
+      makeMapObject('ChinaInfantry', 34, 30), // id 10 hunt victim
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'AttackAreaA',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40, z: 0 },
+        { x: 60, y: 40, z: 0 },
+        { x: 60, y: 60, z: 0 },
+        { x: 40, y: 60, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    expect(logic.setScriptTeamMembers('Attackers', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('Victims', [3, 4])).toBe(true);
+    expect(logic.setScriptTeamMembers('LoadTeam', [6, 7, 8])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        attackTargetEntityId: number | null;
+        autoTargetScanNextFrame: number;
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 47, // NAMED_ATTACK_AREA
+      params: [1, 'AttackAreaA'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+
+    expect(logic.executeScriptAction({
+      actionType: 48, // NAMED_ATTACK_TEAM
+      params: [1, 'Victims'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+
+    expect(logic.executeScriptAction({
+      actionType: 49, // TEAM_ATTACK_AREA
+      params: ['Attackers', 'AttackAreaA'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(2)?.attackTargetEntityId);
+
+    expect(logic.executeScriptAction({
+      actionType: 50, // TEAM_ATTACK_NAMED
+      params: ['Attackers', 5],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBe(5);
+
+    expect(logic.executeScriptAction({
+      actionType: 51, // TEAM_LOAD_TRANSPORTS
+      params: ['LoadTeam'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    const loadedPassengerCount = [7, 8]
+      .filter((entityId) => privateApi.spawnedEntities.get(entityId)?.transportContainerId === 6)
+      .length;
+    expect(loadedPassengerCount).toBe(1);
+
+    const namedHunter = privateApi.spawnedEntities.get(9);
+    expect(namedHunter).toBeDefined();
+    namedHunter!.attackTargetEntityId = null;
+    namedHunter!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    expect(logic.executeScriptAction({
+      actionType: 59, // NAMED_HUNT
+      params: [9],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(9)?.attackTargetEntityId).toBe(10);
+
+    const teamHunter1 = privateApi.spawnedEntities.get(1);
+    const teamHunter2 = privateApi.spawnedEntities.get(2);
+    expect(teamHunter1).toBeDefined();
+    expect(teamHunter2).toBeDefined();
+    teamHunter1!.attackTargetEntityId = null;
+    teamHunter2!.attackTargetEntityId = null;
+    teamHunter1!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    teamHunter2!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    expect(logic.executeScriptAction({
+      actionType: 60, // TEAM_HUNT
+      params: ['Attackers'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).not.toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 47,
+      params: [1, 'MissingArea'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 48,
+      params: [1, 'MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 49,
+      params: ['MissingTeam', 'AttackAreaA'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 50,
+      params: ['Attackers', 999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 51,
+      params: ['MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 59,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 60,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script damage/delete/kill actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
