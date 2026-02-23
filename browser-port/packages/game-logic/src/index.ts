@@ -19474,28 +19474,82 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doBuildTeam.
-   * TODO(source-parity): wire TeamFactory/AI production to materialize team members.
+   * Materializes TeamPrototype instances for non-singleton teams.
    */
   private executeScriptBuildTeam(teamName: string): boolean {
-    const team = this.getScriptTeamPrototypeRecord(teamName);
-    if (!team) {
+    const prototype = this.getScriptTeamPrototypeRecord(teamName);
+    if (!prototype) {
       return false;
     }
-    this.scheduleScriptTeamCreatedByConfiguredDelay(team);
+    const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
+    if (team) {
+      this.scheduleScriptTeamCreatedByConfiguredDelay(team);
+    }
     return true;
   }
 
   /**
    * Source parity subset: ScriptActions::doRecruitTeam.
-   * TODO(source-parity): wire AI recruit pipeline to collect nearby units into team instances.
+   * Materializes TeamPrototype instances for non-singleton teams.
    */
   private executeScriptRecruitTeam(teamName: string, _recruitRadius: number): boolean {
-    const team = this.getScriptTeamPrototypeRecord(teamName);
-    if (!team) {
+    const prototype = this.getScriptTeamPrototypeRecord(teamName);
+    if (!prototype) {
       return false;
     }
-    this.scheduleScriptTeamCreatedByConfiguredDelay(team);
+    const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
+    if (team) {
+      this.scheduleScriptTeamCreatedByConfiguredDelay(team);
+    }
     return true;
+  }
+
+  private isScriptTeamPrototypeSingleton(team: ScriptTeamRecord): boolean {
+    if (team.maxInstances < 2) {
+      return true;
+    }
+    return team.isSingleton;
+  }
+
+  private createScriptTeamInstanceFromPrototype(prototype: ScriptTeamRecord): ScriptTeamRecord {
+    let suffix = 1;
+    let instanceNameUpper = `${prototype.nameUpper}#${suffix}`;
+    while (this.scriptTeamsByName.has(instanceNameUpper)) {
+      suffix += 1;
+      instanceNameUpper = `${prototype.nameUpper}#${suffix}`;
+    }
+
+    const instance: ScriptTeamRecord = {
+      nameUpper: instanceNameUpper,
+      prototypeNameUpper: prototype.nameUpper,
+      memberEntityIds: new Set<number>(),
+      created: false,
+      stateName: '',
+      attackPrioritySetName: '',
+      recruitableOverride: prototype.recruitableOverride,
+      controllingSide: prototype.controllingSide,
+      isSingleton: false,
+      maxInstances: prototype.maxInstances,
+      productionPriority: prototype.productionPriority,
+      productionPrioritySuccessIncrease: prototype.productionPrioritySuccessIncrease,
+      productionPriorityFailureDecrease: prototype.productionPriorityFailureDecrease,
+    };
+    this.scriptTeamsByName.set(instanceNameUpper, instance);
+    this.registerScriptTeamPrototypeInstance(instance);
+    return instance;
+  }
+
+  private resolveScriptTeamBuildOrRecruitTarget(prototype: ScriptTeamRecord): ScriptTeamRecord | null {
+    if (this.isScriptTeamPrototypeSingleton(prototype)) {
+      return prototype;
+    }
+
+    const allMaterializedInstances = this.getScriptTeamInstancesByPrototypeName(prototype.nameUpper, true);
+    if (prototype.maxInstances > 0 && allMaterializedInstances.length >= prototype.maxInstances) {
+      // Source parity subset: team-instance cap blocks additional materialization.
+      return null;
+    }
+    return this.createScriptTeamInstanceFromPrototype(prototype);
   }
 
   private scheduleScriptTeamCreatedByConfiguredDelay(team: ScriptTeamRecord): void {
@@ -32006,7 +32060,10 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private getScriptTeamInstancesByPrototypeName(prototypeNameUpper: string): ScriptTeamRecord[] {
+  private getScriptTeamInstancesByPrototypeName(
+    prototypeNameUpper: string,
+    includeInactive = false,
+  ): ScriptTeamRecord[] {
     const instanceNames = this.scriptTeamInstanceNamesByPrototypeName.get(prototypeNameUpper);
     if (!instanceNames || instanceNames.length === 0) {
       return [];
@@ -32017,8 +32074,17 @@ export class GameLogicSubsystem implements Subsystem {
       if (!team) {
         continue;
       }
+
+      const isPrototypePlaceholder = team.nameUpper === prototypeNameUpper
+        && team.prototypeNameUpper === prototypeNameUpper
+        && !team.created
+        && team.memberEntityIds.size === 0;
+      if (isPrototypePlaceholder) {
+        continue;
+      }
+
       // Source parity: TeamPrototype iteration only considers active instances.
-      if (!team.created && team.memberEntityIds.size === 0) {
+      if (!includeInactive && !team.created && team.memberEntityIds.size === 0) {
         continue;
       }
       teams.push(team);

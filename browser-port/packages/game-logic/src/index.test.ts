@@ -38717,6 +38717,94 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('materializes non-singleton build/recruit team instances and enforces max instances while delayed', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([makeMapObject('AmericaInfantry', 10, 10)], 64, 64);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'AlphaProto',
+          teamOwner: 'Player_1',
+          teamIsSingleton: false,
+          teamMaxInstances: 2,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, {
+        created: boolean;
+        prototypeNameUpper: string;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 44, // SET_BASE_CONSTRUCTION_SPEED
+      params: ['America', 3],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 69, // BUILD_TEAM
+      params: ['AlphaProto'],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('ALPHAPROTO#1')?.prototypeNameUpper).toBe('ALPHAPROTO');
+    expect(privateApi.scriptTeamsByName.get('ALPHAPROTO#1')?.created).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 177, // RECRUIT_TEAM
+      params: ['AlphaProto', 120],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('ALPHAPROTO#2')?.prototypeNameUpper).toBe('ALPHAPROTO');
+    expect(privateApi.scriptTeamsByName.get('ALPHAPROTO#2')?.created).toBe(false);
+    expect(privateApi.scriptTeamsByName.has('ALPHAPROTO#3')).toBe(false);
+
+    for (let i = 0; i < 45; i += 1) {
+      logic.update(0);
+    }
+
+    expect(logic.executeScriptAction({
+      actionType: 69, // BUILD_TEAM
+      params: ['AlphaProto'],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.has('ALPHAPROTO#3')).toBe(false);
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'AlphaProto' })).toBe(false);
+
+    for (let i = 0; i < 45; i += 1) {
+      logic.update(0);
+    }
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'AlphaProto' })).toBe(true);
+  });
+
   it('applies base-construction-speed delay to build/recruit team created state', () => {
     const bundle = makeBundle({
       objects: [
