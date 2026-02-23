@@ -29529,6 +29529,10 @@ describe('Script condition groundwork', () => {
       actionType: 483, // TEAM_HUNT_WITH_COMMAND_BUTTON (offset id)
       params: ['AliasTeam', 'Command_Missing'],
     })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 278, // TEAM_HUNT_WITH_COMMAND_BUTTON (raw id)
+      params: ['AliasTeam', 'Command_Missing'],
+    })).toBe(false);
   });
 
   it('executes script victory/defeat actions using source action ids', () => {
@@ -31228,7 +31232,15 @@ describe('Script condition groundwork', () => {
       params: ['ContainTeam'],
     })).toBe(false);
     expect(logic.executeScriptAction({
+      actionType: 279, // TEAM_WAIT_FOR_NOT_CONTAINED_ALL (raw id)
+      params: ['ContainTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
       actionType: 485, // TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL
+      params: ['ContainTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 280, // TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL (raw id)
       params: ['ContainTeam'],
     })).toBe(false);
 
@@ -31238,13 +31250,25 @@ describe('Script condition groundwork', () => {
       params: ['ContainTeam'],
     })).toBe(true);
     expect(logic.executeScriptAction({
+      actionType: 279,
+      params: ['ContainTeam'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
       actionType: 485,
+      params: ['ContainTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 280,
       params: ['ContainTeam'],
     })).toBe(false);
 
     privateApi.spawnedEntities.get(2)!.transportContainerId = null;
     expect(logic.executeScriptAction({
       actionType: 485,
+      params: ['ContainTeam'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 280,
       params: ['ContainTeam'],
     })).toBe(true);
 
@@ -31896,7 +31920,15 @@ describe('Script condition groundwork', () => {
       params: ['America', 'CapturedTeam'],
     })).toBe(true);
     expect(logic.executeScriptAction({
+      actionType: 271, // PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS (raw id)
+      params: ['America', 'CapturedTeam'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
       actionType: 476,
+      params: ['America', 'MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 271,
       params: ['America', 'MissingTeam'],
     })).toBe(false);
   });
