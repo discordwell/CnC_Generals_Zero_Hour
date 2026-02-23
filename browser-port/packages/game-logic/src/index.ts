@@ -708,6 +708,8 @@ const BEZIER_ARC_LENGTH_TOLERANCE = 1.0;
  * (in logic frames) between idle auto-target scans. C++ uses 2 seconds (60 frames).
  */
 const AUTO_TARGET_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE * 2;
+const SCRIPT_AI_ATTITUDE_PASSIVE = 1;
+const SCRIPT_AI_ATTITUDE_NORMAL = 2;
 
 /**
  * Source parity: TAiData guard parameters. Real values come from AIData.ini;
@@ -1664,6 +1666,10 @@ interface MapEntity {
   receivingDifficultyBonus: boolean;
   /** Source parity: ScriptActions::changeObjectPanelFlagForSingleObject "AI Recruitable". */
   scriptAiRecruitable: boolean;
+  /** Source parity: AIUpdateInterface::setAttackInfo from script attack-priority actions. */
+  scriptAttackPrioritySetName: string;
+  /** Source parity: AIUpdateInterface::m_attitude (default AI_NORMAL). */
+  scriptAttitude: number;
   /** Source parity: KeepObjectDie — prevents entity removal on death, keeps as rubble. */
   keepObjectOnDeath: boolean;
   /** Source parity: Body module type determines damage behavior (HighlanderBody caps at 1HP, ImmortalBody never dies). */
@@ -4029,6 +4035,8 @@ interface ScriptTeamRecord {
   memberEntityIds: Set<number>;
   created: boolean;
   stateName: string;
+  /** Source parity: Team::setAttackPriorityName from script attack-priority actions. */
+  attackPrioritySetName: string;
   /** Source parity: Team::setRecruitable explicit override state. */
   recruitableOverride: boolean | null;
   controllingSide: string | null;
@@ -4382,6 +4390,11 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [39, 'NAMED_ATTACK_NAMED'],
   [40, 'CREATE_NAMED_ON_TEAM_AT_WAYPOINT'],
   [41, 'CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT'],
+  [42, 'NAMED_APPLY_ATTACK_PRIORITY_SET'],
+  [43, 'TEAM_APPLY_ATTACK_PRIORITY_SET'],
+  [44, 'SET_BASE_CONSTRUCTION_SPEED'],
+  [45, 'NAMED_SET_ATTITUDE'],
+  [46, 'TEAM_SET_ATTITUDE'],
   [47, 'NAMED_ATTACK_AREA'],
   [48, 'NAMED_ATTACK_TEAM'],
   [49, 'TEAM_ATTACK_AREA'],
@@ -5015,6 +5028,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideCanBuildBaseByScript = new Map<string, boolean>();
   /** Source parity subset: Player::setCanBuildUnits script toggle by side. */
   private readonly sideCanBuildUnitsByScript = new Map<string, boolean>();
+  /** Source parity subset: Player::setTeamDelaySeconds from script action. */
+  private readonly sideTeamBuildDelaySecondsByScript = new Map<string, number>();
   /** Source parity subset: Player::setObjectsEnabled per-side disabled template names. */
   private readonly sideDisabledObjectTemplatesByScript = new Map<string, Set<string>>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
@@ -9494,6 +9509,31 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['templateName', 'objectType', 'thingName', 'unitType']),
           readString(1, ['teamName', 'team']),
           readString(2, ['waypointName', 'waypoint']),
+        );
+      case 'NAMED_APPLY_ATTACK_PRIORITY_SET':
+        return this.executeScriptNamedApplyAttackPrioritySet(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+          readString(1, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
+        );
+      case 'TEAM_APPLY_ATTACK_PRIORITY_SET':
+        return this.executeScriptTeamApplyAttackPrioritySet(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
+        );
+      case 'SET_BASE_CONSTRUCTION_SPEED':
+        return this.executeScriptSetBaseConstructionSpeed(
+          readSide(0, ['side', 'playerName', 'player']),
+          readInteger(1, ['delayInSeconds', 'seconds', 'delay', 'value']),
+        );
+      case 'NAMED_SET_ATTITUDE':
+        return this.executeScriptNamedSetAttitude(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+          readInteger(1, ['attitude', 'mood', 'value']),
+        );
+      case 'TEAM_SET_ATTITUDE':
+        return this.executeScriptTeamSetAttitude(
+          readString(0, ['teamName', 'team']),
+          readInteger(1, ['attitude', 'mood', 'value']),
         );
       case 'VICTORY':
       case 'QUICKVICTORY':
@@ -17459,6 +17499,94 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private normalizeScriptAttackPrioritySetName(attackPrioritySetName: string): string {
+    return attackPrioritySetName.trim().toUpperCase();
+  }
+
+  /**
+   * Source parity subset: ScriptActions::updateNamedAttackPrioritySet.
+   * TODO(source-parity): resolve AttackPriorityInfo lookup/default fallback table.
+   */
+  private executeScriptNamedApplyAttackPrioritySet(entityId: number, attackPrioritySetName: string): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    entity.scriptAttackPrioritySetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::updateTeamAttackPrioritySet.
+   * TODO(source-parity): resolve AttackPriorityInfo lookup/default fallback table.
+   */
+  private executeScriptTeamApplyAttackPrioritySet(teamName: string, attackPrioritySetName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const normalizedSetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
+    if (normalizedSetName) {
+      team.attackPrioritySetName = normalizedSetName;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      entity.scriptAttackPrioritySetName = normalizedSetName;
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::updateBaseConstructionSpeed.
+   * TODO(source-parity): apply Player::m_teamDelaySeconds to TeamFactory scheduling.
+   */
+  private executeScriptSetBaseConstructionSpeed(side: string, delayInSeconds: number): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.collectScriptKnownSides().has(normalizedSide)) {
+      return false;
+    }
+    this.sideTeamBuildDelaySecondsByScript.set(normalizedSide, Math.trunc(delayInSeconds));
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::updateNamedSetAttitude.
+   */
+  private executeScriptNamedSetAttitude(entityId: number, attitude: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    entity.scriptAttitude = Math.trunc(attitude);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::updateTeamSetAttitude.
+   */
+  private executeScriptTeamSetAttitude(teamName: string, attitude: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const nextAttitude = Math.trunc(attitude);
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      entity.scriptAttitude = nextAttitude;
+    }
+    return true;
+  }
+
   /**
    * Source parity subset: ScriptActions::doCreateObject.
    * TODO(source-parity): BLAST_CRATER script creates should deform terrain and refresh pathfinding.
@@ -17610,6 +17738,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team) {
       return false;
     }
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (controllingSide) {
+      // Source parity placeholder: TeamFactory build delay lives on the controlling player.
+      void this.sideTeamBuildDelaySecondsByScript.get(controllingSide);
+    }
     team.created = true;
     return true;
   }
@@ -17622,6 +17755,11 @@ export class GameLogicSubsystem implements Subsystem {
     const team = this.getScriptTeamRecord(teamName);
     if (!team) {
       return false;
+    }
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (controllingSide) {
+      // Source parity placeholder: TeamFactory build delay lives on the controlling player.
+      void this.sideTeamBuildDelaySecondsByScript.get(controllingSide);
     }
     team.created = true;
     return true;
@@ -21600,6 +21738,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideUnitsShouldIdleOrResume.clear();
     this.sideCanBuildBaseByScript.clear();
     this.sideCanBuildUnitsByScript.clear();
+    this.sideTeamBuildDelaySecondsByScript.clear();
     this.sideDisabledObjectTemplatesByScript.clear();
     this.scriptSideRepairQueue.clear();
     this.scriptCurrentPlayerSide = null;
@@ -21831,6 +21970,8 @@ export class GameLogicSubsystem implements Subsystem {
       isIndestructible: false,
       receivingDifficultyBonus: this.scriptObjectsReceiveDifficultyBonus,
       scriptAiRecruitable: true,
+      scriptAttackPrioritySetName: '',
+      scriptAttitude: SCRIPT_AI_ATTITUDE_NORMAL,
       keepObjectOnDeath: this.hasKeepObjectDie(objectDef),
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
       locomotorSets: locomotorSetProfiles,
@@ -30177,6 +30318,7 @@ export class GameLogicSubsystem implements Subsystem {
       memberEntityIds: new Set<number>(),
       created: false,
       stateName: '',
+      attackPrioritySetName: '',
       recruitableOverride: null,
       controllingSide: null,
       isSingleton: true,
@@ -42294,6 +42436,15 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
 
+      // Source parity subset: passive AI units only retaliate to last attacker and
+      // otherwise skip proactive idle-acquire scans.
+      if (
+        this.getSidePlayerType(entity.side) !== 'HUMAN'
+        && entity.scriptAttitude === SCRIPT_AI_ATTITUDE_PASSIVE
+      ) {
+        continue;
+      }
+
       // Guarding entities use their own scan logic in updateGuardBehavior().
       if (entity.guardState !== 'NONE') {
         continue;
@@ -52161,6 +52312,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideUnitsShouldIdleOrResume.clear();
     this.sideCanBuildBaseByScript.clear();
     this.sideCanBuildUnitsByScript.clear();
+    this.sideTeamBuildDelaySecondsByScript.clear();
     this.sideDisabledObjectTemplatesByScript.clear();
     this.sideSkillPointsModifier.clear();
     this.sideScriptSkillset.clear();

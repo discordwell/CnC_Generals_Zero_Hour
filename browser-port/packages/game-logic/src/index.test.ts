@@ -37128,6 +37128,151 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('executes script attack-priority, base-speed, and attitude actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('WeaponSet', '', {
+            Conditions: 'None',
+            Weapon: 'PRIMARY TestRifle',
+          }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('WeaponSet', '', {
+            Conditions: 'None',
+            Weapon: 'PRIMARY TestRifle',
+          }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfLoco', 80),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          PrimaryDamage: 5,
+          PrimaryDamageRadius: 0,
+          AttackRange: 200,
+          DelayBetweenShots: 1000,
+          WeaponSpeed: 9999,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaInfantry', 10, 10), // id 1
+        makeMapObject('ChinaInfantry', 20, 10), // id 2
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setSidePlayerType('America', 'COMPUTER');
+    logic.setSidePlayerType('China', 'COMPUTER');
+    expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      sideTeamBuildDelaySecondsByScript: Map<string, number>;
+      scriptTeamsByName: Map<string, {
+        attackPrioritySetName: string;
+      }>;
+      spawnedEntities: Map<number, {
+        attackTargetEntityId: number | null;
+        autoTargetScanNextFrame: number;
+        scriptAttackPrioritySetName: string;
+        scriptAttitude: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 42, // NAMED_APPLY_ATTACK_PRIORITY_SET
+      params: [1, 'AntiVehicleSet'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('ANTIVEHICLESET');
+
+    expect(logic.executeScriptAction({
+      actionType: 43, // TEAM_APPLY_ATTACK_PRIORITY_SET
+      params: ['AlphaTeam', 'InfantryFirst'],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('ALPHATEAM')?.attackPrioritySetName).toBe('INFANTRYFIRST');
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('INFANTRYFIRST');
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttackPrioritySetName).toBe('INFANTRYFIRST');
+
+    expect(logic.executeScriptAction({
+      actionType: 43,
+      params: ['AlphaTeam', ''],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('ALPHATEAM')?.attackPrioritySetName).toBe('INFANTRYFIRST');
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('');
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttackPrioritySetName).toBe('');
+
+    expect(logic.executeScriptAction({
+      actionType: 44, // SET_BASE_CONSTRUCTION_SPEED
+      params: ['America', 7],
+    })).toBe(true);
+    expect(privateApi.sideTeamBuildDelaySecondsByScript.get('america')).toBe(7);
+
+    expect(logic.executeScriptAction({
+      actionType: 46, // TEAM_SET_ATTITUDE
+      params: ['AlphaTeam', 4],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(4);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(4);
+
+    expect(logic.executeScriptAction({
+      actionType: 45, // NAMED_SET_ATTITUDE
+      params: [1, 1], // PASSIVE
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(1);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(4);
+
+    const unit1 = privateApi.spawnedEntities.get(1);
+    const unit2 = privateApi.spawnedEntities.get(2);
+    expect(unit1).toBeDefined();
+    expect(unit2).toBeDefined();
+    unit1!.attackTargetEntityId = null;
+    unit2!.attackTargetEntityId = null;
+    unit1!.autoTargetScanNextFrame = 0;
+    unit2!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+
+    // Passive AI should not auto-acquire without recent attacker data.
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
+
+    // Passive AI should still retaliate to a recent attacker.
+    privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 1, 'SMALL_ARMS');
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 42,
+      params: [999, 'AnySet'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 43,
+      params: ['MissingTeam', 'AnySet'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 44,
+      params: ['MissingSide', 5],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 45,
+      params: [999, 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 46,
+      params: ['MissingTeam', 2],
+    })).toBe(false);
+  });
+
   it('executes script damage/delete/kill actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
