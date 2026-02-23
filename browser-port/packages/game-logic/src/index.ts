@@ -4382,9 +4382,15 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [98, 'SOUND_AMBIENT_RESUME'],
   [99, 'MUSIC_SET_TRACK'],
   [102, 'MAP_REVEAL_ALL'],
+  [103, 'TEAM_GARRISON_SPECIFIC_BUILDING'],
   [104, 'EXIT_SPECIFIC_BUILDING'],
+  [105, 'TEAM_GARRISON_NEAREST_BUILDING'],
   [106, 'TEAM_EXIT_ALL_BUILDINGS'],
+  [107, 'NAMED_GARRISON_SPECIFIC_BUILDING'],
+  [108, 'NAMED_GARRISON_NEAREST_BUILDING'],
   [109, 'NAMED_EXIT_BUILDING'],
+  [110, 'PLAYER_GARRISON_ALL_BUILDINGS'],
+  [111, 'PLAYER_EXIT_ALL_BUILDINGS'],
   [114, 'SETUP_CAMERA'],
   [115, 'CAMERA_LETTERBOX_BEGIN'],
   [116, 'CAMERA_LETTERBOX_END'],
@@ -9491,17 +9497,43 @@ export class GameLogicSubsystem implements Subsystem {
           readBoolean(1, ['fadeOut', 'fadeout']),
           readBoolean(2, ['fadeIn', 'fadein']),
         );
+      case 'TEAM_GARRISON_SPECIFIC_BUILDING':
+        return this.executeScriptTeamGarrisonSpecificBuilding(
+          readString(0, ['teamName', 'team']),
+          readEntityId(1, ['buildingEntityId', 'entityId', 'buildingId', 'unitId', 'named']),
+        );
       case 'EXIT_SPECIFIC_BUILDING':
         return this.executeScriptExitSpecificBuilding(
           readEntityId(0, ['entityId', 'unitId', 'named', 'buildingId']),
+        );
+      case 'TEAM_GARRISON_NEAREST_BUILDING':
+        return this.executeScriptTeamGarrisonNearestBuilding(
+          readString(0, ['teamName', 'team']),
         );
       case 'TEAM_EXIT_ALL_BUILDINGS':
         return this.executeScriptTeamExitAllBuildings(
           readString(0, ['teamName', 'team']),
         );
+      case 'NAMED_GARRISON_SPECIFIC_BUILDING':
+        return this.executeScriptNamedGarrisonSpecificBuilding(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readEntityId(1, ['buildingEntityId', 'entityId', 'buildingId', 'targetEntityId']),
+        );
+      case 'NAMED_GARRISON_NEAREST_BUILDING':
+        return this.executeScriptNamedGarrisonNearestBuilding(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+        );
       case 'NAMED_EXIT_BUILDING':
         return this.executeScriptNamedExitBuilding(
           readEntityId(0, ['entityId', 'unitId', 'named']),
+        );
+      case 'PLAYER_GARRISON_ALL_BUILDINGS':
+        return this.executeScriptPlayerGarrisonAllBuildings(
+          readSide(0, ['side', 'playerName', 'player']),
+        );
+      case 'PLAYER_EXIT_ALL_BUILDINGS':
+        return this.executeScriptPlayerExitAllBuildings(
+          readSide(0, ['side', 'playerName', 'player']),
         );
       case 'MOVE_CAMERA_TO':
         return this.requestScriptMoveCameraTo(
@@ -15125,6 +15157,356 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
     }
     return true;
+  }
+
+  private resolveScriptContainerCapacity(container: MapEntity): number {
+    const contain = container.containProfile;
+    if (!contain) {
+      return 0;
+    }
+    switch (contain.moduleType) {
+      case 'GARRISON':
+        return contain.garrisonCapacity;
+      case 'TUNNEL':
+        return this.config.maxTunnelCapacity;
+      default:
+        return contain.transportCapacity;
+    }
+  }
+
+  private resolveScriptContainedSide(container: MapEntity): string | null {
+    for (const passengerId of this.collectContainedEntityIds(container.id)) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        continue;
+      }
+      const normalizedSide = this.normalizeSide(passenger.side);
+      if (normalizedSide) {
+        return normalizedSide;
+      }
+    }
+    return null;
+  }
+
+  private isScriptInternetCenterBuilding(entity: MapEntity): boolean {
+    const kindOf = this.resolveEntityKindOfSet(entity);
+    return kindOf.has('FS_INTERNET_CENTER') || entity.containProfile?.moduleType === 'INTERNET_HACK';
+  }
+
+  private canScriptSideUseBuildingContainer(building: MapEntity, normalizedSide: string): boolean {
+    if (!this.resolveEntityKindOfSet(building).has('STRUCTURE')) {
+      return false;
+    }
+    if (!building.containProfile) {
+      return false;
+    }
+    const occupiedSide = this.resolveScriptContainedSide(building);
+    return occupiedSide === null || occupiedSide === normalizedSide;
+  }
+
+  private issueScriptEnterContainer(entity: MapEntity, container: MapEntity): boolean {
+    const containProfile = container.containProfile;
+    if (!containProfile) {
+      return false;
+    }
+    if (containProfile.moduleType === 'GARRISON') {
+      this.applyCommand({
+        type: 'garrisonBuilding',
+        entityId: entity.id,
+        targetBuildingId: container.id,
+      });
+      return true;
+    }
+    this.applyCommand({
+      type: 'enterTransport',
+      entityId: entity.id,
+      targetTransportId: container.id,
+    });
+    return true;
+  }
+
+  private findScriptNearestGarrisonBuilding(
+    source: MapEntity,
+    requireInternetCenter: boolean,
+  ): MapEntity | null {
+    const normalizedSide = this.normalizeSide(source.side);
+    if (!normalizedSide) {
+      return null;
+    }
+    const sourceOffMap = this.isEntityOffMap(source);
+
+    let nearest: MapEntity | null = null;
+    let nearestDistSq = Number.POSITIVE_INFINITY;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || candidate.id === source.id) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (!this.canScriptSideUseBuildingContainer(candidate, normalizedSide)) {
+        continue;
+      }
+      const isInternetCenter = this.isScriptInternetCenterBuilding(candidate);
+      if (requireInternetCenter) {
+        if (!isInternetCenter) {
+          continue;
+        }
+      } else if (isInternetCenter) {
+        continue;
+      }
+
+      const capacity = this.resolveScriptContainerCapacity(candidate);
+      if (capacity > 0 && this.collectContainedEntityIds(candidate.id).length >= capacity) {
+        continue;
+      }
+
+      const dx = candidate.x - source.x;
+      const dz = candidate.z - source.z;
+      const distSq = (dx * dx) + (dz * dz);
+      if (
+        distSq < nearestDistSq
+        || (distSq === nearestDistSq && nearest !== null && candidate.id < nearest.id)
+        || (distSq === nearestDistSq && nearest === null)
+      ) {
+        nearest = candidate;
+        nearestDistSq = distSq;
+      }
+    }
+
+    return nearest;
+  }
+
+  private executeScriptTeamGarrisonSpecificBuilding(teamName: string, buildingEntityId: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const building = this.spawnedEntities.get(buildingEntityId);
+    if (!team || !building || building.destroyed) {
+      return false;
+    }
+
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (!controllingSide) {
+      return false;
+    }
+    if (!this.canScriptSideUseBuildingContainer(building, controllingSide)) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const member of this.getScriptTeamMemberEntities(team)) {
+      if (member.destroyed) {
+        continue;
+      }
+      if (this.issueScriptEnterContainer(member, building)) {
+        issuedAny = true;
+      }
+    }
+    return issuedAny;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamGarrisonNearestBuilding.
+   * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
+   */
+  private executeScriptTeamGarrisonNearestBuilding(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const leader = teamMembers[0]!;
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (!controllingSide) {
+      return false;
+    }
+    const requireInternetCenter = this.resolveEntityKindOfSet(leader).has('MONEY_HACKER');
+    const leaderOffMap = this.isEntityOffMap(leader);
+    const candidates = Array.from(this.spawnedEntities.values())
+      .filter((candidate) => {
+        if (candidate.destroyed) {
+          return false;
+        }
+        if (this.isEntityOffMap(candidate) !== leaderOffMap) {
+          return false;
+        }
+        if (!this.canScriptSideUseBuildingContainer(candidate, controllingSide)) {
+          return false;
+        }
+        const isInternetCenter = this.isScriptInternetCenterBuilding(candidate);
+        if (requireInternetCenter) {
+          if (!isInternetCenter) {
+            return false;
+          }
+        } else if (isInternetCenter) {
+          return false;
+        }
+        return true;
+      })
+      .sort((left, right) => {
+        const leftDx = left.x - leader.x;
+        const leftDz = left.z - leader.z;
+        const rightDx = right.x - leader.x;
+        const rightDz = right.z - leader.z;
+        const leftDistSq = (leftDx * leftDx) + (leftDz * leftDz);
+        const rightDistSq = (rightDx * rightDx) + (rightDz * rightDz);
+        if (leftDistSq !== rightDistSq) {
+          return leftDistSq - rightDistSq;
+        }
+        return left.id - right.id;
+      });
+
+    let memberIndex = 0;
+    let issuedAny = false;
+    for (const building of candidates) {
+      const capacity = this.resolveScriptContainerCapacity(building);
+      if (capacity <= 0) {
+        continue;
+      }
+      const occupants = this.collectContainedEntityIds(building.id).length;
+      let slotsAvailable = capacity - occupants;
+      while (slotsAvailable > 0 && memberIndex < teamMembers.length) {
+        const member = teamMembers[memberIndex]!;
+        memberIndex += 1;
+        const kindOf = this.resolveEntityKindOfSet(member);
+        if (!kindOf.has('INFANTRY') || kindOf.has('NO_GARRISON')) {
+          continue;
+        }
+        if (this.normalizeSide(member.side) !== controllingSide) {
+          continue;
+        }
+        if (this.issueScriptEnterContainer(member, building)) {
+          issuedAny = true;
+          slotsAvailable -= 1;
+        }
+      }
+      if (memberIndex >= teamMembers.length) {
+        break;
+      }
+    }
+
+    return issuedAny;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doUnitGarrisonSpecificBuilding.
+   */
+  private executeScriptNamedGarrisonSpecificBuilding(entityId: number, buildingEntityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    const building = this.spawnedEntities.get(buildingEntityId);
+    if (!entity || !building || entity.destroyed || building.destroyed) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(entity.side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.canScriptSideUseBuildingContainer(building, normalizedSide)) {
+      return false;
+    }
+    return this.issueScriptEnterContainer(entity, building);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doUnitGarrisonNearestBuilding.
+   * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
+   */
+  private executeScriptNamedGarrisonNearestBuilding(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    const requireInternetCenter = this.resolveEntityKindOfSet(entity).has('MONEY_HACKER');
+    const nearest = this.findScriptNearestGarrisonBuilding(entity, requireInternetCenter);
+    if (!nearest) {
+      return false;
+    }
+    return this.issueScriptEnterContainer(entity, nearest);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doPlayerGarrisonAllBuildings.
+   */
+  private executeScriptPlayerGarrisonAllBuildings(playerSide: string): boolean {
+    const normalizedSide = this.resolveScriptRevealMapTargetSide(playerSide);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (this.isEntityContained(entity)) {
+        continue;
+      }
+      const kindOf = this.resolveEntityKindOfSet(entity);
+      if (!kindOf.has('INFANTRY') || kindOf.has('NO_GARRISON')) {
+        continue;
+      }
+
+      const requireInternetCenter = kindOf.has('MONEY_HACKER');
+      const nearest = this.findScriptNearestGarrisonBuilding(entity, requireInternetCenter);
+      if (!nearest) {
+        continue;
+      }
+      if (this.issueScriptEnterContainer(entity, nearest)) {
+        issuedAny = true;
+      }
+    }
+
+    return issuedAny;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doPlayerExitAllBuildings.
+   */
+  private executeScriptPlayerExitAllBuildings(playerSide: string): boolean {
+    const normalizedSide = this.resolveScriptRevealMapTargetSide(playerSide);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+        this.applyCommand({
+          type: 'evacuate',
+          entityId: entity.id,
+        });
+        issuedAny = true;
+        continue;
+      }
+      if (
+        entity.garrisonContainerId !== null
+        || entity.transportContainerId !== null
+        || entity.tunnelContainerId !== null
+      ) {
+        this.applyCommand({
+          type: 'exitContainer',
+          entityId: entity.id,
+        });
+        issuedAny = true;
+      }
+    }
+
+    return issuedAny;
   }
 
   /**
