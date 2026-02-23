@@ -34264,6 +34264,31 @@ describe('Script condition groundwork', () => {
     );
 
     expect(logic.executeScriptAction({
+      actionType: 171, // CAMERA_TETHER_NAMED (raw id)
+      params: [1, 0, 150],
+    })).toBe(true);
+    expect(logic.getScriptCameraTetherState()).toEqual({
+      entityId: 1,
+      immediate: false,
+      play: 150,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 172, // CAMERA_STOP_TETHER_NAMED (raw id)
+    })).toBe(true);
+    expect(logic.getScriptCameraTetherState()).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 173, // CAMERA_SET_DEFAULT (raw id)
+      params: [20, 90, 400],
+    })).toBe(true);
+    expect(logic.getScriptCameraDefaultViewState()).toEqual({
+      pitch: 20,
+      angle: 90,
+      maxHeight: 400,
+    });
+
+    expect(logic.executeScriptAction({
       actionType: 376, // CAMERA_TETHER_NAMED
       params: [1, 1, 250],
     })).toBe(true);
@@ -34570,10 +34595,31 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
     expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
 
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).not.toBe('NONE');
+    expect(logic.executeScriptAction({
+      actionType: 174, // NAMED_STOP (raw id)
+      params: [1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+
     expect(logic.executeScriptAction({
       actionType: 380, // TEAM_STOP
       params: ['AlphaTeam'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
+
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+    expect(logic.executeScriptAction({
+      actionType: 175, // TEAM_STOP (raw id)
+      params: ['AlphaTeam'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
     expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
 
     expect(logic.executeScriptAction({
@@ -34614,12 +34660,23 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
 
     expect(logic.executeScriptAction({
-      actionType: 381, // TEAM_STOP_AND_DISBAND
+      actionType: 176, // TEAM_STOP_AND_DISBAND (raw id)
       params: ['AlphaTeam'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
     expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
     expect(logic.evaluateScriptHasUnits({ teamName: 'AlphaTeam' })).toBe(false);
+
+    expect(logic.setScriptTeamMembers('BravoTeam', [1, 2])).toBe(true);
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 381, // TEAM_STOP_AND_DISBAND (offset id)
+      params: ['BravoTeam'],
+    })).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'BravoTeam' })).toBe(false);
 
     expect(logic.executeScriptAction({
       actionType: 380, // TEAM_STOP
