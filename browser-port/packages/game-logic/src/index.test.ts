@@ -30477,6 +30477,77 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script stealth-enable actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('StealthUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', {
+            InnateStealth: 'Yes',
+            StealthDelay: 0,
+          }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('StealthUnit', 10, 10), // id 1
+        makeMapObject('StealthUnit', 14, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('StealthTeam', [1, 2])).toBe(true);
+
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('STEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('STEALTHED');
+
+    expect(logic.executeScriptAction({
+      actionType: 291, // ID collision path: raw id 291 + 2 params => NAMED_SET_STEALTH_ENABLED
+      params: [1, 0],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('STEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('STEALTHED');
+
+    expect(logic.executeScriptAction({
+      actionType: 497, // TEAM_SET_STEALTH_ENABLED (offset id)
+      params: ['StealthTeam', 0],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('STEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('STEALTHED');
+
+    expect(logic.executeScriptAction({
+      actionType: 496, // NAMED_SET_STEALTH_ENABLED (offset id)
+      params: [1, 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 497,
+      params: ['StealthTeam', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(1)?.statusFlags).toContain('STEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('STEALTHED');
+
+    expect(logic.executeScriptAction({
+      actionType: 496,
+      params: [999, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 497,
+      params: ['MissingTeam', 0],
+    })).toBe(false);
+  });
+
   it('executes script repulsor actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

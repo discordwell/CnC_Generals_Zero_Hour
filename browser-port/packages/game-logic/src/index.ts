@@ -4244,6 +4244,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [288, 'OBJECTLIST_REMOVEOBJECTTYPE'],
   [289, 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT'],
   [290, 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT'],
+  [292, 'TEAM_SET_STEALTH_ENABLED'],
   [291, 'PLAYER_RELATES_PLAYER'],
   [293, 'RADAR_DISABLE'],
   [294, 'RADAR_ENABLE'],
@@ -4359,6 +4360,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [487, 'NAMED_FOLLOW_WAYPOINTS_EXACT'],
   [494, 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT'],
   [495, 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT'],
+  [496, 'NAMED_SET_STEALTH_ENABLED'],
+  [497, 'TEAM_SET_STEALTH_ENABLED'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -7542,12 +7545,26 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const actionRecord = action as Record<string, unknown>;
-    const actionType = this.resolveScriptActionTypeName(actionRecord.actionType ?? actionRecord.type);
+    const { paramsObject, paramsArray } = this.resolveScriptConditionParams(actionRecord);
+    const rawActionType = actionRecord.actionType ?? actionRecord.type;
+    let actionType = this.resolveScriptActionTypeName(rawActionType);
+    if (typeof rawActionType === 'number'
+      && Number.isFinite(rawActionType)
+      && Math.trunc(rawActionType) === 291) {
+      // Source parity: Script chunks may collide on numeric id 291 across script-set variants.
+      // ScriptAction::ParseAction rematches by internal-name key; without that key we disambiguate
+      // by signature (2 params => NAMED_SET_STEALTH_ENABLED, 3 params => PLAYER_RELATES_PLAYER).
+      const paramCount = paramsArray.length > 0
+        ? paramsArray.length
+        : (paramsObject ? Object.keys(paramsObject).length : 0);
+      if (paramCount === 2) {
+        actionType = 'NAMED_SET_STEALTH_ENABLED';
+      }
+    }
     if (!actionType) {
       return false;
     }
 
-    const { paramsObject, paramsArray } = this.resolveScriptConditionParams(actionRecord);
     const readValue = (index: number, keyNames: readonly string[] = []): unknown =>
       this.resolveScriptConditionParamValue(actionRecord, paramsObject, paramsArray, index, keyNames);
     const readString = (index: number, keyNames: readonly string[] = []): string =>
@@ -8212,6 +8229,16 @@ export class GameLogicSubsystem implements Subsystem {
       case 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT':
         return this.executeScriptUndoRevealMapAtWaypointPermanently(
           readString(0, ['lookName', 'mapLookName', 'namedReveal']),
+        );
+      case 'NAMED_SET_STEALTH_ENABLED':
+        return this.executeScriptNamedSetStealthEnabled(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readBoolean(1, ['enabled', 'stealthEnabled', 'value']),
+        );
+      case 'TEAM_SET_STEALTH_ENABLED':
+        return this.executeScriptTeamSetStealthEnabled(
+          readString(0, ['teamName', 'team']),
+          readBoolean(1, ['enabled', 'stealthEnabled', 'value']),
         );
       case 'NAMED_SET_REPULSOR':
         return this.executeScriptNamedSetRepulsor(
@@ -12229,6 +12256,47 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedEnableStealth.
+   * C++ toggles OBJECT_STATUS_SCRIPT_UNSTEALTHED on the target object.
+   */
+  private executeScriptNamedSetStealthEnabled(entityId: number, enabled: boolean): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    if (enabled) {
+      entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
+    } else {
+      entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamEnableStealth.
+   * C++ toggles OBJECT_STATUS_SCRIPT_UNSTEALTHED for each team member.
+   */
+  private executeScriptTeamSetStealthEnabled(teamName: string, enabled: boolean): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (enabled) {
+        entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
+      } else {
+        entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
+      }
     }
     return true;
   }
@@ -30558,6 +30626,9 @@ export class GameLogicSubsystem implements Subsystem {
         if (entity.objectStatusFlags.has('IS_USING_ABILITY')) {
           breakStealth = true;
         }
+      }
+      if (entity.objectStatusFlags.has('SCRIPT_UNSTEALTHED')) {
+        breakStealth = true;
       }
 
       if (breakStealth) {
