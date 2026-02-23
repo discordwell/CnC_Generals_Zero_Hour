@@ -35155,6 +35155,40 @@ describe('Script condition groundwork', () => {
     );
 
     expect(logic.isScriptSkyboxEnabled()).toBe(false);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 126, // CAMERA_BW_MODE_END (raw id)
+      params: [9],
+    })).toBe(true);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(false);
+    expect(logic.drainScriptCameraBlackWhiteRequests()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 125, // CAMERA_BW_MODE_BEGIN (raw id)
+      params: [15],
+    })).toBe(true);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 330, // CAMERA_BW_MODE_BEGIN (offset id)
+      params: [8],
+    })).toBe(true);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 126, // CAMERA_BW_MODE_END (raw id)
+      params: [6],
+    })).toBe(true);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 331, // CAMERA_BW_MODE_END (offset id)
+      params: [4],
+    })).toBe(true);
+    expect(logic.isScriptCameraBlackWhiteEnabled()).toBe(false);
+    expect(logic.drainScriptCameraBlackWhiteRequests()).toEqual([
+      { enabled: true, fadeFrames: 15, frame: 0 },
+      { enabled: true, fadeFrames: 8, frame: 0 },
+      { enabled: false, fadeFrames: 6, frame: 0 },
+    ]);
 
     expect(logic.executeScriptAction({
       actionType: 127, // DRAW_SKYBOX_BEGIN (raw id)

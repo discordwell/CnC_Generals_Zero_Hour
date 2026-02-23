@@ -3899,6 +3899,12 @@ interface ScriptCameraFilterRequestState {
   frame: number;
 }
 
+interface ScriptCameraBlackWhiteRequestState {
+  enabled: boolean;
+  fadeFrames: number;
+  frame: number;
+}
+
 interface ScriptScreenShakeState {
   intensity: number;
   frame: number;
@@ -4351,6 +4357,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
   [119, 'CAMERA_FOLLOW_NAMED'],
+  [125, 'CAMERA_BW_MODE_BEGIN'],
+  [126, 'CAMERA_BW_MODE_END'],
   [127, 'DRAW_SKYBOX_BEGIN'],
   [128, 'DRAW_SKYBOX_END'],
   [132, 'CAMERA_STOP_FOLLOW'],
@@ -4545,6 +4553,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [322, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
+  [330, 'CAMERA_BW_MODE_BEGIN'],
+  [331, 'CAMERA_BW_MODE_END'],
   [332, 'DRAW_SKYBOX_BEGIN'],
   [333, 'DRAW_SKYBOX_END'],
   [337, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
@@ -5026,6 +5036,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraLookTowardWaypointState: ScriptCameraLookTowardWaypointState | null = null;
   /** Source parity bridge: TacticalView camera action requests consumed by renderer integration. */
   private readonly scriptCameraActionRequests: ScriptCameraActionRequestState[] = [];
+  /** Source parity bridge: ScriptActions::doBlackWhiteMode active-state mirror. */
+  private scriptCameraBlackWhiteEnabled = false;
+  /** Source parity bridge: ScriptActions::doBlackWhiteMode renderer requests. */
+  private readonly scriptCameraBlackWhiteRequests: ScriptCameraBlackWhiteRequestState[] = [];
   /** Source parity bridge: ScriptActions::doSkyBox renderer toggle. */
   private scriptSkyboxEnabled = false;
   /** Source parity bridge: camera motion-blur requests consumed by renderer integration. */
@@ -7926,6 +7940,35 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
+  private requestScriptCameraBlackWhiteMode(enabled: boolean, fadeFrames: number): void {
+    const normalizedFadeFrames = Number.isFinite(fadeFrames) ? Math.trunc(fadeFrames) : 0;
+
+    // Source parity: ending BW mode is ignored if the BW filter isn't active.
+    if (!enabled && !this.scriptCameraBlackWhiteEnabled) {
+      return;
+    }
+
+    this.scriptCameraBlackWhiteEnabled = enabled;
+    this.scriptCameraBlackWhiteRequests.push({
+      enabled,
+      fadeFrames: normalizedFadeFrames,
+      frame: this.frameCounter,
+    });
+  }
+
+  isScriptCameraBlackWhiteEnabled(): boolean {
+    return this.scriptCameraBlackWhiteEnabled;
+  }
+
+  drainScriptCameraBlackWhiteRequests(): ScriptCameraBlackWhiteRequestState[] {
+    if (this.scriptCameraBlackWhiteRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptCameraBlackWhiteRequests.map((request) => ({ ...request }));
+    this.scriptCameraBlackWhiteRequests.length = 0;
+    return requests;
+  }
+
   setScriptSkyboxEnabled(enabled: boolean): void {
     this.scriptSkyboxEnabled = enabled;
   }
@@ -8976,6 +9019,18 @@ export class GameLogicSubsystem implements Subsystem {
       case 'SET_FPS_LIMIT':
         this.setScriptFramesPerSecondLimit(
           readInteger(0, ['fpsLimit', 'framesPerSecondLimit', 'value']),
+        );
+        return true;
+      case 'CAMERA_BW_MODE_BEGIN':
+        this.requestScriptCameraBlackWhiteMode(
+          true,
+          readInteger(0, ['frames', 'fadeFrames', 'value']),
+        );
+        return true;
+      case 'CAMERA_BW_MODE_END':
+        this.requestScriptCameraBlackWhiteMode(
+          false,
+          readInteger(0, ['frames', 'fadeFrames', 'value']),
         );
         return true;
       case 'DRAW_SKYBOX_BEGIN':
@@ -18930,6 +18985,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
     this.scriptCameraActionRequests.length = 0;
+    this.scriptCameraBlackWhiteEnabled = false;
+    this.scriptCameraBlackWhiteRequests.length = 0;
     this.scriptSkyboxEnabled = false;
     this.scriptCameraFilterRequests.length = 0;
     this.placementSummary = {
@@ -49381,6 +49438,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
     this.scriptCameraActionRequests.length = 0;
+    this.scriptCameraBlackWhiteEnabled = false;
+    this.scriptCameraBlackWhiteRequests.length = 0;
     this.scriptSkyboxEnabled = false;
     this.scriptCameraFilterRequests.length = 0;
     this.thingTemplateBuildableOverrides.clear();
