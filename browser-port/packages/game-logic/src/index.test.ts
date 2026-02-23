@@ -29535,6 +29535,88 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team-hunt-with-command-button action using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('HunterUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_HuntPower', {
+            SpecialPowerTemplate: 'ScriptHuntPower',
+          }),
+          makeBlock('Behavior', 'CommandButtonHuntUpdate ModuleTag_Hunt', {
+            ScanRate: 33,
+            ScanRange: 300,
+          }),
+        ], {
+          CommandSet: 'HunterCommandSet',
+        }),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 150, InitialHealth: 150 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_HuntPower', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptHuntPower',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('HunterCommandSet', {
+          1: 'Command_HuntPower',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptHuntPower', {
+          ReloadTime: 0,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('HunterUnit', 20, 20), // id 1
+        makeMapObject('EnemyTarget', 60, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('HuntTeam', [1])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 278, // TEAM_HUNT_WITH_COMMAND_BUTTON (raw id)
+      params: ['HuntTeam', 'Command_HuntPower'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTHUNTPOWER',
+      dispatchType: 'OBJECT',
+      targetEntityId: 2,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 483, // TEAM_HUNT_WITH_COMMAND_BUTTON (offset id)
+      params: ['HuntTeam', 'Command_HuntPower'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 1,
+      targetX: 10,
+      targetZ: 10,
+      commandSource: 'PLAYER',
+    });
+    logic.update(1 / 30);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { commandButtonHuntMode: string }>;
+    };
+    expect(privateApi.spawnedEntities.get(1)?.commandButtonHuntMode).toBe('NONE');
+  });
+
   it('executes script skill-point modifier action and scales PLAYER_ADD_SKILLPOINTS gains', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

@@ -1575,6 +1575,23 @@ interface RepairDockProfile {
   timeForFullHealFrames: number;
 }
 
+/**
+ * Source parity: CommandButtonHuntUpdateModuleData.
+ * C++ file: CommandButtonHuntUpdate.cpp.
+ */
+interface CommandButtonHuntProfile {
+  scanFrames: number;
+  scanRange: number;
+}
+
+type CommandButtonHuntMode =
+  | 'NONE'
+  | 'SPECIAL_POWER'
+  | 'WEAPON'
+  | 'ENTER_HIJACK'
+  | 'ENTER_CARBOMB'
+  | 'ENTER_SABOTAGE';
+
 interface DozerAIProfile {
   /** Source parity: DozerAIUpdateModuleData::m_repairHealthPercentPerSecond (0..1 per second). */
   repairHealthPercentPerSecond: number;
@@ -1778,6 +1795,10 @@ interface MapEntity {
   /** Source parity: ChinookAIUpdate::m_airfieldForHealing. */
   chinookHealingAirfieldId: number;
   repairDockProfile: RepairDockProfile | null;
+  commandButtonHuntProfile: CommandButtonHuntProfile | null;
+  commandButtonHuntMode: CommandButtonHuntMode;
+  commandButtonHuntButtonName: string;
+  commandButtonHuntNextScanFrame: number;
   dozerAIProfile: DozerAIProfile | null;
   /** Source parity: DozerPrimaryIdleState::m_idleTooLongTimestamp. */
   dozerIdleTooLongTimestamp: number;
@@ -5748,6 +5769,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateDeployStyleEntities();
     this.updateTurretAI();
     this.updateCombat();
+    this.updateCommandButtonHunt();
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
     this.updateJetAI();
@@ -8728,9 +8750,10 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'TEAM_HUNT_WITH_COMMAND_BUTTON':
-        // TODO(source-parity): requires CommandButtonHuntUpdate module support to keep
-        // team members hunting with a command-button-driven target loop.
-        return false;
+        return this.executeScriptTeamHuntWithCommandButton(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
       case 'OBJECTLIST_ADDOBJECTTYPE':
         return this.executeScriptObjectTypeListMaintenance(
           readString(0, ['listName', 'objectList', 'objectListName']),
@@ -9757,6 +9780,119 @@ export class GameLogicSubsystem implements Subsystem {
       default:
         return 0;
     }
+  }
+
+  private resolveScriptCommandButtonSpecialPowerName(commandButtonDef: CommandButtonDef): string | null {
+    const rawName = readStringField(commandButtonDef.fields, ['SpecialPower'])
+      ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
+      ?? '';
+    const normalized = this.normalizeShortcutSpecialPowerName(rawName);
+    return normalized || null;
+  }
+
+  private resolveScriptCommandButtonHuntMode(commandButtonDef: CommandButtonDef): CommandButtonHuntMode {
+    const commandTypeName = this.normalizeScriptCommandTypeName(
+      commandButtonDef.commandTypeName
+      ?? readStringField(commandButtonDef.fields, ['Command'])
+      ?? '',
+    );
+    if (!commandTypeName) {
+      return 'NONE';
+    }
+
+    switch (commandTypeName) {
+      case 'SPECIAL_POWER':
+      case 'SPECIAL_POWER_FROM_COMMAND_CENTER':
+      case 'SPECIAL_POWER_FROM_SHORTCUT':
+      case 'SPECIAL_POWER_CONSTRUCT':
+      case 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT': {
+        const specialPowerName = this.resolveScriptCommandButtonSpecialPowerName(commandButtonDef);
+        if (!specialPowerName) {
+          return 'NONE';
+        }
+        const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+        return (commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0
+          ? 'SPECIAL_POWER'
+          : 'NONE';
+      }
+      case 'SWITCH_WEAPON':
+      case 'FIRE_WEAPON':
+        return 'WEAPON';
+      case 'HIJACK_VEHICLE':
+        return 'ENTER_HIJACK';
+      case 'CONVERT_TO_CARBOMB':
+        return 'ENTER_CARBOMB';
+      case 'SABOTAGE_BUILDING':
+        return 'ENTER_SABOTAGE';
+      default:
+        return 'NONE';
+    }
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamHuntWithCommandButton.
+   * C++ validates command type and enables CommandButtonHuntUpdate per unit.
+   */
+  private executeScriptTeamHuntWithCommandButton(teamName: string, commandButtonName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const registry = this.iniDataRegistry;
+    if (!team || !registry) {
+      return false;
+    }
+
+    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
+    const huntMode = this.resolveScriptCommandButtonHuntMode(commandButtonDef);
+    if (huntMode === 'NONE') {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (!entity.commandButtonHuntProfile) {
+        continue;
+      }
+      const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonDef.name);
+      if (commandButtons.length === 0) {
+        continue;
+      }
+      this.activateCommandButtonHuntForEntity(entity, commandButtonDef.name, huntMode);
+    }
+
+    return true;
+  }
+
+  private activateCommandButtonHuntForEntity(
+    entity: MapEntity,
+    commandButtonName: string,
+    mode: CommandButtonHuntMode,
+  ): void {
+    entity.commandButtonHuntButtonName = commandButtonName.trim().toUpperCase();
+    entity.commandButtonHuntMode = mode;
+    entity.commandButtonHuntNextScanFrame = this.frameCounter;
+    // Source parity: setCommandButton() forces aiIdle(CMD_FROM_AI) before arming.
+    this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'AI' });
+    // Source parity: setCommandButton() immediately runs one update tick.
+    this.updateCommandButtonHuntForEntity(entity);
+  }
+
+  private clearCommandButtonHuntForEntity(entity: MapEntity): void {
+    entity.commandButtonHuntMode = 'NONE';
+    entity.commandButtonHuntButtonName = '';
+    entity.commandButtonHuntNextScanFrame = 0;
+  }
+
+  private clearCommandButtonHuntForEntityId(entityId: number): void {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity) {
+      return;
+    }
+    this.clearCommandButtonHuntForEntity(entity);
   }
 
   private findScriptEntityCommandButtonsByName(
@@ -17103,6 +17239,7 @@ export class GameLogicSubsystem implements Subsystem {
     const supplyTruckProfile = this.extractSupplyTruckProfile(objectDef);
     const chinookAIProfile = this.extractChinookAIProfile(objectDef);
     const repairDockProfile = this.extractRepairDockProfile(objectDef);
+    const commandButtonHuntProfile = this.extractCommandButtonHuntProfile(objectDef);
     const dozerAIProfile = this.extractDozerAIProfile(objectDef);
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
     const experienceProfile = this.extractExperienceProfile(objectDef);
@@ -17310,6 +17447,10 @@ export class GameLogicSubsystem implements Subsystem {
       chinookFlightStatusEnteredFrame: chinookAIProfile ? this.frameCounter : 0,
       chinookHealingAirfieldId: 0,
       repairDockProfile,
+      commandButtonHuntProfile,
+      commandButtonHuntMode: 'NONE',
+      commandButtonHuntButtonName: '',
+      commandButtonHuntNextScanFrame: 0,
       dozerAIProfile,
       dozerIdleTooLongTimestamp: this.frameCounter,
       dozerBuildTaskOrderFrame: 0,
@@ -20043,6 +20184,44 @@ export class GameLogicSubsystem implements Subsystem {
           return;
         }
       }
+      for (const child of block.blocks) {
+        visitBlock(child);
+      }
+    };
+
+    for (const block of objectDef.blocks) {
+      visitBlock(block);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Source parity: CommandButtonHuntUpdateModuleData.
+   * INI fields: ScanRate (duration), ScanRange.
+   */
+  private extractCommandButtonHuntProfile(objectDef: ObjectDef | undefined): CommandButtonHuntProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    let profile: CommandButtonHuntProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile !== null) {
+        return;
+      }
+      if (block.type.toUpperCase() === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'COMMANDBUTTONHUNTUPDATE') {
+          const scanRateMs = readNumericField(block.fields, ['ScanRate']) ?? 1000;
+          profile = {
+            scanFrames: Math.max(1, this.msToLogicFrames(scanRateMs)),
+            scanRange: readNumericField(block.fields, ['ScanRange']) ?? 9999,
+          };
+          return;
+        }
+      }
+
       for (const child of block.blocks) {
         visitBlock(child);
       }
@@ -26317,6 +26496,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'moveTo': {
         const commandSource = command.commandSource ?? 'PLAYER';
+        if (commandSource !== 'AI') {
+          this.clearCommandButtonHuntForEntityId(command.entityId);
+        }
         if (commandSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
@@ -26343,6 +26525,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'attackMoveTo': {
         const commandSource = command.commandSource ?? 'PLAYER';
+        if (commandSource !== 'AI') {
+          this.clearCommandButtonHuntForEntityId(command.entityId);
+        }
         if (commandSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
@@ -26376,6 +26561,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'guardPosition': {
         const guardSource = command.commandSource ?? 'PLAYER';
+        if (guardSource !== 'AI') {
+          this.clearCommandButtonHuntForEntityId(command.entityId);
+        }
         if (guardSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
@@ -26389,6 +26577,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'guardObject': {
         const guardSource = command.commandSource ?? 'PLAYER';
+        if (guardSource !== 'AI') {
+          this.clearCommandButtonHuntForEntityId(command.entityId);
+        }
         if (guardSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
@@ -26405,6 +26596,9 @@ export class GameLogicSubsystem implements Subsystem {
         return;
       case 'attackEntity': {
         const commandSource = command.commandSource ?? 'PLAYER';
+        if (commandSource !== 'AI') {
+          this.clearCommandButtonHuntForEntityId(command.entityId);
+        }
         if (commandSource === 'PLAYER') {
           this.setSupplyTruckForceBusy(command.entityId, true);
         }
@@ -26467,6 +26661,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'stop': {
         const stopSource = command.commandSource ?? 'AI';
+        if (stopSource !== 'AI') {
+          this.clearCommandButtonHuntForEntityId(command.entityId);
+        }
         this.cancelEntityCommandPathActions(
           command.entityId,
           stopSource === 'PLAYER' ? 'current' : 'none',
@@ -26634,6 +26831,9 @@ export class GameLogicSubsystem implements Subsystem {
         this.handleGarrisonBuildingCommand(command);
         return;
       case 'repairBuilding':
+        if ((command.commandSource ?? 'PLAYER') !== 'AI') {
+          this.clearCommandButtonHuntForEntityId(command.entityId);
+        }
         this.handleRepairBuildingCommand(command);
         return;
       case 'enterTransport':
@@ -37109,6 +37309,198 @@ export class GameLogicSubsystem implements Subsystem {
       isTurretAlignedForFiring: (attacker) =>
         this.isTurretAlignedForWeaponSlot(attacker, 0), // Primary weapon slot.
     });
+  }
+
+  /**
+   * Source parity subset: CommandButtonHuntUpdate::update.
+   */
+  private updateCommandButtonHunt(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.commandButtonHuntMode === 'NONE') {
+        continue;
+      }
+      this.updateCommandButtonHuntForEntity(entity);
+    }
+  }
+
+  private updateCommandButtonHuntForEntity(entity: MapEntity): void {
+    if (entity.commandButtonHuntMode === 'NONE') {
+      return;
+    }
+    const profile = entity.commandButtonHuntProfile;
+    if (!profile) {
+      this.clearCommandButtonHuntForEntity(entity);
+      return;
+    }
+    if (this.frameCounter < entity.commandButtonHuntNextScanFrame) {
+      return;
+    }
+
+    if (!entity.commandButtonHuntButtonName) {
+      this.clearCommandButtonHuntForEntity(entity);
+      return;
+    }
+
+    const commandButtons = this.findScriptEntityCommandButtonsByName(entity, entity.commandButtonHuntButtonName);
+    if (commandButtons.length === 0) {
+      this.clearCommandButtonHuntForEntity(entity);
+      return;
+    }
+
+    const commandButtonDef = commandButtons[0]!;
+    const mode = this.resolveScriptCommandButtonHuntMode(commandButtonDef);
+    if (mode === 'NONE' || mode !== entity.commandButtonHuntMode) {
+      this.clearCommandButtonHuntForEntity(entity);
+      return;
+    }
+
+    if (mode === 'WEAPON') {
+      this.updateCommandButtonHuntWeapon(entity, commandButtonDef);
+      entity.commandButtonHuntNextScanFrame = this.frameCounter + 1;
+      return;
+    }
+
+    if (!this.isEntityIdleForCommandButtonHunt(entity)) {
+      entity.commandButtonHuntNextScanFrame = this.frameCounter + profile.scanFrames;
+      return;
+    }
+
+    if (mode === 'SPECIAL_POWER') {
+      const specialPowerName = this.resolveScriptCommandButtonSpecialPowerName(commandButtonDef);
+      if (!specialPowerName) {
+        this.clearCommandButtonHuntForEntity(entity);
+        return;
+      }
+      const ready = this.evaluateScriptCommandButtonSpecialPowerReady(entity, specialPowerName);
+      if (!ready) {
+        entity.commandButtonHuntNextScanFrame = this.frameCounter + profile.scanFrames;
+        return;
+      }
+    }
+
+    const target = this.findCommandButtonHuntTarget(entity, commandButtonDef, mode, profile.scanRange);
+    if (target) {
+      this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
+        kind: 'OBJECT',
+        targetEntity: target,
+      });
+    }
+    entity.commandButtonHuntNextScanFrame = this.frameCounter + profile.scanFrames;
+  }
+
+  private updateCommandButtonHuntWeapon(entity: MapEntity, commandButtonDef: CommandButtonDef): void {
+    const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef) ?? 0;
+    entity.forcedWeaponSlot = weaponSlot;
+    entity.weaponLockStatus = 'LOCKED_TEMPORARILY';
+    this.refreshEntityCombatProfiles(entity);
+
+    // Source parity subset: aiHunt(CMD_FROM_AI) nudges idle units into enemy scans.
+    if (this.isEntityIdleForCommandButtonHunt(entity)) {
+      entity.autoTargetScanNextFrame = this.frameCounter;
+    }
+  }
+
+  private isEntityIdleForCommandButtonHunt(entity: MapEntity): boolean {
+    if (entity.moving) {
+      return false;
+    }
+    if (entity.attackTargetEntityId !== null || entity.attackTargetPosition !== null) {
+      return false;
+    }
+    if (entity.guardState !== 'NONE') {
+      return false;
+    }
+    if (entity.transportContainerId !== null || entity.tunnelContainerId !== null || entity.garrisonContainerId !== null) {
+      return false;
+    }
+    if (entity.specialAbilityState && entity.specialAbilityState.packState !== 'NONE') {
+      return false;
+    }
+    return true;
+  }
+
+  private findCommandButtonHuntTarget(
+    source: MapEntity,
+    commandButtonDef: CommandButtonDef,
+    mode: CommandButtonHuntMode,
+    scanRange: number,
+  ): MapEntity | null {
+    const range = Math.max(0, scanRange);
+    const rangeSqr = range * range;
+    const sourceOffMap = this.isEntityOffMap(source);
+
+    let allowEnemies = false;
+    let allowNeutral = false;
+    let allowAllies = false;
+    if (mode === 'ENTER_CARBOMB') {
+      allowNeutral = true;
+    } else if (mode === 'ENTER_HIJACK' || mode === 'ENTER_SABOTAGE') {
+      allowEnemies = true;
+    } else if (mode === 'SPECIAL_POWER') {
+      const options = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+      allowEnemies = (options & SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT) !== 0;
+      allowNeutral = (options & SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT) !== 0;
+      allowAllies = (options & SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT) !== 0;
+      if (!allowEnemies && !allowNeutral && !allowAllies) {
+        allowEnemies = true;
+      }
+    }
+
+    let bestTarget: MapEntity | null = null;
+    let bestDistanceSqr = Number.POSITIVE_INFINITY;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || candidate.id === source.id) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (candidate.objectStatusFlags.has('STEALTHED') && !candidate.objectStatusFlags.has('DETECTED')) {
+        continue;
+      }
+
+      const relation = this.getTeamRelationship(source, candidate);
+      const relationAllowed = (allowEnemies && relation === RELATIONSHIP_ENEMIES)
+        || (allowNeutral && relation === RELATIONSHIP_NEUTRAL)
+        || (allowAllies && relation === RELATIONSHIP_ALLIES);
+      if (!relationAllowed) {
+        continue;
+      }
+
+      const dx = candidate.x - source.x;
+      const dz = candidate.z - source.z;
+      const distanceSqr = (dx * dx) + (dz * dz);
+      if (distanceSqr > rangeSqr || distanceSqr >= bestDistanceSqr) {
+        continue;
+      }
+      if (!this.isCommandButtonHuntTargetValidForMode(source, candidate, mode)) {
+        continue;
+      }
+
+      bestTarget = candidate;
+      bestDistanceSqr = distanceSqr;
+    }
+
+    return bestTarget;
+  }
+
+  private isCommandButtonHuntTargetValidForMode(
+    source: MapEntity,
+    target: MapEntity,
+    mode: CommandButtonHuntMode,
+  ): boolean {
+    switch (mode) {
+      case 'SPECIAL_POWER':
+        return target.canTakeDamage;
+      case 'ENTER_HIJACK':
+        return this.canExecuteHijackVehicleEnterAction(source, target);
+      case 'ENTER_CARBOMB':
+        return this.canExecuteConvertToCarBombEnterAction(source, target);
+      case 'ENTER_SABOTAGE':
+        return this.resolveSabotageBuildingProfile(source, target) !== null;
+      default:
+        return false;
+    }
   }
 
   /**
