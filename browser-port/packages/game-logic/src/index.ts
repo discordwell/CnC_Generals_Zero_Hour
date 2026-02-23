@@ -3905,6 +3905,17 @@ interface ScriptAudioRemovalRequestState {
   frame: number;
 }
 
+interface ScriptAudioPlaybackRequestState {
+  audioName: string;
+  playbackType: 'SOUND_EFFECT' | 'SPEECH';
+  allowOverlap: boolean;
+  sourceEntityId: number | null;
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  frame: number;
+}
+
 interface ScriptRadarEventState {
   x: number;
   y: number;
@@ -4248,15 +4259,19 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [4, 'DEFEAT'],
   [5, 'NO_OP'],
   [6, 'SET_TIMER'],
+  [7, 'PLAY_SOUND_EFFECT'],
   [8, 'ENABLE_SCRIPT'],
   [9, 'DISABLE_SCRIPT'],
   [10, 'CALL_SUBROUTINE'],
+  [11, 'PLAY_SOUND_EFFECT_AT'],
   [15, 'INCREMENT_COUNTER'],
   [16, 'DECREMENT_COUNTER'],
   [20, 'SET_MILLISECOND_TIMER'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
+  [82, 'SOUND_PLAY_NAMED'],
+  [83, 'SPEECH_PLAY'],
   [86, 'PLAYER_RELATES_PLAYER'],
   [88, 'RADAR_DISABLE'],
   [89, 'RADAR_ENABLE'],
@@ -4330,6 +4345,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [213, 'OBJECT_CREATE_RADAR_EVENT'],
   [214, 'TEAM_CREATE_RADAR_EVENT'],
   [215, 'DISPLAY_CINEMATIC_TEXT'],
+  [216, 'PLAY_SOUND_EFFECT_AT'],
   [217, 'SOUND_DISABLE_TYPE'],
   [218, 'SOUND_ENABLE_TYPE'],
   [219, 'SOUND_ENABLE_ALL'],
@@ -4863,6 +4879,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptAudioVolumeOverrides = new Map<string, number>();
   /** Source parity bridge: Audio::removeDisabledEvents / removeAudioEvent requests. */
   private readonly scriptAudioRemovalRequests: ScriptAudioRemovalRequestState[] = [];
+  /** Source parity bridge: ScriptActions audio-play requests consumed by renderer/audio bridge. */
+  private readonly scriptAudioPlaybackRequests: ScriptAudioPlaybackRequestState[] = [];
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SOUND). */
   private scriptSoundVolumeScale = 1;
   /** Source parity bridge: ScriptActions::doAudioSetVolume(SPEECH). */
@@ -7722,6 +7740,97 @@ export class GameLogicSubsystem implements Subsystem {
       .sort((left, right) => left.counterName.localeCompare(right.counterName));
   }
 
+  private queueScriptAudioPlaybackRequest(request: {
+    audioName: string;
+    playbackType: 'SOUND_EFFECT' | 'SPEECH';
+    allowOverlap: boolean;
+    sourceEntityId: number | null;
+    x: number | null;
+    y: number | null;
+    z: number | null;
+  }): boolean {
+    const normalizedAudioName = this.normalizeScriptAudioEventName(request.audioName);
+    if (!normalizedAudioName) {
+      return false;
+    }
+    this.scriptAudioPlaybackRequests.push({
+      audioName: normalizedAudioName,
+      playbackType: request.playbackType,
+      allowOverlap: request.allowOverlap,
+      sourceEntityId: request.sourceEntityId,
+      x: request.x,
+      y: request.y,
+      z: request.z,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  private requestScriptPlaySoundEffect(audioName: string): boolean {
+    return this.queueScriptAudioPlaybackRequest({
+      audioName,
+      playbackType: 'SOUND_EFFECT',
+      allowOverlap: true,
+      sourceEntityId: null,
+      x: null,
+      y: null,
+      z: null,
+    });
+  }
+
+  private requestScriptPlaySoundEffectAt(audioName: string, waypointName: string): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    return this.queueScriptAudioPlaybackRequest({
+      audioName,
+      playbackType: 'SOUND_EFFECT',
+      allowOverlap: true,
+      sourceEntityId: null,
+      x: waypoint.x,
+      y: this.resolveGroundHeight(waypoint.x, waypoint.z),
+      z: waypoint.z,
+    });
+  }
+
+  private requestScriptSoundPlayFromNamed(audioName: string, sourceEntityId: number): boolean {
+    const entity = this.spawnedEntities.get(sourceEntityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    return this.queueScriptAudioPlaybackRequest({
+      audioName,
+      playbackType: 'SOUND_EFFECT',
+      allowOverlap: true,
+      sourceEntityId: entity.id,
+      x: entity.x,
+      y: entity.y,
+      z: entity.z,
+    });
+  }
+
+  private requestScriptSpeechPlay(speechName: string, allowOverlap: boolean): boolean {
+    return this.queueScriptAudioPlaybackRequest({
+      audioName: speechName,
+      playbackType: 'SPEECH',
+      allowOverlap,
+      sourceEntityId: null,
+      x: null,
+      y: null,
+      z: null,
+    });
+  }
+
+  drainScriptAudioPlaybackRequests(): ScriptAudioPlaybackRequestState[] {
+    if (this.scriptAudioPlaybackRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptAudioPlaybackRequests.map((request) => ({ ...request }));
+    this.scriptAudioPlaybackRequests.length = 0;
+    return requests;
+  }
+
   /**
    * Source parity bridge: ScriptActions::doSoundEnableType.
    */
@@ -8031,7 +8140,10 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: Script chunks may collide on numeric id 291 across script-set variants.
       // ScriptAction::ParseAction rematches by internal-name key; without that key we disambiguate
       // by signature (2 params => NAMED_SET_STEALTH_ENABLED, 3 params => PLAYER_RELATES_PLAYER).
-      if (numericType === 291 && paramCount === 2) {
+      if (numericType === 212 && paramCount === 1) {
+        // 212 also maps to WAREHOUSE_SET_VALUE in another script set; 1-param signature is sound effect.
+        actionType = 'PLAY_SOUND_EFFECT';
+      } else if (numericType === 291 && paramCount === 2) {
         actionType = 'NAMED_SET_STEALTH_ENABLED';
       } else if (numericType === 293 && paramCount === 1) {
         // 293 also maps to RADAR_DISABLE in another script set; 1-param signature is EVA toggle.
@@ -8101,6 +8213,25 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DISABLE_SCORING':
         this.setScriptScoringEnabled(false);
         return true;
+      case 'PLAY_SOUND_EFFECT':
+        return this.requestScriptPlaySoundEffect(
+          readString(0, ['soundEventName', 'soundName', 'audioName', 'sound']),
+        );
+      case 'PLAY_SOUND_EFFECT_AT':
+        return this.requestScriptPlaySoundEffectAt(
+          readString(0, ['soundEventName', 'soundName', 'audioName', 'sound']),
+          readString(1, ['waypointName', 'waypoint']),
+        );
+      case 'SOUND_PLAY_NAMED':
+        return this.requestScriptSoundPlayFromNamed(
+          readString(0, ['soundEventName', 'soundName', 'audioName', 'sound']),
+          readEntityId(1, ['entityId', 'unitId', 'named', 'unitName']),
+        );
+      case 'SPEECH_PLAY':
+        return this.requestScriptSpeechPlay(
+          readString(0, ['speechName', 'audioName', 'sound']),
+          readBoolean(1, ['allowOverlap', 'overlap']),
+        );
       case 'SOUND_SET_VOLUME':
         this.setScriptSoundVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
         return true;
@@ -17899,6 +18030,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
     this.scriptAudioRemovalRequests.length = 0;
+    this.scriptAudioPlaybackRequests.length = 0;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
@@ -48196,6 +48328,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
     this.scriptAudioRemovalRequests.length = 0;
+    this.scriptAudioPlaybackRequests.length = 0;
     this.scriptSoundVolumeScale = 1;
     this.scriptSpeechVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;

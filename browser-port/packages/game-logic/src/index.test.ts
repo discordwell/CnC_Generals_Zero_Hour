@@ -30928,12 +30928,120 @@ describe('Script condition groundwork', () => {
   });
 
   it('executes script sound/audio-control actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SoundSourceUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const map = makeMap([
+      makeMapObject('SoundSourceUnit', 24, 30, { objectName: 'SoundSource' }),
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'AudioWaypoint',
+          position: { x: 48, y: 64, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([], 128, 128),
-      makeRegistry(makeBundle({ objects: [] })),
+      map,
+      makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
+
+    expect(logic.executeScriptAction({
+      actionType: 7, // PLAY_SOUND_EFFECT (raw id)
+      params: ['MissionStart'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 212, // PLAY_SOUND_EFFECT (offset/collision id)
+      params: ['MissionStartOffset'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 11, // PLAY_SOUND_EFFECT_AT (raw id)
+      params: ['MissionAt', 'AudioWaypoint'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 216, // PLAY_SOUND_EFFECT_AT (offset id)
+      params: ['MissionAtOffset', 'AudioWaypoint'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 82, // SOUND_PLAY_NAMED (raw id)
+      params: ['MissionFromUnit', 'SoundSource'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 83, // SPEECH_PLAY (raw id)
+      params: ['CommanderLine', 0],
+    })).toBe(true);
+    expect(logic.drainScriptAudioPlaybackRequests()).toEqual([
+      {
+        audioName: 'MissionStart',
+        playbackType: 'SOUND_EFFECT',
+        allowOverlap: true,
+        sourceEntityId: null,
+        x: null,
+        y: null,
+        z: null,
+        frame: 0,
+      },
+      {
+        audioName: 'MissionStartOffset',
+        playbackType: 'SOUND_EFFECT',
+        allowOverlap: true,
+        sourceEntityId: null,
+        x: null,
+        y: null,
+        z: null,
+        frame: 0,
+      },
+      {
+        audioName: 'MissionAt',
+        playbackType: 'SOUND_EFFECT',
+        allowOverlap: true,
+        sourceEntityId: null,
+        x: 48,
+        y: 0,
+        z: 64,
+        frame: 0,
+      },
+      {
+        audioName: 'MissionAtOffset',
+        playbackType: 'SOUND_EFFECT',
+        allowOverlap: true,
+        sourceEntityId: null,
+        x: 48,
+        y: 0,
+        z: 64,
+        frame: 0,
+      },
+      {
+        audioName: 'MissionFromUnit',
+        playbackType: 'SOUND_EFFECT',
+        allowOverlap: true,
+        sourceEntityId: 1,
+        x: 24,
+        y: 1,
+        z: 30,
+        frame: 0,
+      },
+      {
+        audioName: 'CommanderLine',
+        playbackType: 'SPEECH',
+        allowOverlap: false,
+        sourceEntityId: null,
+        x: null,
+        y: null,
+        z: null,
+        frame: 0,
+      },
+    ]);
 
     expect(logic.executeScriptAction({
       actionType: 422, // SOUND_DISABLE_TYPE
@@ -31018,6 +31126,18 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 321,
       params: [''],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 11,
+      params: ['MissionAt', 'MissingWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 82,
+      params: ['MissionFromUnit', 'MissingUnit'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 83,
+      params: ['', 1],
     })).toBe(false);
   });
 
