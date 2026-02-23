@@ -29028,6 +29028,10 @@ describe('Script condition groundwork', () => {
 
     expect(logic.evaluateScriptCondition(null)).toBe(false);
     expect(logic.evaluateScriptCondition({ conditionType: 'UNKNOWN_CONDITION' })).toBe(false);
+    expect(logic.evaluateScriptCondition({ conditionType: 'OBSOLETE_SCRIPT_1' })).toBe(false);
+    expect(logic.evaluateScriptCondition({ conditionType: 'OBSOLETE_SCRIPT_2' })).toBe(false);
+    expect(logic.evaluateScriptCondition({ conditionType: 'UNIT_COMPLETED_SEQUENTIAL_EXECUTION' })).toBe(false);
+    expect(logic.evaluateScriptCondition({ conditionType: 'TEAM_COMPLETED_SEQUENTIAL_EXECUTION' })).toBe(false);
     expect(logic.evaluateScriptCondition({
       conditionType: 'CAMERA_MOVEMENT_FINISHED',
     })).toBe(true);

@@ -12470,9 +12470,14 @@ export class GameLogicSubsystem implements Subsystem {
           side: readSide(0, ['side']),
           startPosition: readInteger(1, ['startPosition']),
         });
+      case 'OBSOLETE_SCRIPT_1':
+      case 'OBSOLETE_SCRIPT_2':
+      case 'UNIT_COMPLETED_SEQUENTIAL_EXECUTION':
+      case 'TEAM_COMPLETED_SEQUENTIAL_EXECUTION':
+        // Source parity: these condition handlers are unimplemented in C++ and return FALSE.
+        return false;
 
       default:
-        // TODO(source-parity): script-sequential and camera/view conditions.
         return false;
     }
   }
