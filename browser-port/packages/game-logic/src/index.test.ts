@@ -8564,6 +8564,148 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getSideCredits('GLA')).toBeGreaterThanOrEqual(300);
   });
 
+  it('regroups supply trucks to a friendly structure when no legal dock exists', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const commandCenterDef = makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'COMMANDCENTER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    const supplyTruckDef = makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+      makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CommandCenter', 90, 10), // id 1
+        makeMapObject('SupplyTruck', 10, 10),   // id 2
+      ], 128, 128),
+      makeRegistry(makeBundle({
+        objects: [commandCenterDef, supplyTruckDef],
+      })),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      supplyTruckStates: Map<number, {
+        aiState: number;
+        currentBoxes: number;
+        targetWarehouseId: number | null;
+        targetDepotId: number | null;
+        actionDelayFinishFrame: number;
+        preferredDockId: number | null;
+        forceBusy: boolean;
+      }>;
+      commandQueue: Array<{
+        type: string;
+        entityId?: number;
+        targetX?: number;
+        targetZ?: number;
+        commandSource?: string;
+      }>;
+    };
+
+    // Carrying boxes forces depot search; with no SupplyCenterDockUpdate available it must regroup.
+    priv.supplyTruckStates.set(2, {
+      aiState: 0,
+      currentBoxes: 2,
+      targetWarehouseId: null,
+      targetDepotId: null,
+      actionDelayFinishFrame: 0,
+      preferredDockId: null,
+      forceBusy: false,
+    });
+
+    logic.update(1 / 30);
+    expect(priv.supplyTruckStates.get(2)?.aiState).toBe(5); // WAITING
+    expect(priv.commandQueue).toContainEqual({
+      type: 'moveTo',
+      entityId: 2,
+      targetX: 90,
+      targetZ: 10,
+      commandSource: 'AI',
+    });
+  });
+
+  it('prefers CASH_GENERATOR regroup targets over nearer command centers', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const cashGeneratorDef = makeObjectDef('CashGen', 'America', ['STRUCTURE', 'CASH_GENERATOR'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    const commandCenterDef = makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'COMMANDCENTER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    const supplyTruckDef = makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+      makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 50,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CashGen', 90, 10),       // id 1 (farther but higher priority)
+        makeMapObject('CommandCenter', 30, 10), // id 2 (nearer but lower priority)
+        makeMapObject('SupplyTruck', 10, 10),   // id 3
+      ], 128, 128),
+      makeRegistry(makeBundle({
+        objects: [cashGeneratorDef, commandCenterDef, supplyTruckDef],
+      })),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      supplyTruckStates: Map<number, {
+        aiState: number;
+        currentBoxes: number;
+        targetWarehouseId: number | null;
+        targetDepotId: number | null;
+        actionDelayFinishFrame: number;
+        preferredDockId: number | null;
+        forceBusy: boolean;
+      }>;
+      commandQueue: Array<{
+        type: string;
+        entityId?: number;
+        targetX?: number;
+        targetZ?: number;
+        commandSource?: string;
+      }>;
+    };
+
+    priv.supplyTruckStates.set(3, {
+      aiState: 0,
+      currentBoxes: 0,
+      targetWarehouseId: null,
+      targetDepotId: null,
+      actionDelayFinishFrame: 0,
+      preferredDockId: null,
+      forceBusy: false,
+    });
+
+    logic.update(1 / 30);
+    expect(priv.supplyTruckStates.get(3)?.aiState).toBe(5); // WAITING
+    expect(priv.commandQueue).toContainEqual({
+      type: 'moveTo',
+      entityId: 3,
+      targetX: 90,
+      targetZ: 10,
+      commandSource: 'AI',
+    });
+  });
+
   it('clears worker preferred dock when entering a repair dozer task', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

@@ -116,6 +116,15 @@ export interface SupplyChainContext<TEntity extends SupplyChainEntity> {
   /** Issue a move-to command for an entity. */
   moveEntityTo(entityId: number, targetX: number, targetZ: number): void;
 
+  /**
+   * Source parity: SupplyTruckAIUpdate::RegroupingState::onEnter.
+   * Optional fallback regroup location when no legal supply dock can be found.
+   */
+  findRegroupPosition?: (
+    truck: TEntity,
+    carryingBoxes: boolean,
+  ) => { x: number; z: number } | null;
+
   /** Mark an entity for destruction. */
   destroyEntity(entityId: number): void;
 
@@ -394,9 +403,8 @@ function tickIdle<TEntity extends SupplyChainEntity>(
       context.moveEntityTo(truck.id, depot.x, depot.z);
       return;
     }
-    // No depot available — wait.
-    state.aiState = SupplyTruckAIState.WAITING;
-    state.actionDelayFinishFrame = context.frameCounter + 30;
+    // No depot available — regroup and wait.
+    enterWaiting(truck, state, context, 30);
     return;
   }
 
@@ -412,9 +420,8 @@ function tickIdle<TEntity extends SupplyChainEntity>(
     return;
   }
 
-  // No warehouse with boxes — wait and retry.
-  state.aiState = SupplyTruckAIState.WAITING;
-  state.actionDelayFinishFrame = context.frameCounter + 60;
+  // No warehouse with boxes — regroup and retry.
+  enterWaiting(truck, state, context, 60);
 }
 
 function tickApproachingWarehouse<TEntity extends SupplyChainEntity>(
@@ -545,9 +552,24 @@ function transitionToDeposit<TEntity extends SupplyChainEntity>(
     state.aiState = SupplyTruckAIState.APPROACHING_DEPOT;
     context.moveEntityTo(truck.id, depot.x, depot.z);
   } else {
-    state.aiState = SupplyTruckAIState.WAITING;
-    state.actionDelayFinishFrame = context.frameCounter + 30;
+    enterWaiting(truck, state, context, 30);
   }
+}
+
+function enterWaiting<TEntity extends SupplyChainEntity>(
+  truck: TEntity,
+  state: SupplyTruckState,
+  context: SupplyChainContext<TEntity>,
+  delayFrames: number,
+): void {
+  state.aiState = SupplyTruckAIState.WAITING;
+  state.actionDelayFinishFrame = context.frameCounter + delayFrames;
+
+  const regroupPosition = context.findRegroupPosition?.(truck, state.currentBoxes > 0);
+  if (!regroupPosition) {
+    return;
+  }
+  context.moveEntityTo(truck.id, regroupPosition.x, regroupPosition.z);
 }
 
 function tickApproachingDepot<TEntity extends SupplyChainEntity>(

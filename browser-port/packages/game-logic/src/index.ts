@@ -32546,6 +32546,7 @@ export class GameLogicSubsystem implements Subsystem {
       moveEntityTo: (entityId: number, targetX: number, targetZ: number) => {
         this.submitCommand({ type: 'moveTo', entityId, targetX, targetZ, commandSource: 'AI' });
       },
+      findRegroupPosition: (truck: MapEntity) => this.findSupplyTruckRegroupPosition(truck),
       destroyEntity: (entityId: number) => {
         this.markEntityDestroyed(entityId, -1);
       },
@@ -32617,6 +32618,53 @@ export class GameLogicSubsystem implements Subsystem {
       state.targetDepotId = null;
       state.aiState = SupplyTruckAIState.IDLE;
     }
+  }
+
+  /**
+   * Source parity: SupplyTruckAIUpdate::RegroupingState::onEnter.
+   * Preferred regroup target order:
+   * 1) CASH_GENERATOR
+   * 2) COMMANDCENTER
+   * 3) any STRUCTURE
+   */
+  private findSupplyTruckRegroupPosition(truck: MapEntity): { x: number; z: number } | null {
+    const truckSide = this.normalizeSide(truck.side);
+    if (!truckSide) {
+      return null;
+    }
+
+    const findClosestByKindOf = (requiredKindOf: string): MapEntity | null => {
+      let best: MapEntity | null = null;
+      let bestDistanceSqr = Number.POSITIVE_INFINITY;
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed || entity.id === truck.id) {
+          continue;
+        }
+        if (this.normalizeSide(entity.side) !== truckSide) {
+          continue;
+        }
+        if (!entity.kindOf.has(requiredKindOf)) {
+          continue;
+        }
+        const dx = entity.x - truck.x;
+        const dz = entity.z - truck.z;
+        const distanceSqr = dx * dx + dz * dz;
+        if (distanceSqr < bestDistanceSqr) {
+          best = entity;
+          bestDistanceSqr = distanceSqr;
+        }
+      }
+      return best;
+    };
+
+    const regroupTarget = findClosestByKindOf('CASH_GENERATOR')
+      ?? findClosestByKindOf('COMMANDCENTER')
+      ?? findClosestByKindOf('STRUCTURE');
+
+    if (!regroupTarget) {
+      return null;
+    }
+    return { x: regroupTarget.x, z: regroupTarget.z };
   }
 
   /**
