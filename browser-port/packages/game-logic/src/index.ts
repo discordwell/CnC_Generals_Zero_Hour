@@ -4334,6 +4334,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [474, 'TEAM_PARTIAL_USE_COMMANDBUTTON'],
   [475, 'TEAM_CAPTURE_NEAREST_UNOWNED_FACTION_UNIT'],
   [476, 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS'],
+  [484, 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL'],
+  [485, 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -7765,6 +7767,16 @@ export class GameLogicSubsystem implements Subsystem {
           readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
           false,
         );
+      case 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL':
+        return this.executeScriptTeamWaitForNotContained(
+          readString(0, ['teamName', 'team']),
+          true,
+        );
+      case 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL':
+        return this.executeScriptTeamWaitForNotContained(
+          readString(0, ['teamName', 'team']),
+          false,
+        );
       case 'TEAM_SPIN_FOR_FRAMECOUNT':
         return this.executeScriptTeamSpinForFramecount(
           readString(0, ['teamName', 'team']),
@@ -10367,6 +10379,21 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, allReady);
+  }
+
+  /**
+   * Source parity subset: ScriptEngine sequential handling of
+   * TEAM_WAIT_FOR_NOT_CONTAINED_{ALL|PARTIAL}.
+   */
+  private executeScriptTeamWaitForNotContained(teamName: string, allContained: boolean): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    return !this.evaluateScriptTeamIsContained({
+      teamName: team.nameUpper,
+      allContained,
+    });
   }
 
   /**
@@ -29334,6 +29361,16 @@ export class GameLogicSubsystem implements Subsystem {
             const commandButtonName = this.coerceScriptConditionString(params[2]);
             const allReady = actionTypeName === 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL';
             if (!this.executeScriptSkirmishWaitForCommandButtonAvailability(teamName, commandButtonName, allReady)) {
+              seqScript.dontAdvanceInstruction = true;
+            }
+          } else if (
+            actionTypeName === 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL'
+            || actionTypeName === 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'
+          ) {
+            const params = action.params.map((param) => param.value);
+            const teamName = this.coerceScriptConditionString(params[0]);
+            const allContained = actionTypeName === 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL';
+            if (!this.executeScriptTeamWaitForNotContained(teamName, allContained)) {
               seqScript.dontAdvanceInstruction = true;
             }
           } else {

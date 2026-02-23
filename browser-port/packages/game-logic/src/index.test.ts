@@ -31112,6 +31112,126 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script team wait-for-not-contained actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 28, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('ContainTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+    };
+    privateApi.spawnedEntities.get(1)!.transportContainerId = 99;
+    privateApi.spawnedEntities.get(2)!.transportContainerId = 99;
+
+    expect(logic.executeScriptAction({
+      actionType: 484, // TEAM_WAIT_FOR_NOT_CONTAINED_ALL
+      params: ['ContainTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 485, // TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL
+      params: ['ContainTeam'],
+    })).toBe(false);
+
+    privateApi.spawnedEntities.get(1)!.transportContainerId = null;
+    expect(logic.executeScriptAction({
+      actionType: 484,
+      params: ['ContainTeam'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 485,
+      params: ['ContainTeam'],
+    })).toBe(false);
+
+    privateApi.spawnedEntities.get(2)!.transportContainerId = null;
+    expect(logic.executeScriptAction({
+      actionType: 485,
+      params: ['ContainTeam'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 484,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
+  it('holds sequential scripts on team wait-for-not-contained actions until containment clears', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 28, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('ContainTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+      mapScriptsByNameUpper: Map<string, {
+        actions: Array<{ actionType: number; params: Array<{ type: number; value: unknown }> }>;
+      }>;
+    };
+    privateApi.mapScriptsByNameUpper.set('WAITCONTAINSEQ', {
+      actions: [
+        {
+          actionType: 485, // TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL
+          params: [{ type: 2, value: 'ContainTeam' }],
+        },
+        {
+          actionType: 1, // SET_FLAG
+          params: [
+            { type: 5, value: 'ContainmentCleared' },
+            { type: 8, value: true },
+          ],
+        },
+      ],
+    });
+
+    privateApi.spawnedEntities.get(1)!.transportContainerId = 99;
+
+    expect(logic.executeScriptAction({
+      actionType: 395, // TEAM_EXECUTE_SEQUENTIAL_SCRIPT
+      params: ['ContainTeam', 'WaitContainSeq'],
+    })).toBe(true);
+
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['ContainmentCleared', true],
+    })).toBe(false);
+
+    privateApi.spawnedEntities.get(1)!.transportContainerId = null;
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['ContainmentCleared', true],
+    })).toBe(true);
+  });
+
   it('executes script team spin-for-framecount action using source action id', () => {
     const bundle = makeBundle({
       objects: [
