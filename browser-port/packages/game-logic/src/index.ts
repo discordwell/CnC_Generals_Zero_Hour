@@ -4269,6 +4269,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [311, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [313, 'ENABLE_SCORING'],
   [314, 'DISABLE_SCORING'],
+  [315, 'SOUND_SET_VOLUME'],
+  [316, 'SPEECH_SET_VOLUME'],
+  [317, 'DISABLE_BORDER_SHROUD'],
+  [318, 'ENABLE_BORDER_SHROUD'],
   [324, 'QUICKVICTORY'],
   [376, 'CAMERA_TETHER_NAMED'],
   [377, 'CAMERA_STOP_TETHER_NAMED'],
@@ -4389,6 +4393,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [516, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [518, 'ENABLE_SCORING'],
   [519, 'DISABLE_SCORING'],
+  [520, 'SOUND_SET_VOLUME'],
+  [521, 'SPEECH_SET_VOLUME'],
+  [522, 'DISABLE_BORDER_SHROUD'],
+  [523, 'ENABLE_BORDER_SHROUD'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4645,6 +4653,12 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptDisabledAudioEventNames = new Set<string>();
   /** Source parity bridge: Audio::setAudioEventVolumeOverride script overrides. */
   private readonly scriptAudioVolumeOverrides = new Map<string, number>();
+  /** Source parity bridge: ScriptActions::doAudioSetVolume(SOUND). */
+  private scriptSoundVolumeScale = 1;
+  /** Source parity bridge: ScriptActions::doAudioSetVolume(SPEECH). */
+  private scriptSpeechVolumeScale = 1;
+  /** Source parity bridge: Display::setBorderShroudLevel script control. */
+  private scriptBorderShroudEnabled = true;
   /** Source parity bridge: ScriptEngine::m_toppleDirections keyed by named entity. */
   private readonly scriptToppleDirectionByEntityId = new Map<number, { x: number; z: number }>();
   /** Source parity bridge: Radar::createEvent script requests. */
@@ -7486,6 +7500,44 @@ export class GameLogicSubsystem implements Subsystem {
       .map(([eventName, volumeScale]) => ({ eventName, volumeScale }));
   }
 
+  setScriptSoundVolumeScale(newVolumePercent: number): void {
+    this.scriptSoundVolumeScale = this.clampScriptVolumeScale(newVolumePercent);
+  }
+
+  getScriptSoundVolumeScale(): number {
+    return this.scriptSoundVolumeScale;
+  }
+
+  setScriptSpeechVolumeScale(newVolumePercent: number): void {
+    this.scriptSpeechVolumeScale = this.clampScriptVolumeScale(newVolumePercent);
+  }
+
+  getScriptSpeechVolumeScale(): number {
+    return this.scriptSpeechVolumeScale;
+  }
+
+  setScriptBorderShroudEnabled(enabled: boolean): void {
+    this.scriptBorderShroudEnabled = enabled;
+  }
+
+  isScriptBorderShroudEnabled(): boolean {
+    return this.scriptBorderShroudEnabled;
+  }
+
+  private clampScriptVolumeScale(newVolumePercent: number): number {
+    if (!Number.isFinite(newVolumePercent)) {
+      return 0;
+    }
+    const normalized = newVolumePercent / 100;
+    if (normalized < 0) {
+      return 0;
+    }
+    if (normalized > 1) {
+      return 1;
+    }
+    return normalized;
+  }
+
   private normalizeScriptAudioEventName(eventName: string): string {
     return eventName.trim();
   }
@@ -7737,6 +7789,18 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'DISABLE_SCORING':
         this.setScriptScoringEnabled(false);
+        return true;
+      case 'SOUND_SET_VOLUME':
+        this.setScriptSoundVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
+        return true;
+      case 'SPEECH_SET_VOLUME':
+        this.setScriptSpeechVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
+        return true;
+      case 'DISABLE_BORDER_SHROUD':
+        this.setScriptBorderShroudEnabled(false);
+        return true;
+      case 'ENABLE_BORDER_SHROUD':
+        this.setScriptBorderShroudEnabled(true);
         return true;
       case 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN':
         return this.setSideExcludedFromScoreScreen(
@@ -16593,6 +16657,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDisplayedCounters.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
+    this.scriptSoundVolumeScale = 1;
+    this.scriptSpeechVolumeScale = 1;
+    this.scriptBorderShroudEnabled = true;
     this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;
@@ -46569,6 +46636,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDisplayedCounters.clear();
     this.scriptDisabledAudioEventNames.clear();
     this.scriptAudioVolumeOverrides.clear();
+    this.scriptSoundVolumeScale = 1;
+    this.scriptSpeechVolumeScale = 1;
+    this.scriptBorderShroudEnabled = true;
     this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;

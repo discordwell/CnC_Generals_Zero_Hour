@@ -29635,6 +29635,49 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script volume and border-shroud actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.getScriptSoundVolumeScale()).toBe(1);
+    expect(logic.executeScriptAction({
+      actionType: 315, // SOUND_SET_VOLUME (raw id)
+      params: [25],
+    })).toBe(true);
+    expect(logic.getScriptSoundVolumeScale()).toBe(0.25);
+    expect(logic.executeScriptAction({
+      actionType: 520, // SOUND_SET_VOLUME (offset id)
+      params: [150],
+    })).toBe(true);
+    expect(logic.getScriptSoundVolumeScale()).toBe(1);
+
+    expect(logic.getScriptSpeechVolumeScale()).toBe(1);
+    expect(logic.executeScriptAction({
+      actionType: 316, // SPEECH_SET_VOLUME (raw id)
+      params: [-10],
+    })).toBe(true);
+    expect(logic.getScriptSpeechVolumeScale()).toBe(0);
+    expect(logic.executeScriptAction({
+      actionType: 521, // SPEECH_SET_VOLUME (offset id)
+      params: [40],
+    })).toBe(true);
+    expect(logic.getScriptSpeechVolumeScale()).toBe(0.4);
+
+    expect(logic.isScriptBorderShroudEnabled()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 317, // DISABLE_BORDER_SHROUD (raw id)
+    })).toBe(true);
+    expect(logic.isScriptBorderShroudEnabled()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 523, // ENABLE_BORDER_SHROUD (offset id)
+    })).toBe(true);
+    expect(logic.isScriptBorderShroudEnabled()).toBe(true);
+  });
+
   it('executes script victory/defeat actions using source action ids', () => {
     const createLogic = (): GameLogicSubsystem => {
       const logic = new GameLogicSubsystem(new THREE.Scene());
