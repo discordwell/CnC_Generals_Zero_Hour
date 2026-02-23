@@ -37723,6 +37723,64 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(3);
   });
 
+  it('hunt scans map-wide and acquires distant enemies outside idle auto-target range', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ], {
+          VisionRange: 80,
+        }),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+        ], {
+          VisionRange: 80,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfLoco', 80),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          AttackRange: 220,
+          DelayBetweenShots: 1000,
+          WeaponSpeed: 9999,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaInfantry', 10, 10), // id 1 hunter
+        makeMapObject('ChinaInfantry', 500, 10), // id 2 distant victim
+      ], 1024, 1024),
+      makeRegistry(bundle),
+      makeHeightmap(1024, 1024),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        attackTargetEntityId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 59, // NAMED_HUNT
+      params: [1],
+    })).toBe(true);
+
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(2);
+  });
+
   it('executes script player sell/build toggles actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

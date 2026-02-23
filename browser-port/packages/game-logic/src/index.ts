@@ -4179,6 +4179,10 @@ interface ScriptAttackAreaState {
   nextEnemyScanFrame: number;
 }
 
+interface ScriptHuntState {
+  nextEnemyScanFrame: number;
+}
+
 interface DynamicWaterUpdateState {
   waterIndex: number;
   targetHeight: number;
@@ -5158,6 +5162,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptTeamsByName = new Map<string, ScriptTeamRecord>();
   /** Source parity subset: AIAttackAreaState runtime keyed by attacker entity id. */
   private readonly scriptAttackAreaStateByEntityId = new Map<number, ScriptAttackAreaState>();
+  /** Source parity subset: AIHuntState runtime keyed by hunting entity id. */
+  private readonly scriptHuntStateByEntityId = new Map<number, ScriptHuntState>();
   /** Source parity: ScriptEngine sequential script queue. */
   private readonly scriptSequentialScripts: ScriptSequentialScriptState[] = [];
   /** Source parity: ScriptEngine script lists loaded from map SidesList. */
@@ -6369,6 +6375,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateTurretAI();
     this.updateCombat();
     this.updateScriptAttackArea();
+    this.updateScriptHunt();
     this.updateCommandButtonHunt();
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
@@ -18310,24 +18317,123 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private setScriptHuntState(entityId: number): void {
+    this.scriptHuntStateByEntityId.set(entityId, {
+      nextEnemyScanFrame: this.frameCounter,
+    });
+  }
+
+  private findScriptHuntTarget(entity: MapEntity): MapEntity | null {
+    let bestTarget: MapEntity | null = null;
+    let bestDistanceSqr = Number.POSITIVE_INFINITY;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed || candidate.id === entity.id || !candidate.canTakeDamage) {
+        continue;
+      }
+      if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+      if (
+        candidate.objectStatusFlags.has('STEALTHED')
+        && !candidate.objectStatusFlags.has('DETECTED')
+      ) {
+        continue;
+      }
+      if (!this.canAttackerTargetEntity(entity, candidate, 'SCRIPT')) {
+        continue;
+      }
+
+      const dx = candidate.x - entity.x;
+      const dz = candidate.z - entity.z;
+      const distanceSqr = dx * dx + dz * dz;
+      if (distanceSqr >= bestDistanceSqr) {
+        continue;
+      }
+      bestDistanceSqr = distanceSqr;
+      bestTarget = candidate;
+    }
+
+    return bestTarget;
+  }
+
   /**
-   * Source parity subset: ScriptActions::doNamedHunt.
-   * TODO(source-parity): port full AI hunt state machine transitions.
+   * Source parity subset: AIHuntState::update.
+   * Hunt scans for enemies every ENEMY_SCAN_RATE and keeps chasing until no
+   * victims remain (or indefinitely while PLAYER_HUNT is enabled for the side).
+   */
+  private updateScriptHunt(): void {
+    if (this.scriptHuntStateByEntityId.size === 0) {
+      return;
+    }
+
+    for (const [entityId, state] of this.scriptHuntStateByEntityId) {
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
+        this.scriptHuntStateByEntityId.delete(entityId);
+        continue;
+      }
+      if (!entity.canMove || entity.kindOf.has('PROJECTILE')) {
+        this.scriptHuntStateByEntityId.delete(entityId);
+        continue;
+      }
+      if (this.frameCounter < state.nextEnemyScanFrame) {
+        continue;
+      }
+      state.nextEnemyScanFrame = this.frameCounter + LOGIC_FRAME_RATE;
+
+      const side = this.normalizeSide(entity.side);
+      const hasGlobalPlayerHunt = side !== null && this.scriptSidesUnitsShouldHunt.has(side);
+
+      const currentTargetId = entity.attackTargetEntityId;
+      if (currentTargetId !== null) {
+        const currentTarget = this.spawnedEntities.get(currentTargetId);
+        if (
+          currentTarget
+          && !currentTarget.destroyed
+          && !this.isScriptEntityEffectivelyDead(currentTarget)
+          && this.getTeamRelationship(entity, currentTarget) === RELATIONSHIP_ENEMIES
+          && this.canAttackerTargetEntity(entity, currentTarget, 'SCRIPT')
+        ) {
+          continue;
+        }
+        this.clearAttackTarget(entity.id);
+      }
+
+      const victim = this.findScriptHuntTarget(entity);
+      if (victim) {
+        this.issueAttackEntity(entity.id, victim.id, 'SCRIPT');
+        continue;
+      }
+
+      if (!hasGlobalPlayerHunt) {
+        this.scriptHuntStateByEntityId.delete(entityId);
+      }
+    }
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedHunt -> AIUpdateInterface::aiHunt.
    */
   private executeScriptNamedHunt(entityId: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
+    if (!entity || entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
       return false;
     }
+    if (!entity.canMove || entity.kindOf.has('PROJECTILE')) {
+      return false;
+    }
+
+    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
     this.clearCommandButtonHuntForEntity(entity);
     this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'AI' });
+    this.setScriptHuntState(entity.id);
     entity.autoTargetScanNextFrame = this.frameCounter;
     return true;
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamHunt.
-   * TODO(source-parity): port full AIGroup::groupHunt behavior.
+   * Source parity subset: ScriptActions::doTeamHunt -> AIGroup::groupHunt.
    */
   private executeScriptTeamHunt(teamName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -18346,7 +18452,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doPlayerHunt -> Player::setUnitsShouldHunt(true).
-   * TODO(source-parity): integrate persistent m_unitsShouldHunt behavior with full AI hunt states.
    */
   private executeScriptPlayerHunt(side: string): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -33245,6 +33350,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingRepairDockActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
     this.scriptAttackAreaStateByEntityId.delete(entityId);
+    this.scriptHuntStateByEntityId.delete(entityId);
     this.clearChinookCombatDropIgnoredObstacle(entityId);
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
@@ -35274,6 +35380,7 @@ export class GameLogicSubsystem implements Subsystem {
         team.memberEntityIds.delete(entityId);
       }
       this.scriptAttackAreaStateByEntityId.delete(entityId);
+      this.scriptHuntStateByEntityId.delete(entityId);
       this.scriptTransportStatusByEntityId.delete(entityId);
       this.notifyScriptObjectCreationOrDestruction();
     }
@@ -53475,6 +53582,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCompletedMusic.length = 0;
     this.scriptTeamsByName.clear();
     this.scriptAttackAreaStateByEntityId.clear();
+    this.scriptHuntStateByEntityId.clear();
     this.scriptSequentialScripts.length = 0;
     this.mapScriptLists.length = 0;
     this.mapScriptsByNameUpper.clear();
