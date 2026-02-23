@@ -40036,6 +40036,76 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('invalidates skirmish area/value caches on trigger enter-exit transitions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InfantryA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { BuildCost: 500 }),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('InfantryA', 30, 30)], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'CacheZone',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.update(0);
+    logic.update(0);
+
+    const evaluateUnitsInArea = (): boolean => logic.evaluateScriptSkirmishPlayerHasUnitsInArea({
+      side: 'America',
+      triggerName: 'CacheZone',
+      conditionCacheId: 'cache-units',
+    });
+    const evaluateValueInArea = (): boolean => logic.evaluateScriptSkirmishValueInArea({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      money: 500,
+      triggerName: 'CacheZone',
+      conditionCacheId: 'cache-value',
+    });
+
+    expect(evaluateUnitsInArea()).toBe(false);
+    expect(evaluateValueInArea()).toBe(false);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number }>;
+    };
+    privateApi.spawnedEntities.get(1)!.x = 10;
+    privateApi.spawnedEntities.get(1)!.z = 10;
+
+    expect(evaluateUnitsInArea()).toBe(false);
+    expect(evaluateValueInArea()).toBe(false);
+
+    logic.update(0);
+    expect(evaluateUnitsInArea()).toBe(true);
+    expect(evaluateValueInArea()).toBe(true);
+    logic.update(0);
+    logic.update(0);
+
+    privateApi.spawnedEntities.get(1)!.x = 30;
+    privateApi.spawnedEntities.get(1)!.z = 30;
+
+    expect(evaluateUnitsInArea()).toBe(true);
+    expect(evaluateValueInArea()).toBe(true);
+
+    logic.update(0);
+    expect(evaluateUnitsInArea()).toBe(false);
+    expect(evaluateValueInArea()).toBe(false);
+  });
+
   it('evaluates skirmish player attacked-by-player condition', () => {
     const bundle = makeBundle({
       objects: [

@@ -20671,13 +20671,12 @@ export class GameLogicSubsystem implements Subsystem {
 
     const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     let anyChanges = cache === null || cache.customData === 0;
-    // TODO(source-parity): include Team::didEnterOrExit once script team tracking exists.
-    if (cache && this.scriptObjectCountChangedFrame > cache.customFrame) {
+    if (this.scriptObjectCountChangedFrame + 1 >= this.frameCounter) {
       anyChanges = true;
     }
-    // Until team enter/exit notifications are available, area membership can change without
-    // topology changes, so conservatively recompute every call.
-    anyChanges = true;
+    if (this.didScriptSideEntityEnterOrExitRecently(normalizedSide)) {
+      anyChanges = true;
+    }
     if (!anyChanges && cache) {
       return cache.customData === 1;
     }
@@ -20693,7 +20692,7 @@ export class GameLogicSubsystem implements Subsystem {
     const hasUnits = objectCount > 0;
     if (cache) {
       cache.customData = hasUnits ? 1 : -1;
-      cache.customFrame = this.scriptObjectCountChangedFrame;
+      cache.customFrame = this.frameCounter;
     }
     return hasUnits;
   }
@@ -20861,12 +20860,12 @@ export class GameLogicSubsystem implements Subsystem {
 
     const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     let anyChanges = cache === null || cache.customData === 0;
-    // TODO(source-parity): include Team::didEnterOrExit once script team tracking exists.
-    if (cache && this.scriptObjectCountChangedFrame !== cache.customFrame) {
+    if (this.scriptObjectCountChangedFrame + 1 >= this.frameCounter) {
       anyChanges = true;
     }
-    // Movement in/out can happen without topology changes; recompute conservatively.
-    anyChanges = true;
+    if (this.didScriptSideEntityEnterOrExitRecently(normalizedSide)) {
+      anyChanges = true;
+    }
     if (!anyChanges && cache) {
       return cache.customData === 1;
     }
@@ -20883,7 +20882,7 @@ export class GameLogicSubsystem implements Subsystem {
     const comparison = this.compareScriptCount(filter.comparison, totalCost, filter.money);
     if (cache) {
       cache.customData = comparison ? 1 : -1;
-      cache.customFrame = this.scriptObjectCountChangedFrame;
+      cache.customFrame = this.frameCounter;
     }
     return comparison;
   }
@@ -32134,6 +32133,29 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
     }
+    return false;
+  }
+
+  private didScriptSideEntityEnterOrExitRecently(side: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+
+    for (const [entityId, changedFrame] of this.scriptTriggerEnterExitFrameByEntityId) {
+      if (changedFrame + 1 < this.frameCounter) {
+        continue;
+      }
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      return true;
+    }
+
     return false;
   }
 
