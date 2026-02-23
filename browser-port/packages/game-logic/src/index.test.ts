@@ -9472,6 +9472,63 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.pendingRepairActions.has(1)).toBe(false);
   });
 
+  it('does not switch an under-construction building to repair when another builder is active', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),    // id 1 (active builder)
+        makeMapObject('USADozer', 24, 20),    // id 2 (attempting repair)
+        makeMapObject('USABarracks', 22, 20), // id 3
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        constructionPercent: number;
+        buildTotalFrames: number;
+        builderId: number;
+        objectStatusFlags: Set<string>;
+      }>;
+      pendingConstructionActions: Map<number, number>;
+      pendingRepairActions: Map<number, number>;
+    };
+
+    const building = priv.spawnedEntities.get(3)!;
+    building.health = 250;
+    building.constructionPercent = 50;
+    building.buildTotalFrames = 300;
+    building.builderId = 1;
+    building.objectStatusFlags.add('UNDER_CONSTRUCTION');
+    priv.pendingConstructionActions.set(1, 3);
+
+    logic.update(0);
+    logic.submitCommand({ type: 'repairBuilding', entityId: 2, targetBuildingId: 3 });
+    logic.update(1 / 30);
+
+    expect(priv.pendingConstructionActions.has(2)).toBe(false);
+    expect(priv.pendingRepairActions.has(2)).toBe(false);
+    expect(priv.spawnedEntities.get(3)?.builderId).toBe(1);
+  });
+
   it('idle dozer auto-seeks nearby repairs after bored time', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

@@ -27594,8 +27594,6 @@ export class GameLogicSubsystem implements Subsystem {
     const dozer = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
     if (!dozer || !building || dozer.destroyed || building.destroyed) return;
-    if (!this.canDozerRepairTarget(dozer, building)) return;
-    if (!this.canDozerAcceptNewRepairTarget(dozer, building)) return;
 
     if (this.isWorkerEntity(dozer)) {
       // Source parity: WorkerAIUpdate::newTask clears preferred dock when entering dozer tasks.
@@ -27604,9 +27602,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: DozerAIUpdate::privateResumeConstruction — if the building is
     // still under construction, resume building instead of repairing.
-    if (building.constructionPercent !== CONSTRUCTION_COMPLETE
-      && building.objectStatusFlags.has('UNDER_CONSTRUCTION')
-      && building.builderId === 0) {
+    if (this.canDozerResumeConstructionTarget(dozer, building)) {
       // Another dozer can resume. Claim it.
       building.builderId = dozer.id;
       this.pendingConstructionActions.set(dozer.id, building.id);
@@ -27615,6 +27611,9 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    if (!this.canDozerRepairTarget(dozer, building)) return;
+    if (!this.canDozerAcceptNewRepairTarget(dozer, building)) return;
+
     // Move dozer to building if not close enough.
     const distance = Math.hypot(building.x - dozer.x, building.z - dozer.z);
     if (distance > 20) {
@@ -27622,6 +27621,43 @@ export class GameLogicSubsystem implements Subsystem {
     }
     this.pendingRepairActions.set(dozer.id, building.id);
     dozer.dozerRepairTaskOrderFrame = this.frameCounter;
+  }
+
+  /**
+   * Source parity subset: ActionManager::canResumeConstructionOf.
+   */
+  private canDozerResumeConstructionTarget(dozer: MapEntity, building: MapEntity): boolean {
+    if (!this.isEntityDozerCapable(dozer)) {
+      return false;
+    }
+
+    const isUnderConstruction = building.objectStatusFlags.has('UNDER_CONSTRUCTION')
+      || building.constructionPercent !== CONSTRUCTION_COMPLETE;
+    if (!isUnderConstruction) {
+      return false;
+    }
+
+    if (this.getTeamRelationship(dozer, building) !== RELATIONSHIP_ALLIES) {
+      return false;
+    }
+
+    if (building.builderId === 0) {
+      return true;
+    }
+
+    const builder = this.spawnedEntities.get(building.builderId);
+    if (!builder || builder.destroyed) {
+      return true;
+    }
+
+    if (
+      this.pendingConstructionActions.get(builder.id) === building.id
+      && this.getDozerCurrentTask(builder) === 'BUILD'
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -27872,18 +27908,13 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: ActionManager::canRepairObject disallows bridge and bridge towers.
     if (building.kindOf.has('BRIDGE') || building.kindOf.has('BRIDGE_TOWER')) return false;
     if (building.objectStatusFlags.has('SOLD')) return false;
+    if (building.objectStatusFlags.has('UNDER_CONSTRUCTION')
+      || building.constructionPercent !== CONSTRUCTION_COMPLETE) return false;
     if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) return false;
 
     const relationship = this.getTeamRelationship(dozer, building);
-    const isUnderConstruction = building.objectStatusFlags.has('UNDER_CONSTRUCTION')
-      || building.constructionPercent !== CONSTRUCTION_COMPLETE;
-
-    // Source parity: canResumeConstructionOf requires allies; canRepairObject allows neutral.
-    if (isUnderConstruction) {
-      if (relationship !== RELATIONSHIP_ALLIES) {
-        return false;
-      }
-    } else if (relationship === RELATIONSHIP_ENEMIES) {
+    // Source parity: canRepairObject allows allied/neutral structures, but not enemies.
+    if (relationship === RELATIONSHIP_ENEMIES) {
       return false;
     }
 
