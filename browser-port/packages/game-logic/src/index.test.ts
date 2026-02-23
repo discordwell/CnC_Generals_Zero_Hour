@@ -29535,6 +29535,45 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script skill-point modifier action and scales PLAYER_ADD_SKILLPOINTS gains', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+    const privateApi = logic as unknown as {
+      getSideRankStateMap: (side: string) => {
+        skillPoints: number;
+      };
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 310, // PLAYER_AFFECT_RECEIVING_EXPERIENCE (raw id)
+      params: ['America', 0.5],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 272, // PLAYER_ADD_SKILLPOINTS
+      params: ['America', 101],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').skillPoints).toBe(51); // ceil(101 * 0.5)
+
+    expect(logic.executeScriptAction({
+      actionType: 515, // PLAYER_AFFECT_RECEIVING_EXPERIENCE (offset id)
+      params: ['America', 2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 272,
+      params: ['America', 10],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').skillPoints).toBe(71); // +ceil(10 * 2)
+
+    expect(logic.executeScriptAction({
+      actionType: 310,
+      params: ['', 1],
+    })).toBe(false);
+  });
+
   it('executes script victory/defeat actions using source action ids', () => {
     const createLogic = (): GameLogicSubsystem => {
       const logic = new GameLogicSubsystem(new THREE.Scene());

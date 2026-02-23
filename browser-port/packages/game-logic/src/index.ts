@@ -4265,6 +4265,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [298, 'PLAYER_SCIENCE_AVAILABILITY'],
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
+  [310, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [324, 'QUICKVICTORY'],
   [376, 'CAMERA_TETHER_NAMED'],
   [377, 'CAMERA_STOP_TETHER_NAMED'],
@@ -4381,6 +4382,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [502, 'OPTIONS_SET_PARTICLE_CAP_MODE'],
   [504, 'UNIT_AFFECT_OBJECT_PANEL_FLAGS'],
   [505, 'TEAM_AFFECT_OBJECT_PANEL_FLAGS'],
+  [515, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4539,6 +4541,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideUnitsShouldIdleOrResume = new Map<string, boolean>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
   private readonly sideCashBountyPercent = new Map<string, number>();
+  /** Source parity: Player::m_skillPointsModifier (multiplies awarded rank points before apply). */
+  private readonly sideSkillPointsModifier = new Map<string, number>();
   private readonly sideUpgradesInProduction = new Map<string, Set<string>>();
   private readonly sideCompletedUpgrades = new Map<string, Set<string>>();
   private readonly sideKindOfProductionCostModifiers = new Map<string, KindOfProductionCostModifier[]>();
@@ -8335,6 +8339,11 @@ export class GameLogicSubsystem implements Subsystem {
       case 'OPTIONS_SET_PARTICLE_CAP_MODE':
         this.setScriptDynamicLodEnabled(readBoolean(0, ['enabled', 'particleCapEnabled', 'value']));
         return true;
+      case 'PLAYER_AFFECT_RECEIVING_EXPERIENCE':
+        return this.setSideSkillPointsModifier(
+          readSide(0, ['side', 'playerName', 'player']),
+          readNumber(1, ['modifier', 'experienceModifier', 'value']),
+        );
       case 'UNIT_AFFECT_OBJECT_PANEL_FLAGS':
         return this.executeScriptAffectObjectPanelFlagsUnit(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -8390,7 +8399,7 @@ export class GameLogicSubsystem implements Subsystem {
         if (!this.normalizeSide(side)) {
           return false;
         }
-        this.adjustSideSkillPoints(side, readInteger(1, ['value', 'amount', 'skillPoints']));
+        this.addPlayerSkillPoints(side, readInteger(1, ['value', 'amount', 'skillPoints']));
         return true;
       }
       case 'PLAYER_ADD_RANKLEVEL': {
@@ -16079,14 +16088,39 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: Player::setSkillPointsModifier and getSkillPointsModifier.
+   */
+  private setSideSkillPointsModifier(side: string, modifier: number): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide || !Number.isFinite(modifier)) {
+      return false;
+    }
+    this.sideSkillPointsModifier.set(normalizedSide, modifier);
+    return true;
+  }
+
+  private getSideSkillPointsModifier(normalizedSide: string): number {
+    return this.sideSkillPointsModifier.get(normalizedSide) ?? 1;
+  }
+
+  /**
    * Source parity: Player::addSkillPoints — award player-level skill points from kills.
    * Returns true if a rank level-up occurred.
    */
   private addPlayerSkillPoints(side: string, delta: number): boolean {
-    if (delta <= 0) {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
       return false;
     }
-    return this.adjustSideSkillPoints(side, delta);
+    const normalizedDelta = Number.isFinite(delta) ? Math.trunc(delta) : 0;
+    if (normalizedDelta === 0) {
+      return false;
+    }
+    const scaledDelta = Math.ceil(this.getSideSkillPointsModifier(normalizedSide) * normalizedDelta);
+    if (scaledDelta === 0) {
+      return false;
+    }
+    return this.adjustSideSkillPoints(normalizedSide, scaledDelta);
   }
 
   private hasSideScience(side: string, scienceName: string): boolean {
@@ -16471,6 +16505,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptSideRepairQueue.clear();
     this.scriptCurrentPlayerSide = null;
     this.sideCashBountyPercent.clear();
+    this.sideSkillPointsModifier.clear();
     this.sideBattlePlanBonuses.clear();
     this.battlePlanParalyzedUntilFrame.clear();
     this.sideUpgradesInProduction.clear();
