@@ -34453,6 +34453,11 @@ describe('Script condition groundwork', () => {
           name: 'CameraWaypointA',
           position: { x: 64, y: 72, z: 0 },
         },
+        {
+          id: 2,
+          name: 'CameraWaypointB',
+          position: { x: 88, y: 96, z: 0 },
+        },
       ],
       links: [],
     };
@@ -34541,6 +34546,303 @@ describe('Script condition groundwork', () => {
     });
 
     expect(logic.executeScriptAction({
+      actionType: 14, // MOVE_CAMERA_TO (raw id)
+      params: ['CameraWaypointA', 2, 0.5, 0.25, 0.75],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 219, // MOVE_CAMERA_TO (offset/collision id)
+      params: ['CameraWaypointA', 1, 0.1, 0.2, 0.3],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 17, // MOVE_CAMERA_ALONG_WAYPOINT_PATH (raw id)
+      params: ['CameraWaypointA', 1.5, 0.2, 0.4, 0.6],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 222, // MOVE_CAMERA_ALONG_WAYPOINT_PATH (offset/collision id)
+      params: ['CameraWaypointA', 0.75, 0.05, 0.1, 0.15],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 18, // ROTATE_CAMERA (raw id)
+      params: [1.25, 2, 0.5, 0.75],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 223, // ROTATE_CAMERA (offset/collision id)
+      params: [0.5, 1, 0.2, 0.3],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 19, // RESET_CAMERA (raw id)
+      params: ['CameraWaypointA', 2.5, 0.4, 0.2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 224, // RESET_CAMERA (offset/collision id)
+      params: ['CameraWaypointA', 1.25, 0.1, 0.05],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 114, // SETUP_CAMERA (raw id)
+      params: ['CameraWaypointA', 300, 30, 'CameraWaypointB'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 319, // SETUP_CAMERA (offset/collision id)
+      params: ['CameraWaypointA', 450, 35, 'CameraWaypointB'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 117, // ZOOM_CAMERA (raw id)
+      params: [350, 1.5, 0.25, 0.5],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 322, // ZOOM_CAMERA (offset/collision id)
+      params: [500, 2.25, 0.1, 0.2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 118, // PITCH_CAMERA (raw id)
+      params: [40, 2.5, 0.3, 0.6],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 323, // PITCH_CAMERA (offset/collision id)
+      params: [25, 1.75, 0.2, 0.4],
+    })).toBe(true);
+    expect(logic.drainScriptCameraActionRequests()).toEqual([
+      {
+        requestType: 'MOVE_TO',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: null,
+        x: 64,
+        z: 72,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 2000,
+        cameraStutterMs: 500,
+        easeInMs: 250,
+        easeOutMs: 750,
+        rotations: null,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOVE_TO',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: null,
+        x: 64,
+        z: 72,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 1000,
+        cameraStutterMs: 100,
+        easeInMs: 200,
+        easeOutMs: 300,
+        rotations: null,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: null,
+        x: 64,
+        z: 72,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 1500,
+        cameraStutterMs: 200,
+        easeInMs: 400,
+        easeOutMs: 600,
+        rotations: null,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: null,
+        x: 64,
+        z: 72,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 750,
+        cameraStutterMs: 50,
+        easeInMs: 100,
+        easeOutMs: 150,
+        rotations: null,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'ROTATE',
+        waypointName: null,
+        lookAtWaypointName: null,
+        x: null,
+        z: null,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 2000,
+        cameraStutterMs: 0,
+        easeInMs: 500,
+        easeOutMs: 750,
+        rotations: 1.25,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'ROTATE',
+        waypointName: null,
+        lookAtWaypointName: null,
+        x: null,
+        z: null,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 1000,
+        cameraStutterMs: 0,
+        easeInMs: 200,
+        easeOutMs: 300,
+        rotations: 0.5,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'RESET',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: null,
+        x: 64,
+        z: 72,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 2500,
+        cameraStutterMs: 0,
+        easeInMs: 400,
+        easeOutMs: 200,
+        rotations: null,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'RESET',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: null,
+        x: 64,
+        z: 72,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 1250,
+        cameraStutterMs: 0,
+        easeInMs: 100,
+        easeOutMs: 50,
+        rotations: null,
+        zoom: null,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'SETUP',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: 'CameraWaypointB',
+        x: 64,
+        z: 72,
+        lookAtX: 88,
+        lookAtZ: 96,
+        durationMs: 0,
+        cameraStutterMs: 0,
+        easeInMs: 0,
+        easeOutMs: 0,
+        rotations: null,
+        zoom: 300,
+        pitch: 30,
+        frame: 0,
+      },
+      {
+        requestType: 'SETUP',
+        waypointName: 'CameraWaypointA',
+        lookAtWaypointName: 'CameraWaypointB',
+        x: 64,
+        z: 72,
+        lookAtX: 88,
+        lookAtZ: 96,
+        durationMs: 0,
+        cameraStutterMs: 0,
+        easeInMs: 0,
+        easeOutMs: 0,
+        rotations: null,
+        zoom: 450,
+        pitch: 35,
+        frame: 0,
+      },
+      {
+        requestType: 'ZOOM',
+        waypointName: null,
+        lookAtWaypointName: null,
+        x: null,
+        z: null,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 1500,
+        cameraStutterMs: 0,
+        easeInMs: 250,
+        easeOutMs: 500,
+        rotations: null,
+        zoom: 350,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'ZOOM',
+        waypointName: null,
+        lookAtWaypointName: null,
+        x: null,
+        z: null,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 2250,
+        cameraStutterMs: 0,
+        easeInMs: 100,
+        easeOutMs: 200,
+        rotations: null,
+        zoom: 500,
+        pitch: null,
+        frame: 0,
+      },
+      {
+        requestType: 'PITCH',
+        waypointName: null,
+        lookAtWaypointName: null,
+        x: null,
+        z: null,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 2500,
+        cameraStutterMs: 0,
+        easeInMs: 300,
+        easeOutMs: 600,
+        rotations: null,
+        zoom: null,
+        pitch: 40,
+        frame: 0,
+      },
+      {
+        requestType: 'PITCH',
+        waypointName: null,
+        lookAtWaypointName: null,
+        x: null,
+        z: null,
+        lookAtX: null,
+        lookAtZ: null,
+        durationMs: 1750,
+        cameraStutterMs: 0,
+        easeInMs: 200,
+        easeOutMs: 400,
+        rotations: null,
+        zoom: null,
+        pitch: 25,
+        frame: 0,
+      },
+    ]);
+
+    expect(logic.executeScriptAction({
       actionType: 376,
       params: [999, 0, 100],
     })).toBe(false);
@@ -34551,6 +34853,14 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 411,
       params: ['MissingWaypoint', 1, 0, 0, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 14,
+      params: ['MissingWaypoint', 1, 0, 0, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 114,
+      params: ['CameraWaypointA', 300, 30, 'MissingWaypoint'],
     })).toBe(false);
 
     expect(logic.executeScriptAction({

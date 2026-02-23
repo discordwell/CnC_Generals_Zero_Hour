@@ -3865,6 +3865,24 @@ interface ScriptCameraLookTowardWaypointState {
   reverseRotation: boolean;
 }
 
+interface ScriptCameraActionRequestState {
+  requestType: 'MOVE_TO' | 'MOVE_ALONG_WAYPOINT_PATH' | 'RESET' | 'ROTATE' | 'SETUP' | 'ZOOM' | 'PITCH';
+  waypointName: string | null;
+  lookAtWaypointName: string | null;
+  x: number | null;
+  z: number | null;
+  lookAtX: number | null;
+  lookAtZ: number | null;
+  durationMs: number;
+  cameraStutterMs: number;
+  easeInMs: number;
+  easeOutMs: number;
+  rotations: number | null;
+  zoom: number | null;
+  pitch: number | null;
+  frame: number;
+}
+
 interface ScriptScreenShakeState {
   intensity: number;
   frame: number;
@@ -4264,8 +4282,12 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [9, 'DISABLE_SCRIPT'],
   [10, 'CALL_SUBROUTINE'],
   [11, 'PLAY_SOUND_EFFECT_AT'],
+  [14, 'MOVE_CAMERA_TO'],
   [15, 'INCREMENT_COUNTER'],
   [16, 'DECREMENT_COUNTER'],
+  [17, 'MOVE_CAMERA_ALONG_WAYPOINT_PATH'],
+  [18, 'ROTATE_CAMERA'],
+  [19, 'RESET_CAMERA'],
   [20, 'SET_MILLISECOND_TIMER'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
@@ -4277,6 +4299,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [89, 'RADAR_ENABLE'],
   [94, 'DISABLE_INPUT'],
   [95, 'ENABLE_INPUT'],
+  [114, 'SETUP_CAMERA'],
+  [117, 'ZOOM_CAMERA'],
+  [118, 'PITCH_CAMERA'],
   [147, 'SET_RANDOM_TIMER'],
   [148, 'SET_RANDOM_MSEC_TIMER'],
   [149, 'STOP_TIMER'],
@@ -4901,6 +4926,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraLookTowardObjectState: ScriptCameraLookTowardObjectState | null = null;
   /** Source parity bridge: TacticalView rotateCameraTowardPosition request from scripts. */
   private scriptCameraLookTowardWaypointState: ScriptCameraLookTowardWaypointState | null = null;
+  /** Source parity bridge: TacticalView camera action requests consumed by renderer integration. */
+  private readonly scriptCameraActionRequests: ScriptCameraActionRequestState[] = [];
   /** Source parity: ScriptEngine::m_objectCount map used by evaluatePlayerLostObjectType(). */
   private readonly scriptObjectCountBySideAndType = new Map<string, number>();
   /** Source parity: ScriptEngine::m_allObjectTypeLists (script object-type groups). */
@@ -7487,6 +7514,287 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptCameraLookTowardWaypointState };
   }
 
+  private queueScriptCameraActionRequest(request: Omit<ScriptCameraActionRequestState, 'frame'>): void {
+    this.scriptCameraActionRequests.push({
+      ...request,
+      frame: this.frameCounter,
+    });
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doMoveCameraTo.
+   */
+  private requestScriptMoveCameraTo(
+    waypointName: string,
+    durationSeconds: number,
+    cameraStutterSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    if (
+      !Number.isFinite(durationSeconds)
+      || !Number.isFinite(cameraStutterSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.queueScriptCameraActionRequest({
+      requestType: 'MOVE_TO',
+      waypointName: waypointName.trim(),
+      lookAtWaypointName: null,
+      x: waypoint.x,
+      z: waypoint.z,
+      lookAtX: null,
+      lookAtZ: null,
+      durationMs: durationSeconds * 1000,
+      cameraStutterMs: cameraStutterSeconds * 1000,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+      rotations: null,
+      zoom: null,
+      pitch: null,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doMoveCameraAlongWaypointPath.
+   */
+  private requestScriptMoveCameraAlongWaypointPath(
+    waypointName: string,
+    durationSeconds: number,
+    cameraStutterSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    if (
+      !Number.isFinite(durationSeconds)
+      || !Number.isFinite(cameraStutterSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.queueScriptCameraActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: waypointName.trim(),
+      lookAtWaypointName: null,
+      x: waypoint.x,
+      z: waypoint.z,
+      lookAtX: null,
+      lookAtZ: null,
+      durationMs: durationSeconds * 1000,
+      cameraStutterMs: cameraStutterSeconds * 1000,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+      rotations: null,
+      zoom: null,
+      pitch: null,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doResetCamera.
+   */
+  private requestScriptResetCamera(
+    waypointName: string,
+    durationSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    if (
+      !Number.isFinite(durationSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.queueScriptCameraActionRequest({
+      requestType: 'RESET',
+      waypointName: waypointName.trim(),
+      lookAtWaypointName: null,
+      x: waypoint.x,
+      z: waypoint.z,
+      lookAtX: null,
+      lookAtZ: null,
+      durationMs: durationSeconds * 1000,
+      cameraStutterMs: 0,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+      rotations: null,
+      zoom: null,
+      pitch: null,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doRotateCamera.
+   */
+  private requestScriptRotateCamera(
+    rotations: number,
+    durationSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+  ): boolean {
+    if (
+      !Number.isFinite(rotations)
+      || !Number.isFinite(durationSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.queueScriptCameraActionRequest({
+      requestType: 'ROTATE',
+      waypointName: null,
+      lookAtWaypointName: null,
+      x: null,
+      z: null,
+      lookAtX: null,
+      lookAtZ: null,
+      durationMs: durationSeconds * 1000,
+      cameraStutterMs: 0,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+      rotations,
+      zoom: null,
+      pitch: null,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doSetupCamera.
+   */
+  private requestScriptSetupCamera(
+    waypointName: string,
+    zoom: number,
+    pitch: number,
+    lookAtWaypointName: string,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    const lookAtWaypoint = this.resolveScriptWaypointPosition(lookAtWaypointName);
+    if (!waypoint || !lookAtWaypoint) {
+      return false;
+    }
+    if (!Number.isFinite(zoom) || !Number.isFinite(pitch)) {
+      return false;
+    }
+    this.queueScriptCameraActionRequest({
+      requestType: 'SETUP',
+      waypointName: waypointName.trim(),
+      lookAtWaypointName: lookAtWaypointName.trim(),
+      x: waypoint.x,
+      z: waypoint.z,
+      lookAtX: lookAtWaypoint.x,
+      lookAtZ: lookAtWaypoint.z,
+      durationMs: 0,
+      cameraStutterMs: 0,
+      easeInMs: 0,
+      easeOutMs: 0,
+      rotations: null,
+      zoom,
+      pitch,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doZoomCamera.
+   */
+  private requestScriptZoomCamera(
+    zoom: number,
+    durationSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+  ): boolean {
+    if (
+      !Number.isFinite(zoom)
+      || !Number.isFinite(durationSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.queueScriptCameraActionRequest({
+      requestType: 'ZOOM',
+      waypointName: null,
+      lookAtWaypointName: null,
+      x: null,
+      z: null,
+      lookAtX: null,
+      lookAtZ: null,
+      durationMs: durationSeconds * 1000,
+      cameraStutterMs: 0,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+      rotations: null,
+      zoom,
+      pitch: null,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity bridge: mirrors ScriptActions::doPitchCamera.
+   */
+  private requestScriptPitchCamera(
+    pitch: number,
+    durationSeconds: number,
+    easeInSeconds: number,
+    easeOutSeconds: number,
+  ): boolean {
+    if (
+      !Number.isFinite(pitch)
+      || !Number.isFinite(durationSeconds)
+      || !Number.isFinite(easeInSeconds)
+      || !Number.isFinite(easeOutSeconds)
+    ) {
+      return false;
+    }
+    this.queueScriptCameraActionRequest({
+      requestType: 'PITCH',
+      waypointName: null,
+      lookAtWaypointName: null,
+      x: null,
+      z: null,
+      lookAtX: null,
+      lookAtZ: null,
+      durationMs: durationSeconds * 1000,
+      cameraStutterMs: 0,
+      easeInMs: easeInSeconds * 1000,
+      easeOutMs: easeOutSeconds * 1000,
+      rotations: null,
+      zoom: null,
+      pitch,
+    });
+    return true;
+  }
+
+  drainScriptCameraActionRequests(): ScriptCameraActionRequestState[] {
+    if (this.scriptCameraActionRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptCameraActionRequests.map((request) => ({ ...request }));
+    this.scriptCameraActionRequests.length = 0;
+    return requests;
+  }
+
   /**
    * Source parity subset: ScriptActions::doVictory/doDefeat and timer start.
    * This port applies the local outcome immediately (without UI/end-game timer windows).
@@ -8143,6 +8451,27 @@ export class GameLogicSubsystem implements Subsystem {
       if (numericType === 212 && paramCount === 1) {
         // 212 also maps to WAREHOUSE_SET_VALUE in another script set; 1-param signature is sound effect.
         actionType = 'PLAY_SOUND_EFFECT';
+      } else if (numericType === 219 && paramCount === 5) {
+        // 219 also maps to SOUND_ENABLE_ALL in another script set; 5-param signature is camera move.
+        actionType = 'MOVE_CAMERA_TO';
+      } else if (numericType === 222 && paramCount === 5) {
+        // 222 also maps to AUDIO_RESTORE_VOLUME_ALL_TYPE; 5-param signature is waypoint-path camera move.
+        actionType = 'MOVE_CAMERA_ALONG_WAYPOINT_PATH';
+      } else if (numericType === 223 && paramCount === 4) {
+        // 223 also maps to INGAME_POPUP_MESSAGE; 4-param signature is camera rotation.
+        actionType = 'ROTATE_CAMERA';
+      } else if (numericType === 224 && paramCount === 4) {
+        // 224 also maps to SET_CAVE_INDEX; 4-param signature is camera reset.
+        actionType = 'RESET_CAMERA';
+      } else if (numericType === 319 && paramCount === 4) {
+        // 319 also maps to SOUND_REMOVE_ALL_DISABLED; 4-param signature is setup camera.
+        actionType = 'SETUP_CAMERA';
+      } else if (numericType === 322 && paramCount === 4) {
+        // 322 also maps to TEAM_GUARD_IN_TUNNEL_NETWORK; 4-param signature is zoom camera.
+        actionType = 'ZOOM_CAMERA';
+      } else if (numericType === 323 && paramCount === 4) {
+        // 323 also maps to QUICKVICTORY/TEAM_GUARD_IN_TUNNEL_NETWORK; 4-param signature is pitch camera.
+        actionType = 'PITCH_CAMERA';
       } else if (numericType === 291 && paramCount === 2) {
         actionType = 'NAMED_SET_STEALTH_ENABLED';
       } else if (numericType === 293 && paramCount === 1) {
@@ -8231,6 +8560,57 @@ export class GameLogicSubsystem implements Subsystem {
         return this.requestScriptSpeechPlay(
           readString(0, ['speechName', 'audioName', 'sound']),
           readBoolean(1, ['allowOverlap', 'overlap']),
+        );
+      case 'MOVE_CAMERA_TO':
+        return this.requestScriptMoveCameraTo(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['cameraStutterSeconds', 'cameraStutter', 'stutter']),
+          readNumber(3, ['easeInSeconds', 'easeIn']),
+          readNumber(4, ['easeOutSeconds', 'easeOut']),
+        );
+      case 'MOVE_CAMERA_ALONG_WAYPOINT_PATH':
+        return this.requestScriptMoveCameraAlongWaypointPath(
+          readString(0, ['waypointName', 'waypoint', 'waypointPathName', 'waypointPath']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['cameraStutterSeconds', 'cameraStutter', 'stutter']),
+          readNumber(3, ['easeInSeconds', 'easeIn']),
+          readNumber(4, ['easeOutSeconds', 'easeOut']),
+        );
+      case 'RESET_CAMERA':
+        return this.requestScriptResetCamera(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['easeInSeconds', 'easeIn']),
+          readNumber(3, ['easeOutSeconds', 'easeOut']),
+        );
+      case 'ROTATE_CAMERA':
+        return this.requestScriptRotateCamera(
+          readNumber(0, ['rotations']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['easeInSeconds', 'easeIn']),
+          readNumber(3, ['easeOutSeconds', 'easeOut']),
+        );
+      case 'SETUP_CAMERA':
+        return this.requestScriptSetupCamera(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['zoom']),
+          readNumber(2, ['pitch']),
+          readString(3, ['lookAtWaypointName', 'lookAtWaypoint', 'lookWaypointName', 'lookWaypoint']),
+        );
+      case 'ZOOM_CAMERA':
+        return this.requestScriptZoomCamera(
+          readNumber(0, ['zoom']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['easeInSeconds', 'easeIn']),
+          readNumber(3, ['easeOutSeconds', 'easeOut']),
+        );
+      case 'PITCH_CAMERA':
+        return this.requestScriptPitchCamera(
+          readNumber(0, ['pitch']),
+          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
+          readNumber(2, ['easeInSeconds', 'easeIn']),
+          readNumber(3, ['easeOutSeconds', 'easeOut']),
         );
       case 'SOUND_SET_VOLUME':
         this.setScriptSoundVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
@@ -18041,6 +18421,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
+    this.scriptCameraActionRequests.length = 0;
     this.placementSummary = {
       totalObjects: 0,
       spawnedObjects: 0,
@@ -48340,6 +48721,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraDefaultViewState = null;
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
+    this.scriptCameraActionRequests.length = 0;
     this.thingTemplateBuildableOverrides.clear();
     this.commandSetButtonSlotOverrides.clear();
     this.scriptObjectCountBySideAndType.clear();
