@@ -126,6 +126,10 @@ function makeBundle(params: {
   specialPowers?: SpecialPowerDef[];
   locomotors?: LocomotorDef[];
   factions?: FactionDef[];
+  ai?: {
+    attackUsesLineOfSight?: boolean;
+    skirmishBaseDefenseExtraDistance?: number;
+  };
 }): IniDataBundle {
   const weapons = params.weapons ?? [];
   const armors = params.armors ?? [];
@@ -149,6 +153,7 @@ function makeBundle(params: {
     locomotors,
     ai: {
       attackUsesLineOfSight: true,
+      ...params.ai,
     },
     stats: {
       objects: params.objects.length,
@@ -33790,6 +33795,93 @@ describe('Script condition groundwork', () => {
     const built = privateApi.spawnedEntities.get(buildId!);
     expect(built?.templateName).toBe('USABarracks');
     expect(built!.x).toBeGreaterThan(90); // Fallback should bias toward enemy structure center.
+  });
+
+  it('applies AI SkirmishBaseDefenseExtraDistance to front skirmish placement distance', () => {
+    const runFrontBuild = (extraDistance: number): { x: number; z: number } => {
+      const bundle = makeBundle({
+        objects: [
+          makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+            makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          ], {
+            CommandSet: 'DozerConstructSet',
+            GeometryMajorRadius: 5,
+            GeometryMinorRadius: 5,
+          }),
+          makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+            makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          ], {
+            GeometryMajorRadius: 10,
+            GeometryMinorRadius: 10,
+          }),
+        ],
+        commandButtons: [
+          makeCommandButtonDef('Command_ConstructBarracks', {
+            Command: 'DOZER_CONSTRUCT',
+            Object: 'USABarracks',
+          }),
+        ],
+        commandSets: [
+          makeCommandSetDef('DozerConstructSet', {
+            1: 'Command_ConstructBarracks',
+          }),
+        ],
+        ai: {
+          skirmishBaseDefenseExtraDistance: extraDistance,
+        },
+      });
+
+      const map = makeMap([
+        makeMapObject('USADozer', 58, 130), // id 1
+        makeMapObject('USABarracks', 30, 120), // id 2
+        makeMapObject('USABarracks', 90, 120), // id 3
+        makeMapObject('USABarracks', 60, 200), // id 4
+      ], 256, 256);
+      map.waypoints = {
+        nodes: [
+          { id: 301, name: 'Center1_A', position: { x: 60, y: 40, z: 0 }, pathLabel1: 'Center1', biDirectional: false },
+        ],
+        links: [],
+      };
+
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        map,
+        makeRegistry(bundle),
+        makeHeightmap(256, 256),
+      );
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 15000 });
+      expect(logic.setSkirmishPlayerStartPosition('America', 1)).toBe(true);
+      expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+      logic.update(0);
+
+      const privateApi = logic as unknown as {
+        pendingConstructionActions: Map<number, number>;
+        spawnedEntities: Map<number, {
+          x: number;
+          z: number;
+          templateName: string;
+        }>;
+      };
+      expect(logic.executeScriptAction({
+        actionType: 460, // SKIRMISH_BUILD_STRUCTURE_FRONT
+        params: ['USABarracks'],
+      })).toBe(true);
+
+      const builtId = privateApi.pendingConstructionActions.get(1);
+      expect(builtId).toBeDefined();
+      const built = privateApi.spawnedEntities.get(builtId!);
+      expect(built?.templateName).toBe('USABarracks');
+      return { x: built!.x, z: built!.z };
+    };
+
+    const near = runFrontBuild(0);
+    const far = runFrontBuild(40);
+    const baseCenterX = (30 + 90 + 60) / 3;
+    const baseCenterZ = (120 + 120 + 200) / 3;
+    const nearDistance = Math.hypot(near.x - baseCenterX, near.z - baseCenterZ);
+    const farDistance = Math.hypot(far.x - baseCenterX, far.z - baseCenterZ);
+    expect(farDistance).toBeGreaterThan(nearDistance + 20);
   });
 
   it('executes script skirmish-attack-nearest-group-with-value action using source action id', () => {

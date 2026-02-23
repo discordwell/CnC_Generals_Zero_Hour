@@ -212,10 +212,14 @@ describe('IniDataRegistry', () => {
 
     it('indexes AI block config values', () => {
       registry.loadBlocks([
-        makeBlock('AI', 'AI', { AttackUsesLineOfSight: 'no' }),
+        makeBlock('AI', 'AI', {
+          AttackUsesLineOfSight: 'no',
+          SkirmishBaseDefenseExtraDistance: '25.5',
+        }),
       ]);
 
       expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
+      expect(registry.getAiConfig()?.skirmishBaseDefenseExtraDistance).toBeCloseTo(25.5);
     });
 
     it('indexes AudioSettings runtime fields', () => {
@@ -490,6 +494,7 @@ describe('IniDataRegistry', () => {
         ],
         ai: {
           attackUsesLineOfSight: false,
+          skirmishBaseDefenseExtraDistance: 12.25,
         },
         audioSettings: {
           sampleCount2D: 12,
@@ -526,6 +531,7 @@ describe('IniDataRegistry', () => {
       expect(registry.objects.get('TankA')?.side).toBe('America');
       expect(registry.weapons.get('Gun')?.fields['Damage']).toBe(50);
       expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
+      expect(registry.getAiConfig()?.skirmishBaseDefenseExtraDistance).toBeCloseTo(12.25);
       expect(registry.getAudioSettings()).toEqual({
         sampleCount2D: 12,
         sampleCount3D: 36,

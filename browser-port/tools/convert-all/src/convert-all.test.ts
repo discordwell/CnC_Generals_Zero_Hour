@@ -1078,6 +1078,7 @@ End
 
 AI
   AttackUsesLineOfSight = no
+  SkirmishBaseDefenseExtraDistance = 37.5
 End
 `);
 
@@ -1095,6 +1096,7 @@ End
         readFileSync(resolve(outputDir, 'data', 'bundle-game.json'), 'utf8',
       ));
       expect(gameBundle.ai?.attackUsesLineOfSight).toBe(false);
+      expect(gameBundle.ai?.skirmishBaseDefenseExtraDistance).toBeCloseTo(37.5);
 
       const runtimeManifestText = readFileSync(
         resolve(outputDir, RUNTIME_MANIFEST_FILE),
@@ -1121,12 +1123,13 @@ End
         objects: unknown[];
         weapons: unknown[];
         stats: { objects: number; weapons: number };
-        ai?: { attackUsesLineOfSight?: boolean };
+        ai?: { attackUsesLineOfSight?: boolean; skirmishBaseDefenseExtraDistance?: number };
       };
       expect(bundle.objects).toHaveLength(1);
       expect(bundle.stats.objects).toBe(1);
       expect(bundle.stats.weapons).toBe(0);
       expect(bundle.ai?.attackUsesLineOfSight).toBe(false);
+      expect(bundle.ai?.skirmishBaseDefenseExtraDistance).toBeCloseTo(37.5);
     });
   });
 

@@ -5104,6 +5104,8 @@ export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
   private readonly config: GameLogicConfig;
+  /** Source parity: TAiData::m_skirmishBaseDefenseExtraDistance from AI block. */
+  private skirmishBaseDefenseExtraDistance = SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
   private readonly spawnedEntities = new Map<number, MapEntity>();
   private readonly raycaster = new THREE.Raycaster();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -5562,6 +5564,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (gameDataConfig) {
       this.globalWeaponBonusTable = buildWeaponBonusTable(gameDataConfig.weaponBonusEntries);
     }
+    const aiConfig = iniDataRegistry.getAiConfig();
+    this.skirmishBaseDefenseExtraDistance =
+      aiConfig?.skirmishBaseDefenseExtraDistance ?? SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
 
     this.railedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(
       this.resolveRailedTransportWaypointData(mapData),
@@ -13938,7 +13943,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveSkirmishBaseDefenseExtraDistance(): number {
-    return SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
+    return this.skirmishBaseDefenseExtraDistance;
   }
 
   private resolveCachedSkirmishBaseCenterAndRadius(side: string): ScriptBaseCenterAndRadius | null {
@@ -53826,6 +53831,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.missileAIProfileByProjectileTemplate.clear();
     this.visualEventBuffer.length = 0;
     this.nextProjectileVisualId = 1;
+    this.skirmishBaseDefenseExtraDistance = SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
     for (const [entityId] of this.overchargeStateByEntityId) {
       const entity = this.spawnedEntities.get(entityId);
       if (entity && !entity.destroyed) {

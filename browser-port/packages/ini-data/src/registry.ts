@@ -144,6 +144,7 @@ export interface RegistryError {
 
 export interface AiConfig {
   attackUsesLineOfSight?: boolean;
+  skirmishBaseDefenseExtraDistance?: number;
 }
 
 /**
@@ -737,6 +738,9 @@ export class IniDataRegistry {
           ...this.ai,
           attackUsesLineOfSight: extractBoolean(block.fields['AttackUsesLineOfSight']) ??
             this.ai?.attackUsesLineOfSight,
+          skirmishBaseDefenseExtraDistance:
+            extractNumber(block.fields['SkirmishBaseDefenseExtraDistance']) ??
+            this.ai?.skirmishBaseDefenseExtraDistance,
         };
         break;
 
