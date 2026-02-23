@@ -4403,6 +4403,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [65, 'PLAYER_ENABLE_BASE_CONSTRUCTION'],
   [66, 'PLAYER_ENABLE_FACTORIES'],
   [67, 'PLAYER_ENABLE_UNIT_CONSTRUCTION'],
+  [68, 'CAMERA_MOVE_HOME'],
   [69, 'BUILD_TEAM'],
   [70, 'NAMED_DAMAGE'],
   [71, 'NAMED_DELETE'],
@@ -9466,6 +9467,9 @@ export class GameLogicSubsystem implements Subsystem {
           readSide(0, ['side', 'playerName', 'player']),
           true,
         );
+      case 'CAMERA_MOVE_HOME':
+        // Source parity: ScriptActions::doCameraMoveHome is an intentional no-op in C++.
+        return true;
       case 'BUILD_TEAM':
         return this.executeScriptBuildTeam(
           readString(0, ['teamName', 'team']),

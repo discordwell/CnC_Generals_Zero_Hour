@@ -37114,6 +37114,20 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script camera-move-home action using source action id', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 68, // CAMERA_MOVE_HOME
+      params: [],
+    })).toBe(true);
+  });
+
   it('executes script damage/delete/kill actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
