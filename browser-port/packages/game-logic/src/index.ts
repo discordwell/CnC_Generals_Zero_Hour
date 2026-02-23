@@ -3905,6 +3905,12 @@ interface ScriptPopupMessageState {
   frame: number;
 }
 
+interface ScriptMoviePlaybackRequestState {
+  movieName: string;
+  playbackType: 'FULLSCREEN' | 'RADAR';
+  frame: number;
+}
+
 interface ScriptDisplayedCounterState {
   counterName: string;
   counterText: string;
@@ -4301,6 +4307,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
+  [80, 'MOVIE_PLAY_FULLSCREEN'],
+  [81, 'MOVIE_PLAY_RADAR'],
   [82, 'SOUND_PLAY_NAMED'],
   [83, 'SPEECH_PLAY'],
   [86, 'PLAYER_RELATES_PLAYER'],
@@ -4312,6 +4320,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [98, 'SOUND_AMBIENT_RESUME'],
   [99, 'MUSIC_SET_TRACK'],
   [114, 'SETUP_CAMERA'],
+  [115, 'CAMERA_LETTERBOX_BEGIN'],
+  [116, 'CAMERA_LETTERBOX_END'],
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
   [144, 'MUSIC_SET_VOLUME'],
@@ -4448,6 +4458,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [280, 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'],
   [281, 'TEAM_FOLLOW_WAYPOINTS_EXACT'],
   [282, 'NAMED_FOLLOW_WAYPOINTS_EXACT'],
+  [285, 'MOVIE_PLAY_FULLSCREEN'],
+  [286, 'MOVIE_PLAY_RADAR'],
   [477, 'PLAYER_ADD_SKILLPOINTS'],
   [478, 'PLAYER_ADD_RANKLEVEL'],
   [479, 'PLAYER_SET_RANKLEVEL'],
@@ -4905,8 +4917,12 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCinematicTextState: ScriptCinematicTextState | null = null;
   /** Source parity bridge: InGameUI::popupMessage script queue. */
   private readonly scriptPopupMessages: ScriptPopupMessageState[] = [];
+  /** Source parity bridge: Display/InGameUI movie playback requests from scripts. */
+  private readonly scriptMoviePlaybackRequests: ScriptMoviePlaybackRequestState[] = [];
   /** Source parity bridge: InGameUI::addNamedTimer / removeNamedTimer script counters. */
   private readonly scriptDisplayedCounters = new Map<string, ScriptDisplayedCounterState>();
+  /** Source parity bridge: Display::enableLetterBox script toggle. */
+  private scriptLetterboxEnabled = false;
   /** Source parity bridge: InGameUI::showNamedTimerDisplay global timer visibility. */
   private scriptNamedTimerDisplayEnabled = true;
   /** Source parity bridge: InGameUI::setSuperweaponDisplayEnabledByScript global gate. */
@@ -8003,6 +8019,36 @@ export class GameLogicSubsystem implements Subsystem {
     return messages;
   }
 
+  private requestScriptMoviePlayback(movieName: string, playbackType: 'FULLSCREEN' | 'RADAR'): boolean {
+    const normalizedMovieName = movieName.trim();
+    if (!normalizedMovieName) {
+      return false;
+    }
+    this.scriptMoviePlaybackRequests.push({
+      movieName: normalizedMovieName,
+      playbackType,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  drainScriptMoviePlaybackRequests(): ScriptMoviePlaybackRequestState[] {
+    if (this.scriptMoviePlaybackRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptMoviePlaybackRequests.map((request) => ({ ...request }));
+    this.scriptMoviePlaybackRequests.length = 0;
+    return requests;
+  }
+
+  setScriptLetterboxEnabled(enabled: boolean): void {
+    this.scriptLetterboxEnabled = enabled;
+  }
+
+  isScriptLetterboxEnabled(): boolean {
+    return this.scriptLetterboxEnabled;
+  }
+
   private setScriptDisplayedCounter(counterName: string, counterText: string, isCountdown: boolean): boolean {
     const normalizedName = this.normalizeScriptVariableName(counterName);
     if (!normalizedName) {
@@ -8552,6 +8598,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 304 && paramCount === 3) {
         // 304 also maps to NAMED_FACE_WAYPOINT; 3-param signature is music track change.
         actionType = 'MUSIC_SET_TRACK';
+      } else if (numericType === 321 && paramCount === 0) {
+        // 321 also maps to SOUND_REMOVE_TYPE; 0-param signature is letterbox end.
+        actionType = 'CAMERA_LETTERBOX_END';
       } else if (numericType === 291 && paramCount === 2) {
         actionType = 'NAMED_SET_STEALTH_ENABLED';
       } else if (numericType === 293 && paramCount === 1) {
@@ -8641,6 +8690,22 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['speechName', 'audioName', 'sound']),
           readBoolean(1, ['allowOverlap', 'overlap']),
         );
+      case 'MOVIE_PLAY_FULLSCREEN':
+        return this.requestScriptMoviePlayback(
+          readString(0, ['movieName', 'movie']),
+          'FULLSCREEN',
+        );
+      case 'MOVIE_PLAY_RADAR':
+        return this.requestScriptMoviePlayback(
+          readString(0, ['movieName', 'movie']),
+          'RADAR',
+        );
+      case 'CAMERA_LETTERBOX_BEGIN':
+        this.setScriptLetterboxEnabled(true);
+        return true;
+      case 'CAMERA_LETTERBOX_END':
+        this.setScriptLetterboxEnabled(false);
+        return true;
       case 'SUSPEND_BACKGROUND_SOUNDS':
         this.setScriptBackgroundSoundsPaused(true);
         return true;
@@ -18504,7 +18569,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
+    this.scriptMoviePlaybackRequests.length = 0;
     this.scriptDisplayedCounters.clear();
+    this.scriptLetterboxEnabled = false;
     this.scriptNamedTimerDisplayEnabled = true;
     this.scriptSpecialPowerDisplayEnabled = true;
     this.scriptHiddenSpecialPowerDisplayEntityIds.clear();
@@ -48807,7 +48874,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptScreenShakeState = null;
     this.scriptCinematicTextState = null;
     this.scriptPopupMessages.length = 0;
+    this.scriptMoviePlaybackRequests.length = 0;
     this.scriptDisplayedCounters.clear();
+    this.scriptLetterboxEnabled = false;
     this.scriptNamedTimerDisplayEnabled = true;
     this.scriptSpecialPowerDisplayEnabled = true;
     this.scriptHiddenSpecialPowerDisplayEntityIds.clear();

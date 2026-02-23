@@ -34945,6 +34945,72 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptCameraLookTowardObjectState()).toBeNull();
   });
 
+  it('executes script movie and letterbox actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.isScriptLetterboxEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 115, // CAMERA_LETTERBOX_BEGIN (raw id)
+    })).toBe(true);
+    expect(logic.isScriptLetterboxEnabled()).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 116, // CAMERA_LETTERBOX_END (raw id)
+    })).toBe(true);
+    expect(logic.isScriptLetterboxEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 115,
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 321, // CAMERA_LETTERBOX_END (offset/collision id when no params)
+      params: [],
+    })).toBe(true);
+    expect(logic.isScriptLetterboxEnabled()).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 80, // MOVIE_PLAY_FULLSCREEN (raw id)
+      params: ['IntroMovieA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 285, // MOVIE_PLAY_FULLSCREEN (offset id)
+      params: ['IntroMovieB'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 81, // MOVIE_PLAY_RADAR (raw id)
+      params: ['RadarMovieA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 286, // MOVIE_PLAY_RADAR (offset id)
+      params: ['RadarMovieB'],
+    })).toBe(true);
+    expect(logic.drainScriptMoviePlaybackRequests()).toEqual([
+      { movieName: 'IntroMovieA', playbackType: 'FULLSCREEN', frame: 0 },
+      { movieName: 'IntroMovieB', playbackType: 'FULLSCREEN', frame: 0 },
+      { movieName: 'RadarMovieA', playbackType: 'RADAR', frame: 0 },
+      { movieName: 'RadarMovieB', playbackType: 'RADAR', frame: 0 },
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 80,
+      params: [''],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 321, // SOUND_REMOVE_TYPE when params are present
+      params: ['MissionAlert'],
+    })).toBe(true);
+    expect(logic.drainScriptAudioRemovalRequests()).toEqual([
+      { eventName: 'MissionAlert', removeDisabledOnly: false, frame: 0 },
+    ]);
+  });
+
   it('executes script force-select and destroy-all-contained actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
