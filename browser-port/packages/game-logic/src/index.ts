@@ -4763,6 +4763,10 @@ const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
  * collisions in map script chunks (ScriptAction::ParseAction + ActionTemplate internal names).
  */
 const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
+  'TEAM_DELETE_LIVING',
+  'RESIZE_VIEW_GUARDBAND',
+  'DELETE_ALL_UNMANNED',
+  'CHOOSE_VICTIM_ALWAYS_USES_NORMAL',
   'SET_TRAIN_HELD',
   'NAMED_SET_UNMANNED_STATUS',
   'TEAM_SET_UNMANNED_STATUS',
@@ -5062,6 +5066,10 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptMusicVolumeScale = 1;
   /** Source parity bridge: Display::setBorderShroudLevel script control. */
   private scriptBorderShroudEnabled = true;
+  /** Source parity bridge: TacticalView::setGuardBandBias script override. */
+  private scriptViewGuardbandBias: { x: number; y: number } | null = null;
+  /** Source parity bridge: ScriptEngine choose-victim difficulty override flag. */
+  private scriptChooseVictimAlwaysUsesNormal = false;
   /** Source parity bridge: ScriptEngine::m_toppleDirections keyed by named entity. */
   private readonly scriptToppleDirectionByEntityId = new Map<number, { x: number; z: number }>();
   /** Source parity bridge: Radar::createEvent script requests. */
@@ -8777,6 +8785,22 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptBorderShroudEnabled;
   }
 
+  setScriptViewGuardbandBias(gbx: number, gby: number): void {
+    this.scriptViewGuardbandBias = { x: gbx, y: gby };
+  }
+
+  getScriptViewGuardbandBias(): { x: number; y: number } | null {
+    return this.scriptViewGuardbandBias ? { ...this.scriptViewGuardbandBias } : null;
+  }
+
+  setScriptChooseVictimAlwaysUsesNormal(enabled: boolean): void {
+    this.scriptChooseVictimAlwaysUsesNormal = enabled;
+  }
+
+  isScriptChooseVictimAlwaysUsesNormal(): boolean {
+    return this.scriptChooseVictimAlwaysUsesNormal;
+  }
+
   private clampScriptVolumeScale(newVolumePercent: number): number {
     if (!Number.isFinite(newVolumePercent)) {
       return 0;
@@ -9012,6 +9036,18 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 324 && paramCount === 2) {
         // 324 also maps to QUICKVICTORY; 2-param signature is camera follow named.
         actionType = 'CAMERA_FOLLOW_NAMED';
+      } else if (numericType === 326 && paramCount === 1) {
+        // 326 also maps to CAMERA_FADE_ADD in another script set; 1-param signature is team delete living.
+        actionType = 'TEAM_DELETE_LIVING';
+      } else if (numericType === 327 && paramCount === 2) {
+        // 327 also maps to CAMERA_FADE_SUBTRACT in another script set; 2-param signature is resize view guardband.
+        actionType = 'RESIZE_VIEW_GUARDBAND';
+      } else if (numericType === 328 && paramCount === 0) {
+        // 328 also maps to CAMERA_FADE_SATURATE in another script set; 0-param signature is delete all unmanned.
+        actionType = 'DELETE_ALL_UNMANNED';
+      } else if (numericType === 329 && paramCount === 1) {
+        // 329 also maps to CAMERA_FADE_MULTIPLY in another script set; 1-param signature is choose victim always uses normal.
+        actionType = 'CHOOSE_VICTIM_ALWAYS_USES_NORMAL';
       } else if (numericType === 333 && paramCount === 2) {
         // 333 also maps to DRAW_SKYBOX_END in another script set; 2-param signature is set train held.
         actionType = 'SET_TRAIN_HELD';
@@ -9118,6 +9154,21 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DEFEAT':
       case 'LOCALDEFEAT':
         return this.setScriptLocalGameEndState(true);
+      case 'TEAM_DELETE_LIVING':
+        return this.executeScriptTeamDeleteLiving(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'RESIZE_VIEW_GUARDBAND':
+        return this.executeScriptResizeViewGuardband(
+          readNumber(0, ['guardbandX', 'x']),
+          readNumber(1, ['guardbandY', 'y']),
+        );
+      case 'DELETE_ALL_UNMANNED':
+        return this.executeScriptDeleteAllUnmanned();
+      case 'CHOOSE_VICTIM_ALWAYS_USES_NORMAL':
+        return this.executeScriptChooseVictimAlwaysUsesNormal(
+          readBoolean(0, ['enabled', 'value']),
+        );
       case 'FREEZE_TIME':
         this.setScriptTimeFrozenByScript(true);
         return true;
@@ -15617,6 +15668,67 @@ export class GameLogicSubsystem implements Subsystem {
     return this.clearScriptTeam(teamName);
   }
 
+  /**
+   * Source parity subset: ScriptActions::doTeamDelete(ignoreDead=true).
+   * TEAM_DELETE_LIVING destroys current non-destroyed team members.
+   */
+  private executeScriptTeamDeleteLiving(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      this.markEntityDestroyed(entity.id, -1);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doResizeViewGuardband.
+   * TODO(source-parity): forward this to TacticalView::setGuardBandBias renderer bridge.
+   */
+  private executeScriptResizeViewGuardband(guardbandX: number, guardbandY: number): boolean {
+    if (!Number.isFinite(guardbandX) || !Number.isFinite(guardbandY)) {
+      return false;
+    }
+    this.setScriptViewGuardbandBias(guardbandX, guardbandY);
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::deleteAllUnmanned.
+   */
+  private executeScriptDeleteAllUnmanned(): boolean {
+    const unmannedEntityIds: number[] = [];
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (!entity.objectStatusFlags.has('DISABLED_UNMANNED')) {
+        continue;
+      }
+      unmannedEntityIds.push(entity.id);
+    }
+
+    for (const entityId of unmannedEntityIds) {
+      this.markEntityDestroyed(entityId, -1);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doChooseVictimAlwaysUsesNormal.
+   * TODO(source-parity): wire this flag into choose-victim targeting heuristics.
+   */
+  private executeScriptChooseVictimAlwaysUsesNormal(enabled: boolean): boolean {
+    this.setScriptChooseVictimAlwaysUsesNormal(enabled);
+    return true;
+  }
+
   clearScriptTeam(teamName: string): boolean {
     const teamNameUpper = this.resolveScriptTeamName(teamName);
     if (!teamNameUpper) {
@@ -19400,6 +19512,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptSpeechVolumeScale = 1;
     this.scriptMusicVolumeScale = 1;
     this.scriptBorderShroudEnabled = true;
+    this.scriptViewGuardbandBias = null;
+    this.scriptChooseVictimAlwaysUsesNormal = false;
     this.scriptToppleDirectionByEntityId.clear();
     this.scriptRadarEvents.length = 0;
     this.scriptLastRadarEventState = null;

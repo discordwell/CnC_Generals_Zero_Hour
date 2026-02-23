@@ -35717,6 +35717,99 @@ describe('Script condition groundwork', () => {
     ]);
   });
 
+  it('executes script delete-living/guardband/unmanned-delete/choose-victim actions using source id collisions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Jeep', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 12, 10), // id 2
+        makeMapObject('Jeep', 14, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('DeleteTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        destroyed: boolean;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+
+    // Collision parity: 326-329 keep camera-fade behavior with 5-parameter signatures.
+    expect(logic.executeScriptAction({
+      actionType: 326,
+      params: [0.1, 0.9, 3, 2, 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 327,
+      params: [0.8, 0.2, 5, 4, 3],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 328,
+      params: [0.4, 0.9, 6, 5, 4],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 329,
+      params: [0.9, 0.1, 2, 1, 0],
+    })).toBe(true);
+    expect(logic.drainScriptCameraFadeRequests().map((request) => request.fadeType)).toEqual([
+      'ADD',
+      'SUBTRACT',
+      'SATURATE',
+      'MULTIPLY',
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 326, // TEAM_DELETE_LIVING when param count == 1
+      params: ['DeleteTeam'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.destroyed).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.destroyed).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 326,
+      params: ['MissingTeam'],
+    })).toBe(false);
+
+    expect(logic.getScriptViewGuardbandBias()).toBeNull();
+    expect(logic.executeScriptAction({
+      actionType: 327, // RESIZE_VIEW_GUARDBAND when param count == 2
+      params: [12, 8],
+    })).toBe(true);
+    expect(logic.getScriptViewGuardbandBias()).toEqual({ x: 12, y: 8 });
+
+    privateApi.spawnedEntities.get(3)?.objectStatusFlags.add('DISABLED_UNMANNED');
+    expect(logic.executeScriptAction({
+      actionType: 328, // DELETE_ALL_UNMANNED when param count == 0
+      params: [],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.destroyed).toBe(true);
+
+    expect(logic.isScriptChooseVictimAlwaysUsesNormal()).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 329, // CHOOSE_VICTIM_ALWAYS_USES_NORMAL when param count == 1
+      params: [1],
+    })).toBe(true);
+    expect(logic.isScriptChooseVictimAlwaysUsesNormal()).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 329,
+      params: [0],
+    })).toBe(true);
+    expect(logic.isScriptChooseVictimAlwaysUsesNormal()).toBe(false);
+  });
+
   it('executes script movie and letterbox actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
