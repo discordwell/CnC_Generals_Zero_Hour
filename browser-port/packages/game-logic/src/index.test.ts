@@ -35329,6 +35329,147 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptCameraFilterRequests()).toEqual([]);
   });
 
+  it('executes script unmanned and boobytrap actions using source action id collisions', () => {
+    const map = makeMap([
+      makeMapObject('TrapTarget', 12, 12), // id 1
+      makeMapObject('TrapTarget', 18, 12), // id 2
+      makeMapObject('TrapTarget', 24, 12), // id 3
+      makeMapObject('TrapTarget', 30, 12), // id 4
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'BlurWaypoint',
+          position: { x: 40, y: 52, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TrapTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          GeometryMajorRadius: 6,
+          GeometryMinorRadius: 4,
+        }),
+        makeObjectDef('BoobyBomb', 'America', ['BOOBY_TRAP'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+          makeBlock('Behavior', 'StickyBombUpdate ModuleTag_StickyBomb', {}),
+        ], {
+          GeometryMajorRadius: 1,
+          GeometryMinorRadius: 1,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('UnmannedTeam', [2])).toBe(true);
+    expect(logic.setScriptTeamMembers('TrapTeam', [4])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number;
+        x: number;
+        z: number;
+        side: string;
+        controllingPlayerToken: string | null;
+        objectStatusFlags: Set<string>;
+        stickyBombTargetId: number;
+        stickyBombProfile: unknown;
+      }>;
+    };
+
+    // Collision parity: 338-341 keep camera behavior with their camera signatures.
+    expect(logic.executeScriptAction({
+      actionType: 338,
+      params: [1, 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 339,
+      params: ['BlurWaypoint', 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 340,
+      params: [3],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 341,
+      params: [],
+    })).toBe(true);
+    expect(logic.drainScriptCameraFilterRequests().map((request) => request.requestType)).toEqual([
+      'MOTION_BLUR',
+      'MOTION_BLUR_JUMP',
+      'MOTION_BLUR_FOLLOW',
+      'MOTION_BLUR_END_FOLLOW',
+    ]);
+
+    expect(logic.executeScriptAction({
+      actionType: 338, // NAMED_SET_UNMANNED_STATUS when param count == 1
+      params: [1],
+    })).toBe(true);
+    const unmannedNamed = privateApi.spawnedEntities.get(1)!;
+    expect(unmannedNamed.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+    expect(unmannedNamed.side).toBe('');
+    expect(unmannedNamed.controllingPlayerToken).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 339, // TEAM_SET_UNMANNED_STATUS when param count == 1
+      params: ['UnmannedTeam'],
+    })).toBe(true);
+    const unmannedTeamMember = privateApi.spawnedEntities.get(2)!;
+    expect(unmannedTeamMember.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+    expect(unmannedTeamMember.side).toBe('');
+    expect(unmannedTeamMember.controllingPlayerToken).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 340, // NAMED_SET_BOOBYTRAPPED when param count == 2
+      params: ['BoobyBomb', 3],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 341, // TEAM_SET_BOOBYTRAPPED when param count == 2
+      params: ['BoobyBomb', 'TrapTeam'],
+    })).toBe(true);
+
+    const targetThree = privateApi.spawnedEntities.get(3)!;
+    const targetFour = privateApi.spawnedEntities.get(4)!;
+    expect(targetThree.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(true);
+    expect(targetFour.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(true);
+
+    const attachedBombs = [...privateApi.spawnedEntities.values()]
+      .filter((entity) => entity.stickyBombProfile && entity.stickyBombTargetId !== 0);
+    expect(attachedBombs).toHaveLength(2);
+    expect(new Set(attachedBombs.map((entity) => entity.stickyBombTargetId))).toEqual(new Set([3, 4]));
+    const namedBomb = attachedBombs.find((entity) => entity.stickyBombTargetId === 3)!;
+    const teamBomb = attachedBombs.find((entity) => entity.stickyBombTargetId === 4)!;
+    expect(Math.hypot(namedBomb.x - targetThree.x, namedBomb.z - targetThree.z)).toBeGreaterThan(0.1);
+    expect(Math.hypot(teamBomb.x - targetFour.x, teamBomb.z - targetFour.z)).toBeGreaterThan(0.1);
+
+    expect(logic.executeScriptAction({
+      actionType: 338,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 339,
+      params: ['MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 340,
+      params: ['MissingBomb', 3],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 341,
+      params: ['BoobyBomb', 'MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script freeze-time and weather actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

@@ -4754,6 +4754,17 @@ const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
   ['SUB_FROM_TIMER', 'SUB_FROM_MSEC_TIMER'],
 ]);
 
+/**
+ * Source parity: additional action names that currently arrive through numeric-id remapping
+ * collisions in map script chunks (ScriptAction::ParseAction + ActionTemplate internal names).
+ */
+const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
+  'NAMED_SET_UNMANNED_STATUS',
+  'TEAM_SET_UNMANNED_STATUS',
+  'NAMED_SET_BOOBYTRAPPED',
+  'TEAM_SET_BOOBYTRAPPED',
+]);
+
 const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
   'PATRIOT',
   'GATTLINGCANNON',
@@ -9008,6 +9019,18 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 337 && paramCount === 0) {
         // 337 also maps to NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH; 0-param signature is camera stop follow.
         actionType = 'CAMERA_STOP_FOLLOW';
+      } else if (numericType === 338 && paramCount === 1) {
+        // 338 also maps to CAMERA_MOTION_BLUR in another script set; 1-param signature is named set unmanned.
+        actionType = 'NAMED_SET_UNMANNED_STATUS';
+      } else if (numericType === 339 && paramCount === 1) {
+        // 339 also maps to CAMERA_MOTION_BLUR_JUMP in another script set; 1-param signature is team set unmanned.
+        actionType = 'TEAM_SET_UNMANNED_STATUS';
+      } else if (numericType === 340 && paramCount === 2) {
+        // 340 also maps to CAMERA_MOTION_BLUR_FOLLOW in another script set; 2-param signature is named set boobytrapped.
+        actionType = 'NAMED_SET_BOOBYTRAPPED';
+      } else if (numericType === 341 && paramCount === 2) {
+        // 341 also maps to CAMERA_MOTION_BLUR_END_FOLLOW in another script set; 2-param signature is team set boobytrapped.
+        actionType = 'TEAM_SET_BOOBYTRAPPED';
       } else if (numericType === 342 && paramCount === 0) {
         // 342 also maps to SHOW_WEATHER; 0-param signature is FREEZE_TIME from offset script-set ids.
         actionType = 'FREEZE_TIME';
@@ -10109,6 +10132,24 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamSetStealthEnabled(
           readString(0, ['teamName', 'team']),
           readBoolean(1, ['enabled', 'stealthEnabled', 'value']),
+        );
+      case 'NAMED_SET_UNMANNED_STATUS':
+        return this.executeScriptNamedSetUnmannedStatus(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+        );
+      case 'TEAM_SET_UNMANNED_STATUS':
+        return this.executeScriptTeamSetUnmannedStatus(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'NAMED_SET_BOOBYTRAPPED':
+        return this.executeScriptNamedSetBoobytrapped(
+          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readEntityId(1, ['entityId', 'unitId', 'named']),
+        );
+      case 'TEAM_SET_BOOBYTRAPPED':
+        return this.executeScriptTeamSetBoobytrapped(
+          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readString(1, ['teamName', 'team']),
         );
       case 'EVA_SET_ENABLED_DISABLED':
         this.setScriptEvaEnabled(readBoolean(0, ['enabled', 'evaEnabled', 'value']));
@@ -14868,6 +14909,147 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
     }
     return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedSetUnmanned / doTeamSetUnmanned shared object mutation.
+   */
+  private setScriptEntityUnmanned(entity: MapEntity): void {
+    entity.objectStatusFlags.add('DISABLED_UNMANNED');
+    entity.attackTargetEntityId = null;
+    entity.attackTargetPosition = null;
+    if (entity.moving) {
+      entity.moving = false;
+      entity.moveTarget = null;
+      entity.movePath = [];
+      entity.pathIndex = 0;
+      entity.pathfindGoalCell = null;
+    }
+    this.unregisterEntityEnergy(entity);
+    entity.isSelected = false;
+    entity.side = '';
+    entity.controllingPlayerToken = null;
+    for (const team of this.scriptTeamsByName.values()) {
+      team.memberEntityIds.delete(entity.id);
+    }
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedSetUnmanned.
+   * Marks the target as unmanned and transfers ownership to neutral.
+   */
+  private executeScriptNamedSetUnmannedStatus(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    this.setScriptEntityUnmanned(entity);
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamSetUnmanned.
+   * Applies unmanned status to each team member.
+   */
+  private executeScriptTeamSetUnmannedStatus(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let updated = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.setScriptEntityUnmanned(entity);
+      updated = true;
+    }
+    return updated;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedSetBoobytrapped.
+   * Creates the boobytrap object and attaches its StickyBombUpdate target.
+   */
+  private applyScriptBoobytrapToEntity(boobytrapTemplateName: string, target: MapEntity): boolean {
+    const normalizedTemplateName = boobytrapTemplateName.trim();
+    if (!normalizedTemplateName) {
+      return false;
+    }
+
+    const spawnX = target.x;
+    const spawnZ = target.z;
+    const boobytrap = this.spawnEntityFromTemplate(
+      normalizedTemplateName,
+      spawnX,
+      spawnZ,
+      target.rotationY,
+      target.side,
+    );
+    if (!boobytrap) {
+      return false;
+    }
+    if (!boobytrap.stickyBombProfile) {
+      return true;
+    }
+
+    // Source parity: GeometryInfo::makeRandomOffsetOnPerimeter + object transform matrix.
+    const geometry = target.obstacleGeometry;
+    const majorRadius = Math.max(0, geometry?.majorRadius ?? target.geometryMajorRadius ?? 0);
+    const minorRadius = Math.max(0, geometry?.minorRadius ?? majorRadius);
+    const perimeterAngle = this.gameRandom.nextFloat() * (Math.PI * 2);
+    const localX = Math.cos(perimeterAngle) * majorRadius;
+    const localZ = Math.sin(perimeterAngle) * minorRadius;
+    const cosTheta = Math.cos(target.rotationY);
+    const sinTheta = Math.sin(target.rotationY);
+    boobytrap.x = target.x + (localX * cosTheta) - (localZ * sinTheta);
+    boobytrap.z = target.z + (localX * sinTheta) + (localZ * cosTheta);
+    if (this.mapHeightmap) {
+      boobytrap.y = this.mapHeightmap.getInterpolatedHeight(boobytrap.x, boobytrap.z) ?? boobytrap.y;
+    }
+
+    boobytrap.stickyBombTargetId = target.id;
+    target.objectStatusFlags.add('BOOBY_TRAPPED');
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedSetBoobytrapped.
+   */
+  private executeScriptNamedSetBoobytrapped(
+    boobytrapTemplateName: string,
+    entityId: number,
+  ): boolean {
+    const target = this.spawnedEntities.get(entityId);
+    if (!target || target.destroyed) {
+      return false;
+    }
+    return this.applyScriptBoobytrapToEntity(boobytrapTemplateName, target);
+  }
+
+  /**
+   * Source parity: ScriptActions::doTeamSetBoobytrapped.
+   */
+  private executeScriptTeamSetBoobytrapped(
+    boobytrapTemplateName: string,
+    teamName: string,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let attachedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.applyScriptBoobytrapToEntity(boobytrapTemplateName, entity)) {
+        attachedAny = true;
+      }
+    }
+    return attachedAny;
   }
 
   /**
@@ -27076,7 +27258,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const canonical = SCRIPT_ACTION_TYPE_ALIASES.get(normalized) ?? normalized;
-    if (!SCRIPT_ACTION_TYPE_NAME_SET.has(canonical)) {
+    if (!SCRIPT_ACTION_TYPE_NAME_SET.has(canonical) && !SCRIPT_ACTION_TYPE_EXTRA_NAMES.has(canonical)) {
       return null;
     }
     return canonical;
