@@ -1643,6 +1643,8 @@ interface MapEntity {
   isImmobile: boolean;
   noCollisions: boolean;
   isIndestructible: boolean;
+  /** Source parity: ScriptActions::changeObjectPanelFlagForSingleObject "AI Recruitable". */
+  scriptAiRecruitable: boolean;
   /** Source parity: KeepObjectDie — prevents entity removal on death, keeps as rubble. */
   keepObjectOnDeath: boolean;
   /** Source parity: Body module type determines damage behavior (HighlanderBody caps at 1HP, ImmortalBody never dies). */
@@ -3973,6 +3975,15 @@ interface DynamicWaterUpdateState {
   currentHeight: number;
 }
 
+type ScriptObjectPanelFlagName =
+  | 'ENABLED'
+  | 'POWERED'
+  | 'INDESTRUCTIBLE'
+  | 'UNSELLABLE'
+  | 'SELECTABLE'
+  | 'AI_RECRUITABLE'
+  | 'PLAYER_TARGETABLE';
+
 interface ScriptCounterState {
   value: number;
   isCountdownTimer: boolean;
@@ -4368,6 +4379,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [499, 'OPTIONS_SET_OCCLUSION_MODE'],
   [500, 'OPTIONS_SET_DRAWICON_UI_MODE'],
   [502, 'OPTIONS_SET_PARTICLE_CAP_MODE'],
+  [504, 'UNIT_AFFECT_OBJECT_PANEL_FLAGS'],
+  [505, 'TEAM_AFFECT_OBJECT_PANEL_FLAGS'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -7623,6 +7636,12 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 294 && paramCount === 1) {
         // 294 also maps to RADAR_ENABLE in another script set; 1-param signature is occlusion toggle.
         actionType = 'OPTIONS_SET_OCCLUSION_MODE';
+      } else if (numericType === 299 && paramCount === 3) {
+        // 299 also maps to DISABLE_INPUT in another script set; 3-param signature is unit panel flags.
+        actionType = 'UNIT_AFFECT_OBJECT_PANEL_FLAGS';
+      } else if (numericType === 300 && paramCount === 3) {
+        // 300 also maps to ENABLE_INPUT in another script set; 3-param signature is team panel flags.
+        actionType = 'TEAM_AFFECT_OBJECT_PANEL_FLAGS';
       }
     }
     if (!actionType) {
@@ -8316,6 +8335,18 @@ export class GameLogicSubsystem implements Subsystem {
       case 'OPTIONS_SET_PARTICLE_CAP_MODE':
         this.setScriptDynamicLodEnabled(readBoolean(0, ['enabled', 'particleCapEnabled', 'value']));
         return true;
+      case 'UNIT_AFFECT_OBJECT_PANEL_FLAGS':
+        return this.executeScriptAffectObjectPanelFlagsUnit(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['flagName', 'flag']),
+          readBoolean(2, ['enabled', 'value']),
+        );
+      case 'TEAM_AFFECT_OBJECT_PANEL_FLAGS':
+        return this.executeScriptAffectObjectPanelFlagsTeam(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['flagName', 'flag']),
+          readBoolean(2, ['enabled', 'value']),
+        );
       case 'NAMED_SET_REPULSOR':
         return this.executeScriptNamedSetRepulsor(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -12373,6 +12404,130 @@ export class GameLogicSubsystem implements Subsystem {
       } else {
         entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
       }
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::changeObjectPanelFlagForSingleObject flag-name table.
+   */
+  private resolveScriptObjectPanelFlagName(flagName: string): ScriptObjectPanelFlagName | null {
+    const normalized = flagName.trim().toUpperCase();
+    switch (normalized) {
+      case 'ENABLED':
+        return 'ENABLED';
+      case 'POWERED':
+        return 'POWERED';
+      case 'INDESTRUCTIBLE':
+        return 'INDESTRUCTIBLE';
+      case 'UNSELLABLE':
+        return 'UNSELLABLE';
+      case 'SELECTABLE':
+        return 'SELECTABLE';
+      case 'AI RECRUITABLE':
+        return 'AI_RECRUITABLE';
+      case 'PLAYER TARGETABLE':
+        return 'PLAYER_TARGETABLE';
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Source parity: ScriptActions::changeObjectPanelFlagForSingleObject.
+   */
+  private applyScriptObjectPanelFlag(
+    entity: MapEntity,
+    flag: ScriptObjectPanelFlagName,
+    enabled: boolean,
+  ): void {
+    switch (flag) {
+      case 'ENABLED':
+        if (enabled) {
+          entity.objectStatusFlags.delete('SCRIPT_DISABLED');
+        } else {
+          entity.objectStatusFlags.add('SCRIPT_DISABLED');
+        }
+        return;
+      case 'POWERED':
+        if (enabled) {
+          entity.objectStatusFlags.delete('SCRIPT_UNPOWERED');
+        } else {
+          entity.objectStatusFlags.add('SCRIPT_UNPOWERED');
+        }
+        return;
+      case 'INDESTRUCTIBLE':
+        entity.isIndestructible = enabled;
+        return;
+      case 'UNSELLABLE':
+        if (enabled) {
+          entity.objectStatusFlags.add('SCRIPT_UNSELLABLE');
+        } else {
+          entity.objectStatusFlags.delete('SCRIPT_UNSELLABLE');
+        }
+        return;
+      case 'SELECTABLE':
+        if (enabled) {
+          entity.objectStatusFlags.delete('UNSELECTABLE');
+        } else {
+          entity.objectStatusFlags.add('UNSELECTABLE');
+        }
+        return;
+      case 'AI_RECRUITABLE':
+        // TODO(source-parity): wire this state into AI recruit/merge behavior.
+        entity.scriptAiRecruitable = enabled;
+        return;
+      case 'PLAYER_TARGETABLE':
+        if (enabled) {
+          entity.objectStatusFlags.add('SCRIPT_TARGETABLE');
+        } else {
+          entity.objectStatusFlags.delete('SCRIPT_TARGETABLE');
+        }
+        return;
+    }
+  }
+
+  /**
+   * Source parity: ScriptActions::doAffectObjectPanelFlagsUnit.
+   */
+  private executeScriptAffectObjectPanelFlagsUnit(
+    entityId: number,
+    flagName: string,
+    enabled: boolean,
+  ): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    const flag = this.resolveScriptObjectPanelFlagName(flagName);
+    if (!flag) {
+      return false;
+    }
+    this.applyScriptObjectPanelFlag(entity, flag, enabled);
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doAffectObjectPanelFlagsTeam.
+   */
+  private executeScriptAffectObjectPanelFlagsTeam(
+    teamName: string,
+    flagName: string,
+    enabled: boolean,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const flag = this.resolveScriptObjectPanelFlagName(flagName);
+    if (!flag) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.applyScriptObjectPanelFlag(entity, flag, enabled);
     }
     return true;
   }
@@ -16499,6 +16654,7 @@ export class GameLogicSubsystem implements Subsystem {
       isImmobile,
       noCollisions: false,
       isIndestructible: false,
+      scriptAiRecruitable: true,
       keepObjectOnDeath: this.hasKeepObjectDie(objectDef),
       canMove: category === 'infantry' || category === 'vehicle' || category === 'air',
       locomotorSets: locomotorSetProfiles,

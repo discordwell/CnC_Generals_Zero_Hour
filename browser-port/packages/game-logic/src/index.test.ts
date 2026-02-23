@@ -29715,6 +29715,88 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptDynamicLodEnabled()).toBe(true);
   });
 
+  it('executes script object-panel flag actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10), // id 1
+        makeMapObject('Ranger', 14, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('PanelTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        objectStatusFlags: Set<string>;
+        isIndestructible: boolean;
+        scriptAiRecruitable: boolean;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 299, // ID collision path: 299 + 3 params => UNIT_AFFECT_OBJECT_PANEL_FLAGS
+      params: [1, 'Enabled', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 504, // UNIT_AFFECT_OBJECT_PANEL_FLAGS (offset id)
+      params: [1, 'Enabled', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 300, // ID collision path: 300 + 3 params => TEAM_AFFECT_OBJECT_PANEL_FLAGS
+      params: ['PanelTeam', 'Selectable', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('UNSELECTABLE')).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('UNSELECTABLE')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 505, // TEAM_AFFECT_OBJECT_PANEL_FLAGS (offset id)
+      params: ['PanelTeam', 'AI Recruitable', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAiRecruitable).toBe(false);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAiRecruitable).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 504,
+      params: [1, 'Indestructible', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.isIndestructible).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 504,
+      params: [1, 'Player Targetable', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_TARGETABLE')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 505,
+      params: ['PanelTeam', 'Unsellable', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_UNSELLABLE')).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SCRIPT_UNSELLABLE')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 504,
+      params: [1, 'UnknownFlag', 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 505,
+      params: ['MissingTeam', 'Enabled', 1],
+    })).toBe(false);
+  });
+
   it('executes script screen-shake action using source action id', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
