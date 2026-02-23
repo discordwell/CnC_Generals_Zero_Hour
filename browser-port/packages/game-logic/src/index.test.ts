@@ -30200,6 +30200,19 @@ describe('Script condition groundwork', () => {
       actionType: 414, // RADAR_REVERT_TO_NORMAL
     })).toBe(true);
     expect(logic.isScriptRadarForced()).toBe(false);
+
+    expect(logic.getScriptRadarRefreshRequestedFrame()).toBeNull();
+    expect(logic.executeScriptAction({
+      actionType: 170, // REFRESH_RADAR (raw id)
+    })).toBe(true);
+    expect(logic.getScriptRadarRefreshRequestedFrame()).toBe(0);
+
+    logic.update(1 / 30);
+    logic.update(1 / 30);
+    expect(logic.executeScriptAction({
+      actionType: 375, // REFRESH_RADAR (offset id)
+    })).toBe(true);
+    expect(logic.getScriptRadarRefreshRequestedFrame()).toBe(2);
   });
 
   it('executes script EVA and options UI toggle actions using source action ids', () => {

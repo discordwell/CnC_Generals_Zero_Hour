@@ -4280,6 +4280,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [167, 'NAMED_ADD_SPECIAL_POWER_COUNTDOWN'],
   [168, 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT'],
   [169, 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED'],
+  [170, 'REFRESH_RADAR'],
   [271, 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS'],
   [272, 'PLAYER_ADD_SKILLPOINTS'],
   [273, 'PLAYER_ADD_RANKLEVEL'],
@@ -4349,6 +4350,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [372, 'NAMED_ADD_SPECIAL_POWER_COUNTDOWN'],
   [373, 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT'],
   [374, 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED'],
+  [375, 'REFRESH_RADAR'],
   [376, 'CAMERA_TETHER_NAMED'],
   [377, 'CAMERA_STOP_TETHER_NAMED'],
   [378, 'CAMERA_SET_DEFAULT'],
@@ -4737,6 +4739,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraMovementFinished = true;
   /** Source parity bridge: Radar::forceOn script control. */
   private scriptRadarForced = false;
+  /** Source parity bridge: Radar::refreshTerrain script pulse frame. */
+  private scriptRadarRefreshFrame = -1;
   /** Source parity bridge: TacticalView::shake request from scripts. */
   private scriptScreenShakeState: ScriptScreenShakeState | null = null;
   /** Source parity bridge: Display::setCinematicText from script action. */
@@ -7460,6 +7464,14 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptRadarForced;
   }
 
+  requestScriptRadarRefresh(): void {
+    this.scriptRadarRefreshFrame = this.frameCounter;
+  }
+
+  getScriptRadarRefreshRequestedFrame(): number | null {
+    return this.scriptRadarRefreshFrame >= 0 ? this.scriptRadarRefreshFrame : null;
+  }
+
   /**
    * Source parity bridge: ScriptActions::doScreenShake.
    * TODO(source-parity): forward to TacticalView::shake.
@@ -8033,6 +8045,9 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       case 'RADAR_REVERT_TO_NORMAL':
         this.setScriptRadarForced(false);
+        return true;
+      case 'REFRESH_RADAR':
+        this.requestScriptRadarRefresh();
         return true;
       case 'SCREEN_SHAKE':
         return this.setScriptScreenShake(readInteger(0, ['intensity', 'shakeType', 'cameraShakeType']));
@@ -17767,6 +17782,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
+    this.scriptRadarRefreshFrame = -1;
     this.scriptEvaEnabled = true;
     this.scriptOcclusionModeEnabled = false;
     this.scriptDrawIconUIEnabled = true;
@@ -48062,6 +48078,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptInputDisabled = false;
     this.scriptRadarHidden = false;
     this.scriptRadarForced = false;
+    this.scriptRadarRefreshFrame = -1;
     this.scriptEvaEnabled = true;
     this.scriptOcclusionModeEnabled = false;
     this.scriptDrawIconUIEnabled = true;
