@@ -29942,6 +29942,73 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named-fire-weapon-following-waypoint-path action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WaypointLauncher', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'WaypointMissileWeapon'] }),
+        ]),
+        makeObjectDef('WaypointProjectile', 'America', ['SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+        makeObjectDef('WaypointTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 250, InitialHealth: 250 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('WaypointMissileWeapon', {
+          AttackRange: 500,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 999999,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('WaypointLauncher', 10, 10), // id 1
+      makeMapObject('WaypointTarget', 40, 20), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'WP_START',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'WeaponPath',
+        },
+        {
+          id: 2,
+          name: 'WP_END',
+          position: { x: 40, y: 20, z: 0 },
+          pathLabel1: 'WeaponPath',
+        },
+      ],
+      links: [
+        { waypoint1: 1, waypoint2: 2 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
+      params: [1, 'WeaponPath'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.attackTargetEntityId).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 387,
+      params: [1, 'MissingPath'],
+    })).toBe(false);
+  });
+
   it('executes script volume and border-shroud actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

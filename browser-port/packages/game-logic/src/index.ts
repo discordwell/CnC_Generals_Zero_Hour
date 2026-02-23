@@ -8404,8 +8404,10 @@ export class GameLogicSubsystem implements Subsystem {
           readNumber(4, ['easeOutSeconds', 'easeOut']),
         );
       case 'NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH':
-        // TODO(source-parity): requires waypoint-following weapon support.
-        return false;
+        return this.executeScriptNamedFireWeaponFollowingWaypointPath(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
+        );
       case 'UNIT_EXECUTE_SEQUENTIAL_SCRIPT':
         return this.executeScriptUnitExecuteSequentialScript(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -11881,6 +11883,72 @@ export class GameLogicSubsystem implements Subsystem {
       return resolvedExplicit;
     }
     return this.resolveScriptCurrentPlayerSideFromContext();
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedFireWeaponFollowingWaypointPath.
+   * C++ fires a waypoint-following projectile from the closest node on the path.
+   * TODO(source-parity): waypoint-following projectile locomotion is pending; this subset
+   * fires a projectile weapon at the final route waypoint.
+   */
+  private executeScriptNamedFireWeaponFollowingWaypointPath(
+    entityId: number,
+    waypointPathLabel: string,
+  ): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const route = this.resolveScriptWaypointRouteByPathLabel(waypointPathLabel, entity.x, entity.z);
+    if (!route || route.length === 0) {
+      return false;
+    }
+
+    const weaponSlot = this.findWaypointFollowingCapableWeaponSlot(entity);
+    if (weaponSlot === null) {
+      return false;
+    }
+
+    const finalWaypoint = route[route.length - 1]!;
+    this.applyCommand({
+      type: 'fireWeapon',
+      entityId: entity.id,
+      weaponSlot,
+      maxShotsToFire: 1,
+      targetObjectId: null,
+      targetPosition: [finalWaypoint.x, 0, finalWaypoint.z],
+    });
+    return true;
+  }
+
+  private findWaypointFollowingCapableWeaponSlot(entity: MapEntity): number | null {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return null;
+    }
+
+    const selectedSet = this.selectBestSetByConditions(entity.weaponTemplateSets, entity.weaponSetFlagsMask);
+    if (!selectedSet) {
+      return null;
+    }
+
+    for (let slot = 0; slot < selectedSet.weaponNamesBySlot.length; slot += 1) {
+      const weaponName = selectedSet.weaponNamesBySlot[slot];
+      if (!weaponName) {
+        continue;
+      }
+      const weaponDef = findWeaponDefByName(registry, weaponName);
+      if (!weaponDef) {
+        continue;
+      }
+      const profile = this.resolveWeaponProfileFromDef(weaponDef);
+      if (profile?.projectileObjectName) {
+        return slot;
+      }
+    }
+
+    return null;
   }
 
   /**
