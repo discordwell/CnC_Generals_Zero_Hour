@@ -30409,6 +30409,74 @@ describe('Script condition groundwork', () => {
     expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_FOGGED);
   });
 
+  it('executes script waypoint permanent-reveal actions using raw and offset source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaScout', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 0 }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericaScout', 16, 16), // id 1
+    ], 256, 256);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 91,
+          name: 'RevealPoint',
+          position: { x: 220, y: 220, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.update(1 / 30);
+
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 289, // MAP_REVEAL_PERMANENTLY_AT_WAYPOINT (raw id)
+      params: ['RevealPoint', 35, 'America', 'LookAlpha'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_CLEAR);
+
+    expect(logic.executeScriptAction({
+      actionType: 290, // MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT (raw id)
+      params: ['LookAlpha'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_FOGGED);
+
+    expect(logic.executeScriptAction({
+      actionType: 494, // MAP_REVEAL_PERMANENTLY_AT_WAYPOINT (offset id)
+      params: ['RevealPoint', 35, 'America', 'LookBeta'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_CLEAR);
+
+    expect(logic.executeScriptAction({
+      actionType: 495, // MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT (offset id)
+      params: ['LookBeta'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_FOGGED);
+
+    expect(logic.executeScriptAction({
+      actionType: 289,
+      params: ['MissingWaypoint', 35, 'America', 'LookGamma'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 290,
+      params: ['MissingLook'],
+    })).toBe(false);
+  });
+
   it('executes script repulsor actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

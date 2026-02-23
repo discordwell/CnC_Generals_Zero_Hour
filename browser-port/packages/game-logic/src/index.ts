@@ -4242,6 +4242,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [483, 'TEAM_HUNT_WITH_COMMAND_BUTTON'],
   [287, 'OBJECTLIST_ADDOBJECTTYPE'],
   [288, 'OBJECTLIST_REMOVEOBJECTTYPE'],
+  [289, 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT'],
+  [290, 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT'],
   [291, 'PLAYER_RELATES_PLAYER'],
   [293, 'RADAR_DISABLE'],
   [294, 'RADAR_ENABLE'],
@@ -4355,6 +4357,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [485, 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'],
   [486, 'TEAM_FOLLOW_WAYPOINTS_EXACT'],
   [487, 'NAMED_FOLLOW_WAYPOINTS_EXACT'],
+  [494, 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT'],
+  [495, 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4642,6 +4646,14 @@ export class GameLogicSubsystem implements Subsystem {
     pathName: string;
     finalX: number;
     finalZ: number;
+  }>();
+  /** Source parity subset: ScriptEngine named map reveals keyed by look-name token. */
+  private readonly scriptNamedMapRevealByName = new Map<string, {
+    playerIndex: number;
+    worldX: number;
+    worldZ: number;
+    radius: number;
+    applied: boolean;
   }>();
   /** Source parity: evaluateUnitHasEmptied transport-status cache keyed by entity id. */
   private readonly scriptTransportStatusByEntityId = new Map<number, { frameNumber: number; unitCount: number }>();
@@ -8189,6 +8201,17 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptRevealMapEntirePermanently(
           false,
           readString(0, ['side', 'playerName', 'player']),
+        );
+      case 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT':
+        return this.executeScriptRevealMapAtWaypointPermanently(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['radius', 'radiusToReveal']),
+          readSide(2, ['side', 'playerName', 'player']),
+          readString(3, ['lookName', 'mapLookName', 'namedReveal']),
+        );
+      case 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT':
+        return this.executeScriptUndoRevealMapAtWaypointPermanently(
+          readString(0, ['lookName', 'mapLookName', 'namedReveal']),
         );
       case 'NAMED_SET_REPULSOR':
         return this.executeScriptNamedSetRepulsor(
@@ -31724,6 +31747,116 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  /**
+   * Source parity subset: ScriptActions::doRevealMapAtWaypointPermanent.
+   * Creates/replaces a named reveal and applies it immediately.
+   */
+  private executeScriptRevealMapAtWaypointPermanently(
+    waypointName: string,
+    radiusToReveal: number,
+    side: string,
+    lookName: string,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    const normalizedSide = this.normalizeSide(side);
+    const normalizedLookName = this.normalizeScriptVariableName(lookName);
+    if (!waypoint || !normalizedSide || !normalizedLookName) {
+      return false;
+    }
+
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return false;
+    }
+
+    const playerIndex = this.resolvePlayerIndexForSide(normalizedSide);
+    if (playerIndex < 0) {
+      return false;
+    }
+
+    const radius = Number.isFinite(radiusToReveal) ? Math.max(0, radiusToReveal) : 0;
+    const existing = this.scriptNamedMapRevealByName.get(normalizedLookName);
+    if (existing?.applied) {
+      grid.removeLooker(existing.playerIndex, existing.worldX, existing.worldZ, existing.radius);
+    }
+
+    this.scriptNamedMapRevealByName.set(normalizedLookName, {
+      playerIndex,
+      worldX: waypoint.x,
+      worldZ: waypoint.z,
+      radius,
+      applied: false,
+    });
+
+    return this.applyNamedScriptMapReveal(normalizedLookName);
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doUndoRevealMapAtWaypointPermanent.
+   * Removes active reveal and deletes the named reveal definition.
+   */
+  private executeScriptUndoRevealMapAtWaypointPermanently(lookName: string): boolean {
+    const normalizedLookName = this.normalizeScriptVariableName(lookName);
+    if (!normalizedLookName || !this.scriptNamedMapRevealByName.has(normalizedLookName)) {
+      return false;
+    }
+    this.undoNamedScriptMapReveal(normalizedLookName);
+    return this.removeNamedScriptMapReveal(normalizedLookName);
+  }
+
+  private applyNamedScriptMapReveal(lookName: string): boolean {
+    const normalizedLookName = this.normalizeScriptVariableName(lookName);
+    if (!normalizedLookName) {
+      return false;
+    }
+    const reveal = this.scriptNamedMapRevealByName.get(normalizedLookName);
+    const grid = this.fogOfWarGrid;
+    if (!reveal || !grid) {
+      return false;
+    }
+    if (!reveal.applied) {
+      grid.addLooker(reveal.playerIndex, reveal.worldX, reveal.worldZ, reveal.radius);
+      reveal.applied = true;
+    }
+    return true;
+  }
+
+  private undoNamedScriptMapReveal(lookName: string): boolean {
+    const normalizedLookName = this.normalizeScriptVariableName(lookName);
+    if (!normalizedLookName) {
+      return false;
+    }
+    const reveal = this.scriptNamedMapRevealByName.get(normalizedLookName);
+    if (!reveal) {
+      return false;
+    }
+    if (reveal.applied && this.fogOfWarGrid) {
+      this.fogOfWarGrid.removeLooker(reveal.playerIndex, reveal.worldX, reveal.worldZ, reveal.radius);
+    }
+    reveal.applied = false;
+    return true;
+  }
+
+  private removeNamedScriptMapReveal(lookName: string): boolean {
+    const normalizedLookName = this.normalizeScriptVariableName(lookName);
+    if (!normalizedLookName) {
+      return false;
+    }
+    return this.scriptNamedMapRevealByName.delete(normalizedLookName);
+  }
+
+  private clearScriptNamedMapReveals(): void {
+    const grid = this.fogOfWarGrid;
+    if (grid) {
+      for (const reveal of this.scriptNamedMapRevealByName.values()) {
+        if (reveal.applied) {
+          grid.removeLooker(reveal.playerIndex, reveal.worldX, reveal.worldZ, reveal.radius);
+        }
+      }
+    }
+    this.scriptNamedMapRevealByName.clear();
+  }
+
   private setMapRevealEntirePermanentlyForSide(side: string, reveal: boolean): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
@@ -46049,6 +46182,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptTriggerEnterExitFrameByEntityId.clear();
     this.scriptCompletedWaypointPathsByEntityId.clear();
     this.scriptPendingWaypointPathByEntityId.clear();
+    this.clearScriptNamedMapReveals();
     this.scriptTransportStatusByEntityId.clear();
     this.dynamicWaterUpdates.length = 0;
     this.loadedMapData = null;
