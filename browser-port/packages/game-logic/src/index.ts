@@ -4174,6 +4174,11 @@ interface ScriptSequentialScriptState {
   nextScript: ScriptSequentialScriptState | null;
 }
 
+interface ScriptAttackAreaState {
+  triggerIndex: number;
+  nextEnemyScanFrame: number;
+}
+
 interface DynamicWaterUpdateState {
   waterIndex: number;
   targetHeight: number;
@@ -5151,6 +5156,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptCompletedMusic: ScriptMusicCompletedEvent[] = [];
   /** Source parity subset: ScriptEngine team registry keyed by uppercase team name. */
   private readonly scriptTeamsByName = new Map<string, ScriptTeamRecord>();
+  /** Source parity subset: AIAttackAreaState runtime keyed by attacker entity id. */
+  private readonly scriptAttackAreaStateByEntityId = new Map<number, ScriptAttackAreaState>();
   /** Source parity: ScriptEngine sequential script queue. */
   private readonly scriptSequentialScripts: ScriptSequentialScriptState[] = [];
   /** Source parity: ScriptEngine script lists loaded from map SidesList. */
@@ -6361,6 +6368,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateDeployStyleEntities();
     this.updateTurretAI();
     this.updateCombat();
+    this.updateScriptAttackArea();
     this.updateCommandButtonHunt();
     this.updateIdleAutoTargeting();
     this.updateGuardBehavior();
@@ -18026,8 +18034,83 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: AIAttackAreaState::onEnter randomizes first scan to
+   * spread work, then scans every ENEMY_SCAN_RATE frames.
+   */
+  private setScriptAttackAreaState(entityId: number, triggerIndex: number): void {
+    const firstScanDelay = this.gameRandom.nextRange(0, LOGIC_FRAME_RATE);
+    this.scriptAttackAreaStateByEntityId.set(entityId, {
+      triggerIndex,
+      nextEnemyScanFrame: this.frameCounter + firstScanDelay,
+    });
+  }
+
+  private updateScriptAttackAreaEntity(
+    attacker: MapEntity,
+    state: ScriptAttackAreaState,
+    forceScan: boolean,
+  ): void {
+    const trigger = this.mapTriggerRegions[state.triggerIndex];
+    if (!trigger) {
+      this.scriptAttackAreaStateByEntityId.delete(attacker.id);
+      return;
+    }
+
+    if (!forceScan && this.frameCounter < state.nextEnemyScanFrame) {
+      return;
+    }
+    state.nextEnemyScanFrame = this.frameCounter + LOGIC_FRAME_RATE;
+
+    const currentTargetId = attacker.attackTargetEntityId;
+    if (currentTargetId !== null) {
+      const currentTarget = this.spawnedEntities.get(currentTargetId);
+      if (
+        currentTarget
+        && !currentTarget.destroyed
+        && !this.isScriptEntityEffectivelyDead(currentTarget)
+        && this.getTeamRelationship(attacker, currentTarget) === RELATIONSHIP_ENEMIES
+        && this.isPointInsideTriggerRegion(trigger, currentTarget.x, currentTarget.z)
+        && this.canAttackerTargetEntity(attacker, currentTarget, 'SCRIPT')
+      ) {
+        return;
+      }
+      this.clearAttackTarget(attacker.id);
+    }
+
+    const victim = this.findScriptClosestEnemyInTriggerArea(attacker, state.triggerIndex);
+    if (victim) {
+      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+    }
+  }
+
+  /**
+   * Source parity subset: AIAttackAreaState::update.
+   * Re-evaluates scripted attack-area targets once per ENEMY_SCAN_RATE.
+   */
+  private updateScriptAttackArea(): void {
+    if (this.scriptAttackAreaStateByEntityId.size === 0) {
+      return;
+    }
+
+    for (const [entityId, state] of this.scriptAttackAreaStateByEntityId) {
+      const attacker = this.spawnedEntities.get(entityId);
+      if (!attacker || attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
+        this.scriptAttackAreaStateByEntityId.delete(entityId);
+        continue;
+      }
+      // Source parity: AI_ATTACK_AREA is only valid for mobile, non-projectile units.
+      if (!attacker.canMove || attacker.kindOf.has('PROJECTILE')) {
+        this.scriptAttackAreaStateByEntityId.delete(entityId);
+        continue;
+      }
+
+      this.updateScriptAttackAreaEntity(attacker, state, false);
+    }
+  }
+
+  /**
    * Source parity subset: ScriptActions::doNamedAttackArea.
-   * TODO(source-parity): port persistent AIAttackAreaState area-scanning behavior.
+   * Mirrors AIAttackAreaState by storing area intent and scanning for victims over time.
    */
   private executeScriptNamedAttackArea(attackerEntityId: number, triggerName: string): boolean {
     const attacker = this.spawnedEntities.get(attackerEntityId);
@@ -18038,9 +18121,10 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.cancelEntityCommandPathActions(attacker.id);
     this.clearAttackTarget(attacker.id);
-    const victim = this.findScriptClosestEnemyInTriggerArea(attacker, area.triggerIndex);
-    if (victim) {
-      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+    this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
+    const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
+    if (attackAreaState) {
+      this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
     }
     return true;
   }
@@ -18098,9 +18182,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
       this.cancelEntityCommandPathActions(attacker.id);
       this.clearAttackTarget(attacker.id);
-      const victim = this.findScriptClosestEnemyInTriggerArea(attacker, area.triggerIndex);
-      if (victim) {
-        this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+      this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
+      const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
+      if (attackAreaState) {
+        this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
       }
     }
 
@@ -33159,6 +33244,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingEnterObjectActions.delete(entityId);
     this.pendingRepairDockActions.delete(entityId);
     this.pendingCombatDropActions.delete(entityId);
+    this.scriptAttackAreaStateByEntityId.delete(entityId);
     this.clearChinookCombatDropIgnoredObstacle(entityId);
     this.pendingGarrisonActions.delete(entityId);
     this.pendingTransportActions.delete(entityId);
@@ -35187,6 +35273,7 @@ export class GameLogicSubsystem implements Subsystem {
       for (const team of this.scriptTeamsByName.values()) {
         team.memberEntityIds.delete(entityId);
       }
+      this.scriptAttackAreaStateByEntityId.delete(entityId);
       this.scriptTransportStatusByEntityId.delete(entityId);
       this.notifyScriptObjectCreationOrDestruction();
     }
@@ -53387,6 +53474,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCompletedAudio.length = 0;
     this.scriptCompletedMusic.length = 0;
     this.scriptTeamsByName.clear();
+    this.scriptAttackAreaStateByEntityId.clear();
     this.scriptSequentialScripts.length = 0;
     this.mapScriptLists.length = 0;
     this.mapScriptsByNameUpper.clear();

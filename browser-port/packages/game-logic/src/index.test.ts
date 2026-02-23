@@ -37636,6 +37636,93 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('reacquires attack-area victims over time for named scripted attack-area orders', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfLoco', 80),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 0,
+          AttackRange: 220,
+          DelayBetweenShots: 1000,
+          WeaponSpeed: 9999,
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericaInfantry', 10, 10), // id 1 attacker
+      makeMapObject('ChinaInfantry', 50, 50), // id 2 initial area victim
+      makeMapObject('ChinaInfantry', 90, 90), // id 3 enters area later
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'AttackAreaA',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40, z: 0 },
+        { x: 60, y: 40, z: 0 },
+        { x: 60, y: 60, z: 0 },
+        { x: 40, y: 60, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+      spawnedEntities: Map<number, {
+        attackTargetEntityId: number | null;
+        autoTargetScanNextFrame: number;
+        x: number;
+        z: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 47, // NAMED_ATTACK_AREA
+      params: [1, 'AttackAreaA'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(2);
+
+    privateApi.spawnedEntities.get(1)!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(2), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    const delayedVictim = privateApi.spawnedEntities.get(3);
+    expect(delayedVictim).toBeDefined();
+    delayedVictim!.x = 50;
+    delayedVictim!.z = 52;
+
+    for (let i = 0; i < 40; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(3);
+  });
+
   it('executes script player sell/build toggles actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
