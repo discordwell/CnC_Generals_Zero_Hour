@@ -30089,6 +30089,74 @@ describe('Script condition groundwork', () => {
     });
   });
 
+  it('executes script commandbar add/remove button actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [8, 0, 0],
+            ExitDelay: 0,
+          }),
+        ], {
+          CommandSet: 'CommandSet_WarFactory',
+        }),
+        makeObjectDef('BuildableUnit', 'America', ['VEHICLE'], [], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_BuildableUnit', {
+          Command: 'UNIT_BUILD',
+          Object: 'BuildableUnit',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('CommandSet_WarFactory', {
+          1: 'Command_BuildableUnit',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('WarFactory', 12, 12)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+
+    expect(logic.executeScriptAction({
+      actionType: 307, // COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE (raw id)
+      params: ['Command_BuildableUnit', 'WarFactory'],
+    })).toBe(true);
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+    logic.update(1 / 30);
+    expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
+    expect(logic.getSideCredits('America')).toBe(500);
+
+    expect(logic.executeScriptAction({
+      actionType: 513, // COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT (offset id)
+      params: ['Command_BuildableUnit', 'WarFactory', 1],
+    })).toBe(true);
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+    logic.update(1 / 30);
+    expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+    expect(logic.getSideCredits('America')).toBe(400);
+
+    expect(logic.executeScriptAction({
+      actionType: 512, // COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE (offset id)
+      params: ['Command_BuildableUnit', 'WarFactory'],
+    })).toBe(true);
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+    logic.update(1 / 30);
+    expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+    expect(logic.getSideCredits('America')).toBe(400);
+  });
+
   it('executes script buildability-override action using source action id', () => {
     const bundle = makeBundle({
       objects: [

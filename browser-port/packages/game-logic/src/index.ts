@@ -15,6 +15,7 @@ import {
   IniDataRegistry,
   type ArmorDef,
   type CommandButtonDef,
+  type CommandSetDef,
   type LocomotorDef,
   type SpecialPowerDef,
   type ObjectDef,
@@ -4274,6 +4275,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
   [301, 'PLAYER_SELECT_SKILLSET'],
+  [307, 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE'],
+  [308, 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT'],
   [310, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [311, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [312, 'TEAM_GUARD_SUPPLY_CENTER'],
@@ -4403,6 +4406,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [504, 'UNIT_AFFECT_OBJECT_PANEL_FLAGS'],
   [505, 'TEAM_AFFECT_OBJECT_PANEL_FLAGS'],
   [506, 'PLAYER_SELECT_SKILLSET'],
+  [512, 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE'],
+  [513, 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT'],
   [515, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [516, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [517, 'TEAM_GUARD_SUPPLY_CENTER'],
@@ -4565,6 +4570,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly bridgeDamageStateByControlEntity = new Map<number, boolean>();
   /** Source parity: GameLogic::m_thingTemplateBuildableOverrides script-action runtime overrides. */
   private readonly thingTemplateBuildableOverrides = new Map<string, BuildableStatus>();
+  /** Source parity: GameLogic::setControlBarOverride keyed by command set + slot. */
+  private readonly commandSetButtonSlotOverrides = new Map<string, Map<number, string | null>>();
   private readonly teamRelationshipOverrides = new Map<string, number>();
   private readonly playerRelationshipOverrides = new Map<string, number>();
   private readonly sideCredits = new Map<string, number>();
@@ -8543,6 +8550,17 @@ export class GameLogicSubsystem implements Subsystem {
           readSide(0, ['side', 'playerName', 'player']),
           readInteger(1, ['skillset', 'value']),
         );
+      case 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE':
+        return this.executeScriptCommandBarRemoveButtonObjectType(
+          readString(0, ['buttonName', 'commandButton', 'button']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+        );
+      case 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT':
+        return this.executeScriptCommandBarAddButtonObjectTypeSlot(
+          readString(0, ['buttonName', 'commandButton', 'button']),
+          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
+          readInteger(2, ['slotNum', 'slot', 'value']),
+        );
       case 'UNIT_AFFECT_OBJECT_PANEL_FLAGS':
         return this.executeScriptAffectObjectPanelFlagsUnit(
           readEntityId(0, ['entityId', 'unitId', 'named']),
@@ -9731,7 +9749,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const matches: CommandButtonDef[] = [];
     for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
-      const slottedCommandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      const slottedCommandButtonName = this.resolveCommandSetSlotButtonName(commandSetDef, buttonSlot);
       if (!slottedCommandButtonName) {
         continue;
       }
@@ -12945,6 +12963,83 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.thingTemplateBuildableOverrides.set(normalizedTemplateName, buildableStatus);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doRemoveCommandBarButton.
+   */
+  private executeScriptCommandBarRemoveButtonObjectType(
+    buttonName: string,
+    objectType: string,
+  ): boolean {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const objectDef = this.resolveObjectDefByTemplateName(objectType);
+    if (!objectDef) {
+      return false;
+    }
+    const commandSetName = readStringField(objectDef.fields, ['CommandSet'])?.trim().toUpperCase() ?? '';
+    if (!commandSetName || commandSetName === 'NONE') {
+      return false;
+    }
+    const commandSetDef = findCommandSetDefByName(registry, commandSetName);
+    if (!commandSetDef) {
+      return false;
+    }
+    const normalizedButtonName = buttonName.trim().toUpperCase();
+    if (!normalizedButtonName) {
+      return false;
+    }
+
+    for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
+      const slottedButtonName = this.resolveCommandSetSlotButtonName(commandSetDef, buttonSlot);
+      if (!slottedButtonName) {
+        continue;
+      }
+      if (slottedButtonName.trim().toUpperCase() !== normalizedButtonName) {
+        continue;
+      }
+      this.setScriptCommandSetButtonOverride(commandSetName, buttonSlot, null);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doAddCommandBarButton.
+   */
+  private executeScriptCommandBarAddButtonObjectTypeSlot(
+    buttonName: string,
+    objectType: string,
+    slotNum: number,
+  ): boolean {
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const objectDef = this.resolveObjectDefByTemplateName(objectType);
+    if (!objectDef) {
+      return false;
+    }
+    const commandSetName = readStringField(objectDef.fields, ['CommandSet'])?.trim().toUpperCase() ?? '';
+    if (!commandSetName || commandSetName === 'NONE') {
+      return false;
+    }
+    const commandButtonDef = findCommandButtonDefByName(registry, buttonName);
+    if (!commandButtonDef) {
+      return false;
+    }
+
+    const slot = Math.trunc(slotNum);
+    if (slot < 1 || slot > 18) {
+      return false;
+    }
+
+    this.setScriptCommandSetButtonOverride(commandSetName, slot, commandButtonDef.name);
     return true;
   }
 
@@ -16802,6 +16897,7 @@ export class GameLogicSubsystem implements Subsystem {
       resolvedObjects: 0,
       unresolvedObjects: 0,
     };
+    this.commandSetButtonSlotOverrides.clear();
   }
 
   dispose(): void {
@@ -34462,7 +34558,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
-      const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      const commandButtonName = this.resolveCommandSetSlotButtonName(commandSetDef, buttonSlot);
       if (!commandButtonName) {
         continue;
       }
@@ -34534,7 +34630,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const result: string[] = [];
     for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
-      const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      const commandButtonName = this.resolveCommandSetSlotButtonName(commandSetDef, buttonSlot);
       if (!commandButtonName) continue;
 
       const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
@@ -34847,7 +34943,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
-      const commandButtonName = readStringField(commandSetDef.fields, [String(buttonSlot)]);
+      const commandButtonName = this.resolveCommandSetSlotButtonName(commandSetDef, buttonSlot);
       if (!commandButtonName) {
         continue;
       }
@@ -34901,6 +34997,37 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
     return baseCommandSet;
+  }
+
+  private setScriptCommandSetButtonOverride(
+    commandSetName: string,
+    slot: number,
+    commandButtonName: string | null,
+  ): void {
+    const normalizedCommandSetName = commandSetName.trim().toUpperCase();
+    if (!normalizedCommandSetName || slot < 1 || slot > 18) {
+      return;
+    }
+    let slotOverrides = this.commandSetButtonSlotOverrides.get(normalizedCommandSetName);
+    if (!slotOverrides) {
+      slotOverrides = new Map<number, string | null>();
+      this.commandSetButtonSlotOverrides.set(normalizedCommandSetName, slotOverrides);
+    }
+    if (commandButtonName === null) {
+      slotOverrides.set(slot, null);
+      return;
+    }
+    const normalizedCommandButtonName = commandButtonName.trim().toUpperCase();
+    slotOverrides.set(slot, normalizedCommandButtonName || null);
+  }
+
+  private resolveCommandSetSlotButtonName(commandSetDef: CommandSetDef, slot: number): string {
+    const normalizedCommandSetName = commandSetDef.name.trim().toUpperCase();
+    const slotOverrides = this.commandSetButtonSlotOverrides.get(normalizedCommandSetName);
+    if (slotOverrides && slotOverrides.has(slot)) {
+      return slotOverrides.get(slot) ?? '';
+    }
+    return readStringField(commandSetDef.fields, [String(slot)]) ?? '';
   }
 
   private cancelUpgradeProduction(entityId: number, upgradeName: string): boolean {
@@ -46780,6 +46907,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraLookTowardObjectState = null;
     this.scriptCameraLookTowardWaypointState = null;
     this.thingTemplateBuildableOverrides.clear();
+    this.commandSetButtonSlotOverrides.clear();
     this.scriptObjectCountBySideAndType.clear();
     this.scriptObjectTypeListsByName.clear();
     this.scriptExistedEntityIds.clear();
