@@ -4382,6 +4382,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [98, 'SOUND_AMBIENT_RESUME'],
   [99, 'MUSIC_SET_TRACK'],
   [102, 'MAP_REVEAL_ALL'],
+  [104, 'EXIT_SPECIFIC_BUILDING'],
+  [106, 'TEAM_EXIT_ALL_BUILDINGS'],
+  [109, 'NAMED_EXIT_BUILDING'],
   [114, 'SETUP_CAMERA'],
   [115, 'CAMERA_LETTERBOX_BEGIN'],
   [116, 'CAMERA_LETTERBOX_END'],
@@ -9487,6 +9490,18 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['musicName', 'trackName', 'track']),
           readBoolean(1, ['fadeOut', 'fadeout']),
           readBoolean(2, ['fadeIn', 'fadein']),
+        );
+      case 'EXIT_SPECIFIC_BUILDING':
+        return this.executeScriptExitSpecificBuilding(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'buildingId']),
+        );
+      case 'TEAM_EXIT_ALL_BUILDINGS':
+        return this.executeScriptTeamExitAllBuildings(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'NAMED_EXIT_BUILDING':
+        return this.executeScriptNamedExitBuilding(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
         );
       case 'MOVE_CAMERA_TO':
         return this.requestScriptMoveCameraTo(
@@ -15110,6 +15125,86 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doExitSpecificBuilding.
+   * Orders the specified container/building to evacuate contained units.
+   */
+  private executeScriptExitSpecificBuilding(containerEntityId: number): boolean {
+    const container = this.spawnedEntities.get(containerEntityId);
+    if (!container || container.destroyed) {
+      return false;
+    }
+    if (!container.containProfile) {
+      return false;
+    }
+    this.applyCommand({
+      type: 'evacuate',
+      entityId: container.id,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedExitBuilding.
+   * Orders the specified unit to exit its current container/building.
+   */
+  private executeScriptNamedExitBuilding(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    if (
+      entity.garrisonContainerId === null
+      && entity.transportContainerId === null
+      && entity.tunnelContainerId === null
+    ) {
+      return false;
+    }
+    this.applyCommand({
+      type: 'exitContainer',
+      entityId: entity.id,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamExitAll.
+   * Issues evacuation/exit commands for each team member depending on its containment state.
+   */
+  private executeScriptTeamExitAllBuildings(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    let issuedAny = false;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+        this.applyCommand({
+          type: 'evacuate',
+          entityId: entity.id,
+        });
+        issuedAny = true;
+        continue;
+      }
+      if (
+        entity.garrisonContainerId !== null
+        || entity.transportContainerId !== null
+        || entity.tunnelContainerId !== null
+      ) {
+        this.applyCommand({
+          type: 'exitContainer',
+          entityId: entity.id,
+        });
+        issuedAny = true;
+      }
+    }
+    return issuedAny;
   }
 
   /**

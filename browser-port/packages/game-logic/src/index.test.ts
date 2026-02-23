@@ -31380,6 +31380,92 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script building-exit actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CivilianBunker', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 600, InitialHealth: 600 }),
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_Garrison', {
+            ContainMax: 4,
+          }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 6,
+        }),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CivilianBunker', 40, 40), // id 1
+        makeMapObject('Passenger', 40, 40), // id 2
+        makeMapObject('Passenger', 40, 40), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('ExitTeam', [2, 3])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        garrisonContainerId: number | null;
+      }>;
+    };
+
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 3, targetBuildingId: 1 });
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(privateApi.spawnedEntities.get(2)?.garrisonContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 109, // NAMED_EXIT_BUILDING
+      params: [2],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 104, // EXIT_SPECIFIC_BUILDING
+      params: [1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 3, targetBuildingId: 1 });
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.executeScriptAction({
+      actionType: 106, // TEAM_EXIT_ALL_BUILDINGS
+      params: ['ExitTeam'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 109,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 104,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['MissingTeam'],
+    })).toBe(false);
+  });
+
   it('executes script named-set-topple-direction action using source action id', () => {
     const bundle = makeBundle({
       objects: [
