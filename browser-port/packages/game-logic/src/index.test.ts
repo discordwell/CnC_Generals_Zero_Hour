@@ -36447,6 +36447,108 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptChooseVictimAlwaysUsesNormal()).toBe(false);
   });
 
+  it('executes script damage/delete/kill actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaInfantry', 10, 10), // id 1 named damage
+        makeMapObject('AmericaInfantry', 12, 10), // id 2 named delete
+        makeMapObject('AmericaInfantry', 14, 10), // id 3 team delete
+        makeMapObject('AmericaInfantry', 16, 10), // id 4 team delete
+        makeMapObject('AmericaInfantry', 18, 10), // id 5 named kill
+        makeMapObject('AmericaInfantry', 20, 10), // id 6 team kill
+        makeMapObject('AmericaInfantry', 22, 10), // id 7 team kill
+        makeMapObject('AmericaInfantry', 24, 10), // id 8 player kill
+        makeMapObject('ChinaInfantry', 26, 10), // id 9 survivor
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('DeleteTeam', [3, 4])).toBe(true);
+    expect(logic.setScriptTeamMembers('KillTeam', [6, 7])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        destroyed: boolean;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 70, // NAMED_DAMAGE
+      params: [1, 999],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.destroyed).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 71, // NAMED_DELETE
+      params: [2],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.destroyed).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 72, // TEAM_DELETE
+      params: ['DeleteTeam'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.destroyed).toBe(true);
+    expect(privateApi.spawnedEntities.get(4)?.destroyed).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 73, // NAMED_KILL
+      params: [5],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(5)?.destroyed).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 74, // TEAM_KILL
+      params: ['KillTeam'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(6)?.destroyed).toBe(true);
+    expect(privateApi.spawnedEntities.get(7)?.destroyed).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 75, // PLAYER_KILL
+      params: ['America'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(8)?.destroyed).toBe(true);
+    expect(privateApi.spawnedEntities.get(9)?.destroyed).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 70,
+      params: [999, 100],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 71,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 72,
+      params: ['MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 73,
+      params: [999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 74,
+      params: ['MissingTeam'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 75,
+      params: ['MissingSide'],
+    })).toBe(false);
+  });
+
   it('executes script movie and letterbox actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

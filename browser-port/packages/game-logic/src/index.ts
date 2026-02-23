@@ -4379,6 +4379,12 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [56, 'NAMED_FOLLOW_WAYPOINTS'],
   [57, 'NAMED_GUARD'],
   [58, 'TEAM_GUARD'],
+  [70, 'NAMED_DAMAGE'],
+  [71, 'NAMED_DELETE'],
+  [72, 'TEAM_DELETE'],
+  [73, 'NAMED_KILL'],
+  [74, 'TEAM_KILL'],
+  [75, 'PLAYER_KILL'],
   [76, 'DISPLAY_TEXT'],
   [77, 'CAMEO_FLASH'],
   [78, 'NAMED_FLASH'],
@@ -9328,6 +9334,32 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DEFEAT':
       case 'LOCALDEFEAT':
         return this.setScriptLocalGameEndState(true);
+      case 'NAMED_DAMAGE':
+        return this.executeScriptNamedDamage(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+          readInteger(1, ['damageAmount', 'damage', 'amount']),
+        );
+      case 'NAMED_DELETE':
+        return this.executeScriptNamedDelete(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+        );
+      case 'TEAM_DELETE':
+        return this.executeScriptTeamDelete(
+          readString(0, ['teamName', 'team']),
+          false,
+        );
+      case 'NAMED_KILL':
+        return this.executeScriptNamedKill(
+          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
+        );
+      case 'TEAM_KILL':
+        return this.executeScriptTeamKill(
+          readString(0, ['teamName', 'team']),
+        );
+      case 'PLAYER_KILL':
+        return this.executeScriptPlayerKill(
+          readSide(0, ['side', 'playerName', 'player']),
+        );
       case 'TEAM_DELETE_LIVING':
         return this.executeScriptTeamDeleteLiving(
           readString(0, ['teamName', 'team']),
@@ -16634,22 +16666,113 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamDelete(ignoreDead=true).
-   * TEAM_DELETE_LIVING destroys current non-destroyed team members.
+   * Source parity: ScriptActions::doNamedDamage.
+   * Applies UNRESISTABLE damage with source INVALID_ID.
    */
-  private executeScriptTeamDeleteLiving(teamName: string): boolean {
+  private executeScriptNamedDamage(entityId: number, damageAmount: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    this.applyWeaponDamageAmount(null, entity, damageAmount, 'UNRESISTABLE', 'NORMAL');
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedDelete.
+   * Uses destroyObject semantics (silent immediate removal, no death pipeline).
+   */
+  private executeScriptNamedDelete(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    this.silentDestroyEntity(entity.id);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamDelete.
+   * Uses destroyObject semantics on team members and optionally skips effectively-dead ones.
+   */
+  private executeScriptTeamDelete(teamName: string, ignoreDead: boolean): boolean {
     const team = this.getScriptTeamRecord(teamName);
     if (!team) {
       return false;
     }
 
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
+      if (ignoreDead && this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
+      }
+      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+        this.evacuateContainedEntities(entity, entity.x, entity.z, null);
+      }
+      this.silentDestroyEntity(entity.id);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedKill.
+   */
+  private executeScriptNamedKill(entityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+    this.markEntityDestroyed(entity.id, -1);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamKill.
+   */
+  private executeScriptTeamKill(teamName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+        this.evacuateContainedEntities(entity, entity.x, entity.z, null);
+      }
+    }
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.isScriptEntityEffectivelyDead(entity) && !this.isBeaconEntity(entity)) {
         continue;
       }
       this.markEntityDestroyed(entity.id, -1);
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doPlayerKill.
+   */
+  private executeScriptPlayerKill(side: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!this.collectScriptKnownSides().has(normalizedSide)) {
+      return false;
+    }
+    this.killRemainingEntitiesForSide(normalizedSide);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamDelete(ignoreDead=true).
+   * TEAM_DELETE_LIVING destroys current non-destroyed team members.
+   */
+  private executeScriptTeamDeleteLiving(teamName: string): boolean {
+    return this.executeScriptTeamDelete(teamName, true);
   }
 
   /**
