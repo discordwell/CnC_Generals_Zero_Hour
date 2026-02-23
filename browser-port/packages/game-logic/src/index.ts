@@ -4263,6 +4263,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [153, 'TEAM_TRANSFER_TO_PLAYER'],
   [154, 'PLAYER_SET_MONEY'],
   [155, 'PLAYER_GIVE_MONEY'],
+  [168, 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT'],
+  [169, 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED'],
   [271, 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS'],
   [272, 'PLAYER_ADD_SKILLPOINTS'],
   [273, 'PLAYER_ADD_RANKLEVEL'],
@@ -4318,6 +4320,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [322, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
+  [373, 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT'],
+  [374, 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED'],
   [376, 'CAMERA_TETHER_NAMED'],
   [377, 'CAMERA_STOP_TETHER_NAMED'],
   [378, 'CAMERA_SET_DEFAULT'],
@@ -8126,6 +8130,18 @@ export class GameLogicSubsystem implements Subsystem {
           readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
           readString(1, ['specialPowerName', 'specialPower']),
         );
+      case 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT':
+        return this.executeScriptNamedFireSpecialPowerAtWaypoint(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['specialPowerName', 'specialPower']),
+          readString(2, ['waypointName', 'waypoint']),
+        );
+      case 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED':
+        return this.executeScriptNamedFireSpecialPowerAtNamed(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['specialPowerName', 'specialPower']),
+          readEntityId(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
       case 'IDLE_ALL_UNITS':
         return this.executeScriptIdleAllUnits();
       case 'RESUME_SUPPLY_TRUCKING':
@@ -11723,6 +11739,87 @@ export class GameLogicSubsystem implements Subsystem {
       return token.slice('KINDOF_'.length);
     }
     return token;
+  }
+
+  /**
+   * Source parity: ScriptActions::doSkirmishFireSpecialPowerAtMostCost.
+   * Resolves the enemy's most-costly area and fires the named special power at that location.
+   */
+  private executeScriptNamedFireSpecialPowerAtWaypoint(
+    entityId: number,
+    specialPowerName: string,
+    waypointName: string,
+  ): boolean {
+    const sourceEntity = this.spawnedEntities.get(entityId);
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!sourceEntity || sourceEntity.destroyed || !waypoint) {
+      return false;
+    }
+
+    const specialPowerToken = specialPowerName.trim();
+    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
+    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
+      return false;
+    }
+    if (!this.resolveSpecialPowerDefByName(normalizedSpecialPowerName)) {
+      return false;
+    }
+    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
+      return false;
+    }
+
+    this.applyCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: '',
+      specialPowerName: specialPowerToken,
+      commandOption: SCRIPT_COMMAND_OPTION_NEED_TARGET_POS,
+      issuingEntityIds: [sourceEntity.id],
+      sourceEntityId: sourceEntity.id,
+      targetEntityId: null,
+      targetX: waypoint.x,
+      targetZ: waypoint.z,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doNamedFireSpecialPowerAtNamed.
+   */
+  private executeScriptNamedFireSpecialPowerAtNamed(
+    entityId: number,
+    specialPowerName: string,
+    targetEntityId: number,
+  ): boolean {
+    const sourceEntity = this.spawnedEntities.get(entityId);
+    const targetEntity = this.spawnedEntities.get(targetEntityId);
+    if (!sourceEntity || sourceEntity.destroyed || !targetEntity || targetEntity.destroyed) {
+      return false;
+    }
+
+    const specialPowerToken = specialPowerName.trim();
+    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
+    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
+      return false;
+    }
+    if (!this.resolveSpecialPowerDefByName(normalizedSpecialPowerName)) {
+      return false;
+    }
+    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
+      return false;
+    }
+
+    this.applyCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: '',
+      specialPowerName: specialPowerToken,
+      commandOption: SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET,
+      issuingEntityIds: [sourceEntity.id],
+      sourceEntityId: sourceEntity.id,
+      targetEntityId: targetEntity.id,
+      targetX: null,
+      targetZ: null,
+    });
+    return true;
   }
 
   /**

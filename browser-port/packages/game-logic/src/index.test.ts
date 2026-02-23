@@ -33107,6 +33107,117 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script named-fire-special-power actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerCaster', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_AtWaypoint', {
+            SpecialPowerTemplate: 'ScriptPowerAtWaypoint',
+          }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_AtNamed', {
+            SpecialPowerTemplate: 'ScriptPowerAtNamed',
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('SpecialPowerTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 250, InitialHealth: 250 }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerAtWaypoint', { ReloadTime: 0 }),
+        makeSpecialPowerDef('ScriptPowerAtNamed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('SpecialPowerCaster', 12, 12), // id 1
+      makeMapObject('SpecialPowerTarget', 40, 20), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'SpecialPowerWaypoint',
+          position: { x: 64, y: 80, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 168, // NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT (raw id)
+      params: [1, 'ScriptPowerAtWaypoint', 'SpecialPowerWaypoint'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      commandButtonId: '',
+      targetEntityId: null,
+      targetX: 64,
+      targetZ: 80,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 373, // NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT (offset id)
+      params: [1, 'ScriptPowerAtWaypoint', 'SpecialPowerWaypoint'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATWAYPOINT',
+      dispatchType: 'POSITION',
+      targetEntityId: null,
+      targetX: 64,
+      targetZ: 80,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 169, // NAMED_FIRE_SPECIAL_POWER_AT_NAMED (raw id)
+      params: [1, 'ScriptPowerAtNamed', 2],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATNAMED',
+      dispatchType: 'OBJECT',
+      commandButtonId: '',
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 374, // NAMED_FIRE_SPECIAL_POWER_AT_NAMED (offset id)
+      params: [1, 'ScriptPowerAtNamed', 2],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERATNAMED',
+      dispatchType: 'OBJECT',
+      targetEntityId: 2,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 168,
+      params: [1, 'MissingPower', 'SpecialPowerWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 168,
+      params: [1, 'ScriptPowerAtWaypoint', 'MissingWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 169,
+      params: [1, 'ScriptPowerAtNamed', 999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 169,
+      params: [999, 'ScriptPowerAtNamed', 2],
+    })).toBe(false);
+  });
+
   it('executes script command-button ability actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
