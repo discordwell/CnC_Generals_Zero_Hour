@@ -31302,6 +31302,83 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptDebugMessageRequests()).toEqual([]);
   });
 
+  it('executes script emoticon actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 12, 12, { objectName: 'EmoteUnitA' }), // id 1
+      makeMapObject('Ranger', 14, 12, { objectName: 'EmoteUnitB' }), // id 2
+      makeMapObject('Ranger', 16, 12, { objectName: 'EmoteUnitC' }), // id 3
+    ], 64, 64);
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(64, 64));
+    expect(logic.setScriptTeamMembers('EmoteTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 488, // TEAM_SET_EMOTICON
+      params: ['EmoteTeam', 'Emotion_Happy', 1.5],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 489, // NAMED_SET_EMOTICON
+      params: [3, 'Emotion_Angry', -1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 489,
+      params: ['EmoteUnitA', '', 0],
+    })).toBe(true);
+    expect(logic.drainScriptEmoticonRequests()).toEqual([
+      {
+        entityId: 1,
+        emoticonName: 'Emotion_Happy',
+        durationFrames: 45,
+        frame: 0,
+      },
+      {
+        entityId: 2,
+        emoticonName: 'Emotion_Happy',
+        durationFrames: 45,
+        frame: 0,
+      },
+      {
+        entityId: 3,
+        emoticonName: 'Emotion_Angry',
+        durationFrames: -30,
+        frame: 0,
+      },
+      {
+        entityId: 1,
+        emoticonName: '',
+        durationFrames: 0,
+        frame: 0,
+      },
+    ]);
+    expect(logic.drainScriptEmoticonRequests()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 488,
+      params: ['MissingTeam', 'Emotion_Happy', 1],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 489,
+      params: [999, 'Emotion_Happy', 1],
+    })).toBe(false);
+
+    // Source parity subset: loading a map clears script bridge state.
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+    expect(logic.drainScriptEmoticonRequests()).toEqual([]);
+  });
+
   it('executes script infantry-lighting override actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

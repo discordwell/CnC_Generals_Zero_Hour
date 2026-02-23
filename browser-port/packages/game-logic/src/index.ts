@@ -4061,6 +4061,13 @@ interface ScriptDebugMessageRequestState {
   frame: number;
 }
 
+interface ScriptEmoticonRequestState {
+  entityId: number;
+  emoticonName: string;
+  durationFrames: number;
+  frame: number;
+}
+
 interface ScriptRadarEventState {
   x: number;
   y: number;
@@ -4878,6 +4885,8 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [485, 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'],
   [486, 'TEAM_FOLLOW_WAYPOINTS_EXACT'],
   [487, 'NAMED_FOLLOW_WAYPOINTS_EXACT'],
+  [488, 'TEAM_SET_EMOTICON'],
+  [489, 'NAMED_SET_EMOTICON'],
   [494, 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT'],
   [495, 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT'],
   [496, 'NAMED_SET_STEALTH_ENABLED'],
@@ -5251,6 +5260,8 @@ export class GameLogicSubsystem implements Subsystem {
   };
   /** Source parity subset: DEBUG_STRING/DEBUG_CRASH_BOX script messages. */
   private readonly scriptDebugMessageRequests: ScriptDebugMessageRequestState[] = [];
+  /** Source parity bridge: ScriptActions::doTeamEmoticon / doNamedEmoticon. */
+  private readonly scriptEmoticonRequests: ScriptEmoticonRequestState[] = [];
   /** Source parity bridge: ScriptActions::doCameraSetAudibleDistance (engine-side no-op). */
   private scriptCameraAudibleDistance = 0;
   /** Source parity bridge: ScriptActions::SET_FPS_LIMIT current max-FPS setting. */
@@ -9254,6 +9265,68 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
+  drainScriptEmoticonRequests(): ScriptEmoticonRequestState[] {
+    if (this.scriptEmoticonRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptEmoticonRequests.map((request) => ({ ...request }));
+    this.scriptEmoticonRequests.length = 0;
+    return requests;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedEmoticon.
+   * TODO(source-parity): wire requests to Drawable::setEmoticon in renderer bridge.
+   */
+  private executeScriptNamedSetEmoticon(
+    entityId: number,
+    emoticonName: string,
+    durationSeconds: number,
+  ): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    if (!entity || entity.destroyed) {
+      return false;
+    }
+
+    const durationFrames = Math.trunc(durationSeconds * LOGIC_FRAME_RATE);
+    this.scriptEmoticonRequests.push({
+      entityId: entity.id,
+      emoticonName,
+      durationFrames,
+      frame: this.frameCounter,
+    });
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamEmoticon (via AIGroup::groupSetEmoticon).
+   * TODO(source-parity): wire requests to Drawable::setEmoticon in renderer bridge.
+   */
+  private executeScriptTeamSetEmoticon(
+    teamName: string,
+    emoticonName: string,
+    durationSeconds: number,
+  ): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+
+    const durationFrames = Math.trunc(durationSeconds * LOGIC_FRAME_RATE);
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.scriptEmoticonRequests.push({
+        entityId: entity.id,
+        emoticonName,
+        durationFrames,
+        frame: this.frameCounter,
+      });
+    }
+    return true;
+  }
+
   setScriptCameraAudibleDistance(audibleDistance: number): void {
     if (!Number.isFinite(audibleDistance)) {
       return;
@@ -11454,6 +11527,18 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptTeamHuntWithCommandButton(
           readString(0, ['teamName', 'team']),
           readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
+        );
+      case 'TEAM_SET_EMOTICON':
+        return this.executeScriptTeamSetEmoticon(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['emoticonName', 'emoticon']),
+          readNumber(2, ['durationSeconds', 'seconds', 'duration', 'timeInSeconds']),
+        );
+      case 'NAMED_SET_EMOTICON':
+        return this.executeScriptNamedSetEmoticon(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['emoticonName', 'emoticon']),
+          readNumber(2, ['durationSeconds', 'seconds', 'duration', 'timeInSeconds']),
         );
       case 'OBJECTLIST_ADDOBJECTTYPE':
         return this.executeScriptObjectTypeListMaintenance(
@@ -22454,6 +22539,7 @@ export class GameLogicSubsystem implements Subsystem {
       randomness: 0,
     };
     this.scriptDebugMessageRequests.length = 0;
+    this.scriptEmoticonRequests.length = 0;
     this.scriptCameraAudibleDistance = 0;
     this.scriptFramesPerSecondLimit = 0;
     this.scriptUseFpsLimit = false;
@@ -53058,6 +53144,7 @@ export class GameLogicSubsystem implements Subsystem {
       randomness: 0,
     };
     this.scriptDebugMessageRequests.length = 0;
+    this.scriptEmoticonRequests.length = 0;
     this.scriptCameraAudibleDistance = 0;
     this.scriptFramesPerSecondLimit = 0;
     this.scriptUseFpsLimit = false;
