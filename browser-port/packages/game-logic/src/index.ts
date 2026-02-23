@@ -4396,6 +4396,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [84, 'PLAYER_TRANSFER_OWNERSHIP_PLAYER'],
   [85, 'NAMED_TRANSFER_OWNERSHIP_PLAYER'],
   [86, 'PLAYER_RELATES_PLAYER'],
+  [87, 'RADAR_CREATE_EVENT'],
   [88, 'RADAR_DISABLE'],
   [89, 'RADAR_ENABLE'],
   [90, 'MAP_REVEAL_AT_WAYPOINT'],
@@ -9781,6 +9782,11 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptWarehouseSetValue(
           readEntityId(0, ['entityId', 'unitId', 'named']),
           readInteger(1, ['cashValue', 'value', 'amount']),
+        );
+      case 'RADAR_CREATE_EVENT':
+        return this.executeScriptRadarCreateEvent(
+          readValue(0, ['position', 'coord3D', 'coord', 'location', 'waypoint']),
+          readInteger(1, ['eventType', 'type']),
         );
       case 'OBJECT_CREATE_RADAR_EVENT':
         return this.executeScriptObjectCreateRadarEvent(
@@ -16616,6 +16622,36 @@ export class GameLogicSubsystem implements Subsystem {
       ?? initializeWarehouseStateImpl(warehouse.supplyWarehouseProfile);
     warehouseState.currentBoxes = Math.ceil(cashValue / DEFAULT_SUPPLY_BOX_VALUE);
     this.supplyWarehouseStates.set(warehouse.id, warehouseState);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doRadarCreateEvent.
+   * Accepts Script coord3 parameters and waypoint-name fallback for map-script JSON parity.
+   */
+  private executeScriptRadarCreateEvent(position: unknown, eventType: number): boolean {
+    const coord3 = this.coerceScriptConditionCoord3(position);
+    if (coord3) {
+      this.recordScriptRadarEvent(coord3.x, coord3.z, coord3.y, eventType, null, null);
+      return true;
+    }
+
+    const waypointName = this.coerceScriptConditionString(position);
+    if (!waypointName) {
+      return false;
+    }
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    this.recordScriptRadarEvent(
+      waypoint.x,
+      this.resolveGroundHeight(waypoint.x, waypoint.z),
+      waypoint.z,
+      eventType,
+      null,
+      null,
+    );
     return true;
   }
 

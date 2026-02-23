@@ -30626,6 +30626,10 @@ describe('Script condition groundwork', () => {
     expect(logic.setScriptTeamMembers('StructureTeam', [3])).toBe(true);
 
     expect(logic.executeScriptAction({
+      actionType: 87, // RADAR_CREATE_EVENT
+      params: [{ x: 40, y: 50, z: 3 }, 2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
       actionType: 418, // OBJECT_CREATE_RADAR_EVENT
       params: [1, 3],
     })).toBe(true);
@@ -30639,22 +30643,32 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
 
     const radarEvents = logic.getScriptRadarEvents();
-    expect(radarEvents).toHaveLength(3);
+    expect(radarEvents).toHaveLength(4);
     expect(radarEvents[0]).toMatchObject({
+      x: 40,
+      y: 3,
+      z: 50,
+      eventType: 2,
+      sourceEntityId: null,
+      sourceTeamName: null,
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(radarEvents[1]).toMatchObject({
       eventType: 3,
       sourceEntityId: 1,
       sourceTeamName: null,
       frame: 0,
       expireFrame: 120,
     });
-    expect(radarEvents[1]).toMatchObject({
+    expect(radarEvents[2]).toMatchObject({
       eventType: 4,
       sourceEntityId: 1,
       sourceTeamName: 'ALPHATEAM',
       frame: 0,
       expireFrame: 120,
     });
-    expect(radarEvents[2]).toMatchObject({
+    expect(radarEvents[3]).toMatchObject({
       eventType: 5,
       sourceEntityId: 1,
       sourceTeamName: 'ALPHATEAM',
@@ -30670,6 +30684,10 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 418,
       params: [999, 4],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 87,
+      params: ['MissingWaypoint', 4],
     })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 419,
