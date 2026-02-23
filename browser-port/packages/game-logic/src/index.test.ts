@@ -31525,6 +31525,12 @@ describe('Script condition groundwork', () => {
     expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
 
     expect(logic.executeScriptAction({
+      actionType: 145, // MAP_SHROUD_AT_WAYPOINT (raw id)
+      params: ['RevealSpot', 40, 'America'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 220, 220)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
       actionType: 295, // MAP_REVEAL_AT_WAYPOINT (offset/collision id)
       params: ['RevealSpot', 40, 'MissingPlayerName'],
     })).toBe(true);
@@ -31535,9 +31541,18 @@ describe('Script condition groundwork', () => {
       params: ['RevealSpot', 40, 'GLA'],
     })).toBe(true);
     expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_FOGGED);
+    expect(logic.executeScriptAction({
+      actionType: 350, // MAP_SHROUD_AT_WAYPOINT (offset/collision id)
+      params: ['RevealSpot', 40, 'GLA'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('GLA', 220, 220)).toBe(CELL_SHROUDED);
 
     expect(logic.executeScriptAction({
       actionType: 90,
+      params: ['MissingWaypoint', 40, 'America'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 145,
       params: ['MissingWaypoint', 40, 'America'],
     })).toBe(false);
   });

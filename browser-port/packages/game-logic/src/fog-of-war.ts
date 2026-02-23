@@ -126,6 +126,41 @@ export class FogOfWarGrid {
   }
 
   /**
+   * Source parity subset: PartitionManager::doShroudCover + undoShroudCover.
+   * Applies a local shroud "dollop" by clearing explored state in a circle.
+   */
+  shroudAt(playerIndex: number, worldX: number, worldZ: number, radius: number): void {
+    if (playerIndex < 0 || playerIndex >= MAX_FOW_PLAYERS || radius <= 0) {
+      return;
+    }
+
+    const [cx, cz] = this.worldToCell(worldX, worldZ);
+    const cellRadius = Math.ceil(radius / this.cellSize);
+    const seen = this.everSeen[playerIndex];
+    if (!seen) {
+      return;
+    }
+    const radiusSq = cellRadius * cellRadius;
+
+    for (let dz = -cellRadius; dz <= cellRadius; dz++) {
+      const gz = cz + dz;
+      if (gz < 0 || gz >= this.cellsDeep) {
+        continue;
+      }
+      for (let dx = -cellRadius; dx <= cellRadius; dx++) {
+        const gx = cx + dx;
+        if (gx < 0 || gx >= this.cellsWide) {
+          continue;
+        }
+        if (dx * dx + dz * dz <= radiusSq) {
+          const idx = this.cellIndex(gx, gz);
+          seen[idx] = 0;
+        }
+      }
+    }
+  }
+
+  /**
    * Source parity: PartitionManager::revealMapForPlayerPermanently.
    * Adds a persistent looker to every cell so shroud generation no longer covers the map.
    */

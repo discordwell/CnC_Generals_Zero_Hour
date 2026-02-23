@@ -4343,6 +4343,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [132, 'CAMERA_STOP_FOLLOW'],
   [139, 'SHOW_MILITARY_CAPTION'],
   [144, 'MUSIC_SET_VOLUME'],
+  [145, 'MAP_SHROUD_AT_WAYPOINT'],
   [146, 'MAP_SHROUD_ALL'],
   [147, 'SET_RANDOM_TIMER'],
   [148, 'SET_RANDOM_MSEC_TIMER'],
@@ -8704,6 +8705,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 337 && paramCount === 0) {
         // 337 also maps to NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH; 0-param signature is camera stop follow.
         actionType = 'CAMERA_STOP_FOLLOW';
+      } else if (numericType === 350 && paramCount === 3) {
+        // 350 also maps to PLAYER_GIVE_MONEY; 3-param signature is map shroud at waypoint.
+        actionType = 'MAP_SHROUD_AT_WAYPOINT';
       } else if (numericType === 321 && paramCount === 0) {
         // 321 also maps to SOUND_REMOVE_TYPE; 0-param signature is letterbox end.
         actionType = 'CAMERA_LETTERBOX_END';
@@ -9644,6 +9648,12 @@ export class GameLogicSubsystem implements Subsystem {
         return this.executeScriptRevealMapAtWaypoint(
           readString(0, ['waypointName', 'waypoint']),
           readNumber(1, ['radius', 'radiusToReveal']),
+          readString(2, ['side', 'playerName', 'player']),
+        );
+      case 'MAP_SHROUD_AT_WAYPOINT':
+        return this.executeScriptShroudMapAtWaypoint(
+          readString(0, ['waypointName', 'waypoint']),
+          readNumber(1, ['radius', 'radiusToShroud']),
           readString(2, ['side', 'playerName', 'player']),
         );
       case 'MAP_REVEAL_ALL':
@@ -34378,6 +34388,29 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private executeScriptShroudMapAtWaypoint(
+    waypointName: string,
+    radiusToShroud: number,
+    playerName: string,
+  ): boolean {
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+    const radius = Number.isFinite(radiusToShroud) ? Math.max(0, radiusToShroud) : 0;
+
+    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
+    if (targetSide) {
+      this.setMapShroudAtWaypointForSide(targetSide, waypoint.x, waypoint.z, radius);
+      return true;
+    }
+
+    for (const side of this.collectScriptHumanSides()) {
+      this.setMapShroudAtWaypointForSide(side, waypoint.x, waypoint.z, radius);
+    }
+    return true;
+  }
+
   /**
    * Source parity subset: ScriptActions::doRevealMapEntire.
    * - If playerName resolves to a known player side and is not empty: apply to that player.
@@ -34580,6 +34613,18 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: doShroudReveal + undoShroudReveal ("quick look").
     grid.addLooker(playerIndex, worldX, worldZ, radius);
     grid.removeLooker(playerIndex, worldX, worldZ, radius);
+  }
+
+  private setMapShroudAtWaypointForSide(side: string, worldX: number, worldZ: number, radius: number): void {
+    const grid = this.fogOfWarGrid;
+    if (!grid) {
+      return;
+    }
+    const playerIndex = this.resolvePlayerIndexForSide(side);
+    if (playerIndex < 0) {
+      return;
+    }
+    grid.shroudAt(playerIndex, worldX, worldZ, radius);
   }
 
   private setMapShroudEntireForSide(side: string): void {
