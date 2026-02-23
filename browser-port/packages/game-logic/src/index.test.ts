@@ -35375,6 +35375,126 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptWeatherVisible()).toBe(true);
   });
 
+  it('executes script camera-fade actions using source action ids', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 121, // CAMERA_FADE_ADD (raw id)
+      params: [0, 1, 30, 20, 10],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 326, // CAMERA_FADE_ADD (offset id)
+      params: [0.1, 0.9, 3, 2, 1],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 122, // CAMERA_FADE_SUBTRACT (raw id)
+      params: [1, 0, 8, 7, 6],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 327, // CAMERA_FADE_SUBTRACT (offset id)
+      params: [0.8, 0.2, 5, 4, 3],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 123, // CAMERA_FADE_SATURATE (raw id)
+      params: [0.5, 1, 9, 8, 7],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 328, // CAMERA_FADE_SATURATE (offset id)
+      params: [0.4, 0.9, 6, 5, 4],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 124, // CAMERA_FADE_MULTIPLY (raw id)
+      params: [1, 0.2, 12, 11, 10],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 329, // CAMERA_FADE_MULTIPLY (offset id)
+      params: [0.9, 0.1, 2, 1, 0],
+    })).toBe(true);
+
+    expect(logic.drainScriptCameraFadeRequests()).toEqual([
+      {
+        fadeType: 'ADD',
+        minFade: 0,
+        maxFade: 1,
+        increaseFrames: 30,
+        holdFrames: 20,
+        decreaseFrames: 10,
+        frame: 0,
+      },
+      {
+        fadeType: 'ADD',
+        minFade: 0.1,
+        maxFade: 0.9,
+        increaseFrames: 3,
+        holdFrames: 2,
+        decreaseFrames: 1,
+        frame: 0,
+      },
+      {
+        fadeType: 'SUBTRACT',
+        minFade: 1,
+        maxFade: 0,
+        increaseFrames: 8,
+        holdFrames: 7,
+        decreaseFrames: 6,
+        frame: 0,
+      },
+      {
+        fadeType: 'SUBTRACT',
+        minFade: 0.8,
+        maxFade: 0.2,
+        increaseFrames: 5,
+        holdFrames: 4,
+        decreaseFrames: 3,
+        frame: 0,
+      },
+      {
+        fadeType: 'SATURATE',
+        minFade: 0.5,
+        maxFade: 1,
+        increaseFrames: 9,
+        holdFrames: 8,
+        decreaseFrames: 7,
+        frame: 0,
+      },
+      {
+        fadeType: 'SATURATE',
+        minFade: 0.4,
+        maxFade: 0.9,
+        increaseFrames: 6,
+        holdFrames: 5,
+        decreaseFrames: 4,
+        frame: 0,
+      },
+      {
+        fadeType: 'MULTIPLY',
+        minFade: 1,
+        maxFade: 0.2,
+        increaseFrames: 12,
+        holdFrames: 11,
+        decreaseFrames: 10,
+        frame: 0,
+      },
+      {
+        fadeType: 'MULTIPLY',
+        minFade: 0.9,
+        maxFade: 0.1,
+        increaseFrames: 2,
+        holdFrames: 1,
+        decreaseFrames: 0,
+        frame: 0,
+      },
+    ]);
+  });
+
   it('executes script movie and letterbox actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

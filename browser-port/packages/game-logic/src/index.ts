@@ -3905,6 +3905,16 @@ interface ScriptCameraBlackWhiteRequestState {
   frame: number;
 }
 
+interface ScriptCameraFadeRequestState {
+  fadeType: 'ADD' | 'SUBTRACT' | 'SATURATE' | 'MULTIPLY';
+  minFade: number;
+  maxFade: number;
+  increaseFrames: number;
+  holdFrames: number;
+  decreaseFrames: number;
+  frame: number;
+}
+
 interface ScriptScreenShakeState {
   intensity: number;
   frame: number;
@@ -4357,6 +4367,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [117, 'ZOOM_CAMERA'],
   [118, 'PITCH_CAMERA'],
   [119, 'CAMERA_FOLLOW_NAMED'],
+  [121, 'CAMERA_FADE_ADD'],
+  [122, 'CAMERA_FADE_SUBTRACT'],
+  [123, 'CAMERA_FADE_SATURATE'],
+  [124, 'CAMERA_FADE_MULTIPLY'],
   [125, 'CAMERA_BW_MODE_BEGIN'],
   [126, 'CAMERA_BW_MODE_END'],
   [127, 'DRAW_SKYBOX_BEGIN'],
@@ -4555,6 +4569,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [322, 'TEAM_GUARD_IN_TUNNEL_NETWORK'],
   [323, 'QUICKVICTORY'],
   [324, 'QUICKVICTORY'],
+  [326, 'CAMERA_FADE_ADD'],
+  [327, 'CAMERA_FADE_SUBTRACT'],
+  [328, 'CAMERA_FADE_SATURATE'],
+  [329, 'CAMERA_FADE_MULTIPLY'],
   [330, 'CAMERA_BW_MODE_BEGIN'],
   [331, 'CAMERA_BW_MODE_END'],
   [332, 'DRAW_SKYBOX_BEGIN'],
@@ -5044,6 +5062,8 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCameraBlackWhiteEnabled = false;
   /** Source parity bridge: ScriptActions::doBlackWhiteMode renderer requests. */
   private readonly scriptCameraBlackWhiteRequests: ScriptCameraBlackWhiteRequestState[] = [];
+  /** Source parity bridge: ScriptEngine::setFade camera fade requests. */
+  private readonly scriptCameraFadeRequests: ScriptCameraFadeRequestState[] = [];
   /** Source parity bridge: ScriptActions::doSkyBox renderer toggle. */
   private scriptSkyboxEnabled = false;
   /** Source parity bridge: camera motion-blur requests consumed by renderer integration. */
@@ -7977,6 +7997,37 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
+  private requestScriptCameraFade(
+    fadeType: ScriptCameraFadeRequestState['fadeType'],
+    minFade: number,
+    maxFade: number,
+    increaseFrames: number,
+    holdFrames: number,
+    decreaseFrames: number,
+  ): void {
+    if (!Number.isFinite(minFade) || !Number.isFinite(maxFade)) {
+      return;
+    }
+    this.scriptCameraFadeRequests.push({
+      fadeType,
+      minFade,
+      maxFade,
+      increaseFrames: Math.trunc(increaseFrames),
+      holdFrames: Math.trunc(holdFrames),
+      decreaseFrames: Math.trunc(decreaseFrames),
+      frame: this.frameCounter,
+    });
+  }
+
+  drainScriptCameraFadeRequests(): ScriptCameraFadeRequestState[] {
+    if (this.scriptCameraFadeRequests.length === 0) {
+      return [];
+    }
+    const requests = this.scriptCameraFadeRequests.map((request) => ({ ...request }));
+    this.scriptCameraFadeRequests.length = 0;
+    return requests;
+  }
+
   setScriptSkyboxEnabled(enabled: boolean): void {
     this.scriptSkyboxEnabled = enabled;
   }
@@ -9055,6 +9106,46 @@ export class GameLogicSubsystem implements Subsystem {
       case 'SET_FPS_LIMIT':
         this.setScriptFramesPerSecondLimit(
           readInteger(0, ['fpsLimit', 'framesPerSecondLimit', 'value']),
+        );
+        return true;
+      case 'CAMERA_FADE_ADD':
+        this.requestScriptCameraFade(
+          'ADD',
+          readNumber(0, ['minFade', 'minValue', 'min']),
+          readNumber(1, ['maxFade', 'maxValue', 'max']),
+          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
+          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
+          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
+        );
+        return true;
+      case 'CAMERA_FADE_SUBTRACT':
+        this.requestScriptCameraFade(
+          'SUBTRACT',
+          readNumber(0, ['minFade', 'minValue', 'min']),
+          readNumber(1, ['maxFade', 'maxValue', 'max']),
+          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
+          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
+          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
+        );
+        return true;
+      case 'CAMERA_FADE_SATURATE':
+        this.requestScriptCameraFade(
+          'SATURATE',
+          readNumber(0, ['minFade', 'minValue', 'min']),
+          readNumber(1, ['maxFade', 'maxValue', 'max']),
+          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
+          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
+          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
+        );
+        return true;
+      case 'CAMERA_FADE_MULTIPLY':
+        this.requestScriptCameraFade(
+          'MULTIPLY',
+          readNumber(0, ['minFade', 'minValue', 'min']),
+          readNumber(1, ['maxFade', 'maxValue', 'max']),
+          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
+          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
+          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
         );
         return true;
       case 'CAMERA_BW_MODE_BEGIN':
@@ -19025,6 +19116,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraActionRequests.length = 0;
     this.scriptCameraBlackWhiteEnabled = false;
     this.scriptCameraBlackWhiteRequests.length = 0;
+    this.scriptCameraFadeRequests.length = 0;
     this.scriptSkyboxEnabled = false;
     this.scriptCameraFilterRequests.length = 0;
     this.placementSummary = {
@@ -49480,6 +49572,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCameraActionRequests.length = 0;
     this.scriptCameraBlackWhiteEnabled = false;
     this.scriptCameraBlackWhiteRequests.length = 0;
+    this.scriptCameraFadeRequests.length = 0;
     this.scriptSkyboxEnabled = false;
     this.scriptCameraFilterRequests.length = 0;
     this.thingTemplateBuildableOverrides.clear();
