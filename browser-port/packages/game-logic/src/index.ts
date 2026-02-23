@@ -4896,6 +4896,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [511, 'TEAM_FACE_WAYPOINT'],
   [512, 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE'],
   [513, 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT'],
+  [514, 'UNIT_SPAWN_NAMED_LOCATION_ORIENTATION'],
   [515, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [516, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [517, 'TEAM_GUARD_SUPPLY_CENTER'],
@@ -9910,6 +9911,14 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['templateName', 'objectType', 'thingName', 'unitType']),
           readString(1, ['teamName', 'team']),
           readString(2, ['waypointName', 'waypoint']),
+        );
+      case 'UNIT_SPAWN_NAMED_LOCATION_ORIENTATION':
+        return this.executeScriptCreateNamedObjectAtPosition(
+          readString(0, ['objectName', 'entityName', 'name', 'unitName', 'named']),
+          readString(1, ['templateName', 'objectType', 'thingName', 'unitType']),
+          readString(2, ['teamName', 'team']),
+          readValue(3, ['position', 'coord3D', 'coord']),
+          readNumber(4, ['angle', 'orientation', 'rotation']),
         );
       case 'NAMED_APPLY_ATTACK_PRIORITY_SET':
         return this.executeScriptNamedApplyAttackPrioritySet(
@@ -18210,6 +18219,31 @@ export class GameLogicSubsystem implements Subsystem {
     }
     return this.executeScriptCreateObject(
       '',
+      templateName,
+      teamName,
+      coord3.x,
+      coord3.y,
+      angleRadians,
+      coord3.z,
+    );
+  }
+
+  /**
+   * Source parity: ScriptActions::UNIT_SPAWN_NAMED_LOCATION_ORIENTATION.
+   */
+  private executeScriptCreateNamedObjectAtPosition(
+    objectName: string,
+    templateName: string,
+    teamName: string,
+    position: unknown,
+    angleRadians: number,
+  ): boolean {
+    const coord3 = this.coerceScriptConditionCoord3(position);
+    if (!coord3) {
+      return false;
+    }
+    return this.executeScriptCreateObject(
+      objectName,
       templateName,
       teamName,
       coord3.x,

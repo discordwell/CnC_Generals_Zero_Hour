@@ -31450,6 +31450,62 @@ describe('Script condition groundwork', () => {
     expect(logic.getScriptHulkLifetimeOverrideFrames()).toBe(-1);
   });
 
+  it('executes unit-spawn-named-location-orientation action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpawnTemplate', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+        rotationY: number;
+        scriptName: string;
+      }>;
+      scriptNamedEntitiesByName: Map<string, number>;
+      scriptTeamsByName: Map<string, {
+        created: boolean;
+        memberEntityIds: Set<number>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 514, // UNIT_SPAWN_NAMED_LOCATION_ORIENTATION
+      params: ['SpawnedGuy', 'SpawnTemplate', 'SpawnTeam', { x: 40, y: 52, z: 3 }, 1.25],
+    })).toBe(true);
+    const entity = privateApi.spawnedEntities.get(1);
+    expect(entity).toBeDefined();
+    expect(entity!.x).toBeCloseTo(40);
+    expect(entity!.z).toBeCloseTo(52);
+    expect(entity!.rotationY).toBeCloseTo(1.25);
+    expect(entity!.scriptName).toBe('SpawnedGuy');
+    expect(privateApi.scriptNamedEntitiesByName.get('SpawnedGuy')).toBe(1);
+    const team = privateApi.scriptTeamsByName.get('SPAWNTEAM');
+    expect(team).toBeDefined();
+    expect(team!.created).toBe(true);
+    expect(team!.memberEntityIds.has(1)).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 514,
+      params: ['SpawnedGuy2', 'MissingTemplate', 'SpawnTeam', { x: 1, y: 2, z: 0 }, 0],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 514,
+      params: ['SpawnedGuy2', 'SpawnTemplate', 'SpawnTeam', 'not-a-coord', 0],
+    })).toBe(false);
+  });
+
   it('executes script set-cave-index action using source action id', () => {
     const bundle = makeBundle({
       objects: [
