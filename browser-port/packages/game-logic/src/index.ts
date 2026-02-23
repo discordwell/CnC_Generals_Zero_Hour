@@ -27630,6 +27630,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!this.isEntityDozerCapable(dozer)) {
       return false;
     }
+    if (this.isEntityContained(dozer)) {
+      return false;
+    }
 
     const isUnderConstruction = building.objectStatusFlags.has('UNDER_CONSTRUCTION')
       || building.constructionPercent !== CONSTRUCTION_COMPLETE;
@@ -27904,6 +27907,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private canDozerRepairTarget(dozer: MapEntity, building: MapEntity): boolean {
     if (!this.isEntityDozerCapable(dozer)) return false;
+    if (this.isEntityContained(dozer)) return false;
     if (!building.kindOf.has('STRUCTURE')) return false;
     // Source parity: ActionManager::canRepairObject disallows bridge and bridge towers.
     if (building.kindOf.has('BRIDGE') || building.kindOf.has('BRIDGE_TOWER')) return false;

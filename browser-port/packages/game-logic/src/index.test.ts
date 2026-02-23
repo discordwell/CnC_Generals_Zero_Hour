@@ -9529,6 +9529,65 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.spawnedEntities.get(3)?.builderId).toBe(1);
   });
 
+  it('does not allow repair commands while dozer is contained in a transport', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const transportDef = makeObjectDef('TransportTruck', 'America', ['VEHICLE', 'TRANSPORT'], [
+      makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+        Slots: 5,
+        InitialPayload: 0,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+    ], { GeometryMajorRadius: 8, GeometryMinorRadius: 8 });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),      // id 1
+        makeMapObject('TransportTruck', 20, 20),// id 2
+        makeMapObject('USABarracks', 20, 20),   // id 3
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, transportDef, buildingDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+      pendingRepairActions: Map<number, number>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 1, targetTransportId: 2 });
+    for (let frame = 0; frame < 6; frame += 1) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(1)?.transportContainerId === 2) {
+        break;
+      }
+    }
+    expect(priv.spawnedEntities.get(1)?.transportContainerId).toBe(2);
+
+    const healthBefore = logic.getEntityState(3)!.health;
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 3 });
+    logic.update(1 / 30);
+    const healthAfter = logic.getEntityState(3)!.health;
+
+    expect(healthAfter).toBe(healthBefore);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+  });
+
   it('idle dozer auto-seeks nearby repairs after bored time', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
