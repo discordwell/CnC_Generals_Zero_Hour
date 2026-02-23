@@ -39904,6 +39904,80 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('invalidates unit-type/kind area caches on trigger enter-exit transitions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InfantryA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('InfantryA', 30, 30)], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'CacheZone',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.update(0);
+    logic.update(0);
+
+    const evaluateTypeInArea = (): boolean => logic.evaluateScriptPlayerHasUnitTypeInArea({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      count: 1,
+      templateName: 'InfantryA',
+      triggerName: 'CacheZone',
+      conditionCacheId: 'cache-type',
+    });
+    const evaluateKindInArea = (): boolean => logic.evaluateScriptPlayerHasUnitKindInArea({
+      side: 'America',
+      comparison: 'GREATER_EQUAL',
+      count: 1,
+      kindOf: 'INFANTRY',
+      triggerName: 'CacheZone',
+      conditionCacheId: 'cache-kind',
+    });
+
+    expect(evaluateTypeInArea()).toBe(false);
+    expect(evaluateKindInArea()).toBe(false);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number }>;
+    };
+    privateApi.spawnedEntities.get(1)!.x = 10;
+    privateApi.spawnedEntities.get(1)!.z = 10;
+
+    expect(evaluateTypeInArea()).toBe(false);
+    expect(evaluateKindInArea()).toBe(false);
+
+    logic.update(0);
+    expect(evaluateTypeInArea()).toBe(true);
+    expect(evaluateKindInArea()).toBe(true);
+    logic.update(0);
+    logic.update(0);
+
+    privateApi.spawnedEntities.get(1)!.x = 30;
+    privateApi.spawnedEntities.get(1)!.z = 30;
+
+    expect(evaluateTypeInArea()).toBe(true);
+    expect(evaluateKindInArea()).toBe(true);
+
+    logic.update(0);
+    expect(evaluateTypeInArea()).toBe(false);
+    expect(evaluateKindInArea()).toBe(false);
+  });
+
   it('tracks player-lost-object-type transitions against previous counts', () => {
     const bundle = makeBundle({
       objects: [
