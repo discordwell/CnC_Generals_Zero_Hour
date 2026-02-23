@@ -9773,6 +9773,23 @@ export class GameLogicSubsystem implements Subsystem {
     return Math.trunc(maxShots);
   }
 
+  private resolveScriptCommandButtonTemplateName(commandButtonDef: CommandButtonDef): string | null {
+    const templateName = readStringField(commandButtonDef.fields, ['Object'])
+      ?? readStringField(commandButtonDef.fields, ['ThingTemplate']);
+    if (!templateName) {
+      return null;
+    }
+    return templateName;
+  }
+
+  private resolveScriptCommandButtonUpgradeName(commandButtonDef: CommandButtonDef): string | null {
+    const upgradeName = readStringField(commandButtonDef.fields, ['Upgrade']);
+    if (!upgradeName) {
+      return null;
+    }
+    return upgradeName;
+  }
+
   private resolveScriptGuardModeForCommandType(commandTypeName: string): number {
     switch (commandTypeName) {
       case 'GUARD_WITHOUT_PURSUIT':
@@ -9992,6 +10009,52 @@ export class GameLogicSubsystem implements Subsystem {
         });
         return true;
       }
+      case 'OBJECT_UPGRADE':
+      case 'PLAYER_UPGRADE': {
+        const upgradeName = this.resolveScriptCommandButtonUpgradeName(commandButtonDef);
+        if (!upgradeName) {
+          return false;
+        }
+        this.applyCommand({
+          type: 'queueUpgradeProduction',
+          entityId: sourceEntity.id,
+          upgradeName,
+        });
+        return true;
+      }
+      case 'UNIT_BUILD':
+      case 'DOZER_CONSTRUCT': {
+        const templateName = this.resolveScriptCommandButtonTemplateName(commandButtonDef);
+        if (!templateName) {
+          return false;
+        }
+
+        if (target.kind === 'POSITION') {
+          if (commandTypeName !== 'DOZER_CONSTRUCT') {
+            return false;
+          }
+          this.applyCommand({
+            type: 'constructBuilding',
+            entityId: sourceEntity.id,
+            templateName,
+            targetPosition: [target.targetX, 0, target.targetZ],
+            angle: 0,
+            lineEndPosition: null,
+          });
+          return true;
+        }
+
+        if (target.kind !== 'NONE') {
+          return false;
+        }
+
+        this.applyCommand({
+          type: 'queueUnitProduction',
+          entityId: sourceEntity.id,
+          unitTemplateName: templateName,
+        });
+        return true;
+      }
       case 'STOP':
         this.applyCommand({ type: 'stop', entityId: sourceEntity.id, commandSource: 'SCRIPT' });
         return true;
@@ -10053,22 +10116,31 @@ export class GameLogicSubsystem implements Subsystem {
         const needsTargetPosition = (commandOption & SCRIPT_COMMAND_OPTION_NEED_TARGET_POS) !== 0;
         const attacksObjectPosition = (commandOption & SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION) !== 0;
 
-        let targetObjectId: number | null = target.kind === 'OBJECT' ? target.targetEntity.id : null;
-        let targetPosition: readonly [number, number, number] | null = target.kind === 'POSITION'
-          ? [target.targetX, 0, target.targetZ]
-          : null;
+        let targetObjectId: number | null = null;
+        let targetPosition: readonly [number, number, number] | null = null;
 
-        if (needsObjectTarget && targetObjectId === null) {
-          return false;
-        }
-        if (needsTargetPosition && targetPosition === null) {
-          return false;
-        }
-        if (attacksObjectPosition && targetPosition === null && targetObjectId !== null) {
-          targetPosition = this.getEntityWorldPosition(targetObjectId);
-          if (!targetPosition) {
+        // Source parity: Object::doCommandButton{,AtObject,AtPosition} only fire weapon
+        // when the invocation context matches the button target requirements.
+        if (target.kind === 'NONE') {
+          if (needsObjectTarget || needsTargetPosition) {
             return false;
           }
+        } else if (target.kind === 'OBJECT') {
+          if (!needsObjectTarget) {
+            return false;
+          }
+          targetObjectId = target.targetEntity.id;
+          if (attacksObjectPosition) {
+            targetPosition = this.getEntityWorldPosition(targetObjectId);
+            if (!targetPosition) {
+              return false;
+            }
+          }
+        } else {
+          if (!needsTargetPosition) {
+            return false;
+          }
+          targetPosition = [target.targetX, 0, target.targetZ];
         }
 
         this.applyCommand({
@@ -10076,7 +10148,7 @@ export class GameLogicSubsystem implements Subsystem {
           entityId: sourceEntity.id,
           weaponSlot,
           maxShotsToFire,
-          targetObjectId: needsObjectTarget ? targetObjectId : null,
+          targetObjectId,
           targetPosition,
         });
         return true;

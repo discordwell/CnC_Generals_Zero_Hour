@@ -33318,6 +33318,240 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script command-button production and upgrade actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 4,
+          }),
+        ], {
+          CommandSet: 'ScriptFactoryCommandSet',
+        }),
+        makeObjectDef('ScriptInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          BuildCost: 100,
+          BuildTime: 0.1,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_BuildScriptInfantry', {
+          Command: 'UNIT_BUILD',
+          Object: 'ScriptInfantry',
+        }),
+        makeCommandButtonDef('Command_ResearchScriptUpgrade', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_ScriptResearch',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptFactoryCommandSet', {
+          1: 'Command_BuildScriptInfantry',
+          2: 'Command_ResearchScriptUpgrade',
+        }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_ScriptResearch', {
+          Type: 'PLAYER',
+          BuildCost: 150,
+          BuildTime: 0.2,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ScriptFactory', 12, 12)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.update(1 / 30);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_BuildScriptInfantry'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_ResearchScriptUpgrade'],
+    })).toBe(true);
+
+    const productionState = logic.getProductionState(1);
+    expect(productionState?.queueEntryCount).toBe(2);
+    expect(logic.getSideCredits('America')).toBe(250);
+    expect(logic.getSideUpgradeState('America').inProduction).toEqual(['UPGRADE_SCRIPTRESEARCH']);
+  });
+
+  it('executes script dozer-construct command-button ability at waypoint', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptDozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          CommandSet: 'ScriptDozerCommandSet',
+        }),
+        makeObjectDef('ScriptBarracks', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ], {
+          BuildCost: 300,
+          BuildTime: 1,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructScriptBarracks', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'ScriptBarracks',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptDozerCommandSet', {
+          1: 'Command_ConstructScriptBarracks',
+        }),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('ScriptDozer', 10, 10)], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'BuildWaypoint',
+          position: { x: 40, y: 40, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    logic.update(1 / 30);
+
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_ConstructScriptBarracks', 'BuildWaypoint'],
+    })).toBe(true);
+
+    const priv = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+    };
+    const buildingId = priv.pendingConstructionActions.get(1);
+    expect(typeof buildingId).toBe('number');
+    if (typeof buildingId === 'number') {
+      expect(logic.getEntityState(buildingId)?.templateName).toBe('ScriptBarracks');
+      expect(logic.getEntityState(buildingId)?.statusFlags).toContain('UNDER_CONSTRUCTION');
+    }
+    expect(logic.getSideCredits('America')).toBe(700);
+  });
+
+  it('enforces source fire-weapon command-button target-context requirements', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptShooter', 'America', ['INFANTRY', 'CAN_ATTACK'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          CommandSet: 'ScriptShooterCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_FireNoTarget', {
+          Command: 'FIRE_WEAPON',
+          WeaponSlot: 'PRIMARY',
+        }),
+        makeCommandButtonDef('Command_FireNeedObject', {
+          Command: 'FIRE_WEAPON',
+          WeaponSlot: 'PRIMARY',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+        makeCommandButtonDef('Command_FireNeedPosition', {
+          Command: 'FIRE_WEAPON',
+          WeaponSlot: 'PRIMARY',
+          Options: 'NEED_TARGET_POS',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptShooterCommandSet', {
+          1: 'Command_FireNoTarget',
+          2: 'Command_FireNeedObject',
+          3: 'Command_FireNeedPosition',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptShooter', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'FireWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_FireNoTarget'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_FireNeedObject', 2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_FireNeedPosition', 'FireWaypoint'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 445,
+      params: [1, 'Command_FireNeedObject'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 445,
+      params: [1, 'Command_FireNeedPosition'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403,
+      params: [1, 'Command_FireNoTarget', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403,
+      params: [1, 'Command_FireNeedPosition', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404,
+      params: [1, 'Command_FireNoTarget', 'FireWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404,
+      params: [1, 'Command_FireNeedObject', 'FireWaypoint'],
+    })).toBe(false);
+  });
+
   it('executes script flash-white actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
