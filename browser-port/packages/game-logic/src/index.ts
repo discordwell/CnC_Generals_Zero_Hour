@@ -4266,6 +4266,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
   [310, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
+  [311, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
+  [313, 'ENABLE_SCORING'],
+  [314, 'DISABLE_SCORING'],
   [324, 'QUICKVICTORY'],
   [376, 'CAMERA_TETHER_NAMED'],
   [377, 'CAMERA_STOP_TETHER_NAMED'],
@@ -4383,6 +4386,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [504, 'UNIT_AFFECT_OBJECT_PANEL_FLAGS'],
   [505, 'TEAM_AFFECT_OBJECT_PANEL_FLAGS'],
   [515, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
+  [516, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
+  [518, 'ENABLE_SCORING'],
+  [519, 'DISABLE_SCORING'],
 ]);
 
 const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
@@ -4590,6 +4596,10 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: GameLogic::m_rankLevelLimit consumed by Player rank/skill progression. */
   private rankLevelLimit = RANK_TABLE.length;
   private readonly sideScoreState = new Map<string, SideScoreState>();
+  /** Source parity: ScriptActions::enableScoring / scorekeeper global gate. */
+  private scriptScoringEnabled = true;
+  /** Source parity: ScriptActions::excludePlayerFromScoreScreen per-player hidden set. */
+  private readonly sideScoreScreenExcluded = new Set<string>();
   /** Source parity: Player::m_attackedBy + m_attackedFrame. */
   private readonly sideAttackedBy = new Map<string, Set<string>>();
   private readonly sideAttackedFrame = new Map<string, number>();
@@ -6792,6 +6802,35 @@ export class GameLogicSubsystem implements Subsystem {
     };
   }
 
+  setScriptScoringEnabled(enabled: boolean): void {
+    this.scriptScoringEnabled = enabled;
+  }
+
+  isScriptScoringEnabled(): boolean {
+    return this.scriptScoringEnabled;
+  }
+
+  private setSideExcludedFromScoreScreen(side: string, excluded: boolean): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    if (excluded) {
+      this.sideScoreScreenExcluded.add(normalizedSide);
+    } else {
+      this.sideScoreScreenExcluded.delete(normalizedSide);
+    }
+    return true;
+  }
+
+  isSideExcludedFromScoreScreen(side: string): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    return this.sideScoreScreenExcluded.has(normalizedSide);
+  }
+
   getScriptObjectTopologyVersion(): number {
     return this.scriptObjectTopologyVersion;
   }
@@ -7693,6 +7732,17 @@ export class GameLogicSubsystem implements Subsystem {
       case 'DEFEAT':
       case 'LOCALDEFEAT':
         return this.setScriptLocalGameEndState(true);
+      case 'ENABLE_SCORING':
+        this.setScriptScoringEnabled(true);
+        return true;
+      case 'DISABLE_SCORING':
+        this.setScriptScoringEnabled(false);
+        return true;
+      case 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN':
+        return this.setSideExcludedFromScoreScreen(
+          readSide(0, ['side', 'playerName', 'player']),
+          true,
+        );
       case 'DISABLE_INPUT':
         this.setScriptInputDisabled(true);
         return true;
@@ -16506,6 +16556,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCurrentPlayerSide = null;
     this.sideCashBountyPercent.clear();
     this.sideSkillPointsModifier.clear();
+    this.scriptScoringEnabled = true;
+    this.sideScoreScreenExcluded.clear();
     this.sideBattlePlanBonuses.clear();
     this.battlePlanParalyzedUntilFrame.clear();
     this.sideUpgradesInProduction.clear();
@@ -28736,11 +28788,14 @@ export class GameLogicSubsystem implements Subsystem {
    * C++: addObjectBuilt + addMoneySpent(calcCostToBuild).
    */
   private addStructureCompletionScore(structure: MapEntity, isRebuild: boolean): void {
-    if (isRebuild) {
+    if (isRebuild || !this.scriptScoringEnabled) {
       return;
     }
     const side = this.normalizeSide(structure.side);
     if (!side) {
+      return;
+    }
+    if (this.sideScoreScreenExcluded.has(side)) {
       return;
     }
     const score = this.getOrCreateSideScoreState(side);
@@ -46467,11 +46522,14 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptConditionEntityId = null;
     this.scriptLocalPlayerTeamNameUpper = null;
     this.sideScoreState.clear();
+    this.scriptScoringEnabled = true;
+    this.sideScoreScreenExcluded.clear();
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
     this.sideUnitsShouldIdleOrResume.clear();
+    this.sideSkillPointsModifier.clear();
     this.sideScriptAcquiredSciences.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptMidwaySpecialPowerEvents.clear();

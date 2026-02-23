@@ -29574,6 +29574,67 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script scoring-toggle and score-screen exclusion actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScoreStructure', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          BuildCost: 600,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ScoreStructure', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, unknown>;
+      onStructureConstructionComplete: (builder: unknown, structure: unknown, isRebuild: boolean) => void;
+    };
+    const structure = privateApi.spawnedEntities.get(1);
+    expect(structure).toBeDefined();
+
+    expect(logic.getSideScoreState('America')).toEqual({ structuresBuilt: 0, moneySpent: 0 });
+
+    expect(logic.executeScriptAction({
+      actionType: 314, // DISABLE_SCORING (raw id)
+    })).toBe(true);
+    expect(logic.isScriptScoringEnabled()).toBe(false);
+    privateApi.onStructureConstructionComplete(null, structure, false);
+    expect(logic.getSideScoreState('America')).toEqual({ structuresBuilt: 0, moneySpent: 0 });
+
+    expect(logic.executeScriptAction({
+      actionType: 518, // ENABLE_SCORING (offset id)
+    })).toBe(true);
+    expect(logic.isScriptScoringEnabled()).toBe(true);
+    privateApi.onStructureConstructionComplete(null, structure, false);
+    expect(logic.getSideScoreState('America')).toEqual({ structuresBuilt: 1, moneySpent: 600 });
+
+    expect(logic.executeScriptAction({
+      actionType: 311, // PLAYER_EXCLUDE_FROM_SCORE_SCREEN (raw id)
+      params: ['America'],
+    })).toBe(true);
+    expect(logic.isSideExcludedFromScoreScreen('America')).toBe(true);
+    privateApi.onStructureConstructionComplete(null, structure, false);
+    expect(logic.getSideScoreState('America')).toEqual({ structuresBuilt: 1, moneySpent: 600 });
+
+    expect(logic.executeScriptAction({
+      actionType: 516, // PLAYER_EXCLUDE_FROM_SCORE_SCREEN (offset id)
+      params: ['GLA'],
+    })).toBe(true);
+    expect(logic.isSideExcludedFromScoreScreen('GLA')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 311,
+      params: [''],
+    })).toBe(false);
+  });
+
   it('executes script victory/defeat actions using source action ids', () => {
     const createLogic = (): GameLogicSubsystem => {
       const logic = new GameLogicSubsystem(new THREE.Scene());
