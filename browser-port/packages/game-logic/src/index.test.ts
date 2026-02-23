@@ -40925,6 +40925,48 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 1 })).toBe(false);
   });
 
+  it('evaluates named-has-free-container-slots for tunnel networks via shared tracker capacity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TunnelNode', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+          makeBlock('Behavior', 'TunnelContain ModuleTag_Contain', { TimeForFullHeal: 1000 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TunnelNode', 10, 10), // id 1
+        makeMapObject('TunnelNode', 20, 10), // id 2
+        makeMapObject('Ranger', 12, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      config: { maxTunnelCapacity: number };
+      tunnelTrackers: Map<string, { passengerIds: Set<number> }>;
+      spawnedEntities: Map<number, { tunnelContainerId: number | null }>;
+    };
+    privateApi.config.maxTunnelCapacity = 1;
+    const tracker = Array.from(privateApi.tunnelTrackers.values())[0]!;
+    tracker.passengerIds.add(3);
+    privateApi.spawnedEntities.get(3)!.tunnelContainerId = 1;
+
+    expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 1 })).toBe(false);
+    expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 2 })).toBe(false);
+
+    tracker.passengerIds.clear();
+    privateApi.spawnedEntities.get(3)!.tunnelContainerId = null;
+    expect(logic.evaluateScriptNamedHasFreeContainerSlots({ entityId: 2 })).toBe(true);
+  });
+
   it('evaluates named-entered-area and named-exited-area using current/previous frame parity', () => {
     const bundle = makeBundle({
       objects: [

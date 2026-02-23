@@ -21801,9 +21801,18 @@ export class GameLogicSubsystem implements Subsystem {
         maxSlots = contain.garrisonCapacity;
         break;
       case 'TUNNEL':
-        // TODO(source-parity): tunnel capacity comes from TunnelTracker shared state.
+      case 'CAVE': {
+        // Source parity: TunnelContain/CaveContain capacity is tracked on shared TunnelTracker.
+        const tracker = this.resolveTunnelTrackerForContainer(entity);
+        if (!tracker) {
+          return true;
+        }
         maxSlots = this.config.maxTunnelCapacity;
-        break;
+        if (maxSlots <= 0) {
+          return true;
+        }
+        return tracker.passengerIds.size < maxSlots;
+      }
       default:
         maxSlots = contain.transportCapacity;
         break;
