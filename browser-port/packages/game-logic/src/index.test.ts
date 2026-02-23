@@ -29446,6 +29446,91 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes offset source action ids for rank/science actions and rejects hunt-with-command-button', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+      sciences: [
+        makeScienceDef('SCIENCE_ALPHA', {
+          SciencePurchasePointCost: 2,
+          IsGrantable: 'Yes',
+        }),
+        makeScienceDef('SCIENCE_BETA', {
+          SciencePurchasePointCost: 3,
+          PrerequisiteSciences: 'SCIENCE_ALPHA',
+          IsGrantable: 'Yes',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CommandCenter', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AliasTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      getSideRankStateMap: (side: string) => {
+        rankLevel: number;
+        skillPoints: number;
+        sciencePurchasePoints: number;
+      };
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 477, // PLAYER_ADD_SKILLPOINTS (offset id)
+      params: ['America', 500],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(3);
+    expect(privateApi.getSideRankStateMap('america').skillPoints).toBe(500);
+
+    expect(logic.executeScriptAction({
+      actionType: 478, // PLAYER_ADD_RANKLEVEL (offset id)
+      params: ['America', 1],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(4);
+
+    expect(logic.executeScriptAction({
+      actionType: 479, // PLAYER_SET_RANKLEVEL (offset id)
+      params: ['America', 2],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 480, // PLAYER_SET_RANKLEVELLIMIT (offset id)
+      params: [2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 477, // PLAYER_ADD_SKILLPOINTS (offset id)
+      params: ['America', 5000],
+    })).toBe(true);
+    expect(privateApi.getSideRankStateMap('america').rankLevel).toBe(2);
+
+    privateApi.getSideRankStateMap('america').sciencePurchasePoints = 5;
+    expect(logic.executeScriptAction({
+      actionType: 481, // PLAYER_GRANT_SCIENCE (offset id)
+      params: ['America', 'SCIENCE_ALPHA'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 482, // PLAYER_PURCHASE_SCIENCE (offset id)
+      params: ['America', 'SCIENCE_BETA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_ACQUIRED_SCIENCE',
+      params: ['America', 'SCIENCE_BETA'],
+    })).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 483, // TEAM_HUNT_WITH_COMMAND_BUTTON (offset id)
+      params: ['AliasTeam', 'Command_Missing'],
+    })).toBe(false);
+  });
+
   it('executes script victory/defeat actions using source action ids', () => {
     const createLogic = (): GameLogicSubsystem => {
       const logic = new GameLogicSubsystem(new THREE.Scene());

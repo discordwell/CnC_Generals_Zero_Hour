@@ -4225,6 +4225,13 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [275, 'PLAYER_SET_RANKLEVELLIMIT'],
   [276, 'PLAYER_GRANT_SCIENCE'],
   [277, 'PLAYER_PURCHASE_SCIENCE'],
+  [477, 'PLAYER_ADD_SKILLPOINTS'],
+  [478, 'PLAYER_ADD_RANKLEVEL'],
+  [479, 'PLAYER_SET_RANKLEVEL'],
+  [480, 'PLAYER_SET_RANKLEVELLIMIT'],
+  [481, 'PLAYER_GRANT_SCIENCE'],
+  [482, 'PLAYER_PURCHASE_SCIENCE'],
+  [483, 'TEAM_HUNT_WITH_COMMAND_BUTTON'],
   [287, 'OBJECTLIST_ADDOBJECTTYPE'],
   [288, 'OBJECTLIST_REMOVEOBJECTTYPE'],
   [291, 'PLAYER_RELATES_PLAYER'],
@@ -8254,6 +8261,10 @@ export class GameLogicSubsystem implements Subsystem {
         rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
         return true;
       }
+      case 'TEAM_HUNT_WITH_COMMAND_BUTTON':
+        // TODO(source-parity): requires CommandButtonHuntUpdate module support to keep
+        // team members hunting with a command-button-driven target loop.
+        return false;
       case 'OBJECTLIST_ADDOBJECTTYPE':
         return this.executeScriptObjectTypeListMaintenance(
           readString(0, ['listName', 'objectList', 'objectListName']),
