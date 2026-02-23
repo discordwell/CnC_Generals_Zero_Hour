@@ -5184,6 +5184,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideTeamBuildDelaySecondsByScript = new Map<string, number>();
   /** Source parity subset: delayed Team::isCreated toggles scheduled from TeamFactory-side delays. */
   private readonly scriptTeamCreatedReadyFrameByName = new Map<string, number>();
+  /** Source parity subset: Team::m_created one-frame pulse auto-clear frame. */
+  private readonly scriptTeamCreatedAutoClearFrameByName = new Map<string, number>();
   /** Source parity subset: Player::setObjectsEnabled per-side disabled template names. */
   private readonly sideDisabledObjectTemplatesByScript = new Map<string, Set<string>>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
@@ -6619,6 +6621,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateScriptWaypointPathCompletions();
     this.updateScriptTriggerTransitions();
     this.updatePendingScriptTeamCreated();
+    this.updateScriptTeamCreatedPulses();
     this.executeMapScripts();
     this.clearScriptUIInteractions();
     this.updateScriptSequentialScripts();
@@ -6662,9 +6665,31 @@ export class GameLogicSubsystem implements Subsystem {
       }
       const team = this.scriptTeamsByName.get(teamNameUpper);
       if (team) {
-        team.created = true;
+        this.markScriptTeamCreatedPulse(team);
       }
       this.scriptTeamCreatedReadyFrameByName.delete(teamNameUpper);
+    }
+  }
+
+  private markScriptTeamCreatedPulse(team: ScriptTeamRecord): void {
+    team.created = true;
+    this.scriptTeamCreatedAutoClearFrameByName.set(team.nameUpper, this.frameCounter + 1);
+  }
+
+  private updateScriptTeamCreatedPulses(): void {
+    if (this.scriptTeamCreatedAutoClearFrameByName.size === 0) {
+      return;
+    }
+
+    for (const [teamNameUpper, clearFrame] of this.scriptTeamCreatedAutoClearFrameByName) {
+      if (this.frameCounter < clearFrame) {
+        continue;
+      }
+      const team = this.scriptTeamsByName.get(teamNameUpper);
+      if (team) {
+        team.created = false;
+      }
+      this.scriptTeamCreatedAutoClearFrameByName.delete(teamNameUpper);
     }
   }
 
@@ -12521,6 +12546,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     team.memberEntityIds = nextMembers;
     team.created = true;
+    this.scriptTeamCreatedAutoClearFrameByName.delete(team.nameUpper);
     return true;
   }
 
@@ -12567,6 +12593,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     team.created = created;
     this.scriptTeamCreatedReadyFrameByName.delete(team.nameUpper);
+    this.scriptTeamCreatedAutoClearFrameByName.delete(team.nameUpper);
     return true;
   }
 
@@ -19599,12 +19626,13 @@ export class GameLogicSubsystem implements Subsystem {
     const delayFrames = delaySeconds * LOGIC_FRAME_RATE;
 
     if (delayFrames <= 0) {
-      team.created = true;
       this.scriptTeamCreatedReadyFrameByName.delete(team.nameUpper);
+      this.markScriptTeamCreatedPulse(team);
       return;
     }
 
     team.created = false;
+    this.scriptTeamCreatedAutoClearFrameByName.delete(team.nameUpper);
     this.scriptTeamCreatedReadyFrameByName.set(team.nameUpper, this.frameCounter + delayFrames);
   }
 
@@ -19870,6 +19898,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (removed) {
       this.removeAllSequentialScriptsForTeam(teamNameUpper);
       this.scriptTeamCreatedReadyFrameByName.delete(teamNameUpper);
+      this.scriptTeamCreatedAutoClearFrameByName.delete(teamNameUpper);
       for (const [side, defaultTeamNameUpper] of this.scriptDefaultTeamNameBySide) {
         if (defaultTeamNameUpper === teamNameUpper) {
           this.scriptDefaultTeamNameBySide.delete(side);
@@ -23597,6 +23626,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCanBuildUnitsByScript.clear();
     this.sideTeamBuildDelaySecondsByScript.clear();
     this.scriptTeamCreatedReadyFrameByName.clear();
+    this.scriptTeamCreatedAutoClearFrameByName.clear();
     this.sideDisabledObjectTemplatesByScript.clear();
     this.scriptSideRepairQueue.clear();
     this.scriptCurrentPlayerSide = null;
@@ -54493,6 +54523,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideCanBuildUnitsByScript.clear();
     this.sideTeamBuildDelaySecondsByScript.clear();
     this.scriptTeamCreatedReadyFrameByName.clear();
+    this.scriptTeamCreatedAutoClearFrameByName.clear();
     this.sideDisabledObjectTemplatesByScript.clear();
     this.sideSkillPointsModifier.clear();
     this.sideScriptSkillset.clear();

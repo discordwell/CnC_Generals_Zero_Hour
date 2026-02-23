@@ -38803,6 +38803,8 @@ describe('Script condition groundwork', () => {
       logic.update(0);
     }
     expect(logic.evaluateScriptTeamCreated({ teamName: 'AlphaProto' })).toBe(true);
+    logic.update(0);
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'AlphaProto' })).toBe(false);
   });
 
   it('applies base-construction-speed delay to build/recruit team created state', () => {
@@ -38843,6 +38845,8 @@ describe('Script condition groundwork', () => {
 
     logic.update(0);
     expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(true);
+    logic.update(0);
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(false);
 
     expect(logic.setScriptTeamCreated('DelayTeam', false)).toBe(true);
     expect(logic.executeScriptAction({
@@ -38855,6 +38859,8 @@ describe('Script condition groundwork', () => {
       logic.update(0);
     }
     expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(true);
+    logic.update(0);
+    expect(logic.evaluateScriptTeamCreated({ teamName: 'DelayTeam' })).toBe(false);
   });
 
   it('executes script camera-move-home action using source action id', () => {
