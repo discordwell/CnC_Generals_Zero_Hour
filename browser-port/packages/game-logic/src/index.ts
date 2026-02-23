@@ -4275,6 +4275,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [299, 'DISABLE_INPUT'],
   [300, 'ENABLE_INPUT'],
   [301, 'PLAYER_SELECT_SKILLSET'],
+  [303, 'NAMED_FACE_NAMED'],
+  [304, 'NAMED_FACE_WAYPOINT'],
+  [305, 'TEAM_FACE_NAMED'],
+  [306, 'TEAM_FACE_WAYPOINT'],
   [307, 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE'],
   [308, 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT'],
   [310, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
@@ -4408,6 +4412,10 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [504, 'UNIT_AFFECT_OBJECT_PANEL_FLAGS'],
   [505, 'TEAM_AFFECT_OBJECT_PANEL_FLAGS'],
   [506, 'PLAYER_SELECT_SKILLSET'],
+  [508, 'NAMED_FACE_NAMED'],
+  [509, 'NAMED_FACE_WAYPOINT'],
+  [510, 'TEAM_FACE_NAMED'],
+  [511, 'TEAM_FACE_WAYPOINT'],
   [512, 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE'],
   [513, 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT'],
   [515, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
@@ -8465,6 +8473,26 @@ export class GameLogicSubsystem implements Subsystem {
           readString(0, ['teamName', 'team']),
           readString(1, ['triggerName', 'trigger', 'areaName', 'area']),
         );
+      case 'NAMED_FACE_NAMED':
+        return this.executeScriptNamedFaceNamed(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readEntityId(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
+      case 'NAMED_FACE_WAYPOINT':
+        return this.executeScriptNamedFaceWaypoint(
+          readEntityId(0, ['entityId', 'unitId', 'named']),
+          readString(1, ['waypointName', 'waypoint']),
+        );
+      case 'TEAM_FACE_NAMED':
+        return this.executeScriptTeamFaceNamed(
+          readString(0, ['teamName', 'team']),
+          readEntityId(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
+        );
+      case 'TEAM_FACE_WAYPOINT':
+        return this.executeScriptTeamFaceWaypoint(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointName', 'waypoint']),
+        );
       case 'OBJECT_FORCE_SELECT':
         return this.executeScriptObjectForceSelect(
           readString(0, ['teamName', 'team']),
@@ -12457,6 +12485,77 @@ export class GameLogicSubsystem implements Subsystem {
       );
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedFaceNamed.
+   */
+  private executeScriptNamedFaceNamed(entityId: number, targetEntityId: number): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    const target = this.spawnedEntities.get(targetEntityId);
+    if (!entity || !target || entity.destroyed || target.destroyed) {
+      return false;
+    }
+    this.faceEntityTowardPosition(entity, target.x, target.z);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doNamedFaceWaypoint.
+   */
+  private executeScriptNamedFaceWaypoint(entityId: number, waypointName: string): boolean {
+    const entity = this.spawnedEntities.get(entityId);
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!entity || entity.destroyed || !waypoint) {
+      return false;
+    }
+    this.faceEntityTowardPosition(entity, waypoint.x, waypoint.z);
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamFaceNamed.
+   */
+  private executeScriptTeamFaceNamed(teamName: string, targetEntityId: number): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const target = this.spawnedEntities.get(targetEntityId);
+    if (!team || !target || target.destroyed) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.faceEntityTowardPosition(entity, target.x, target.z);
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doTeamFaceWaypoint.
+   */
+  private executeScriptTeamFaceWaypoint(teamName: string, waypointName: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!team || !waypoint) {
+      return false;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      this.faceEntityTowardPosition(entity, waypoint.x, waypoint.z);
+    }
+    return true;
+  }
+
+  private faceEntityTowardPosition(entity: MapEntity, targetX: number, targetZ: number): void {
+    const dx = targetX - entity.x;
+    const dz = targetZ - entity.z;
+    if (dx === 0 && dz === 0) {
+      return;
+    }
+    entity.rotationY = Math.atan2(dz, dx);
   }
 
   /**

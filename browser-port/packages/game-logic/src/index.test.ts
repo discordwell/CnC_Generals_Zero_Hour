@@ -29775,6 +29775,91 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes script face actions using source action ids', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 10), // id 1
+      makeMapObject('Ranger', 14, 10), // id 2
+      makeMapObject('Ranger', 22, 10), // id 3 target
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'FaceWaypointA',
+          position: { x: 14, y: 30, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    expect(logic.setScriptTeamMembers('FaceTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number; rotationY: number }>;
+    };
+
+    const angleTo = (sourceEntityId: number, targetX: number, targetZ: number): number => {
+      const state = privateApi.spawnedEntities.get(sourceEntityId)!;
+      return Math.atan2(targetZ - state.z, targetX - state.x);
+    };
+
+    const rotationOf = (entityId: number): number =>
+      privateApi.spawnedEntities.get(entityId)?.rotationY ?? Number.NaN;
+
+    expect(logic.executeScriptAction({
+      actionType: 303, // NAMED_FACE_NAMED (raw id)
+      params: [1, 3],
+    })).toBe(true);
+    expect(rotationOf(1)).toBeCloseTo(angleTo(1, 22, 10), 6);
+
+    expect(logic.executeScriptAction({
+      actionType: 509, // NAMED_FACE_WAYPOINT (offset id)
+      params: [1, 'FaceWaypointA'],
+    })).toBe(true);
+    expect(rotationOf(1)).toBeCloseTo(angleTo(1, 14, 30), 6);
+
+    expect(logic.executeScriptAction({
+      actionType: 510, // TEAM_FACE_NAMED (offset id)
+      params: ['FaceTeam', 3],
+    })).toBe(true);
+    expect(rotationOf(1)).toBeCloseTo(angleTo(1, 22, 10), 6);
+    expect(rotationOf(2)).toBeCloseTo(angleTo(2, 22, 10), 6);
+
+    expect(logic.executeScriptAction({
+      actionType: 306, // TEAM_FACE_WAYPOINT (raw id)
+      params: ['FaceTeam', 'FaceWaypointA'],
+    })).toBe(true);
+    expect(rotationOf(1)).toBeCloseTo(angleTo(1, 14, 30), 6);
+    expect(rotationOf(2)).toBeCloseTo(angleTo(2, 14, 30), 6);
+
+    expect(logic.executeScriptAction({
+      actionType: 303,
+      params: [1, 999],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 304,
+      params: [1, 'MissingWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 305,
+      params: ['MissingTeam', 3],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 306,
+      params: ['FaceTeam', 'MissingWaypoint'],
+    })).toBe(false);
+  });
+
   it('executes script volume and border-shroud actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
