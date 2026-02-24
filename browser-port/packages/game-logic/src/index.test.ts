@@ -32381,12 +32381,22 @@ describe('Script condition groundwork', () => {
         makeMapObject('TroopTransport', 20, 20), // id 1
         makeMapObject('Ranger', 20, 20), // id 2
         makeMapObject('Ranger', 22, 20), // id 3
+        makeMapObject('TroopTransport', 60, 20), // id 4
+        makeMapObject('Ranger', 60, 20), // id 5
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('RideTeam', [2, 3])).toBe(true);
+    expect(logic.setScriptTeamMembers('RideInstanceA', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('RideInstanceA', 'RideProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('RideInstanceB', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('RideInstanceB', 'RideProto')).toBe(true);
     expect(logic.setScriptTeamMembers('TransportTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('TransportInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('TransportInstanceA', 'TransportProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('TransportInstanceB', [4])).toBe(true);
+    expect(logic.setScriptTeamPrototype('TransportInstanceB', 'TransportProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -32432,6 +32442,72 @@ describe('Script condition groundwork', () => {
     logic.update(1 / 30);
     expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
     expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 53,
+      params: ['RideProto', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+    expect(logic.executeScriptAction({
+      actionType: 54,
+      params: [1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.setScriptConditionTeamContext('RideInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 53,
+      params: ['RideProto', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBeNull();
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 53,
+      params: ['RideProto', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [2, 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [5, 4],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(5)?.transportContainerId).toBe(4);
+    expect(logic.executeScriptAction({
+      actionType: 55,
+      params: ['TransportProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(5)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [2, 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [5, 4],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.setScriptConditionTeamContext('TransportInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 55,
+      params: ['TransportProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(5)?.transportContainerId).toBe(4);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 52,

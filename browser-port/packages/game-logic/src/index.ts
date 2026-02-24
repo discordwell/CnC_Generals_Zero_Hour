@@ -17325,19 +17325,23 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamEnterNamed.
    */
   private executeScriptTeamEnterNamed(teamName: string, targetContainerEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const teams = this.resolveScriptConditionTeams(teamName);
     const container = this.spawnedEntities.get(targetContainerEntityId);
-    if (!team || !container || container.destroyed) {
+    if (teams.length === 0 || !container || container.destroyed) {
       return false;
     }
 
+    const entityIds = new Set<number>();
     let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.issueScriptEnterContainer(entity, container)) {
-        issuedAny = true;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || entityIds.has(entity.id)) {
+          continue;
+        }
+        entityIds.add(entity.id);
+        if (this.issueScriptEnterContainer(entity, container)) {
+          issuedAny = true;
+        }
       }
     }
     return issuedAny;
@@ -17362,21 +17366,25 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamExitAll (groupEvacuate).
    */
   private executeScriptTeamExitAll(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    const entityIds = new Set<number>();
     let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.containProfile) {
-        continue;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || !entity.containProfile || entityIds.has(entity.id)) {
+          continue;
+        }
+        entityIds.add(entity.id);
+        this.applyCommand({
+          type: 'evacuate',
+          entityId: entity.id,
+        });
+        issuedAny = true;
       }
-      this.applyCommand({
-        type: 'evacuate',
-        entityId: entity.id,
-      });
-      issuedAny = true;
     }
     return issuedAny;
   }
