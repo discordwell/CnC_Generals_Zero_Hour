@@ -20380,25 +20380,29 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamOwnedByPlayer.
-   * TODO(source-parity): bind to Team::getControllingPlayer().
+   * Uses Team controlling-player ownership only (no member-side inference).
    */
   evaluateScriptTeamOwnedByPlayer(filter: {
     teamName: string;
     side: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
-      return false;
-    }
     const normalizedSide = this.normalizeSide(filter.side);
     if (!normalizedSide) {
       return false;
     }
-    const controllingSide = this.resolveScriptTeamControllingSide(team);
-    if (!controllingSide) {
+
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-    return controllingSide === normalizedSide;
+
+    for (const team of teams) {
+      const controllingSide = team.controllingSide ? this.normalizeSide(team.controllingSide) : '';
+      if (controllingSide === normalizedSide) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

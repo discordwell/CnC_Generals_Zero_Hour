@@ -41976,6 +41976,54 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates TEAM_OWNED_BY_PLAYER from controlling-team ownership with prototype fan-out', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TeamUnit', 10, 10)], 128, 128), // id 1
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('LooseTeam', [1])).toBe(true);
+    // Source parity: ownership is Team::getControllingPlayer(), not inferred from member side.
+    expect(logic.evaluateScriptTeamOwnedByPlayer({ teamName: 'LooseTeam', side: 'America' })).toBe(false);
+    expect(logic.setScriptTeamControllingSide('LooseTeam', 'America')).toBe(true);
+    expect(logic.evaluateScriptTeamOwnedByPlayer({ teamName: 'LooseTeam', side: 'America' })).toBe(true);
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamControllingSide('AlphaInstanceA', 'China')).toBe(true);
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamControllingSide('AlphaInstanceB', 'America')).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['AlphaProto', 'America'],
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['AlphaProto', 'America'],
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['AlphaProto', 'America'],
+    })).toBe(true);
+  });
+
   it('resolves THIS_PLAYER tokens for player-side script params', () => {
     const bundle = makeBundle({
       objects: [
