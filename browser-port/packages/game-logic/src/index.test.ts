@@ -39721,6 +39721,10 @@ describe('Script condition groundwork', () => {
     );
     expect(logic.setScriptTeamMembers('SourceTeam', [1, 2])).toBe(true);
     expect(logic.setScriptTeamControllingSide('SourceTeam', 'America')).toBe(true);
+    expect(logic.setScriptTeamMembers('SourceInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SourceInstanceA', 'SourceProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('SourceInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SourceInstanceB', 'SourceProto')).toBe(true);
     expect(logic.setScriptTeamMembers('TargetTeam', [3])).toBe(true);
     expect(logic.setScriptTeamControllingSide('TargetTeam', 'China')).toBe(true);
 
@@ -39743,6 +39747,29 @@ describe('Script condition groundwork', () => {
       params: ['SourceTeam', 1],
     })).toBe(true);
     expect(privateApi.scriptTeamsByName.get('SOURCETEAM')?.recruitableOverride).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 91,
+      params: ['SourceProto', 0],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEA')?.recruitableOverride).toBe(false);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('SourceInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 91,
+      params: ['SourceProto', 1],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEA')?.recruitableOverride).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBe(false);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
+      actionType: 91,
+      params: ['SourceProto', 1],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBe(true);
+
     expect(logic.executeScriptAction({
       actionType: 91,
       params: ['MissingTeam', 1],
