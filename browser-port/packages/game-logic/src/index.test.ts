@@ -29471,6 +29471,40 @@ describe('Script condition groundwork', () => {
       params: ['AlphaTeam', 'China'],
     })).toBe(true);
 
+    expect(logic.setScriptTeamCreated('TransferInstanceA', true)).toBe(true);
+    expect(logic.setScriptTeamControllingSide('TransferInstanceA', 'America')).toBe(true);
+    expect(logic.setScriptTeamPrototype('TransferInstanceA', 'TransferProto')).toBe(true);
+    expect(logic.setScriptTeamCreated('TransferInstanceB', true)).toBe(true);
+    expect(logic.setScriptTeamControllingSide('TransferInstanceB', 'America')).toBe(true);
+    expect(logic.setScriptTeamPrototype('TransferInstanceB', 'TransferProto')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 153,
+      params: ['TransferProto', 'China'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['TransferInstanceA', 'China'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['TransferInstanceB', 'China'],
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('TransferInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 153,
+      params: ['TransferProto', 'America'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['TransferInstanceA', 'America'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['TransferInstanceB', 'China'],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
+
     expect(logic.executeScriptAction({
       actionType: 154, // PLAYER_SET_MONEY
       params: ['America', 500],

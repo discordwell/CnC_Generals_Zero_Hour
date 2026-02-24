@@ -12602,19 +12602,29 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: Team controlling player side override.
    */
   setScriptTeamControllingSide(teamName: string, side: string | null): boolean {
-    const team = this.getOrCreateScriptTeamRecord(teamName);
-    if (!team) {
+    const resolvedTeams = this.resolveScriptConditionTeams(teamName);
+    const teams = resolvedTeams.length > 0
+      ? resolvedTeams
+      : [this.getOrCreateScriptTeamRecord(teamName)].filter((team): team is ScriptTeamRecord => team !== null);
+    if (teams.length === 0) {
       return false;
     }
+
     if (side === null) {
-      team.controllingSide = null;
+      for (const team of teams) {
+        team.controllingSide = null;
+      }
       return true;
     }
+
     const normalizedSide = this.resolveScriptPlayerSideFromInput(side);
     if (!normalizedSide) {
       return false;
     }
-    team.controllingSide = normalizedSide;
+
+    for (const team of teams) {
+      team.controllingSide = normalizedSide;
+    }
     return true;
   }
 
