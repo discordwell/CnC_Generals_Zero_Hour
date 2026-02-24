@@ -36563,11 +36563,16 @@ describe('Script condition groundwork', () => {
     logic.loadMapObjects(
       makeMap([
         makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 26, 20), // id 2
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('CapturedTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('CapturedInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('CapturedInstanceA', 'CapturedProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('CapturedInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('CapturedInstanceB', 'CapturedProto')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 476, // PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS
@@ -36577,6 +36582,16 @@ describe('Script condition groundwork', () => {
       actionType: 271, // PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS (raw id)
       params: ['America', 'CapturedTeam'],
     })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 476,
+      params: ['America', 'CapturedProto'],
+    })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('CapturedInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 271,
+      params: ['America', 'CapturedProto'],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
       actionType: 476,
       params: ['America', 'MissingTeam'],

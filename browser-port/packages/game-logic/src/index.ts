@@ -15400,8 +15400,8 @@ export class GameLogicSubsystem implements Subsystem {
   ): boolean {
     // Source parity: player parameter is currently unused by C++.
     void playerName;
-    const team = this.getScriptTeamRecord(teamName);
-    return team !== null;
+    const teams = this.resolveScriptConditionTeams(teamName);
+    return teams.length > 0;
   }
 
   /**
