@@ -12654,12 +12654,23 @@ export class GameLogicSubsystem implements Subsystem {
     };
   }
 
-  private resolveScriptTeamSideForRelationship(teamName: string): string | null {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return null;
+  private resolveScriptTeamSidesForRelationship(teamName: string): string[] {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
+      return [];
     }
-    return this.resolveScriptTeamControllingSide(team);
+
+    const sides: string[] = [];
+    const seenSides = new Set<string>();
+    for (const team of teams) {
+      const side = this.resolveScriptTeamControllingSide(team);
+      if (!side || seenSides.has(side)) {
+        continue;
+      }
+      seenSides.add(side);
+      sides.push(side);
+    }
+    return sides;
   }
 
   private setScriptTeamOverrideRelationToTeam(
@@ -12667,35 +12678,49 @@ export class GameLogicSubsystem implements Subsystem {
     otherTeamName: string,
     relationshipInput: ScriptRelationshipInput,
   ): boolean {
-    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
-    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
-    if (!sourceSide || !targetSide) {
-      return false;
-    }
     const relationship = this.resolveScriptRelationshipInput(relationshipInput);
     if (relationship === null) {
       return false;
     }
-    this.setTeamRelationship(sourceSide, targetSide, relationship);
+
+    const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
+    const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
+    if (sourceSides.length === 0 || targetSides.length === 0) {
+      return false;
+    }
+
+    for (const sourceSide of sourceSides) {
+      for (const targetSide of targetSides) {
+        this.setTeamRelationship(sourceSide, targetSide, relationship);
+      }
+    }
     return true;
   }
 
   private removeScriptTeamOverrideRelationToTeam(teamName: string, otherTeamName: string): boolean {
-    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
-    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
-    if (!sourceSide || !targetSide) {
+    const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
+    const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
+    if (sourceSides.length === 0 || targetSides.length === 0) {
       return false;
     }
-    this.removeTeamRelationship(sourceSide, targetSide);
+
+    for (const sourceSide of sourceSides) {
+      for (const targetSide of targetSides) {
+        this.removeTeamRelationship(sourceSide, targetSide);
+      }
+    }
     return true;
   }
 
   private removeScriptTeamAllOverrideRelations(teamName: string): boolean {
-    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
-    if (!sourceSide) {
+    const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
+    if (sourceSides.length === 0) {
       return false;
     }
-    this.clearRelationshipOverridesForSourceSide(sourceSide);
+
+    for (const sourceSide of sourceSides) {
+      this.clearRelationshipOverridesForSourceSide(sourceSide);
+    }
     return true;
   }
 
@@ -12704,26 +12729,32 @@ export class GameLogicSubsystem implements Subsystem {
     playerSide: string,
     relationshipInput: ScriptRelationshipInput,
   ): boolean {
-    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
+    const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
     const targetSide = this.normalizeSide(playerSide);
-    if (!sourceSide || !targetSide) {
+    if (sourceSides.length === 0 || !targetSide) {
       return false;
     }
     const relationship = this.resolveScriptRelationshipInput(relationshipInput);
     if (relationship === null) {
       return false;
     }
-    this.setTeamRelationship(sourceSide, targetSide, relationship);
+
+    for (const sourceSide of sourceSides) {
+      this.setTeamRelationship(sourceSide, targetSide, relationship);
+    }
     return true;
   }
 
   private removeScriptTeamOverrideRelationToPlayer(teamName: string, playerSide: string): boolean {
-    const sourceSide = this.resolveScriptTeamSideForRelationship(teamName);
+    const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
     const targetSide = this.normalizeSide(playerSide);
-    if (!sourceSide || !targetSide) {
+    if (sourceSides.length === 0 || !targetSide) {
       return false;
     }
-    this.removeTeamRelationship(sourceSide, targetSide);
+
+    for (const sourceSide of sourceSides) {
+      this.removeTeamRelationship(sourceSide, targetSide);
+    }
     return true;
   }
 
@@ -12733,25 +12764,31 @@ export class GameLogicSubsystem implements Subsystem {
     relationshipInput: ScriptRelationshipInput,
   ): boolean {
     const sourceSide = this.normalizeSide(playerSide);
-    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
-    if (!sourceSide || !targetSide) {
+    const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
+    if (!sourceSide || targetSides.length === 0) {
       return false;
     }
     const relationship = this.resolveScriptRelationshipInput(relationshipInput);
     if (relationship === null) {
       return false;
     }
-    this.setPlayerRelationship(sourceSide, targetSide, relationship);
+
+    for (const targetSide of targetSides) {
+      this.setPlayerRelationship(sourceSide, targetSide, relationship);
+    }
     return true;
   }
 
   private removeScriptPlayerOverrideRelationToTeam(playerSide: string, otherTeamName: string): boolean {
     const sourceSide = this.normalizeSide(playerSide);
-    const targetSide = this.resolveScriptTeamSideForRelationship(otherTeamName);
-    if (!sourceSide || !targetSide) {
+    const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
+    if (!sourceSide || targetSides.length === 0) {
       return false;
     }
-    this.removePlayerRelationship(sourceSide, targetSide);
+
+    for (const targetSide of targetSides) {
+      this.removePlayerRelationship(sourceSide, targetSide);
+    }
     return true;
   }
 

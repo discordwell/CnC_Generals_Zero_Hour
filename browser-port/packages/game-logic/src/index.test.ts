@@ -40622,6 +40622,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('TankHunter', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         ]),
+        makeObjectDef('Rebel', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
       ],
     });
 
@@ -40630,12 +40633,19 @@ describe('Script condition groundwork', () => {
       makeMap([
         makeMapObject('Ranger', 10, 10),
         makeMapObject('TankHunter', 20, 20),
+        makeMapObject('Rebel', 30, 20),
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('AlphaTeam', [1])).toBe(true);
     expect(logic.setScriptTeamMembers('BravoTeam', [2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('BravoInstanceA', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('BravoInstanceA', 'BravoProto')).toBe(true);
 
     expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
     expect(logic.executeScriptAction({
@@ -40695,6 +40705,92 @@ describe('Script condition groundwork', () => {
       params: ['AlphaTeam'],
     })).toBe(true);
     expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 383, // TEAM_SET_OVERRIDE_RELATION_TO_TEAM
+      params: ['AlphaProto', 'BravoProto', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    expect(logic.executeScriptAction({
+      actionType: 384, // TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM
+      params: ['AlphaProto', 'BravoProto'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 383,
+      params: ['AlphaProto', 'BravoProto', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 384,
+      params: ['AlphaProto', 'BravoProto'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 388, // TEAM_SET_OVERRIDE_RELATION_TO_PLAYER
+      params: ['AlphaProto', 'China', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 389, // TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER
+      params: ['AlphaProto', 'China'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 389,
+      params: ['AlphaProto', 'China'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 390, // PLAYER_SET_OVERRIDE_RELATION_TO_TEAM
+      params: ['China', 'AlphaProto', 0],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(2, 1)).toBe('enemies');
+    expect(logic.getEntityRelationship(2, 3)).toBe('enemies');
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 391, // PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM
+      params: ['China', 'AlphaProto'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(2, 1)).toBe('neutral');
+    expect(logic.getEntityRelationship(2, 3)).toBe('enemies');
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 391,
+      params: ['China', 'AlphaProto'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(2, 3)).toBe('neutral');
+
+    expect(logic.executeScriptAction({
+      actionType: 388,
+      params: ['AlphaProto', 'China', 0],
+    })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 385,
+      params: ['AlphaProto'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
+    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 385,
+      params: ['AlphaProto'],
+    })).toBe(true);
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
 
     expect(logic.executeScriptAction({
       actionType: 383,
