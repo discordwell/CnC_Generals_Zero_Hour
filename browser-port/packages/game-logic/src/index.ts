@@ -16226,28 +16226,8 @@ export class GameLogicSubsystem implements Subsystem {
     asTeam: boolean,
     exact: boolean,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const center = this.resolveScriptTeamCenter(teamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const route = this.resolveScriptWaypointRouteByPathLabel(
-      waypointPathLabel,
-      center.x,
-      center.z,
-    );
-    if (!route || route.length === 0) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
@@ -16256,10 +16236,34 @@ export class GameLogicSubsystem implements Subsystem {
     void asTeam;
     void exact;
 
+    const handledEntityIds = new Set<number>();
     let movedAny = false;
-    for (const entity of teamMembers) {
-      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-        movedAny = true;
+    for (const team of teams) {
+      const teamMembers = this.getScriptTeamMemberEntities(team)
+        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
+      if (teamMembers.length === 0) {
+        continue;
+      }
+
+      const center = this.resolveScriptTeamCenter(teamMembers);
+      if (!center) {
+        continue;
+      }
+
+      const route = this.resolveScriptWaypointRouteByPathLabel(
+        waypointPathLabel,
+        center.x,
+        center.z,
+      );
+      if (!route || route.length === 0) {
+        return movedAny;
+      }
+
+      for (const entity of teamMembers) {
+        handledEntityIds.add(entity.id);
+        if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+          movedAny = true;
+        }
       }
     }
     return movedAny;
@@ -19348,16 +19352,20 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamHunt -> AIGroup::groupHunt.
    */
   private executeScriptTeamHunt(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+    const handledEntityIds = new Set<number>();
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        this.executeScriptNamedHunt(entity.id);
       }
-      this.executeScriptNamedHunt(entity.id);
     }
     return true;
   }

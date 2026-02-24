@@ -34137,10 +34137,16 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('PatrolTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('PatrolInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PatrolInstanceA', 'PatrolProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('PatrolInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PatrolInstanceB', 'PatrolProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
+        moving: boolean;
         moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
       }>;
     };
 
@@ -34179,6 +34185,38 @@ describe('Script condition groundwork', () => {
       actionType: 487, // NAMED_FOLLOW_WAYPOINTS_EXACT (offset id)
       params: [2, 'PatrolPathA'],
     })).toBe(true);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.executeScriptAction({
+      actionType: 36,
+      params: ['PatrolProto', 'PatrolPathA', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    const patrolOne = privateApi.spawnedEntities.get(1);
+    const patrolTwo = privateApi.spawnedEntities.get(2);
+    expect(patrolOne).toBeDefined();
+    expect(patrolTwo).toBeDefined();
+    patrolOne!.moving = false;
+    patrolOne!.moveTarget = null;
+    patrolOne!.movePath = [];
+    patrolTwo!.moving = false;
+    patrolTwo!.moveTarget = null;
+    patrolTwo!.movePath = [];
+    expect(logic.setScriptConditionTeamContext('PatrolInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 486, // TEAM_FOLLOW_WAYPOINTS_EXACT (offset id)
+      params: ['PatrolProto', 'PatrolPathA', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 36,
@@ -39484,6 +39522,10 @@ describe('Script condition groundwork', () => {
     logic.setTeamRelationship('China', 'America', 0);
 
     expect(logic.setScriptTeamMembers('Attackers', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackerInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackerInstanceA', 'AttackerProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackerInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackerInstanceB', 'AttackerProto')).toBe(true);
     expect(logic.setScriptTeamMembers('Victims', [3, 4])).toBe(true);
     expect(logic.setScriptTeamMembers('LoadTeam', [6, 7, 8])).toBe(true);
 
@@ -39557,6 +39599,32 @@ describe('Script condition groundwork', () => {
     logic.update(1 / 30);
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
     expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).not.toBeNull();
+
+    teamHunter1!.attackTargetEntityId = null;
+    teamHunter2!.attackTargetEntityId = null;
+    teamHunter1!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    teamHunter2!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    expect(logic.executeScriptAction({
+      actionType: 60,
+      params: ['AttackerProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).not.toBeNull();
+
+    teamHunter1!.attackTargetEntityId = null;
+    teamHunter2!.attackTargetEntityId = null;
+    teamHunter1!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    teamHunter2!.autoTargetScanNextFrame = Number.MAX_SAFE_INTEGER;
+    expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 60,
+      params: ['AttackerProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     teamHunter1!.attackTargetEntityId = null;
     teamHunter2!.attackTargetEntityId = null;
