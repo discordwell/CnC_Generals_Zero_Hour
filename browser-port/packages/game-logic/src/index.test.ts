@@ -32803,6 +32803,10 @@ describe('Script condition groundwork', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
     expect(logic.setScriptTeamMembers('MoveTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('MoveInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('MoveInstanceA', 'MoveProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('MoveInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('MoveInstanceB', 'MoveProto')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 432, // UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE
@@ -32836,6 +32840,34 @@ describe('Script condition groundwork', () => {
     expect(unitTwoTeamFinal).toBeDefined();
     expect(Math.hypot(unitOneTeamFinal!.x - 25, unitOneTeamFinal!.z - 10)).toBeLessThanOrEqual(20);
     expect(Math.hypot(unitTwoTeamFinal!.x - 25, unitTwoTeamFinal!.z - 10)).toBeLessThanOrEqual(20);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.executeScriptAction({
+      actionType: 433,
+      params: ['MoveProto', 'TargetBeacon', 'MoveArea'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    const moveOne = privateApi.spawnedEntities.get(1)!;
+    const moveTwo = privateApi.spawnedEntities.get(2)!;
+    moveOne.moveTarget = null;
+    moveOne.movePath = [];
+    moveTwo.moveTarget = null;
+    moveTwo.movePath = [];
+    expect(logic.setScriptConditionTeamContext('MoveInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 433,
+      params: ['MoveProto', 'TargetBeacon', 'MoveArea'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 432,
@@ -34038,6 +34070,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('AttackTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackInstanceA', 'AttackProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackInstanceB', 'AttackProto')).toBe(true);
     logic.setTeamRelationship('America', 'China', 0);
     logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
     logic.submitCommand({ type: 'setSidePlayerType', side: 'China', playerType: 'HUMAN' });
@@ -34084,6 +34120,34 @@ describe('Script condition groundwork', () => {
     expect(
       privateApi.spawnedEntities.get(2)?.movePath.some((node) => Math.hypot(node.x - 90, node.z - 20) < 0.5),
     ).toBe(true);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.executeScriptAction({
+      actionType: 450,
+      params: ['AttackProto', 'ApproachPath', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.movePath.length).toBeGreaterThan(0);
+    expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBeGreaterThan(0);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    const attackOne = privateApi.spawnedEntities.get(1)!;
+    const attackTwo = privateApi.spawnedEntities.get(2)!;
+    attackOne.moveTarget = null;
+    attackOne.movePath = [];
+    attackTwo.moveTarget = null;
+    attackTwo.movePath = [];
+    expect(logic.setScriptConditionTeamContext('AttackInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 454,
+      params: ['AttackProto', 'ApproachPath'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 450,
@@ -41030,6 +41094,10 @@ describe('Script condition groundwork', () => {
     );
 
     expect(logic.setScriptTeamMembers('StopTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('StopInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('StopInstanceA', 'StopProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('StopInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('StopInstanceB', 'StopProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -41050,6 +41118,21 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(12);
     expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(12);
+
+    expect(logic.executeScriptAction({
+      actionType: 346,
+      params: ['StopProto', 10],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(10);
+    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(10);
+    expect(logic.setScriptConditionTeamContext('StopInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 141,
+      params: ['StopProto', 7],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(7);
+    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(10);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 142, // NAMED_SET_STOPPING_DISTANCE (raw id)

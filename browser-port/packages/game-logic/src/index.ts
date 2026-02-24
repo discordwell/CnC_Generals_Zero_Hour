@@ -8881,17 +8881,22 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptSetStoppingDistance(teamName: string, stoppingDistance: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      // Source parity: return immediately when encountering a member without an active locomotor.
-      if (!this.applyScriptStoppingDistanceToEntity(entity, stoppingDistance)) {
-        return true;
+
+    const handledEntityIds = new Set<number>();
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        // Source parity: return immediately when encountering a member without an active locomotor.
+        if (!this.applyScriptStoppingDistanceToEntity(entity, stoppingDistance)) {
+          return true;
+        }
       }
     }
     return true;
@@ -16339,8 +16344,8 @@ export class GameLogicSubsystem implements Subsystem {
     asTeam: boolean,
     explicitPlayerSide: string,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
@@ -16349,34 +16354,38 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const center = this.resolveScriptTeamCenter(teamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const route = this.resolveScriptSkirmishApproachRoute(
-      waypointPathLabel,
-      side,
-      center.x,
-      center.z,
-    );
-    if (!route || route.length === 0) {
-      return false;
-    }
-
     // TODO(source-parity): "asTeam" should use group-follow-as-team semantics instead of per-unit routes.
     void asTeam;
 
+    const handledEntityIds = new Set<number>();
     let movedAny = false;
-    for (const entity of teamMembers) {
-      if (this.enqueueScriptWaypointRoute(entity, route)) {
-        movedAny = true;
+    for (const team of teams) {
+      const teamMembers = this.getScriptTeamMemberEntities(team)
+        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
+      if (teamMembers.length === 0) {
+        continue;
+      }
+
+      const center = this.resolveScriptTeamCenter(teamMembers);
+      if (!center) {
+        continue;
+      }
+
+      const route = this.resolveScriptSkirmishApproachRoute(
+        waypointPathLabel,
+        side,
+        center.x,
+        center.z,
+      );
+      if (!route || route.length === 0) {
+        return movedAny;
+      }
+
+      for (const entity of teamMembers) {
+        handledEntityIds.add(entity.id);
+        if (this.enqueueScriptWaypointRoute(entity, route)) {
+          movedAny = true;
+        }
       }
     }
     return movedAny;
@@ -16391,8 +16400,8 @@ export class GameLogicSubsystem implements Subsystem {
     waypointPathLabel: string,
     explicitPlayerSide: string,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
@@ -16401,39 +16410,43 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const center = this.resolveScriptTeamCenter(teamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const route = this.resolveScriptSkirmishApproachRoute(
-      waypointPathLabel,
-      side,
-      center.x,
-      center.z,
-    );
-    if (!route || route.length === 0) {
-      return false;
-    }
-
-    const firstWaypoint = route[0]!;
+    const handledEntityIds = new Set<number>();
     let movedAny = false;
-    for (const entity of teamMembers) {
-      this.applyCommand({
-        type: 'moveTo',
-        entityId: entity.id,
-        targetX: firstWaypoint.x,
-        targetZ: firstWaypoint.z,
-        commandSource: 'SCRIPT',
-      });
-      if (entity.moving) {
-        movedAny = true;
+    for (const team of teams) {
+      const teamMembers = this.getScriptTeamMemberEntities(team)
+        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
+      if (teamMembers.length === 0) {
+        continue;
+      }
+
+      const center = this.resolveScriptTeamCenter(teamMembers);
+      if (!center) {
+        continue;
+      }
+
+      const route = this.resolveScriptSkirmishApproachRoute(
+        waypointPathLabel,
+        side,
+        center.x,
+        center.z,
+      );
+      if (!route || route.length === 0) {
+        return movedAny;
+      }
+
+      const firstWaypoint = route[0]!;
+      for (const entity of teamMembers) {
+        handledEntityIds.add(entity.id);
+        this.applyCommand({
+          type: 'moveTo',
+          entityId: entity.id,
+          targetX: firstWaypoint.x,
+          targetZ: firstWaypoint.z,
+          commandSource: 'SCRIPT',
+        });
+        if (entity.moving) {
+          movedAny = true;
+        }
       }
     }
     return movedAny;
@@ -17185,64 +17198,73 @@ export class GameLogicSubsystem implements Subsystem {
     objectTypeName: string,
     triggerName: string,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team);
-    let mapStatusEntity: MapEntity | null = null;
-    let sourceX = 0;
-    let sourceZ = 0;
-    let sourceCount = 0;
-    for (const member of teamMembers) {
-      if (member.destroyed) {
+    const handledEntityIds = new Set<number>();
+    let movedAny = false;
+    for (const team of teams) {
+      const teamMembers = this.getScriptTeamMemberEntities(team)
+        .filter((member) => !handledEntityIds.has(member.id));
+      if (teamMembers.length === 0) {
         continue;
       }
-      if (!member.canMove) {
-        continue;
-      }
-      if (!mapStatusEntity) {
-        mapStatusEntity = member;
-      }
-      sourceX += member.x;
-      sourceZ += member.z;
-      sourceCount += 1;
-    }
 
-    if (!mapStatusEntity || sourceCount <= 0) {
-      return false;
-    }
-
-    const target = this.findNearestScriptMoveTargetByType(
-      sourceX / sourceCount,
-      sourceZ / sourceCount,
-      mapStatusEntity,
-      objectTypeName,
-      triggerName,
-    );
-    if (!target) {
-      return false;
-    }
-
-    for (const member of teamMembers) {
-      if (member.destroyed || !member.canMove) {
-        return false;
+      let mapStatusEntity: MapEntity | null = null;
+      let sourceX = 0;
+      let sourceZ = 0;
+      let sourceCount = 0;
+      for (const member of teamMembers) {
+        if (member.destroyed || !member.canMove) {
+          continue;
+        }
+        if (!mapStatusEntity) {
+          mapStatusEntity = member;
+        }
+        sourceX += member.x;
+        sourceZ += member.z;
+        sourceCount += 1;
       }
-      this.setEntityLocomotorSet(member.id, LOCOMOTORSET_NORMAL);
-      const interactionDistance = this.resolveEntityInteractionDistance(member, target);
-      this.issueMoveTo(
-        member.id,
-        target.x,
-        target.z,
-        interactionDistance,
+      if (!mapStatusEntity || sourceCount <= 0) {
+        return movedAny;
+      }
+
+      const target = this.findNearestScriptMoveTargetByType(
+        sourceX / sourceCount,
+        sourceZ / sourceCount,
+        mapStatusEntity,
+        objectTypeName,
+        triggerName,
       );
-      if (member.moveTarget === null) {
-        this.issueMoveTo(member.id, target.x, target.z, interactionDistance, true);
+      if (!target) {
+        return movedAny;
+      }
+
+      for (const member of teamMembers) {
+        handledEntityIds.add(member.id);
+        if (member.destroyed || !member.canMove) {
+          return movedAny;
+        }
+        this.setEntityLocomotorSet(member.id, LOCOMOTORSET_NORMAL);
+        const interactionDistance = this.resolveEntityInteractionDistance(member, target);
+        this.issueMoveTo(
+          member.id,
+          target.x,
+          target.z,
+          interactionDistance,
+        );
+        if (member.moveTarget === null) {
+          this.issueMoveTo(member.id, target.x, target.z, interactionDistance, true);
+        }
+        if (member.moving) {
+          movedAny = true;
+        }
       }
     }
 
-    return true;
+    return movedAny;
   }
 
   /**
