@@ -36253,6 +36253,72 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('fans out team-capture-nearest-unowned-faction-unit across TeamPrototype with THIS_TEAM precedence', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CaptureInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AbandonedVehicle', 'Civilian', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CaptureInfantry', 20, 20), // id 1
+        makeMapObject('CaptureInfantry', 60, 20), // id 2
+        makeMapObject('AbandonedVehicle', 24, 20), // id 3
+        makeMapObject('AbandonedVehicle', 64, 20), // id 4
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('CaptureInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('CaptureInstanceA', 'CaptureProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('CaptureInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('CaptureInstanceB', 'CaptureProto')).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        side: string | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(3)?.objectStatusFlags.add('DISABLED_UNMANNED');
+    privateApi.spawnedEntities.get(4)?.objectStatusFlags.add('DISABLED_UNMANNED');
+
+    expect(logic.setScriptConditionTeamContext('CaptureInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureProto'],
+    })).toBe(true);
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect((privateApi.spawnedEntities.get(3)?.side ?? '').toLowerCase()).toBe('america');
+    expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+    expect((privateApi.spawnedEntities.get(4)?.side ?? '').toLowerCase()).toBe('civilian');
+    expect(privateApi.spawnedEntities.get(4)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureProto'],
+    })).toBe(true);
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect((privateApi.spawnedEntities.get(4)?.side ?? '').toLowerCase()).toBe('america');
+    expect(privateApi.spawnedEntities.get(4)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+  });
+
   it('executes script player-create-team-from-captured-units action using source action id', () => {
     const bundle = makeBundle({
       objects: [
@@ -39528,6 +39594,11 @@ describe('Script condition groundwork', () => {
     expect(logic.setScriptTeamPrototype('AttackerInstanceB', 'AttackerProto')).toBe(true);
     expect(logic.setScriptTeamMembers('Victims', [3, 4])).toBe(true);
     expect(logic.setScriptTeamMembers('LoadTeam', [6, 7, 8])).toBe(true);
+    expect(logic.setScriptTeamMembers('LoadInstanceA', [6, 7])).toBe(true);
+    expect(logic.setScriptTeamPrototype('LoadInstanceA', 'LoadProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('LoadInstanceB', [8])).toBe(true);
+    expect(logic.setScriptTeamPrototype('LoadInstanceB', 'LoadProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('LoadTransportTeam', [6])).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -39572,6 +39643,37 @@ describe('Script condition groundwork', () => {
       .filter((entityId) => privateApi.spawnedEntities.get(entityId)?.transportContainerId === 6)
       .length;
     expect(loadedPassengerCount).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 55, // TEAM_EXIT_ALL
+      params: ['LoadTransportTeam'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(7)?.transportContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(8)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 51, // TEAM_LOAD_TRANSPORTS
+      params: ['LoadProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(7)?.transportContainerId).toBe(6);
+    expect(privateApi.spawnedEntities.get(8)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 55,
+      params: ['LoadTransportTeam'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.setScriptConditionTeamContext('LoadInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 51,
+      params: ['LoadProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(7)?.transportContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(8)?.transportContainerId).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     const namedHunter = privateApi.spawnedEntities.get(9);
     expect(namedHunter).toBeDefined();
@@ -40254,6 +40356,10 @@ describe('Script condition groundwork', () => {
     logic.setSidePlayerType('America', 'COMPUTER');
     logic.setSidePlayerType('China', 'COMPUTER');
     expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
@@ -40315,11 +40421,27 @@ describe('Script condition groundwork', () => {
 
     expect(logic.executeScriptAction({
       actionType: 43,
+      params: ['AlphaProto', 'InfantryFirst'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('INFANTRYFIRST');
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttackPrioritySetName).toBe('INFANTRYFIRST');
+
+    expect(logic.executeScriptAction({
+      actionType: 43,
       params: ['AlphaTeam', ''],
     })).toBe(true);
     expect(privateApi.scriptTeamsByName.get('ALPHATEAM')?.attackPrioritySetName).toBe('INFANTRYFIRST');
     expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('');
     expect(privateApi.spawnedEntities.get(2)?.scriptAttackPrioritySetName).toBe('');
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 43,
+      params: ['AlphaProto', 'InfantryFirst'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('INFANTRYFIRST');
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttackPrioritySetName).toBe('');
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 44, // SET_BASE_CONSTRUCTION_SPEED
@@ -40335,11 +40457,27 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(4);
 
     expect(logic.executeScriptAction({
+      actionType: 46,
+      params: ['AlphaProto', 5],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(5);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 46,
+      params: ['AlphaProto', 6],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(6);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(5);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
       actionType: 45, // NAMED_SET_ATTITUDE
       params: [1, 1], // PASSIVE
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(1);
-    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(4);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(5);
 
     const unit1 = privateApi.spawnedEntities.get(1);
     const unit2 = privateApi.spawnedEntities.get(2);
@@ -40994,6 +41132,10 @@ describe('Script condition groundwork', () => {
     );
 
     expect(logic.setScriptTeamMembers('SelectTeam', [3, 4, 5])).toBe(true);
+    expect(logic.setScriptTeamMembers('SelectInstanceA', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SelectInstanceA', 'SelectProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('SelectInstanceB', [4, 5])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SelectInstanceB', 'SelectProto')).toBe(true);
 
     logic.submitCommand({ type: 'select', entityId: 5 });
     logic.update(0);
@@ -41004,6 +41146,22 @@ describe('Script condition groundwork', () => {
       params: ['SelectTeam', 'Ranger', 0, ''],
     })).toBe(true);
     expect(logic.getLocalPlayerSelectionIds()).toEqual([3]);
+
+    expect(logic.executeScriptAction({
+      actionType: 410,
+      params: ['SelectProto', 'Ranger', 0, ''],
+    })).toBe(true);
+    expect(logic.getLocalPlayerSelectionIds()).toEqual([3]);
+
+    logic.submitCommand({ type: 'select', entityId: 5 });
+    logic.update(0);
+    expect(logic.setScriptConditionTeamContext('SelectInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 410,
+      params: ['SelectProto', 'Ranger', 0, ''],
+    })).toBe(true);
+    expect(logic.getLocalPlayerSelectionIds()).toEqual([4]);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 410,
