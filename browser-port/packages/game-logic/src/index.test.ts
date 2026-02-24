@@ -38540,7 +38540,15 @@ describe('Script condition groundwork', () => {
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
     expect(logic.setScriptTeamMembers('Attackers', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackerInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackerInstanceA', 'AttackersProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackerInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackerInstanceB', 'AttackersProto')).toBe(true);
     expect(logic.setScriptTeamMembers('Victims', [3, 4])).toBe(true);
+    expect(logic.setScriptTeamMembers('VictimInstanceA', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('VictimInstanceA', 'VictimsProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('VictimInstanceB', [4])).toBe(true);
+    expect(logic.setScriptTeamPrototype('VictimInstanceB', 'VictimsProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -38559,6 +38567,20 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(75);
     expect(logic.executeScriptAction({
       actionType: 12,
+      params: ['VictimsProto', 10],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.health).toBeCloseTo(65);
+    expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(65);
+    expect(logic.setScriptConditionTeamContext('VictimInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 12,
+      params: ['VictimsProto', 5],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.health).toBeCloseTo(60);
+    expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(65);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 12,
       params: ['MissingTeam', 25],
     })).toBe(false);
 
@@ -38574,6 +38596,33 @@ describe('Script condition groundwork', () => {
       actionType: 13,
       params: ['Attackers', 'MissingWaypoint'],
     })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 13,
+      params: ['AttackersProto', 'MoveB'],
+    })).toBe(true);
+    const attacker1PathAfterProtoMove = privateApi.spawnedEntities.get(1)?.movePath ?? [];
+    const attacker2PathAfterProtoMove = privateApi.spawnedEntities.get(2)?.movePath ?? [];
+    expect(attacker1PathAfterProtoMove.length).toBeGreaterThan(0);
+    expect(attacker2PathAfterProtoMove.length).toBeGreaterThan(0);
+    const attacker1EndAfterProtoMove = attacker1PathAfterProtoMove[attacker1PathAfterProtoMove.length - 1] ?? null;
+    const attacker2EndAfterProtoMove = attacker2PathAfterProtoMove[attacker2PathAfterProtoMove.length - 1] ?? null;
+    expect(attacker1EndAfterProtoMove?.x).toBeCloseTo(attacker2EndAfterProtoMove?.x ?? 0);
+    expect(attacker1EndAfterProtoMove?.z).toBeCloseTo(attacker2EndAfterProtoMove?.z ?? 0);
+    expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 13,
+      params: ['AttackersProto', 'MoveA'],
+    })).toBe(true);
+    const attacker1PathAfterContextMove = privateApi.spawnedEntities.get(1)?.movePath ?? [];
+    const attacker2PathAfterContextMove = privateApi.spawnedEntities.get(2)?.movePath ?? [];
+    const attacker1EndAfterContextMove = attacker1PathAfterContextMove[attacker1PathAfterContextMove.length - 1] ?? null;
+    const attacker2EndAfterContextMove = attacker2PathAfterContextMove[attacker2PathAfterContextMove.length - 1] ?? null;
+    expect(attacker1EndAfterContextMove?.x).not.toBeCloseTo(attacker1EndAfterProtoMove?.x ?? 0);
+    expect(attacker1EndAfterContextMove?.z).not.toBeCloseTo(attacker1EndAfterProtoMove?.z ?? 0);
+    expect(attacker2EndAfterContextMove?.x).toBeCloseTo(attacker2EndAfterProtoMove?.x ?? 0);
+    expect(attacker2EndAfterContextMove?.z).toBeCloseTo(attacker2EndAfterProtoMove?.z ?? 0);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 38, // MOVE_NAMED_UNIT_TO
@@ -38604,6 +38653,22 @@ describe('Script condition groundwork', () => {
     const teamAttackTarget2 = privateApi.spawnedEntities.get(2)?.attackTargetEntityId;
     expect([3, 4]).toContain(teamAttackTarget1);
     expect([3, 4]).toContain(teamAttackTarget2);
+    expect(logic.executeScriptAction({
+      actionType: 32,
+      params: ['AttackersProto', 'VictimsProto'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(2)?.attackTargetEntityId);
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
+    expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 32,
+      params: ['AttackersProto', 'VictimsProto'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBe(null);
+    logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
       actionType: 32,
       params: ['MissingTeam', 'Victims'],
