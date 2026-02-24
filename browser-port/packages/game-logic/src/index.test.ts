@@ -29857,12 +29857,17 @@ describe('Script condition groundwork', () => {
     logic.loadMapObjects(
       makeMap([
         makeMapObject('HunterUnit', 20, 20), // id 1
-        makeMapObject('EnemyTarget', 60, 20), // id 2
+        makeMapObject('HunterUnit', 24, 20), // id 2
+        makeMapObject('EnemyTarget', 60, 20), // id 3
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
-    expect(logic.setScriptTeamMembers('HuntTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('HuntTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('HuntInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('HuntInstanceA', 'HuntProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('HuntInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('HuntInstanceB', 'HuntProto')).toBe(true);
     logic.setTeamRelationship('America', 'China', 0);
 
     expect(logic.executeScriptAction({
@@ -29873,15 +29878,25 @@ describe('Script condition groundwork', () => {
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
       specialPowerTemplateName: 'SCRIPTHUNTPOWER',
       dispatchType: 'OBJECT',
-      targetEntityId: 2,
+      targetEntityId: 3,
     });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
 
     expect(logic.executeScriptAction({
       actionType: 483, // TEAM_HUNT_WITH_COMMAND_BUTTON (offset id)
       params: ['HuntTeam', 'Command_HuntPower'],
     })).toBe(true);
     logic.update(1 / 30);
-    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+
+    expect(logic.executeScriptAction({
+      actionType: 278,
+      params: ['HuntProto', 'Command_HuntPower'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
 
     logic.submitCommand({
       type: 'moveTo',
@@ -29890,11 +29905,29 @@ describe('Script condition groundwork', () => {
       targetZ: 10,
       commandSource: 'PLAYER',
     });
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 2,
+      targetX: 12,
+      targetZ: 10,
+      commandSource: 'PLAYER',
+    });
     logic.update(1 / 30);
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, { commandButtonHuntMode: string }>;
     };
     expect(privateApi.spawnedEntities.get(1)?.commandButtonHuntMode).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.commandButtonHuntMode).toBe('NONE');
+
+    expect(logic.setScriptConditionTeamContext('HuntInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 483,
+      params: ['HuntProto', 'Command_HuntPower'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.commandButtonHuntMode).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.commandButtonHuntMode).toBe('NONE');
+    logic.clearScriptConditionTeamContext();
   });
 
   it('executes script skill-point modifier action and scales PLAYER_ADD_SKILLPOINTS gains', () => {
@@ -35726,6 +35759,13 @@ describe('Script condition groundwork', () => {
       makeHeightmap(196, 196),
     );
     expect(logic.setScriptTeamMembers('AllUseTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AllUseInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AllUseInstanceA', 'AllUseProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AllUseInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AllUseInstanceB', 'AllUseProto')).toBe(true);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { lastSpecialPowerDispatch: unknown | null }>;
+    };
     logic.setTeamRelationship('America', 'China', 0);
 
     expect(logic.executeScriptAction({
@@ -35776,6 +35816,28 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(7);
     expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(7);
+
+    expect(logic.executeScriptAction({
+      actionType: 468, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT
+      params: ['AllUseProto', 'Command_ScriptOnNamed'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+
+    const allUseOne = privateApi.spawnedEntities.get(1);
+    const allUseTwo = privateApi.spawnedEntities.get(2);
+    expect(allUseOne).toBeDefined();
+    expect(allUseTwo).toBeDefined();
+    allUseOne!.lastSpecialPowerDispatch = null;
+    allUseTwo!.lastSpecialPowerDispatch = null;
+    expect(logic.setScriptConditionTeamContext('AllUseInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 467, // TEAM_ALL_USE_COMMANDBUTTON_ON_NAMED
+      params: ['AllUseProto', 'Command_ScriptOnNamed', 5],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(5);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 468,
@@ -36036,6 +36098,13 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('PartialTeam', [1, 2, 3])).toBe(true);
+    expect(logic.setScriptTeamMembers('PartialInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PartialInstanceA', 'PartialProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('PartialInstanceB', [2, 3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PartialInstanceB', 'PartialProto')).toBe(true);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { lastSpecialPowerDispatch: unknown | null }>;
+    };
 
     expect(logic.executeScriptAction({
       actionType: 474, // TEAM_PARTIAL_USE_COMMANDBUTTON
@@ -36050,6 +36119,31 @@ describe('Script condition groundwork', () => {
     });
     expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
     expect(logic.getEntityState(3)?.lastSpecialPowerDispatch).toBeNull();
+
+    privateApi.spawnedEntities.get(1)!.lastSpecialPowerDispatch = null;
+    privateApi.spawnedEntities.get(2)!.lastSpecialPowerDispatch = null;
+    privateApi.spawnedEntities.get(3)!.lastSpecialPowerDispatch = null;
+    expect(logic.executeScriptAction({
+      actionType: 474,
+      params: [50, 'PartialProto', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+    const partialPrototypeDispatchCount = [1, 2, 3]
+      .filter((entityId) => logic.getEntityState(entityId)?.lastSpecialPowerDispatch !== null)
+      .length;
+    expect(partialPrototypeDispatchCount).toBe(1);
+
+    privateApi.spawnedEntities.get(1)!.lastSpecialPowerDispatch = null;
+    privateApi.spawnedEntities.get(2)!.lastSpecialPowerDispatch = null;
+    privateApi.spawnedEntities.get(3)!.lastSpecialPowerDispatch = null;
+    expect(logic.setScriptConditionTeamContext('PartialInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 474,
+      params: [100, 'PartialProto', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).not.toBeNull();
+    expect(logic.getEntityState(3)?.lastSpecialPowerDispatch).not.toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 474,
@@ -36577,6 +36671,13 @@ describe('Script condition groundwork', () => {
 
     logic.setTeamRelationship('America', 'China', 0);
     expect(logic.setScriptTeamMembers('AbilityTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AbilityInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AbilityInstanceA', 'AbilityProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AbilityInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AbilityInstanceB', 'AbilityProto')).toBe(true);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { lastSpecialPowerDispatch: unknown | null }>;
+    };
 
     expect(logic.executeScriptAction({
       actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
@@ -36743,6 +36844,28 @@ describe('Script condition groundwork', () => {
       targetX: null,
       targetZ: null,
     });
+
+    expect(logic.executeScriptAction({
+      actionType: 446, // TEAM_USE_COMMANDBUTTON_ABILITY
+      params: ['AbilityProto', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.commandButtonId).toBe('Command_ScriptNoTarget');
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.commandButtonId).toBe('Command_ScriptNoTarget');
+
+    const abilityOne = privateApi.spawnedEntities.get(1);
+    const abilityTwo = privateApi.spawnedEntities.get(2);
+    expect(abilityOne).toBeDefined();
+    expect(abilityTwo).toBeDefined();
+    abilityOne!.lastSpecialPowerDispatch = null;
+    abilityTwo!.lastSpecialPowerDispatch = null;
+    expect(logic.setScriptConditionTeamContext('AbilityInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 443, // TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: ['AbilityProto', 'Command_ScriptOnNamed', 3],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 445,
