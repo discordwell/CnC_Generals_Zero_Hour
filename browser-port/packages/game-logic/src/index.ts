@@ -16737,25 +16737,27 @@ export class GameLogicSubsystem implements Subsystem {
    * Orders each team member to guard its own current position.
    */
   private executeScriptTeamGuard(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
     let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || !entity.canMove) {
+          continue;
+        }
+        this.applyCommand({
+          type: 'guardPosition',
+          entityId: entity.id,
+          targetX: entity.x,
+          targetZ: entity.z,
+          guardMode: 0,
+          commandSource: 'SCRIPT',
+        });
+        issuedAny = true;
       }
-      this.applyCommand({
-        type: 'guardPosition',
-        entityId: entity.id,
-        targetX: entity.x,
-        targetZ: entity.z,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
-      issuedAny = true;
     }
     return issuedAny;
   }
@@ -16765,23 +16767,26 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses a named waypoint and sets each team member to guard that location.
    */
   private executeScriptTeamGuardPosition(teamName: string, waypointName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const teams = this.resolveScriptConditionTeams(teamName);
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!team || !waypoint) {
+    if (teams.length === 0 || !waypoint) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.applyCommand({
+          type: 'guardPosition',
+          entityId: entity.id,
+          targetX: waypoint.x,
+          targetZ: waypoint.z,
+          guardMode: 0,
+          commandSource: 'SCRIPT',
+        });
       }
-      this.applyCommand({
-        type: 'guardPosition',
-        entityId: entity.id,
-        targetX: waypoint.x,
-        targetZ: waypoint.z,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
     }
     return true;
   }
@@ -16791,22 +16796,25 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses a named/target entity and sets each team member to guard that object.
    */
   private executeScriptTeamGuardObject(teamName: string, targetEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const teams = this.resolveScriptConditionTeams(teamName);
     const target = this.spawnedEntities.get(targetEntityId);
-    if (!team || !target || target.destroyed) {
+    if (teams.length === 0 || !target || target.destroyed) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.applyCommand({
+          type: 'guardObject',
+          entityId: entity.id,
+          targetEntityId: target.id,
+          guardMode: 0,
+          commandSource: 'SCRIPT',
+        });
       }
-      this.applyCommand({
-        type: 'guardObject',
-        entityId: entity.id,
-        targetEntityId: target.id,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
     }
     return true;
   }
@@ -16898,24 +16906,26 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses trigger-area center/radius from PolygonTrigger and orders team members to guard that area.
    */
   private executeScriptTeamGuardArea(teamName: string, triggerName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const teams = this.resolveScriptConditionTeams(teamName);
     const area = this.resolveScriptTriggerAreaByName(triggerName);
-    if (!team || !area) {
+    if (teams.length === 0 || !area) {
       return false;
     }
 
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.initGuardArea(
+          entity.id,
+          area.triggerIndex,
+          area.centerX,
+          area.centerZ,
+          0,
+          area.radius,
+        );
       }
-      this.initGuardArea(
-        entity.id,
-        area.triggerIndex,
-        area.centerX,
-        area.centerZ,
-        0,
-        area.radius,
-      );
     }
     return true;
   }
