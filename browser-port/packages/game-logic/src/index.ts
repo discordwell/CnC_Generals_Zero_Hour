@@ -14880,12 +14880,12 @@ export class GameLogicSubsystem implements Subsystem {
    * TEAM_WAIT_FOR_NOT_CONTAINED_{ALL|PARTIAL}.
    */
   private executeScriptTeamWaitForNotContained(teamName: string, allContained: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
     return !this.evaluateScriptTeamIsContained({
-      teamName: team.nameUpper,
+      teamName,
       allContained,
     });
   }

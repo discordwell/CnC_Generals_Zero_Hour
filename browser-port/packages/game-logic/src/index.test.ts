@@ -34527,6 +34527,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('ContainTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('ContainInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ContainInstanceA', 'ContainProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('ContainInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ContainInstanceB', 'ContainProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, { transportContainerId: number | null }>;
@@ -34550,6 +34554,14 @@ describe('Script condition groundwork', () => {
       actionType: 280, // TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL (raw id)
       params: ['ContainTeam'],
     })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 484,
+      params: ['ContainProto'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 485,
+      params: ['ContainProto'],
+    })).toBe(false);
 
     privateApi.spawnedEntities.get(1)!.transportContainerId = null;
     expect(logic.executeScriptAction({
@@ -34568,6 +34580,35 @@ describe('Script condition groundwork', () => {
       actionType: 280,
       params: ['ContainTeam'],
     })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 484,
+      params: ['ContainProto'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 485,
+      params: ['ContainProto'],
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('ContainInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 484,
+      params: ['ContainProto'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 485,
+      params: ['ContainProto'],
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('ContainInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 484,
+      params: ['ContainProto'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 485,
+      params: ['ContainProto'],
+    })).toBe(false);
+    logic.clearScriptConditionTeamContext();
 
     privateApi.spawnedEntities.get(2)!.transportContainerId = null;
     expect(logic.executeScriptAction({
@@ -34577,6 +34618,14 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 280,
       params: ['ContainTeam'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 484,
+      params: ['ContainProto'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 485,
+      params: ['ContainProto'],
     })).toBe(true);
 
     expect(logic.executeScriptAction({
