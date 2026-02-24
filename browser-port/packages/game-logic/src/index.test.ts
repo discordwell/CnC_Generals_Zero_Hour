@@ -30657,6 +30657,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('PanelTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('PanelInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PanelInstanceA', 'PanelProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('PanelInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PanelInstanceB', 'PanelProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -30690,6 +30694,21 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAiRecruitable).toBe(false);
     expect(privateApi.spawnedEntities.get(2)?.scriptAiRecruitable).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 505,
+      params: ['PanelProto', 'Player Targetable', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_TARGETABLE')).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SCRIPT_TARGETABLE')).toBe(true);
+    expect(logic.setScriptConditionTeamContext('PanelInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 505,
+      params: ['PanelProto', 'Enabled', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(false);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 504,
@@ -38322,6 +38341,9 @@ describe('Script condition groundwork', () => {
       makeMapObject('TrapTarget', 18, 12), // id 2
       makeMapObject('TrapTarget', 24, 12), // id 3
       makeMapObject('TrapTarget', 30, 12), // id 4
+      makeMapObject('TrapTarget', 36, 12), // id 5
+      makeMapObject('TrapTarget', 42, 12), // id 6
+      makeMapObject('TrapTarget', 48, 12), // id 7
     ], 128, 128);
     map.waypoints = {
       nodes: [
@@ -38359,7 +38381,15 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('UnmannedTeam', [2])).toBe(true);
+    expect(logic.setScriptTeamMembers('UnmannedInstanceA', [5])).toBe(true);
+    expect(logic.setScriptTeamPrototype('UnmannedInstanceA', 'UnmannedProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('UnmannedInstanceB', [7])).toBe(true);
+    expect(logic.setScriptTeamPrototype('UnmannedInstanceB', 'UnmannedProto')).toBe(true);
     expect(logic.setScriptTeamMembers('TrapTeam', [4])).toBe(true);
+    expect(logic.setScriptTeamMembers('TrapInstanceA', [4])).toBe(true);
+    expect(logic.setScriptTeamPrototype('TrapInstanceA', 'TrapProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('TrapInstanceB', [6])).toBe(true);
+    expect(logic.setScriptTeamPrototype('TrapInstanceB', 'TrapProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -38416,6 +38446,26 @@ describe('Script condition groundwork', () => {
     expect(unmannedTeamMember.side).toBe('');
     expect(unmannedTeamMember.controllingPlayerToken).toBeNull();
 
+    expect(privateApi.spawnedEntities.get(5)?.side).toBe('America');
+    expect(privateApi.spawnedEntities.get(7)?.side).toBe('America');
+    expect(logic.setScriptConditionTeamContext('UnmannedInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 339,
+      params: ['UnmannedProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(5)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+    expect(privateApi.spawnedEntities.get(7)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 339,
+      params: ['UnmannedProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(7)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+    expect(privateApi.spawnedEntities.get(5)?.side).toBe('');
+    expect(privateApi.spawnedEntities.get(5)?.controllingPlayerToken).toBeNull();
+    expect(privateApi.spawnedEntities.get(7)?.side).toBe('');
+    expect(privateApi.spawnedEntities.get(7)?.controllingPlayerToken).toBeNull();
+
     expect(logic.executeScriptAction({
       actionType: 340, // NAMED_SET_BOOBYTRAPPED when param count == 2
       params: ['BoobyBomb', 3],
@@ -38424,20 +38474,34 @@ describe('Script condition groundwork', () => {
       actionType: 341, // TEAM_SET_BOOBYTRAPPED when param count == 2
       params: ['BoobyBomb', 'TrapTeam'],
     })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('TrapInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 341,
+      params: ['BoobyBomb', 'TrapProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(6)?.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(false);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 341,
+      params: ['BoobyBomb', 'TrapProto'],
+    })).toBe(true);
 
     const targetThree = privateApi.spawnedEntities.get(3)!;
     const targetFour = privateApi.spawnedEntities.get(4)!;
+    const targetSix = privateApi.spawnedEntities.get(6)!;
     expect(targetThree.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(true);
     expect(targetFour.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(true);
+    expect(targetSix.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(true);
 
     const attachedBombs = [...privateApi.spawnedEntities.values()]
       .filter((entity) => entity.stickyBombProfile && entity.stickyBombTargetId !== 0);
-    expect(attachedBombs).toHaveLength(2);
-    expect(new Set(attachedBombs.map((entity) => entity.stickyBombTargetId))).toEqual(new Set([3, 4]));
+    expect(new Set(attachedBombs.map((entity) => entity.stickyBombTargetId))).toEqual(new Set([3, 4, 6]));
     const namedBomb = attachedBombs.find((entity) => entity.stickyBombTargetId === 3)!;
     const teamBomb = attachedBombs.find((entity) => entity.stickyBombTargetId === 4)!;
+    const protoBomb = attachedBombs.find((entity) => entity.stickyBombTargetId === 6)!;
     expect(Math.hypot(namedBomb.x - targetThree.x, namedBomb.z - targetThree.z)).toBeGreaterThan(0.1);
     expect(Math.hypot(teamBomb.x - targetFour.x, teamBomb.z - targetFour.z)).toBeGreaterThan(0.1);
+    expect(Math.hypot(protoBomb.x - targetSix.x, protoBomb.z - targetSix.z)).toBeGreaterThan(0.1);
 
     expect(logic.executeScriptAction({
       actionType: 338,

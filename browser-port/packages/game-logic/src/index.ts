@@ -17836,18 +17836,22 @@ export class GameLogicSubsystem implements Subsystem {
    * Applies unmanned status to each team member.
    */
   private executeScriptTeamSetUnmannedStatus(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    const handledEntityIds = new Set<number>();
     let updated = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        this.setScriptEntityUnmanned(entity);
+        updated = true;
       }
-      this.setScriptEntityUnmanned(entity);
-      updated = true;
     }
     return updated;
   }
@@ -17919,18 +17923,22 @@ export class GameLogicSubsystem implements Subsystem {
     boobytrapTemplateName: string,
     teamName: string,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    const handledEntityIds = new Set<number>();
     let attachedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.applyScriptBoobytrapToEntity(boobytrapTemplateName, entity)) {
-        attachedAny = true;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        if (this.applyScriptBoobytrapToEntity(boobytrapTemplateName, entity)) {
+          attachedAny = true;
+        }
       }
     }
     return attachedAny;
@@ -18088,19 +18096,24 @@ export class GameLogicSubsystem implements Subsystem {
     flagName: string,
     enabled: boolean,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
     const flag = this.resolveScriptObjectPanelFlagName(flagName);
     if (!flag) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    const handledEntityIds = new Set<number>();
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        this.applyScriptObjectPanelFlag(entity, flag, enabled);
       }
-      this.applyScriptObjectPanelFlag(entity, flag, enabled);
     }
     return true;
   }
