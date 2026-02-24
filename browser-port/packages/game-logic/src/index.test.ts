@@ -36694,6 +36694,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('FlashTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('FlashInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FlashInstanceA', 'FlashProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('FlashInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FlashInstanceB', 'FlashProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -36725,6 +36729,21 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(3);
 
     expect(logic.executeScriptAction({
+      actionType: 448,
+      params: ['FlashProto', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(2);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(2);
+    expect(logic.setScriptConditionTeamContext('FlashInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 448,
+      params: ['FlashProto', 2],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(4);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(2);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
       actionType: 447,
       params: [999, 2],
     })).toBe(false);
@@ -36753,6 +36772,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('FlashTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('FlashInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FlashInstanceA', 'FlashProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('FlashInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FlashInstanceB', 'FlashProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -36789,6 +36812,23 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.scriptFlashColor).toBe(0xffffff);
     expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(2);
     expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 79,
+      params: ['FlashProto', 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(2);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(2);
+    expect(logic.setScriptConditionTeamContext('FlashInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 79,
+      params: ['FlashProto', 2],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashColor).toBe(0x123456);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashColor).toBe(0xffffff);
+    expect(privateApi.spawnedEntities.get(1)?.scriptFlashCount).toBe(4);
+    expect(privateApi.spawnedEntities.get(2)?.scriptFlashCount).toBe(2);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 77,

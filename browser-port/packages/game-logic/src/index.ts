@@ -13731,18 +13731,20 @@ export class GameLogicSubsystem implements Subsystem {
    * TODO(source-parity): use drawable indicator color from side colors when available.
    */
   private executeScriptTeamFlash(teamName: string, timeInSeconds: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
     let flashed = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.applyScriptEntityFlash(entity, timeInSeconds, this.resolveScriptEntityFlashColor(entity))) {
-        flashed = true;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        if (this.applyScriptEntityFlash(entity, timeInSeconds, this.resolveScriptEntityFlashColor(entity))) {
+          flashed = true;
+        }
       }
     }
     return flashed;
@@ -13757,18 +13759,20 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamFlashWhite(teamName: string, timeInSeconds: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
     let flashed = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.applyScriptEntityFlash(entity, timeInSeconds, SOURCE_FLASH_COLOR_WHITE)) {
-        flashed = true;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        if (this.applyScriptEntityFlash(entity, timeInSeconds, SOURCE_FLASH_COLOR_WHITE)) {
+          flashed = true;
+        }
       }
     }
     return flashed;
