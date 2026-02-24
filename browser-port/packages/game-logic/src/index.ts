@@ -20217,19 +20217,22 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateIsDestroyed.
-   * TODO(source-parity): support full ScriptEngine team instance resolution.
    */
   evaluateScriptIsDestroyed(filter: {
     teamName: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (this.isScriptTeamMemberAliveForObjects(entity)) {
-        return false;
+    // Source parity bridge: when a prototype token is referenced without an
+    // explicit THIS_TEAM context, evaluate all prototype instances.
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (this.isScriptTeamMemberAliveForObjects(entity)) {
+          return false;
+        }
       }
     }
     return true;
@@ -20241,32 +20244,11 @@ export class GameLogicSubsystem implements Subsystem {
   evaluateScriptHasUnits(filter: {
     teamName: string;
   }): boolean {
-    const desiredTeamToken = filter.teamName.trim();
-    if (!desiredTeamToken) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-
-    const desiredTeamNameUpper = this.resolveScriptTeamName(desiredTeamToken);
-    if (!desiredTeamNameUpper) {
-      return false;
-    }
-
-    // Source parity: explicit <This Team> / teamThePlayer resolve through getTeamNamed context.
-    if (desiredTeamToken === SCRIPT_THIS_TEAM || desiredTeamToken === SCRIPT_TEAM_THE_PLAYER) {
-      const resolvedTeam = this.getScriptTeamRecord(desiredTeamToken);
-      return resolvedTeam ? this.doesScriptTeamHaveAnyUnits(resolvedTeam) : false;
-    }
-
-    // Source parity: if the current THIS_TEAM has the same Team::getName(),
-    // evaluate that specific instance first.
-    const thisTeam = this.getScriptTeamRecord(SCRIPT_THIS_TEAM);
-    if (thisTeam && this.isScriptTeamNameMatch(thisTeam, desiredTeamNameUpper)) {
-      return this.doesScriptTeamHaveAnyUnits(thisTeam);
-    }
-
-    // Source parity: when not tied to THIS_TEAM, evaluate all instances of the
-    // referenced TeamPrototype and return true if any instance has units.
-    for (const team of this.getScriptTeamInstancesByPrototypeName(desiredTeamNameUpper)) {
+    for (const team of teams) {
       if (this.doesScriptTeamHaveAnyUnits(team)) {
         return true;
       }
@@ -20326,22 +20308,35 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamAttackedByPlayer.
-   * TODO(source-parity): support full ScriptEngine team instance resolution.
    */
   evaluateScriptTeamAttackedByPlayer(filter: {
     teamName: string;
     attackedBySide: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const normalizedAttackerSide = this.normalizeSide(filter.attackedBySide);
+    if (!normalizedAttackerSide) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (this.evaluateScriptNamedAttackedByPlayer({
-        entityId: entity.id,
-        attackedBySide: filter.attackedBySide,
-      })) {
-        return true;
+
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
+      return false;
+    }
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        // Source parity: team-level check uses live attacker object lookup from sourceID.
+        const attackerId = entity.scriptLastDamageSourceEntityId;
+        if (attackerId === null) {
+          continue;
+        }
+        const attacker = this.spawnedEntities.get(attackerId);
+        if (!attacker) {
+          continue;
+        }
+        if (this.normalizeSide(attacker.side) === normalizedAttackerSide) {
+          return true;
+        }
       }
     }
     return false;
@@ -20363,19 +20358,21 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamDiscovered.
-   * TODO(source-parity): support full ScriptEngine team instance resolution.
    */
   evaluateScriptTeamDiscovered(filter: {
     teamName: string;
     side: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (this.evaluateScriptNamedDiscovered({ entityId: entity.id, side: filter.side })) {
-        return true;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (this.evaluateScriptNamedDiscovered({ entityId: entity.id, side: filter.side })) {
+          return true;
+        }
       }
     }
     return false;
@@ -20461,15 +20458,14 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamHasObjectStatus.
-   * TODO(source-parity): support full ScriptEngine team instance resolution.
    */
   evaluateScriptTeamHasObjectStatus(filter: {
     teamName: string;
     objectStatus: unknown;
     entireTeam: boolean;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
 
@@ -20479,20 +20475,42 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
+    if (filter.entireTeam) {
+      for (const team of teams) {
+        if (!this.evaluateScriptSingleTeamHasObjectStatus(team, statusMask, statusTokens, true)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    for (const team of teams) {
+      if (this.evaluateScriptSingleTeamHasObjectStatus(team, statusMask, statusTokens, false)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private evaluateScriptSingleTeamHasObjectStatus(
+    team: ScriptTeamRecord,
+    statusMask: number | null,
+    statusTokens: readonly string[],
+    entireTeam: boolean,
+  ): boolean {
     for (const entity of this.getScriptTeamMemberEntities(team)) {
       const hasStatus = (
         (statusMask !== null && statusMask !== 0 && this.entityHasAnyStatusMask(entity, statusMask))
         || statusTokens.some((token) => this.entityHasObjectStatus(entity, token))
       );
-      if (filter.entireTeam && !hasStatus) {
+      if (entireTeam && !hasStatus) {
         return false;
       }
-      if (!filter.entireTeam && hasStatus) {
+      if (!entireTeam && hasStatus) {
         return true;
       }
     }
-
-    return filter.entireTeam;
+    return entireTeam;
   }
 
   /**
@@ -32201,6 +32219,41 @@ export class GameLogicSubsystem implements Subsystem {
       return this.scriptDefaultTeamNameBySide.get(localSide) ?? null;
     }
     return this.normalizeScriptTeamName(trimmed);
+  }
+
+  private resolveScriptConditionTeams(teamName: string): ScriptTeamRecord[] {
+    const desiredTeamToken = teamName.trim();
+    if (!desiredTeamToken) {
+      return [];
+    }
+
+    // Source parity bridge: explicit THIS_TEAM / teamThePlayer tokens resolve
+    // through context-aware getTeamNamed() behavior.
+    if (desiredTeamToken === SCRIPT_THIS_TEAM || desiredTeamToken === SCRIPT_TEAM_THE_PLAYER) {
+      const resolved = this.getScriptTeamRecord(desiredTeamToken);
+      return resolved ? [resolved] : [];
+    }
+
+    const desiredTeamNameUpper = this.resolveScriptTeamName(desiredTeamToken);
+    if (!desiredTeamNameUpper) {
+      return [];
+    }
+
+    // Source parity bridge: when a condition is currently iterating team instances,
+    // use that contextual team if it matches by name or prototype.
+    const thisTeam = this.getScriptTeamRecord(SCRIPT_THIS_TEAM);
+    if (thisTeam && this.isScriptTeamNameMatch(thisTeam, desiredTeamNameUpper)) {
+      return [thisTeam];
+    }
+
+    // Source parity bridge: resolve TeamPrototype references across all active instances.
+    const prototypeInstances = this.getScriptTeamInstancesByPrototypeName(desiredTeamNameUpper);
+    if (prototypeInstances.length > 0) {
+      return prototypeInstances;
+    }
+
+    const direct = this.scriptTeamsByName.get(desiredTeamNameUpper);
+    return direct ? [direct] : [];
   }
 
   private registerScriptTeamPrototypeInstance(team: ScriptTeamRecord): void {

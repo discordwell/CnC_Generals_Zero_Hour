@@ -41881,6 +41881,101 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('fans out team-scoped conditions across TeamPrototype instances with THIS_TEAM precedence', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 40 }),
+        makeObjectDef('EnemyUnit', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 40 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TeamUnit', 10, 10),  // id 1
+        makeMapObject('EnemyUnit', 15, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.update(1 / 30);
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+      applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;
+    };
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('VETERAN');
+    privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 12, 'SMALL_ARMS');
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_DESTROYED',
+      params: ['AlphaProto'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_ATTACKED_BY_PLAYER',
+      params: ['AlphaProto', 'China'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_DISCOVERED',
+      params: ['AlphaProto', 'China'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_SOME_HAVE_OBJECT_STATUS',
+      params: ['AlphaProto', 'VETERAN'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_ALL_HAS_OBJECT_STATUS',
+      params: ['AlphaProto', 'VETERAN'],
+    })).toBe(true);
+
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.delete('VETERAN');
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_ALL_HAS_OBJECT_STATUS',
+      params: ['AlphaProto', 'VETERAN'],
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_DESTROYED',
+      params: ['AlphaProto'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_ATTACKED_BY_PLAYER',
+      params: ['AlphaProto', 'China'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_DISCOVERED',
+      params: ['AlphaProto', 'China'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_SOME_HAVE_OBJECT_STATUS',
+      params: ['AlphaProto', 'VETERAN'],
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_DESTROYED',
+      params: ['AlphaProto'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_ATTACKED_BY_PLAYER',
+      params: ['AlphaProto', 'China'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_DISCOVERED',
+      params: ['AlphaProto', 'China'],
+    })).toBe(true);
+  });
+
   it('resolves THIS_PLAYER tokens for player-side script params', () => {
     const bundle = makeBundle({
       objects: [
