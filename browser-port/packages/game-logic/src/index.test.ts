@@ -28311,6 +28311,115 @@ describe('Map script execution', () => {
     expect(logic.getSideCredits('America')).toBe(1500);
   });
 
+  it('uses first-defined script when subroutine names collide across side script lists', () => {
+    const bundle = makeBundle({
+      objects: [],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }, {
+        name: 'FactionChina',
+        side: 'China',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'DuplicateSubroutine',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: false,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: true,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 3, // CONDITION_TRUE
+                params: [],
+              }],
+            }],
+            actions: [{
+              actionType: 1, // SET_FLAG
+              params: [
+                { type: 5, intValue: 0, realValue: 0, stringValue: 'FirstSubroutineFlag' },
+                { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+              ],
+            }],
+            falseActions: [],
+          }],
+          groups: [],
+        },
+      }, {
+        dict: {
+          playerName: 'Player_2',
+          playerFaction: 'FactionChina',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'DuplicateSubroutine',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: false,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: true,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 3, // CONDITION_TRUE
+                params: [],
+              }],
+            }],
+            actions: [{
+              actionType: 1, // SET_FLAG
+              params: [
+                { type: 5, intValue: 0, realValue: 0, stringValue: 'SecondSubroutineFlag' },
+                { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+              ],
+            }],
+            falseActions: [],
+          }],
+          groups: [],
+        },
+      }],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+
+    expect(logic.executeScriptAction({
+      actionType: 10, // CALL_SUBROUTINE
+      params: ['DuplicateSubroutine'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['FirstSubroutineFlag', true],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['SecondSubroutineFlag', true],
+    })).toBe(false);
+  });
+
   it('iterates non-singleton condition-team instances for one-shot map script execution', () => {
     const bundle = makeBundle({
       objects: [
@@ -34093,6 +34202,76 @@ describe('Script condition groundwork', () => {
       actionType: 462,
       params: ['MissingTeam', 3, 1200],
     })).toBe(false);
+  });
+
+  it('uses partition cell size instead of pathfind cell size for nearest-group value scans', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          BuildCost: 300,
+        }),
+        makeObjectDef('EnemyCellSplitA', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 320, InitialHealth: 320 }),
+        ], {
+          BuildCost: 700,
+        }),
+        makeObjectDef('EnemyCellSplitB', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ], {
+          BuildCost: 700,
+        }),
+        makeObjectDef('EnemyValuableFar', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          BuildCost: 2400,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    // Source parity: partition value scans use TheGlobalData::m_partitionCellSize,
+    // which may differ from pathfind-cell size.
+    const logic = new GameLogicSubsystem(new THREE.Scene(), { partitionCellSize: 20 });
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 24, 20), // id 2
+        makeMapObject('EnemyCellSplitA', 66, 66), // id 3
+        makeMapObject('EnemyCellSplitB', 74, 66), // id 4
+        makeMapObject('EnemyValuableFar', 180, 180), // id 5
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+
+    expect(logic.setScriptTeamMembers('AttackValueTeam', [1, 2])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 462, // SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE
+      params: ['AttackValueTeam', 3, 1200], // GREATER_EQUAL 1200
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+    const finalOne = privateApi.spawnedEntities.get(1)?.movePath.at(-1);
+    const finalTwo = privateApi.spawnedEntities.get(2)?.movePath.at(-1);
+    expect(finalOne).toBeDefined();
+    expect(finalTwo).toBeDefined();
+
+    // With partitionCellSize=20, the two 700-cost enemies aggregate in cell (3,3)
+    // at world-space origin (60,60). A pathfind-cell query (10) would miss this
+    // aggregation and prefer the far expensive target near (180,180).
+    expect(Math.hypot(finalOne!.x - 60, finalOne!.z - 60)).toBeLessThanOrEqual(35);
+    expect(Math.hypot(finalTwo!.x - 60, finalTwo!.z - 60)).toBeLessThanOrEqual(35);
   });
 
   it('executes script command-button-on-most-valuable-object action using source action id', () => {
@@ -40084,6 +40263,66 @@ describe('Script condition groundwork', () => {
     expect(Array.from(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.memberEntityIds ?? []).sort((a, b) => a - b))
       .toEqual([1, 2]);
     expect(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.recruitableOverride).toBe(true);
+  });
+
+  it('preserves default-team bookkeeping when TEAM_STOP_AND_DISBAND targets the default team itself', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 10),
+      makeMapObject('Ranger', 14, 10),
+    ], 128, 128);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'teamPlayer_1',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('teamPlayer_1', [1, 2])).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 176, // TEAM_STOP_AND_DISBAND
+      params: ['teamPlayer_1'],
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, unknown>;
+      scriptDefaultTeamNameBySide: Map<string, string>;
+    };
+    expect(privateApi.scriptTeamsByName.has('TEAMPLAYER_1')).toBe(true);
+    expect(privateApi.scriptDefaultTeamNameBySide.get('america')).toBe('TEAMPLAYER_1');
   });
 
   it('executes script relation-override actions using source action ids', () => {

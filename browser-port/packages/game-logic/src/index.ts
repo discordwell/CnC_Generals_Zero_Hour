@@ -3809,6 +3809,7 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
   sellPercentage: SOURCE_DEFAULT_SELL_PERCENTAGE,
   superweaponRestriction: 0,
   maxTunnelCapacity: 10,
+  partitionCellSize: PATHFIND_CELL_SIZE,
 };
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
@@ -5925,7 +5926,7 @@ export class GameLogicSubsystem implements Subsystem {
       subroutine: group.subroutine ?? false,
       scripts,
     };
-    if (nameUpper) {
+    if (nameUpper && !this.mapScriptGroupsByNameUpper.has(nameUpper)) {
       this.mapScriptGroupsByNameUpper.set(nameUpper, runtime);
     }
     return runtime;
@@ -5979,7 +5980,7 @@ export class GameLogicSubsystem implements Subsystem {
       runtime.frameToEvaluateAt = this.gameRandom.nextRange(0, 2 * LOGIC_FRAME_RATE);
     }
 
-    if (nameUpper) {
+    if (nameUpper && !this.mapScriptsByNameUpper.has(nameUpper)) {
       this.mapScriptsByNameUpper.set(nameUpper, runtime);
     }
 
@@ -14415,9 +14416,18 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    const mapCellWidth = Math.max(1, this.mapHeightmap.width - 1);
-    const mapCellHeight = Math.max(1, this.mapHeightmap.height - 1);
-    const [startCellX, startCellZ] = this.worldToGrid(sourceLocation.x, sourceLocation.z);
+    const partitionCellSize = Number.isFinite(this.config.partitionCellSize) && this.config.partitionCellSize > 0
+      ? this.config.partitionCellSize
+      : PATHFIND_CELL_SIZE;
+    const mapCellWidth = Math.max(1, Math.ceil(this.mapHeightmap.worldWidth / partitionCellSize));
+    const mapCellHeight = Math.max(1, Math.ceil(this.mapHeightmap.worldDepth / partitionCellSize));
+    const [startCellX, startCellZ] = this.worldToPartitionCell(
+      sourceLocation.x,
+      sourceLocation.z,
+      partitionCellSize,
+      mapCellWidth,
+      mapCellHeight,
+    );
     if (startCellX === null || startCellZ === null) {
       return null;
     }
@@ -14435,7 +14445,13 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const [candidateCellX, candidateCellZ] = this.worldToGrid(candidate.x, candidate.z);
+      const [candidateCellX, candidateCellZ] = this.worldToPartitionCell(
+        candidate.x,
+        candidate.z,
+        partitionCellSize,
+        mapCellWidth,
+        mapCellHeight,
+      );
       if (candidateCellX === null || candidateCellZ === null) {
         continue;
       }
@@ -14463,8 +14479,8 @@ export class GameLogicSubsystem implements Subsystem {
       const valueAtCell = cellCashValue.get(index) ?? 0;
       if ((valueAtCell > valueRequired && greaterThan) || (valueAtCell < valueRequired && !greaterThan)) {
         return {
-          x: cellX * PATHFIND_CELL_SIZE,
-          z: cellZ * PATHFIND_CELL_SIZE,
+          x: cellX * partitionCellSize,
+          z: cellZ * partitionCellSize,
         };
       }
 
@@ -19592,6 +19608,11 @@ export class GameLogicSubsystem implements Subsystem {
     const controllingSide = this.resolveScriptTeamControllingSide(team);
     if (controllingSide) {
       const defaultTeamNameUpper = this.scriptDefaultTeamNameBySide.get(controllingSide) ?? null;
+      // Source parity bridge: when disband is requested on the controlling side's
+      // default team, keep default-team bookkeeping intact.
+      if (defaultTeamNameUpper && defaultTeamNameUpper === team.nameUpper) {
+        return true;
+      }
       if (defaultTeamNameUpper && defaultTeamNameUpper !== team.nameUpper) {
         if (this.executeScriptTeamMergeIntoTeam(team.nameUpper, defaultTeamNameUpper)) {
           return true;
@@ -32319,6 +32340,32 @@ export class GameLogicSubsystem implements Subsystem {
       };
     }
     return null;
+  }
+
+  private worldToPartitionCell(
+    worldX: number,
+    worldZ: number,
+    cellSize: number,
+    cellWidth: number,
+    cellHeight: number,
+  ): [number | null, number | null] {
+    if (!this.mapHeightmap) {
+      return [null, null];
+    }
+    if (!Number.isFinite(cellSize) || cellSize <= 0 || cellWidth <= 0 || cellHeight <= 0) {
+      return [null, null];
+    }
+
+    const maxWorldX = Math.max(0, this.mapHeightmap.worldWidth - 0.0001);
+    const maxWorldZ = Math.max(0, this.mapHeightmap.worldDepth - 0.0001);
+    const clampedX = clamp(worldX, 0, maxWorldX);
+    const clampedZ = clamp(worldZ, 0, maxWorldZ);
+    const cellX = Math.floor(clampedX / cellSize);
+    const cellZ = Math.floor(clampedZ / cellSize);
+    if (cellX < 0 || cellX >= cellWidth || cellZ < 0 || cellZ >= cellHeight) {
+      return [null, null];
+    }
+    return [cellX, cellZ];
   }
 
   private resolveScriptTriggerAreaByName(triggerName: string): {

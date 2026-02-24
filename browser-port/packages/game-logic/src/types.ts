@@ -531,4 +531,9 @@ export interface GameLogicConfig {
    * tunnel network passenger limit. 0 = tunnels disabled.
    */
   maxTunnelCapacity: number;
+  /**
+   * Source parity: TheGlobalData::m_partitionCellSize used by PartitionManager
+   * cell-space queries (for example getNearestGroupWithValue).
+   */
+  partitionCellSize: number;
 }
