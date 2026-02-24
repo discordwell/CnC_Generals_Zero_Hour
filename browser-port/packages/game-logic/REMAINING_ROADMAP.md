@@ -1,6 +1,6 @@
 # Game Logic Remaining Roadmap (Source-Parity)
 
-Last updated: 2026-02-23
+Last updated: 2026-02-24
 
 ## Objective
 
@@ -10,7 +10,7 @@ Generals/ZH C++ source, without heuristic substitutions.
 ## Current Baseline
 
 - Branch target: `main`
-- Test baseline: `1666` passing (`npx vitest run`)
+- Test baseline: `1667` passing (`npx vitest run`)
 - Recently completed slices:
   - Script team instance-resolution parity (`getTeamNamed` context precedence + condition-team iteration + `TEAM_HAS_UNITS` prototype fan-out)
   - Team command-button target filtering parity (source command-button source + controlling-side affiliation checks)
@@ -18,19 +18,12 @@ Generals/ZH C++ source, without heuristic substitutions.
   - Scripted `TEAM_CREATED` lifecycle tightening (build/recruit readiness now emits one-frame created pulse)
   - `TEAM_STOP_AND_DISBAND` parity bridge (recruitable override + merge into controlling-player default team)
   - `teamThePlayer` alias fallback to map `SidesList` default-team mapping (`team<playerName>`)
+  - `doSkirmishAttackNearestGroupWithValue` partition-cell parity (`getNearestGroupWithValue`-style enemy cash-value breadth-first lookup)
+  - `doSkirmishCommandButtonOnMostValuable` partition iterator parity (`FROM_CENTER_2D` + strict range boundary + expensive-to-cheap first target)
 
 ## Remaining High-Impact Slices
 
-1. Skirmish nearest-group-with-value parity
-- Port `ScriptActions::doSkirmishAttackNearestGroupWithValue` from object-value approximation
-  to source `PartitionManager::getNearestGroupWithValue` semantics.
-- Keep comparison handling and destination selection aligned to source behavior.
-
-2. Skirmish command-button-on-most-valuable partition parity
-- Replace current candidate scan/sort approximation with source iterator behavior:
-  `iterateObjectsInRange(..., ITER_SORTED_EXPENSIVE_TO_CHEAP)` +
-  `PartitionFilterValidCommandButtonTarget` semantics.
-- Preserve existing source-command-button-source and same-map filters.
+- None in this roadmap tranche.
 
 ## Execution Rules
 

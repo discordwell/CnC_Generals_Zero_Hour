@@ -34025,15 +34025,15 @@ describe('Script condition groundwork', () => {
         ], {
           BuildCost: 300,
         }),
-        makeObjectDef('EnemyLight', 'China', ['VEHICLE'], [
-          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        makeObjectDef('EnemyClusterUnitA', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 320, InitialHealth: 320 }),
         ], {
-          BuildCost: 1000,
+          BuildCost: 700,
         }),
-        makeObjectDef('EnemyValuableNear', 'China', ['VEHICLE'], [
+        makeObjectDef('EnemyClusterUnitB', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
         ], {
-          BuildCost: 1800,
+          BuildCost: 700,
         }),
         makeObjectDef('EnemyValuableFar', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
@@ -34051,8 +34051,8 @@ describe('Script condition groundwork', () => {
       makeMap([
         makeMapObject('Ranger', 20, 20), // id 1
         makeMapObject('Ranger', 24, 20), // id 2
-        makeMapObject('EnemyLight', 70, 20), // id 3
-        makeMapObject('EnemyValuableNear', 70, 80), // id 4
+        makeMapObject('EnemyClusterUnitA', 70, 80), // id 3
+        makeMapObject('EnemyClusterUnitB', 74, 84), // id 4
         makeMapObject('EnemyValuableFar', 180, 180), // id 5
       ], 256, 256),
       makeRegistry(bundle),
@@ -34080,6 +34080,8 @@ describe('Script condition groundwork', () => {
     const finalTwo = unitTwo.movePath.at(-1);
     expect(finalOne).toBeDefined();
     expect(finalTwo).toBeDefined();
+    // Source parity: query operates on partition-cell aggregated value, so the
+    // near 2-unit cluster (700+700) is selected over the far single expensive unit.
     expect(Math.hypot(finalOne!.x - 70, finalOne!.z - 80)).toBeLessThanOrEqual(35);
     expect(Math.hypot(finalTwo!.x - 70, finalTwo!.z - 80)).toBeLessThanOrEqual(35);
 
@@ -34164,6 +34166,72 @@ describe('Script condition groundwork', () => {
       actionType: 463,
       params: ['MissingTeam', 'Command_ScriptOnNamed', 200, 0],
     })).toBe(false);
+  });
+
+  it('applies source range-boundary behavior for command-button-on-most-valuable scans', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+          BuildCost: 300,
+        }),
+        makeObjectDef('EnemyInside', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 220, InitialHealth: 220 }),
+        ], {
+          BuildCost: 500,
+        }),
+        makeObjectDef('EnemyBoundaryExpensive', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 350, InitialHealth: 350 }),
+        ], {
+          BuildCost: 2400,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptOnNamed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('EnemyInside', 69, 20), // id 2 (distance 49)
+        makeMapObject('EnemyBoundaryExpensive', 70, 20), // id 3 (distance 50)
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AbilityValueTeam', [1])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 463, // SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT
+      params: ['AbilityValueTeam', 'Command_ScriptOnNamed', 50, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 463,
+      params: ['AbilityValueTeam', 'Command_ScriptOnNamed', 51, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
   });
 
   it('executes script skirmish wait-for-command-button actions using source action ids', () => {

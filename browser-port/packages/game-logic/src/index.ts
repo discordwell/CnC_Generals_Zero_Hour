@@ -14349,7 +14349,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doSkirmishAttackNearestGroupWithValue.
-   * TODO(source-parity): port true partition-group value queries (getNearestGroupWithValue).
+   * Uses PartitionManager::getNearestGroupWithValue-style partition-cell value scan.
    */
   private executeScriptSkirmishAttackNearestGroupWithValue(
     teamName: string,
@@ -14380,41 +14380,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const source = teamMembers[0]!;
-    const sourceOffMap = this.isEntityOffMap(source);
-    let bestTarget: MapEntity | null = null;
-    let bestDistSqr = Number.POSITIVE_INFINITY;
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed) {
-        continue;
-      }
-      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
-        continue;
-      }
-      if (this.getTeamRelationship(source, candidate) !== RELATIONSHIP_ENEMIES) {
-        continue;
-      }
-
-      const objectDef = this.resolveObjectDefByTemplateName(candidate.templateName);
-      const candidateValue = objectDef
-        ? this.resolveObjectBuildCost(objectDef, candidate.side ?? '')
-        : 0;
-      if (comparison === GREATER_EQUAL && candidateValue < value) {
-        continue;
-      }
-      if (comparison === GREATER && candidateValue <= value) {
-        continue;
-      }
-
-      const dx = candidate.x - center.x;
-      const dz = candidate.z - center.z;
-      const distSqr = (dx * dx) + (dz * dz);
-      if (distSqr < bestDistSqr) {
-        bestTarget = candidate;
-        bestDistSqr = distSqr;
-      }
-    }
-
-    if (!bestTarget) {
+    const target = this.resolveScriptNearestEnemyGroupLocationWithValue(team, source, center, value);
+    if (!target) {
       return false;
     }
 
@@ -14423,8 +14390,8 @@ export class GameLogicSubsystem implements Subsystem {
       this.applyCommand({
         type: 'attackMoveTo',
         entityId: entity.id,
-        targetX: bestTarget.x,
-        targetZ: bestTarget.z,
+        targetX: target.x,
+        targetZ: target.z,
         commandSource: 'SCRIPT',
       });
       if (entity.moveTarget !== null || entity.attackTargetPosition !== null) {
@@ -14435,8 +14402,112 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity subset: PartitionManager::getNearestGroupWithValue(VOT_CashValue, ALLOW_ENEMIES).
+   * Aggregates enemy build cost per map cell, then breadth-first scans cells from source.
+   */
+  private resolveScriptNearestEnemyGroupLocationWithValue(
+    team: ScriptTeamRecord,
+    sourceEntity: MapEntity,
+    sourceLocation: VectorXZ,
+    valueRequired: number,
+  ): VectorXZ | null {
+    if (!this.mapHeightmap) {
+      return null;
+    }
+
+    const mapCellWidth = Math.max(1, this.mapHeightmap.width - 1);
+    const mapCellHeight = Math.max(1, this.mapHeightmap.height - 1);
+    const [startCellX, startCellZ] = this.worldToGrid(sourceLocation.x, sourceLocation.z);
+    if (startCellX === null || startCellZ === null) {
+      return null;
+    }
+
+    const sourceOffMap = this.isEntityOffMap(sourceEntity);
+    const cellCashValue = new Map<number, number>();
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+
+      const [candidateCellX, candidateCellZ] = this.worldToGrid(candidate.x, candidate.z);
+      if (candidateCellX === null || candidateCellZ === null) {
+        continue;
+      }
+
+      const index = candidateCellZ * mapCellWidth + candidateCellX;
+      const nextValue = (cellCashValue.get(index) ?? 0) + this.resolveEntityBuildCostRaw(candidate);
+      cellCashValue.set(index, nextValue);
+    }
+
+    // Source parity quirk: PartitionManager.cpp currently assigns this flag from valueRequired.
+    // For positive values (the skirmish script use-case), this resolves to strict ">" matching.
+    const greaterThan = valueRequired !== 0;
+    const visited = new Uint8Array(mapCellWidth * mapCellHeight);
+    const queueX: number[] = [startCellX];
+    const queueZ: number[] = [startCellZ];
+    visited[startCellZ * mapCellWidth + startCellX] = 1;
+
+    let head = 0;
+    while (head < queueX.length) {
+      const cellX = queueX[head]!;
+      const cellZ = queueZ[head]!;
+      head += 1;
+
+      const index = cellZ * mapCellWidth + cellX;
+      const valueAtCell = cellCashValue.get(index) ?? 0;
+      if ((valueAtCell > valueRequired && greaterThan) || (valueAtCell < valueRequired && !greaterThan)) {
+        return {
+          x: cellX * PATHFIND_CELL_SIZE,
+          z: cellZ * PATHFIND_CELL_SIZE,
+        };
+      }
+
+      if (cellX - 1 >= 0) {
+        const nextIndex = cellZ * mapCellWidth + (cellX - 1);
+        if (visited[nextIndex] === 0) {
+          visited[nextIndex] = 1;
+          queueX.push(cellX - 1);
+          queueZ.push(cellZ);
+        }
+      }
+      if (cellZ - 1 >= 0) {
+        const nextIndex = (cellZ - 1) * mapCellWidth + cellX;
+        if (visited[nextIndex] === 0) {
+          visited[nextIndex] = 1;
+          queueX.push(cellX);
+          queueZ.push(cellZ - 1);
+        }
+      }
+      if (cellX + 1 < mapCellWidth) {
+        const nextIndex = cellZ * mapCellWidth + (cellX + 1);
+        if (visited[nextIndex] === 0) {
+          visited[nextIndex] = 1;
+          queueX.push(cellX + 1);
+          queueZ.push(cellZ);
+        }
+      }
+      if (cellZ + 1 < mapCellHeight) {
+        const nextIndex = (cellZ + 1) * mapCellWidth + cellX;
+        if (visited[nextIndex] === 0) {
+          visited[nextIndex] = 1;
+          queueX.push(cellX);
+          queueZ.push(cellZ + 1);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Source parity subset: ScriptActions::doSkirmishCommandButtonOnMostValuable.
-   * TODO(source-parity): port PartitionFilterValidCommandButtonTarget + expensive-group iterator.
+   * Uses iterateObjectsInRange(FROM_CENTER_2D, ITER_SORTED_EXPENSIVE_TO_CHEAP) semantics.
    */
   private executeScriptSkirmishCommandButtonOnMostValuableObject(
     teamName: string,
@@ -14471,7 +14542,7 @@ export class GameLogicSubsystem implements Subsystem {
     const searchRange = Number.isFinite(range) ? Math.max(0, range) : 0;
     const searchRangeSqr = searchRange * searchRange;
     const sourceOffMap = this.isEntityOffMap(sourceEntity);
-    const candidates: MapEntity[] = [];
+    const candidates: Array<{ entity: MapEntity; buildCost: number }> = [];
     for (const candidate of this.spawnedEntities.values()) {
       if (candidate.destroyed) {
         continue;
@@ -14486,7 +14557,7 @@ export class GameLogicSubsystem implements Subsystem {
       const dx = candidate.x - center.x;
       const dz = candidate.z - center.z;
       const distSqr = (dx * dx) + (dz * dz);
-      if (distSqr > searchRangeSqr) {
+      if (distSqr >= searchRangeSqr) {
         continue;
       }
 
@@ -14497,27 +14568,20 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      candidates.push(candidate);
+      candidates.push({
+        entity: candidate,
+        buildCost: this.resolveEntityBuildCostRaw(candidate),
+      });
     }
 
-    candidates.sort((left, right) => {
-      const leftDef = this.resolveObjectDefByTemplateName(left.templateName);
-      const rightDef = this.resolveObjectDefByTemplateName(right.templateName);
-      const leftValue = leftDef ? this.resolveObjectBuildCost(leftDef, left.side ?? '') : 0;
-      const rightValue = rightDef ? this.resolveObjectBuildCost(rightDef, right.side ?? '') : 0;
-      if (rightValue !== leftValue) {
-        return rightValue - leftValue;
-      }
-      return left.id - right.id;
-    });
+    candidates.sort((left, right) => right.buildCost - left.buildCost);
 
-    for (const candidate of candidates) {
-      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonDef.name, candidate)) {
-        return true;
-      }
+    const target = candidates[0]?.entity;
+    if (!target) {
+      return false;
     }
 
-    return false;
+    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(team, commandButtonDef.name, target);
   }
 
   private appendScriptSequentialScript(script: ScriptSequentialScriptState): void {
