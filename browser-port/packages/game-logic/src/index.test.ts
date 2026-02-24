@@ -39685,12 +39685,24 @@ describe('Script condition groundwork', () => {
         makeMapObject('AmericaInfantry', 22, 10), // id 7 team kill
         makeMapObject('AmericaInfantry', 24, 10), // id 8 player kill
         makeMapObject('ChinaInfantry', 26, 10), // id 9 survivor
+        makeMapObject('AmericaInfantry', 28, 10), // id 10 prototype delete A
+        makeMapObject('AmericaInfantry', 30, 10), // id 11 prototype delete B
+        makeMapObject('AmericaInfantry', 32, 10), // id 12 prototype kill A
+        makeMapObject('AmericaInfantry', 34, 10), // id 13 prototype kill B
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('DeleteTeam', [3, 4])).toBe(true);
+    expect(logic.setScriptTeamMembers('DeleteInstanceA', [10])).toBe(true);
+    expect(logic.setScriptTeamPrototype('DeleteInstanceA', 'DeleteProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('DeleteInstanceB', [11])).toBe(true);
+    expect(logic.setScriptTeamPrototype('DeleteInstanceB', 'DeleteProto')).toBe(true);
     expect(logic.setScriptTeamMembers('KillTeam', [6, 7])).toBe(true);
+    expect(logic.setScriptTeamMembers('KillInstanceA', [12])).toBe(true);
+    expect(logic.setScriptTeamPrototype('KillInstanceA', 'KillProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('KillInstanceB', [13])).toBe(true);
+    expect(logic.setScriptTeamPrototype('KillInstanceB', 'KillProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -39716,6 +39728,19 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(3)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(4)?.destroyed).toBe(true);
+    expect(logic.setScriptConditionTeamContext('DeleteInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 72,
+      params: ['DeleteProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(10)?.destroyed).toBe(true);
+    expect(privateApi.spawnedEntities.get(11)?.destroyed).toBe(false);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 72,
+      params: ['DeleteProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(11)?.destroyed).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 73, // NAMED_KILL
@@ -39729,6 +39754,19 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(6)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(7)?.destroyed).toBe(true);
+    expect(logic.setScriptConditionTeamContext('KillInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 74,
+      params: ['KillProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(12)?.destroyed).toBe(true);
+    expect(privateApi.spawnedEntities.get(13)?.destroyed).toBe(false);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 74,
+      params: ['KillProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(13)?.destroyed).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 75, // PLAYER_KILL
