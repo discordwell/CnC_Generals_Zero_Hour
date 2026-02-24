@@ -20263,11 +20263,17 @@ export class GameLogicSubsystem implements Subsystem {
     teamName: string;
     stateName: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-    return team.stateName === filter.stateName.trim();
+    const stateName = filter.stateName.trim();
+    for (const team of teams) {
+      if (team.stateName === stateName) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -20277,11 +20283,17 @@ export class GameLogicSubsystem implements Subsystem {
     teamName: string;
     stateName: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-    return team.stateName !== filter.stateName.trim();
+    const stateName = filter.stateName.trim();
+    for (const team of teams) {
+      if (team.stateName !== stateName) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
