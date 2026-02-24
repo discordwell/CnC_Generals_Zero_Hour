@@ -14776,39 +14776,45 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamGuardForFramecount(teamName: string, frameCount: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.applyCommand({
+          type: 'guardPosition',
+          entityId: entity.id,
+          targetX: entity.x,
+          targetZ: entity.z,
+          guardMode: 0,
+          commandSource: 'SCRIPT',
+        });
       }
-      this.applyCommand({
-        type: 'guardPosition',
-        entityId: entity.id,
-        targetX: entity.x,
-        targetZ: entity.z,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
+      this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
     }
-    this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
     return true;
   }
 
   private executeScriptTeamIdleForFramecount(teamName: string, frameCount: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
       }
-      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
+      this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
     }
-    this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
     return true;
   }
 

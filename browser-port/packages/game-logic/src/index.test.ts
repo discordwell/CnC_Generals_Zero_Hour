@@ -34942,6 +34942,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('FrameTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('FrameInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FrameInstanceA', 'FrameProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('FrameInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FrameInstanceB', 'FrameProto')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 392, // UNIT_EXECUTE_SEQUENTIAL_SCRIPT
@@ -34950,6 +34954,14 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 395, // TEAM_EXECUTE_SEQUENTIAL_SCRIPT
       params: ['FrameTeam', 'TeamFrameSeq'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 395,
+      params: ['FrameInstanceA', 'TeamFrameSeq'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 395,
+      params: ['FrameInstanceB', 'TeamFrameSeq'],
     })).toBe(true);
 
     const privateApi = logic as unknown as {
@@ -34962,6 +34974,8 @@ describe('Script condition groundwork', () => {
     };
     const unitSeq = privateApi.scriptSequentialScripts.find((script) => script.objectId === 1)!;
     const teamSeq = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'FRAMETEAM')!;
+    const teamSeqA = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'FRAMEINSTANCEA')!;
+    const teamSeqB = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'FRAMEINSTANCEB')!;
 
     expect(logic.executeScriptAction({
       actionType: 398, // UNIT_GUARD_FOR_FRAMECOUNT
@@ -34988,6 +35002,30 @@ describe('Script condition groundwork', () => {
       params: ['FrameTeam', 5],
     })).toBe(true);
     expect(teamSeq.framesToWait).toBe(5);
+
+    expect(logic.executeScriptAction({
+      actionType: 400,
+      params: ['FrameProto', 14],
+    })).toBe(true);
+    expect(teamSeqA.framesToWait).toBe(14);
+    expect(teamSeqB.framesToWait).toBe(14);
+
+    expect(logic.setScriptConditionTeamContext('FrameInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 401,
+      params: ['FrameProto', 3],
+    })).toBe(true);
+    expect(teamSeqA.framesToWait).toBe(3);
+    expect(teamSeqB.framesToWait).toBe(14);
+
+    expect(logic.setScriptConditionTeamContext('FrameInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 401,
+      params: ['FrameProto', 7],
+    })).toBe(true);
+    expect(teamSeqA.framesToWait).toBe(3);
+    expect(teamSeqB.framesToWait).toBe(7);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 398,
