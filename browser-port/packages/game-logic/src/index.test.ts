@@ -34710,15 +34710,28 @@ describe('Script condition groundwork', () => {
     logic.loadMapObjects(
       makeMap([
         makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 28, 20), // id 2
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('SpinTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('SpinInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SpinInstanceA', 'SpinProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('SpinInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SpinInstanceB', 'SpinProto')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 395, // TEAM_EXECUTE_SEQUENTIAL_SCRIPT
       params: ['SpinTeam', 'SpinScript'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 395,
+      params: ['SpinInstanceA', 'SpinScript'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 395,
+      params: ['SpinInstanceB', 'SpinScript'],
     })).toBe(true);
 
     const privateApi = logic as unknown as {
@@ -34732,12 +34745,46 @@ describe('Script condition groundwork', () => {
     );
     expect(spinScript).toBeTruthy();
     expect(spinScript?.framesToWait).toBe(-1);
+    const spinScriptA = privateApi.scriptSequentialScripts.find(
+      (script) => script.teamNameUpper === 'SPININSTANCEA',
+    );
+    const spinScriptB = privateApi.scriptSequentialScripts.find(
+      (script) => script.teamNameUpper === 'SPININSTANCEB',
+    );
+    expect(spinScriptA).toBeTruthy();
+    expect(spinScriptB).toBeTruthy();
+    expect(spinScriptA?.framesToWait).toBe(-1);
+    expect(spinScriptB?.framesToWait).toBe(-1);
 
     expect(logic.executeScriptAction({
       actionType: 466, // TEAM_SPIN_FOR_FRAMECOUNT
       params: ['SpinTeam', 45],
     })).toBe(true);
     expect(spinScript?.framesToWait).toBe(45);
+
+    expect(logic.executeScriptAction({
+      actionType: 466,
+      params: ['SpinProto', 45],
+    })).toBe(true);
+    expect(spinScriptA?.framesToWait).toBe(45);
+    expect(spinScriptB?.framesToWait).toBe(45);
+
+    expect(logic.setScriptConditionTeamContext('SpinInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 466,
+      params: ['SpinProto', 12],
+    })).toBe(true);
+    expect(spinScriptA?.framesToWait).toBe(12);
+    expect(spinScriptB?.framesToWait).toBe(45);
+
+    expect(logic.setScriptConditionTeamContext('SpinInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 466,
+      params: ['SpinProto', 30],
+    })).toBe(true);
+    expect(spinScriptA?.framesToWait).toBe(12);
+    expect(spinScriptB?.framesToWait).toBe(30);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 466,

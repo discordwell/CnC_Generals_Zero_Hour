@@ -14895,12 +14895,14 @@ export class GameLogicSubsystem implements Subsystem {
    * Stores Team sequential spin timer frame for ScriptEngine parity bridges.
    */
   private executeScriptTeamSpinForFramecount(teamName: string, waitForFrames: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
     const waitFrames = Math.max(0, Math.trunc(waitForFrames));
-    this.setScriptSequentialTimerForTeam(team.nameUpper, waitFrames);
+    for (const team of teams) {
+      this.setScriptSequentialTimerForTeam(team.nameUpper, waitFrames);
+    }
     return true;
   }
 
