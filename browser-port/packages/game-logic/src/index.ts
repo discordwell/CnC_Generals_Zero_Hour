@@ -9515,22 +9515,26 @@ export class GameLogicSubsystem implements Subsystem {
     emoticonName: string,
     durationSeconds: number,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
     const durationFrames = Math.trunc(durationSeconds * LOGIC_FRAME_RATE);
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+    const handledEntityIds = new Set<number>();
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        this.scriptEmoticonRequests.push({
+          entityId: entity.id,
+          emoticonName,
+          durationFrames,
+          frame: this.frameCounter,
+        });
       }
-      this.scriptEmoticonRequests.push({
-        entityId: entity.id,
-        emoticonName,
-        durationFrames,
-        frame: this.frameCounter,
-      });
     }
     return true;
   }

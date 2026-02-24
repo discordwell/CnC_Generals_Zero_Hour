@@ -31730,6 +31730,10 @@ describe('Script condition groundwork', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(64, 64));
     expect(logic.setScriptTeamMembers('EmoteTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('EmoteInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('EmoteInstanceA', 'EmoteProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('EmoteInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('EmoteInstanceB', 'EmoteProto')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 488, // TEAM_SET_EMOTICON
@@ -31770,6 +31774,37 @@ describe('Script condition groundwork', () => {
       },
     ]);
     expect(logic.drainScriptEmoticonRequests()).toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 488,
+      params: ['EmoteProto', 'Emotion_Surprised', 2],
+    })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('EmoteInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 488,
+      params: ['EmoteProto', 'Emotion_Calm', 1],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.drainScriptEmoticonRequests()).toEqual([
+      {
+        entityId: 1,
+        emoticonName: 'Emotion_Surprised',
+        durationFrames: 60,
+        frame: 0,
+      },
+      {
+        entityId: 2,
+        emoticonName: 'Emotion_Surprised',
+        durationFrames: 60,
+        frame: 0,
+      },
+      {
+        entityId: 1,
+        emoticonName: 'Emotion_Calm',
+        durationFrames: 30,
+        frame: 0,
+      },
+    ]);
 
     expect(logic.executeScriptAction({
       actionType: 488,
