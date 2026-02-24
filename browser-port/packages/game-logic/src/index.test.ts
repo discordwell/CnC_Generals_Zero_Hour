@@ -33884,6 +33884,93 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('fans out AI_PLAYER_BUILD_TYPE_NEAREST_TEAM across TeamPrototype instances', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+          PlacementViewAngle: 90,
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('USADozer', 20, 20), // id 1
+      makeMapObject('USADozer', 20, 90), // id 2
+      makeMapObject('Ranger', 90, 20), // id 3
+      makeMapObject('Ranger', 90, 90), // id 4
+    ], 128, 128);
+
+    const makeScenario = () => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 4000 });
+      logic.update(0);
+      expect(logic.setScriptTeamMembers('ForwardInstanceA', [3])).toBe(true);
+      expect(logic.setScriptTeamPrototype('ForwardInstanceA', 'ForwardProto')).toBe(true);
+      expect(logic.setScriptTeamMembers('ForwardInstanceB', [4])).toBe(true);
+      expect(logic.setScriptTeamPrototype('ForwardInstanceB', 'ForwardProto')).toBe(true);
+      return logic as unknown as GameLogicSubsystem & {
+        pendingConstructionActions: Map<number, number>;
+        spawnedEntities: Map<number, {
+          templateName: string;
+          x: number;
+          z: number;
+        }>;
+      };
+    };
+
+    const fanoutLogic = makeScenario();
+    expect(fanoutLogic.executeScriptAction({
+      actionType: 343,
+      params: ['America', 'USAPowerPlant', 'ForwardProto'],
+    })).toBe(true);
+    const builtIds = [...new Set(fanoutLogic.pendingConstructionActions.values())];
+    expect(builtIds.length).toBe(2);
+    const builtNearA = builtIds.some((entityId) => {
+      const built = fanoutLogic.spawnedEntities.get(entityId);
+      if (!built) {
+        return false;
+      }
+      return Math.hypot(built.x - 90, built.z - 20) <= 20;
+    });
+    const builtNearB = builtIds.some((entityId) => {
+      const built = fanoutLogic.spawnedEntities.get(entityId);
+      if (!built) {
+        return false;
+      }
+      return Math.hypot(built.x - 90, built.z - 90) <= 20;
+    });
+    expect(builtNearA).toBe(true);
+    expect(builtNearB).toBe(true);
+
+    const contextLogic = makeScenario();
+    expect(contextLogic.setScriptConditionTeamContext('ForwardInstanceA')).toBe(true);
+    expect(contextLogic.executeScriptAction({
+      actionType: 343,
+      params: ['America', 'USAPowerPlant', 'ForwardProto'],
+    })).toBe(true);
+    const contextBuiltIds = [...new Set(contextLogic.pendingConstructionActions.values())];
+    expect(contextBuiltIds.length).toBe(1);
+    const contextBuilt = contextLogic.spawnedEntities.get(contextBuiltIds[0]!);
+    expect(contextBuilt).toBeDefined();
+    expect(Math.hypot(contextBuilt!.x - 90, contextBuilt!.z - 20)).toBeLessThanOrEqual(20);
+    expect(Math.hypot(contextBuilt!.x - 90, contextBuilt!.z - 90)).toBeGreaterThan(20);
+    contextLogic.clearScriptConditionTeamContext();
+  });
+
   it('executes AI_PLAYER_BUILD_SUPPLY_CENTER using source collision id', () => {
     const bundle = makeBundle({
       objects: [
@@ -34828,6 +34915,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(256, 256),
     );
     expect(logic.setScriptTeamMembers('AttackValueTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackValueInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackValueInstanceA', 'AttackValueProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AttackValueInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AttackValueInstanceB', 'AttackValueProto')).toBe(true);
     logic.setTeamRelationship('America', 'China', 0);
 
     expect(logic.executeScriptAction({
@@ -34839,6 +34930,7 @@ describe('Script condition groundwork', () => {
       spawnedEntities: Map<number, {
         moveTarget: { x: number; z: number } | null;
         movePath: Array<{ x: number; z: number }>;
+        attackTargetPosition: { x: number; z: number } | null;
       }>;
     };
     const unitOne = privateApi.spawnedEntities.get(1)!;
@@ -34853,6 +34945,36 @@ describe('Script condition groundwork', () => {
     // near 2-unit cluster (700+700) is selected over the far single expensive unit.
     expect(Math.hypot(finalOne!.x - 70, finalOne!.z - 80)).toBeLessThanOrEqual(35);
     expect(Math.hypot(finalTwo!.x - 70, finalTwo!.z - 80)).toBeLessThanOrEqual(35);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.executeScriptAction({
+      actionType: 462,
+      params: ['AttackValueProto', 3, 1200],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    const attackOne = privateApi.spawnedEntities.get(1)!;
+    const attackTwo = privateApi.spawnedEntities.get(2)!;
+    attackOne.moveTarget = null;
+    attackOne.movePath = [];
+    attackOne.attackTargetPosition = null;
+    attackTwo.moveTarget = null;
+    attackTwo.movePath = [];
+    attackTwo.attackTargetPosition = null;
+    expect(logic.setScriptConditionTeamContext('AttackValueInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 462,
+      params: ['AttackValueProto', 3, 1200],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 462,
@@ -34956,6 +35078,16 @@ describe('Script condition groundwork', () => {
         ], {
           BuildCost: 2000,
         }),
+        makeObjectDef('EnemyCheapSouth', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          BuildCost: 400,
+        }),
+        makeObjectDef('EnemyExpensiveSouth', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 280, InitialHealth: 280 }),
+        ], {
+          BuildCost: 1500,
+        }),
       ],
       commandButtons: [
         makeCommandButtonDef('Command_ScriptOnNamed', {
@@ -34978,13 +35110,20 @@ describe('Script condition groundwork', () => {
     logic.loadMapObjects(
       makeMap([
         makeMapObject('ScriptCaster', 20, 20), // id 1
-        makeMapObject('EnemyCheap', 60, 20), // id 2
-        makeMapObject('EnemyExpensive', 70, 20), // id 3
+        makeMapObject('ScriptCaster', 20, 90), // id 2
+        makeMapObject('EnemyCheap', 60, 20), // id 3
+        makeMapObject('EnemyExpensive', 70, 20), // id 4
+        makeMapObject('EnemyCheapSouth', 60, 90), // id 5
+        makeMapObject('EnemyExpensiveSouth', 70, 90), // id 6
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('AbilityValueTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('AbilityValueInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AbilityValueInstanceA', 'AbilityValueProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AbilityValueInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AbilityValueInstanceB', 'AbilityValueProto')).toBe(true);
     logic.setTeamRelationship('America', 'China', 0);
 
     expect(logic.executeScriptAction({
@@ -34994,7 +35133,35 @@ describe('Script condition groundwork', () => {
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
       specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
       dispatchType: 'OBJECT',
-      targetEntityId: 3,
+      targetEntityId: 4,
+    });
+
+    expect(logic.setScriptConditionTeamContext('AbilityValueInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 463,
+      params: ['AbilityValueProto', 'Command_ScriptOnNamed', 80, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      targetEntityId: 4,
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
+      actionType: 463,
+      params: ['AbilityValueProto', 'Command_ScriptOnNamed', 80, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      targetEntityId: 4,
+    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
+      dispatchType: 'OBJECT',
+      targetEntityId: 6,
     });
 
     expect(logic.executeScriptAction({
