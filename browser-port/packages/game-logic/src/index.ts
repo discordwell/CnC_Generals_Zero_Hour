@@ -14700,8 +14700,8 @@ export class GameLogicSubsystem implements Subsystem {
     scriptName: string,
     timesToLoop: number,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
     const normalizedScriptName = scriptName.trim().toUpperCase();
@@ -14709,19 +14709,21 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity: idle the team before executing the sequential script.
-    this.executeScriptTeamStop(teamName);
+    for (const team of teams) {
+      // Source parity: idle the team before executing the sequential script.
+      this.executeScriptTeamStop(team.nameUpper);
 
-    this.appendScriptSequentialScript({
-      scriptNameUpper: normalizedScriptName,
-      objectId: null,
-      teamNameUpper: team.nameUpper,
-      currentInstruction: -1,
-      timesToLoop: Math.trunc(timesToLoop),
-      framesToWait: -1,
-      dontAdvanceInstruction: false,
-      nextScript: null,
-    });
+      this.appendScriptSequentialScript({
+        scriptNameUpper: normalizedScriptName,
+        objectId: null,
+        teamNameUpper: team.nameUpper,
+        currentInstruction: -1,
+        timesToLoop: Math.trunc(timesToLoop),
+        framesToWait: -1,
+        dontAdvanceInstruction: false,
+        nextScript: null,
+      });
+    }
     return true;
   }
 
@@ -14735,11 +14737,14 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamStopSequentialScript(teamName: string): boolean {
-    const teamNameUpper = this.resolveScriptTeamName(teamName);
-    if (!teamNameUpper) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    this.removeAllSequentialScriptsForTeam(teamNameUpper);
+
+    for (const team of teams) {
+      this.removeAllSequentialScriptsForTeam(team.nameUpper);
+    }
     return true;
   }
 

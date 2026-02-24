@@ -34803,11 +34803,18 @@ describe('Script condition groundwork', () => {
 
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([makeMapObject('Ranger', 20, 20)], 128, 128),
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 28, 20), // id 2
+      ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('SeqTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('SeqInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SeqInstanceA', 'SeqProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('SeqInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SeqInstanceB', 'SeqProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       scriptSequentialScripts: Array<{
@@ -34868,12 +34875,51 @@ describe('Script condition groundwork', () => {
     expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQTEAM')).toBe(false);
 
     expect(logic.executeScriptAction({
+      actionType: 395,
+      params: ['SeqProto', 'ProtoSeq'],
+    })).toBe(true);
+    const protoSeqA = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'SEQINSTANCEA');
+    const protoSeqB = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'SEQINSTANCEB');
+    expect(protoSeqA?.scriptNameUpper).toBe('PROTOSEQ');
+    expect(protoSeqB?.scriptNameUpper).toBe('PROTOSEQ');
+
+    expect(logic.executeScriptAction({
+      actionType: 396,
+      params: ['SeqProto', 'ProtoSeqLoop', 2],
+    })).toBe(true);
+    const protoNextA = protoSeqA?.nextScript as { scriptNameUpper: string; timesToLoop: number } | null;
+    const protoNextB = protoSeqB?.nextScript as { scriptNameUpper: string; timesToLoop: number } | null;
+    expect(protoNextA?.scriptNameUpper).toBe('PROTOSEQLOOP');
+    expect(protoNextA?.timesToLoop).toBe(1);
+    expect(protoNextB?.scriptNameUpper).toBe('PROTOSEQLOOP');
+    expect(protoNextB?.timesToLoop).toBe(1);
+
+    expect(logic.setScriptConditionTeamContext('SeqInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 397,
+      params: ['SeqProto'],
+    })).toBe(true);
+    expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQINSTANCEA')).toBe(false);
+    expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQINSTANCEB')).toBe(true);
+
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 397,
+      params: ['SeqProto'],
+    })).toBe(true);
+    expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQINSTANCEB')).toBe(false);
+
+    expect(logic.executeScriptAction({
       actionType: 392,
       params: [999, 'MissingUnit'],
     })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 395,
       params: ['MissingTeam', 'MissingScript'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 397,
+      params: ['MissingTeam'],
     })).toBe(false);
   });
 
