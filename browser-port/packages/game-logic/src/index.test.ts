@@ -32174,6 +32174,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('ExitTeam', [2, 3])).toBe(true);
+    expect(logic.setScriptTeamMembers('ExitInstanceA', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ExitInstanceA', 'ExitProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('ExitInstanceB', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ExitInstanceB', 'ExitProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -32215,6 +32219,40 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     logic.update(1 / 30);
     expect(privateApi.spawnedEntities.get(2)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 3, targetBuildingId: 1 });
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['ExitProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 3, targetBuildingId: 1 });
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.setScriptConditionTeamContext('ExitInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['ExitProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBe(1);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['ExitProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
     expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
 
     expect(logic.executeScriptAction({
@@ -32265,6 +32303,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('GarrisonTeam', [3, 4])).toBe(true);
+    expect(logic.setScriptTeamMembers('GarrisonInstanceA', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('GarrisonInstanceA', 'GarrisonProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('GarrisonInstanceB', [4])).toBe(true);
+    expect(logic.setScriptTeamPrototype('GarrisonInstanceB', 'GarrisonProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -32295,6 +32337,73 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     logic.update(1 / 30);
     expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 103,
+      params: ['GarrisonProto', 1],
+    })).toBe(true);
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBe(1);
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['GarrisonProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBeNull();
+
+    expect(logic.setScriptConditionTeamContext('GarrisonInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 103,
+      params: ['GarrisonProto', 1],
+    })).toBe(true);
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBeNull();
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 103,
+      params: ['GarrisonProto', 1],
+    })).toBe(true);
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBe(1);
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['GarrisonProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+
+    expect(logic.executeScriptAction({
+      actionType: 105, // TEAM_GARRISON_NEAREST_BUILDING
+      params: ['GarrisonProto'],
+    })).toBe(true);
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBe(1);
+    expect(logic.setScriptConditionTeamContext('GarrisonInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['GarrisonProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBe(1);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 106,
+      params: ['GarrisonProto'],
+    })).toBe(true);
+    logic.update(1 / 30);
     expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBeNull();
 
     expect(logic.executeScriptAction({

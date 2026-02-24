@@ -17443,27 +17443,30 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamGarrisonSpecificBuilding(teamName: string, buildingEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const teams = this.resolveScriptConditionTeams(teamName);
     const building = this.spawnedEntities.get(buildingEntityId);
-    if (!team || !building || building.destroyed) {
+    if (teams.length === 0 || !building || building.destroyed) {
       return false;
     }
 
-    const controllingSide = this.resolveScriptTeamControllingSide(team);
-    if (!controllingSide) {
-      return false;
-    }
-    if (!this.canScriptSideUseBuildingContainer(building, controllingSide)) {
-      return false;
-    }
-
+    const handledEntityIds = new Set<number>();
     let issuedAny = false;
-    for (const member of this.getScriptTeamMemberEntities(team)) {
-      if (member.destroyed) {
+    for (const team of teams) {
+      const controllingSide = this.resolveScriptTeamControllingSide(team);
+      if (!controllingSide) {
         continue;
       }
-      if (this.issueScriptEnterContainer(member, building)) {
-        issuedAny = true;
+      if (!this.canScriptSideUseBuildingContainer(building, controllingSide)) {
+        continue;
+      }
+      for (const member of this.getScriptTeamMemberEntities(team)) {
+        if (member.destroyed || handledEntityIds.has(member.id)) {
+          continue;
+        }
+        if (this.issueScriptEnterContainer(member, building)) {
+          handledEntityIds.add(member.id);
+          issuedAny = true;
+        }
       }
     }
     return issuedAny;
@@ -17474,13 +17477,27 @@ export class GameLogicSubsystem implements Subsystem {
    * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
    */
   private executeScriptTeamGarrisonNearestBuilding(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    let issuedAny = false;
+    const handledEntityIds = new Set<number>();
+    for (const team of teams) {
+      if (this.executeScriptSingleTeamGarrisonNearestBuilding(team, handledEntityIds)) {
+        issuedAny = true;
+      }
+    }
+    return issuedAny;
+  }
+
+  private executeScriptSingleTeamGarrisonNearestBuilding(
+    team: ScriptTeamRecord,
+    handledEntityIds: Set<number> | null = null,
+  ): boolean {
     const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
+      .filter((entity) => !entity.destroyed && (handledEntityIds ? !handledEntityIds.has(entity.id) : true));
     if (teamMembers.length === 0) {
       return false;
     }
@@ -17546,6 +17563,7 @@ export class GameLogicSubsystem implements Subsystem {
           continue;
         }
         if (this.issueScriptEnterContainer(member, building)) {
+          handledEntityIds?.add(member.id);
           issuedAny = true;
           slotsAvailable -= 1;
         }
@@ -17720,34 +17738,39 @@ export class GameLogicSubsystem implements Subsystem {
    * Issues evacuation/exit commands for each team member depending on its containment state.
    */
   private executeScriptTeamExitAllBuildings(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    const handledEntityIds = new Set<number>();
     let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
-        this.applyCommand({
-          type: 'evacuate',
-          entityId: entity.id,
-        });
-        issuedAny = true;
-        continue;
-      }
-      if (
-        entity.garrisonContainerId !== null
-        || entity.transportContainerId !== null
-        || entity.tunnelContainerId !== null
-      ) {
-        this.applyCommand({
-          type: 'exitContainer',
-          entityId: entity.id,
-        });
-        issuedAny = true;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+          handledEntityIds.add(entity.id);
+          this.applyCommand({
+            type: 'evacuate',
+            entityId: entity.id,
+          });
+          issuedAny = true;
+          continue;
+        }
+        if (
+          entity.garrisonContainerId !== null
+          || entity.transportContainerId !== null
+          || entity.tunnelContainerId !== null
+        ) {
+          handledEntityIds.add(entity.id);
+          this.applyCommand({
+            type: 'exitContainer',
+            entityId: entity.id,
+          });
+          issuedAny = true;
+        }
       }
     }
     return issuedAny;
