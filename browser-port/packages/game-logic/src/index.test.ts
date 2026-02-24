@@ -30869,6 +30869,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('RadarInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('RadarInstanceA', 'RadarProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('RadarInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('RadarInstanceB', 'RadarProto')).toBe(true);
     expect(logic.setScriptTeamMembers('StructureTeam', [3])).toBe(true);
 
     expect(logic.executeScriptAction({
@@ -30887,9 +30891,19 @@ describe('Script condition groundwork', () => {
       actionType: 419,
       params: ['AlphaTeam', 5], // beacon pulse does not update "last event"
     })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 419,
+      params: ['RadarProto', 6],
+    })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('RadarInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 419,
+      params: ['RadarProto', 7],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
 
     const radarEvents = logic.getScriptRadarEvents();
-    expect(radarEvents).toHaveLength(4);
+    expect(radarEvents).toHaveLength(7);
     expect(radarEvents[0]).toMatchObject({
       x: 40,
       y: 3,
@@ -30921,10 +30935,31 @@ describe('Script condition groundwork', () => {
       frame: 0,
       expireFrame: 120,
     });
-    expect(logic.getScriptLastRadarEventState()).toMatchObject({
-      eventType: 4,
+    expect(radarEvents[4]).toMatchObject({
+      eventType: 6,
       sourceEntityId: 1,
-      sourceTeamName: 'ALPHATEAM',
+      sourceTeamName: 'RADARINSTANCEA',
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(radarEvents[5]).toMatchObject({
+      eventType: 6,
+      sourceEntityId: 2,
+      sourceTeamName: 'RADARINSTANCEB',
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(radarEvents[6]).toMatchObject({
+      eventType: 7,
+      sourceEntityId: 1,
+      sourceTeamName: 'RADARINSTANCEA',
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(logic.getScriptLastRadarEventState()).toMatchObject({
+      eventType: 7,
+      sourceEntityId: 1,
+      sourceTeamName: 'RADARINSTANCEA',
     });
 
     expect(logic.executeScriptAction({
@@ -30949,9 +30984,9 @@ describe('Script condition groundwork', () => {
     }
     expect(logic.getScriptRadarEvents()).toEqual([]);
     expect(logic.getScriptLastRadarEventState()).toMatchObject({
-      eventType: 4,
+      eventType: 7,
       sourceEntityId: 1,
-      sourceTeamName: 'ALPHATEAM',
+      sourceTeamName: 'RADARINSTANCEA',
     });
   });
 
