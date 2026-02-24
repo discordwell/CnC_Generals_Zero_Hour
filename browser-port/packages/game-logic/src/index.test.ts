@@ -41924,6 +41924,10 @@ describe('Script condition groundwork', () => {
       conditionType: 'TEAM_ATTACKED_BY_PLAYER',
       params: ['AlphaProto', 'China'],
     })).toBe(true);
+    expect(logic.evaluateScriptTeamAttackedByType({
+      teamName: 'AlphaProto',
+      objectType: 'EnemyUnit',
+    })).toBe(true);
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_DISCOVERED',
       params: ['AlphaProto', 'China'],
@@ -41952,6 +41956,10 @@ describe('Script condition groundwork', () => {
       conditionType: 'TEAM_ATTACKED_BY_PLAYER',
       params: ['AlphaProto', 'China'],
     })).toBe(false);
+    expect(logic.evaluateScriptTeamAttackedByType({
+      teamName: 'AlphaProto',
+      objectType: 'EnemyUnit',
+    })).toBe(false);
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_DISCOVERED',
       params: ['AlphaProto', 'China'],
@@ -41969,6 +41977,10 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_ATTACKED_BY_PLAYER',
       params: ['AlphaProto', 'China'],
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamAttackedByType({
+      teamName: 'AlphaProto',
+      objectType: 'EnemyUnit',
     })).toBe(true);
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_DISCOVERED',

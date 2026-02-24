@@ -20303,16 +20303,19 @@ export class GameLogicSubsystem implements Subsystem {
     teamName: string;
     objectType: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (this.evaluateScriptNamedAttackedByType({
-        entityId: entity.id,
-        objectType: filter.objectType,
-      })) {
-        return true;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (this.evaluateScriptNamedAttackedByType({
+          entityId: entity.id,
+          objectType: filter.objectType,
+        })) {
+          return true;
+        }
       }
     }
     return false;
