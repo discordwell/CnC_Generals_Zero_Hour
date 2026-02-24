@@ -16644,15 +16644,18 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamStop(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
       }
-      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
     }
     return true;
   }

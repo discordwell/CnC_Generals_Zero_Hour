@@ -40296,6 +40296,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('StopInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('StopInstanceA', 'StopProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('StopInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('StopInstanceB', 'StopProto')).toBe(true);
 
     logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
     logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
@@ -40340,6 +40344,35 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
     expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
+
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+    expect(logic.executeScriptAction({
+      actionType: 380,
+      params: ['StopProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
+
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+    expect(logic.setScriptConditionTeamContext('StopInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 380,
+      params: ['StopProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+
+    expect(logic.setScriptConditionTeamContext('StopInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 380,
+      params: ['StopProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 380,
