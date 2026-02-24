@@ -40430,6 +40430,45 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(logic.evaluateScriptHasUnits({ teamName: 'BravoTeam' })).toBe(false);
 
+    expect(logic.setScriptTeamMembers('DisbandInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('DisbandInstanceA', 'DisbandProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('DisbandInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('DisbandInstanceB', 'DisbandProto')).toBe(true);
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 381,
+      params: ['DisbandProto'],
+    })).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceA' })).toBe(false);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceB' })).toBe(false);
+
+    expect(logic.setScriptTeamMembers('DisbandInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('DisbandInstanceA', 'DisbandProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('DisbandInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('DisbandInstanceB', 'DisbandProto')).toBe(true);
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
+    logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
+    logic.update(0);
+
+    expect(logic.setScriptConditionTeamContext('DisbandInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 381,
+      params: ['DisbandProto'],
+    })).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceA' })).toBe(false);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceB' })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 381,
+      params: ['DisbandProto'],
+    })).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceB' })).toBe(false);
+
     expect(logic.executeScriptAction({
       actionType: 380, // TEAM_STOP
       params: ['AlphaTeam'],

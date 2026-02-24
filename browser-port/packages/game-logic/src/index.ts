@@ -19604,12 +19604,22 @@ export class GameLogicSubsystem implements Subsystem {
    * the controlling player's default team when available.
    */
   private executeScriptTeamStopAndDisband(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    const stopped = this.executeScriptTeamStop(teamName);
+    let anyHandled = false;
+    for (const team of teams) {
+      if (this.executeScriptSingleTeamStopAndDisband(team)) {
+        anyHandled = true;
+      }
+    }
+    return anyHandled;
+  }
+
+  private executeScriptSingleTeamStopAndDisband(team: ScriptTeamRecord): boolean {
+    const stopped = this.executeScriptTeamStop(team.nameUpper);
     if (!stopped) {
       return false;
     }
