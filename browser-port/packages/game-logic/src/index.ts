@@ -20565,29 +20565,200 @@ export class GameLogicSubsystem implements Subsystem {
     triggerName: string;
     surfacesAllowed?: number;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
-    if (!triggerNameUpper) {
-      return false;
-    }
-    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+    const triggerIndex = this.resolveScriptTeamTriggerIndex(filter.triggerName);
     if (triggerIndex < 0) {
       return false;
     }
 
-    // Source parity: empty teams are not inside.
-    if (this.evaluateScriptIsDestroyed({ teamName: filter.teamName })) {
+    for (const team of teams) {
+      if (this.evaluateScriptSingleTeamInsideAreaEntirely(team, triggerIndex, filter.surfacesAllowed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamInsideAreaPartially.
+   */
+  evaluateScriptTeamInsideAreaPartially(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    const triggerIndex = this.resolveScriptTeamTriggerIndex(filter.triggerName);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const team of teams) {
+      if (this.evaluateScriptSingleTeamInsideAreaPartially(team, triggerIndex, filter.surfacesAllowed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamOutsideAreaEntirely.
+   */
+  evaluateScriptTeamOutsideAreaEntirely(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
+      return false;
+    }
+
+    const triggerIndex = this.resolveScriptTeamTriggerIndex(filter.triggerName);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const team of teams) {
+      if (
+        this.evaluateScriptSingleTeamInsideAreaEntirely(team, triggerIndex, filter.surfacesAllowed)
+        || this.evaluateScriptSingleTeamInsideAreaPartially(team, triggerIndex, filter.surfacesAllowed)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaEntirely.
+   */
+  evaluateScriptTeamEnteredAreaEntirely(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
+      return false;
+    }
+
+    const triggerIndex = this.resolveScriptTeamTriggerIndex(filter.triggerName);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const team of teams) {
+      if (this.evaluateScriptSingleTeamEnteredAreaEntirely(team, triggerIndex, filter.surfacesAllowed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaPartially.
+   */
+  evaluateScriptTeamEnteredAreaPartially(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
+      return false;
+    }
+
+    const triggerIndex = this.resolveScriptTeamTriggerIndex(filter.triggerName);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const team of teams) {
+      if (this.evaluateScriptSingleTeamEnteredAreaPartially(team, triggerIndex, filter.surfacesAllowed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaEntirely.
+   */
+  evaluateScriptTeamExitedAreaEntirely(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
+      return false;
+    }
+
+    const triggerIndex = this.resolveScriptTeamTriggerIndex(filter.triggerName);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const team of teams) {
+      if (this.evaluateScriptSingleTeamExitedAreaEntirely(team, triggerIndex, filter.surfacesAllowed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaPartially.
+   */
+  evaluateScriptTeamExitedAreaPartially(filter: {
+    teamName: string;
+    triggerName: string;
+    surfacesAllowed?: number;
+  }): boolean {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
+      return false;
+    }
+
+    const triggerIndex = this.resolveScriptTeamTriggerIndex(filter.triggerName);
+    if (triggerIndex < 0) {
+      return false;
+    }
+
+    for (const team of teams) {
+      if (this.evaluateScriptSingleTeamExitedAreaPartially(team, triggerIndex, filter.surfacesAllowed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private resolveScriptTeamTriggerIndex(triggerName: string): number {
+    const triggerNameUpper = triggerName.trim().toUpperCase();
+    if (!triggerNameUpper) {
+      return -1;
+    }
+    return this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
+  }
+
+  private evaluateScriptSingleTeamInsideAreaEntirely(
+    team: ScriptTeamRecord,
+    triggerIndex: number,
+    surfacesAllowed: number | undefined,
+  ): boolean {
     let anyConsidered = false;
     let anyOutside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, surfacesAllowed)) {
         continue;
       }
       if (this.isScriptEntityEffectivelyDead(entity)) {
@@ -20606,33 +20777,16 @@ export class GameLogicSubsystem implements Subsystem {
     return anyConsidered && !anyOutside;
   }
 
-  /**
-   * Source parity subset: ScriptConditions::evaluateTeamInsideAreaPartially.
-   */
-  evaluateScriptTeamInsideAreaPartially(filter: {
-    teamName: string;
-    triggerName: string;
-    surfacesAllowed?: number;
-  }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
-      return false;
-    }
-
-    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
-    if (!triggerNameUpper) {
-      return false;
-    }
-    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
-    if (triggerIndex < 0) {
-      return false;
-    }
-
+  private evaluateScriptSingleTeamInsideAreaPartially(
+    team: ScriptTeamRecord,
+    triggerIndex: number,
+    surfacesAllowed: number | undefined,
+  ): boolean {
     let anyConsidered = false;
     let anyInside = false;
     let anyOutside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, surfacesAllowed)) {
         continue;
       }
       if (this.isScriptEntityEffectivelyDead(entity)) {
@@ -20655,47 +20809,19 @@ export class GameLogicSubsystem implements Subsystem {
     return someInsideSomeOutside || allInside;
   }
 
-  /**
-   * Source parity subset: ScriptConditions::evaluateTeamOutsideAreaEntirely.
-   */
-  evaluateScriptTeamOutsideAreaEntirely(filter: {
-    teamName: string;
-    triggerName: string;
-    surfacesAllowed?: number;
-  }): boolean {
-    return !(this.evaluateScriptTeamInsideAreaEntirely(filter) || this.evaluateScriptTeamInsideAreaPartially(filter));
-  }
-
-  /**
-   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaEntirely.
-   */
-  evaluateScriptTeamEnteredAreaEntirely(filter: {
-    teamName: string;
-    triggerName: string;
-    surfacesAllowed?: number;
-  }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
-      return false;
-    }
-
+  private evaluateScriptSingleTeamEnteredAreaEntirely(
+    team: ScriptTeamRecord,
+    triggerIndex: number,
+    surfacesAllowed: number | undefined,
+  ): boolean {
     if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
-      return false;
-    }
-
-    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
-    if (!triggerNameUpper) {
-      return false;
-    }
-    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
-    if (triggerIndex < 0) {
       return false;
     }
 
     let entered = false;
     let outside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, surfacesAllowed)) {
         continue;
       }
       if (this.isScriptEntityEffectivelyDead(entity)) {
@@ -20715,34 +20841,17 @@ export class GameLogicSubsystem implements Subsystem {
     return entered && !outside;
   }
 
-  /**
-   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaPartially.
-   */
-  evaluateScriptTeamEnteredAreaPartially(filter: {
-    teamName: string;
-    triggerName: string;
-    surfacesAllowed?: number;
-  }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
-      return false;
-    }
-
+  private evaluateScriptSingleTeamEnteredAreaPartially(
+    team: ScriptTeamRecord,
+    triggerIndex: number,
+    surfacesAllowed: number | undefined,
+  ): boolean {
     if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
       return false;
     }
 
-    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
-    if (!triggerNameUpper) {
-      return false;
-    }
-    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
-    if (triggerIndex < 0) {
-      return false;
-    }
-
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, surfacesAllowed)) {
         continue;
       }
       if (this.isScriptEntityEffectivelyDead(entity)) {
@@ -20758,29 +20867,12 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  /**
-   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaEntirely.
-   */
-  evaluateScriptTeamExitedAreaEntirely(filter: {
-    teamName: string;
-    triggerName: string;
-    surfacesAllowed?: number;
-  }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
-      return false;
-    }
-
+  private evaluateScriptSingleTeamExitedAreaEntirely(
+    team: ScriptTeamRecord,
+    triggerIndex: number,
+    surfacesAllowed: number | undefined,
+  ): boolean {
     if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
-      return false;
-    }
-
-    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
-    if (!triggerNameUpper) {
-      return false;
-    }
-    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
-    if (triggerIndex < 0) {
       return false;
     }
 
@@ -20788,7 +20880,7 @@ export class GameLogicSubsystem implements Subsystem {
     let exited = false;
     let inside = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, surfacesAllowed)) {
         continue;
       }
       if (this.isScriptEntityEffectivelyDead(entity)) {
@@ -20809,34 +20901,17 @@ export class GameLogicSubsystem implements Subsystem {
     return anyConsidered && exited && !inside;
   }
 
-  /**
-   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaPartially.
-   */
-  evaluateScriptTeamExitedAreaPartially(filter: {
-    teamName: string;
-    triggerName: string;
-    surfacesAllowed?: number;
-  }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
-      return false;
-    }
-
+  private evaluateScriptSingleTeamExitedAreaPartially(
+    team: ScriptTeamRecord,
+    triggerIndex: number,
+    surfacesAllowed: number | undefined,
+  ): boolean {
     if (!this.didScriptTeamMemberEnterOrExitThisFrame(team)) {
       return false;
     }
 
-    const triggerNameUpper = filter.triggerName.trim().toUpperCase();
-    if (!triggerNameUpper) {
-      return false;
-    }
-    const triggerIndex = this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
-    if (triggerIndex < 0) {
-      return false;
-    }
-
     for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (!this.doesScriptSurfaceMaskMatchEntity(entity, filter.surfacesAllowed)) {
+      if (!this.doesScriptSurfaceMaskMatchEntity(entity, surfacesAllowed)) {
         continue;
       }
       if (this.isScriptEntityEffectivelyDead(entity)) {

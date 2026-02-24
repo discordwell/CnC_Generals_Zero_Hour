@@ -42250,6 +42250,94 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates team area enter/exit conditions across TeamPrototype instances with THIS_TEAM precedence', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamMover', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('TeamMover', 20, 20), // id 1
+      makeMapObject('TeamMover', 24, 20), // id 2
+    ], 128, 128);
+    map.triggers = [{
+      name: 'TeamZone',
+      id: 1,
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 40, y: 40 },
+        { x: 80, y: 40 },
+        { x: 80, y: 80 },
+        { x: 40, y: 80 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number }>;
+    };
+    const memberB = privateApi.spawnedEntities.get(2)!;
+
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamInsideAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+
+    memberB.x = 50;
+    memberB.z = 50;
+    logic.update(0);
+
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamInsideAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamEnteredAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamEnteredAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamExitedAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamInsideAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamEnteredAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamEnteredAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptTeamInsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamInsideAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamEnteredAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamEnteredAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+
+    memberB.x = 24;
+    memberB.z = 20;
+    logic.update(0);
+
+    logic.clearScriptConditionTeamContext();
+    expect(logic.evaluateScriptTeamExitedAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.evaluateScriptTeamExitedAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptTeamExitedAreaPartially({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamExitedAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+    expect(logic.evaluateScriptTeamOutsideAreaEntirely({ teamName: 'AlphaProto', triggerName: 'TeamZone' })).toBe(true);
+  });
+
   it('resolves THIS_PLAYER tokens for player-side script params', () => {
     const bundle = makeBundle({
       objects: [
