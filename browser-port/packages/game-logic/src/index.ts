@@ -14872,11 +14872,7 @@ export class GameLogicSubsystem implements Subsystem {
     commandButtonName: string,
     allReady: boolean,
   ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    return this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, allReady);
+    return this.evaluateScriptTeamCommandButtonReadinessByName(teamName, commandButtonName, allReady);
   }
 
   /**
@@ -21446,11 +21442,38 @@ export class GameLogicSubsystem implements Subsystem {
   }): boolean {
     // Source parity: pSkirmishPlayerParm is ignored in C++.
     void filter.side;
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    return this.evaluateScriptTeamCommandButtonReadinessByName(
+      filter.teamName,
+      filter.commandButtonName,
+      filter.allReady,
+    );
+  }
+
+  private evaluateScriptTeamCommandButtonReadinessByName(
+    teamName: string,
+    commandButtonName: string,
+    allReady: boolean,
+  ): boolean {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    return this.evaluateScriptTeamCommandButtonIsReady(team, filter.commandButtonName, filter.allReady);
+
+    if (allReady) {
+      for (const team of teams) {
+        if (!this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, true)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    for (const team of teams) {
+      if (this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, false)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

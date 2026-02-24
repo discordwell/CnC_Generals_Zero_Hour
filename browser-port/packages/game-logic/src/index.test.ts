@@ -34466,6 +34466,42 @@ describe('Script condition groundwork', () => {
       params: ['America', 'WaitTeam', 'Command_ScriptNoTarget'],
     })).toBe(true);
 
+    expect(logic.setScriptTeamMembers('WaitInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('WaitInstanceA', 'WaitProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('WaitInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('WaitInstanceB', 'WaitProto')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 464,
+      params: ['America', 'WaitProto', 'Command_ScriptNoTarget'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 465,
+      params: ['America', 'WaitProto', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('WaitInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 464,
+      params: ['America', 'WaitProto', 'Command_ScriptNoTarget'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 465,
+      params: ['America', 'WaitProto', 'Command_ScriptNoTarget'],
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('WaitInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 464,
+      params: ['America', 'WaitProto', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 465,
+      params: ['America', 'WaitProto', 'Command_ScriptNoTarget'],
+    })).toBe(true);
+
+    logic.clearScriptConditionTeamContext();
+
     expect(logic.executeScriptAction({
       actionType: 464,
       params: ['America', 'MissingTeam', 'Command_ScriptNoTarget'],
@@ -43009,6 +43045,54 @@ describe('Script condition groundwork', () => {
       commandButtonName: 'Command_ParticleCannon',
       allReady: false,
     })).toBe(true);
+
+    expect(logic.setScriptTeamMembers('PowerInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PowerInstanceA', 'PowerProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('PowerInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PowerInstanceB', 'PowerProto')).toBe(true);
+
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      teamName: 'PowerProto',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: true,
+    })).toBe(false);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      teamName: 'PowerProto',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: false,
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('PowerInstanceA')).toBe(true);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      teamName: 'PowerProto',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: true,
+    })).toBe(true);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      teamName: 'PowerProto',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: false,
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('PowerInstanceB')).toBe(true);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      teamName: 'PowerProto',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: true,
+    })).toBe(false);
+    expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
+      side: 'America',
+      teamName: 'PowerProto',
+      commandButtonName: 'Command_ParticleCannon',
+      allReady: false,
+    })).toBe(false);
+
+    logic.clearScriptConditionTeamContext();
 
     privateApi.spawnedEntities.get(2)!.objectStatusFlags.delete('DISABLED_EMP');
     expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
