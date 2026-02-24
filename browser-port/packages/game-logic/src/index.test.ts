@@ -30217,6 +30217,10 @@ describe('Script condition groundwork', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
     expect(logic.setScriptTeamMembers('FaceTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('FaceInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FaceInstanceA', 'FaceProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('FaceInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('FaceInstanceB', 'FaceProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, { x: number; z: number; rotationY: number }>;
@@ -30254,6 +30258,26 @@ describe('Script condition groundwork', () => {
       params: ['FaceTeam', 'FaceWaypointA'],
     })).toBe(true);
     expect(rotationOf(1)).toBeCloseTo(angleTo(1, 14, 30), 6);
+    expect(rotationOf(2)).toBeCloseTo(angleTo(2, 14, 30), 6);
+
+    expect(logic.executeScriptAction({
+      actionType: 510,
+      params: ['FaceProto', 3],
+    })).toBe(true);
+    expect(rotationOf(1)).toBeCloseTo(angleTo(1, 22, 10), 6);
+    expect(rotationOf(2)).toBeCloseTo(angleTo(2, 22, 10), 6);
+    expect(logic.setScriptConditionTeamContext('FaceInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 306,
+      params: ['FaceProto', 'FaceWaypointA'],
+    })).toBe(true);
+    expect(rotationOf(1)).toBeCloseTo(angleTo(1, 14, 30), 6);
+    expect(rotationOf(2)).toBeCloseTo(angleTo(2, 22, 10), 6);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 306,
+      params: ['FaceProto', 'FaceWaypointA'],
+    })).toBe(true);
     expect(rotationOf(2)).toBeCloseTo(angleTo(2, 14, 30), 6);
 
     expect(logic.executeScriptAction({

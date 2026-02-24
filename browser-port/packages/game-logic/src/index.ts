@@ -16969,16 +16969,19 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamFaceNamed.
    */
   private executeScriptTeamFaceNamed(teamName: string, targetEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const teams = this.resolveScriptConditionTeams(teamName);
     const target = this.spawnedEntities.get(targetEntityId);
-    if (!team || !target || target.destroyed) {
+    if (teams.length === 0 || !target || target.destroyed) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.faceEntityTowardPosition(entity, target.x, target.z);
       }
-      this.faceEntityTowardPosition(entity, target.x, target.z);
     }
     return true;
   }
@@ -16987,16 +16990,19 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamFaceWaypoint.
    */
   private executeScriptTeamFaceWaypoint(teamName: string, waypointName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+    const teams = this.resolveScriptConditionTeams(teamName);
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!team || !waypoint) {
+    if (teams.length === 0 || !waypoint) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed) {
+          continue;
+        }
+        this.faceEntityTowardPosition(entity, waypoint.x, waypoint.z);
       }
-      this.faceEntityTowardPosition(entity, waypoint.x, waypoint.z);
     }
     return true;
   }
