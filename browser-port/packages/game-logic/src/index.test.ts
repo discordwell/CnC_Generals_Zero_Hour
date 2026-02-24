@@ -42082,6 +42082,40 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates TEAM_CREATED across TeamPrototype instances with THIS_TEAM precedence', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamCreated('AlphaInstanceA', false)).toBe(true);
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamCreated('AlphaInstanceB', true)).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_CREATED',
+      params: ['AlphaProto'],
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_CREATED',
+      params: ['AlphaProto'],
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_CREATED',
+      params: ['AlphaProto'],
+    })).toBe(true);
+  });
+
   it('resolves THIS_PLAYER tokens for player-side script params', () => {
     const bundle = makeBundle({
       objects: [

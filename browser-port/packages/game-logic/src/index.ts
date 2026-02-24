@@ -20356,16 +20356,20 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamCreated.
-   * TODO(source-parity): wire team creation lifecycle from TeamFactory.
    */
   evaluateScriptTeamCreated(filter: {
     teamName: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-    return team.created;
+    for (const team of teams) {
+      if (team.created) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
