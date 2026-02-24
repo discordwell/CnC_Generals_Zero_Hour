@@ -16824,19 +16824,26 @@ export class GameLogicSubsystem implements Subsystem {
    * Resolves the controlling side's best supply source by minimum cash and guards it.
    */
   private executeScriptTeamGuardSupplyCenter(teamName: string, minimumCash: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    const controllingSide = this.resolveScriptTeamControllingSide(team);
-    if (!controllingSide) {
-      return false;
+
+    let issuedAny = false;
+    for (const team of teams) {
+      const controllingSide = this.resolveScriptTeamControllingSide(team);
+      if (!controllingSide) {
+        continue;
+      }
+      const supplySource = this.findScriptSupplySourceForSide(controllingSide, minimumCash);
+      if (!supplySource) {
+        continue;
+      }
+      if (this.executeScriptTeamGuardObject(team.nameUpper, supplySource.id)) {
+        issuedAny = true;
+      }
     }
-    const supplySource = this.findScriptSupplySourceForSide(controllingSide, minimumCash);
-    if (!supplySource) {
-      return false;
-    }
-    return this.executeScriptTeamGuardObject(team.nameUpper, supplySource.id);
+    return issuedAny;
   }
 
   /**
@@ -16844,26 +16851,28 @@ export class GameLogicSubsystem implements Subsystem {
    * Orders each team member into the nearest friendly tunnel-network node.
    */
   private executeScriptTeamGuardInTunnelNetwork(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
     let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || this.isEntityContained(entity)) {
-        continue;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || this.isEntityContained(entity)) {
+          continue;
+        }
+        const tunnel = this.findNearestFriendlyTunnelNetworkForEntity(entity);
+        if (!tunnel) {
+          continue;
+        }
+        this.applyCommand({
+          type: 'enterTransport',
+          entityId: entity.id,
+          targetTransportId: tunnel.id,
+        });
+        issuedAny = true;
       }
-      const tunnel = this.findNearestFriendlyTunnelNetworkForEntity(entity);
-      if (!tunnel) {
-        continue;
-      }
-      this.applyCommand({
-        type: 'enterTransport',
-        entityId: entity.id,
-        targetTransportId: tunnel.id,
-      });
-      issuedAny = true;
     }
     return issuedAny;
   }

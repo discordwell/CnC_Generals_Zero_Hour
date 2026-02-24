@@ -30050,11 +30050,16 @@ describe('Script condition groundwork', () => {
         makeMapObject('Ranger', 10, 10), // id 1
         makeMapObject('SupplyWarehouseRich', 35, 10), // id 2
         makeMapObject('SupplyWarehousePoor', 75, 10), // id 3
+        makeMapObject('Ranger', 12, 12), // id 4
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('SupplyGuardTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('SupplyGuardInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SupplyGuardInstanceA', 'SupplyGuardProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('SupplyGuardInstanceB', [4])).toBe(true);
+    expect(logic.setScriptTeamPrototype('SupplyGuardInstanceB', 'SupplyGuardProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, { guardObjectId: number }>;
@@ -30071,6 +30076,27 @@ describe('Script condition groundwork', () => {
       params: ['SupplyGuardTeam', 100],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
+
+    expect(logic.executeScriptAction({
+      actionType: 312,
+      params: ['SupplyGuardProto', 100],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(2);
+    expect(logic.executeScriptAction({
+      actionType: 58, // TEAM_GUARD
+      params: ['SupplyGuardProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(0);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(0);
+    expect(logic.setScriptConditionTeamContext('SupplyGuardInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 312,
+      params: ['SupplyGuardProto', 100],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(0);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 312,
@@ -30101,11 +30127,16 @@ describe('Script condition groundwork', () => {
       makeMap([
         makeMapObject('GLATunnelNetwork', 50, 50), // id 1
         makeMapObject('Ranger', 50, 50), // id 2
+        makeMapObject('Ranger', 54, 50), // id 3
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('TunnelGuardTeam', [2])).toBe(true);
+    expect(logic.setScriptTeamMembers('TunnelGuardInstanceA', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('TunnelGuardInstanceA', 'TunnelGuardProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('TunnelGuardInstanceB', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('TunnelGuardInstanceB', 'TunnelGuardProto')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 322, // TEAM_GUARD_IN_TUNNEL_NETWORK (raw id)
@@ -30130,6 +30161,27 @@ describe('Script condition groundwork', () => {
       params: ['TunnelGuardTeam'],
     })).toBe(true);
     expect(logic.getEntityState(2)?.statusFlags).toContain('DISABLED_HELD');
+
+    logic.submitCommand({ type: 'exitContainer', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.executeScriptAction({
+      actionType: 322,
+      params: ['TunnelGuardProto'],
+    })).toBe(true);
+    expect(logic.getEntityState(2)?.statusFlags).toContain('DISABLED_HELD');
+    expect(logic.getEntityState(3)?.statusFlags).toContain('DISABLED_HELD');
+
+    logic.submitCommand({ type: 'exitContainer', entityId: 2 });
+    logic.submitCommand({ type: 'exitContainer', entityId: 3 });
+    logic.update(1 / 30);
+    expect(logic.setScriptConditionTeamContext('TunnelGuardInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 527,
+      params: ['TunnelGuardProto'],
+    })).toBe(true);
+    expect(logic.getEntityState(2)?.statusFlags).toContain('DISABLED_HELD');
+    expect(logic.getEntityState(3)?.statusFlags).not.toContain('DISABLED_HELD');
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 322,
