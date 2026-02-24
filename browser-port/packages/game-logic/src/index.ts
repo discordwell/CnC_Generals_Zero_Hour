@@ -18747,40 +18747,55 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doMergeTeamIntoTeam.
    */
   private executeScriptTeamMergeIntoTeam(sourceTeamName: string, targetTeamName: string): boolean {
-    const sourceTeam = this.getScriptTeamRecord(sourceTeamName);
+    const sourceTeams = this.resolveScriptConditionTeams(sourceTeamName);
     const targetTeam = this.getScriptTeamRecord(targetTeamName);
-    if (!sourceTeam || !targetTeam) {
+    if (sourceTeams.length === 0 || !targetTeam) {
       return false;
     }
-    if (sourceTeam.nameUpper === targetTeam.nameUpper) {
-      return true;
-    }
 
-    const mergedEntityIds = new Set<number>(targetTeam.memberEntityIds);
-    const targetSide = this.resolveScriptTeamControllingSide(targetTeam);
-    for (const entityId of sourceTeam.memberEntityIds) {
-      mergedEntityIds.add(entityId);
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed || !targetSide) {
+    const processedSourceTeamNames = new Set<string>();
+    let mergedAny = false;
+    for (const sourceTeam of sourceTeams) {
+      if (processedSourceTeamNames.has(sourceTeam.nameUpper)) {
         continue;
       }
-      this.transferScriptEntityToSide(entity, targetSide);
-    }
-    targetTeam.memberEntityIds = mergedEntityIds;
-    targetTeam.created = true;
-    if (targetTeam.recruitableOverride === null && sourceTeam.recruitableOverride !== null) {
-      targetTeam.recruitableOverride = sourceTeam.recruitableOverride;
-    }
-    sourceTeam.memberEntityIds = new Set<number>();
-    sourceTeam.created = false;
-    this.scriptTeamCreatedReadyFrameByName.delete(sourceTeam.nameUpper);
+      processedSourceTeamNames.add(sourceTeam.nameUpper);
 
-    // Source parity bridge: Team::deleteTeam empties members but singleton teams persist.
-    // Non-prototype synthetic instances are removed after transfer.
-    if (sourceTeam.nameUpper !== sourceTeam.prototypeNameUpper) {
-      return this.clearScriptTeam(sourceTeam.nameUpper);
+      if (sourceTeam.nameUpper === targetTeam.nameUpper) {
+        mergedAny = true;
+        continue;
+      }
+
+      const mergedEntityIds = new Set<number>(targetTeam.memberEntityIds);
+      const targetSide = this.resolveScriptTeamControllingSide(targetTeam);
+      for (const entityId of sourceTeam.memberEntityIds) {
+        mergedEntityIds.add(entityId);
+        const entity = this.spawnedEntities.get(entityId);
+        if (!entity || entity.destroyed || !targetSide) {
+          continue;
+        }
+        this.transferScriptEntityToSide(entity, targetSide);
+      }
+      targetTeam.memberEntityIds = mergedEntityIds;
+      targetTeam.created = true;
+      if (targetTeam.recruitableOverride === null && sourceTeam.recruitableOverride !== null) {
+        targetTeam.recruitableOverride = sourceTeam.recruitableOverride;
+      }
+      sourceTeam.memberEntityIds = new Set<number>();
+      sourceTeam.created = false;
+      this.scriptTeamCreatedReadyFrameByName.delete(sourceTeam.nameUpper);
+
+      // Source parity bridge: Team::deleteTeam empties members but singleton teams persist.
+      // Non-prototype synthetic instances are removed after transfer.
+      if (sourceTeam.nameUpper !== sourceTeam.prototypeNameUpper) {
+        if (!this.clearScriptTeam(sourceTeam.nameUpper)) {
+          return false;
+        }
+      }
+      mergedAny = true;
     }
-    return true;
+
+    return mergedAny;
   }
 
   /**
@@ -19111,13 +19126,22 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private executeScriptNamedAttackTeam(attackerEntityId: number, victimTeamName: string): boolean {
     const attacker = this.spawnedEntities.get(attackerEntityId);
-    const victimTeam = this.getScriptTeamRecord(victimTeamName);
-    if (!attacker || attacker.destroyed || !victimTeam) {
+    const victimTeams = this.resolveScriptConditionTeams(victimTeamName);
+    if (!attacker || attacker.destroyed || victimTeams.length === 0) {
       return false;
     }
 
-    const victims = this.getScriptTeamMemberEntities(victimTeam)
-      .filter((entity) => !entity.destroyed && !this.isScriptEntityEffectivelyDead(entity));
+    const victims: MapEntity[] = [];
+    const seenVictimIds = new Set<number>();
+    for (const victimTeam of victimTeams) {
+      for (const entity of this.getScriptTeamMemberEntities(victimTeam)) {
+        if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity) || seenVictimIds.has(entity.id)) {
+          continue;
+        }
+        seenVictimIds.add(entity.id);
+        victims.push(entity);
+      }
+    }
 
     this.cancelEntityCommandPathActions(attacker.id);
     this.clearAttackTarget(attacker.id);
@@ -19147,22 +19171,28 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamAttackArea.
    */
   private executeScriptTeamAttackArea(attackerTeamName: string, triggerName: string): boolean {
-    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
+    const attackerTeams = this.resolveScriptConditionTeams(attackerTeamName);
     const area = this.resolveScriptTriggerAreaByName(triggerName);
-    if (!attackerTeam || !area) {
+    if (attackerTeams.length === 0 || !area) {
       return false;
     }
 
-    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
-        continue;
-      }
-      this.cancelEntityCommandPathActions(attacker.id);
-      this.clearAttackTarget(attacker.id);
-      this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
-      const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
-      if (attackAreaState) {
-        this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
+    const handledEntityIds = new Set<number>();
+    for (const attackerTeam of attackerTeams) {
+      for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
+        if (attacker.destroyed
+          || this.isScriptEntityEffectivelyDead(attacker)
+          || handledEntityIds.has(attacker.id)) {
+          continue;
+        }
+        handledEntityIds.add(attacker.id);
+        this.cancelEntityCommandPathActions(attacker.id);
+        this.clearAttackTarget(attacker.id);
+        this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
+        const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
+        if (attackAreaState) {
+          this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
+        }
       }
     }
 
@@ -19173,19 +19203,25 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamAttackNamed.
    */
   private executeScriptTeamAttackNamed(attackerTeamName: string, victimEntityId: number): boolean {
-    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
+    const attackerTeams = this.resolveScriptConditionTeams(attackerTeamName);
     const victim = this.spawnedEntities.get(victimEntityId);
-    if (!attackerTeam || !victim || victim.destroyed) {
+    if (attackerTeams.length === 0 || !victim || victim.destroyed) {
       return false;
     }
 
-    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
-        continue;
+    const handledEntityIds = new Set<number>();
+    for (const attackerTeam of attackerTeams) {
+      for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
+        if (attacker.destroyed
+          || this.isScriptEntityEffectivelyDead(attacker)
+          || handledEntityIds.has(attacker.id)) {
+          continue;
+        }
+        handledEntityIds.add(attacker.id);
+        this.cancelEntityCommandPathActions(attacker.id);
+        this.clearAttackTarget(attacker.id);
+        this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
       }
-      this.cancelEntityCommandPathActions(attacker.id);
-      this.clearAttackTarget(attacker.id);
-      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
     }
 
     return true;

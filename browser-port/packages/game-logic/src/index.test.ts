@@ -39824,6 +39824,10 @@ describe('Script condition groundwork', () => {
     expect(logic.setScriptTeamMembers('AttackerInstanceB', [2])).toBe(true);
     expect(logic.setScriptTeamPrototype('AttackerInstanceB', 'AttackerProto')).toBe(true);
     expect(logic.setScriptTeamMembers('Victims', [3, 4])).toBe(true);
+    expect(logic.setScriptTeamMembers('VictimInstanceA', [3])).toBe(true);
+    expect(logic.setScriptTeamPrototype('VictimInstanceA', 'VictimProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('VictimInstanceB', [4])).toBe(true);
+    expect(logic.setScriptTeamPrototype('VictimInstanceB', 'VictimProto')).toBe(true);
     expect(logic.setScriptTeamMembers('LoadTeam', [6, 7, 8])).toBe(true);
     expect(logic.setScriptTeamMembers('LoadInstanceA', [6, 7])).toBe(true);
     expect(logic.setScriptTeamPrototype('LoadInstanceA', 'LoadProto')).toBe(true);
@@ -39850,6 +39854,18 @@ describe('Script condition groundwork', () => {
       params: [1, 'Victims'],
     })).toBe(true);
     expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+    expect(logic.executeScriptAction({
+      actionType: 48,
+      params: [1, 'VictimProto'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+    expect(logic.setScriptConditionTeamContext('VictimInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 48,
+      params: [1, 'VictimProto'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(4);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 49, // TEAM_ATTACK_AREA
@@ -39857,6 +39873,24 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
     expect([3, 4]).toContain(privateApi.spawnedEntities.get(2)?.attackTargetEntityId);
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
+    expect(logic.executeScriptAction({
+      actionType: 49,
+      params: ['AttackerProto', 'AttackAreaA'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(2)?.attackTargetEntityId);
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
+    expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 49,
+      params: ['AttackerProto', 'AttackAreaA'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 50, // TEAM_ATTACK_NAMED
@@ -39864,6 +39898,24 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(5);
     expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBe(5);
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
+    expect(logic.executeScriptAction({
+      actionType: 50,
+      params: ['AttackerProto', 5],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBe(5);
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
+    expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 50,
+      params: ['AttackerProto', 5],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBeNull();
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 51, // TEAM_LOAD_TRANSPORTS
@@ -41056,6 +41108,25 @@ describe('Script condition groundwork', () => {
       actionType: 92,
       params: ['MissingTeam'],
     })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('SourceInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 93,
+      params: ['SourceProto', 'TargetTeam'],
+    })).toBe(true);
+    expect(Array.from(privateApi.scriptTeamsByName.get('TARGETTEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
+      .toEqual([1, 3]);
+    expect(privateApi.scriptTeamsByName.has('SOURCEINSTANCEA')).toBe(false);
+    expect(privateApi.scriptTeamsByName.has('SOURCEINSTANCEB')).toBe(true);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
+      actionType: 93,
+      params: ['SourceProto', 'TargetTeam'],
+    })).toBe(true);
+    expect(Array.from(privateApi.scriptTeamsByName.get('TARGETTEAM')?.memberEntityIds ?? []).sort((a, b) => a - b))
+      .toEqual([1, 2, 3]);
+    expect(privateApi.scriptTeamsByName.has('SOURCEINSTANCEB')).toBe(false);
 
     expect(logic.executeScriptAction({
       actionType: 93, // TEAM_MERGE_INTO_TEAM
