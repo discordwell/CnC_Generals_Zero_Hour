@@ -33098,6 +33098,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('StealthTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('StealthInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('StealthInstanceA', 'StealthProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('StealthInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('StealthInstanceB', 'StealthProto')).toBe(true);
 
     logic.update(1 / 30);
     expect(logic.getEntityState(1)?.statusFlags).toContain('STEALTHED');
@@ -33137,6 +33141,38 @@ describe('Script condition groundwork', () => {
     expect(logic.getEntityState(2)?.statusFlags).toContain('STEALTHED');
 
     expect(logic.executeScriptAction({
+      actionType: 497,
+      params: ['StealthProto', 0],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.executeScriptAction({
+      actionType: 497,
+      params: ['StealthProto', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
+
+    expect(logic.setScriptConditionTeamContext('StealthInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 497,
+      params: ['StealthProto', 0],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 497,
+      params: ['StealthProto', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
+
+    expect(logic.executeScriptAction({
       actionType: 496,
       params: [999, 0],
     })).toBe(false);
@@ -33166,6 +33202,10 @@ describe('Script condition groundwork', () => {
     );
 
     expect(logic.setScriptTeamMembers('RepulsorTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('RepulsorInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('RepulsorInstanceA', 'RepulsorProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('RepulsorInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('RepulsorInstanceB', 'RepulsorProto')).toBe(true);
 
     expect(logic.executeScriptAction({
       actionType: 436, // NAMED_SET_REPULSOR
@@ -33191,6 +33231,26 @@ describe('Script condition groundwork', () => {
       params: ['RepulsorTeam', 0],
     })).toBe(true);
     expect(logic.getEntityState(1)?.statusFlags).not.toContain('REPULSOR');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('REPULSOR');
+
+    expect(logic.executeScriptAction({
+      actionType: 437,
+      params: ['RepulsorProto', 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).toContain('REPULSOR');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('REPULSOR');
+    expect(logic.setScriptConditionTeamContext('RepulsorInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 437,
+      params: ['RepulsorProto', 0],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.statusFlags).not.toContain('REPULSOR');
+    expect(logic.getEntityState(2)?.statusFlags).toContain('REPULSOR');
+    logic.clearScriptConditionTeamContext();
+    expect(logic.executeScriptAction({
+      actionType: 437,
+      params: ['RepulsorProto', 0],
+    })).toBe(true);
     expect(logic.getEntityState(2)?.statusFlags).not.toContain('REPULSOR');
 
     expect(logic.executeScriptAction({
@@ -33227,6 +33287,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('WanderTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('WanderInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('WanderInstanceA', 'WanderProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('WanderInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('WanderInstanceB', 'WanderProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -33261,6 +33325,24 @@ describe('Script condition groundwork', () => {
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.update(1 / 30);
     expect(unitOne.scriptWanderInPlaceActive).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 438,
+      params: ['WanderProto'],
+    })).toBe(true);
+    expect(unitOne.scriptWanderInPlaceActive).toBe(true);
+    expect(unitTwo.scriptWanderInPlaceActive).toBe(true);
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.setScriptConditionTeamContext('WanderInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 438,
+      params: ['WanderProto'],
+    })).toBe(true);
+    expect(unitOne.scriptWanderInPlaceActive).toBe(true);
+    expect(unitTwo.scriptWanderInPlaceActive).toBe(false);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 438,
@@ -33308,6 +33390,10 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
     expect(logic.setScriptTeamMembers('PathTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamMembers('PathInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PathInstanceA', 'PathProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('PathInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PathInstanceB', 'PathProto')).toBe(true);
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
@@ -33343,6 +33429,30 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.movePath.length).toBeGreaterThan(0);
     expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBeGreaterThan(0);
 
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+
+    expect(logic.executeScriptAction({
+      actionType: 112,
+      params: ['PathProto', 'PanicPath'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_WANDER');
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_WANDER');
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+
+    expect(logic.setScriptConditionTeamContext('PathInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 113,
+      params: ['PathProto', 'PanicPath'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_PANIC');
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+    logic.clearScriptConditionTeamContext();
+
     expect(logic.executeScriptAction({
       actionType: 112,
       params: ['MissingTeam', 'PanicPath'],
@@ -33368,13 +33478,22 @@ describe('Script condition groundwork', () => {
 
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([makeMapObject('Ranger', 20, 20)], 64, 64),
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('Ranger', 24, 20), // id 2
+      ], 64, 64),
       makeRegistry(bundle),
       makeHeightmap(64, 64),
     );
 
     expect(logic.setScriptTeamMembers('PriorityTeam', [1])).toBe(true);
     expect(logic.setScriptTeamPriorityValues('PriorityTeam', 10, 3, 2)).toBe(true);
+    expect(logic.setScriptTeamMembers('PriorityInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PriorityInstanceA', 'PriorityProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('PriorityInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('PriorityInstanceB', 'PriorityProto')).toBe(true);
+    expect(logic.setScriptTeamPriorityValues('PriorityInstanceA', 100, 7, 5)).toBe(true);
+    expect(logic.setScriptTeamPriorityValues('PriorityInstanceB', 200, 11, 13)).toBe(true);
     expect(logic.getScriptTeamPriorityState('PriorityTeam')).toEqual({
       productionPriority: 10,
       successIncrease: 3,
@@ -33392,6 +33511,28 @@ describe('Script condition groundwork', () => {
       params: ['PriorityTeam'],
     })).toBe(true);
     expect(logic.getScriptTeamPriorityState('PriorityTeam')?.productionPriority).toBe(11);
+
+    expect(logic.executeScriptAction({
+      actionType: 439,
+      params: ['PriorityProto'],
+    })).toBe(true);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceA')?.productionPriority).toBe(107);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(211);
+    expect(logic.executeScriptAction({
+      actionType: 440,
+      params: ['PriorityProto'],
+    })).toBe(true);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceA')?.productionPriority).toBe(102);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(198);
+
+    expect(logic.setScriptConditionTeamContext('PriorityInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 439,
+      params: ['PriorityProto'],
+    })).toBe(true);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceA')?.productionPriority).toBe(109);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(198);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 439,

@@ -17959,19 +17959,23 @@ export class GameLogicSubsystem implements Subsystem {
    * C++ toggles OBJECT_STATUS_SCRIPT_UNSTEALTHED for each team member.
    */
   private executeScriptTeamSetStealthEnabled(teamName: string, enabled: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (enabled) {
-        entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
-      } else {
-        entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
+    const handledEntityIds = new Set<number>();
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        if (enabled) {
+          entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
+        } else {
+          entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
+        }
       }
     }
     return true;
@@ -18122,19 +18126,23 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptActions::doTeamSetRepulsor.
    */
   private executeScriptTeamSetRepulsor(teamName: string, repulsor: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (repulsor) {
-        entity.objectStatusFlags.add('REPULSOR');
-      } else {
-        entity.objectStatusFlags.delete('REPULSOR');
+    const handledEntityIds = new Set<number>();
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        if (repulsor) {
+          entity.objectStatusFlags.add('REPULSOR');
+        } else {
+          entity.objectStatusFlags.delete('REPULSOR');
+        }
       }
     }
     return true;
@@ -18186,27 +18194,31 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses per-entity nearest waypoint resolution and SET_WANDER locomotor.
    */
   private executeScriptTeamWander(teamName: string, waypointPathLabel: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    const handledEntityIds = new Set<number>();
     let movedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      const route = this.resolveScriptWaypointRouteByPathLabel(
-        waypointPathLabel,
-        entity.x,
-        entity.z,
-      );
-      if (!route || route.length === 0) {
-        return movedAny;
-      }
-      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
-      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-        movedAny = true;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || !entity.canMove || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        const route = this.resolveScriptWaypointRouteByPathLabel(
+          waypointPathLabel,
+          entity.x,
+          entity.z,
+        );
+        if (!route || route.length === 0) {
+          return movedAny;
+        }
+        this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
+        if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+          movedAny = true;
+        }
       }
     }
     return movedAny;
@@ -18217,27 +18229,31 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses per-entity nearest waypoint resolution and SET_PANIC locomotor.
    */
   private executeScriptTeamPanic(teamName: string, waypointPathLabel: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    const handledEntityIds = new Set<number>();
     let movedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      const route = this.resolveScriptWaypointRouteByPathLabel(
-        waypointPathLabel,
-        entity.x,
-        entity.z,
-      );
-      if (!route || route.length === 0) {
-        return movedAny;
-      }
-      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
-      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-        movedAny = true;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || !entity.canMove || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        const route = this.resolveScriptWaypointRouteByPathLabel(
+          waypointPathLabel,
+          entity.x,
+          entity.z,
+        );
+        if (!route || route.length === 0) {
+          return movedAny;
+        }
+        this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
+        if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+          movedAny = true;
+        }
       }
     }
     return movedAny;
@@ -18249,22 +18265,28 @@ export class GameLogicSubsystem implements Subsystem {
    * re-targeting random points around the action-time origin until interrupted.
    */
   private executeScriptTeamWanderInPlace(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
 
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
+    const handledEntityIds = new Set<number>();
+    let activatedAny = false;
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (entity.destroyed || !entity.canMove || handledEntityIds.has(entity.id)) {
+          continue;
+        }
+        handledEntityIds.add(entity.id);
+        this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
+        entity.scriptWanderInPlaceActive = true;
+        entity.scriptWanderInPlaceOriginX = entity.x;
+        entity.scriptWanderInPlaceOriginZ = entity.z;
+        this.setScriptWanderInPlaceGoal(entity);
+        activatedAny = true;
       }
-      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
-      entity.scriptWanderInPlaceActive = true;
-      entity.scriptWanderInPlaceOriginX = entity.x;
-      entity.scriptWanderInPlaceOriginZ = entity.z;
-      this.setScriptWanderInPlaceGoal(entity);
     }
-    return true;
+    return activatedAny;
   }
 
   /**
@@ -18272,11 +18294,14 @@ export class GameLogicSubsystem implements Subsystem {
    * TeamPrototype::increaseAIPriorityForSuccess adds success increase to current priority.
    */
   private executeScriptTeamIncreasePriority(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    team.productionPriority += team.productionPrioritySuccessIncrease;
+
+    for (const team of teams) {
+      team.productionPriority += team.productionPrioritySuccessIncrease;
+    }
     return true;
   }
 
@@ -18285,11 +18310,14 @@ export class GameLogicSubsystem implements Subsystem {
    * TeamPrototype::decreaseAIPriorityForFailure subtracts failure decrease from current priority.
    */
   private executeScriptTeamDecreasePriority(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
       return false;
     }
-    team.productionPriority -= team.productionPriorityFailureDecrease;
+
+    for (const team of teams) {
+      team.productionPriority -= team.productionPriorityFailureDecrease;
+    }
     return true;
   }
 
