@@ -20423,22 +20423,24 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamReachedWaypointsEnd.
-   * TODO(source-parity): support TeamPrototype instance expansion.
    */
   evaluateScriptTeamReachedWaypointsEnd(filter: {
     teamName: string;
     waypointPathName: string;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (this.evaluateScriptNamedReachedWaypointsEnd({
-        entityId: entity.id,
-        waypointPathName: filter.waypointPathName,
-      })) {
-        return true;
+
+    for (const team of teams) {
+      for (const entity of this.getScriptTeamMemberEntities(team)) {
+        if (this.evaluateScriptNamedReachedWaypointsEnd({
+          entityId: entity.id,
+          waypointPathName: filter.waypointPathName,
+        })) {
+          return true;
+        }
       }
     }
     return false;
@@ -20446,34 +20448,53 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateTeamIsContained.
-   * TODO(source-parity): include AI_EXIT transitional containment state.
+   * Source parity quirk: C++ AI_EXIT branch currently evaluates
+   * `isContained && (state == AI_EXIT)`, so transitional AI_EXIT does not alter
+   * results when getContainedBy() is null.
    */
   evaluateScriptTeamIsContained(filter: {
     teamName: string;
     allContained: boolean;
   }): boolean {
-    const team = this.getScriptTeamRecord(filter.teamName);
-    if (!team) {
+    const teams = this.resolveScriptConditionTeams(filter.teamName);
+    if (teams.length === 0) {
       return false;
     }
 
+    if (!filter.allContained) {
+      for (const team of teams) {
+        if (this.evaluateScriptSingleTeamIsContained(team, false)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    for (const team of teams) {
+      if (!this.evaluateScriptSingleTeamIsContained(team, true)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private evaluateScriptSingleTeamIsContained(team: ScriptTeamRecord, allContained: boolean): boolean {
     let anyConsidered = false;
     for (const entity of this.getScriptTeamMemberEntities(team)) {
       const isContained = this.isEntityContained(entity);
       if (isContained) {
-        if (!filter.allContained) {
+        if (!allContained) {
           return true;
         }
-      } else if (filter.allContained) {
+      } else if (allContained) {
         return false;
       }
       anyConsidered = true;
     }
-
     if (!anyConsidered) {
       return false;
     }
-    return filter.allContained;
+    return allContained;
   }
 
   /**

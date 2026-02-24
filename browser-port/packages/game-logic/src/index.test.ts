@@ -42116,6 +42116,128 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('evaluates TEAM_REACHED_WAYPOINTS_END across TeamPrototype instances with THIS_TEAM precedence', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TeamUnit', 10, 10), // id 1
+        makeMapObject('TeamUnit', 20, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+
+    logic.notifyScriptWaypointPathCompleted(2, 'RouteAlpha');
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_REACHED_WAYPOINTS_END',
+      params: ['AlphaProto', 'RouteAlpha'],
+    })).toBe(true);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_REACHED_WAYPOINTS_END',
+      params: ['AlphaProto', 'RouteAlpha'],
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_REACHED_WAYPOINTS_END',
+      params: ['AlphaProto', 'RouteAlpha'],
+    })).toBe(true);
+  });
+
+  it('evaluates TEAM_IS_CONTAINED across TeamPrototype instances with THIS_TEAM precedence', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TeamUnit', 10, 10), // id 1
+        makeMapObject('TeamUnit', 20, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+    };
+
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: false,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: true,
+    })).toBe(false);
+
+    privateApi.spawnedEntities.get(2)!.transportContainerId = 99;
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: false,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: true,
+    })).toBe(false);
+
+    privateApi.spawnedEntities.get(1)!.transportContainerId = 99;
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: true,
+    })).toBe(true);
+
+    privateApi.spawnedEntities.get(1)!.transportContainerId = null;
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: false,
+    })).toBe(false);
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: true,
+    })).toBe(false);
+
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: false,
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamIsContained({
+      teamName: 'AlphaProto',
+      allContained: true,
+    })).toBe(true);
+  });
+
   it('resolves THIS_PLAYER tokens for player-side script params', () => {
     const bundle = makeBundle({
       objects: [
