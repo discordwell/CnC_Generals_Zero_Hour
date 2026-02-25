@@ -31272,6 +31272,11 @@ describe('Script condition groundwork', () => {
       actionType: 419,
       params: ['RadarProto', 7],
     })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('RadarInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 419,
+      params: ['RadarProto', 8],
+    })).toBe(true);
     logic.clearScriptConditionTeamContext();
 
     const radarEvents = logic.getScriptRadarEvents();
@@ -31315,23 +31320,23 @@ describe('Script condition groundwork', () => {
       expireFrame: 120,
     });
     expect(radarEvents[5]).toMatchObject({
-      eventType: 6,
+      eventType: 7,
+      sourceEntityId: 1,
+      sourceTeamName: 'RADARINSTANCEA',
+      frame: 0,
+      expireFrame: 120,
+    });
+    expect(radarEvents[6]).toMatchObject({
+      eventType: 8,
       sourceEntityId: 2,
       sourceTeamName: 'RADARINSTANCEB',
       frame: 0,
       expireFrame: 120,
     });
-    expect(radarEvents[6]).toMatchObject({
-      eventType: 7,
-      sourceEntityId: 1,
-      sourceTeamName: 'RADARINSTANCEA',
-      frame: 0,
-      expireFrame: 120,
-    });
     expect(logic.getScriptLastRadarEventState()).toMatchObject({
-      eventType: 7,
-      sourceEntityId: 1,
-      sourceTeamName: 'RADARINSTANCEA',
+      eventType: 8,
+      sourceEntityId: 2,
+      sourceTeamName: 'RADARINSTANCEB',
     });
 
     expect(logic.executeScriptAction({
@@ -31356,9 +31361,9 @@ describe('Script condition groundwork', () => {
     }
     expect(logic.getScriptRadarEvents()).toEqual([]);
     expect(logic.getScriptLastRadarEventState()).toMatchObject({
-      eventType: 7,
-      sourceEntityId: 1,
-      sourceTeamName: 'RADARINSTANCEA',
+      eventType: 8,
+      sourceEntityId: 2,
+      sourceTeamName: 'RADARINSTANCEB',
     });
   });
 

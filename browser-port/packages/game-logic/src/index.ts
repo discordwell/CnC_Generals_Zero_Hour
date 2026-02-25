@@ -18680,35 +18680,31 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptActions::doTeamRadarCreateEvent.
    */
   private executeScriptTeamCreateRadarEvent(teamName: string, eventType: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    let recorded = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team);
-      const hasUnits = teamMembers.some((entity) => this.isScriptTeamMemberAliveForUnits(entity));
-      if (!hasUnits) {
-        continue;
-      }
-
-      const estimatePositionEntity = teamMembers[0];
-      if (!estimatePositionEntity) {
-        continue;
-      }
-
-      this.recordScriptRadarEvent(
-        estimatePositionEntity.x,
-        estimatePositionEntity.y,
-        estimatePositionEntity.z,
-        eventType,
-        estimatePositionEntity.id,
-        team.nameUpper,
-      );
-      recorded = true;
+    const teamMembers = this.getScriptTeamMemberEntities(team);
+    const hasUnits = teamMembers.some((entity) => this.isScriptTeamMemberAliveForUnits(entity));
+    if (!hasUnits) {
+      return false;
     }
-    return recorded;
+
+    const estimatePositionEntity = teamMembers[0];
+    if (!estimatePositionEntity) {
+      return false;
+    }
+
+    this.recordScriptRadarEvent(
+      estimatePositionEntity.x,
+      estimatePositionEntity.y,
+      estimatePositionEntity.z,
+      eventType,
+      estimatePositionEntity.id,
+      team.nameUpper,
+    );
+    return true;
   }
 
   /**
