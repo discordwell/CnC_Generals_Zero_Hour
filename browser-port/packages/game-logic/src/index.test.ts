@@ -43996,8 +43996,12 @@ describe('Script condition groundwork', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
       ],
     });
 
@@ -44036,6 +44040,57 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 177,
       params: ['MissingTeam', 120],
+    })).toBe(false);
+  });
+
+  it('executes script create-reinforcement-team action using source action id', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('AmericaInfantry', 10, 10)], 64, 64);
+    map.waypoints = {
+      nodes: [{
+        id: 1,
+        name: 'ReinforceDrop',
+        position: { x: 42, y: 42, z: 0 },
+      }],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.setScriptTeamMembers('ReinforceTeam', [1])).toBe(true);
+    expect(logic.setScriptTeamCreated('ReinforceTeam', false)).toBe(true);
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, {
+        created: boolean;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 241, // CREATE_REINFORCEMENT_TEAM
+      params: ['ReinforceTeam', 'ReinforceDrop'],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('REINFORCETEAM')?.created).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 241,
+      params: ['MissingTeam', 'ReinforceDrop'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 241,
+      params: ['ReinforceTeam', 'MissingWaypoint'],
     })).toBe(false);
   });
 

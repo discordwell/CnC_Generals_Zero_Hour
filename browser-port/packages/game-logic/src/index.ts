@@ -5028,6 +5028,7 @@ const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'TEAM_SET_BOOBYTRAPPED',
   'CAMERA_MOD_LOOK_TOWARD',
   'DEBUG_CRASH_BOX',
+  'CREATE_REINFORCEMENT_TEAM',
 ]);
 
 const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
@@ -10053,6 +10054,9 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (numericType === 230 && paramCount === 0) {
         // 230 also maps to MAP_REVEAL_ALL_UNDO_PERM; 0-param signature is background sound resume.
         actionType = 'RESUME_BACKGROUND_SOUNDS';
+      } else if (numericType === 241 && paramCount === 2) {
+        // 241 also maps to TEAM_FOLLOW_WAYPOINTS in another script set; 2-param signature is reinforcements.
+        actionType = 'CREATE_REINFORCEMENT_TEAM';
       } else if (numericType === 281 && paramCount === 1) {
         // 281 also maps to TEAM_FOLLOW_WAYPOINTS_EXACT; 1-param signature is display text.
         actionType = 'DISPLAY_TEXT';
@@ -10301,6 +10305,11 @@ export class GameLogicSubsystem implements Subsystem {
       case 'BUILD_TEAM':
         return this.executeScriptBuildTeam(
           readString(0, ['teamName', 'team']),
+        );
+      case 'CREATE_REINFORCEMENT_TEAM':
+        return this.executeScriptCreateReinforcementTeam(
+          readString(0, ['teamName', 'team']),
+          readString(1, ['waypointName', 'waypoint']),
         );
       case 'CREATE_OBJECT':
         return this.executeScriptCreateObjectAtPosition(
@@ -20211,6 +20220,34 @@ export class GameLogicSubsystem implements Subsystem {
     if (team) {
       this.scheduleScriptTeamCreatedByConfiguredDelay(team);
     }
+    return true;
+  }
+
+  /**
+   * Source parity subset: ScriptActions::doCreateReinforcements.
+   * Full TeamPrototype transport/payload spawning is not wired yet in this port.
+   * TODO(source-parity): materialize reinforcement members from TeamTemplate data
+   * (including transport, teamStartsFull, and DeliverPayload packaging).
+   */
+  private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
+    const prototype = this.getScriptTeamPrototypeRecord(teamName);
+    if (!prototype) {
+      return false;
+    }
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return false;
+    }
+
+    const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
+    if (!team) {
+      // Source parity subset: respect instance-cap behavior without failing script execution.
+      return true;
+    }
+
+    this.scheduleScriptTeamCreatedByConfiguredDelay(team);
+    // Source parity subset: move currently materialized team members to the destination waypoint.
+    this.executeScriptMoveTeamToWaypoint(team.nameUpper, waypointName);
     return true;
   }
 
