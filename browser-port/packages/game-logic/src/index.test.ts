@@ -30936,7 +30936,7 @@ describe('Script condition groundwork', () => {
       params: ['PanelProto', 'Player Targetable', 1],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_TARGETABLE')).toBe(true);
-    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SCRIPT_TARGETABLE')).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SCRIPT_TARGETABLE')).toBe(false);
     expect(logic.setScriptConditionTeamContext('PanelInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 505,
@@ -30944,6 +30944,13 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(true);
     expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(false);
+    logic.clearScriptConditionTeamContext();
+    expect(logic.setScriptConditionTeamContext('PanelInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 505,
+      params: ['PanelProto', 'Enabled', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(true);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({

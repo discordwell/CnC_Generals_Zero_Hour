@@ -18248,8 +18248,8 @@ export class GameLogicSubsystem implements Subsystem {
     flagName: string,
     enabled: boolean,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     const flag = this.resolveScriptObjectPanelFlagName(flagName);
@@ -18257,15 +18257,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        this.applyScriptObjectPanelFlag(entity, flag, enabled);
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      this.applyScriptObjectPanelFlag(entity, flag, enabled);
     }
     return true;
   }
