@@ -18823,14 +18823,12 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptActions::doTeamAvailableForRecruitment.
    */
   private executeScriptTeamAvailableForRecruitment(teamName: string, availability: boolean): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    for (const team of teams) {
-      team.recruitableOverride = availability;
-    }
+    team.recruitableOverride = availability;
     return true;
   }
 

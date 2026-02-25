@@ -42055,7 +42055,7 @@ describe('Script condition groundwork', () => {
       params: ['SourceProto', 0],
     })).toBe(true);
     expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEA')?.recruitableOverride).toBe(false);
-    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBe(false);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBeNull();
 
     expect(logic.setScriptConditionTeamContext('SourceInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -42063,13 +42063,23 @@ describe('Script condition groundwork', () => {
       params: ['SourceProto', 1],
     })).toBe(true);
     expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEA')?.recruitableOverride).toBe(true);
-    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBe(false);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBeNull();
     logic.clearScriptConditionTeamContext();
 
+    expect(logic.setScriptConditionTeamContext('SourceInstanceB')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 91,
       params: ['SourceProto', 1],
     })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEA')?.recruitableOverride).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBe(true);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
+      actionType: 91,
+      params: ['SourceProto', 0],
+    })).toBe(true);
+    expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEA')?.recruitableOverride).toBe(false);
     expect(privateApi.scriptTeamsByName.get('SOURCEINSTANCEB')?.recruitableOverride).toBe(true);
 
     expect(logic.executeScriptAction({
