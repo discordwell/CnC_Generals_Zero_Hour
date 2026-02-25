@@ -30147,20 +30147,20 @@ describe('Script condition groundwork', () => {
       params: ['SupplyGuardProto', 100],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
-    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(2);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(0);
     expect(logic.executeScriptAction({
       actionType: 58, // TEAM_GUARD
       params: ['SupplyGuardProto'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(0);
-    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(2);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(0);
     expect(logic.setScriptConditionTeamContext('SupplyGuardInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 312,
       params: ['SupplyGuardProto', 100],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
-    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(2);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(0);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
@@ -30234,7 +30234,7 @@ describe('Script condition groundwork', () => {
       params: ['TunnelGuardProto'],
     })).toBe(true);
     expect(logic.getEntityState(2)?.statusFlags).toContain('DISABLED_HELD');
-    expect(logic.getEntityState(3)?.statusFlags).toContain('DISABLED_HELD');
+    expect(logic.getEntityState(3)?.statusFlags).not.toContain('DISABLED_HELD');
 
     logic.submitCommand({ type: 'exitContainer', entityId: 2 });
     logic.submitCommand({ type: 'exitContainer', entityId: 3 });
@@ -30330,6 +30330,12 @@ describe('Script condition groundwork', () => {
       params: ['FaceProto', 3],
     })).toBe(true);
     expect(rotationOf(1)).toBeCloseTo(angleTo(1, 22, 10), 6);
+    expect(rotationOf(2)).toBeCloseTo(angleTo(2, 14, 30), 6);
+    expect(logic.setScriptConditionTeamContext('FaceInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 510,
+      params: ['FaceProto', 3],
+    })).toBe(true);
     expect(rotationOf(2)).toBeCloseTo(angleTo(2, 22, 10), 6);
     expect(logic.setScriptConditionTeamContext('FaceInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -30343,7 +30349,14 @@ describe('Script condition groundwork', () => {
       actionType: 306,
       params: ['FaceProto', 'FaceWaypointA'],
     })).toBe(true);
+    expect(rotationOf(2)).toBeCloseTo(angleTo(2, 22, 10), 6);
+    expect(logic.setScriptConditionTeamContext('FaceInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 306,
+      params: ['FaceProto', 'FaceWaypointA'],
+    })).toBe(true);
     expect(rotationOf(2)).toBeCloseTo(angleTo(2, 14, 30), 6);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 303,
