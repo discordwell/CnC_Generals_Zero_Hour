@@ -12910,10 +12910,9 @@ export class GameLogicSubsystem implements Subsystem {
     );
   }
 
-  private validateScriptSpecialPowerCommandButtonExecution(
+  private resolveScriptSpecialPowerCommandButtonExecution(
     sourceEntity: MapEntity,
     commandButtonDef: CommandButtonDef,
-    target: ScriptCommandButtonTarget,
   ): {
     specialPowerName: string;
     normalizedSpecialPowerName: string;
@@ -12935,6 +12934,36 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+    const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
+    const readyFrame = isSharedSynced
+      ? this.resolveScriptCommandButtonSharedSpecialPowerReadyFrame(normalizedSpecialPowerName)
+      : this.resolveSpecialPowerReadyFrameForSourceEntity(normalizedSpecialPowerName, sourceEntity.id);
+    if (this.frameCounter < readyFrame) {
+      return null;
+    }
+
+    return {
+      specialPowerName,
+      normalizedSpecialPowerName,
+      commandOption,
+    };
+  }
+
+  private validateScriptSpecialPowerCommandButtonExecution(
+    sourceEntity: MapEntity,
+    commandButtonDef: CommandButtonDef,
+    target: ScriptCommandButtonTarget,
+  ): {
+    specialPowerName: string;
+    normalizedSpecialPowerName: string;
+    commandOption: number;
+  } | null {
+    const resolved = this.resolveScriptSpecialPowerCommandButtonExecution(sourceEntity, commandButtonDef);
+    if (!resolved) {
+      return null;
+    }
+
+    const { commandOption } = resolved;
     const needsObjectTarget = (commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
     const needsTargetPosition = (commandOption & SCRIPT_COMMAND_OPTION_NEED_TARGET_POS) !== 0;
 
@@ -12953,19 +12982,7 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
-    const readyFrame = isSharedSynced
-      ? this.resolveScriptCommandButtonSharedSpecialPowerReadyFrame(normalizedSpecialPowerName)
-      : this.resolveSpecialPowerReadyFrameForSourceEntity(normalizedSpecialPowerName, sourceEntity.id);
-    if (this.frameCounter < readyFrame) {
-      return null;
-    }
-
-    return {
-      specialPowerName,
-      normalizedSpecialPowerName,
-      commandOption,
-    };
+    return resolved;
   }
 
   private resolveScriptCommandButtonHuntMode(commandButtonDef: CommandButtonDef): CommandButtonHuntMode {
@@ -13543,18 +13560,26 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
-      if ((commandOption & SCRIPT_COMMAND_OPTION_CAN_USE_WAYPOINTS) === 0) {
+      const resolved = this.resolveScriptSpecialPowerCommandButtonExecution(sourceEntity, commandButtonDef);
+      if (!resolved) {
+        continue;
+      }
+      if ((resolved.commandOption & SCRIPT_COMMAND_OPTION_CAN_USE_WAYPOINTS) === 0) {
         continue;
       }
 
-      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
-        kind: 'POSITION',
+      this.applyCommand({
+        type: 'issueSpecialPower',
+        commandButtonId: commandButtonDef.name,
+        specialPowerName: resolved.specialPowerName,
+        commandOption: resolved.commandOption,
+        issuingEntityIds: [sourceEntity.id],
+        sourceEntityId: sourceEntity.id,
+        targetEntityId: null,
         targetX: closestWaypoint.x,
         targetZ: closestWaypoint.z,
-      })) {
-        executed = true;
-      }
+      });
+      executed = true;
     }
 
     return executed;

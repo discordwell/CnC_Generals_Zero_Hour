@@ -39173,6 +39173,9 @@ describe('Script condition groundwork', () => {
           makeBlock('Behavior', 'SpecialPowerModule ModuleTag_PathBlocked', {
             SpecialPowerTemplate: 'ScriptPathPowerBlocked',
           }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_PathWaypointOnly', {
+            SpecialPowerTemplate: 'ScriptPathPowerWaypointOnly',
+          }),
         ], {
           CommandSet: 'ScriptPathCasterCommandSet',
         }),
@@ -39188,16 +39191,23 @@ describe('Script condition groundwork', () => {
           SpecialPower: 'ScriptPathPowerBlocked',
           Options: 'NEED_TARGET_POS',
         }),
+        makeCommandButtonDef('Command_PathPowerWaypointOnly', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPathPowerWaypointOnly',
+          Options: 'CAN_USE_WAYPOINTS',
+        }),
       ],
       commandSets: [
         makeCommandSetDef('ScriptPathCasterCommandSet', {
           1: 'Command_PathPowerAllowed',
           2: 'Command_PathPowerBlocked',
+          3: 'Command_PathPowerWaypointOnly',
         }),
       ],
       specialPowers: [
         makeSpecialPowerDef('ScriptPathPowerAllowed', { ReloadTime: 0 }),
         makeSpecialPowerDef('ScriptPathPowerBlocked', { ReloadTime: 0 }),
+        makeSpecialPowerDef('ScriptPathPowerWaypointOnly', { ReloadTime: 0 }),
       ],
     });
 
@@ -39269,6 +39279,19 @@ describe('Script condition groundwork', () => {
       commandButtonId: 'Command_PathPowerAllowed',
       targetX: 30,
       targetZ: 35,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 542,
+      params: [1, 'Command_PathPowerWaypointOnly', 'PathAlpha'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      specialPowerTemplateName: 'SCRIPTPATHPOWERWAYPOINTONLY',
+      dispatchType: 'NO_TARGET',
+      commandButtonId: 'Command_PathPowerWaypointOnly',
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
     });
 
     expect(logic.executeScriptAction({
