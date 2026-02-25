@@ -1288,6 +1288,10 @@ interface TensileFormationRuntimeState {
   life: number;
   lowestSlideElevation: number;
   nextWakeFrame: number;
+  /** Source parity bridge: wall footprint removed while collapse is active. */
+  footprintRemoved: boolean;
+  /** Source parity bridge: initial path-blocking state used to restore wall footprint. */
+  originalBlocksPath: boolean;
   done: boolean;
 }
 
@@ -25040,6 +25044,8 @@ export class GameLogicSubsystem implements Subsystem {
         life: 0,
         lowestSlideElevation: 255,
         nextWakeFrame: 0,
+        footprintRemoved: false,
+        originalBlocksPath: blocksPath,
         done: false,
       } : null,
       // AssaultTransport
@@ -51023,6 +51029,32 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity bridge: TensileFormationUpdate::removeWallFromMyFootprint.
+   * While collapsing, release static path-blocking footprint so units can route around the slide.
+   */
+  private releaseTensileFootprint(entity: MapEntity, state: TensileFormationRuntimeState): void {
+    if (state.footprintRemoved || !state.originalBlocksPath || !entity.blocksPath) {
+      return;
+    }
+    entity.blocksPath = false;
+    state.footprintRemoved = true;
+    this.refreshNavigationGridFromCurrentMap();
+  }
+
+  /**
+   * Source parity bridge: TensileFormationUpdate::createWallFromMyFootprint.
+   * After collapse completes, restore static path-blocking footprint.
+   */
+  private restoreTensileFootprint(entity: MapEntity, state: TensileFormationRuntimeState): void {
+    if (!state.footprintRemoved || !state.originalBlocksPath) {
+      return;
+    }
+    entity.blocksPath = true;
+    state.footprintRemoved = false;
+    this.refreshNavigationGridFromCurrentMap();
+  }
+
+  /**
    * Source parity: TerrainLogic::getGroundHeight(..., normal) equivalent used by
    * TensileFormationUpdate to compute slope.
    */
@@ -51073,11 +51105,16 @@ export class GameLogicSubsystem implements Subsystem {
         this.initTensileFormationLinks(entity, state);
       }
 
+      if (state.enabled) {
+        this.releaseTensileFootprint(entity, state);
+      }
+
       if (!state.enabled) {
         const bodyState = calcBodyDamageState(entity.health, entity.maxHealth);
         if (bodyState >= 1) {
           state.enabled = true;
-          // TODO(C&C source parity): pathfinder removeWallFromMyFootprint + CrackSound audio event.
+          this.releaseTensileFootprint(entity, state);
+          // TODO(C&C source parity): CrackSound audio event.
         } else {
           if (this.frameCounter < state.nextWakeFrame) {
             continue;
@@ -51093,7 +51130,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.modelConditionFlags.delete('FREEFALL');
         entity.modelConditionFlags.delete('POST_COLLAPSE');
         this.setEntityBodyDamageState(entity, 3);
-        // TODO(C&C source parity): pathfinder createWallFromMyFootprint and module sleep forever.
+        this.restoreTensileFootprint(entity, state);
         state.done = true;
         continue;
       }

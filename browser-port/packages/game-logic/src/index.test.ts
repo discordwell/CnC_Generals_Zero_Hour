@@ -27487,6 +27487,48 @@ describe('TensileFormationUpdate', () => {
     expect(second.health).toBe(49); // ActiveBody::setDamageState(BODY_DAMAGED): max*0.5 - 1
   });
 
+  it('releases path footprint during collapse and restores it when done', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CollapseChunk', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'TensileFormationUpdate ModuleTag_Tensile', {
+            Enabled: false,
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CollapseChunk', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, MapEntity>;
+      navigationGrid: { blocked: Uint8Array } | null;
+      applyWeaponDamageAmount(sourceEntityId: number | null, target: MapEntity, amount: number, damageType: string): void;
+    };
+    const entity = privateApi.spawnedEntities.get(1)!;
+    const blockedBefore = Array.from(privateApi.navigationGrid!.blocked).reduce((sum, value) => sum + value, 0);
+
+    privateApi.applyWeaponDamageAmount(null, entity, 60, 'CRUSH');
+    logic.update(1 / 30);
+
+    const blockedDuring = Array.from(privateApi.navigationGrid!.blocked).reduce((sum, value) => sum + value, 0);
+    expect(blockedDuring).toBeLessThan(blockedBefore);
+
+    for (let i = 0; i < 301; i++) {
+      logic.update(1 / 30);
+    }
+
+    const blockedAfter = Array.from(privateApi.navigationGrid!.blocked).reduce((sum, value) => sum + value, 0);
+    expect(blockedAfter).toBe(blockedBefore);
+  });
+
   it('enters rubble state after life exceeds 300 frames', () => {
     const bundle = makeBundle({
       objects: [
