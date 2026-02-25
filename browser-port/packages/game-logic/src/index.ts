@@ -14762,8 +14762,8 @@ export class GameLogicSubsystem implements Subsystem {
     scriptName: string,
     timesToLoop: number,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     const normalizedScriptName = scriptName.trim().toUpperCase();
@@ -14771,21 +14771,19 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    for (const team of teams) {
-      // Source parity: idle the team before executing the sequential script.
-      this.executeScriptTeamStop(team.nameUpper);
+    // Source parity: idle the team before executing the sequential script.
+    this.executeScriptTeamStop(team.nameUpper);
 
-      this.appendScriptSequentialScript({
-        scriptNameUpper: normalizedScriptName,
-        objectId: null,
-        teamNameUpper: team.nameUpper,
-        currentInstruction: -1,
-        timesToLoop: Math.trunc(timesToLoop),
-        framesToWait: -1,
-        dontAdvanceInstruction: false,
-        nextScript: null,
-      });
-    }
+    this.appendScriptSequentialScript({
+      scriptNameUpper: normalizedScriptName,
+      objectId: null,
+      teamNameUpper: team.nameUpper,
+      currentInstruction: -1,
+      timesToLoop: Math.trunc(timesToLoop),
+      framesToWait: -1,
+      dontAdvanceInstruction: false,
+      nextScript: null,
+    });
     return true;
   }
 
@@ -14799,14 +14797,12 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamStopSequentialScript(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    for (const team of teams) {
-      this.removeAllSequentialScriptsForTeam(team.nameUpper);
-    }
+    this.removeAllSequentialScriptsForTeam(team.nameUpper);
     return true;
   }
 
@@ -14838,45 +14834,41 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamGuardForFramecount(teamName: string, frameCount: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed) {
-          continue;
-        }
-        this.applyCommand({
-          type: 'guardPosition',
-          entityId: entity.id,
-          targetX: entity.x,
-          targetZ: entity.z,
-          guardMode: 0,
-          commandSource: 'SCRIPT',
-        });
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
-      this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
+      this.applyCommand({
+        type: 'guardPosition',
+        entityId: entity.id,
+        targetX: entity.x,
+        targetZ: entity.z,
+        guardMode: 0,
+        commandSource: 'SCRIPT',
+      });
     }
+    this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
     return true;
   }
 
   private executeScriptTeamIdleForFramecount(teamName: string, frameCount: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed) {
-          continue;
-        }
-        this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
-      this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
+      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
     }
+    this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
     return true;
   }
 
@@ -14968,14 +14960,12 @@ export class GameLogicSubsystem implements Subsystem {
    * Stores Team sequential spin timer frame for ScriptEngine parity bridges.
    */
   private executeScriptTeamSpinForFramecount(teamName: string, waitForFrames: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     const waitFrames = Math.max(0, Math.trunc(waitForFrames));
-    for (const team of teams) {
-      this.setScriptSequentialTimerForTeam(team.nameUpper, waitFrames);
-    }
+    this.setScriptSequentialTimerForTeam(team.nameUpper, waitFrames);
     return true;
   }
 

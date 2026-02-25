@@ -35882,7 +35882,7 @@ describe('Script condition groundwork', () => {
       params: ['SpinProto', 45],
     })).toBe(true);
     expect(spinScriptA?.framesToWait).toBe(45);
-    expect(spinScriptB?.framesToWait).toBe(45);
+    expect(spinScriptB?.framesToWait).toBe(-1);
 
     expect(logic.setScriptConditionTeamContext('SpinInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -35890,7 +35890,7 @@ describe('Script condition groundwork', () => {
       params: ['SpinProto', 12],
     })).toBe(true);
     expect(spinScriptA?.framesToWait).toBe(12);
-    expect(spinScriptB?.framesToWait).toBe(45);
+    expect(spinScriptB?.framesToWait).toBe(-1);
 
     expect(logic.setScriptConditionTeamContext('SpinInstanceB')).toBe(true);
     expect(logic.executeScriptAction({
@@ -35996,7 +35996,7 @@ describe('Script condition groundwork', () => {
     const protoSeqA = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'SEQINSTANCEA');
     const protoSeqB = privateApi.scriptSequentialScripts.find((script) => script.teamNameUpper === 'SEQINSTANCEB');
     expect(protoSeqA?.scriptNameUpper).toBe('PROTOSEQ');
-    expect(protoSeqB?.scriptNameUpper).toBe('PROTOSEQ');
+    expect(protoSeqB).toBeUndefined();
 
     expect(logic.executeScriptAction({
       actionType: 396,
@@ -36006,8 +36006,7 @@ describe('Script condition groundwork', () => {
     const protoNextB = protoSeqB?.nextScript as { scriptNameUpper: string; timesToLoop: number } | null;
     expect(protoNextA?.scriptNameUpper).toBe('PROTOSEQLOOP');
     expect(protoNextA?.timesToLoop).toBe(1);
-    expect(protoNextB?.scriptNameUpper).toBe('PROTOSEQLOOP');
-    expect(protoNextB?.timesToLoop).toBe(1);
+    expect(protoNextB).toBeUndefined();
 
     expect(logic.setScriptConditionTeamContext('SeqInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -36015,7 +36014,7 @@ describe('Script condition groundwork', () => {
       params: ['SeqProto'],
     })).toBe(true);
     expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQINSTANCEA')).toBe(false);
-    expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQINSTANCEB')).toBe(true);
+    expect(privateApi.scriptSequentialScripts.some((script) => script.teamNameUpper === 'SEQINSTANCEB')).toBe(false);
 
     logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
@@ -36123,7 +36122,7 @@ describe('Script condition groundwork', () => {
       params: ['FrameProto', 14],
     })).toBe(true);
     expect(teamSeqA.framesToWait).toBe(14);
-    expect(teamSeqB.framesToWait).toBe(14);
+    expect(teamSeqB.framesToWait).toBe(-1);
 
     expect(logic.setScriptConditionTeamContext('FrameInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -36131,7 +36130,7 @@ describe('Script condition groundwork', () => {
       params: ['FrameProto', 3],
     })).toBe(true);
     expect(teamSeqA.framesToWait).toBe(3);
-    expect(teamSeqB.framesToWait).toBe(14);
+    expect(teamSeqB.framesToWait).toBe(-1);
 
     expect(logic.setScriptConditionTeamContext('FrameInstanceB')).toBe(true);
     expect(logic.executeScriptAction({
