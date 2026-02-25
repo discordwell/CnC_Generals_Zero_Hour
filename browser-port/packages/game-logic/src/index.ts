@@ -3345,6 +3345,8 @@ interface SlowDeathRuntimeState {
   destructionFrame: number;
   /** Whether the midpoint phase has been executed. */
   midpointExecuted: boolean;
+  /** Whether slow death completion should destroy the entity. */
+  destroyOnCompletion: boolean;
 }
 
 /**
@@ -48286,11 +48288,8 @@ export class GameLogicSubsystem implements Subsystem {
       target.health = target.maxHealth; // FULLY_HEAL
       target.armorSetFlagsMask |= ARMOR_SET_FLAG_SECOND_LIFE;
       target.modelConditionFlags.add('SECOND_LIFE');
-      // TODO(PARITY): C++ startSecondLife fires a SlowDeathBehavior for transformation visual.
-      // In C++ the slow death runs while the entity stays alive (model swap animation).
-      // Our tryBeginSlowDeath marks entity as dead, so we skip it here. The SECOND_LIFE
-      // model condition provides basic visual differentiation. Full parity requires a
-      // "slow-death-while-alive" system for proper model transition animations.
+      target.pendingDeathType = weaponDeathType || damageTypeToDeathType(damageType);
+      this.tryBeginUndeadSecondLifeSlowDeathVisual(target);
     }
 
     // Source parity: ActiveBody::getLastDamageTimestamp — track last damage frame for stealth.
@@ -51548,6 +51547,70 @@ export class GameLogicSubsystem implements Subsystem {
     this.spawnEntityFromTemplate(profile.crateTemplateName, crateX, crateZ, rotation, entity.side);
   }
 
+  /**
+   * Source parity: UndeadBody::startSecondLife invokes SlowDeathBehavior::beginSlowDeath.
+   * Unlike SlowDeathBehavior::onDie, this path is visual-only and does not destroy the entity.
+   */
+  private tryBeginUndeadSecondLifeSlowDeathVisual(entity: MapEntity): boolean {
+    if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) {
+      return false;
+    }
+    if (entity.slowDeathProfiles.length === 0) {
+      return false;
+    }
+
+    const candidates: { index: number; weight: number }[] = [];
+    for (let i = 0; i < entity.slowDeathProfiles.length; i += 1) {
+      const profile = entity.slowDeathProfiles[i]!;
+      if (!this.isSlowDeathApplicable(entity, profile)) {
+        continue;
+      }
+      candidates.push({
+        index: i,
+        weight: Math.max(1, profile.probabilityModifier),
+      });
+    }
+    if (candidates.length === 0) {
+      return false;
+    }
+
+    const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
+    let roll = this.gameRandom.nextRange(1, totalWeight);
+    let selectedIndex = candidates[0]!.index;
+    for (const candidate of candidates) {
+      roll -= candidate.weight;
+      if (roll <= 0) {
+        selectedIndex = candidate.index;
+        break;
+      }
+    }
+
+    const profile = entity.slowDeathProfiles[selectedIndex]!;
+    const sinkDelay = profile.sinkDelay + (profile.sinkDelayVariance > 0
+      ? this.gameRandom.nextRange(0, profile.sinkDelayVariance) : 0);
+    const destructionDelay = profile.destructionDelay + (profile.destructionDelayVariance > 0
+      ? this.gameRandom.nextRange(0, profile.destructionDelayVariance) : 0);
+    const sinkFrame = this.frameCounter + sinkDelay;
+    const destructionFrame = this.frameCounter + Math.max(1, destructionDelay);
+    const midpointBegin = Math.floor(destructionDelay * SLOW_DEATH_BEGIN_MIDPOINT_RATIO);
+    const midpointEnd = Math.floor(destructionDelay * SLOW_DEATH_END_MIDPOINT_RATIO);
+    const midpointFrame = this.frameCounter + (midpointBegin < midpointEnd
+      ? this.gameRandom.nextRange(midpointBegin, midpointEnd)
+      : midpointBegin);
+
+    entity.slowDeathState = {
+      profileIndex: selectedIndex,
+      sinkFrame,
+      midpointFrame,
+      destructionFrame,
+      midpointExecuted: false,
+      destroyOnCompletion: false,
+    };
+
+    this.executeSlowDeathPhase(entity, profile, 0); // INITIAL
+    return true;
+  }
+
   private tryBeginSlowDeath(entity: MapEntity, attackerId: number): boolean {
     if (entity.slowDeathProfiles.length === 0) return false;
 
@@ -51610,6 +51673,7 @@ export class GameLogicSubsystem implements Subsystem {
       midpointFrame,
       destructionFrame,
       midpointExecuted: false,
+      destroyOnCompletion: true,
     };
 
     // Source parity: mark AI as dead — prevent further combat, production, movement.
@@ -52679,8 +52743,10 @@ export class GameLogicSubsystem implements Subsystem {
       const state = entity.slowDeathState;
       const profile = entity.slowDeathProfiles[state.profileIndex];
       if (!profile) {
-        // Profile missing — fall through to immediate destruction.
-        this.markEntityDestroyed(entity.id, -1);
+        entity.slowDeathState = null;
+        if (state.destroyOnCompletion) {
+          this.markEntityDestroyed(entity.id, -1);
+        }
         continue;
       }
 
@@ -52691,7 +52757,9 @@ export class GameLogicSubsystem implements Subsystem {
         if (entity.y <= profile.destructionAltitude) {
           this.executeSlowDeathPhase(entity, profile, 2); // FINAL
           entity.slowDeathState = null;
-          this.markEntityDestroyed(entity.id, -1);
+          if (state.destroyOnCompletion) {
+            this.markEntityDestroyed(entity.id, -1);
+          }
           continue;
         }
       }
@@ -52710,7 +52778,9 @@ export class GameLogicSubsystem implements Subsystem {
         && !entity.helicopterSlowDeathState && !entity.jetSlowDeathState) {
         this.executeSlowDeathPhase(entity, profile, 2); // FINAL
         entity.slowDeathState = null;
-        this.markEntityDestroyed(entity.id, -1);
+        if (state.destroyOnCompletion) {
+          this.markEntityDestroyed(entity.id, -1);
+        }
         continue;
       }
 

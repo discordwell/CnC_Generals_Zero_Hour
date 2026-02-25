@@ -28212,6 +28212,87 @@ describe('UndeadBody', () => {
     expect(entity.modelConditionFlags.has('SECOND_LIFE')).toBe(true);
   });
 
+  it('fires slow-death visual phases when entering second life without destroying the entity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UndeadUnit', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'UndeadBody ModuleTag_Body', {
+            MaxHealth: 200,
+            InitialHealth: 200,
+            SecondLifeMaxHealth: 50,
+          }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_Transform', {
+            DestructionDelay: 100, // ~3 frames
+            ProbabilityModifier: 10,
+            OCL: ['INITIAL OCLSecondLifeInitial', 'FINAL OCLSecondLifeFinal'],
+          }),
+        ]),
+        makeObjectDef('SecondLifeInitialFx', 'GLA', ['INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+        makeObjectDef('SecondLifeFinalFx', 'GLA', ['INERT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+    });
+    (bundle as Record<string, unknown>).objectCreationLists = [
+      {
+        name: 'OCLSecondLifeInitial',
+        fields: {},
+        blocks: [{
+          type: 'CreateObject',
+          name: 'CreateObject',
+          fields: { ObjectNames: 'SecondLifeInitialFx', Count: '1' },
+          blocks: [],
+        }],
+      },
+      {
+        name: 'OCLSecondLifeFinal',
+        fields: {},
+        blocks: [{
+          type: 'CreateObject',
+          name: 'CreateObject',
+          fields: { ObjectNames: 'SecondLifeFinalFx', Count: '1' },
+          blocks: [],
+        }],
+      },
+    ];
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap([makeMapObject('UndeadUnit', 100, 100)]), makeRegistry(bundle), makeHeightmap());
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        destroyed: boolean;
+        undeadIsSecondLife: boolean;
+        slowDeathState: unknown;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    (logic as unknown as {
+      applyWeaponDamageAmount(a: null, t: unknown, d: number, dt: string): void;
+    }).applyWeaponDamageAmount(null, entity, 9999, 'EXPLOSION');
+
+    expect(entity.undeadIsSecondLife).toBe(true);
+    expect(entity.health).toBe(50);
+    expect(entity.destroyed).toBe(false);
+    expect(entity.slowDeathState).not.toBeNull();
+
+    for (let i = 0; i < 10; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(entity.destroyed).toBe(false);
+    expect(entity.slowDeathState).toBeNull();
+    expect(logic.getEntityState(1)).not.toBeNull();
+
+    const states = logic.getRenderableEntityStates();
+    expect(states.some((state) => state.templateName === 'SecondLifeInitialFx')).toBe(true);
+    expect(states.some((state) => state.templateName === 'SecondLifeFinalFx')).toBe(true);
+  });
+
   it('takes normal damage on second life and dies normally', () => {
     const bundle = makeBundle({
       objects: [
