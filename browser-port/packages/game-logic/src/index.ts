@@ -1840,6 +1840,8 @@ interface MapEntity {
   detectedUntilFrame: number;
   /** Frame at which entity last took damage (for STEALTH_NOT_WHILE_TAKING_DAMAGE). */
   lastDamageFrame: number;
+  /** Source parity: Body::getLastDamageInfo()->out.m_noEffect snapshot for latest damage event. */
+  lastDamageNoEffect: boolean;
   /**
    * Source parity: BodyModule::m_lastDamageSourceId / getClearableLastAttacker().
    * Set when damage is received; cleared after retaliation check. Enables
@@ -21740,8 +21742,11 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      // TODO(source-parity): C++ also checks Body::getLastDamageInfo()->out.m_noEffect.
-      if (entity.lastDamageFrame > 0 && entity.lastDamageFrame + scanRateFrames > this.frameCounter) {
+      if (
+        entity.lastDamageFrame > 0
+        && entity.lastDamageFrame + scanRateFrames > this.frameCounter
+        && !entity.lastDamageNoEffect
+      ) {
         this.sideAttackedSupplySource.set(normalizedSide, entity.id);
         return true;
       }
@@ -24444,6 +24449,7 @@ export class GameLogicSubsystem implements Subsystem {
       stealthDelayRemaining: 0,
       detectedUntilFrame: 0,
       lastDamageFrame: 0,
+      lastDamageNoEffect: false,
       lastAttackerEntityId: null,
       scriptLastDamageSourceEntityId: null,
       scriptLastDamageSourceTemplateName: null,
@@ -47568,6 +47574,7 @@ export class GameLogicSubsystem implements Subsystem {
         this.recordPreferredLastAttacker(target, sourceEntityId);
         this.recordAttackedBySource(target, sourceEntityId);
         target.lastDamageFrame = this.frameCounter;
+        target.lastDamageNoEffect = false;
       }
       // Source parity: ActiveBody.cpp notifies Player::setAttackedBy even when damage is
       // subdual-only. We record attacked-by side state and emit existing EVA cues.
@@ -47630,6 +47637,7 @@ export class GameLogicSubsystem implements Subsystem {
       this.recordPreferredLastAttacker(target, sourceEntityId);
       this.recordAttackedBySource(target, sourceEntityId);
       target.lastDamageFrame = this.frameCounter;
+      target.lastDamageNoEffect = false;
     }
 
     // Source parity: onDamage resets heal timers for AutoHeal and BaseRegen.

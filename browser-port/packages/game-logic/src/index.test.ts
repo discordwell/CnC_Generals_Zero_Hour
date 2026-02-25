@@ -46640,9 +46640,18 @@ describe('Script condition groundwork', () => {
     logic.update(1 / 30);
     const privateApi = logic as unknown as {
       applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
-      spawnedEntities: Map<number, unknown>;
+      spawnedEntities: Map<number, { lastDamageNoEffect: boolean }>;
+      sideSupplySourceAttackCheckFrame: Map<string, number>;
     };
     privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 25, 'SMALL_ARMS');
+
+    // Source parity: AIPlayer::isSupplySourceAttacked ignores no-effect damage snapshots.
+    privateApi.spawnedEntities.get(1)!.lastDamageNoEffect = true;
+    expect(logic.evaluateScriptSkirmishSupplySourceAttacked({
+      side: 'America',
+    })).toBe(false);
+    privateApi.spawnedEntities.get(1)!.lastDamageNoEffect = false;
+    privateApi.sideSupplySourceAttackCheckFrame.set('america', 0);
 
     expect(logic.evaluateScriptSkirmishSupplySourceAttacked({
       side: 'America',
