@@ -34565,6 +34565,64 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('treats ParachuteContain riders as special zero-slot containers in TEAM_LOAD_TRANSPORTS', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            ContainMax: 1,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('ParachuteShell', 'America', ['PARACHUTE'], [
+          makeBlock('Behavior', 'ParachuteContain ModuleTag_Contain', {
+            ContainMax: 1,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ], {
+          TransportSlotCount: 1,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopTransport', 20, 20), // id 1
+        makeMapObject('ParachuteShell', 20, 20), // id 2
+        makeMapObject('Ranger', 20, 20), // id 3 (rider inside parachute shell)
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('LoadTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+      }>;
+    };
+
+    privateApi.spawnedEntities.get(3)!.transportContainerId = 2;
+
+    expect(logic.executeScriptAction({
+      actionType: 51, // TEAM_LOAD_TRANSPORTS
+      params: ['LoadTeam'],
+    })).toBe(true);
+
+    logic.update(1 / 30);
+
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(2);
+  });
+
   it('executes script named-set-topple-direction action using source action id', () => {
     const bundle = makeBundle({
       objects: [

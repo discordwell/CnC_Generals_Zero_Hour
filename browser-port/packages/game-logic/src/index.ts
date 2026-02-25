@@ -1149,7 +1149,7 @@ interface ParkingPlaceProfile {
   nextHealFrame: number;
 }
 
-type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'GARRISON' | 'TUNNEL' | 'CAVE' | 'HEAL' | 'INTERNET_HACK';
+type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'PARACHUTE' | 'GARRISON' | 'TUNNEL' | 'CAVE' | 'HEAL' | 'INTERNET_HACK';
 
 interface ContainProfile {
   moduleType: ContainModuleType;
@@ -19587,6 +19587,33 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveScriptEntityTransportSlotCount(entity: MapEntity): number {
+    return this.resolveScriptEntityTransportSlotCountRecursive(entity, new Set<number>());
+  }
+
+  private resolveScriptEntityTransportSlotCountRecursive(entity: MapEntity, visitedEntityIds: Set<number>): number {
+    if (visitedEntityIds.has(entity.id)) {
+      return 0;
+    }
+    visitedEntityIds.add(entity.id);
+
+    // Source parity: Object::getTransportSlotCount — special zero-slot containers
+    // proxy slot count to their contained riders.
+    if (entity.containProfile?.moduleType === 'PARACHUTE') {
+      let totalSlots = 0;
+      for (const containedEntityId of this.collectContainedEntityIds(entity.id)) {
+        const containedEntity = this.spawnedEntities.get(containedEntityId);
+        if (!containedEntity || containedEntity.destroyed) {
+          continue;
+        }
+        totalSlots += this.resolveScriptEntityTransportSlotCountRecursive(containedEntity, visitedEntityIds);
+      }
+      return totalSlots;
+    }
+
+    return this.resolveScriptEntityRawTransportSlotCount(entity);
+  }
+
+  private resolveScriptEntityRawTransportSlotCount(entity: MapEntity): number {
     const registry = this.iniDataRegistry;
     if (registry) {
       const objectDef = findObjectDefByName(registry, entity.templateName);
@@ -19602,6 +19629,65 @@ export class GameLogicSubsystem implements Subsystem {
     return (entity.kindOf.has('INFANTRY') || entity.kindOf.has('VEHICLE') || entity.kindOf.has('PORTABLE_STRUCTURE'))
       ? 1
       : 0;
+  }
+
+  private resolveScriptTransportValidationEntity(entity: MapEntity): MapEntity {
+    if (entity.containProfile?.moduleType !== 'PARACHUTE') {
+      return entity;
+    }
+    for (const containedEntityId of this.collectContainedEntityIds(entity.id)) {
+      const containedEntity = this.spawnedEntities.get(containedEntityId);
+      if (containedEntity && !containedEntity.destroyed) {
+        return containedEntity;
+      }
+    }
+    return entity;
+  }
+
+  private resolveScriptContainerUsedTransportSlots(container: MapEntity): number {
+    let usedSlots = 0;
+    for (const containedEntityId of this.collectContainedEntityIds(container.id)) {
+      const containedEntity = this.spawnedEntities.get(containedEntityId);
+      if (!containedEntity || containedEntity.destroyed) {
+        continue;
+      }
+      usedSlots += this.resolveScriptEntityTransportSlotCount(containedEntity);
+    }
+    return usedSlots;
+  }
+
+  private canScriptContainerFitEntity(container: MapEntity, entity: MapEntity): boolean {
+    const containProfile = container.containProfile;
+    if (!containProfile) {
+      return false;
+    }
+
+    if (containProfile.transportCapacity <= 0) {
+      if (
+        containProfile.moduleType === 'TRANSPORT'
+        || containProfile.moduleType === 'OVERLORD'
+        || containProfile.moduleType === 'HELIX'
+      ) {
+        return this.resolveScriptEntityTransportSlotCount(entity) > 0;
+      }
+      return true;
+    }
+
+    if (
+      containProfile.moduleType === 'TRANSPORT'
+      || containProfile.moduleType === 'OVERLORD'
+      || containProfile.moduleType === 'HELIX'
+    ) {
+      const entitySlots = this.resolveScriptEntityTransportSlotCount(entity);
+      if (entitySlots <= 0) {
+        return false;
+      }
+      const usedSlots = this.resolveScriptContainerUsedTransportSlots(container);
+      return usedSlots + entitySlots <= containProfile.transportCapacity;
+    }
+
+    const occupants = this.collectContainedEntityIds(container.id).length;
+    return occupants < containProfile.transportCapacity;
   }
 
   private solveScriptFastPartitionAssignments(
@@ -20847,11 +20933,9 @@ export class GameLogicSubsystem implements Subsystem {
         );
         if (putInContainer) {
           this.positionEntityAtWorldXZ(putInContainer, member.x, member.z);
-          const containerCapacity = this.resolveScriptContainerCapacity(putInContainer);
-          const containerOccupants = this.collectContainedEntityIds(putInContainer.id).length;
           if (
             this.isScriptReinforcementTransportValidForUnit(putInContainer, member)
-            && (containerCapacity <= 0 || containerOccupants < containerCapacity)
+            && this.canScriptContainerFitEntity(putInContainer, member)
           ) {
             team.memberEntityIds.add(putInContainer.id);
             this.enterTransport(member, putInContainer);
@@ -20865,9 +20949,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      let activeCapacity = this.resolveScriptContainerCapacity(activeTransport);
-      let activeOccupants = this.collectContainedEntityIds(activeTransport.id).length;
-      if (activeCapacity > 0 && activeOccupants >= activeCapacity) {
+      if (!this.canScriptContainerFitEntity(activeTransport, memberToLoad)) {
         const spawnX = originX + transportCount * Math.max(activeTransport.geometryMajorRadius, MAP_XY_FACTOR);
         const spawnedTransport = this.spawnEntityFromTemplate(
           activeTransport.templateName,
@@ -20886,9 +20968,7 @@ export class GameLogicSubsystem implements Subsystem {
         if (!this.isScriptReinforcementTransportValidForUnit(activeTransport, memberToLoad)) {
           continue;
         }
-        activeCapacity = this.resolveScriptContainerCapacity(activeTransport);
-        activeOccupants = this.collectContainedEntityIds(activeTransport.id).length;
-        if (activeCapacity > 0 && activeOccupants >= activeCapacity) {
+        if (!this.canScriptContainerFitEntity(activeTransport, memberToLoad)) {
           continue;
         }
       }
@@ -20902,19 +20982,22 @@ export class GameLogicSubsystem implements Subsystem {
     if (!containProfile) {
       return false;
     }
+    const validationUnit = this.resolveScriptTransportValidationEntity(unit);
     const transportSide = this.normalizeSide(transport.side);
-    const unitSide = this.normalizeSide(unit.side);
+    const unitSide = this.normalizeSide(validationUnit.side);
     if (transportSide && unitSide && transportSide !== unitSide) {
       return false;
     }
 
-    const unitKindOf = this.resolveEntityKindOfSet(unit);
+    const unitKindOf = this.resolveEntityKindOfSet(validationUnit);
     switch (containProfile.moduleType) {
       case 'TRANSPORT':
-        return unitKindOf.has('INFANTRY') || unitKindOf.has('VEHICLE');
+        return (unitKindOf.has('INFANTRY') || unitKindOf.has('VEHICLE'))
+          && this.resolveScriptEntityTransportSlotCount(unit) > 0;
       case 'OVERLORD':
       case 'HELIX':
-        return unitKindOf.has('INFANTRY') || unitKindOf.has('PORTABLE_STRUCTURE');
+        return (unitKindOf.has('INFANTRY') || unitKindOf.has('PORTABLE_STRUCTURE'))
+          && this.resolveScriptEntityTransportSlotCount(unit) > 0;
       case 'OPEN':
       case 'HEAL':
       case 'INTERNET_HACK':
@@ -27869,6 +27952,20 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           portableStructureTemplateNames: payloadTemplateNames,
+          garrisonCapacity: 0,
+          transportCapacity: containMax,
+          timeForFullHealFrames: 0,
+          damagePercentToUnits,
+          burnedDeathToUnits,
+        };
+      } else if (moduleType === 'PARACHUTECONTAIN') {
+        // Source parity: ParachuteContain overrides isSpecialZeroSlotContainer() == true.
+        // The parachute shell itself contributes zero transport slots and proxies slot size
+        // checks to its contained rider.
+        profile = {
+          moduleType: 'PARACHUTE',
+          passengersAllowedToFire,
+          passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
           transportCapacity: containMax,
           timeForFullHealFrames: 0,
@@ -37400,15 +37497,13 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: OpenContain::addToContain — cannot enter if already contained.
     if (this.isEntityContained(passenger)) return;
 
-    // Source parity: TransportContain::isValidContainerFor — same-side check.
-    if (this.normalizeSide(passenger.side) !== this.normalizeSide(transport.side)) return;
-
     // Validate: target must have a transport-style contain profile.
     const containProfile = transport.containProfile;
     if (!containProfile) return;
 
     // Source parity: TunnelContain/CaveContain — route to shared-network entry.
     if (containProfile.moduleType === 'TUNNEL' || containProfile.moduleType === 'CAVE') {
+      if (this.normalizeSide(passenger.side) !== this.normalizeSide(transport.side)) return;
       const kindOf = this.resolveEntityKindOfSet(passenger);
       if (kindOf.has('AIRCRAFT')) return;
       const tracker = this.resolveTunnelTrackerForContainer(transport);
@@ -37425,26 +37520,31 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    if (containProfile.moduleType !== 'TRANSPORT'
-      && containProfile.moduleType !== 'OVERLORD'
-      && containProfile.moduleType !== 'HELIX'
-      && containProfile.moduleType !== 'OPEN'
-      && containProfile.moduleType !== 'HEAL'
-      && containProfile.moduleType !== 'INTERNET_HACK') return;
+    const isTransportContain = containProfile.moduleType === 'TRANSPORT'
+      || containProfile.moduleType === 'OVERLORD'
+      || containProfile.moduleType === 'HELIX';
+    const isOpenStyleContain = containProfile.moduleType === 'OPEN'
+      || containProfile.moduleType === 'HEAL'
+      || containProfile.moduleType === 'INTERNET_HACK';
+    if (!isTransportContain && !isOpenStyleContain) return;
 
-    // Source parity: TransportContain type checks — only infantry for TRANSPORT,
-    // infantry + portable structures for OVERLORD/HELIX.
-    const kindOf = this.resolveEntityKindOfSet(passenger);
-    if (containProfile.moduleType === 'TRANSPORT') {
-      if (!kindOf.has('INFANTRY') && !kindOf.has('VEHICLE')) return;
-    } else if (containProfile.moduleType === 'OVERLORD' || containProfile.moduleType === 'HELIX') {
-      if (!kindOf.has('INFANTRY') && !kindOf.has('PORTABLE_STRUCTURE')) return;
-    }
+    if (isTransportContain) {
+      // Source parity: TransportContain::isValidContainerFor — when a rider is a
+      // special-zero-slot container (e.g. parachute shell), validate against its rider.
+      const validationPassenger = this.resolveScriptTransportValidationEntity(passenger);
+      if (this.normalizeSide(validationPassenger.side) !== this.normalizeSide(transport.side)) return;
 
-    // Check capacity.
-    if (containProfile.transportCapacity > 0) {
-      const currentOccupants = this.collectContainedEntityIds(transport.id).length;
-      if (currentOccupants >= containProfile.transportCapacity) return;
+      const kindOf = this.resolveEntityKindOfSet(validationPassenger);
+      if (containProfile.moduleType === 'TRANSPORT') {
+        if (!kindOf.has('INFANTRY') && !kindOf.has('VEHICLE')) return;
+      } else if (containProfile.moduleType === 'OVERLORD' || containProfile.moduleType === 'HELIX') {
+        if (!kindOf.has('INFANTRY') && !kindOf.has('PORTABLE_STRUCTURE')) return;
+      }
+
+      if (!this.canScriptContainerFitEntity(transport, passenger)) return;
+    } else {
+      if (this.normalizeSide(passenger.side) !== this.normalizeSide(transport.side)) return;
+      if (!this.canScriptContainerFitEntity(transport, passenger)) return;
     }
 
     // Move passenger to transport if not close enough.
@@ -37540,12 +37640,28 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      if (containProfile.transportCapacity > 0) {
-        const currentOccupants = this.collectContainedEntityIds(transport.id).length;
-        if (currentOccupants >= containProfile.transportCapacity) {
+      if (
+        containProfile.moduleType === 'TRANSPORT'
+        || containProfile.moduleType === 'OVERLORD'
+        || containProfile.moduleType === 'HELIX'
+      ) {
+        const validationPassenger = this.resolveScriptTransportValidationEntity(passenger);
+        if (this.normalizeSide(validationPassenger.side) !== this.normalizeSide(transport.side)) {
           this.pendingTransportActions.delete(passengerId);
           continue;
         }
+      } else if (
+        containProfile.moduleType !== 'OPEN'
+        && containProfile.moduleType !== 'HEAL'
+        && containProfile.moduleType !== 'INTERNET_HACK'
+      ) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+
+      if (!this.canScriptContainerFitEntity(transport, passenger)) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
       }
 
       this.enterTransport(passenger, transport);
@@ -42539,10 +42655,7 @@ export class GameLogicSubsystem implements Subsystem {
         // Must have a HEAL contain profile with capacity.
         const containProfile = candidate.containProfile;
         if (!containProfile || containProfile.moduleType !== 'HEAL') continue;
-        if (containProfile.transportCapacity > 0) {
-          const occupants = this.collectContainedEntityIds(candidate.id).length;
-          if (occupants >= containProfile.transportCapacity) continue;
-        }
+        if (!this.canScriptContainerFitEntity(candidate, entity)) continue;
 
         const dx = candidate.x - entity.x;
         const dz = candidate.z - entity.z;
