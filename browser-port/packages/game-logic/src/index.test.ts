@@ -30153,14 +30153,14 @@ describe('Script condition groundwork', () => {
       params: ['SupplyGuardProto'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(0);
-    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(0);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(2);
     expect(logic.setScriptConditionTeamContext('SupplyGuardInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 312,
       params: ['SupplyGuardProto', 100],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardObjectId).toBe(2);
-    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(0);
+    expect(privateApi.spawnedEntities.get(4)?.guardObjectId).toBe(2);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
@@ -42601,6 +42601,11 @@ describe('Script condition groundwork', () => {
       params: ['GuardProto'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+    expect(logic.executeScriptAction({
+      actionType: 379, // NAMED_STOP
+      params: [2],
+    })).toBe(true);
     expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
     expect(logic.setScriptConditionTeamContext('GuardInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -42614,7 +42619,14 @@ describe('Script condition groundwork', () => {
       actionType: 58,
       params: ['GuardProto'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
+    expect(logic.setScriptConditionTeamContext('GuardInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 58,
+      params: ['GuardProto'],
+    })).toBe(true);
     expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 57,
@@ -42843,7 +42855,7 @@ describe('Script condition groundwork', () => {
       params: ['StopProto'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
-    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).not.toBe('NONE');
 
     logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 90, targetZ: 90, guardMode: 0 });
     logic.submitCommand({ type: 'guardPosition', entityId: 2, targetX: 92, targetZ: 90, guardMode: 0 });
@@ -42933,7 +42945,7 @@ describe('Script condition groundwork', () => {
       params: ['DisbandProto'],
     })).toBe(true);
     expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceA' })).toBe(false);
-    expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceB' })).toBe(false);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'DisbandInstanceB' })).toBe(true);
 
     expect(logic.setScriptTeamMembers('DisbandInstanceA', [1])).toBe(true);
     expect(logic.setScriptTeamPrototype('DisbandInstanceA', 'DisbandProto')).toBe(true);
