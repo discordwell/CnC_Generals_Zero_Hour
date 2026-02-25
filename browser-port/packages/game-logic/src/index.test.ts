@@ -40012,6 +40012,13 @@ describe('Script condition groundwork', () => {
       actionType: 339,
       params: ['UnmannedProto'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(7)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+    expect(logic.setScriptConditionTeamContext('UnmannedInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 339,
+      params: ['UnmannedProto'],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
     expect(privateApi.spawnedEntities.get(7)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
     expect(privateApi.spawnedEntities.get(5)?.side).toBe('');
     expect(privateApi.spawnedEntities.get(5)?.controllingPlayerToken).toBeNull();
@@ -40037,6 +40044,13 @@ describe('Script condition groundwork', () => {
       actionType: 341,
       params: ['BoobyBomb', 'TrapProto'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(6)?.objectStatusFlags.has('BOOBY_TRAPPED')).toBe(false);
+    expect(logic.setScriptConditionTeamContext('TrapInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 341,
+      params: ['BoobyBomb', 'TrapProto'],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
 
     const targetThree = privateApi.spawnedEntities.get(3)!;
     const targetFour = privateApi.spawnedEntities.get(4)!;

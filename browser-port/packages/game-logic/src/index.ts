@@ -18002,24 +18002,18 @@ export class GameLogicSubsystem implements Subsystem {
    * Applies unmanned status to each team member.
    */
   private executeScriptTeamSetUnmannedStatus(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    let updated = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        this.setScriptEntityUnmanned(entity);
-        updated = true;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      this.setScriptEntityUnmanned(entity);
     }
-    return updated;
+    return true;
   }
 
   /**
@@ -18089,22 +18083,18 @@ export class GameLogicSubsystem implements Subsystem {
     boobytrapTemplateName: string,
     teamName: string,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
     let attachedAny = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        if (this.applyScriptBoobytrapToEntity(boobytrapTemplateName, entity)) {
-          attachedAny = true;
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.applyScriptBoobytrapToEntity(boobytrapTemplateName, entity)) {
+        attachedAny = true;
       }
     }
     return attachedAny;
