@@ -36431,19 +36431,37 @@ describe('Script condition groundwork', () => {
       ],
     });
 
+    const map = makeMap([makeMapObject('Ranger', 10, 10)], 64, 64);
+    map.sidesList = {
+      sides: [
+        {
+          dict: { playerName: 'ReplayObserver', playerFaction: 'Observer' },
+          buildList: [],
+        },
+      ],
+      teams: [],
+    };
+
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
-      makeMap([makeMapObject('Ranger', 10, 10)], 64, 64),
+      map,
       makeRegistry(bundle),
       makeHeightmap(64, 64),
     );
 
-    const privateApi = logic as unknown as { scriptActiveBoundaryIndex: number | null };
+    const privateApi = logic as unknown as {
+      scriptActiveBoundaryIndex: number | null;
+      setMapRevealEntirePermanentlyForSide: (side: string, reveal: boolean) => void;
+    };
+    privateApi.setMapRevealEntirePermanentlyForSide('observer', true);
+    expect(logic.getCellVisibility('observer', 40, 40)).toBe(CELL_CLEAR);
+
     expect(logic.executeScriptAction({
       actionType: 406, // MAP_SWITCH_BORDER
       params: [2],
     })).toBe(true);
     expect(privateApi.scriptActiveBoundaryIndex).toBe(2);
+    expect(logic.getCellVisibility('observer', 60, 60)).toBe(CELL_CLEAR);
   });
 
   it('executes team all-use command-button target actions using source action ids', () => {

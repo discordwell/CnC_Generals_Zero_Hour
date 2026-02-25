@@ -14876,8 +14876,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptMapSwitchBorder(borderIndex: number): boolean {
+    // Source parity: ScriptActions::doBorderSwitch temporarily removes permanent
+    // replay-observer reveal before boundary swap, then reapplies it.
+    const observerSide = this.scriptPlayerSideByName.get('REPLAYOBSERVER') ?? '';
+    const observerPlayerIndex = observerSide
+      ? this.resolvePlayerIndexForSide(observerSide)
+      : -1;
+    if (observerPlayerIndex >= 0 && this.fogOfWarGrid) {
+      this.fogOfWarGrid.undoRevealMapForPlayerPermanently(observerPlayerIndex);
+    }
+
     this.scriptActiveBoundaryIndex = Math.trunc(borderIndex);
-    // TODO(source-parity): TerrainLogic::setActiveBoundary + observer shroud refresh.
+
+    if (observerPlayerIndex >= 0 && this.fogOfWarGrid) {
+      this.fogOfWarGrid.revealMapForPlayerPermanently(observerPlayerIndex);
+    }
+
+    // Source parity: PartitionManager::refreshShroudForLocalPlayer.
+    this.updateFogOfWar();
     return true;
   }
 
