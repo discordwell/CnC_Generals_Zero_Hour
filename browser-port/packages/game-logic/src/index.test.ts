@@ -29951,6 +29951,31 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.commandButtonHuntMode).toBe('NONE');
     expect(privateApi.spawnedEntities.get(2)?.commandButtonHuntMode).toBe('NONE');
 
+    expect(logic.executeScriptAction({
+      actionType: 278,
+      params: ['HuntProto', 'Command_HuntPower'],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.commandButtonHuntMode).not.toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.commandButtonHuntMode).toBe('NONE');
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 1,
+      targetX: 10,
+      targetZ: 10,
+      commandSource: 'PLAYER',
+    });
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 2,
+      targetX: 12,
+      targetZ: 10,
+      commandSource: 'PLAYER',
+    });
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.commandButtonHuntMode).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.commandButtonHuntMode).toBe('NONE');
+
     expect(logic.setScriptConditionTeamContext('HuntInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 483,

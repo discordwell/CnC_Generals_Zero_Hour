@@ -13031,9 +13031,9 @@ export class GameLogicSubsystem implements Subsystem {
    * C++ validates command type and enables CommandButtonHuntUpdate per unit.
    */
   private executeScriptTeamHuntWithCommandButton(teamName: string, commandButtonName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const registry = this.iniDataRegistry;
-    if (teams.length === 0 || !registry) {
+    if (!team || !registry) {
       return false;
     }
 
@@ -13047,22 +13047,18 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        if (!entity.commandButtonHuntProfile) {
-          continue;
-        }
-        const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonDef.name);
-        if (commandButtons.length === 0) {
-          continue;
-        }
-        this.activateCommandButtonHuntForEntity(entity, commandButtonDef.name, huntMode);
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      if (!entity.commandButtonHuntProfile) {
+        continue;
+      }
+      const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonDef.name);
+      if (commandButtons.length === 0) {
+        continue;
+      }
+      this.activateCommandButtonHuntForEntity(entity, commandButtonDef.name, huntMode);
     }
 
     return true;
