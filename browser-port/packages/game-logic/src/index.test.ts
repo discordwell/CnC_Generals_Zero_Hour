@@ -36893,6 +36893,78 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('applies source attack distance when executing script ATTACK_MOVE command buttons at position', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'ScriptTankGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('ScriptTankGun', {
+          AttackRange: 70,
+          PrimaryDamage: 20,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ScriptTank', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        id: number;
+        destroyed: boolean;
+        largestWeaponRange: number;
+      }>;
+      applyCommand: (command: unknown) => void;
+      executeScriptCommandButtonForEntity: (
+        sourceEntity: unknown,
+        commandButtonDef: CommandButtonDef,
+        target: { kind: 'POSITION'; targetX: number; targetZ: number },
+        validateOnly?: boolean,
+      ) => boolean;
+    };
+
+    const sourceEntity = privateApi.spawnedEntities.get(1);
+    expect(sourceEntity).toBeDefined();
+    if (!sourceEntity) return;
+    expect(sourceEntity.largestWeaponRange).toBeGreaterThan(0);
+
+    const commandButtonDef = makeCommandButtonDef('Command_ScriptAttackMove', {
+      Command: 'ATTACK_MOVE',
+    });
+
+    let capturedCommand: unknown = null;
+    privateApi.applyCommand = (command: unknown): void => {
+      capturedCommand = command;
+    };
+
+    expect(
+      privateApi.executeScriptCommandButtonForEntity(
+        sourceEntity,
+        commandButtonDef,
+        { kind: 'POSITION', targetX: 84, targetZ: 52 },
+      ),
+    ).toBe(true);
+
+    expect(capturedCommand).toMatchObject({
+      type: 'attackMoveTo',
+      entityId: 1,
+      targetX: 84,
+      targetZ: 52,
+      commandSource: 'SCRIPT',
+    });
+    const attackMoveCommand = capturedCommand as { attackDistance: number };
+    expect(attackMoveCommand.attackDistance).toBeCloseTo(sourceEntity.largestWeaponRange + 30, 5);
+  });
+
   it('uses team controlling-side affiliation for nearest-enemy command-button scans', () => {
     const bundle = makeBundle({
       objects: [

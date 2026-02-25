@@ -13251,6 +13251,7 @@ export class GameLogicSubsystem implements Subsystem {
           entityId: sourceEntity.id,
           targetX: target.targetX,
           targetZ: target.targetZ,
+          attackDistance: this.resolveAttackMoveDistance(sourceEntity),
           commandSource: 'SCRIPT',
         });
         return true;
