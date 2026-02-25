@@ -44333,6 +44333,146 @@ describe('Script condition groundwork', () => {
     }
   });
 
+  it('returns teamTransportsExit transports to origin before deleting them', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 350, InitialHealth: 350 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 80),
+        makeLocomotorDef('TestVehicleLoco', 15),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'DropOrigin',
+          position: { x: 4, y: 12, z: 0 },
+        },
+        {
+          id: 2,
+          name: 'DropDest',
+          position: { x: 52, y: 12, z: 0 },
+        },
+      ],
+      links: [],
+    };
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'AlphaProto',
+          teamOwner: 'Player_1',
+          teamIsSingleton: false,
+          teamMaxInstances: 2,
+          teamUnitType1: 'AmericaInfantry',
+          teamUnitMaxCount1: 1,
+          teamTransport: 'TroopTransport',
+          teamStartsFull: true,
+          teamTransportsExit: true,
+          teamReinforcementOrigin: 'DropOrigin',
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, {
+        memberEntityIds: Set<number>;
+      }>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        transportContainerId: number | null;
+        moving: boolean;
+        x: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 241, // CREATE_REINFORCEMENT_TEAM
+      params: ['AlphaProto', 'DropDest'],
+    })).toBe(true);
+
+    const createdTeam = privateApi.scriptTeamsByName.get('ALPHAPROTO#1');
+    expect(createdTeam).toBeDefined();
+
+    const memberIds = Array.from(createdTeam?.memberEntityIds ?? []);
+    const transportIds = memberIds.filter(
+      (entityId) => privateApi.spawnedEntities.get(entityId)?.templateName === 'TroopTransport',
+    );
+    const infantryIds = memberIds.filter(
+      (entityId) => privateApi.spawnedEntities.get(entityId)?.templateName === 'AmericaInfantry',
+    );
+    expect(transportIds).toHaveLength(1);
+    expect(infantryIds).toHaveLength(1);
+
+    const transportId = transportIds[0]!;
+    const infantryId = infantryIds[0]!;
+
+    let unloadObserved = false;
+    let transportXAtUnload = 0;
+    for (let i = 0; i < 360; i += 1) {
+      logic.update(1 / 30);
+      const transport = privateApi.spawnedEntities.get(transportId);
+      if (!transport) {
+        break;
+      }
+      if (privateApi.spawnedEntities.get(infantryId)?.transportContainerId === null) {
+        unloadObserved = true;
+        transportXAtUnload = transport.x;
+        break;
+      }
+    }
+
+    expect(unloadObserved).toBe(true);
+    expect(privateApi.spawnedEntities.has(transportId)).toBe(true);
+
+    for (let i = 0; i < 45; i += 1) {
+      logic.update(1 / 30);
+    }
+    const returningTransport = privateApi.spawnedEntities.get(transportId);
+    expect(returningTransport).toBeDefined();
+    expect(returningTransport?.moving).toBe(true);
+    expect(returningTransport?.x).toBeLessThan(transportXAtUnload);
+
+    for (let i = 0; i < 360; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(privateApi.spawnedEntities.has(transportId)).toBe(false);
+  });
+
   it('packages reinforcement members into PutInContainer payloads from DeliverPayloadAIUpdate', () => {
     const bundle = makeBundle({
       objects: [

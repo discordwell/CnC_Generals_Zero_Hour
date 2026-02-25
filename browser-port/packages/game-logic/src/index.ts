@@ -4244,8 +4244,11 @@ interface ScriptHuntState {
 interface ScriptReinforcementTransportArrivalState {
   targetX: number;
   targetZ: number;
+  originX: number;
+  originZ: number;
   transportsExit: boolean;
   evacuationIssued: boolean;
+  exitMoveIssued: boolean;
 }
 
 interface ScriptSkirmishBaseDefenseState {
@@ -20302,7 +20305,6 @@ export class GameLogicSubsystem implements Subsystem {
    * including teamStartsFull loading and arrival evacuation behavior.
    * Source parity subset: PutInContainer packaging from DeliverPayloadAIUpdate is wired.
    * TODO(source-parity): DeliverPayloadAIUpdate flight/drop behavior is not wired yet.
-   * TODO(source-parity): aiMoveToAndEvacuateAndExit off-map departure pathing is not wired yet.
    */
   private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
     const prototype = this.getScriptTeamPrototypeRecord(teamName);
@@ -20421,8 +20423,11 @@ export class GameLogicSubsystem implements Subsystem {
           this.pendingScriptReinforcementTransportArrivalByEntityId.set(member.id, {
             targetX: destination.x,
             targetZ: destination.z,
+            originX: member.x,
+            originZ: member.z,
             transportsExit: prototype.reinforcementTransportsExit,
             evacuationIssued: false,
+            exitMoveIssued: false,
           });
           continue;
         }
@@ -20633,14 +20638,46 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      const reachDistance = Math.max(
+        MAP_XY_FACTOR,
+        this.resolveEntityMajorRadius(transport) + MAP_XY_FACTOR,
+      );
+
+      if (pending.exitMoveIssued) {
+        if (this.isEntityOffMap(transport)) {
+          this.markEntityDestroyed(transport.id, -1);
+          this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+          continue;
+        }
+        if (transport.moving) {
+          continue;
+        }
+        const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
+        if (distanceToOrigin > reachDistance) {
+          this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
+          continue;
+        }
+        this.markEntityDestroyed(transport.id, -1);
+        this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+        continue;
+      }
+
       if (pending.evacuationIssued) {
         if (this.collectContainedEntityIds(transport.id).length > 0) {
           continue;
         }
         if (pending.transportsExit) {
-          // Source parity subset: aiMoveToAndEvacuateAndExit removes transports
-          // after payload deployment. Full off-map exit flight is not wired.
-          this.markEntityDestroyed(transport.id, -1);
+          const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
+          if (distanceToOrigin <= reachDistance) {
+            this.markEntityDestroyed(transport.id, -1);
+            this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+            continue;
+          }
+          // Source parity: AIMoveAndEvacuateState::onExit sets goal to move origin,
+          // then AIMoveAndDeleteState returns there and self-destroys.
+          this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
+          pending.exitMoveIssued = true;
+          continue;
         }
         this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
         continue;
@@ -20651,10 +20688,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       const distanceToTarget = Math.hypot(transport.x - pending.targetX, transport.z - pending.targetZ);
-      const reachDistance = Math.max(
-        MAP_XY_FACTOR,
-        this.resolveEntityMajorRadius(transport) + MAP_XY_FACTOR,
-      );
       if (distanceToTarget > reachDistance) {
         this.issueMoveTo(transport.id, pending.targetX, pending.targetZ, NO_ATTACK_DISTANCE, true);
         continue;
@@ -20667,8 +20700,14 @@ export class GameLogicSubsystem implements Subsystem {
       if (pending.transportsExit) {
         pending.evacuationIssued = true;
         if (this.collectContainedEntityIds(transport.id).length <= 0) {
-          this.markEntityDestroyed(transport.id, -1);
-          this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+          const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
+          if (distanceToOrigin <= reachDistance) {
+            this.markEntityDestroyed(transport.id, -1);
+            this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+          } else {
+            this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
+            pending.exitMoveIssued = true;
+          }
         }
         continue;
       }
