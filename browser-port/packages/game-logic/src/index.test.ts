@@ -36533,6 +36533,76 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('does not record waypoint-path completion when follow-waypoints route is aborted near final node', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 18, 20), // id 1
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 41, name: 'Route_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'AbortPath', biDirectional: false },
+        { id: 42, name: 'Route_B', position: { x: 60, y: 20, z: 0 }, pathLabel1: 'AbortPath', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 41, waypoint2: 42 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+        moving: boolean;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 56, // NAMED_FOLLOW_WAYPOINTS
+      params: [1, 'AbortPath'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 120; frame += 1) {
+      logic.update(1 / 30);
+      const mover = privateApi.spawnedEntities.get(1)!;
+      if (mover.x >= 52) {
+        break;
+      }
+    }
+
+    const mover = privateApi.spawnedEntities.get(1)!;
+    expect(mover.moving).toBe(true);
+    expect(Math.hypot(60 - mover.x, 20 - mover.z)).toBeLessThan(10);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.update(1 / 30);
+
+    for (let frame = 0; frame < 5; frame += 1) {
+      expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+        entityId: 1,
+        waypointPathName: 'AbortPath',
+      })).toBe(false);
+      logic.update(1 / 30);
+    }
+  });
+
   it('executes script skirmish-build-base-defense-front action using source action id', () => {
     const bundle = makeBundle({
       objects: [

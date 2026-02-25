@@ -5518,8 +5518,6 @@ export class GameLogicSubsystem implements Subsystem {
   /** Tracks script-issued waypoint-path goals until completion/abort. */
   private readonly scriptPendingWaypointPathByEntityId = new Map<number, {
     pathName: string;
-    finalX: number;
-    finalZ: number;
   }>();
   /** Source parity subset: ScriptEngine named map reveals keyed by look-name token. */
   private readonly scriptNamedMapRevealByName = new Map<string, {
@@ -16710,11 +16708,8 @@ export class GameLogicSubsystem implements Subsystem {
       ? this.normalizeScriptCompletionName(completionPathName)
       : '';
     if (normalizedPathName) {
-      const finalWaypoint = route[route.length - 1]!;
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
         pathName: normalizedPathName,
-        finalX: finalWaypoint.x,
-        finalZ: finalWaypoint.z,
       });
     } else {
       this.scriptPendingWaypointPathByEntityId.delete(entity.id);
@@ -17092,11 +17087,8 @@ export class GameLogicSubsystem implements Subsystem {
       ? this.normalizeScriptCompletionName(completionPathName)
       : '';
     if (normalizedPathName) {
-      const finalWaypoint = route[route.length - 1]!;
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
         pathName: normalizedPathName,
-        finalX: finalWaypoint.x,
-        finalZ: finalWaypoint.z,
       });
     } else {
       this.scriptPendingWaypointPathByEntityId.delete(entity.id);
@@ -17104,8 +17096,17 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private markScriptWaypointPathCompleted(entityId: number): void {
+    const pendingPath = this.scriptPendingWaypointPathByEntityId.get(entityId);
+    if (!pendingPath) {
+      return;
+    }
+    this.notifyScriptWaypointPathCompleted(entityId, pendingPath.pathName);
+    this.scriptPendingWaypointPathByEntityId.delete(entityId);
+  }
+
   private updateScriptWaypointPathCompletions(): void {
-    for (const [entityId, pendingPath] of this.scriptPendingWaypointPathByEntityId.entries()) {
+    for (const [entityId] of this.scriptPendingWaypointPathByEntityId.entries()) {
       const entity = this.spawnedEntities.get(entityId);
       if (!entity || entity.destroyed) {
         this.scriptPendingWaypointPathByEntityId.delete(entityId);
@@ -17114,18 +17115,6 @@ export class GameLogicSubsystem implements Subsystem {
 
       if (entity.moving || entity.movePath.length > 0 || entity.moveTarget !== null) {
         continue;
-      }
-
-      const completionDistance = Math.max(
-        MAP_XY_FACTOR,
-        this.resolveEntityMajorRadius(entity) + MAP_XY_FACTOR * 0.5,
-      );
-      const distanceToGoal = Math.hypot(
-        entity.x - pendingPath.finalX,
-        entity.z - pendingPath.finalZ,
-      );
-      if (distanceToGoal <= completionDistance) {
-        this.notifyScriptWaypointPathCompleted(entity.id, pendingPath.pathName);
       }
       this.scriptPendingWaypointPathByEntityId.delete(entityId);
     }
@@ -55746,6 +55735,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       if (entity.pathIndex >= entity.movePath.length) {
+        this.markScriptWaypointPathCompleted(entity.id);
         entity.moving = false;
         entity.moveTarget = null;
         entity.movePath = [];
@@ -55778,6 +55768,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (distance < 0.001) {
         entity.pathIndex += 1;
         if (entity.pathIndex >= entity.movePath.length) {
+          this.markScriptWaypointPathCompleted(entity.id);
           entity.moving = false;
           entity.moveTarget = null;
           entity.movePath = [];
@@ -55882,6 +55873,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.z = entity.moveTarget.z;
         entity.pathIndex += 1;
         if (entity.pathIndex >= entity.movePath.length) {
+          this.markScriptWaypointPathCompleted(entity.id);
           entity.moving = false;
           entity.moveTarget = null;
           entity.movePath = [];
