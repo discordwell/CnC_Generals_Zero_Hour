@@ -34623,6 +34623,53 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(2);
   });
 
+  it('honors AllowInsideKindOf containment filters for script team enter actions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            ContainMax: 2,
+            AllowInsideKindOf: 'INFANTRY',
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Humvee', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 220, InitialHealth: 220 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopTransport', 20, 20), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2
+        makeMapObject('Humvee', 20, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('RideTeam', [2, 3])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 53, // TEAM_ENTER_NAMED
+      params: ['RideTeam', 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBeNull();
+  });
+
   it('executes script named-set-topple-direction action using source action id', () => {
     const bundle = makeBundle({
       objects: [

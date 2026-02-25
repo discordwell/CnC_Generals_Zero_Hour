@@ -1153,6 +1153,10 @@ type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'PARACHUT
 
 interface ContainProfile {
   moduleType: ContainModuleType;
+  /** Source parity: OpenContainModuleData::m_allowInsideKindOf (null/empty = allow all). */
+  allowInsideKindOf: ReadonlySet<string> | null;
+  /** Source parity: OpenContainModuleData::m_forbidInsideKindOf. */
+  forbidInsideKindOf: ReadonlySet<string>;
   passengersAllowedToFire: boolean;
   passengersAllowedToFireDefault: boolean;
   portableStructureTemplateNames?: string[];
@@ -19644,6 +19648,36 @@ export class GameLogicSubsystem implements Subsystem {
     return entity;
   }
 
+  private isScriptContainKindAllowed(container: MapEntity, rider: MapEntity): boolean {
+    const containProfile = container.containProfile;
+    if (!containProfile) {
+      return false;
+    }
+
+    const riderKinds = this.resolveEntityKindOfSet(rider);
+    const allowInsideKindOf = containProfile.allowInsideKindOf;
+    if (allowInsideKindOf && allowInsideKindOf.size > 0) {
+      let hasAllowedKind = false;
+      for (const kindOfName of allowInsideKindOf) {
+        if (riderKinds.has(kindOfName)) {
+          hasAllowedKind = true;
+          break;
+        }
+      }
+      if (!hasAllowedKind) {
+        return false;
+      }
+    }
+
+    for (const kindOfName of containProfile.forbidInsideKindOf) {
+      if (riderKinds.has(kindOfName)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   private resolveScriptContainerUsedTransportSlots(container: MapEntity): number {
     let usedSlots = 0;
     for (const containedEntityId of this.collectContainedEntityIds(container.id)) {
@@ -20986,6 +21020,9 @@ export class GameLogicSubsystem implements Subsystem {
     const transportSide = this.normalizeSide(transport.side);
     const unitSide = this.normalizeSide(validationUnit.side);
     if (transportSide && unitSide && transportSide !== unitSide) {
+      return false;
+    }
+    if (!this.isScriptContainKindAllowed(transport, validationUnit)) {
       return false;
     }
 
@@ -27900,6 +27937,14 @@ export class GameLogicSubsystem implements Subsystem {
       const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
       const passengersAllowedRaw = readBooleanField(block.fields, ['PassengersAllowedToFire']);
       const passengersAllowedToFire = passengersAllowedRaw === true;
+      const allowInsideKindOfTokens = readStringList(block.fields, ['AllowInsideKindOf'])
+        .map((kindOfName) => kindOfName.trim().toUpperCase())
+        .filter((kindOfName) => kindOfName.length > 0);
+      const forbidInsideKindOfTokens = readStringList(block.fields, ['ForbidInsideKindOf'])
+        .map((kindOfName) => kindOfName.trim().toUpperCase())
+        .filter((kindOfName) => kindOfName.length > 0);
+      const allowInsideKindOf = allowInsideKindOfTokens.length > 0 ? new Set<string>(allowInsideKindOfTokens) : null;
+      const forbidInsideKindOf = new Set<string>(forbidInsideKindOfTokens);
       const containMax = readNumericField(block.fields, ['ContainMax']) ?? 0;
       const payloadTemplateNames = readStringList(block.fields, ['PayloadTemplateName']).map((templateName) =>
         templateName.toUpperCase(),
@@ -27914,6 +27959,8 @@ export class GameLogicSubsystem implements Subsystem {
       if (moduleType === 'OPENCONTAIN') {
         profile = {
           moduleType: 'OPEN',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -27925,6 +27972,8 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (moduleType === 'TRANSPORTCONTAIN') {
         profile = {
           moduleType: 'TRANSPORT',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -27936,6 +27985,8 @@ export class GameLogicSubsystem implements Subsystem {
       } else if (moduleType === 'OVERLORDCONTAIN') {
         profile = {
           moduleType: 'OVERLORD',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -27949,6 +28000,8 @@ export class GameLogicSubsystem implements Subsystem {
         // we map it to a dedicated internal container profile to preserve source behavior.
         profile = {
           moduleType: 'HELIX',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           portableStructureTemplateNames: payloadTemplateNames,
@@ -27964,6 +28017,8 @@ export class GameLogicSubsystem implements Subsystem {
         // checks to its contained rider.
         profile = {
           moduleType: 'PARACHUTE',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -27977,6 +28032,8 @@ export class GameLogicSubsystem implements Subsystem {
         // isPassengerAllowedToFire(), so we track it explicitly for behavior parity.
         profile = {
           moduleType: 'GARRISON',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire: true,
           passengersAllowedToFireDefault: true,
           garrisonCapacity: containMax > 0 ? containMax : 10,
@@ -27991,6 +28048,8 @@ export class GameLogicSubsystem implements Subsystem {
         const timeForFullHealMs = readNumericField(block.fields, ['TimeForFullHeal']) ?? 0;
         profile = {
           moduleType: 'TUNNEL',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -28005,6 +28064,8 @@ export class GameLogicSubsystem implements Subsystem {
         const caveIndex = Number.isFinite(caveIndexRaw) ? Math.max(0, Math.trunc(caveIndexRaw)) : 0;
         profile = {
           moduleType: 'CAVE',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -28020,6 +28081,8 @@ export class GameLogicSubsystem implements Subsystem {
         const timeForFullHealMs = readNumericField(block.fields, ['TimeForFullHeal']) ?? 0;
         profile = {
           moduleType: 'HEAL',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -28033,6 +28096,8 @@ export class GameLogicSubsystem implements Subsystem {
         // hackInternet command to entering units. C++ file: InternetHackContain.cpp.
         profile = {
           moduleType: 'INTERNET_HACK',
+          allowInsideKindOf,
+          forbidInsideKindOf,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -37533,6 +37598,7 @@ export class GameLogicSubsystem implements Subsystem {
       // special-zero-slot container (e.g. parachute shell), validate against its rider.
       const validationPassenger = this.resolveScriptTransportValidationEntity(passenger);
       if (this.normalizeSide(validationPassenger.side) !== this.normalizeSide(transport.side)) return;
+      if (!this.isScriptContainKindAllowed(transport, validationPassenger)) return;
 
       const kindOf = this.resolveEntityKindOfSet(validationPassenger);
       if (containProfile.moduleType === 'TRANSPORT') {
@@ -37544,6 +37610,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!this.canScriptContainerFitEntity(transport, passenger)) return;
     } else {
       if (this.normalizeSide(passenger.side) !== this.normalizeSide(transport.side)) return;
+      if (!this.isScriptContainKindAllowed(transport, passenger)) return;
       if (!this.canScriptContainerFitEntity(transport, passenger)) return;
     }
 
@@ -37650,11 +37717,18 @@ export class GameLogicSubsystem implements Subsystem {
           this.pendingTransportActions.delete(passengerId);
           continue;
         }
+        if (!this.isScriptContainKindAllowed(transport, validationPassenger)) {
+          this.pendingTransportActions.delete(passengerId);
+          continue;
+        }
       } else if (
         containProfile.moduleType !== 'OPEN'
         && containProfile.moduleType !== 'HEAL'
         && containProfile.moduleType !== 'INTERNET_HACK'
       ) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      } else if (!this.isScriptContainKindAllowed(transport, passenger)) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
