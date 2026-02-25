@@ -5410,6 +5410,125 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(first).toEqual(second);
   });
 
+  it('includes collision radii and map clipping in MinimumAttackRange retreat target selection', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('RetreatSource', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+        makeObjectDef('RetreatTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('RetreatSource', 90, 10), makeMapObject('RetreatTarget', 100, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+      }>;
+      computeAttackRetreatTarget: (
+        attacker: unknown,
+        target: unknown,
+        weapon: { minAttackRange: number; attackRange: number },
+      ) => { x: number; z: number } | null;
+    };
+
+    const attacker = privateApi.spawnedEntities.get(1);
+    const target = privateApi.spawnedEntities.get(2);
+    expect(attacker).toBeDefined();
+    expect(target).toBeDefined();
+    if (!attacker || !target) return;
+
+    const retreatWithRadii = privateApi.computeAttackRetreatTarget(
+      attacker,
+      target,
+      { minAttackRange: 40, attackRange: 80 },
+    );
+    expect(retreatWithRadii).not.toBeNull();
+    // (80 + 40) / 2 + sourceRadius(10) + targetRadius(10) = 80 world units from target.
+    expect(retreatWithRadii?.x).toBeCloseTo(20, 5);
+
+    attacker.x = 5;
+    attacker.z = 10;
+    target.x = 15;
+    target.z = 10;
+    const clippedRetreat = privateApi.computeAttackRetreatTarget(
+      attacker,
+      target,
+      { minAttackRange: 40, attackRange: 80 },
+    );
+    expect(clippedRetreat).not.toBeNull();
+    expect(clippedRetreat?.x).toBe(0);
+  });
+
+  it('uses airborne facing to avoid 180 turns when selecting MinimumAttackRange retreat target', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('RetreatJet', 'America', ['AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 150, InitialHealth: 150 }),
+        ]),
+        makeObjectDef('RetreatVictim', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 150, InitialHealth: 150 }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('RetreatJet', 40, 20), makeMapObject('RetreatVictim', 50, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+        y: number;
+        baseHeight: number;
+        rotationY: number;
+      }>;
+      computeAttackRetreatTarget: (
+        attacker: unknown,
+        target: unknown,
+        weapon: { minAttackRange: number; attackRange: number },
+      ) => { x: number; z: number } | null;
+    };
+
+    const attacker = privateApi.spawnedEntities.get(1);
+    const target = privateApi.spawnedEntities.get(2);
+    expect(attacker).toBeDefined();
+    expect(target).toBeDefined();
+    if (!attacker || !target) return;
+
+    // Face the target while airborne: C++ flips retreat direction to avoid a 180-degree turn.
+    attacker.rotationY = Math.PI / 2;
+    attacker.y = 30;
+    const retreat = privateApi.computeAttackRetreatTarget(
+      attacker,
+      target,
+      { minAttackRange: 40, attackRange: 80 },
+    );
+    expect(retreat).not.toBeNull();
+    expect((retreat?.x ?? -Infinity)).toBeGreaterThan(target.x);
+  });
+
   it('reacquires a same-player follow-up victim around original victim position when ContinueAttackRange is enabled', () => {
     const timeline = runContinueAttackRangeTimeline(20);
     expect(timeline.attackerTargetTimeline).toEqual([3, 3, 3, null, null, null, null, null]);

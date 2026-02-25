@@ -43,7 +43,6 @@ import {
 import type { InputState } from '@generals/input';
 import {
   adjustDamageByArmorSet as adjustDamageByArmorSetImpl,
-  computeAttackRetreatTarget as computeAttackRetreatTargetImpl,
   entityHasSneakyTargetingOffset as entityHasSneakyTargetingOffsetImpl,
   recordConsecutiveAttackShot as recordConsecutiveAttackShotImpl,
   rebuildEntityScatterTargets as rebuildEntityScatterTargetsImpl,
@@ -47371,10 +47370,50 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     weapon: AttackWeaponProfile,
   ): VectorXZ | null {
-    // Source parity subset: Weapon::computeApproachTarget() retreats too-close attackers to a
-    // point between minimum and maximum range.
-    // TODO(C&C source parity): port angleOffset/aircraft-facing/terrain-clipping behavior.
-    return computeAttackRetreatTargetImpl(attacker.x, attacker.z, target.x, target.z, weapon);
+    // Source parity: Weapon::computeApproachTarget() min-range retreat branch.
+    // C++ file: Weapon.cpp (computeApproachTarget).
+    let awayX = attacker.x - target.x;
+    let awayZ = attacker.z - target.z;
+    const directionLength = Math.hypot(awayX, awayZ);
+    if (directionLength <= 1e-6) {
+      awayX = 1;
+      awayZ = 0;
+    } else {
+      awayX /= directionLength;
+      awayZ /= directionLength;
+    }
+
+    const terrainY = this.resolveGroundHeight(attacker.x, attacker.z);
+    const isAboveTerrain = (attacker.y - attacker.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD;
+    if (isAboveTerrain) {
+      // Source parity: avoid a 180 turn for airborne units; cross over target instead.
+      const towardTargetX = target.x - attacker.x;
+      const towardTargetZ = target.z - attacker.z;
+      if (Math.hypot(towardTargetX, towardTargetZ) > 1e-6) {
+        const towardTargetAngle = Math.atan2(towardTargetX, -towardTargetZ);
+        let relativeAngle = attacker.rotationY - towardTargetAngle;
+        while (relativeAngle > Math.PI) relativeAngle -= 2 * Math.PI;
+        while (relativeAngle < -Math.PI) relativeAngle += 2 * Math.PI;
+        if (Math.abs(relativeAngle) < Math.PI / 2) {
+          awayX = -awayX;
+          awayZ = -awayZ;
+        }
+      }
+    }
+
+    const minAttackRange = Math.max(0, weapon.minAttackRange);
+    const attackRange = Math.max(minAttackRange, weapon.attackRange);
+    const midpointRange = (attackRange + minAttackRange) * 0.5;
+    if (!Number.isFinite(midpointRange) || midpointRange <= 0) {
+      return null;
+    }
+
+    // Source parity: include source/target collision radii in approach distance.
+    const approachDistance = midpointRange + this.resolveEntityMajorRadius(attacker) + this.resolveEntityMajorRadius(target);
+    let retreatX = target.x + awayX * approachDistance;
+    let retreatZ = target.z + awayZ * approachDistance;
+    [retreatX, retreatZ] = this.clampWorldPositionToMapBounds(retreatX, retreatZ);
+    return { x: retreatX, z: retreatZ };
   }
 
   private resetEntityWeaponTimingState(entity: MapEntity): void {
