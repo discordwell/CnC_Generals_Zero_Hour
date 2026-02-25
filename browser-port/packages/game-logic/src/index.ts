@@ -19270,53 +19270,49 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses PartitionSolver fast mode to assign team members to team transports.
    */
   private executeScriptTeamLoadTransports(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      const entries: Array<{ entityId: number; size: number }> = [];
-      const spaces: Array<{ entityId: number; capacity: number }> = [];
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        if (entity.kindOf.has('TRANSPORT')) {
-          if (!entity.containProfile) {
-            continue;
-          }
-          spaces.push({
-            entityId: entity.id,
-            capacity: Math.max(0, this.resolveScriptContainerCapacity(entity)),
-          });
-        } else {
-          entries.push({
-            entityId: entity.id,
-            size: this.resolveScriptEntityTransportSlotCount(entity),
-          });
-        }
-      }
-
-      if (entries.length === 0 || spaces.length === 0) {
+    const entries: Array<{ entityId: number; size: number }> = [];
+    const spaces: Array<{ entityId: number; capacity: number }> = [];
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
         continue;
       }
-
-      const assignments = this.solveScriptFastPartitionAssignments(entries, spaces);
-      for (const assignment of assignments) {
-        const unit = this.spawnedEntities.get(assignment.entryEntityId);
-        const transport = this.spawnedEntities.get(assignment.spaceEntityId);
-        if (!unit || !transport || unit.destroyed || transport.destroyed) {
+      if (entity.kindOf.has('TRANSPORT')) {
+        if (!entity.containProfile) {
           continue;
         }
-        this.applyCommand({
-          type: 'enterTransport',
-          entityId: unit.id,
-          targetTransportId: transport.id,
+        spaces.push({
+          entityId: entity.id,
+          capacity: Math.max(0, this.resolveScriptContainerCapacity(entity)),
+        });
+      } else {
+        entries.push({
+          entityId: entity.id,
+          size: this.resolveScriptEntityTransportSlotCount(entity),
         });
       }
+    }
+
+    if (entries.length === 0 || spaces.length === 0) {
+      return true;
+    }
+
+    const assignments = this.solveScriptFastPartitionAssignments(entries, spaces);
+    for (const assignment of assignments) {
+      const unit = this.spawnedEntities.get(assignment.entryEntityId);
+      const transport = this.spawnedEntities.get(assignment.spaceEntityId);
+      if (!unit || !transport || unit.destroyed || transport.destroyed) {
+        continue;
+      }
+      this.applyCommand({
+        type: 'enterTransport',
+        entityId: unit.id,
+        targetTransportId: transport.id,
+      });
     }
     return true;
   }
