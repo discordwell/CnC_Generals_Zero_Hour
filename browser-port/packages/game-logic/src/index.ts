@@ -4246,6 +4246,7 @@ interface ScriptReinforcementTransportArrivalState {
   targetZ: number;
   originX: number;
   originZ: number;
+  deliveryDistance: number;
   transportsExit: boolean;
   evacuationIssued: boolean;
   exitMoveIssued: boolean;
@@ -20415,7 +20416,8 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (primaryTransport) {
       const transportObjectDef = this.resolveObjectDefByTemplateName(primaryTransport.templateName);
-      const transportUsesDeliverPayload = this.hasScriptReinforcementDeliverPayloadModule(transportObjectDef);
+      const transportDeliverPayloadProfile = this.resolveScriptReinforcementDeliverPayloadProfile(transportObjectDef);
+      const transportUsesDeliverPayload = transportDeliverPayloadProfile !== null;
       for (const member of this.getScriptTeamMemberEntities(team)) {
         if (member.destroyed) {
           continue;
@@ -20427,6 +20429,7 @@ export class GameLogicSubsystem implements Subsystem {
             targetZ: destination.z,
             originX: member.x,
             originZ: member.z,
+            deliveryDistance: transportDeliverPayloadProfile?.deliveryDistance ?? 0,
             // Source parity: ScriptActions::doCreateReinforcements always routes
             // DeliverPayloadAIUpdate transports through deliverPayloadViaModuleData(),
             // which exits/deletes regardless of TeamTemplate::m_transportsExit.
@@ -20516,7 +20519,8 @@ export class GameLogicSubsystem implements Subsystem {
     originZ: number,
   ): void {
     const transportObjectDef = this.resolveObjectDefByTemplateName(primaryTransport.templateName);
-    const putInContainerTemplateName = this.resolveScriptReinforcementPutInContainerTemplateName(transportObjectDef);
+    const deliverPayloadProfile = this.resolveScriptReinforcementDeliverPayloadProfile(transportObjectDef);
+    const putInContainerTemplateName = deliverPayloadProfile?.putInContainerTemplateName ?? null;
     let activeTransport = primaryTransport;
     let transportCount = 1;
 
@@ -20615,7 +20619,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private resolveScriptReinforcementPutInContainerTemplateName(objectDef: ObjectDef | null): string | null {
+  private resolveScriptReinforcementDeliverPayloadProfile(objectDef: ObjectDef | null):
+  { putInContainerTemplateName: string | null; deliveryDistance: number } | null {
     if (!objectDef) {
       return null;
     }
@@ -20628,27 +20633,13 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       const putInContainerTemplateName = readStringField(block.fields, ['PutInContainer'])?.trim() ?? '';
-      if (putInContainerTemplateName) {
-        return putInContainerTemplateName;
-      }
+      const deliveryDistance = Math.max(0, readNumericField(block.fields, ['DeliveryDistance']) ?? 0);
+      return {
+        putInContainerTemplateName: putInContainerTemplateName || null,
+        deliveryDistance,
+      };
     }
     return null;
-  }
-
-  private hasScriptReinforcementDeliverPayloadModule(objectDef: ObjectDef | null): boolean {
-    if (!objectDef) {
-      return false;
-    }
-    for (const block of objectDef.blocks) {
-      if (block.type.toUpperCase() !== 'BEHAVIOR') {
-        continue;
-      }
-      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-      if (moduleType === 'DELIVERPAYLOADAIUPDATE') {
-        return true;
-      }
-    }
-    return false;
   }
 
   private updatePendingScriptReinforcementTransportArrivals(): void {
@@ -20704,14 +20695,18 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      if (transport.moving) {
+      const distanceToTarget = Math.hypot(transport.x - pending.targetX, transport.z - pending.targetZ);
+      const allowedTargetDistance = Math.max(reachDistance, pending.deliveryDistance);
+      if (distanceToTarget > allowedTargetDistance) {
+        if (!transport.moving) {
+          this.issueMoveTo(transport.id, pending.targetX, pending.targetZ, NO_ATTACK_DISTANCE, true);
+        }
         continue;
       }
-
-      const distanceToTarget = Math.hypot(transport.x - pending.targetX, transport.z - pending.targetZ);
-      if (distanceToTarget > reachDistance) {
-        this.issueMoveTo(transport.id, pending.targetX, pending.targetZ, NO_ATTACK_DISTANCE, true);
-        continue;
+      if (transport.moving) {
+        // Source parity: DeliverPayloadAIUpdate starts drop logic as soon as
+        // distance-to-target constraints are satisfied, not only after path end.
+        this.stopEntity(transport.id);
       }
 
       if (transport.containProfile && this.collectContainedEntityIds(transport.id).length > 0) {
