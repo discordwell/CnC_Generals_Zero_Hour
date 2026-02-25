@@ -6779,6 +6779,95 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(impactFx).toBeUndefined();
   });
 
+  it('applies MissileAI garrison-hit-kill and consumes projectile without normal detonation', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('GarrisonKillAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 150, InitialHealth: 150 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'GarrisonKillMissileWeapon'] }),
+    ]);
+    const bunkerDef = makeObjectDef('GarrisonKillBunker', 'China', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'GarrisonContain ModuleTag_Garrison', {
+        ContainMax: 5,
+      }),
+    ], { GeometryMajorRadius: 8, GeometryMinorRadius: 8 });
+    const defenderDef = makeObjectDef('GarrisonKillDefender', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const targetDef = makeObjectDef('GarrisonKillTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+    ]);
+    const projectileDef = makeObjectDef('GarrisonKillMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'Yes',
+        InitialVelocity: 8,
+        IgnitionDelay: 0,
+        FuelLifetime: 8000,
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 0,
+        GarrisonHitKillRequiredKindOf: 'INFANTRY',
+        GarrisonHitKillCount: 2,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('GarrisonKillMissileWeapon', {
+      PrimaryDamage: 120,
+      PrimaryDamageRadius: 20,
+      AttackRange: 500,
+      WeaponSpeed: 8,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'GarrisonKillMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GarrisonKillAttacker', 0, 0),   // id 1
+        makeMapObject('GarrisonKillBunker', 20, 0),    // id 2
+        makeMapObject('GarrisonKillDefender', 20, 0),  // id 3
+        makeMapObject('GarrisonKillDefender', 20, 2),  // id 4
+        makeMapObject('GarrisonKillDefender', 20, -2), // id 5
+        makeMapObject('GarrisonKillTarget', 80, 0),    // id 6
+      ], 128, 128),
+      makeRegistry(makeBundle({
+        objects: [attackerDef, bunkerDef, defenderDef, targetDef, projectileDef],
+        weapons: [weaponDef],
+      })),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 3, targetBuildingId: 2 });
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 4, targetBuildingId: 2 });
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 5, targetBuildingId: 2 });
+    for (let i = 0; i < 30; i++) {
+      logic.update(1 / 30);
+    }
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    expect(priv.spawnedEntities.get(3)?.garrisonContainerId).toBe(2);
+    expect(priv.spawnedEntities.get(4)?.garrisonContainerId).toBe(2);
+    expect(priv.spawnedEntities.get(5)?.garrisonContainerId).toBe(2);
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 6 });
+    for (let i = 0; i < 40; i++) {
+      logic.update(1 / 30);
+    }
+
+    const survivors = [3, 4, 5]
+      .map((id) => priv.spawnedEntities.get(id))
+      .filter((entity): entity is MapEntity => Boolean(entity && !entity.destroyed));
+    expect(survivors).toHaveLength(1);
+
+    const bunker = priv.spawnedEntities.get(2)!;
+    const target = priv.spawnedEntities.get(6)!;
+    expect(bunker.health).toBe(500);
+    expect(target.health).toBe(300);
+  });
+
   it('keeps DamageDealtAtSelfPosition anchored at source even when ScatterTarget offsets are present', () => {
     const withoutScatterTarget = runDamageAtSelfScatterTargetTimeline(false);
     expect(withoutScatterTarget.targetHealthTimeline).toEqual([150, 150, 150, 150]);

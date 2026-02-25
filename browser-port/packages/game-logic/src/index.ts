@@ -1430,6 +1430,9 @@ interface MissileAIProfile {
   distanceToTargetForLock: number;
   useWeaponSpeed: boolean;
   detonateOnNoFuel: boolean;
+  garrisonHitKillCount: number;
+  garrisonHitKillRequiredKindOf: Set<string>;
+  garrisonHitKillForbiddenKindOf: Set<string>;
   distanceScatterWhenJammed: number;
   detonateCallsKill: boolean;
   killSelfDelayFrames: number;
@@ -26020,6 +26023,9 @@ export class GameLogicSubsystem implements Subsystem {
             distanceToTargetForLock: readNumericField(block.fields, ['DistanceToTargetForLock']) ?? 75,
             useWeaponSpeed: readBooleanField(block.fields, ['UseWeaponSpeed']) ?? false,
             detonateOnNoFuel: readBooleanField(block.fields, ['DetonateOnNoFuel']) ?? false,
+            garrisonHitKillCount: Math.max(0, Math.trunc(readNumericField(block.fields, ['GarrisonHitKillCount']) ?? 0)),
+            garrisonHitKillRequiredKindOf: this.parseKindOf(block.fields['GarrisonHitKillRequiredKindOf']),
+            garrisonHitKillForbiddenKindOf: this.parseKindOf(block.fields['GarrisonHitKillForbiddenKindOf']),
             distanceScatterWhenJammed: readNumericField(block.fields, ['DistanceScatterWhenJammed']) ?? 75,
             detonateCallsKill: readBooleanField(block.fields, ['DetonateCallsKill']) ?? false,
             killSelfDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['KillSelfDelay']) ?? 3),
@@ -47312,6 +47318,11 @@ export class GameLogicSubsystem implements Subsystem {
         );
 
         if (shouldCollide) {
+          // Source parity: MissileAIUpdate garrison-hit-kill shortcut can consume
+          // the projectile without a normal detonation.
+          if (this.tryHandleMissileGarrisonHitKill(event, candidate, launcher ?? null)) {
+            break;
+          }
           // Early-detonate: redirect impact to the collision point and resolve this frame.
           event.impactX = projX;
           event.impactZ = projZ;
@@ -47323,6 +47334,65 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
     }
+  }
+
+  /**
+   * Source parity: MissileAIUpdate::projectileHandleCollision garrison-hit-kill path.
+   * If configured and collided object is a garrisonable container with occupants, kill up
+   * to GarrisonHitKillCount matching occupants and consume the projectile without explosion.
+   */
+  private tryHandleMissileGarrisonHitKill(
+    event: PendingWeaponDamageEvent,
+    collidedEntity: MapEntity,
+    launcher: MapEntity | null,
+  ): boolean {
+    const profile = event.missileAIProfile;
+    if (!profile || profile.garrisonHitKillCount <= 0) {
+      return false;
+    }
+
+    const containProfile = collidedEntity.containProfile;
+    if (!containProfile || containProfile.moduleType !== 'GARRISON') {
+      return false;
+    }
+
+    const containedIds = this.collectContainedEntityIds(collidedEntity.id);
+    if (containedIds.length === 0) {
+      return false;
+    }
+
+    let killCount = 0;
+    for (const passengerId of containedIds) {
+      if (killCount >= profile.garrisonHitKillCount) {
+        break;
+      }
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        continue;
+      }
+      if (!this.matchesKindOfFilter(
+        passenger,
+        profile.garrisonHitKillRequiredKindOf,
+        profile.garrisonHitKillForbiddenKindOf,
+      )) {
+        continue;
+      }
+      this.markEntityDestroyed(passenger.id, launcher?.id ?? event.sourceEntityId);
+      killCount += 1;
+    }
+
+    if (killCount <= 0) {
+      return false;
+    }
+
+    event.countermeasureNoDamage = true;
+    event.primaryVictimEntityId = null;
+    event.suppressImpactVisual = true;
+    event.impactX = collidedEntity.x;
+    event.impactY = collidedEntity.y;
+    event.impactZ = collidedEntity.z;
+    event.executeFrame = this.frameCounter;
+    return true;
   }
 
   private updatePendingWeaponDamage(): void {
