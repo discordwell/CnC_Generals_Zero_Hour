@@ -15201,9 +15201,9 @@ export class GameLogicSubsystem implements Subsystem {
     teamName: string,
     commandButtonName: string,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const registry = this.iniDataRegistry;
-    if (teams.length === 0 || !registry) {
+    if (!team || !registry) {
       return false;
     }
     const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
@@ -15211,17 +15211,8 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    const teamMembers: MapEntity[] = [];
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        teamMembers.push(entity);
-      }
-    }
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
     if (teamMembers.length === 0) {
       return true;
     }
@@ -15255,69 +15246,65 @@ export class GameLogicSubsystem implements Subsystem {
    * TODO(source-parity): port full AIGroup::groupEnter/partition filters for enterable targets.
    */
   private executeScriptTeamCaptureNearestUnownedFactionUnit(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const source = teamMembers[0]!;
+    let closestTarget: MapEntity | null = null;
+    let closestDistSqr = Number.POSITIVE_INFINITY;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate)) {
+        continue;
+      }
+      if (!this.entityHasObjectStatus(candidate, 'DISABLED_UNMANNED')) {
+        continue;
+      }
+
+      const relation = this.getTeamRelationship(source, candidate);
+      if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
+        continue;
+      }
+
+      const dx = candidate.x - center.x;
+      const dz = candidate.z - center.z;
+      const distSqr = (dx * dx) + (dz * dz);
+      if (distSqr < closestDistSqr) {
+        closestTarget = candidate;
+        closestDistSqr = distSqr;
+      }
+    }
+    if (!closestTarget) {
+      return false;
+    }
+
     let issuedAny = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team)
-        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
-      if (teamMembers.length === 0) {
+    for (const entity of teamMembers) {
+      if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(entity, closestTarget)) {
         continue;
       }
-
-      const center = this.resolveScriptTeamCenter(teamMembers);
-      if (!center) {
-        continue;
-      }
-
-      const source = teamMembers[0]!;
-      let closestTarget: MapEntity | null = null;
-      let closestDistSqr = Number.POSITIVE_INFINITY;
-      for (const candidate of this.spawnedEntities.values()) {
-        if (candidate.destroyed) {
-          continue;
-        }
-        if (this.isEntityOffMap(candidate)) {
-          continue;
-        }
-        if (!this.entityHasObjectStatus(candidate, 'DISABLED_UNMANNED')) {
-          continue;
-        }
-
-        const relation = this.getTeamRelationship(source, candidate);
-        if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
-          continue;
-        }
-
-        const dx = candidate.x - center.x;
-        const dz = candidate.z - center.z;
-        const distSqr = (dx * dx) + (dz * dz);
-        if (distSqr < closestDistSqr) {
-          closestTarget = candidate;
-          closestDistSqr = distSqr;
-        }
-      }
-      if (!closestTarget) {
-        continue;
-      }
-
-      for (const entity of teamMembers) {
-        handledEntityIds.add(entity.id);
-        if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(entity, closestTarget)) {
-          continue;
-        }
-        this.applyCommand({
-          type: 'enterObject',
-          entityId: entity.id,
-          targetObjectId: closestTarget.id,
-          action: 'captureUnmannedFactionUnit',
-        });
-        issuedAny = true;
-      }
+      this.applyCommand({
+        type: 'enterObject',
+        entityId: entity.id,
+        targetObjectId: closestTarget.id,
+        action: 'captureUnmannedFactionUnit',
+      });
+      issuedAny = true;
     }
     return issuedAny;
   }
@@ -15332,8 +15319,7 @@ export class GameLogicSubsystem implements Subsystem {
   ): boolean {
     // Source parity: player parameter is currently unused by C++.
     void playerName;
-    const teams = this.resolveScriptConditionTeams(teamName);
-    return teams.length > 0;
+    return this.getScriptTeamRecord(teamName) !== null;
   }
 
   /**

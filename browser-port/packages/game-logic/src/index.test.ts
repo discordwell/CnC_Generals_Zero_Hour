@@ -36693,7 +36693,7 @@ describe('Script condition groundwork', () => {
     const partialPrototypeDispatchCount = [1, 2, 3]
       .filter((entityId) => logic.getEntityState(entityId)?.lastSpecialPowerDispatch !== null)
       .length;
-    expect(partialPrototypeDispatchCount).toBe(1);
+    expect(partialPrototypeDispatchCount).toBe(0);
 
     privateApi.spawnedEntities.get(1)!.lastSpecialPowerDispatch = null;
     privateApi.spawnedEntities.get(2)!.lastSpecialPowerDispatch = null;
@@ -36778,7 +36778,7 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
-  it('fans out team-capture-nearest-unowned-faction-unit across TeamPrototype with THIS_TEAM precedence', () => {
+  it('resolves team-capture-nearest-unowned-faction-unit through getTeamNamed with THIS_TEAM precedence', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('CaptureInfantry', 'America', ['INFANTRY'], [
@@ -36836,12 +36836,18 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 475,
       params: ['CaptureProto'],
+    })).toBe(false);
+    expect(logic.setScriptConditionTeamContext('CaptureInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureProto'],
     })).toBe(true);
     for (let frame = 0; frame < 60; frame += 1) {
       logic.update(1 / 30);
     }
     expect((privateApi.spawnedEntities.get(4)?.side ?? '').toLowerCase()).toBe('america');
     expect(privateApi.spawnedEntities.get(4)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+    logic.clearScriptConditionTeamContext();
   });
 
   it('executes script player-create-team-from-captured-units action using source action id', () => {
