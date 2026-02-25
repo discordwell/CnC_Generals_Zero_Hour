@@ -36869,6 +36869,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       const hasTask = this.pendingConstructionActions.has(entity.id)
         || this.pendingRepairActions.has(entity.id);
+      this.setDozerMineClearingDetail(entity, !hasTask);
       if (this.isWorkerEntity(entity) && !hasTask) {
         // Source parity: WorkerAIUpdate runs dozer logic only while in dozer tasks.
         entity.dozerIdleTooLongTimestamp = this.frameCounter;
@@ -36893,16 +36894,24 @@ export class GameLogicSubsystem implements Subsystem {
       entity.dozerIdleTooLongTimestamp = this.frameCounter;
 
       const target = this.findDozerAutoRepairTarget(entity, profile.boredRange);
-      if (!target) {
+      if (target) {
+        this.handleRepairBuildingCommand({
+          type: 'repairBuilding',
+          entityId: entity.id,
+          targetBuildingId: target.id,
+          commandSource: 'AI',
+        });
         continue;
       }
 
-      this.handleRepairBuildingCommand({
-        type: 'repairBuilding',
-        entityId: entity.id,
-        targetBuildingId: target.id,
-        commandSource: 'AI',
-      });
+      const mineTarget = this.findDozerAutoMineTarget(entity, profile.boredRange);
+      if (!mineTarget) {
+        continue;
+      }
+
+      // Source parity: DozerPrimaryIdleState::update issues aiAttackObject(..., CMD_FROM_DOZER)
+      // when no repair target is available.
+      this.issueAttackEntity(entity.id, mineTarget.id, 'AI');
     }
   }
 
@@ -36926,6 +36935,47 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return closest;
+  }
+
+  private findDozerAutoMineTarget(dozer: MapEntity, range: number): MapEntity | null {
+    const rangeSqr = range * range;
+    let closest: MapEntity | null = null;
+    let closestDistSqr = Infinity;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.id === dozer.id || candidate.destroyed) continue;
+      const kindOf = this.resolveEntityKindOfSet(candidate);
+      if (!kindOf.has('MINE') && !kindOf.has('DEMOTRAP')) continue;
+      if (this.getTeamRelationship(dozer, candidate) === RELATIONSHIP_ALLIES) continue;
+      if (!this.canAttackerTargetEntity(dozer, candidate, 'AI')) continue;
+
+      const dx = candidate.x - dozer.x;
+      const dz = candidate.z - dozer.z;
+      const distSqr = dx * dx + dz * dz;
+      if (distSqr > rangeSqr) continue;
+      if (distSqr < closestDistSqr) {
+        closest = candidate;
+        closestDistSqr = distSqr;
+      }
+    }
+
+    return closest;
+  }
+
+  private setDozerMineClearingDetail(entity: MapEntity, enabled: boolean): void {
+    if (!entity.dozerAIProfile || this.isWorkerEntity(entity)) {
+      return;
+    }
+    const hasFlag = (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_MINE_CLEARING_DETAIL) !== 0;
+    if (enabled) {
+      entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_MINE_CLEARING_DETAIL;
+    } else {
+      entity.weaponSetFlagsMask &= ~WEAPON_SET_FLAG_MINE_CLEARING_DETAIL;
+    }
+    const nextHasFlag = (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_MINE_CLEARING_DETAIL) !== 0;
+    if (hasFlag !== nextHasFlag) {
+      this.refreshEntityCombatProfiles(entity);
+    }
   }
 
   private canDozerRepairTarget(

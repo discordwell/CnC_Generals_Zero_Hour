@@ -10399,6 +10399,66 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(after).toBeGreaterThan(before);
   });
 
+  it('idle dozer attacks nearby mines after bored time when no repair target exists', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER', 'CAN_ATTACK'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '20%',
+        BoredTime: 100, // ~3 frames
+        BoredRange: 120,
+      }),
+      makeBlock('WeaponSet', 'WeaponSet', {
+        Weapon: ['PRIMARY', 'DozerMineClearingGun'],
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5, VisionRange: 80 });
+
+    const mineDef = makeObjectDef('EnemyMine', 'China', ['MINE', 'IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], { GeometryMajorRadius: 4, GeometryMinorRadius: 4 });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [dozerDef, mineDef],
+      weapons: [
+        makeWeaponDef('DozerMineClearingGun', {
+          AttackRange: 120,
+          PrimaryDamage: 60,
+          DelayBetweenShots: 100,
+          AntiMine: true,
+        }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('EnemyMine', 32, 20), // id 2
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        weaponSetFlagsMask: number;
+      }>;
+    };
+
+    for (let i = 0; i < 12; i++) {
+      logic.update(1 / 30);
+    }
+
+    const dozer = priv.spawnedEntities.get(1);
+    expect(dozer).toBeDefined();
+    expect((dozer!.weaponSetFlagsMask & (1 << 8)) !== 0).toBe(true); // MINE_CLEARING_DETAIL
+    const mineState = logic.getEntityState(2);
+    expect(mineState === null || !mineState.alive || mineState.health < 100).toBe(true);
+  });
+
   it('deletes warehouse when empty if DeleteWhenEmpty is true', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
