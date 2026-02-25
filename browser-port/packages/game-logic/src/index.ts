@@ -17521,23 +17521,19 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamEnterNamed.
    */
   private executeScriptTeamEnterNamed(teamName: string, targetContainerEntityId: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const container = this.spawnedEntities.get(targetContainerEntityId);
-    if (teams.length === 0 || !container || container.destroyed) {
+    if (!team || !container || container.destroyed) {
       return false;
     }
 
-    const entityIds = new Set<number>();
     let issuedAny = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || entityIds.has(entity.id)) {
-          continue;
-        }
-        entityIds.add(entity.id);
-        if (this.issueScriptEnterContainer(entity, container)) {
-          issuedAny = true;
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.issueScriptEnterContainer(entity, container)) {
+        issuedAny = true;
       }
     }
     return issuedAny;
@@ -17562,25 +17558,21 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamExitAll (groupEvacuate).
    */
   private executeScriptTeamExitAll(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const entityIds = new Set<number>();
     let issuedAny = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || !entity.containProfile || entityIds.has(entity.id)) {
-          continue;
-        }
-        entityIds.add(entity.id);
-        this.applyCommand({
-          type: 'evacuate',
-          entityId: entity.id,
-        });
-        issuedAny = true;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.containProfile) {
+        continue;
       }
+      this.applyCommand({
+        type: 'evacuate',
+        entityId: entity.id,
+      });
+      issuedAny = true;
     }
     return issuedAny;
   }
@@ -17934,39 +17926,34 @@ export class GameLogicSubsystem implements Subsystem {
    * Issues evacuation/exit commands for each team member depending on its containment state.
    */
   private executeScriptTeamExitAllBuildings(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
     let issuedAny = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
-          handledEntityIds.add(entity.id);
-          this.applyCommand({
-            type: 'evacuate',
-            entityId: entity.id,
-          });
-          issuedAny = true;
-          continue;
-        }
-        if (
-          entity.garrisonContainerId !== null
-          || entity.transportContainerId !== null
-          || entity.tunnelContainerId !== null
-        ) {
-          handledEntityIds.add(entity.id);
-          this.applyCommand({
-            type: 'exitContainer',
-            entityId: entity.id,
-          });
-          issuedAny = true;
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
+        this.applyCommand({
+          type: 'evacuate',
+          entityId: entity.id,
+        });
+        issuedAny = true;
+        continue;
+      }
+      if (
+        entity.garrisonContainerId !== null
+        || entity.transportContainerId !== null
+        || entity.tunnelContainerId !== null
+      ) {
+        this.applyCommand({
+          type: 'exitContainer',
+          entityId: entity.id,
+        });
+        issuedAny = true;
       }
     }
     return issuedAny;
