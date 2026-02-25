@@ -38091,6 +38091,66 @@ describe('Script condition groundwork', () => {
     }
   });
 
+  it('treats PLACE_BEACON script command-button execution as unsupported', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptBeaconUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          CommandSet: 'ScriptBeaconCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_PlaceBeacon', {
+          Command: 'PLACE_BEACON',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptBeaconCommandSet', {
+          1: 'Command_PlaceBeacon',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptBeaconUnit', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'BeaconWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_PlaceBeacon'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_PlaceBeacon', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_PlaceBeacon', 'BeaconWaypoint'],
+    })).toBe(false);
+  });
+
   it('requires FIRE_WEAPON object-target relationship masks to pass source validity checks', () => {
     const bundle = makeBundle({
       objects: [

@@ -13434,17 +13434,9 @@ export class GameLogicSubsystem implements Subsystem {
         });
         return true;
       case 'PLACE_BEACON':
-        if (target.kind !== 'POSITION') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'placeBeacon',
-          targetPosition: [target.targetX, 0, target.targetZ],
-        });
-        return true;
+        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition}
+        // does not implement PLACE_BEACON for script command-button execution.
+        return false;
       default:
         // TODO(source-parity): support remaining command button command types used by map scripts.
         return false;
