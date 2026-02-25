@@ -18525,14 +18525,12 @@ export class GameLogicSubsystem implements Subsystem {
    * TeamPrototype::increaseAIPriorityForSuccess adds success increase to current priority.
    */
   private executeScriptTeamIncreasePriority(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    for (const team of teams) {
-      team.productionPriority += team.productionPrioritySuccessIncrease;
-    }
+    team.productionPriority += team.productionPrioritySuccessIncrease;
     return true;
   }
 
@@ -18541,14 +18539,12 @@ export class GameLogicSubsystem implements Subsystem {
    * TeamPrototype::decreaseAIPriorityForFailure subtracts failure decrease from current priority.
    */
   private executeScriptTeamDecreasePriority(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    for (const team of teams) {
-      team.productionPriority -= team.productionPriorityFailureDecrease;
-    }
+    team.productionPriority -= team.productionPriorityFailureDecrease;
     return true;
   }
 
@@ -19865,23 +19861,19 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::updateTeamSetAttitude.
+   * Source parity: ScriptActions::updateTeamSetAttitude.
    */
   private executeScriptTeamSetAttitude(teamName: string, attitude: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     const nextAttitude = Math.trunc(attitude);
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        entity.scriptAttitude = nextAttitude;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      entity.scriptAttitude = nextAttitude;
     }
     return true;
   }

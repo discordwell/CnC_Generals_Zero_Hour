@@ -33801,13 +33801,13 @@ describe('Script condition groundwork', () => {
       params: ['PriorityProto'],
     })).toBe(true);
     expect(logic.getScriptTeamPriorityState('PriorityInstanceA')?.productionPriority).toBe(107);
-    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(211);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(200);
     expect(logic.executeScriptAction({
       actionType: 440,
       params: ['PriorityProto'],
     })).toBe(true);
     expect(logic.getScriptTeamPriorityState('PriorityInstanceA')?.productionPriority).toBe(102);
-    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(198);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(200);
 
     expect(logic.setScriptConditionTeamContext('PriorityInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -33815,7 +33815,16 @@ describe('Script condition groundwork', () => {
       params: ['PriorityProto'],
     })).toBe(true);
     expect(logic.getScriptTeamPriorityState('PriorityInstanceA')?.productionPriority).toBe(109);
-    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(198);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(200);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.setScriptConditionTeamContext('PriorityInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 440,
+      params: ['PriorityProto'],
+    })).toBe(true);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceA')?.productionPriority).toBe(109);
+    expect(logic.getScriptTeamPriorityState('PriorityInstanceB')?.productionPriority).toBe(187);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
@@ -41721,7 +41730,7 @@ describe('Script condition groundwork', () => {
       params: ['AlphaProto', 5],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(5);
-    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(4);
 
     expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -41729,7 +41738,7 @@ describe('Script condition groundwork', () => {
       params: ['AlphaProto', 6],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(6);
-    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(4);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
@@ -41737,7 +41746,7 @@ describe('Script condition groundwork', () => {
       params: [1, 1], // PASSIVE
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAttitude).toBe(1);
-    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttitude).toBe(4);
 
     const unit1 = privateApi.spawnedEntities.get(1);
     const unit2 = privateApi.spawnedEntities.get(2);
