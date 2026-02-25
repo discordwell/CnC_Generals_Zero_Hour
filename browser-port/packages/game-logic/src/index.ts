@@ -17596,30 +17596,26 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private executeScriptTeamGarrisonSpecificBuilding(teamName: string, buildingEntityId: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const building = this.spawnedEntities.get(buildingEntityId);
-    if (teams.length === 0 || !building || building.destroyed) {
+    if (!team || !building || building.destroyed) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
     let issuedAny = false;
-    for (const team of teams) {
-      const controllingSide = this.resolveScriptTeamControllingSide(team);
-      if (!controllingSide) {
+    const controllingSide = this.resolveScriptTeamControllingSide(team);
+    if (!controllingSide) {
+      return false;
+    }
+    if (!this.canScriptSideUseBuildingContainer(building, controllingSide)) {
+      return false;
+    }
+    for (const member of this.getScriptTeamMemberEntities(team)) {
+      if (member.destroyed) {
         continue;
       }
-      if (!this.canScriptSideUseBuildingContainer(building, controllingSide)) {
-        continue;
-      }
-      for (const member of this.getScriptTeamMemberEntities(team)) {
-        if (member.destroyed || handledEntityIds.has(member.id)) {
-          continue;
-        }
-        if (this.issueScriptEnterContainer(member, building)) {
-          handledEntityIds.add(member.id);
-          issuedAny = true;
-        }
+      if (this.issueScriptEnterContainer(member, building)) {
+        issuedAny = true;
       }
     }
     return issuedAny;
@@ -17630,19 +17626,12 @@ export class GameLogicSubsystem implements Subsystem {
    * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
    */
   private executeScriptTeamGarrisonNearestBuilding(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    let issuedAny = false;
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      if (this.executeScriptSingleTeamGarrisonNearestBuilding(team, handledEntityIds)) {
-        issuedAny = true;
-      }
-    }
-    return issuedAny;
+    return this.executeScriptSingleTeamGarrisonNearestBuilding(team);
   }
 
   private executeScriptSingleTeamGarrisonNearestBuilding(
