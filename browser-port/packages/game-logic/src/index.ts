@@ -322,6 +322,7 @@ const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
 const SOURCE_FLASH_COLOR_WHITE = 0xffffff;
 const MAX_DYNAMIC_WATER = 64;
 const MAX_SPIN_COUNT = 20;
+const SCRIPT_WAYPOINT_PATH_LIMIT = 1024;
 const SCRIPT_DIFFICULTY_EASY = 0;
 const SCRIPT_DIFFICULTY_NORMAL = 1;
 const SCRIPT_DIFFICULTY_HARD = 2;
@@ -16601,6 +16602,7 @@ export class GameLogicSubsystem implements Subsystem {
       waypointPathLabel,
       entity.x,
       entity.z,
+      exact,
     );
     if (!route || route.length === 0) {
       return false;
@@ -16642,6 +16644,7 @@ export class GameLogicSubsystem implements Subsystem {
       waypointPathLabel,
       center.x,
       center.z,
+      exact,
     );
     if (!route || route.length === 0) {
       return false;
@@ -16907,6 +16910,7 @@ export class GameLogicSubsystem implements Subsystem {
     currentPlayerSide: string,
     centerX: number,
     centerZ: number,
+    exactRoute = false,
   ): Array<{ x: number; z: number }> | null {
     const basePathLabel = waypointPathLabel.trim();
     if (!basePathLabel) {
@@ -16926,25 +16930,27 @@ export class GameLogicSubsystem implements Subsystem {
     if (!fullPathLabel) {
       return null;
     }
-    return this.resolveScriptWaypointRouteByNormalizedLabel(fullPathLabel, centerX, centerZ);
+    return this.resolveScriptWaypointRouteByNormalizedLabel(fullPathLabel, centerX, centerZ, exactRoute);
   }
 
   private resolveScriptWaypointRouteByPathLabel(
     waypointPathLabel: string,
     centerX: number,
     centerZ: number,
+    exactRoute = false,
   ): Array<{ x: number; z: number }> | null {
     const normalizedPathLabel = waypointPathLabel.trim().toUpperCase();
     if (!normalizedPathLabel) {
       return null;
     }
-    return this.resolveScriptWaypointRouteByNormalizedLabel(normalizedPathLabel, centerX, centerZ);
+    return this.resolveScriptWaypointRouteByNormalizedLabel(normalizedPathLabel, centerX, centerZ, exactRoute);
   }
 
   private resolveScriptWaypointRouteByNormalizedLabel(
     normalizedPathLabel: string,
     centerX: number,
     centerZ: number,
+    exactRoute = false,
   ): Array<{ x: number; z: number }> | null {
     const waypointData = this.loadedMapData?.waypoints;
     if (!waypointData) {
@@ -16995,31 +17001,54 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const route: Array<{ x: number; z: number }> = [];
-    const visited = new Set<number>();
     let currentNode: (typeof routeNodes)[number] | undefined = startNode;
-    while (currentNode && !visited.has(currentNode.id)) {
-      route.push({
-        x: currentNode.position.x,
-        z: currentNode.position.y,
-      });
-      visited.add(currentNode.id);
+    if (exactRoute) {
+      // Source parity: AIUpdateInterface::setPathFromWaypoint() follows link(0)
+      // repeatedly with WAYPOINT_PATH_LIMIT safety cap.
+      let count = 0;
+      while (currentNode && count < SCRIPT_WAYPOINT_PATH_LIMIT) {
+        route.push({
+          x: currentNode.position.x,
+          z: currentNode.position.y,
+        });
+        count += 1;
 
-      const outgoing = outgoingById.get(currentNode.id);
-      if (!outgoing || outgoing.length === 0) {
-        break;
-      }
-
-      let nextNode: (typeof routeNodes)[number] | undefined;
-      for (const nextId of outgoing) {
-        if (visited.has(nextId)) {
-          continue;
-        }
-        nextNode = routeNodesById.get(nextId);
-        if (nextNode) {
+        const outgoing = outgoingById.get(currentNode.id);
+        if (!outgoing || outgoing.length === 0) {
           break;
         }
+        const nextNode = routeNodesById.get(outgoing[0]!);
+        if (!nextNode) {
+          break;
+        }
+        currentNode = nextNode;
       }
-      currentNode = nextNode;
+    } else {
+      const visited = new Set<number>();
+      while (currentNode && !visited.has(currentNode.id)) {
+        route.push({
+          x: currentNode.position.x,
+          z: currentNode.position.y,
+        });
+        visited.add(currentNode.id);
+
+        const outgoing = outgoingById.get(currentNode.id);
+        if (!outgoing || outgoing.length === 0) {
+          break;
+        }
+
+        let nextNode: (typeof routeNodes)[number] | undefined;
+        for (const nextId of outgoing) {
+          if (visited.has(nextId)) {
+            continue;
+          }
+          nextNode = routeNodesById.get(nextId);
+          if (nextNode) {
+            break;
+          }
+        }
+        currentNode = nextNode;
+      }
     }
 
     return route.length > 0 ? route : null;

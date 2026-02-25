@@ -36467,6 +36467,59 @@ describe('Script condition groundwork', () => {
     expect(exactTwo.movePath[2]?.x).toBeCloseTo(40 + exactOffsetTwoX, 5);
   });
 
+  it('follows link(0) chain with source path-limit behavior for NAMED_FOLLOW_WAYPOINTS_EXACT loop paths', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 18, 20), // id 1
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 301, name: 'Loop_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'LoopPath', biDirectional: false },
+        { id: 302, name: 'Loop_B', position: { x: 40, y: 20, z: 0 }, pathLabel1: 'LoopPath', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 301, waypoint2: 302 },
+        { waypoint1: 302, waypoint2: 301 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 282, // NAMED_FOLLOW_WAYPOINTS_EXACT (raw id)
+      params: [1, 'LoopPath'],
+    })).toBe(true);
+
+    const movePath = privateApi.spawnedEntities.get(1)!.movePath;
+    // Source parity: exact mode follows waypoint link(0) with a fixed path safety cap.
+    expect(movePath.length).toBeGreaterThan(500);
+    expect(movePath[1]?.x).toBeCloseTo(20, 5);
+    expect(movePath[2]?.x).toBeCloseTo(40, 5);
+    expect(movePath[3]?.x).toBeCloseTo(20, 5);
+  });
+
   it('records waypoint-path completion from follow-waypoints actions', () => {
     const bundle = makeBundle({
       objects: [
