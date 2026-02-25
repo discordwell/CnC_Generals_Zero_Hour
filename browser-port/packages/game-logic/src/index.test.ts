@@ -37793,6 +37793,92 @@ describe('Script condition groundwork', () => {
     }
   });
 
+  it('executes SWITCH_WEAPON command-button only for no-target script invocation', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptSwitchUnit', 'America', ['INFANTRY', 'CAN_ATTACK'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [
+              ['PRIMARY', 'TestRiflePrimary'],
+              ['SECONDARY', 'TestRifleSecondary'],
+            ],
+          }),
+        ], {
+          CommandSet: 'ScriptSwitchCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestRiflePrimary', {
+          AttackRange: 120,
+          PrimaryDamage: 10,
+          DamageType: 'SMALL_ARMS',
+          DelayBetweenShots: 100,
+        }),
+        makeWeaponDef('TestRifleSecondary', {
+          AttackRange: 120,
+          PrimaryDamage: 20,
+          DamageType: 'SMALL_ARMS',
+          DelayBetweenShots: 100,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_SwitchSecondary', {
+          Command: 'SWITCH_WEAPON',
+          WeaponSlot: 'SECONDARY',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptSwitchCommandSet', {
+          1: 'Command_SwitchSecondary',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptSwitchUnit', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'SwitchWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { forcedWeaponSlot: number | null }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_SwitchSecondary'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.forcedWeaponSlot).toBe(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_SwitchSecondary', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_SwitchSecondary', 'SwitchWaypoint'],
+    })).toBe(false);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [

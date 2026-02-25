@@ -13368,6 +13368,11 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'SWITCH_WEAPON': {
+        // Source parity: GeneralsMD Object::doCommandButton implements SWITCH_WEAPON
+        // for no-target invocation only; object/position variants are not implemented.
+        if (target.kind !== 'NONE') {
+          return false;
+        }
         const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef);
         if (weaponSlot === null) {
           return false;
