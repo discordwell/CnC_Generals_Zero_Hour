@@ -34500,7 +34500,7 @@ describe('Script condition groundwork', () => {
       params: ['AttackProto', 'ApproachPath', 0],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.movePath.length).toBeGreaterThan(0);
-    expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBeGreaterThan(0);
+    expect(privateApi.spawnedEntities.get(2)?.movePath.length).toBe(0);
 
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
@@ -34635,12 +34635,22 @@ describe('Script condition groundwork', () => {
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
     logic.update(1 / 30);
+    const patrolOneAfterStop = privateApi.spawnedEntities.get(1);
+    const patrolTwoAfterStop = privateApi.spawnedEntities.get(2);
+    expect(patrolOneAfterStop).toBeDefined();
+    expect(patrolTwoAfterStop).toBeDefined();
+    patrolOneAfterStop!.moving = false;
+    patrolOneAfterStop!.moveTarget = null;
+    patrolOneAfterStop!.movePath = [];
+    patrolTwoAfterStop!.moving = false;
+    patrolTwoAfterStop!.moveTarget = null;
+    patrolTwoAfterStop!.movePath = [];
     expect(logic.executeScriptAction({
       actionType: 36,
       params: ['PatrolProto', 'PatrolPathA', 0],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
-    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
 
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });

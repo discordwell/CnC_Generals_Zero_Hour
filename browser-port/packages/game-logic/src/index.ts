@@ -16306,8 +16306,8 @@ export class GameLogicSubsystem implements Subsystem {
     asTeam: boolean,
     exact: boolean,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
@@ -16316,34 +16316,30 @@ export class GameLogicSubsystem implements Subsystem {
     void asTeam;
     void exact;
 
-    const handledEntityIds = new Set<number>();
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const route = this.resolveScriptWaypointRouteByPathLabel(
+      waypointPathLabel,
+      center.x,
+      center.z,
+    );
+    if (!route || route.length === 0) {
+      return false;
+    }
+
     let movedAny = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team)
-        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
-      if (teamMembers.length === 0) {
-        continue;
-      }
-
-      const center = this.resolveScriptTeamCenter(teamMembers);
-      if (!center) {
-        continue;
-      }
-
-      const route = this.resolveScriptWaypointRouteByPathLabel(
-        waypointPathLabel,
-        center.x,
-        center.z,
-      );
-      if (!route || route.length === 0) {
-        return movedAny;
-      }
-
-      for (const entity of teamMembers) {
-        handledEntityIds.add(entity.id);
-        if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-          movedAny = true;
-        }
+    for (const entity of teamMembers) {
+      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+        movedAny = true;
       }
     }
     return movedAny;
@@ -16416,8 +16412,8 @@ export class GameLogicSubsystem implements Subsystem {
     asTeam: boolean,
     explicitPlayerSide: string,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
@@ -16429,35 +16425,31 @@ export class GameLogicSubsystem implements Subsystem {
     // TODO(source-parity): "asTeam" should use group-follow-as-team semantics instead of per-unit routes.
     void asTeam;
 
-    const handledEntityIds = new Set<number>();
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const route = this.resolveScriptSkirmishApproachRoute(
+      waypointPathLabel,
+      side,
+      center.x,
+      center.z,
+    );
+    if (!route || route.length === 0) {
+      return false;
+    }
+
     let movedAny = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team)
-        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
-      if (teamMembers.length === 0) {
-        continue;
-      }
-
-      const center = this.resolveScriptTeamCenter(teamMembers);
-      if (!center) {
-        continue;
-      }
-
-      const route = this.resolveScriptSkirmishApproachRoute(
-        waypointPathLabel,
-        side,
-        center.x,
-        center.z,
-      );
-      if (!route || route.length === 0) {
-        return movedAny;
-      }
-
-      for (const entity of teamMembers) {
-        handledEntityIds.add(entity.id);
-        if (this.enqueueScriptWaypointRoute(entity, route)) {
-          movedAny = true;
-        }
+    for (const entity of teamMembers) {
+      if (this.enqueueScriptWaypointRoute(entity, route)) {
+        movedAny = true;
       }
     }
     return movedAny;
@@ -16472,8 +16464,8 @@ export class GameLogicSubsystem implements Subsystem {
     waypointPathLabel: string,
     explicitPlayerSide: string,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
@@ -16482,43 +16474,39 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const route = this.resolveScriptSkirmishApproachRoute(
+      waypointPathLabel,
+      side,
+      center.x,
+      center.z,
+    );
+    if (!route || route.length === 0) {
+      return false;
+    }
+
+    const firstWaypoint = route[0]!;
     let movedAny = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team)
-        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
-      if (teamMembers.length === 0) {
-        continue;
-      }
-
-      const center = this.resolveScriptTeamCenter(teamMembers);
-      if (!center) {
-        continue;
-      }
-
-      const route = this.resolveScriptSkirmishApproachRoute(
-        waypointPathLabel,
-        side,
-        center.x,
-        center.z,
-      );
-      if (!route || route.length === 0) {
-        return movedAny;
-      }
-
-      const firstWaypoint = route[0]!;
-      for (const entity of teamMembers) {
-        handledEntityIds.add(entity.id);
-        this.applyCommand({
-          type: 'moveTo',
-          entityId: entity.id,
-          targetX: firstWaypoint.x,
-          targetZ: firstWaypoint.z,
-          commandSource: 'SCRIPT',
-        });
-        if (entity.moving) {
-          movedAny = true;
-        }
+    for (const entity of teamMembers) {
+      this.applyCommand({
+        type: 'moveTo',
+        entityId: entity.id,
+        targetX: firstWaypoint.x,
+        targetZ: firstWaypoint.z,
+        commandSource: 'SCRIPT',
+      });
+      if (entity.moving) {
+        movedAny = true;
       }
     }
     return movedAny;
