@@ -32129,6 +32129,86 @@ describe('Script condition groundwork', () => {
       .toBeGreaterThan(privateApi.pendingWeaponDamageEvents[0]!.executeFrame);
   });
 
+  it('interpolates NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH projectile position along waypoint segments', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WaypointLauncher', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [
+              'PRIMARY WaypointMissileWeapon',
+            ],
+          }),
+        ]),
+        makeObjectDef('WaypointProjectile', 'America', ['SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('WaypointMissileWeapon', {
+          AttackRange: 1000,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 2,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('WaypointLauncher', 10, 10), // id 1
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'LONG_START',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'LongPath',
+        },
+        {
+          id: 2,
+          name: 'LONG_MID',
+          position: { x: 20, y: 60, z: 0 },
+          pathLabel1: 'LongPath',
+        },
+        {
+          id: 3,
+          name: 'LONG_END',
+          position: { x: 60, y: 20, z: 0 },
+          pathLabel1: 'LongPath',
+        },
+      ],
+      links: [
+        { waypoint1: 1, waypoint2: 2 },
+        { waypoint1: 2, waypoint2: 3 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.executeScriptAction({
+      actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
+      params: [1, 'LongPath'],
+    })).toBe(true);
+
+    // Route distance is source->(20,20)->(20,60)->(60,20). Sample before midpoint so
+    // interpolation should remain on the vertical bend segment near x=20.
+    for (let i = 0; i < 20; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    const projectiles = logic.getActiveProjectiles();
+    expect(projectiles).toHaveLength(1);
+    expect(projectiles[0]?.x).toBeCloseTo(20, 1);
+    expect(projectiles[0]!.z).toBeGreaterThan(40);
+    // Straight interpolation from (10,10) to (60,20) at this progress would have x much larger.
+    expect(projectiles[0]!.x).toBeLessThan(30);
+  });
+
   it('executes script volume and border-shroud actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

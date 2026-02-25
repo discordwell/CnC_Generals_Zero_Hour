@@ -1413,6 +1413,12 @@ interface PendingWeaponDamageEvent {
   missileAIProfile: MissileAIProfile | null;
   /** Source parity: MissileAIUpdate runtime state for in-flight homing missiles. */
   missileAIState: MissileAIRuntimeState | null;
+  /**
+   * Source parity bridge: ScriptActions::doNamedFireWeaponFollowingWaypointPath uses
+   * AI-followed waypoint paths for projectile motion. When present, interpolation and
+   * pre-impact collision checks traverse this polyline instead of direct source→impact.
+   */
+  scriptWaypointPath?: readonly VectorXZ[] | null;
 }
 
 type MissileAIState = 'PRELAUNCH' | 'LAUNCH' | 'IGNITION' | 'ATTACK_NOTURN' | 'ATTACK' | 'KILL' | 'KILL_SELF';
@@ -7683,7 +7689,17 @@ export class GameLogicSubsystem implements Subsystem {
         const elapsed = this.frameCounter - event.launchFrame;
         progress = Math.min(1, Math.max(0, elapsed / totalFrames));
 
-        if (event.hasBezierArc) {
+        if (event.scriptWaypointPath && event.scriptWaypointPath.length > 1) {
+          const pathPosition = this.interpolateProjectileWaypointPath(event.scriptWaypointPath, progress);
+          x = pathPosition.x;
+          z = pathPosition.z;
+          const baseY = event.sourceY;
+          const arcHeight = Math.max(5, Math.hypot(event.impactX - event.sourceX, event.impactZ - event.sourceZ) * 0.15);
+          const arcY = baseY + arcHeight * 4 * progress * (1 - progress);
+          const terrainY = heightmap ? heightmap.getInterpolatedHeight(x, z) : 0;
+          y = Math.max(terrainY + 1, arcY);
+          heading = pathPosition.heading;
+        } else if (event.hasBezierArc) {
           // Source parity: DumbProjectileBehavior cubic Bezier flight path evaluation.
           // P0 = (sourceX, sourceY, sourceZ), P3 = (impactX, impactY, impactZ).
           // P1 and P2 placed along the 3D line at firstPercentIndent/secondPercentIndent.
@@ -7701,6 +7717,7 @@ export class GameLogicSubsystem implements Subsystem {
           x = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
           y = evaluateCubicBezier(progress, p0y, event.bezierP1Y, event.bezierP2Y, p3y);
           z = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
+          heading = Math.atan2(event.impactX - event.sourceX, event.impactZ - event.sourceZ);
         } else {
           // Fallback: linear XZ + parabolic Y arc for projectiles without Bezier data.
           x = event.sourceX + (event.impactX - event.sourceX) * progress;
@@ -7710,10 +7727,8 @@ export class GameLogicSubsystem implements Subsystem {
           const arcY = baseY + arcHeight * 4 * progress * (1 - progress);
           const terrainY = heightmap ? heightmap.getInterpolatedHeight(x, z) : 0;
           y = Math.max(terrainY + 1, arcY);
+          heading = Math.atan2(event.impactX - event.sourceX, event.impactZ - event.sourceZ);
         }
-
-        // Heading from source to target.
-        heading = Math.atan2(event.impactX - event.sourceX, event.impactZ - event.sourceZ);
       }
 
       projectiles.push({
@@ -16361,6 +16376,7 @@ export class GameLogicSubsystem implements Subsystem {
     const sourceX = attacker.x;
     const sourceY = attacker.y;
     const sourceZ = attacker.z;
+    const waypointPath = this.buildScriptProjectileWaypointPath(sourceX, sourceZ, route);
     const impactX = finalWaypoint.x;
     const impactZ = finalWaypoint.z;
     const impactY = this.mapHeightmap ? this.mapHeightmap.getInterpolatedHeight(impactX, impactZ) : 0;
@@ -16404,10 +16420,23 @@ export class GameLogicSubsystem implements Subsystem {
       suppressImpactVisual: false,
       missileAIProfile: null,
       missileAIState: null,
+      scriptWaypointPath: waypointPath,
     };
 
     this.emitWeaponFiredVisualEvent(attacker, weapon);
     this.pendingWeaponDamageEvents.push(event);
+  }
+
+  private buildScriptProjectileWaypointPath(
+    sourceX: number,
+    sourceZ: number,
+    route: readonly { x: number; z: number }[],
+  ): VectorXZ[] {
+    const path: VectorXZ[] = [{ x: sourceX, z: sourceZ }];
+    for (const waypoint of route) {
+      path.push({ x: waypoint.x, z: waypoint.z });
+    }
+    return path;
   }
 
   private computeWaypointRouteTravelDistance(
@@ -16427,6 +16456,66 @@ export class GameLogicSubsystem implements Subsystem {
       previousZ = waypoint.z;
     }
     return Math.max(0, totalDistance);
+  }
+
+  private interpolateProjectileWaypointPath(
+    path: readonly VectorXZ[],
+    progress: number,
+  ): { x: number; z: number; heading: number } {
+    if (path.length <= 0) {
+      return { x: 0, z: 0, heading: 0 };
+    }
+    if (path.length === 1) {
+      const node = path[0]!;
+      return { x: node.x, z: node.z, heading: 0 };
+    }
+
+    let totalDistance = 0;
+    for (let index = 1; index < path.length; index += 1) {
+      const start = path[index - 1]!;
+      const end = path[index]!;
+      totalDistance += Math.hypot(end.x - start.x, end.z - start.z);
+    }
+
+    if (!Number.isFinite(totalDistance) || totalDistance <= 1e-6) {
+      const start = path[0]!;
+      const end = path[path.length - 1]!;
+      return {
+        x: end.x,
+        z: end.z,
+        heading: Math.atan2(end.x - start.x, end.z - start.z),
+      };
+    }
+
+    const clampedProgress = Math.max(0, Math.min(1, progress));
+    let distanceLeft = totalDistance * clampedProgress;
+    for (let index = 1; index < path.length; index += 1) {
+      const start = path[index - 1]!;
+      const end = path[index]!;
+      const dx = end.x - start.x;
+      const dz = end.z - start.z;
+      const segmentDistance = Math.hypot(dx, dz);
+      if (segmentDistance <= 1e-6) {
+        continue;
+      }
+      if (distanceLeft <= segmentDistance || index === path.length - 1) {
+        const t = Math.max(0, Math.min(1, distanceLeft / segmentDistance));
+        return {
+          x: start.x + (dx * t),
+          z: start.z + (dz * t),
+          heading: Math.atan2(dx, dz),
+        };
+      }
+      distanceLeft -= segmentDistance;
+    }
+
+    const start = path[path.length - 2]!;
+    const end = path[path.length - 1]!;
+    return {
+      x: end.x,
+      z: end.z,
+      heading: Math.atan2(end.x - start.x, end.z - start.z),
+    };
   }
 
   private findFireWeaponTargetForPositionUsingWeapon(
@@ -47487,6 +47576,7 @@ export class GameLogicSubsystem implements Subsystem {
       suppressImpactVisual: false,
       missileAIProfile,
       missileAIState,
+      scriptWaypointPath: null,
     };
 
     // Emit muzzle flash visual event.
@@ -48085,7 +48175,11 @@ export class GameLogicSubsystem implements Subsystem {
 
         const elapsed = this.frameCounter - event.launchFrame;
         const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
-        if (event.hasBezierArc) {
+        if (event.scriptWaypointPath && event.scriptWaypointPath.length > 1) {
+          const pathPosition = this.interpolateProjectileWaypointPath(event.scriptWaypointPath, progress);
+          projX = pathPosition.x;
+          projZ = pathPosition.z;
+        } else if (event.hasBezierArc) {
           const p0x = event.sourceX, p0z = event.sourceZ;
           const p3x = event.impactX, p3z = event.impactZ;
           const dx = p3x - p0x, dz = p3z - p0z;
@@ -49661,7 +49755,11 @@ export class GameLogicSubsystem implements Subsystem {
     const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
 
     let projX: number, projZ: number;
-    if (event.hasBezierArc) {
+    if (event.scriptWaypointPath && event.scriptWaypointPath.length > 1) {
+      const pathPosition = this.interpolateProjectileWaypointPath(event.scriptWaypointPath, progress);
+      projX = pathPosition.x;
+      projZ = pathPosition.z;
+    } else if (event.hasBezierArc) {
       const p0x = event.sourceX, p0z = event.sourceZ;
       const p3x = event.impactX, p3z = event.impactZ;
       const dx = p3x - p0x, dz = p3z - p0z;
