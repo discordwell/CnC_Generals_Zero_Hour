@@ -18133,23 +18133,19 @@ export class GameLogicSubsystem implements Subsystem {
    * C++ toggles OBJECT_STATUS_SCRIPT_UNSTEALTHED for each team member.
    */
   private executeScriptTeamSetStealthEnabled(teamName: string, enabled: boolean): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        if (enabled) {
-          entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
-        } else {
-          entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (enabled) {
+        entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
+      } else {
+        entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
       }
     }
     return true;

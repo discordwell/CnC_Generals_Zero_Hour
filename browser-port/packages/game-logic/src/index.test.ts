@@ -33491,7 +33491,7 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     logic.update(1 / 30);
     expect(logic.getEntityState(1)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
-    expect(logic.getEntityState(2)?.statusFlags).toContain('SCRIPT_UNSTEALTHED');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('SCRIPT_UNSTEALTHED');
     expect(logic.executeScriptAction({
       actionType: 497,
       params: ['StealthProto', 1],
