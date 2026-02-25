@@ -4251,6 +4251,10 @@ interface ScriptReinforcementTransportArrivalState {
   deliverPayloadDoorDelayFrames: number;
   deliverPayloadDropDelayFrames: number;
   deliverPayloadNextDropFrame: number;
+  deliverPayloadDropOffsetX: number;
+  deliverPayloadDropOffsetZ: number;
+  deliverPayloadDropVarianceX: number;
+  deliverPayloadDropVarianceZ: number;
   transportsExit: boolean;
   evacuationIssued: boolean;
   exitMoveIssued: boolean;
@@ -20438,6 +20442,10 @@ export class GameLogicSubsystem implements Subsystem {
             deliverPayloadDoorDelayFrames: transportDeliverPayloadProfile?.doorDelayFrames ?? 0,
             deliverPayloadDropDelayFrames: transportDeliverPayloadProfile?.dropDelayFrames ?? 0,
             deliverPayloadNextDropFrame: -1,
+            deliverPayloadDropOffsetX: transportDeliverPayloadProfile?.dropOffsetX ?? 0,
+            deliverPayloadDropOffsetZ: transportDeliverPayloadProfile?.dropOffsetZ ?? 0,
+            deliverPayloadDropVarianceX: transportDeliverPayloadProfile?.dropVarianceX ?? 0,
+            deliverPayloadDropVarianceZ: transportDeliverPayloadProfile?.dropVarianceZ ?? 0,
             // Source parity: ScriptActions::doCreateReinforcements always routes
             // DeliverPayloadAIUpdate transports through deliverPayloadViaModuleData(),
             // which exits/deletes regardless of TeamTemplate::m_transportsExit.
@@ -20633,6 +20641,10 @@ export class GameLogicSubsystem implements Subsystem {
     deliveryDistance: number;
     doorDelayFrames: number;
     dropDelayFrames: number;
+    dropOffsetX: number;
+    dropOffsetZ: number;
+    dropVarianceX: number;
+    dropVarianceZ: number;
   } | null {
     if (!objectDef) {
       return null;
@@ -20649,14 +20661,51 @@ export class GameLogicSubsystem implements Subsystem {
       const deliveryDistance = Math.max(0, readNumericField(block.fields, ['DeliveryDistance']) ?? 0);
       const doorDelayMs = Math.max(0, readNumericField(block.fields, ['DoorDelay']) ?? 0);
       const dropDelayMs = Math.max(0, readNumericField(block.fields, ['DropDelay']) ?? 0);
+      const dropOffset = readCoord3DField(block.fields, ['DropOffset']) ?? { x: 0, y: 0, z: 0 };
+      const dropVariance = readCoord3DField(block.fields, ['DropVariance']) ?? { x: 0, y: 0, z: 0 };
       return {
         putInContainerTemplateName: putInContainerTemplateName || null,
         deliveryDistance,
         doorDelayFrames: this.msToLogicFrames(doorDelayMs),
         dropDelayFrames: this.msToLogicFrames(dropDelayMs),
+        dropOffsetX: dropOffset.x,
+        dropOffsetZ: dropOffset.y,
+        dropVarianceX: Math.max(0, dropVariance.x),
+        dropVarianceZ: Math.max(0, dropVariance.y),
       };
     }
     return null;
+  }
+
+  private dropScriptReinforcementDeliverPayloadPassenger(
+    passengerId: number,
+    transport: MapEntity,
+    pending: ScriptReinforcementTransportArrivalState,
+  ): void {
+    const passenger = this.spawnedEntities.get(passengerId);
+    if (!passenger || passenger.destroyed) {
+      return;
+    }
+
+    this.cancelEntityCommandPathActions(passenger.id);
+    this.releaseEntityFromContainer(passenger);
+
+    let dropX = transport.x + pending.deliverPayloadDropOffsetX;
+    let dropZ = transport.z + pending.deliverPayloadDropOffsetZ;
+    if (pending.deliverPayloadDropVarianceX > 0) {
+      dropX += ((this.gameRandom.nextFloat() * 2) - 1) * pending.deliverPayloadDropVarianceX;
+    }
+    if (pending.deliverPayloadDropVarianceZ > 0) {
+      dropZ += ((this.gameRandom.nextFloat() * 2) - 1) * pending.deliverPayloadDropVarianceZ;
+    }
+    passenger.x = dropX;
+    passenger.z = dropZ;
+    passenger.y = this.resolveGroundHeight(dropX, dropZ) + passenger.baseHeight;
+    this.updatePathfindPosCell(passenger);
+
+    if (passenger.canMove) {
+      this.issueMoveTo(passenger.id, pending.targetX, pending.targetZ, NO_ATTACK_DISTANCE, true);
+    }
   }
 
   private updatePendingScriptReinforcementTransportArrivals(): void {
@@ -20740,7 +20789,7 @@ export class GameLogicSubsystem implements Subsystem {
             continue;
           }
           const passengerId = containedEntityIds[0]!;
-          this.handleExitContainerCommand(passengerId);
+          this.dropScriptReinforcementDeliverPayloadPassenger(passengerId, transport, pending);
           pending.deliverPayloadNextDropFrame = this.frameCounter + Math.max(1, pending.deliverPayloadDropDelayFrames);
           continue;
         }

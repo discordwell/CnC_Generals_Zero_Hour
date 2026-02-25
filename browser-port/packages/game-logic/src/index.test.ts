@@ -44969,6 +44969,141 @@ describe('Script condition groundwork', () => {
     expect(allDroppedFrame - firstChangeFrame).toBeGreaterThanOrEqual(55);
   });
 
+  it('applies DeliverPayloadAIUpdate DropOffset/DropVariance to reinforcement passenger release positions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
+          makeBlock('Behavior', 'DeliverPayloadAIUpdate ModuleTag_DeliverPayload', {
+            DeliveryDistance: 80,
+            DoorDelay: 0,
+            DropDelay: 0,
+            DropOffset: '10 6 0',
+            DropVariance: '0 0 0',
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 350, InitialHealth: 350 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestVehicleLoco', 12),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'DropOrigin',
+          position: { x: 4, y: 12, z: 0 },
+        },
+        {
+          id: 2,
+          name: 'DropDest',
+          position: { x: 60, y: 12, z: 0 },
+        },
+      ],
+      links: [],
+    };
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'AlphaProto',
+          teamOwner: 'Player_1',
+          teamIsSingleton: false,
+          teamMaxInstances: 2,
+          teamUnitType1: 'AmericaInfantry',
+          teamUnitMaxCount1: 1,
+          teamTransport: 'ReinforceCarrier',
+          teamStartsFull: true,
+          teamTransportsExit: false,
+          teamReinforcementOrigin: 'DropOrigin',
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, {
+        memberEntityIds: Set<number>;
+      }>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        transportContainerId: number | null;
+        x: number;
+        z: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 241, // CREATE_REINFORCEMENT_TEAM
+      params: ['AlphaProto', 'DropDest'],
+    })).toBe(true);
+
+    const createdTeam = privateApi.scriptTeamsByName.get('ALPHAPROTO#1');
+    expect(createdTeam).toBeDefined();
+
+    const memberIds = Array.from(createdTeam?.memberEntityIds ?? []);
+    const carrierIds = memberIds.filter(
+      (entityId) => privateApi.spawnedEntities.get(entityId)?.templateName === 'ReinforceCarrier',
+    );
+    const infantryIds = memberIds.filter(
+      (entityId) => privateApi.spawnedEntities.get(entityId)?.templateName === 'AmericaInfantry',
+    );
+    expect(carrierIds).toHaveLength(1);
+    expect(infantryIds).toHaveLength(1);
+
+    const carrierId = carrierIds[0]!;
+    const infantryId = infantryIds[0]!;
+
+    let releasedDx = Number.NaN;
+    let releasedDz = Number.NaN;
+    for (let i = 0; i < 300; i += 1) {
+      logic.update(1 / 30);
+      const carrier = privateApi.spawnedEntities.get(carrierId);
+      const infantry = privateApi.spawnedEntities.get(infantryId);
+      if (!carrier || !infantry) {
+        break;
+      }
+      if (infantry.transportContainerId === null) {
+        releasedDx = infantry.x - carrier.x;
+        releasedDz = infantry.z - carrier.z;
+        break;
+      }
+    }
+
+    expect(Number.isFinite(releasedDx)).toBe(true);
+    expect(Number.isFinite(releasedDz)).toBe(true);
+    expect(Math.abs(releasedDx - 10)).toBeLessThan(0.2);
+    expect(Math.abs(releasedDz - 6)).toBeLessThan(0.2);
+  });
+
   it('materializes non-singleton build/recruit team instances and enforces max instances while delayed', () => {
     const bundle = makeBundle({
       objects: [
