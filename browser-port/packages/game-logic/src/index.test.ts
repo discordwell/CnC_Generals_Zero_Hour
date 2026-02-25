@@ -27438,6 +27438,51 @@ describe('TensileFormationUpdate', () => {
     expect(entity.tensileFormationProfile?.crackSound).toBe('BuildingCollapseCrack');
   });
 
+  it('plays CrackSound once when collapse is first enabled by damage', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CollapseChunk', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'TensileFormationUpdate ModuleTag_Tensile', {
+            Enabled: false,
+            CrackSound: 'BuildingCollapseCrack',
+          }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('CollapseChunk', 20, 20)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, MapEntity>;
+      applyWeaponDamageAmount(sourceEntityId: number | null, target: MapEntity, amount: number, damageType: string): void;
+    };
+    const entity = privateApi.spawnedEntities.get(1)!;
+
+    privateApi.applyWeaponDamageAmount(null, entity, 60, 'CRUSH');
+    logic.update(1 / 30);
+
+    expect(logic.drainScriptAudioPlaybackRequests()).toEqual([{
+      audioName: 'BuildingCollapseCrack',
+      playbackType: 'SOUND_EFFECT',
+      allowOverlap: true,
+      sourceEntityId: 1,
+      x: entity.x,
+      y: entity.y,
+      z: entity.z,
+      frame: 1,
+    }]);
+
+    logic.update(1 / 30);
+    expect(logic.drainScriptAudioPlaybackRequests()).toEqual([]);
+  });
+
   it('enables on damaged state, sets collapse flags, and propagates BODY_DAMAGED', () => {
     const bundle = makeBundle({
       objects: [

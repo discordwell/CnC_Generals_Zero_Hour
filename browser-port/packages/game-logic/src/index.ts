@@ -51134,7 +51134,9 @@ export class GameLogicSubsystem implements Subsystem {
         if (bodyState >= 1) {
           state.enabled = true;
           this.releaseTensileFootprint(entity, state);
-          // TODO(C&C source parity): CrackSound audio event.
+          if (profile.crackSound.trim().length > 0) {
+            this.requestScriptSoundPlayFromNamed(profile.crackSound, entity.id);
+          }
         } else {
           if (this.frameCounter < state.nextWakeFrame) {
             continue;
