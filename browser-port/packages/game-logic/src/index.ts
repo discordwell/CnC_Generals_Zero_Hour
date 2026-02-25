@@ -13307,6 +13307,9 @@ export class GameLogicSubsystem implements Subsystem {
           if (!needsObjectTarget) {
             return false;
           }
+          if (!isSpecialPowerObjectRelationshipAllowed(commandOption, this.getTeamRelationship(sourceEntity, target.targetEntity))) {
+            return false;
+          }
           targetObjectId = target.targetEntity.id;
           if (attacksObjectPosition) {
             targetPosition = this.getEntityWorldPosition(targetObjectId);

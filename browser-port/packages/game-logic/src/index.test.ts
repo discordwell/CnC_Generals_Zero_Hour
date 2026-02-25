@@ -38091,6 +38091,71 @@ describe('Script condition groundwork', () => {
     }
   });
 
+  it('requires FIRE_WEAPON object-target relationship masks to pass source validity checks', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptShooter', 'America', ['INFANTRY', 'CAN_ATTACK'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
+        ], {
+          CommandSet: 'ScriptFireRelationshipCommandSet',
+        }),
+        makeObjectDef('ScriptAllyTarget', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ScriptEnemyTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          AttackRange: 120,
+          PrimaryDamage: 20,
+          DamageType: 'SMALL_ARMS',
+          DelayBetweenShots: 100,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_FireNeedEnemyObject', {
+          Command: 'FIRE_WEAPON',
+          WeaponSlot: 'PRIMARY',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptFireRelationshipCommandSet', {
+          1: 'Command_FireNeedEnemyObject',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptShooter', 10, 10), // id 1
+        makeMapObject('ScriptAllyTarget', 30, 10), // id 2
+        makeMapObject('ScriptEnemyTarget', 40, 10), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_FireNeedEnemyObject'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_FireNeedEnemyObject', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403,
+      params: [1, 'Command_FireNeedEnemyObject', 3],
+    })).toBe(true);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
