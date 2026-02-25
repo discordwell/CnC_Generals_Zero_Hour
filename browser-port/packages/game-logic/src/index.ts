@@ -20300,7 +20300,8 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doCreateReinforcements.
    * Materializes TeamTemplate reinforcement members (unit entries + optional transport),
    * including teamStartsFull loading and arrival evacuation behavior.
-   * TODO(source-parity): DeliverPayload/PutInContainer packaging is not wired yet.
+   * Source parity subset: PutInContainer packaging from DeliverPayloadAIUpdate is wired.
+   * TODO(source-parity): DeliverPayloadAIUpdate flight/drop behavior is not wired yet.
    * TODO(source-parity): aiMoveToAndEvacuateAndExit off-map departure pathing is not wired yet.
    */
   private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
@@ -20504,6 +20505,8 @@ export class GameLogicSubsystem implements Subsystem {
     originX: number,
     originZ: number,
   ): void {
+    const transportObjectDef = this.resolveObjectDefByTemplateName(primaryTransport.templateName);
+    const putInContainerTemplateName = this.resolveScriptReinforcementPutInContainerTemplateName(transportObjectDef);
     let activeTransport = primaryTransport;
     let transportCount = 1;
 
@@ -20514,7 +20517,32 @@ export class GameLogicSubsystem implements Subsystem {
       if (member.templateName.trim().toUpperCase() === transportTemplateUpper) {
         continue;
       }
-      if (!this.isScriptReinforcementTransportValidForUnit(activeTransport, member)) {
+      let memberToLoad = member;
+      if (putInContainerTemplateName) {
+        const putInContainer = this.spawnEntityFromTemplate(
+          putInContainerTemplateName,
+          member.x,
+          member.z,
+          member.rotationY,
+          side,
+        );
+        if (putInContainer) {
+          this.positionEntityAtWorldXZ(putInContainer, member.x, member.z);
+          const containerCapacity = this.resolveScriptContainerCapacity(putInContainer);
+          const containerOccupants = this.collectContainedEntityIds(putInContainer.id).length;
+          if (
+            this.isScriptReinforcementTransportValidForUnit(putInContainer, member)
+            && (containerCapacity <= 0 || containerOccupants < containerCapacity)
+          ) {
+            team.memberEntityIds.add(putInContainer.id);
+            this.enterTransport(member, putInContainer);
+            memberToLoad = putInContainer;
+          } else {
+            this.markEntityDestroyed(putInContainer.id, -1);
+          }
+        }
+      }
+      if (!this.isScriptReinforcementTransportValidForUnit(activeTransport, memberToLoad)) {
         continue;
       }
 
@@ -20536,7 +20564,7 @@ export class GameLogicSubsystem implements Subsystem {
         team.memberEntityIds.add(spawnedTransport.id);
         activeTransport = spawnedTransport;
         transportCount += 1;
-        if (!this.isScriptReinforcementTransportValidForUnit(activeTransport, member)) {
+        if (!this.isScriptReinforcementTransportValidForUnit(activeTransport, memberToLoad)) {
           continue;
         }
         activeCapacity = this.resolveScriptContainerCapacity(activeTransport);
@@ -20546,7 +20574,7 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
 
-      this.enterTransport(member, activeTransport);
+      this.enterTransport(memberToLoad, activeTransport);
     }
   }
 
@@ -20575,6 +20603,26 @@ export class GameLogicSubsystem implements Subsystem {
       default:
         return false;
     }
+  }
+
+  private resolveScriptReinforcementPutInContainerTemplateName(objectDef: ObjectDef | null): string | null {
+    if (!objectDef) {
+      return null;
+    }
+    for (const block of objectDef.blocks) {
+      if (block.type.toUpperCase() !== 'BEHAVIOR') {
+        continue;
+      }
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'DELIVERPAYLOADAIUPDATE') {
+        continue;
+      }
+      const putInContainerTemplateName = readStringField(block.fields, ['PutInContainer'])?.trim() ?? '';
+      if (putInContainerTemplateName) {
+        return putInContainerTemplateName;
+      }
+    }
+    return null;
   }
 
   private updatePendingScriptReinforcementTransportArrivals(): void {
