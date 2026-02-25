@@ -34565,6 +34565,46 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('allows script enter actions to route cross-side units into tunnel networks', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GLATunnelNetwork', 'GLA', ['STRUCTURE'], [
+          makeBlock('Behavior', 'TunnelContain ModuleTag_Tunnel', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene(), { maxTunnelCapacity: 10 });
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GLATunnelNetwork', 20, 20), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        tunnelContainerId: number | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+
+    expect(privateApi.spawnedEntities.get(2)?.tunnelContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('DISABLED_HELD')).toBe(true);
+  });
+
   it('treats ParachuteContain riders as special zero-slot containers in TEAM_LOAD_TRANSPORTS', () => {
     const bundle = makeBundle({
       objects: [

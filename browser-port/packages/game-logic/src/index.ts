@@ -37632,7 +37632,6 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: TunnelContain/CaveContain — route to shared-network entry.
     if (containProfile.moduleType === 'TUNNEL' || containProfile.moduleType === 'CAVE') {
-      if (this.normalizeSide(passenger.side) !== this.normalizeSide(transport.side)) return;
       const kindOf = this.resolveEntityKindOfSet(passenger);
       if (kindOf.has('AIRCRAFT')) return;
       const tracker = this.resolveTunnelTrackerForContainer(transport);
