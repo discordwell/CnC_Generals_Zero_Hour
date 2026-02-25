@@ -13160,6 +13160,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!commandTypeName) {
       return false;
     }
+    if (this.isEntityDisabledForScriptCommandButton(sourceEntity)) {
+      return false;
+    }
 
     switch (commandTypeName) {
       case 'SPECIAL_POWER':
@@ -13539,6 +13542,9 @@ export class GameLogicSubsystem implements Subsystem {
   ): boolean {
     const sourceEntity = this.spawnedEntities.get(entityId);
     if (!sourceEntity || sourceEntity.destroyed) {
+      return false;
+    }
+    if (this.isEntityDisabledForScriptCommandButton(sourceEntity)) {
       return false;
     }
 
@@ -36110,6 +36116,17 @@ export class GameLogicSubsystem implements Subsystem {
       || this.entityHasObjectStatus(entity, 'SCRIPT_DISABLED')
       || this.entityHasObjectStatus(entity, 'SCRIPT_UNPOWERED')
     );
+  }
+
+  /**
+   * Source parity: Object::doCommandButton{,AtObject,AtPosition,UsingWaypoints} early-outs
+   * when source object is disabled.
+   */
+  private isEntityDisabledForScriptCommandButton(entity: MapEntity): boolean {
+    return this.entityHasObjectStatus(entity, 'DISABLED')
+      || this.entityHasObjectStatus(entity, 'SCRIPT_DISABLED')
+      || this.entityHasObjectStatus(entity, 'SCRIPT_UNPOWERED')
+      || this.isEntityDisabledForMovement(entity);
   }
 
   private isLineBuildTemplate(objectDef: ObjectDef): boolean {

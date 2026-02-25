@@ -38257,6 +38257,120 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('blocks script command-button execution when the source object is disabled', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_NoTarget', {
+            SpecialPowerTemplate: 'DisabledPowerNoTarget',
+          }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'DisabledPowerOnNamed',
+          }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_AtWaypoint', {
+            SpecialPowerTemplate: 'DisabledPowerAtWaypoint',
+          }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_Path', {
+            SpecialPowerTemplate: 'DisabledPowerPath',
+          }),
+        ], {
+          CommandSet: 'DisabledCasterCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_DisabledNoTarget', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'DisabledPowerNoTarget',
+        }),
+        makeCommandButtonDef('Command_DisabledOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'DisabledPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+        makeCommandButtonDef('Command_DisabledAtWaypoint', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'DisabledPowerAtWaypoint',
+          Options: 'NEED_TARGET_POS',
+        }),
+        makeCommandButtonDef('Command_DisabledPath', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'DisabledPowerPath',
+          Options: 'CAN_USE_WAYPOINTS',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('DisabledCasterCommandSet', {
+          1: 'Command_DisabledNoTarget',
+          2: 'Command_DisabledOnNamed',
+          3: 'Command_DisabledAtWaypoint',
+          4: 'Command_DisabledPath',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('DisabledPowerNoTarget', { ReloadTime: 0 }),
+        makeSpecialPowerDef('DisabledPowerOnNamed', { ReloadTime: 0 }),
+        makeSpecialPowerDef('DisabledPowerAtWaypoint', { ReloadTime: 0 }),
+        makeSpecialPowerDef('DisabledPowerPath', { ReloadTime: 0 }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptCaster', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 20, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 1, name: 'DisabledWaypoint', position: { x: 48, y: 48, z: 0 } },
+        { id: 2, name: 'PathStart', position: { x: 16, y: 10, z: 0 }, pathLabel1: 'DisabledPathA', biDirectional: false },
+        { id: 3, name: 'PathEnd', position: { x: 44, y: 10, z: 0 }, pathLabel1: 'DisabledPathA', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 2, waypoint2: 3 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.add('DISABLED_EMP');
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_DisabledNoTarget'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_DisabledOnNamed', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_DisabledAtWaypoint', 'DisabledWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 542, // NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH
+      params: [1, 'Command_DisabledPath', 'DisabledPathA'],
+    })).toBe(false);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    privateApi.spawnedEntities.get(1)!.objectStatusFlags.delete('DISABLED_EMP');
+    expect(logic.executeScriptAction({
+      actionType: 445,
+      params: [1, 'Command_DisabledNoTarget'],
+    })).toBe(true);
+  });
+
   it('executes script command-button production and upgrade actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
