@@ -19318,6 +19318,83 @@ describe('HeightDieUpdate', () => {
     // Now the height check should fire and kill the entity.
     expect(aircraft.destroyed || aircraft.slowDeathState !== null || aircraft.health <= 0).toBe(true);
   });
+
+  it('uses bridge layer height when TargetHeightIncludesStructures is enabled', () => {
+    const markerDef = makeObjectDef('BridgeMarker', 'Neutral', ['IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const objectDef = makeObjectDef('BridgeFlightTarget', 'America', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Behavior', 'HeightDieUpdate ModuleTag_HeightDie', {
+        TargetHeight: 5,
+        TargetHeightIncludesStructures: 'Yes',
+      }),
+    ]);
+
+    const bridgeStart = makeMapObject('BridgeMarker', 40, 40);
+    bridgeStart.flags = 0x010;
+    bridgeStart.position.z = 20;
+    const bridgeEnd = makeMapObject('BridgeMarker', 80, 40);
+    bridgeEnd.flags = 0x020;
+    bridgeEnd.position.z = 20;
+
+    const bundle = makeBundle({ objects: [markerDef, objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([bridgeStart, bridgeEnd, makeMapObject('BridgeFlightTarget', 60, 40)], 32, 32),
+      makeRegistry(bundle),
+      makeHeightmap(32, 32),
+    );
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const aircraft = priv.spawnedEntities.get(3)!;
+    // Ground threshold would be 5, bridge-layer threshold should be 25.
+    aircraft.y = 23;
+
+    logic.update(0);
+
+    expect(aircraft.destroyed || aircraft.slowDeathState !== null || aircraft.health <= 0).toBe(true);
+  });
+
+  it('ignores bridge layer when entity is below bridge surface', () => {
+    const markerDef = makeObjectDef('BridgeMarker', 'Neutral', ['IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const objectDef = makeObjectDef('BridgeFlightTargetLow', 'America', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Behavior', 'HeightDieUpdate ModuleTag_HeightDie', {
+        TargetHeight: 5,
+        TargetHeightIncludesStructures: 'Yes',
+      }),
+    ]);
+
+    const bridgeStart = makeMapObject('BridgeMarker', 40, 40);
+    bridgeStart.flags = 0x010;
+    bridgeStart.position.z = 20;
+    const bridgeEnd = makeMapObject('BridgeMarker', 80, 40);
+    bridgeEnd.flags = 0x020;
+    bridgeEnd.position.z = 20;
+
+    const bundle = makeBundle({ objects: [markerDef, objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([bridgeStart, bridgeEnd, makeMapObject('BridgeFlightTargetLow', 60, 40)], 32, 32),
+      makeRegistry(bundle),
+      makeHeightmap(32, 32),
+    );
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const aircraft = priv.spawnedEntities.get(3)!;
+    // Below the bridge deck (20), so layer should remain ground and threshold stay at 5.
+    aircraft.y = 19;
+
+    logic.update(0);
+
+    expect(aircraft.destroyed).toBe(false);
+    expect(aircraft.health).toBe(200);
+  });
 });
 
 // ── HiveStructureBody Tests ─────────────────────────────────────────────────

@@ -794,6 +794,18 @@ interface BridgeSegmentState {
   passable: boolean;
   cellIndices: number[];
   transitionIndices: number[];
+  /** Source parity bridge: bridge endpoint world-space X (original map X). */
+  startWorldX?: number;
+  /** Source parity bridge: bridge endpoint world-space Z (original map Y -> sim Z). */
+  startWorldZ?: number;
+  /** Source parity bridge: bridge endpoint world-space X (original map X). */
+  endWorldX?: number;
+  /** Source parity bridge: bridge endpoint world-space Z (original map Y -> sim Z). */
+  endWorldZ?: number;
+  /** Source parity bridge: bridge surface height at start endpoint. */
+  startSurfaceY?: number;
+  /** Source parity bridge: bridge surface height at end endpoint. */
+  endSurfaceY?: number;
 }
 
 type ObstacleGeometryShape = 'box' | 'circle';
@@ -42325,6 +42337,72 @@ export class GameLogicSubsystem implements Subsystem {
     return this.mapHeightmap.getInterpolatedHeight(worldX, worldZ);
   }
 
+  /**
+   * Source parity subset: TerrainLogic::getHighestLayerForDestination +
+   * TerrainLogic::getLayerHeight for bridge layers used by HeightDieUpdate.
+   * Returns null when destination resolves to ground.
+   */
+  private resolveHighestBridgeLayerHeightForDestination(worldX: number, worldZ: number, worldY: number): number | null {
+    const grid = this.navigationGrid;
+    if (!grid) {
+      return null;
+    }
+    const [cellX, cellZ] = this.worldToGrid(worldX, worldZ);
+    if (cellX === null || cellZ === null) {
+      return null;
+    }
+    const index = cellZ * grid.width + cellX;
+    if (index < 0 || index >= grid.bridgeSegmentByCell.length) {
+      return null;
+    }
+    const segmentId = grid.bridgeSegmentByCell[index];
+    if (segmentId === undefined || segmentId < 0) {
+      return null;
+    }
+    const segment = this.bridgeSegments.get(segmentId);
+    if (!segment) {
+      return null;
+    }
+    const layerHeight = this.resolveBridgeLayerHeightAt(segment, worldX, worldZ);
+    if (!Number.isFinite(layerHeight)) {
+      return null;
+    }
+    // Source parity: TerrainLogic::getHighestLayerForDestination requires destination to
+    // be at-or-above the tested layer; below-bridge entities stay on ground layer.
+    if (worldY < layerHeight) {
+      return null;
+    }
+    return layerHeight;
+  }
+
+  /**
+   * Source parity bridge: approximate TerrainLogic::getLayerHeight for a bridge segment.
+   * Uses endpoint heights from map bridge markers and linear interpolation along the segment.
+   */
+  private resolveBridgeLayerHeightAt(segment: BridgeSegmentState, worldX: number, worldZ: number): number {
+    const startX = segment.startWorldX;
+    const startZ = segment.startWorldZ;
+    const endX = segment.endWorldX;
+    const endZ = segment.endWorldZ;
+    const startY = segment.startSurfaceY;
+    const endY = segment.endSurfaceY;
+    if (
+      startX === undefined || startZ === undefined || endX === undefined || endZ === undefined
+      || startY === undefined || endY === undefined
+    ) {
+      return this.resolveGroundHeight(worldX, worldZ);
+    }
+
+    const dx = endX - startX;
+    const dz = endZ - startZ;
+    const denom = dx * dx + dz * dz;
+    if (denom <= 1e-6) {
+      return Math.max(startY, endY);
+    }
+    const t = clamp((((worldX - startX) * dx) + ((worldZ - startZ) * dz)) / denom, 0, 1);
+    return startY + ((endY - startY) * t);
+  }
+
   private resolveEntityMajorRadius(entity: MapEntity): number {
     if (entity.geometryMajorRadius > 0) {
       return entity.geometryMajorRadius;
@@ -44424,8 +44502,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private applyBridgeOverlay(mapData: MapDataJSON, grid: NavigationGrid): void {
-    const starts: Array<{ x: number; z: number; properties: Record<string, string>; entityId: number | null }> = [];
-    const ends: Array<{ x: number; z: number; properties: Record<string, string>; entityId: number | null }> = [];
+    const starts: Array<{
+      x: number;
+      z: number;
+      worldX: number;
+      worldZ: number;
+      worldY: number;
+      properties: Record<string, string>;
+      entityId: number | null;
+    }> = [];
+    const ends: Array<{
+      x: number;
+      z: number;
+      worldX: number;
+      worldZ: number;
+      worldY: number;
+      properties: Record<string, string>;
+      entityId: number | null;
+    }> = [];
 
     for (const mapObject of mapData.objects) {
       const flags = mapObject.flags;
@@ -44438,11 +44532,17 @@ export class GameLogicSubsystem implements Subsystem {
       if (!this.isCellInBounds(cellX, cellZ, grid)) {
         continue;
       }
+      const worldX = mapObject.position.x;
+      const worldZ = mapObject.position.y;
+      const worldY = this.resolveGroundHeight(worldX, worldZ) + mapObject.position.z;
 
       if ((flags & OBJECT_FLAG_BRIDGE_POINT1) !== 0) {
         starts.push({
           x: cellX,
           z: cellZ,
+          worldX,
+          worldZ,
+          worldY,
           properties: mapObject.properties,
           entityId: this.findBridgeControlEntityId(cellX, cellZ, OBJECT_FLAG_BRIDGE_POINT1),
         });
@@ -44451,6 +44551,9 @@ export class GameLogicSubsystem implements Subsystem {
         ends.push({
           x: cellX,
           z: cellZ,
+          worldX,
+          worldZ,
+          worldY,
           properties: mapObject.properties,
           entityId: this.findBridgeControlEntityId(cellX, cellZ, OBJECT_FLAG_BRIDGE_POINT2),
         });
@@ -44533,8 +44636,24 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private markBridgeSegment(
-    start: { x: number; z: number; properties: Record<string, string>; entityId: number | null },
-    end: { x: number; z: number; properties: Record<string, string>; entityId: number | null },
+    start: {
+      x: number;
+      z: number;
+      worldX: number;
+      worldZ: number;
+      worldY: number;
+      properties: Record<string, string>;
+      entityId: number | null;
+    },
+    end: {
+      x: number;
+      z: number;
+      worldX: number;
+      worldZ: number;
+      worldY: number;
+      properties: Record<string, string>;
+      entityId: number | null;
+    },
     segmentId: number,
     passable: boolean,
     grid: NavigationGrid,
@@ -44572,6 +44691,12 @@ export class GameLogicSubsystem implements Subsystem {
       passable,
       cellIndices: Array.from(cellIndices),
       transitionIndices: Array.from(transitionIndices),
+      startWorldX: start.worldX,
+      startWorldZ: start.worldZ,
+      endWorldX: end.worldX,
+      endWorldZ: end.worldZ,
+      startSurfaceY: start.worldY,
+      endSurfaceY: end.worldY,
     });
     if (start.entityId !== null) {
       this.bridgeSegmentByControlEntity.set(start.entityId, segmentId);
@@ -52016,14 +52141,25 @@ export class GameLogicSubsystem implements Subsystem {
         directionOK = false;
       }
 
-      // Source parity: calculate height above terrain.
-      const terrainY = this.resolveGroundHeight(entity.x, entity.z);
+      // Source parity: calculate height above terrain/layer.
+      let terrainY = this.resolveGroundHeight(entity.x, entity.z);
       let targetHeight = terrainY + prof.targetHeight;
 
       // Source parity: HeightDieUpdate.cpp:160-221 — TargetHeightIncludesStructures
       // raises targetHeight based on bridge layers and nearby STRUCTURE entities.
       if (prof.targetHeightIncludesStructures) {
-        // TODO(C&C source parity): bridge/pathfind layer height checks (lines 160-169).
+        // Source parity: HeightDieUpdate.cpp lines 160-169
+        // TerrainLogic::getHighestLayerForDestination + getLayerHeight.
+        const layerHeight = this.resolveHighestBridgeLayerHeightForDestination(
+          entity.x,
+          entity.z,
+          entity.y,
+        );
+        if (layerHeight !== null && layerHeight > terrainY) {
+          terrainY = layerHeight;
+          targetHeight = terrainY + prof.targetHeight;
+        }
+
         // Scan nearby structures and raise target height above the tallest one.
         // C++ uses getBoundingCircleRadius(): SPHERE/CYLINDER=majorRadius, BOX=sqrt(major²+minor²).
         const geom = entity.obstacleGeometry;
