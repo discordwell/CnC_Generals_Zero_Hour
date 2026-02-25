@@ -1727,6 +1727,8 @@ interface MapEntity {
   attackTargetPosition: VectorXZ | null;
   attackOriginalVictimPosition: VectorXZ | null;
   attackCommandSource: AttackCommandSource;
+  /** Source parity bridge: per-order neutral-target allowance (used by CMD_FROM_DOZER mine clearing). */
+  allowNeutralAttackTarget: boolean;
   /** Source parity: AI attack state machine sub-state. */
   attackSubState: AttackSubState;
   nextAttackFrame: number;
@@ -18093,6 +18095,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.objectStatusFlags.add('DISABLED_UNMANNED');
     entity.attackTargetEntityId = null;
     entity.attackTargetPosition = null;
+    entity.allowNeutralAttackTarget = false;
     if (entity.moving) {
       entity.moving = false;
       entity.moveTarget = null;
@@ -24728,6 +24731,7 @@ export class GameLogicSubsystem implements Subsystem {
       attackTargetPosition: null,
       attackOriginalVictimPosition: null,
       attackCommandSource: 'AI',
+      allowNeutralAttackTarget: false,
       attackSubState: 'IDLE',
       nextAttackFrame: 0,
       attackAmmoInClip: initialClipAmmo,
@@ -31853,6 +31857,7 @@ export class GameLogicSubsystem implements Subsystem {
     attacker: MapEntity,
     target: MapEntity,
     commandSource: AttackCommandSource,
+    allowNeutralTargets = false,
   ): boolean {
     if (!target.canTakeDamage || target.destroyed) {
       return false;
@@ -31867,7 +31872,16 @@ export class GameLogicSubsystem implements Subsystem {
     if (targetKindOf.has('UNATTACKABLE')) {
       return false;
     }
-    if (this.getTeamRelationship(attacker, target) !== RELATIONSHIP_ENEMIES) {
+    const relationship = this.getTeamRelationship(attacker, target);
+    const allowNeutralMineTarget = allowNeutralTargets
+      || (
+        attacker.allowNeutralAttackTarget
+        && (targetKindOf.has('MINE') || targetKindOf.has('DEMOTRAP'))
+      );
+    if (
+      relationship !== RELATIONSHIP_ENEMIES
+      && (!allowNeutralMineTarget || relationship !== RELATIONSHIP_NEUTRAL)
+    ) {
       return false;
     }
     if (this.isEntityOffMap(attacker) !== this.isEntityOffMap(target)) {
@@ -36911,7 +36925,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Source parity: DozerPrimaryIdleState::update issues aiAttackObject(..., CMD_FROM_DOZER)
       // when no repair target is available.
-      this.issueAttackEntity(entity.id, mineTarget.id, 'AI');
+      this.issueAttackEntity(entity.id, mineTarget.id, 'AI', true);
     }
   }
 
@@ -36946,8 +36960,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (candidate.id === dozer.id || candidate.destroyed) continue;
       const kindOf = this.resolveEntityKindOfSet(candidate);
       if (!kindOf.has('MINE') && !kindOf.has('DEMOTRAP')) continue;
-      if (this.getTeamRelationship(dozer, candidate) === RELATIONSHIP_ALLIES) continue;
-      if (!this.canAttackerTargetEntity(dozer, candidate, 'AI')) continue;
+      if (!this.canAttackerTargetEntity(dozer, candidate, 'AI', true)) continue;
 
       const dx = candidate.x - dozer.x;
       const dz = candidate.z - dozer.z;
@@ -44089,6 +44102,7 @@ export class GameLogicSubsystem implements Subsystem {
     entityId: number,
     targetEntityId: number,
     commandSource: AttackCommandSource,
+    allowNeutralTargets = false,
   ): void {
     const attacker = this.spawnedEntities.get(entityId);
     const target = this.spawnedEntities.get(targetEntityId);
@@ -44103,7 +44117,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     this.setEntityIgnoringStealthStatus(attacker, weapon.continueAttackRange > 0);
-    if (!this.canAttackerTargetEntity(attacker, target, commandSource)) {
+    if (!this.canAttackerTargetEntity(attacker, target, commandSource, allowNeutralTargets)) {
       this.setEntityIgnoringStealthStatus(attacker, false);
       return;
     }
@@ -44114,6 +44128,7 @@ export class GameLogicSubsystem implements Subsystem {
       z: target.z,
     };
     attacker.attackCommandSource = commandSource;
+    attacker.allowNeutralAttackTarget = allowNeutralTargets;
 
     const attackRange = weapon.attackRange;
     if (!attacker.canMove || attackRange <= 0) {
@@ -44171,6 +44186,7 @@ export class GameLogicSubsystem implements Subsystem {
       passenger.attackTargetEntityId = targetEntityId;
       passenger.attackOriginalVictimPosition = { x: target.x, z: target.z };
       passenger.attackCommandSource = commandSource;
+      passenger.allowNeutralAttackTarget = false;
     }
   }
 
@@ -44200,6 +44216,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.setEntityIgnoringStealthStatus(attacker, weapon.continueAttackRange > 0);
     attacker.attackCommandSource = 'PLAYER';
+    attacker.allowNeutralAttackTarget = false;
     attacker.attackTargetEntityId = null;
     attacker.attackOriginalVictimPosition = null;
     attacker.attackTargetPosition = null;
@@ -44321,6 +44338,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    entity.allowNeutralAttackTarget = false;
     // Source parity: AIAttackState::onExit() — clear all attack flags on target release.
     this.setEntityAttackStatus(entity, false);
     entity.preAttackFinishFrame = 0;
@@ -44340,6 +44358,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    entity.allowNeutralAttackTarget = false;
     entity.maxShotsRemaining = 0;
     this.setEntityAttackStatus(entity, false);
     entity.preAttackFinishFrame = 0;
@@ -49936,6 +49955,7 @@ export class GameLogicSubsystem implements Subsystem {
         // Source parity: slave goes idle / crashes (flying drones).
         entity.attackTargetEntityId = null;
         entity.attackTargetPosition = null;
+        entity.allowNeutralAttackTarget = false;
         entity.moveTarget = null;
         entity.moving = false;
         continue;
@@ -50000,6 +50020,7 @@ export class GameLogicSubsystem implements Subsystem {
       slave.moveTarget = { x: master.x, z: master.z };
       slave.attackTargetEntityId = null;
       slave.attackTargetPosition = null;
+      slave.allowNeutralAttackTarget = false;
     }
 
     // Source parity: heal master at repairRatePerSecond / LOGIC_FRAMES_PER_SECOND per frame.
@@ -50076,6 +50097,7 @@ export class GameLogicSubsystem implements Subsystem {
     slave.moveTarget = { x: goalX, z: goalZ };
     slave.attackTargetEntityId = null;
     slave.attackTargetPosition = null;
+    slave.allowNeutralAttackTarget = false;
   }
 
   /** Source parity: SlavedUpdate::doGuardLogic — stay near pinned position around master. */
@@ -50100,6 +50122,7 @@ export class GameLogicSubsystem implements Subsystem {
       slave.moveTarget = { x: newPinnedX, z: newPinnedZ };
       slave.attackTargetEntityId = null;
       slave.attackTargetPosition = null;
+      slave.allowNeutralAttackTarget = false;
       return;
     }
 
@@ -50114,6 +50137,7 @@ export class GameLogicSubsystem implements Subsystem {
       slave.moveTarget = { x: pinnedX, z: pinnedZ };
       slave.attackTargetEntityId = null;
       slave.attackTargetPosition = null;
+      slave.allowNeutralAttackTarget = false;
     }
   }
   // ── Source parity: CountermeasuresBehavior ──
@@ -51826,6 +51850,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    entity.allowNeutralAttackTarget = false;
     entity.attackSubState = 'IDLE';
     entity.moving = false;
     entity.moveTarget = null;
@@ -51974,6 +51999,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    entity.allowNeutralAttackTarget = false;
     entity.attackSubState = 'IDLE';
     entity.moving = false;
     entity.moveTarget = null;
@@ -52871,6 +52897,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    entity.allowNeutralAttackTarget = false;
     entity.attackSubState = 'IDLE';
     entity.lastAttackerEntityId = null;
     this.onObjectDestroyed(entityId);
@@ -53573,6 +53600,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.attackTargetPosition = null;
     entity.attackOriginalVictimPosition = null;
     entity.attackCommandSource = 'AI';
+    entity.allowNeutralAttackTarget = false;
     entity.attackSubState = 'IDLE';
     entity.leechRangeActive = false;
     entity.lastAttackerEntityId = null;
@@ -54013,6 +54041,7 @@ export class GameLogicSubsystem implements Subsystem {
         // Clear attack state (C++ calls aiIdle).
         victim.attackTargetEntityId = null;
         victim.attackTargetPosition = null;
+        victim.allowNeutralAttackTarget = false;
         if (victim.moving) {
           victim.moving = false;
           victim.moveTarget = null;
@@ -54651,6 +54680,7 @@ export class GameLogicSubsystem implements Subsystem {
         entity.attackOriginalVictimPosition = null;
         entity.attackTargetPosition = null;
         entity.attackCommandSource = 'AI';
+        entity.allowNeutralAttackTarget = false;
       }
     }
 
