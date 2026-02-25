@@ -19478,20 +19478,16 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamHunt -> AIGroup::groupHunt.
    */
   private executeScriptTeamHunt(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        this.executeScriptNamedHunt(entity.id);
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      this.executeScriptNamedHunt(entity.id);
     }
     return true;
   }

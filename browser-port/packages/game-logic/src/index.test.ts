@@ -41046,7 +41046,7 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     logic.update(1 / 30);
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).not.toBeNull();
-    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBeNull();
 
     teamHunter1!.attackTargetEntityId = null;
     teamHunter2!.attackTargetEntityId = null;
