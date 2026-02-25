@@ -4255,6 +4255,8 @@ interface ScriptReinforcementTransportArrivalState {
   deliverPayloadDropOffsetZ: number;
   deliverPayloadDropVarianceX: number;
   deliverPayloadDropVarianceZ: number;
+  exitTargetX: number;
+  exitTargetZ: number;
   transportsExit: boolean;
   evacuationIssued: boolean;
   exitMoveIssued: boolean;
@@ -20446,6 +20448,8 @@ export class GameLogicSubsystem implements Subsystem {
             deliverPayloadDropOffsetZ: transportDeliverPayloadProfile?.dropOffsetZ ?? 0,
             deliverPayloadDropVarianceX: transportDeliverPayloadProfile?.dropVarianceX ?? 0,
             deliverPayloadDropVarianceZ: transportDeliverPayloadProfile?.dropVarianceZ ?? 0,
+            exitTargetX: Number.NaN,
+            exitTargetZ: Number.NaN,
             // Source parity: ScriptActions::doCreateReinforcements always routes
             // DeliverPayloadAIUpdate transports through deliverPayloadViaModuleData(),
             // which exits/deletes regardless of TeamTemplate::m_transportsExit.
@@ -20708,6 +20712,39 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
+  private beginScriptReinforcementTransportExit(
+    transport: MapEntity,
+    pending: ScriptReinforcementTransportArrivalState,
+  ): void {
+    if (pending.deliverPayloadMode) {
+      const mapExtentDistance = this.mapHeightmap
+        ? Math.hypot(this.mapHeightmap.worldWidth, this.mapHeightmap.worldDepth) * 1.2
+        : 1024;
+      const headingAngle = transport.rotationY - Math.PI / 2;
+      const dirX = Math.cos(headingAngle);
+      const dirZ = Math.sin(headingAngle);
+      if (Math.abs(dirX) + Math.abs(dirZ) > 1e-6) {
+        pending.exitTargetX = transport.x + dirX * mapExtentDistance;
+        pending.exitTargetZ = transport.z + dirZ * mapExtentDistance;
+      } else {
+        pending.exitTargetX = transport.x + mapExtentDistance;
+        pending.exitTargetZ = transport.z;
+      }
+      this.issueMoveTo(
+        transport.id,
+        pending.exitTargetX,
+        pending.exitTargetZ,
+        NO_ATTACK_DISTANCE,
+        true,
+      );
+      pending.exitMoveIssued = true;
+      return;
+    }
+
+    this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
+    pending.exitMoveIssued = true;
+  }
+
   private updatePendingScriptReinforcementTransportArrivals(): void {
     for (const [entityId, pending] of this.pendingScriptReinforcementTransportArrivalByEntityId.entries()) {
       const transport = this.spawnedEntities.get(entityId);
@@ -20730,6 +20767,16 @@ export class GameLogicSubsystem implements Subsystem {
         if (transport.moving) {
           continue;
         }
+        if (pending.deliverPayloadMode) {
+          this.issueMoveTo(
+            transport.id,
+            pending.exitTargetX,
+            pending.exitTargetZ,
+            NO_ATTACK_DISTANCE,
+            true,
+          );
+          continue;
+        }
         const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
         if (distanceToOrigin > reachDistance) {
           this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
@@ -20744,16 +20791,17 @@ export class GameLogicSubsystem implements Subsystem {
         const remainingContained = this.collectContainedEntityIds(transport.id).length;
         if (remainingContained <= 0) {
           if (pending.transportsExit) {
+            if (pending.deliverPayloadMode) {
+              this.beginScriptReinforcementTransportExit(transport, pending);
+              continue;
+            }
             const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
             if (distanceToOrigin <= reachDistance) {
               this.markEntityDestroyed(transport.id, -1);
               this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
               continue;
             }
-            // Source parity: AIMoveAndEvacuateState::onExit sets goal to move origin,
-            // then AIMoveAndDeleteState returns there and self-destroys.
-            this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
-            pending.exitMoveIssued = true;
+            this.beginScriptReinforcementTransportExit(transport, pending);
             continue;
           }
           this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
@@ -20799,13 +20847,16 @@ export class GameLogicSubsystem implements Subsystem {
       if (pending.transportsExit) {
         pending.evacuationIssued = true;
         if (this.collectContainedEntityIds(transport.id).length <= 0) {
+          if (pending.deliverPayloadMode) {
+            this.beginScriptReinforcementTransportExit(transport, pending);
+            continue;
+          }
           const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
           if (distanceToOrigin <= reachDistance) {
             this.markEntityDestroyed(transport.id, -1);
             this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
           } else {
-            this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
-            pending.exitMoveIssued = true;
+            this.beginScriptReinforcementTransportExit(transport, pending);
           }
         }
         continue;
@@ -44663,6 +44714,20 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
+    if (allowNoPathMove && this.isWorldPositionOffMap(targetX, targetZ)) {
+      // Off-map exits must not run through A* clamping, or movers can get stuck
+      // issuing a one-node path that never leaves the map.
+      entity.moving = true;
+      entity.movePath = [{ x: targetX, z: targetZ }];
+      entity.pathIndex = 0;
+      entity.moveTarget = { x: targetX, z: targetZ };
+      entity.pathfindGoalCell = {
+        x: Math.floor(targetX / PATHFIND_CELL_SIZE),
+        z: Math.floor(targetZ / PATHFIND_CELL_SIZE),
+      };
+      return;
+    }
+
     this.updatePathfindPosCell(entity);
     const path = this.findPath(entity.x, entity.z, targetX, targetZ, entity, attackDistance);
     if (path.length === 0) {
@@ -44691,6 +44756,19 @@ export class GameLogicSubsystem implements Subsystem {
     entity.pathIndex = 0;
     entity.moveTarget = entity.movePath[0]!;
     this.updatePathfindGoalCellFromPath(entity);
+  }
+
+  private isWorldPositionOffMap(worldX: number, worldZ: number): boolean {
+    const heightmap = this.mapHeightmap;
+    if (!heightmap) {
+      return false;
+    }
+    return (
+      worldX < 0
+      || worldZ < 0
+      || worldX >= heightmap.worldWidth
+      || worldZ >= heightmap.worldDepth
+    );
   }
 
   private setEntityRallyPoint(entityId: number, targetX: number, targetZ: number): void {
