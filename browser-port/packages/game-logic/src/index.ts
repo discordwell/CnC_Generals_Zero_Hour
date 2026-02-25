@@ -13430,11 +13430,14 @@ export class GameLogicSubsystem implements Subsystem {
         this.applyCommand({ type: 'sell', entityId: sourceEntity.id });
         return true;
       case 'COMBATDROP': {
-        const targetObjectId = target.kind === 'OBJECT' ? target.targetEntity.id : null;
-        const targetPosition: readonly [number, number, number] | null = target.kind === 'POSITION'
-          ? [target.targetX, 0, target.targetZ]
-          : null;
-        if (targetObjectId === null && targetPosition === null) {
+        // Source parity: GeneralsMD Object::doCommandButtonAtObject handles COMBATDROP;
+        // no-target and position variants are not implemented.
+        if (target.kind !== 'OBJECT') {
+          return false;
+        }
+        const targetObjectId = target.targetEntity.id;
+        const targetPosition = this.getEntityWorldPosition(targetObjectId);
+        if (!targetPosition) {
           return false;
         }
         if (validateOnly) {

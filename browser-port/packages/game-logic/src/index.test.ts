@@ -37520,6 +37520,66 @@ describe('Script condition groundwork', () => {
     expect(logic.getSideCredits('America')).toBe(300);
   });
 
+  it('executes COMBATDROP command-button only for object-target script invocation', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptDropper', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], {
+          CommandSet: 'ScriptDropCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_CombatDrop', {
+          Command: 'COMBATDROP',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptDropCommandSet', {
+          1: 'Command_CombatDrop',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptDropper', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'DropWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_CombatDrop'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_CombatDrop', 'DropWaypoint'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_CombatDrop', 2],
+    })).toBe(true);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
