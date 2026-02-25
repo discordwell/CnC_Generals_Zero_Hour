@@ -17371,8 +17371,8 @@ export class GameLogicSubsystem implements Subsystem {
     centerInView: boolean,
     audioToPlay: string,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     const objectTypeUpper = objectTypeName.trim().toUpperCase();
@@ -17380,20 +17380,16 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
     let bestGuess: MapEntity | null = null;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        if (entity.templateName.trim().toUpperCase() !== objectTypeUpper) {
-          continue;
-        }
-        if (!bestGuess || entity.id < bestGuess.id) {
-          bestGuess = entity;
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (entity.templateName.trim().toUpperCase() !== objectTypeUpper) {
+        continue;
+      }
+      if (!bestGuess || entity.id < bestGuess.id) {
+        bestGuess = entity;
       }
     }
 
