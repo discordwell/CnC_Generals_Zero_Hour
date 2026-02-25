@@ -13321,17 +13321,50 @@ export class GameLogicSubsystem implements Subsystem {
       case 'FIRE_WEAPON': {
         const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef) ?? 0;
         const maxShotsToFire = this.resolveScriptMaxShotsToFireFromCommandButton(commandButtonDef);
-        // Source parity: Object::doCommandButton only handles FIRE_WEAPON for no-target command
-        // invocation (sets temporary weapon lock). Object/position variants are intentional no-ops.
-        if (target.kind !== 'NONE') {
-          return true;
+        const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
+        const needsObjectTarget = (commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
+        const needsTargetPosition = (commandOption & SCRIPT_COMMAND_OPTION_NEED_TARGET_POS) !== 0;
+        const attacksObjectPosition = (commandOption & SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION) !== 0;
+
+        let targetObjectId: number | null = null;
+        let targetPosition: readonly [number, number, number] | null = null;
+
+        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition} gates FIRE_WEAPON
+        // execution by command options + invocation target context.
+        if (target.kind === 'NONE') {
+          if (needsObjectTarget || needsTargetPosition) {
+            return false;
+          }
+        } else if (target.kind === 'OBJECT') {
+          if (!needsObjectTarget) {
+            return false;
+          }
+          targetObjectId = target.targetEntity.id;
+          if (attacksObjectPosition) {
+            targetPosition = this.getEntityWorldPosition(targetObjectId);
+            if (!targetPosition) {
+              return false;
+            }
+          }
+        } else {
+          if (!needsTargetPosition) {
+            return false;
+          }
+          targetPosition = [target.targetX, 0, target.targetZ];
         }
 
         if (validateOnly) {
           return true;
         }
 
-        this.issueFireWeapon(sourceEntity.id, weaponSlot, maxShotsToFire, null, null);
+        this.applyCommand({
+          type: 'fireWeapon',
+          entityId: sourceEntity.id,
+          weaponSlot,
+          maxShotsToFire,
+          targetObjectId,
+          targetPosition,
+        });
         return true;
       }
       case 'SWITCH_WEAPON': {

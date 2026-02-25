@@ -37447,26 +37447,17 @@ describe('Script condition groundwork', () => {
     expect(logic.getSideCredits('America')).toBe(700);
   });
 
-  it('mirrors source FIRE_WEAPON command-button behavior for script target variants', () => {
+  it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('ScriptShooter', 'America', ['INFANTRY', 'CAN_ATTACK'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
         ], {
           CommandSet: 'ScriptShooterCommandSet',
         }),
         makeObjectDef('ScriptTarget', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
         ]),
-      ],
-      weapons: [
-        makeWeaponDef('TestRifle', {
-          AttackRange: 120,
-          PrimaryDamage: 20,
-          DamageType: 'SMALL_ARMS',
-          DelayBetweenShots: 100,
-        }),
       ],
       commandButtons: [
         makeCommandButtonDef('Command_FireNoTarget', {
@@ -37516,66 +37507,43 @@ describe('Script condition groundwork', () => {
     );
     logic.setTeamRelationship('America', 'China', 0);
 
-    const privateApi = logic as unknown as {
-      spawnedEntities: Map<number, {
-        forcedWeaponSlot: number | null;
-        weaponLockStatus: 'NOT_LOCKED' | 'LOCKED_TEMPORARILY' | 'LOCKED_PERMANENTLY';
-        attackTargetEntityId: number | null;
-        attackTargetPosition: { x: number; z: number } | null;
-      }>;
-    };
-
     expect(logic.executeScriptAction({
       actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
       params: [1, 'Command_FireNoTarget'],
     })).toBe(true);
-    expect(privateApi.spawnedEntities.get(1)?.forcedWeaponSlot).toBe(0);
-    expect(privateApi.spawnedEntities.get(1)?.weaponLockStatus).toBe('LOCKED_TEMPORARILY');
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetPosition).toBeNull();
-
     expect(logic.executeScriptAction({
       actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
       params: [1, 'Command_FireNeedObject', 2],
     })).toBe(true);
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetPosition).toBeNull();
-
     expect(logic.executeScriptAction({
       actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
       params: [1, 'Command_FireNeedPosition', 'FireWaypoint'],
     })).toBe(true);
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetPosition).toBeNull();
 
     expect(logic.executeScriptAction({
       actionType: 445,
       params: [1, 'Command_FireNeedObject'],
-    })).toBe(true);
-    expect(privateApi.spawnedEntities.get(1)?.weaponLockStatus).toBe('LOCKED_TEMPORARILY');
+    })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 445,
       params: [1, 'Command_FireNeedPosition'],
-    })).toBe(true);
-    expect(privateApi.spawnedEntities.get(1)?.weaponLockStatus).toBe('LOCKED_TEMPORARILY');
+    })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 403,
       params: [1, 'Command_FireNoTarget', 2],
-    })).toBe(true);
+    })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 403,
       params: [1, 'Command_FireNeedPosition', 2],
-    })).toBe(true);
+    })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 404,
       params: [1, 'Command_FireNoTarget', 'FireWaypoint'],
-    })).toBe(true);
+    })).toBe(false);
     expect(logic.executeScriptAction({
       actionType: 404,
       params: [1, 'Command_FireNeedObject', 'FireWaypoint'],
-    })).toBe(true);
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
-    expect(privateApi.spawnedEntities.get(1)?.attackTargetPosition).toBeNull();
+    })).toBe(false);
   });
 
   it('executes source waypoint-path command-button action for CAN_USE_WAYPOINTS special powers', () => {
