@@ -4245,6 +4245,7 @@ interface ScriptReinforcementTransportArrivalState {
   targetX: number;
   targetZ: number;
   transportsExit: boolean;
+  evacuationIssued: boolean;
 }
 
 interface ScriptSkirmishBaseDefenseState {
@@ -20300,7 +20301,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Materializes TeamTemplate reinforcement members (unit entries + optional transport),
    * including teamStartsFull loading and arrival evacuation behavior.
    * TODO(source-parity): DeliverPayload/PutInContainer packaging is not wired yet.
-   * TODO(source-parity): aiMoveToAndEvacuateAndExit transport exit removal is not wired yet.
+   * TODO(source-parity): aiMoveToAndEvacuateAndExit off-map departure pathing is not wired yet.
    */
   private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
     const prototype = this.getScriptTeamPrototypeRecord(teamName);
@@ -20420,6 +20421,7 @@ export class GameLogicSubsystem implements Subsystem {
             targetX: destination.x,
             targetZ: destination.z,
             transportsExit: prototype.reinforcementTransportsExit,
+            evacuationIssued: false,
           });
           continue;
         }
@@ -20583,6 +20585,19 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      if (pending.evacuationIssued) {
+        if (this.collectContainedEntityIds(transport.id).length > 0) {
+          continue;
+        }
+        if (pending.transportsExit) {
+          // Source parity subset: aiMoveToAndEvacuateAndExit removes transports
+          // after payload deployment. Full off-map exit flight is not wired.
+          this.markEntityDestroyed(transport.id, -1);
+        }
+        this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+        continue;
+      }
+
       if (transport.moving) {
         continue;
       }
@@ -20602,8 +20617,12 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       if (pending.transportsExit) {
-        // TODO(source-parity): ScriptActions::doCreateReinforcements uses
-        // aiMoveToAndEvacuateAndExit for m_transportsExit teams.
+        pending.evacuationIssued = true;
+        if (this.collectContainedEntityIds(transport.id).length <= 0) {
+          this.markEntityDestroyed(transport.id, -1);
+          this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+        }
+        continue;
       }
       this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
     }
