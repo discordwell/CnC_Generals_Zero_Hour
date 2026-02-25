@@ -1854,6 +1854,8 @@ interface MapEntity {
   scriptLastDamageSourceTemplateName: string | null;
   /** Source parity: BodyModule::m_lastDamageInfo.in.m_sourcePlayerMask (resolved to side key). */
   scriptLastDamageSourceSide: string | null;
+  /** Source parity: ActiveBody::m_lastDamageTimestamp used for source-priority windowing. */
+  lastDamageInfoFrame: number;
   /** Source parity: StealthDetectorUpdate — parsed detector module profile. */
   detectorProfile: DetectorProfile | null;
   /** Frame at which next detection scan is allowed (rate throttle). */
@@ -24718,6 +24720,7 @@ export class GameLogicSubsystem implements Subsystem {
       scriptLastDamageSourceEntityId: null,
       scriptLastDamageSourceTemplateName: null,
       scriptLastDamageSourceSide: null,
+      lastDamageInfoFrame: 0,
       detectorProfile: this.extractDetectorProfile(objectDef),
       detectorNextScanFrame: 0,
       autoHealProfile: this.extractAutoHealProfile(objectDef),
@@ -47890,8 +47893,7 @@ export class GameLogicSubsystem implements Subsystem {
       // notifies onDamage callbacks (retaliation, stealth reveal, etc.).
       if (damageType !== 'HEALING') {
         this.recordScriptLastDamageInfo(target, sourceEntityId);
-        this.recordPreferredLastAttacker(target, sourceEntityId);
-        this.recordAttackedBySource(target, sourceEntityId);
+        this.recordAttackedBySource(target, target.scriptLastDamageSourceEntityId);
         target.lastDamageFrame = this.frameCounter;
         target.lastDamageNoEffect = false;
       }
@@ -47953,8 +47955,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Healing damage does not update the timestamp (C++ checks m_damageType != DAMAGE_HEALING).
     if (damageType !== 'HEALING') {
       this.recordScriptLastDamageInfo(target, sourceEntityId);
-      this.recordPreferredLastAttacker(target, sourceEntityId);
-      this.recordAttackedBySource(target, sourceEntityId);
+      this.recordAttackedBySource(target, target.scriptLastDamageSourceEntityId);
       target.lastDamageFrame = this.frameCounter;
       target.lastDamageNoEffect = false;
     }
@@ -48030,56 +48031,59 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: BodyModule::m_lastDamageInfo source fields.
-   * Persists attacker id/template/player-side snapshot for script condition queries.
+   * Source parity: ActiveBody::attemptDamage m_lastDamageInfo source-selection.
+   * Within same/next-frame windows, prefer VEHICLE/INFANTRY/faction-structure sources.
    */
   private recordScriptLastDamageInfo(target: MapEntity, sourceEntityId: number | null): void {
-    if (sourceEntityId === null || sourceEntityId === 0) {
-      target.scriptLastDamageSourceEntityId = null;
-      target.scriptLastDamageSourceTemplateName = null;
-      target.scriptLastDamageSourceSide = null;
+    const normalizedSourceId = sourceEntityId === null || sourceEntityId === 0
+      ? null
+      : Math.trunc(sourceEntityId);
+    const source = normalizedSourceId === null ? null : this.spawnedEntities.get(normalizedSourceId) ?? null;
+
+    const withinPriorityWindow =
+      target.lastDamageInfoFrame === this.frameCounter
+      || target.lastDamageInfoFrame === this.frameCounter - 1;
+    if (!withinPriorityWindow) {
+      this.applyScriptLastDamageSourceSnapshot(target, normalizedSourceId, source);
       return;
     }
 
-    const source = this.spawnedEntities.get(sourceEntityId);
+    // Source parity: within same/next-frame windows, null/unresolved sources do not
+    // overwrite existing last-damage source info.
     if (!source) {
+      return;
+    }
+
+    const currentSource = target.scriptLastDamageSourceEntityId === null
+      ? null
+      : this.spawnedEntities.get(target.scriptLastDamageSourceEntityId) ?? null;
+    if (!currentSource || this.isPreferredRetaliationSource(source)) {
+      this.applyScriptLastDamageSourceSnapshot(target, normalizedSourceId, source);
+    }
+  }
+
+  /**
+   * Source parity: ActiveBody::m_lastDamageInfo snapshot fields + getClearableLastAttacker.
+   */
+  private applyScriptLastDamageSourceSnapshot(
+    target: MapEntity,
+    sourceEntityId: number | null,
+    source: MapEntity | null,
+  ): void {
+    if (sourceEntityId === null || !source) {
       target.scriptLastDamageSourceEntityId = null;
       target.scriptLastDamageSourceTemplateName = null;
       target.scriptLastDamageSourceSide = null;
+      target.lastAttackerEntityId = null;
+      target.lastDamageInfoFrame = this.frameCounter;
       return;
     }
 
     target.scriptLastDamageSourceEntityId = sourceEntityId;
     target.scriptLastDamageSourceTemplateName = source.templateName.trim().toUpperCase();
     target.scriptLastDamageSourceSide = this.normalizeSide(source.side);
-  }
-
-  /**
-   * Source parity: ActiveBody::attemptDamage chooses preferred attacker when multiple
-   * damages happen in the same/next frame. Vehicle/infantry/structure sources win.
-   */
-  private recordPreferredLastAttacker(target: MapEntity, sourceEntityId: number | null): void {
-    if (sourceEntityId === null || sourceEntityId === 0) {
-      return;
-    }
-
-    const source = this.spawnedEntities.get(sourceEntityId);
-    if (!source) {
-      return;
-    }
-
-    const withinPriorityWindow =
-      target.lastDamageFrame === this.frameCounter
-      || target.lastDamageFrame === this.frameCounter - 1;
-    if (!withinPriorityWindow || target.lastAttackerEntityId === null) {
-      target.lastAttackerEntityId = sourceEntityId;
-      return;
-    }
-
-    const current = this.spawnedEntities.get(target.lastAttackerEntityId);
-    if (!current || this.isPreferredRetaliationSource(source)) {
-      target.lastAttackerEntityId = sourceEntityId;
-    }
+    target.lastAttackerEntityId = sourceEntityId;
+    target.lastDamageInfoFrame = this.frameCounter;
   }
 
   /**

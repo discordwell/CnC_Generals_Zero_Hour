@@ -45492,7 +45492,15 @@ describe('Script condition groundwork', () => {
       attackedBySide: 'China',
     })).toBe(true);
 
-    // Environmental/no-source damage overwrites last damage info with no attacker side.
+    // Source parity: same/next-frame no-source damage does not overwrite preferred source.
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 1, 'FLAME');
+    expect(logic.evaluateScriptNamedAttackedByPlayer({
+      entityId: 1,
+      attackedBySide: 'China',
+    })).toBe(true);
+
+    // Source parity: once outside the priority window, no-source damage clears attacker side.
+    logic.update(1 / 30);
     privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 1, 'FLAME');
     expect(logic.evaluateScriptNamedAttackedByPlayer({
       entityId: 1,
