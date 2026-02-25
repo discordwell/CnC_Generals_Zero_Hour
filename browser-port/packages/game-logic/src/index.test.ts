@@ -41713,6 +41713,26 @@ describe('Script condition groundwork', () => {
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
+      actionType: 131, // SET_DEFAULT_ATTACK_PRIORITY
+      params: ['VehicleFocus', 9],
+    })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 43,
+      params: ['AlphaProto', 'VehicleFocus'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('INFANTRYFIRST');
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttackPrioritySetName).toBe('VEHICLEFOCUS');
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
+      actionType: 43,
+      params: ['AlphaProto', ''],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAttackPrioritySetName).toBe('');
+    expect(privateApi.spawnedEntities.get(2)?.scriptAttackPrioritySetName).toBe('VEHICLEFOCUS');
+
+    expect(logic.executeScriptAction({
       actionType: 44, // SET_BASE_CONSTRUCTION_SPEED
       params: ['America', 7],
     })).toBe(true);

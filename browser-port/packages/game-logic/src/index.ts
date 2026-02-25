@@ -19807,27 +19807,23 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::updateTeamAttackPrioritySet.
+   * Source parity: ScriptActions::updateTeamAttackPrioritySet.
    */
   private executeScriptTeamApplyAttackPrioritySet(teamName: string, attackPrioritySetName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
     const normalizedSetName = this.resolveScriptAttackPrioritySetNameForApply(attackPrioritySetName);
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      if (normalizedSetName) {
-        team.attackPrioritySetName = normalizedSetName;
+    if (normalizedSetName) {
+      team.attackPrioritySetName = normalizedSetName;
+    }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        entity.scriptAttackPrioritySetName = normalizedSetName;
-      }
+      entity.scriptAttackPrioritySetName = normalizedSetName;
     }
 
     return true;
