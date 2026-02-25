@@ -18827,21 +18827,19 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptActions::doDamageTeamMembers.
    */
   private executeScriptDamageMembersOfTeam(teamName: string, amount: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     if (!Number.isFinite(amount)) {
       return false;
     }
 
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (this.isScriptEntityEffectivelyDead(entity)) {
-          continue;
-        }
-        this.applyWeaponDamageAmount(null, entity, amount, 'UNRESISTABLE', 'NORMAL');
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
       }
+      this.applyWeaponDamageAmount(null, entity, amount, 'UNRESISTABLE', 'NORMAL');
     }
     return true;
   }
@@ -18850,8 +18848,8 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doMoveToWaypoint.
    */
   private executeScriptMoveTeamToWaypoint(teamName: string, waypointName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
@@ -18859,15 +18857,13 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || !entity.canMove) {
-          continue;
-        }
-        this.cancelEntityCommandPathActions(entity.id);
-        this.clearAttackTarget(entity.id);
-        this.issueMoveTo(entity.id, waypoint.x, waypoint.z);
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
       }
+      this.cancelEntityCommandPathActions(entity.id);
+      this.clearAttackTarget(entity.id);
+      this.issueMoveTo(entity.id, waypoint.x, waypoint.z);
     }
     return true;
   }

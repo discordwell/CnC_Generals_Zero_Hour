@@ -40632,14 +40632,14 @@ describe('Script condition groundwork', () => {
       params: ['VictimsProto', 10],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(3)?.health).toBeCloseTo(65);
-    expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(65);
+    expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(75);
     expect(logic.setScriptConditionTeamContext('VictimInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 12,
       params: ['VictimsProto', 5],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(3)?.health).toBeCloseTo(60);
-    expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(65);
+    expect(privateApi.spawnedEntities.get(4)?.health).toBeCloseTo(75);
     logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
       actionType: 12,
@@ -40669,8 +40669,8 @@ describe('Script condition groundwork', () => {
     expect(attacker2PathAfterProtoMove.length).toBeGreaterThan(0);
     const attacker1EndAfterProtoMove = attacker1PathAfterProtoMove[attacker1PathAfterProtoMove.length - 1] ?? null;
     const attacker2EndAfterProtoMove = attacker2PathAfterProtoMove[attacker2PathAfterProtoMove.length - 1] ?? null;
-    expect(attacker1EndAfterProtoMove?.x).toBeCloseTo(attacker2EndAfterProtoMove?.x ?? 0);
-    expect(attacker1EndAfterProtoMove?.z).toBeCloseTo(attacker2EndAfterProtoMove?.z ?? 0);
+    expect(attacker1EndAfterProtoMove?.x).not.toBeCloseTo(attacker2EndAfterProtoMove?.x ?? 0);
+    expect(attacker1EndAfterProtoMove?.z).not.toBeCloseTo(attacker2EndAfterProtoMove?.z ?? 0);
     expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 13,
