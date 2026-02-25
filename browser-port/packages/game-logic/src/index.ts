@@ -4247,6 +4247,10 @@ interface ScriptReinforcementTransportArrivalState {
   originX: number;
   originZ: number;
   deliveryDistance: number;
+  deliverPayloadMode: boolean;
+  deliverPayloadDoorDelayFrames: number;
+  deliverPayloadDropDelayFrames: number;
+  deliverPayloadNextDropFrame: number;
   transportsExit: boolean;
   evacuationIssued: boolean;
   exitMoveIssued: boolean;
@@ -20430,6 +20434,10 @@ export class GameLogicSubsystem implements Subsystem {
             originX: member.x,
             originZ: member.z,
             deliveryDistance: transportDeliverPayloadProfile?.deliveryDistance ?? 0,
+            deliverPayloadMode: transportUsesDeliverPayload,
+            deliverPayloadDoorDelayFrames: transportDeliverPayloadProfile?.doorDelayFrames ?? 0,
+            deliverPayloadDropDelayFrames: transportDeliverPayloadProfile?.dropDelayFrames ?? 0,
+            deliverPayloadNextDropFrame: -1,
             // Source parity: ScriptActions::doCreateReinforcements always routes
             // DeliverPayloadAIUpdate transports through deliverPayloadViaModuleData(),
             // which exits/deletes regardless of TeamTemplate::m_transportsExit.
@@ -20620,7 +20628,12 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveScriptReinforcementDeliverPayloadProfile(objectDef: ObjectDef | null):
-  { putInContainerTemplateName: string | null; deliveryDistance: number } | null {
+  {
+    putInContainerTemplateName: string | null;
+    deliveryDistance: number;
+    doorDelayFrames: number;
+    dropDelayFrames: number;
+  } | null {
     if (!objectDef) {
       return null;
     }
@@ -20634,9 +20647,13 @@ export class GameLogicSubsystem implements Subsystem {
       }
       const putInContainerTemplateName = readStringField(block.fields, ['PutInContainer'])?.trim() ?? '';
       const deliveryDistance = Math.max(0, readNumericField(block.fields, ['DeliveryDistance']) ?? 0);
+      const doorDelayMs = Math.max(0, readNumericField(block.fields, ['DoorDelay']) ?? 0);
+      const dropDelayMs = Math.max(0, readNumericField(block.fields, ['DropDelay']) ?? 0);
       return {
         putInContainerTemplateName: putInContainerTemplateName || null,
         deliveryDistance,
+        doorDelayFrames: this.msToLogicFrames(doorDelayMs),
+        dropDelayFrames: this.msToLogicFrames(dropDelayMs),
       };
     }
     return null;
@@ -20675,24 +20692,27 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       if (pending.evacuationIssued) {
-        if (this.collectContainedEntityIds(transport.id).length > 0) {
-          continue;
-        }
-        if (pending.transportsExit) {
-          const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
-          if (distanceToOrigin <= reachDistance) {
-            this.markEntityDestroyed(transport.id, -1);
-            this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+        const remainingContained = this.collectContainedEntityIds(transport.id).length;
+        if (remainingContained <= 0) {
+          if (pending.transportsExit) {
+            const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
+            if (distanceToOrigin <= reachDistance) {
+              this.markEntityDestroyed(transport.id, -1);
+              this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+              continue;
+            }
+            // Source parity: AIMoveAndEvacuateState::onExit sets goal to move origin,
+            // then AIMoveAndDeleteState returns there and self-destroys.
+            this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
+            pending.exitMoveIssued = true;
             continue;
           }
-          // Source parity: AIMoveAndEvacuateState::onExit sets goal to move origin,
-          // then AIMoveAndDeleteState returns there and self-destroys.
-          this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
-          pending.exitMoveIssued = true;
+          this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
           continue;
         }
-        this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-        continue;
+        if (!pending.deliverPayloadMode) {
+          continue;
+        }
       }
 
       const distanceToTarget = Math.hypot(transport.x - pending.targetX, transport.z - pending.targetZ);
@@ -20709,7 +20729,21 @@ export class GameLogicSubsystem implements Subsystem {
         this.stopEntity(transport.id);
       }
 
-      if (transport.containProfile && this.collectContainedEntityIds(transport.id).length > 0) {
+      const containedEntityIds = this.collectContainedEntityIds(transport.id);
+      if (transport.containProfile && containedEntityIds.length > 0) {
+        if (pending.deliverPayloadMode) {
+          pending.evacuationIssued = true;
+          if (pending.deliverPayloadNextDropFrame < 0) {
+            pending.deliverPayloadNextDropFrame = this.frameCounter + pending.deliverPayloadDoorDelayFrames;
+          }
+          if (this.frameCounter < pending.deliverPayloadNextDropFrame) {
+            continue;
+          }
+          const passengerId = containedEntityIds[0]!;
+          this.handleExitContainerCommand(passengerId);
+          pending.deliverPayloadNextDropFrame = this.frameCounter + Math.max(1, pending.deliverPayloadDropDelayFrames);
+          continue;
+        }
         this.applyCommand({ type: 'evacuate', entityId: transport.id });
       }
 
