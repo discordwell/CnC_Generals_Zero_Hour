@@ -37544,6 +37544,45 @@ export class GameLogicSubsystem implements Subsystem {
     container.containPlayerEnteredSide = this.normalizeSide(rider.side);
   }
 
+  /**
+   * Source parity: ActionManager::canEnterObject source-object gates.
+   */
+  private canSourceAttemptContainerEnter(source: MapEntity): boolean {
+    if (this.isEntityDisabledForMovement(source)) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    const kindOf = this.resolveEntityKindOfSet(source);
+    if (kindOf.has('STRUCTURE') || kindOf.has('IMMOBILE')) {
+      return false;
+    }
+    if (kindOf.has('IGNORED_IN_GUI') || kindOf.has('MOB_NEXUS')) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Source parity: ActionManager::canEnterObject target-object gates.
+   */
+  private canTargetAcceptContainerEnter(target: MapEntity): boolean {
+    if (this.entityHasObjectStatus(target, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'SOLD')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'DISABLED_SUBDUED')) {
+      return false;
+    }
+    if (this.resolveEntityKindOfSet(target).has('IGNORED_IN_GUI')) {
+      return false;
+    }
+    return true;
+  }
+
   private handleGarrisonBuildingCommand(command: GarrisonBuildingCommand): void {
     const infantry = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
@@ -37634,6 +37673,8 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: OpenContain::addToContain — cannot enter if already contained.
     if (this.isEntityContained(passenger)) return;
+    if (!this.canSourceAttemptContainerEnter(passenger)) return;
+    if (!this.canTargetAcceptContainerEnter(transport)) return;
 
     // Validate: target must have a transport-style contain profile.
     const containProfile = transport.containProfile;
@@ -37755,6 +37796,10 @@ export class GameLogicSubsystem implements Subsystem {
       const passenger = this.spawnedEntities.get(passengerId);
       const transport = this.spawnedEntities.get(transportId);
       if (!passenger || !transport || passenger.destroyed || transport.destroyed) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+      if (!this.canSourceAttemptContainerEnter(passenger) || !this.canTargetAcceptContainerEnter(transport)) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
@@ -42839,6 +42884,10 @@ export class GameLogicSubsystem implements Subsystem {
       const passenger = this.spawnedEntities.get(passengerId);
       const tunnel = this.spawnedEntities.get(tunnelId);
       if (!passenger || !tunnel || passenger.destroyed || tunnel.destroyed) {
+        this.pendingTunnelActions.delete(passengerId);
+        continue;
+      }
+      if (!this.canSourceAttemptContainerEnter(passenger) || !this.canTargetAcceptContainerEnter(tunnel)) {
         this.pendingTunnelActions.delete(passengerId);
         continue;
       }

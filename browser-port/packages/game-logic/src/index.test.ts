@@ -34631,6 +34631,66 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(3)?.activeLocomotorSet).toBe('SET_NORMAL');
   });
 
+  it('blocks script enter actions for immobile sources and DISABLED_SUBDUED targets', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OpenBunker', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'OpenContain ModuleTag_Open', {
+            ContainMax: 2,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('ImmobileProp', 'America', ['IMMOBILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('OpenBunker', 20, 20), // id 1 (enterable)
+        makeMapObject('ImmobileProp', 20, 20), // id 2 (cannot enter)
+        makeMapObject('Ranger', 20, 20), // id 3
+        makeMapObject('OpenBunker', 40, 20), // id 4 (subdued)
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(4)!.objectStatusFlags.add('DISABLED_SUBDUED');
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [3, 4],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [3, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+  });
+
   it('allows script enter actions to route cross-side units into tunnel networks', () => {
     const bundle = makeBundle({
       objects: [
