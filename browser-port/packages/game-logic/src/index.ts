@@ -16968,26 +16968,24 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses a named waypoint and sets each team member to guard that location.
    */
   private executeScriptTeamGuardPosition(teamName: string, waypointName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (teams.length === 0 || !waypoint) {
+    if (!team || !waypoint) {
       return false;
     }
 
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed) {
-          continue;
-        }
-        this.applyCommand({
-          type: 'guardPosition',
-          entityId: entity.id,
-          targetX: waypoint.x,
-          targetZ: waypoint.z,
-          guardMode: 0,
-          commandSource: 'SCRIPT',
-        });
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      this.applyCommand({
+        type: 'guardPosition',
+        entityId: entity.id,
+        targetX: waypoint.x,
+        targetZ: waypoint.z,
+        guardMode: 0,
+        commandSource: 'SCRIPT',
+      });
     }
     return true;
   }
@@ -16997,25 +16995,23 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses a named/target entity and sets each team member to guard that object.
    */
   private executeScriptTeamGuardObject(teamName: string, targetEntityId: number): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const target = this.spawnedEntities.get(targetEntityId);
-    if (teams.length === 0 || !target || target.destroyed) {
+    if (!team || !target || target.destroyed) {
       return false;
     }
 
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed) {
-          continue;
-        }
-        this.applyCommand({
-          type: 'guardObject',
-          entityId: entity.id,
-          targetEntityId: target.id,
-          guardMode: 0,
-          commandSource: 'SCRIPT',
-        });
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      this.applyCommand({
+        type: 'guardObject',
+        entityId: entity.id,
+        targetEntityId: target.id,
+        guardMode: 0,
+        commandSource: 'SCRIPT',
+      });
     }
     return true;
   }
@@ -17116,26 +17112,24 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses trigger-area center/radius from PolygonTrigger and orders team members to guard that area.
    */
   private executeScriptTeamGuardArea(teamName: string, triggerName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const area = this.resolveScriptTriggerAreaByName(triggerName);
-    if (teams.length === 0 || !area) {
+    if (!team || !area) {
       return false;
     }
 
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed) {
-          continue;
-        }
-        this.initGuardArea(
-          entity.id,
-          area.triggerIndex,
-          area.centerX,
-          area.centerZ,
-          0,
-          area.radius,
-        );
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
       }
+      this.initGuardArea(
+        entity.id,
+        area.triggerIndex,
+        area.centerX,
+        area.centerZ,
+        0,
+        area.radius,
+      );
     }
     return true;
   }
