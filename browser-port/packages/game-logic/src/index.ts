@@ -13196,6 +13196,11 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'OBJECT_UPGRADE':
       case 'PLAYER_UPGRADE': {
+        // Source parity: GeneralsMD Object::doCommandButton handles upgrade command-buttons
+        // only for no-target invocation; object/position variants are not implemented.
+        if (target.kind !== 'NONE') {
+          return false;
+        }
         const upgradeName = this.resolveScriptCommandButtonUpgradeName(commandButtonDef);
         if (!upgradeName) {
           return false;

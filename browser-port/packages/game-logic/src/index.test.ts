@@ -37879,6 +37879,83 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('executes upgrade command-buttons only for no-target script invocation', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 4,
+          }),
+        ], {
+          CommandSet: 'ScriptFactoryUpgradeCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ResearchScriptUpgrade', {
+          Command: 'PLAYER_UPGRADE',
+          Upgrade: 'Upgrade_ScriptResearch',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptFactoryUpgradeCommandSet', {
+          1: 'Command_ResearchScriptUpgrade',
+        }),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_ScriptResearch', {
+          Type: 'PLAYER',
+          BuildCost: 150,
+          BuildTime: 0.2,
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptFactory', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'UpgradeWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+    logic.update(1 / 30);
+
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_ResearchScriptUpgrade', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_ResearchScriptUpgrade', 'UpgradeWaypoint'],
+    })).toBe(false);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_ResearchScriptUpgrade'],
+    })).toBe(true);
+    expect(logic.getProductionState(1)?.queueEntryCount).toBe(1);
+    expect(logic.getSideCredits('America')).toBe(350);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
