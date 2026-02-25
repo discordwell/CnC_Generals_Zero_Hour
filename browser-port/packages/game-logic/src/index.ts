@@ -13383,6 +13383,11 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'HACK_INTERNET':
+        // Source parity: GeneralsMD Object::doCommandButton only implements HACK_INTERNET
+        // for no-target invocation; object/position variants are not implemented.
+        if (target.kind !== 'NONE') {
+          return false;
+        }
         if (validateOnly) {
           return true;
         }

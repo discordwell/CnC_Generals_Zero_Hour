@@ -37580,6 +37580,79 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('executes HACK_INTERNET command-button only for no-target script invocation', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptHacker', 'China', ['INFANTRY'], [
+          makeBlock('Behavior', 'HackInternetAIUpdate ModuleTag_Hack', {
+            UnpackTime: 0,
+            CashUpdateDelay: 0,
+            RegularCashAmount: 25,
+          }),
+        ], {
+          CommandSet: 'ScriptHackerCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_HackInternet', {
+          Command: 'HACK_INTERNET',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptHackerCommandSet', {
+          1: 'Command_HackInternet',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptHacker', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'HackWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 0 });
+
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_HackInternet', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_HackInternet', 'HackWaypoint'],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_HackInternet'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 4; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getSideCredits('China')).toBe(100);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
