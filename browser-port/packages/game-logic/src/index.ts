@@ -13282,37 +13282,10 @@ export class GameLogicSubsystem implements Subsystem {
         return false;
       case 'GUARD':
       case 'GUARD_WITHOUT_PURSUIT':
-      case 'GUARD_FLYING_UNITS_ONLY': {
-        const guardMode = this.resolveScriptGuardModeForCommandType(commandTypeName);
-        if (target.kind === 'OBJECT') {
-          if (validateOnly) {
-            return true;
-          }
-          this.applyCommand({
-            type: 'guardObject',
-            entityId: sourceEntity.id,
-            targetEntityId: target.targetEntity.id,
-            guardMode,
-            commandSource: 'SCRIPT',
-          });
-          return true;
-        }
-        if (target.kind === 'POSITION') {
-          if (validateOnly) {
-            return true;
-          }
-          this.applyCommand({
-            type: 'guardPosition',
-            entityId: sourceEntity.id,
-            targetX: target.targetX,
-            targetZ: target.targetZ,
-            guardMode,
-            commandSource: 'SCRIPT',
-          });
-          return true;
-        }
+      case 'GUARD_FLYING_UNITS_ONLY':
+        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition}
+        // does not implement guard command-buttons for script execution.
         return false;
-      }
       case 'FIRE_WEAPON': {
         const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef) ?? 0;
         const maxShotsToFire = this.resolveScriptMaxShotsToFireFromCommandButton(commandButtonDef);

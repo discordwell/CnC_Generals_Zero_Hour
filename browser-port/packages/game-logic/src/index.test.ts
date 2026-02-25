@@ -38016,6 +38016,81 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('treats guard-mode script command-button execution as unsupported', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptGuardUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          CommandSet: 'ScriptGuardCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_Guard', {
+          Command: 'GUARD',
+        }),
+        makeCommandButtonDef('Command_GuardNoPursuit', {
+          Command: 'GUARD_WITHOUT_PURSUIT',
+        }),
+        makeCommandButtonDef('Command_GuardFlyingOnly', {
+          Command: 'GUARD_FLYING_UNITS_ONLY',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptGuardCommandSet', {
+          1: 'Command_Guard',
+          2: 'Command_GuardNoPursuit',
+          3: 'Command_GuardFlyingOnly',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptGuardUnit', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'GuardWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const commandNames = [
+      'Command_Guard',
+      'Command_GuardNoPursuit',
+      'Command_GuardFlyingOnly',
+    ];
+    for (const commandName of commandNames) {
+      expect(logic.executeScriptAction({
+        actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+        params: [1, commandName],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+        params: [1, commandName, 2],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+        params: [1, commandName, 'GuardWaypoint'],
+      })).toBe(false);
+    }
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
