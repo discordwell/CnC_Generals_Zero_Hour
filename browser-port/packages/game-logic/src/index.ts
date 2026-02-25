@@ -5179,6 +5179,8 @@ export class GameLogicSubsystem implements Subsystem {
   private frameCounter = 0;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
+  /** Source parity bridge: per-cell bridge layer membership for overlapping bridge segments. */
+  private readonly bridgeSegmentIdsByCell = new Map<number, number[]>();
   /** Source parity: TerrainLogic::m_bridgeDamageStatesChanged frame gate. */
   private bridgeDamageStatesChangedFrame = -1;
   /** Source parity: BridgeInfo::damageStateChanged + curDamageState snapshot for this frame. */
@@ -24334,6 +24336,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.clearSpawnedObjects();
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
+    this.bridgeSegmentIdsByCell.clear();
     this.resetBridgeDamageStateChanges();
     this.selectedEntityId = null;
     this.nextId = 1;
@@ -42355,24 +42358,39 @@ export class GameLogicSubsystem implements Subsystem {
     if (index < 0 || index >= grid.bridgeSegmentByCell.length) {
       return null;
     }
-    const segmentId = grid.bridgeSegmentByCell[index];
-    if (segmentId === undefined || segmentId < 0) {
+    const segmentIds = this.bridgeSegmentIdsByCell.get(index)
+      ?? (() => {
+        const segmentId = grid.bridgeSegmentByCell[index];
+        return (segmentId === undefined || segmentId < 0) ? [] : [segmentId];
+      })();
+    if (segmentIds.length === 0) {
       return null;
     }
-    const segment = this.bridgeSegments.get(segmentId);
-    if (!segment) {
-      return null;
+
+    let bestLayerHeight: number | null = null;
+    let bestDelta = Number.POSITIVE_INFINITY;
+    for (const segmentId of segmentIds) {
+      const segment = this.bridgeSegments.get(segmentId);
+      if (!segment) {
+        continue;
+      }
+      const layerHeight = this.resolveBridgeLayerHeightAt(segment, worldX, worldZ);
+      if (!Number.isFinite(layerHeight)) {
+        continue;
+      }
+      const delta = worldY - layerHeight;
+      // Source parity: TerrainLogic::getHighestLayerForDestination only considers
+      // layers that are at-or-below the destination height and picks the closest.
+      if (delta < 0) {
+        continue;
+      }
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        bestLayerHeight = layerHeight;
+      }
     }
-    const layerHeight = this.resolveBridgeLayerHeightAt(segment, worldX, worldZ);
-    if (!Number.isFinite(layerHeight)) {
-      return null;
-    }
-    // Source parity: TerrainLogic::getHighestLayerForDestination requires destination to
-    // be at-or-above the tested layer; below-bridge entities stay on ground layer.
-    if (worldY < layerHeight) {
-      return null;
-    }
-    return layerHeight;
+
+    return bestLayerHeight;
   }
 
   /**
@@ -44250,6 +44268,7 @@ export class GameLogicSubsystem implements Subsystem {
     bridgeSegmentByCell.fill(-1);
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
+    this.bridgeSegmentIdsByCell.clear();
     this.resetBridgeDamageStateChanges();
 
     const waterCells = this.buildWaterCellsFromTriggers(mapData, heightmap, cellWidth, cellHeight);
@@ -44724,6 +44743,12 @@ export class GameLogicSubsystem implements Subsystem {
         const currentSegmentId = grid.bridgeSegmentByCell[index];
         if (currentSegmentId === undefined || currentSegmentId < 0) {
           grid.bridgeSegmentByCell[index] = segmentId;
+        }
+        const segmentIdsAtCell = this.bridgeSegmentIdsByCell.get(index);
+        if (!segmentIdsAtCell) {
+          this.bridgeSegmentIdsByCell.set(index, [segmentId]);
+        } else if (!segmentIdsAtCell.includes(segmentId)) {
+          segmentIdsAtCell.push(segmentId);
         }
         grid.bridge[index] = 1;
         if (passable) {
@@ -55666,6 +55691,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.navigationGrid = null;
     this.bridgeSegments.clear();
     this.bridgeSegmentByControlEntity.clear();
+    this.bridgeSegmentIdsByCell.clear();
     this.resetBridgeDamageStateChanges();
     this.shortcutSpecialPowerSourceByName.clear();
     this.shortcutSpecialPowerNamesByEntityId.clear();

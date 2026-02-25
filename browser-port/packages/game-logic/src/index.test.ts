@@ -19395,6 +19395,51 @@ describe('HeightDieUpdate', () => {
     expect(aircraft.destroyed).toBe(false);
     expect(aircraft.health).toBe(200);
   });
+
+  it('selects the highest overlapping bridge layer that is below the entity', () => {
+    const markerDef = makeObjectDef('BridgeMarker', 'Neutral', ['IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const objectDef = makeObjectDef('BridgeFlightTargetOverlap', 'America', ['AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('Behavior', 'HeightDieUpdate ModuleTag_HeightDie', {
+        TargetHeight: 5,
+        TargetHeightIncludesStructures: 'Yes',
+      }),
+    ]);
+
+    const lowStart = makeMapObject('BridgeMarker', 50, 40);
+    lowStart.flags = 0x010;
+    lowStart.position.z = 20;
+    const highStart = makeMapObject('BridgeMarker', 60, 20);
+    highStart.flags = 0x010;
+    highStart.position.z = 35;
+    const lowEnd = makeMapObject('BridgeMarker', 70, 40);
+    lowEnd.flags = 0x020;
+    lowEnd.position.z = 20;
+    const highEnd = makeMapObject('BridgeMarker', 60, 60);
+    highEnd.flags = 0x020;
+    highEnd.position.z = 35;
+
+    const bundle = makeBundle({ objects: [markerDef, objectDef] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([lowStart, highStart, lowEnd, highEnd, makeMapObject('BridgeFlightTargetOverlap', 60, 40)], 32, 32),
+      makeRegistry(bundle),
+      makeHeightmap(32, 32),
+    );
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const aircraft = priv.spawnedEntities.get(5)!;
+    // Above low bridge (20) and high bridge (35). C++ chooses the highest valid
+    // layer (35), so threshold is 40 and this position should die.
+    aircraft.y = 38;
+
+    logic.update(0);
+
+    expect(aircraft.destroyed || aircraft.slowDeathState !== null || aircraft.health <= 0).toBe(true);
+  });
 });
 
 // ── HiveStructureBody Tests ─────────────────────────────────────────────────
