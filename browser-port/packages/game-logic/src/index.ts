@@ -48111,7 +48111,19 @@ export class GameLogicSubsystem implements Subsystem {
   private isPreferredRetaliationSource(source: MapEntity): boolean {
     return source.kindOf.has('VEHICLE')
       || source.kindOf.has('INFANTRY')
-      || source.kindOf.has('STRUCTURE');
+      || this.isFactionStructureRetaliationSource(source);
+  }
+
+  private isFactionStructureRetaliationSource(source: MapEntity): boolean {
+    if (!source.kindOf.has('STRUCTURE')) {
+      return false;
+    }
+    for (const token of source.kindOf) {
+      if (token.startsWith('FS_')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private adjustDamageByArmorSet(target: MapEntity, amount: number, damageType: string): number {

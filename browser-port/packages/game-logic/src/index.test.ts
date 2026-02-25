@@ -47884,7 +47884,7 @@ describe('SubdualDamageHelper', () => {
     expect(target.currentSubdualDamage).toBe(0);
   });
 
-  it('prefers vehicle/infantry/structure attackers for same-frame subdual retaliation source', () => {
+  it('prefers vehicle/infantry/faction-structure attackers for same-frame subdual retaliation source', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('SubdualTarget', 'America', ['VEHICLE'], [
@@ -47929,6 +47929,57 @@ describe('SubdualDamageHelper', () => {
     // Same-frame low-priority hit should not override preferred source.
     privateApi.applyWeaponDamageAmount(2, target, 10, 'SUBDUAL_MISSILE');
     expect(target.lastAttackerEntityId).toBe(3);
+  });
+
+  it('does not prioritize non-faction structures for same-frame subdual retaliation source', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SubdualTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+            SubdualDamageCap: 200,
+          }),
+        ]),
+        makeObjectDef('LowPriorityAttacker', 'China', ['AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('CivilianStructureAttacker', 'Civilian', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('FactionStructureAttacker', 'China', ['STRUCTURE', 'FS_BASE_DEFENSE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SubdualTarget', 10, 10),
+        makeMapObject('LowPriorityAttacker', 20, 10),
+        makeMapObject('CivilianStructureAttacker', 30, 10),
+        makeMapObject('FactionStructureAttacker', 40, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, { lastAttackerEntityId: number | null }>;
+    };
+    const target = privateApi.spawnedEntities.get(1)!;
+
+    privateApi.applyWeaponDamageAmount(2, target, 10, 'SUBDUAL_MISSILE');
+    expect(target.lastAttackerEntityId).toBe(2);
+
+    // Non-faction structure should NOT override a previously recorded source.
+    privateApi.applyWeaponDamageAmount(3, target, 10, 'SUBDUAL_MISSILE');
+    expect(target.lastAttackerEntityId).toBe(2);
+
+    // Faction structure should override in the same frame window.
+    privateApi.applyWeaponDamageAmount(4, target, 10, 'SUBDUAL_MISSILE');
+    expect(target.lastAttackerEntityId).toBe(4);
   });
 
   it('emits BASE_UNDER_ATTACK EVA for subdual-only damage on victory structures', () => {
