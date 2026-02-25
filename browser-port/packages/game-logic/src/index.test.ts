@@ -37447,6 +37447,79 @@ describe('Script condition groundwork', () => {
     expect(logic.getSideCredits('America')).toBe(700);
   });
 
+  it('executes SELL command-button only for no-target script invocation', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptSellBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ], {
+          BuildCost: 300,
+          CommandSet: 'ScriptSellCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_SellSelf', {
+          Command: 'SELL',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptSellCommandSet', {
+          1: 'Command_SellSelf',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptSellBuilding', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'SellWaypoint',
+          position: { x: 40, y: 40, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_SellSelf', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_SellSelf', 'SellWaypoint'],
+    })).toBe(false);
+    expect(logic.getEntityState(1)).not.toBeNull();
+    expect(logic.getSideCredits('America')).toBe(0);
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_SellSelf'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 190; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getSideCredits('America')).toBe(300);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [

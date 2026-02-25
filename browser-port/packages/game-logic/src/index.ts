@@ -13419,6 +13419,11 @@ export class GameLogicSubsystem implements Subsystem {
         this.applyCommand({ type: 'beaconDelete', entityId: sourceEntity.id });
         return true;
       case 'SELL':
+        // Source parity: GeneralsMD Object::doCommandButton only implements SELL for
+        // no-target script invocation; object/position variants are not implemented.
+        if (target.kind !== 'NONE') {
+          return false;
+        }
         if (validateOnly) {
           return true;
         }
