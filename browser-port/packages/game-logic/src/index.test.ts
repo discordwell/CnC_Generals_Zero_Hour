@@ -40717,12 +40717,14 @@ describe('Script condition groundwork', () => {
     const teamAttackTarget2 = privateApi.spawnedEntities.get(2)?.attackTargetEntityId;
     expect([3, 4]).toContain(teamAttackTarget1);
     expect([3, 4]).toContain(teamAttackTarget2);
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
     expect(logic.executeScriptAction({
       actionType: 32,
       params: ['AttackersProto', 'VictimsProto'],
     })).toBe(true);
     expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
-    expect([3, 4]).toContain(privateApi.spawnedEntities.get(2)?.attackTargetEntityId);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBeNull();
     privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
     privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
     expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
@@ -40956,7 +40958,7 @@ describe('Script condition groundwork', () => {
       params: ['AttackerProto', 'AttackAreaA'],
     })).toBe(true);
     expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
-    expect([3, 4]).toContain(privateApi.spawnedEntities.get(2)?.attackTargetEntityId);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBeNull();
     privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
     privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
     expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);
@@ -40981,7 +40983,7 @@ describe('Script condition groundwork', () => {
       params: ['AttackerProto', 5],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(5);
-    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBe(5);
+    expect(privateApi.spawnedEntities.get(2)?.attackTargetEntityId).toBeNull();
     privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
     privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
     expect(logic.setScriptConditionTeamContext('AttackerInstanceA')).toBe(true);

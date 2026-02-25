@@ -18924,25 +18924,18 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doAttack(team, team).
    */
   private executeScriptTeamAttackTeam(attackerTeamName: string, victimTeamName: string): boolean {
-    const attackerTeams = this.resolveScriptConditionTeams(attackerTeamName);
-    const victimTeams = this.resolveScriptConditionTeams(victimTeamName);
-    if (attackerTeams.length === 0 || victimTeams.length === 0) {
+    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
+    const victimTeam = this.getScriptTeamRecord(victimTeamName);
+    if (!attackerTeam || !victimTeam) {
       return false;
     }
 
     const victims: MapEntity[] = [];
-    const seenVictimEntityIds = new Set<number>();
-    for (const victimTeam of victimTeams) {
-      for (const victim of this.getScriptTeamMemberEntities(victimTeam)) {
-        if (victim.destroyed || this.isScriptEntityEffectivelyDead(victim)) {
-          continue;
-        }
-        if (seenVictimEntityIds.has(victim.id)) {
-          continue;
-        }
-        seenVictimEntityIds.add(victim.id);
-        victims.push(victim);
+    for (const victim of this.getScriptTeamMemberEntities(victimTeam)) {
+      if (victim.destroyed || this.isScriptEntityEffectivelyDead(victim)) {
+        continue;
       }
+      victims.push(victim);
     }
 
     if (victims.length === 0) {
@@ -18950,18 +18943,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const attackers: MapEntity[] = [];
-    const seenAttackerEntityIds = new Set<number>();
-    for (const attackerTeam of attackerTeams) {
-      for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-        if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
-          continue;
-        }
-        if (seenAttackerEntityIds.has(attacker.id)) {
-          continue;
-        }
-        seenAttackerEntityIds.add(attacker.id);
-        attackers.push(attacker);
+    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
+      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
+        continue;
       }
+      attackers.push(attacker);
     }
 
     for (const attacker of attackers) {
@@ -19153,21 +19139,17 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private executeScriptNamedAttackTeam(attackerEntityId: number, victimTeamName: string): boolean {
     const attacker = this.spawnedEntities.get(attackerEntityId);
-    const victimTeams = this.resolveScriptConditionTeams(victimTeamName);
-    if (!attacker || attacker.destroyed || victimTeams.length === 0) {
+    const victimTeam = this.getScriptTeamRecord(victimTeamName);
+    if (!attacker || attacker.destroyed || !victimTeam) {
       return false;
     }
 
     const victims: MapEntity[] = [];
-    const seenVictimIds = new Set<number>();
-    for (const victimTeam of victimTeams) {
-      for (const entity of this.getScriptTeamMemberEntities(victimTeam)) {
-        if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity) || seenVictimIds.has(entity.id)) {
-          continue;
-        }
-        seenVictimIds.add(entity.id);
-        victims.push(entity);
+    for (const entity of this.getScriptTeamMemberEntities(victimTeam)) {
+      if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
+        continue;
       }
+      victims.push(entity);
     }
 
     this.setEntityLocomotorSet(attacker.id, LOCOMOTORSET_NORMAL);
@@ -19199,28 +19181,22 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamAttackArea.
    */
   private executeScriptTeamAttackArea(attackerTeamName: string, triggerName: string): boolean {
-    const attackerTeams = this.resolveScriptConditionTeams(attackerTeamName);
+    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
     const area = this.resolveScriptTriggerAreaByName(triggerName);
-    if (attackerTeams.length === 0 || !area) {
+    if (!attackerTeam || !area) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const attackerTeam of attackerTeams) {
-      for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-        if (attacker.destroyed
-          || this.isScriptEntityEffectivelyDead(attacker)
-          || handledEntityIds.has(attacker.id)) {
-          continue;
-        }
-        handledEntityIds.add(attacker.id);
-        this.cancelEntityCommandPathActions(attacker.id);
-        this.clearAttackTarget(attacker.id);
-        this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
-        const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
-        if (attackAreaState) {
-          this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
-        }
+    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
+      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
+        continue;
+      }
+      this.cancelEntityCommandPathActions(attacker.id);
+      this.clearAttackTarget(attacker.id);
+      this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
+      const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
+      if (attackAreaState) {
+        this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
       }
     }
 
@@ -19231,25 +19207,19 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamAttackNamed.
    */
   private executeScriptTeamAttackNamed(attackerTeamName: string, victimEntityId: number): boolean {
-    const attackerTeams = this.resolveScriptConditionTeams(attackerTeamName);
+    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
     const victim = this.spawnedEntities.get(victimEntityId);
-    if (attackerTeams.length === 0 || !victim || victim.destroyed) {
+    if (!attackerTeam || !victim || victim.destroyed) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const attackerTeam of attackerTeams) {
-      for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-        if (attacker.destroyed
-          || this.isScriptEntityEffectivelyDead(attacker)
-          || handledEntityIds.has(attacker.id)) {
-          continue;
-        }
-        handledEntityIds.add(attacker.id);
-        this.cancelEntityCommandPathActions(attacker.id);
-        this.clearAttackTarget(attacker.id);
-        this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
+    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
+      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
+        continue;
       }
+      this.cancelEntityCommandPathActions(attacker.id);
+      this.clearAttackTarget(attacker.id);
+      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
     }
 
     return true;
