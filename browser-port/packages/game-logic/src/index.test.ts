@@ -37489,17 +37489,18 @@ describe('Script condition groundwork', () => {
       targetZ: null,
     });
 
+    const abilityOne = privateApi.spawnedEntities.get(1);
+    const abilityTwo = privateApi.spawnedEntities.get(2);
+    expect(abilityOne).toBeDefined();
+    expect(abilityTwo).toBeDefined();
+    abilityOne!.lastSpecialPowerDispatch = null;
+    abilityTwo!.lastSpecialPowerDispatch = null;
     expect(logic.executeScriptAction({
       actionType: 446, // TEAM_USE_COMMANDBUTTON_ABILITY
       params: ['AbilityProto', 'Command_ScriptNoTarget'],
     })).toBe(true);
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.commandButtonId).toBe('Command_ScriptNoTarget');
-    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.commandButtonId).toBe('Command_ScriptNoTarget');
-
-    const abilityOne = privateApi.spawnedEntities.get(1);
-    const abilityTwo = privateApi.spawnedEntities.get(2);
-    expect(abilityOne).toBeDefined();
-    expect(abilityTwo).toBeDefined();
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
     abilityOne!.lastSpecialPowerDispatch = null;
     abilityTwo!.lastSpecialPowerDispatch = null;
     expect(logic.setScriptConditionTeamContext('AbilityInstanceA')).toBe(true);
