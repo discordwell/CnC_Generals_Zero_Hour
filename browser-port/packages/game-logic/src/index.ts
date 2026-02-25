@@ -20203,23 +20203,12 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses destroyObject semantics on team members and optionally skips effectively-dead ones.
    */
   private executeScriptTeamDelete(teamName: string, ignoreDead: boolean): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const entities: MapEntity[] = [];
-    const seenEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (seenEntityIds.has(entity.id)) {
-          continue;
-        }
-        seenEntityIds.add(entity.id);
-        entities.push(entity);
-      }
-    }
-
+    const entities = this.getScriptTeamMemberEntities(team);
     for (const entity of entities) {
       if (ignoreDead && this.isScriptEntityEffectivelyDead(entity)) {
         continue;
@@ -20248,23 +20237,12 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doTeamKill.
    */
   private executeScriptTeamKill(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const entities: MapEntity[] = [];
-    const seenEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (seenEntityIds.has(entity.id)) {
-          continue;
-        }
-        seenEntityIds.add(entity.id);
-        entities.push(entity);
-      }
-    }
-
+    const entities = this.getScriptTeamMemberEntities(team);
     for (const entity of entities) {
       if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
         this.evacuateContainedEntities(entity, entity.x, entity.z, null);

@@ -41887,19 +41887,20 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(3)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(4)?.destroyed).toBe(true);
-    expect(logic.setScriptConditionTeamContext('DeleteInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 72,
       params: ['DeleteProto'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(10)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(11)?.destroyed).toBe(false);
-    logic.clearScriptConditionTeamContext();
+    expect(logic.setScriptConditionTeamContext('DeleteInstanceB')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 72,
       params: ['DeleteProto'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(10)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(11)?.destroyed).toBe(true);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 73, // NAMED_KILL
@@ -41913,19 +41914,20 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(6)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(7)?.destroyed).toBe(true);
-    expect(logic.setScriptConditionTeamContext('KillInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 74,
       params: ['KillProto'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(12)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(13)?.destroyed).toBe(false);
-    logic.clearScriptConditionTeamContext();
+    expect(logic.setScriptConditionTeamContext('KillInstanceB')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 74,
       params: ['KillProto'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(12)?.destroyed).toBe(true);
     expect(privateApi.spawnedEntities.get(13)?.destroyed).toBe(true);
+    logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
       actionType: 75, // PLAYER_KILL
