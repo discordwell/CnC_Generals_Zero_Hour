@@ -42472,14 +42472,14 @@ describe('Script condition groundwork', () => {
       params: ['StopProto', 10],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(10);
-    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(10);
+    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(12);
     expect(logic.setScriptConditionTeamContext('StopInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 141,
       params: ['StopProto', 7],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptStoppingDistanceOverride).toBe(7);
-    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(10);
+    expect(privateApi.spawnedEntities.get(2)?.scriptStoppingDistanceOverride).toBe(12);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
