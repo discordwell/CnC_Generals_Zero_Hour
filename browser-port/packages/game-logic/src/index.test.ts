@@ -28863,6 +28863,223 @@ describe('Map script execution', () => {
     })).toBe(false);
   });
 
+  it('gives group lookup precedence over script lookup for CALL_SUBROUTINE', () => {
+    const bundle = makeBundle({
+      objects: [],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'SharedRoutine',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: false,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: true,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 3, // CONDITION_TRUE
+                params: [],
+              }],
+            }],
+            actions: [{
+              actionType: 1, // SET_FLAG
+              params: [
+                { type: 5, intValue: 0, realValue: 0, stringValue: 'ScriptRoutineFlag' },
+                { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+              ],
+            }],
+            falseActions: [],
+          }],
+          groups: [{
+            name: 'SharedRoutine',
+            active: false,
+            subroutine: true,
+            scripts: [{
+              name: 'GroupRoutine',
+              comment: '',
+              conditionComment: '',
+              actionComment: '',
+              active: true,
+              oneShot: false,
+              easy: true,
+              normal: true,
+              hard: true,
+              subroutine: true,
+              delayEvaluationSeconds: 0,
+              conditions: [{
+                conditions: [{
+                  conditionType: 3, // CONDITION_TRUE
+                  params: [],
+                }],
+              }],
+              actions: [{
+                actionType: 1, // SET_FLAG
+                params: [
+                  { type: 5, intValue: 0, realValue: 0, stringValue: 'GroupRoutineFlag' },
+                  { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+                ],
+              }],
+              falseActions: [],
+            }],
+          }],
+        },
+      }],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+
+    expect(logic.executeScriptAction({
+      actionType: 10, // CALL_SUBROUTINE
+      params: ['SharedRoutine'],
+    })).toBe(true);
+
+    // Source parity: group lookup wins. Inactive group blocks fallback to script.
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['GroupRoutineFlag', true],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['ScriptRoutineFlag', true],
+    })).toBe(false);
+  });
+
+  it('emits debug warning when CALL_SUBROUTINE targets a non-subroutine group', () => {
+    const bundle = makeBundle({
+      objects: [],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'SharedRoutine',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: false,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: true,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 3, // CONDITION_TRUE
+                params: [],
+              }],
+            }],
+            actions: [{
+              actionType: 1, // SET_FLAG
+              params: [
+                { type: 5, intValue: 0, realValue: 0, stringValue: 'ScriptRoutineFlag' },
+                { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+              ],
+            }],
+            falseActions: [],
+          }],
+          groups: [{
+            name: 'SharedRoutine',
+            active: true,
+            subroutine: false,
+            scripts: [],
+          }],
+        },
+      }],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+
+    expect(logic.executeScriptAction({
+      actionType: 10, // CALL_SUBROUTINE
+      params: ['SharedRoutine'],
+    })).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['ScriptRoutineFlag', true],
+    })).toBe(false);
+
+    expect(logic.drainScriptDebugMessageRequests()).toEqual([
+      {
+        message: '***Attempting to call script that is not a subroutine:***',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+      {
+        message: 'SharedRoutine',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+    ]);
+  });
+
+  it('emits debug warning when CALL_SUBROUTINE targets an undefined script', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 10, // CALL_SUBROUTINE
+      params: ['MissingRoutine'],
+    })).toBe(true);
+
+    expect(logic.drainScriptDebugMessageRequests()).toEqual([
+      {
+        message: '***Script not defined:***',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+      {
+        message: 'MissingRoutine',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+    ]);
+  });
+
   it('iterates non-singleton condition-team instances for one-shot map script execution', () => {
     const bundle = makeBundle({
       objects: [

@@ -7985,24 +7985,44 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptEngine::callSubroutine dispatch marker.
-   * TODO(source-parity): execute real script/subroutine graph once map-script runtime is wired.
+   * Group lookup takes precedence over script lookup (matching C++).
    */
   notifyScriptSubroutineCall(scriptName: string): boolean {
-    const normalizedName = scriptName.trim().toUpperCase();
+    const trimmedName = scriptName.trim();
+    const normalizedName = trimmedName.toUpperCase();
     if (!normalizedName) {
       return false;
     }
     this.scriptSubroutineCalls.push(normalizedName);
+
     const mapGroup = this.mapScriptGroupsByNameUpper.get(normalizedName);
-    if (mapGroup && mapGroup.subroutine && mapGroup.active) {
-      this.executeMapScriptGroup(mapGroup, true);
+    if (mapGroup) {
+      if (!mapGroup.subroutine) {
+        this.executeScriptDebugMessage('***Attempting to call script that is not a subroutine:***', false, false);
+        this.executeScriptDebugMessage(trimmedName, false, false);
+        return true;
+      }
+      if (mapGroup.active) {
+        this.executeMapScriptGroup(mapGroup, true);
+      }
       return true;
     }
+
     const mapScript = this.mapScriptsByNameUpper.get(normalizedName);
-    if (mapScript && mapScript.subroutine && mapScript.active) {
-      this.executeMapScript(mapScript, true);
+    if (mapScript) {
+      if (!mapScript.subroutine) {
+        this.executeScriptDebugMessage('***Attempting to call script that is not a subroutine:***', false, false);
+        this.executeScriptDebugMessage(trimmedName, false, false);
+        return true;
+      }
+      if (mapScript.active) {
+        this.executeMapScript(mapScript, true);
+      }
       return true;
     }
+
+    this.executeScriptDebugMessage('***Script not defined:***', false, false);
+    this.executeScriptDebugMessage(trimmedName, false, false);
     return true;
   }
 
