@@ -29516,7 +29516,7 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_OWNED_BY_PLAYER',
       params: ['TransferInstanceB', 'China'],
-    })).toBe(true);
+    })).toBe(false);
 
     expect(logic.setScriptConditionTeamContext('TransferInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -29530,6 +29530,10 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_OWNED_BY_PLAYER',
       params: ['TransferInstanceB', 'China'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['TransferInstanceB', 'America'],
     })).toBe(true);
     logic.clearScriptConditionTeamContext();
 

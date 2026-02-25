@@ -11287,7 +11287,7 @@ export class GameLogicSubsystem implements Subsystem {
         );
       }
       case 'TEAM_TRANSFER_TO_PLAYER':
-        return this.setScriptTeamControllingSide(
+        return this.transferScriptTeamToSide(
           readString(0, ['teamName', 'team']),
           readSide(1, ['side', 'playerName', 'player']),
         );
@@ -12636,6 +12636,23 @@ export class GameLogicSubsystem implements Subsystem {
     for (const team of teams) {
       team.controllingSide = normalizedSide;
     }
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doTransferTeamToPlayer uses getTeamNamed.
+   * Applies to one resolved team and does not implicitly create teams.
+   */
+  private transferScriptTeamToSide(teamName: string, side: string): boolean {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
+      return false;
+    }
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    team.controllingSide = normalizedSide;
     return true;
   }
 
