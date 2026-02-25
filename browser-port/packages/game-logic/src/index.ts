@@ -13906,33 +13906,26 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
     const angle = this.resolveScriptBuildPlacementAngle(objectDef);
-    let builtAny = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team)
-        .filter((entity) => !entity.destroyed);
-      const location = this.resolveScriptTeamCenter(teamMembers);
-      if (!location) {
-        continue;
-      }
-
-      if (this.tryScriptConstructBuildingWithWiggleSearch(
-        side,
-        objectDef,
-        location.x,
-        location.z,
-        angle,
-      )) {
-        builtAny = true;
-      }
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    const location = this.resolveScriptTeamCenter(teamMembers);
+    if (!location) {
+      return false;
     }
 
-    return builtAny;
+    return this.tryScriptConstructBuildingWithWiggleSearch(
+      side,
+      objectDef,
+      location.x,
+      location.z,
+      angle,
+    );
   }
 
   /**

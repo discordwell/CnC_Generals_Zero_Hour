@@ -34168,7 +34168,7 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
-  it('fans out AI_PLAYER_BUILD_TYPE_NEAREST_TEAM across TeamPrototype instances', () => {
+  it('resolves AI_PLAYER_BUILD_TYPE_NEAREST_TEAM through getTeamNamed semantics', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
@@ -34216,29 +34216,29 @@ describe('Script condition groundwork', () => {
       };
     };
 
-    const fanoutLogic = makeScenario();
-    expect(fanoutLogic.executeScriptAction({
+    const prototypeLogic = makeScenario();
+    expect(prototypeLogic.executeScriptAction({
       actionType: 343,
       params: ['America', 'USAPowerPlant', 'ForwardProto'],
     })).toBe(true);
-    const builtIds = [...new Set(fanoutLogic.pendingConstructionActions.values())];
-    expect(builtIds.length).toBe(2);
+    const builtIds = [...new Set(prototypeLogic.pendingConstructionActions.values())];
+    expect(builtIds.length).toBe(1);
     const builtNearA = builtIds.some((entityId) => {
-      const built = fanoutLogic.spawnedEntities.get(entityId);
+      const built = prototypeLogic.spawnedEntities.get(entityId);
       if (!built) {
         return false;
       }
       return Math.hypot(built.x - 90, built.z - 20) <= 20;
     });
     const builtNearB = builtIds.some((entityId) => {
-      const built = fanoutLogic.spawnedEntities.get(entityId);
+      const built = prototypeLogic.spawnedEntities.get(entityId);
       if (!built) {
         return false;
       }
       return Math.hypot(built.x - 90, built.z - 90) <= 20;
     });
     expect(builtNearA).toBe(true);
-    expect(builtNearB).toBe(true);
+    expect(builtNearB).toBe(false);
 
     const contextLogic = makeScenario();
     expect(contextLogic.setScriptConditionTeamContext('ForwardInstanceA')).toBe(true);
