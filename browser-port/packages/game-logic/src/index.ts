@@ -13386,8 +13386,17 @@ export class GameLogicSubsystem implements Subsystem {
       case 'EVACUATE':
       case 'EXECUTE_RAILED_TRANSPORT':
       case 'BEACON_DELETE':
+      case 'DOZER_CONSTRUCT_CANCEL':
+      case 'CANCEL_UNIT_BUILD':
+      case 'CANCEL_UPGRADE':
+      case 'WAYPOINTS':
         // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition}
         // does not implement these command-button types for script execution.
+        return false;
+      case 'POW_RETURN_TO_PRISON':
+      case 'PICK_UP_PRISONER':
+        // Source parity: ALLOW_SURRENDER-only command modes are not script-implemented
+        // in standard Generals/ZH builds; treat as unsupported in this port.
         return false;
       case 'SELL':
         // Source parity: GeneralsMD Object::doCommandButton only implements SELL for
@@ -13447,7 +13456,7 @@ export class GameLogicSubsystem implements Subsystem {
         // does not implement PLACE_BEACON for script command-button execution.
         return false;
       default:
-        // TODO(source-parity): support remaining command button command types used by map scripts.
+        // Source parity subset: unknown command button types are currently unsupported.
         return false;
     }
   }

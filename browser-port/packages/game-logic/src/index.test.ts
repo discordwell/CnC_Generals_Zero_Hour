@@ -38852,6 +38852,86 @@ describe('Script condition groundwork', () => {
     }
   });
 
+  it('treats CANCEL/WAYPOINTS script command-button execution as unsupported', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCancelUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          CommandSet: 'ScriptCancelCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_DozerConstructCancel', {
+          Command: 'DOZER_CONSTRUCT_CANCEL',
+        }),
+        makeCommandButtonDef('Command_CancelUnitBuild', {
+          Command: 'CANCEL_UNIT_BUILD',
+        }),
+        makeCommandButtonDef('Command_CancelUpgrade', {
+          Command: 'CANCEL_UPGRADE',
+        }),
+        makeCommandButtonDef('Command_Waypoints', {
+          Command: 'WAYPOINTS',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCancelCommandSet', {
+          1: 'Command_DozerConstructCancel',
+          2: 'Command_CancelUnitBuild',
+          3: 'Command_CancelUpgrade',
+          4: 'Command_Waypoints',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptCancelUnit', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'CancelWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const commandNames = [
+      'Command_DozerConstructCancel',
+      'Command_CancelUnitBuild',
+      'Command_CancelUpgrade',
+      'Command_Waypoints',
+    ];
+    for (const commandName of commandNames) {
+      expect(logic.executeScriptAction({
+        actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+        params: [1, commandName],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+        params: [1, commandName, 2],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+        params: [1, commandName, 'CancelWaypoint'],
+      })).toBe(false);
+    }
+  });
+
   it('executes SWITCH_WEAPON command-button only for no-target script invocation', () => {
     const bundle = makeBundle({
       objects: [
