@@ -36379,6 +36379,60 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('uses source random-link traversal for non-exact follow-waypoints branching', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 16, 20), // id 1
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 501, name: 'Branch_Start', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'BranchPath', biDirectional: false },
+        { id: 502, name: 'Branch_Left', position: { x: 40, y: 20, z: 0 }, pathLabel1: 'BranchPath', biDirectional: false },
+        { id: 503, name: 'Branch_Right', position: { x: 20, y: 40, z: 0 }, pathLabel1: 'BranchPath', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 501, waypoint2: 502 }, // link(0)
+        { waypoint1: 501, waypoint2: 503 }, // link(1)
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { movePath: Array<{ x: number; z: number }> }>;
+      gameRandom: { setSeed: (seed: number) => void };
+    };
+    privateApi.gameRandom.setSeed(1);
+
+    expect(logic.executeScriptAction({
+      actionType: 56, // NAMED_FOLLOW_WAYPOINTS (raw id)
+      params: [1, 'BranchPath'],
+    })).toBe(true);
+
+    const movePath = privateApi.spawnedEntities.get(1)!.movePath;
+    expect(movePath.length).toBeGreaterThan(0);
+    // Deterministic seed(1): first nextRange(0,1) selects link index 1.
+    const finalWaypoint = movePath[movePath.length - 1]!;
+    expect(finalWaypoint.x).toBeCloseTo(20, 4);
+    expect(finalWaypoint.z).toBeCloseTo(40, 4);
+  });
+
   it('applies as-team offsets and exact waypoint routes for team follow-waypoints', () => {
     const bundle = makeBundle({
       objects: [

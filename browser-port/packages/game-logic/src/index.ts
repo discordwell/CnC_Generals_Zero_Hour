@@ -17024,28 +17024,27 @@ export class GameLogicSubsystem implements Subsystem {
         currentNode = nextNode;
       }
     } else {
-      const visited = new Set<number>();
-      while (currentNode && !visited.has(currentNode.id)) {
+      // Source parity bridge: AIFollowWaypointPathState::getNextWaypoint() in
+      // ALLOW_BACKTRACK mode picks a random outgoing link each step (including
+      // immediate backtracking). We precompute a capped route here.
+      let count = 0;
+      while (currentNode && count < SCRIPT_WAYPOINT_PATH_LIMIT) {
         route.push({
           x: currentNode.position.x,
           z: currentNode.position.y,
         });
-        visited.add(currentNode.id);
+        count += 1;
 
         const outgoing = outgoingById.get(currentNode.id);
         if (!outgoing || outgoing.length === 0) {
           break;
         }
-
-        let nextNode: (typeof routeNodes)[number] | undefined;
-        for (const nextId of outgoing) {
-          if (visited.has(nextId)) {
-            continue;
-          }
-          nextNode = routeNodesById.get(nextId);
-          if (nextNode) {
-            break;
-          }
+        const nextIndex = outgoing.length > 1
+          ? this.gameRandom.nextRange(0, outgoing.length - 1)
+          : 0;
+        const nextNode = routeNodesById.get(outgoing[nextIndex]!);
+        if (!nextNode) {
+          break;
         }
         currentNode = nextNode;
       }
