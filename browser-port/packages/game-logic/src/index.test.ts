@@ -33622,13 +33622,16 @@ describe('Script condition groundwork', () => {
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.update(1 / 30);
     expect(unitOne.scriptWanderInPlaceActive).toBe(false);
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(unitTwo.scriptWanderInPlaceActive).toBe(false);
 
     expect(logic.executeScriptAction({
       actionType: 438,
       params: ['WanderProto'],
     })).toBe(true);
     expect(unitOne.scriptWanderInPlaceActive).toBe(true);
-    expect(unitTwo.scriptWanderInPlaceActive).toBe(true);
+    expect(unitTwo.scriptWanderInPlaceActive).toBe(false);
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
     logic.update(1 / 30);
@@ -33639,6 +33642,18 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(unitOne.scriptWanderInPlaceActive).toBe(true);
     expect(unitTwo.scriptWanderInPlaceActive).toBe(false);
+    logic.clearScriptConditionTeamContext();
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.setScriptConditionTeamContext('WanderInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 438,
+      params: ['WanderProto'],
+    })).toBe(true);
+    expect(unitOne.scriptWanderInPlaceActive).toBe(false);
+    expect(unitTwo.scriptWanderInPlaceActive).toBe(true);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
@@ -33735,7 +33750,8 @@ describe('Script condition groundwork', () => {
       params: ['PathProto', 'PanicPath'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_WANDER');
-    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_WANDER');
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
     logic.update(1 / 30);
@@ -33748,6 +33764,19 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_PANIC');
     expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
     expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+    logic.clearScriptConditionTeamContext();
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+    expect(logic.setScriptConditionTeamContext('PathInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 113,
+      params: ['PathProto', 'PanicPath'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_PANIC');
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({

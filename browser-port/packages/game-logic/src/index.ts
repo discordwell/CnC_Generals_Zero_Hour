@@ -18403,31 +18403,27 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses per-entity nearest waypoint resolution and SET_WANDER locomotor.
    */
   private executeScriptTeamWander(teamName: string, waypointPathLabel: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
     let movedAny = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || !entity.canMove || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        const route = this.resolveScriptWaypointRouteByPathLabel(
-          waypointPathLabel,
-          entity.x,
-          entity.z,
-        );
-        if (!route || route.length === 0) {
-          return movedAny;
-        }
-        this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
-        if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-          movedAny = true;
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+      const route = this.resolveScriptWaypointRouteByPathLabel(
+        waypointPathLabel,
+        entity.x,
+        entity.z,
+      );
+      if (!route || route.length === 0) {
+        return movedAny;
+      }
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
+      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+        movedAny = true;
       }
     }
     return movedAny;
@@ -18438,31 +18434,27 @@ export class GameLogicSubsystem implements Subsystem {
    * Uses per-entity nearest waypoint resolution and SET_PANIC locomotor.
    */
   private executeScriptTeamPanic(teamName: string, waypointPathLabel: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
     let movedAny = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || !entity.canMove || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        const route = this.resolveScriptWaypointRouteByPathLabel(
-          waypointPathLabel,
-          entity.x,
-          entity.z,
-        );
-        if (!route || route.length === 0) {
-          return movedAny;
-        }
-        this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
-        if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-          movedAny = true;
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
+      }
+      const route = this.resolveScriptWaypointRouteByPathLabel(
+        waypointPathLabel,
+        entity.x,
+        entity.z,
+      );
+      if (!route || route.length === 0) {
+        return movedAny;
+      }
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
+      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+        movedAny = true;
       }
     }
     return movedAny;
@@ -18474,26 +18466,22 @@ export class GameLogicSubsystem implements Subsystem {
    * re-targeting random points around the action-time origin until interrupted.
    */
   private executeScriptTeamWanderInPlace(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
     let activatedAny = false;
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || !entity.canMove || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
-        entity.scriptWanderInPlaceActive = true;
-        entity.scriptWanderInPlaceOriginX = entity.x;
-        entity.scriptWanderInPlaceOriginZ = entity.z;
-        this.setScriptWanderInPlaceGoal(entity);
-        activatedAny = true;
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || !entity.canMove) {
+        continue;
       }
+      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
+      entity.scriptWanderInPlaceActive = true;
+      entity.scriptWanderInPlaceOriginX = entity.x;
+      entity.scriptWanderInPlaceOriginZ = entity.z;
+      this.setScriptWanderInPlaceGoal(entity);
+      activatedAny = true;
     }
     return activatedAny;
   }
