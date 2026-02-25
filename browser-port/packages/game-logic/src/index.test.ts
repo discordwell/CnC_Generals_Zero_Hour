@@ -43544,11 +43544,21 @@ describe('Script condition groundwork', () => {
     expect(logic.setScriptTeamMembers('AlphaTeam', [1, 2])).toBe(true);
 
     const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        scriptAiRecruitable: boolean;
+      }>;
       scriptTeamsByName: Map<string, {
         recruitableOverride: boolean | null;
         memberEntityIds: Set<number>;
       }>;
     };
+
+    expect(logic.executeScriptAction({
+      actionType: 505, // TEAM_AFFECT_OBJECT_PANEL_FLAGS
+      params: ['AlphaTeam', 'AI Recruitable', 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAiRecruitable).toBe(false);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAiRecruitable).toBe(false);
 
     expect(logic.executeScriptAction({
       actionType: 176, // TEAM_STOP_AND_DISBAND
@@ -43561,6 +43571,8 @@ describe('Script condition groundwork', () => {
     expect(Array.from(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.memberEntityIds ?? []).sort((a, b) => a - b))
       .toEqual([1, 2]);
     expect(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.recruitableOverride).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.scriptAiRecruitable).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.scriptAiRecruitable).toBe(true);
   });
 
   it('preserves default-team bookkeeping when TEAM_STOP_AND_DISBAND targets the default team itself', () => {

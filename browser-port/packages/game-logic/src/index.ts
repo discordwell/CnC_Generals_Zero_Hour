@@ -18172,7 +18172,8 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return;
       case 'AI_RECRUITABLE':
-        // TODO(source-parity): wire this state into AI recruit/merge behavior.
+        // Source parity: ScriptActions::changeObjectPanelFlagForSingleObject routes
+        // this to AIUpdateInterface::setIsRecruitable.
         entity.scriptAiRecruitable = enabled;
         return;
       case 'PLAYER_TARGETABLE':
@@ -19936,6 +19937,15 @@ export class GameLogicSubsystem implements Subsystem {
     const stopped = this.executeScriptTeamStop(team.nameUpper);
     if (!stopped) {
       return false;
+    }
+
+    // Source parity: ScriptActions::doTeamStop(team, TRUE) marks each member
+    // recruitable before merging into the controlling player's default team.
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      entity.scriptAiRecruitable = true;
     }
 
     // Source parity bridge: doTeamStop(team, TRUE) marks members recruitable before merge.
