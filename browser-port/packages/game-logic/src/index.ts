@@ -15288,13 +15288,19 @@ export class GameLogicSubsystem implements Subsystem {
     if (teamMembers.length === 0) {
       return false;
     }
+    // Source parity: ScriptActions::doTeamCaptureNearestUnownedFactionUnit uses
+    // PartitionFilterPlayerAffiliation(team->getControllingPlayer(), ...), so
+    // affiliation checks are based on controlling side, not the first member.
+    const controllingSide = this.resolveScriptTeamControllingSide(team)
+      ?? this.normalizeSide(teamMembers[0]!.side);
+    if (!controllingSide) {
+      return false;
+    }
 
     const center = this.resolveScriptTeamCenter(teamMembers);
     if (!center) {
       return false;
     }
-
-    const source = teamMembers[0]!;
     let closestTarget: MapEntity | null = null;
     let closestDistSqr = Number.POSITIVE_INFINITY;
     for (const candidate of this.spawnedEntities.values()) {
@@ -15308,7 +15314,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const relation = this.getTeamRelationship(source, candidate);
+      const relation = this.getTeamRelationshipBySides(controllingSide, candidate.side ?? '');
       if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
         continue;
       }

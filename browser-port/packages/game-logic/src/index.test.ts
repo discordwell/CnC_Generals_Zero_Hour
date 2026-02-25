@@ -37358,6 +37358,62 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('uses team controlling-side affiliation for team-capture-nearest-unowned-faction-unit scans', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CaptureInfantryChina', 'China', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('CaptureInfantryAmerica', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AbandonedVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CaptureInfantryChina', 20, 20), // id 1
+        makeMapObject('CaptureInfantryAmerica', 24, 20), // id 2
+        makeMapObject('AbandonedVehicle', 30, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('CaptureTeam', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamControllingSide('CaptureTeam', 'America')).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        side: string | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(3)?.objectStatusFlags.add('DISABLED_UNMANNED');
+
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeam'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect((privateApi.spawnedEntities.get(3)?.side ?? '').toLowerCase()).toBe('america');
+    expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+  });
+
   it('resolves team-capture-nearest-unowned-faction-unit through getTeamNamed with THIS_TEAM precedence', () => {
     const bundle = makeBundle({
       objects: [
