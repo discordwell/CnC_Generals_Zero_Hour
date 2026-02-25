@@ -9519,6 +9519,68 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.spawnedEntities.get(1)!.dozerRepairTaskOrderFrame).toBeGreaterThan(firstRepairOrderFrame);
   });
 
+  it('keeps current repair target when switching between bridge towers on the same bridge segment', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '5%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const bridgeTowerDef = makeObjectDef('BridgeTower', 'America', ['STRUCTURE', 'BRIDGE_TOWER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),   // id 1
+        makeMapObject('BridgeTower', 30, 20), // id 2
+        makeMapObject('BridgeTower', 40, 20), // id 3
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, bridgeTowerDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        dozerRepairTaskOrderFrame: number;
+        dozerBuildTaskOrderFrame: number;
+      }>;
+      pendingRepairActions: Map<number, number>;
+      bridgeSegmentByControlEntity: Map<number, number>;
+      canDozerAcceptNewRepairTarget: (dozer: unknown, target: unknown) => boolean;
+    };
+
+    const dozer = priv.spawnedEntities.get(1);
+    const towerA = priv.spawnedEntities.get(2);
+    const towerB = priv.spawnedEntities.get(3);
+    expect(dozer).toBeDefined();
+    expect(towerA).toBeDefined();
+    expect(towerB).toBeDefined();
+    if (!dozer || !towerA || !towerB) return;
+
+    // Mark dozer as actively repairing tower A.
+    dozer.dozerBuildTaskOrderFrame = 1;
+    dozer.dozerRepairTaskOrderFrame = 2;
+    priv.pendingRepairActions.set(1, 2);
+
+    // Same bridge segment => reject target switch.
+    priv.bridgeSegmentByControlEntity.set(2, 7);
+    priv.bridgeSegmentByControlEntity.set(3, 7);
+    expect(priv.canDozerAcceptNewRepairTarget(dozer, towerB)).toBe(false);
+
+    // Different segment => switch is allowed.
+    priv.bridgeSegmentByControlEntity.set(3, 8);
+    expect(priv.canDozerAcceptNewRepairTarget(dozer, towerB)).toBe(true);
+  });
+
   it('allows dozers to repair neutral structures', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

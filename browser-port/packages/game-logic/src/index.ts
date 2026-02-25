@@ -36517,8 +36517,12 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (currentRepairTarget.kindOf.has('BRIDGE_TOWER') && target.kindOf.has('BRIDGE_TOWER')) {
-      // TODO(source-parity): reject switching between towers on the same bridge once
-      // bridge-tower bridge-ID linkage is ported.
+      const currentSegmentId = this.bridgeSegmentByControlEntity.get(currentRepairTarget.id);
+      const nextSegmentId = this.bridgeSegmentByControlEntity.get(target.id);
+      // Source parity: keep repairing current bridge if both towers map to the same bridge segment.
+      if (currentSegmentId !== undefined && currentSegmentId === nextSegmentId) {
+        return false;
+      }
     }
 
     return true;
