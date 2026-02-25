@@ -20820,11 +20820,9 @@ export class GameLogicSubsystem implements Subsystem {
         }
         continue;
       }
-      if (transport.moving) {
-        // Source parity: DeliverPayloadAIUpdate starts drop logic as soon as
-        // distance-to-target constraints are satisfied, not only after path end.
-        this.stopEntity(transport.id);
-      }
+      // Source parity: DeliverPayloadAIUpdate starts drop logic as soon as
+      // distance-to-target constraints are satisfied, not only after path end.
+      // The transport keeps following its move command while delivering.
 
       const containedEntityIds = this.collectContainedEntityIds(transport.id);
       if (transport.containProfile && containedEntityIds.length > 0) {
