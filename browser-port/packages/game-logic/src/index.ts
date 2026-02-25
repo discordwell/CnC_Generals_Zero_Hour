@@ -1436,6 +1436,8 @@ interface MissileAIProfile {
   distanceScatterWhenJammed: number;
   detonateCallsKill: boolean;
   killSelfDelayFrames: number;
+  /** Locomotor preferred cruise height above terrain. */
+  preferredHeight: number;
   /** Locomotor turn rate converted from radians/second to radians/frame. */
   turnRatePerFrame: number;
 }
@@ -1468,6 +1470,8 @@ interface MissileAIRuntimeState {
   originalTargetX: number;
   originalTargetY: number;
   originalTargetZ: number;
+  /** Source parity: Locomotor precise-Z mode after dive-distance trigger. */
+  usePreciseTargetY: boolean;
   travelDistance: number;
   totalDistanceEstimate: number;
 }
@@ -26029,6 +26033,7 @@ export class GameLogicSubsystem implements Subsystem {
             distanceScatterWhenJammed: readNumericField(block.fields, ['DistanceScatterWhenJammed']) ?? 75,
             detonateCallsKill: readBooleanField(block.fields, ['DetonateCallsKill']) ?? false,
             killSelfDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['KillSelfDelay']) ?? 3),
+            preferredHeight: Math.max(0, locomotorProfile?.preferredHeight ?? 0),
             turnRatePerFrame: Math.max(0, (locomotorProfile?.turnRate ?? 0) / LOGIC_FRAME_RATE),
           };
         }
@@ -46651,6 +46656,7 @@ export class GameLogicSubsystem implements Subsystem {
           originalTargetX: impactX,
           originalTargetY: impactY,
           originalTargetZ: impactZ,
+          usePreciseTargetY: false,
           travelDistance: 0,
           totalDistanceEstimate: Math.max(1, Math.hypot(impactX - sourceX, impactZ - sourceZ)),
         };
@@ -47062,13 +47068,40 @@ export class GameLogicSubsystem implements Subsystem {
         ? state.speed
         : Math.max(1, Math.hypot(state.velocityX, state.velocityY, state.velocityZ));
 
+      // Source parity: MissileAIUpdate::doAttackState + Locomotor::setUsePreciseZPos.
+      // Before dive trigger, missiles with preferred height cruise above terrain; once
+      // within dive distance they switch to precise target Z/Y tracking.
+      if (
+        profile.preferredHeight > 0
+        && !state.usePreciseTargetY
+        && (state.state === 'ATTACK_NOTURN' || state.state === 'ATTACK')
+      ) {
+        const diveDistance = profile.distanceToTargetBeforeDiving;
+        if (diveDistance > 0) {
+          const distanceToTarget2D = Math.hypot(state.targetX - state.currentX, state.targetZ - state.currentZ);
+          if (distanceToTarget2D < diveDistance) {
+            state.usePreciseTargetY = true;
+          }
+        }
+      }
+
+      let guidanceTargetY = state.targetY;
+      if (
+        profile.preferredHeight > 0
+        && !state.usePreciseTargetY
+        && state.state !== 'KILL'
+        && state.state !== 'KILL_SELF'
+      ) {
+        guidanceTargetY = this.resolveGroundHeight(state.currentX, state.currentZ) + profile.preferredHeight;
+      }
+
       let dirX = state.velocityX;
       let dirY = state.velocityY;
       let dirZ = state.velocityZ;
       const canTurn = (state.state === 'ATTACK' || state.state === 'KILL') && !fuelExpired;
       if (canTurn) {
         const toTargetX = state.targetX - state.currentX;
-        const toTargetY = state.targetY - state.currentY;
+        const toTargetY = guidanceTargetY - state.currentY;
         const toTargetZ = state.targetZ - state.currentZ;
         const toTargetLength = Math.hypot(toTargetX, toTargetY, toTargetZ);
         if (toTargetLength > 0) {
@@ -47105,7 +47138,7 @@ export class GameLogicSubsystem implements Subsystem {
         dirZ /= directionLength;
       } else {
         const fallbackX = state.targetX - state.currentX;
-        const fallbackY = state.targetY - state.currentY;
+        const fallbackY = guidanceTargetY - state.currentY;
         const fallbackZ = state.targetZ - state.currentZ;
         const fallbackLength = Math.hypot(fallbackX, fallbackY, fallbackZ);
         if (fallbackLength > 0) {

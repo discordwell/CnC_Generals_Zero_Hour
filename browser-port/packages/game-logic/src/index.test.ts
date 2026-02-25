@@ -6868,6 +6868,156 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(target.health).toBe(300);
   });
 
+  it('uses preferred-height cruise until DistanceToTargetBeforeDiving then switches to precise dive', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const missileLocomotor = makeLocomotorDef('MissileCruiseLocomotor', 240);
+    (missileLocomotor.fields as Record<string, unknown>).PreferredHeight = 30;
+
+    const attackerDef = makeObjectDef('CruiseMissileAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'CruiseMissileWeapon'] }),
+    ]);
+    const targetDef = makeObjectDef('CruiseMissileTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const projectileDef = makeObjectDef('CruiseMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('LocomotorSet', 'SET_NORMAL MissileCruiseLocomotor', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'No',
+        InitialVelocity: 10,
+        IgnitionDelay: 0,
+        FuelLifetime: 8000,
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetBeforeDiving: 20,
+        DistanceToTargetForLock: 0,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('CruiseMissileWeapon', {
+      PrimaryDamage: 80,
+      PrimaryDamageRadius: 0,
+      AttackRange: 500,
+      WeaponSpeed: 10,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'CruiseMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CruiseMissileAttacker', 0, 0),
+        makeMapObject('CruiseMissileTarget', 120, 0),
+      ], 256, 256),
+      makeRegistry(makeBundle({
+        objects: [attackerDef, targetDef, projectileDef],
+        weapons: [weaponDef],
+        locomotors: [missileLocomotor],
+      })),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      frameCounter: number;
+      spawnedEntities: Map<number, {
+        attackWeapon: unknown;
+      }>;
+      queueWeaponDamageEvent: (
+        attacker: { attackWeapon: unknown },
+        target: unknown,
+        weapon: unknown,
+      ) => void;
+      updateMissileAIEvents: () => void;
+      pendingWeaponDamageEvents: Array<{
+        missileAIProfile: { preferredHeight: number } | null;
+        missileAIState: {
+          state: string;
+          stateEnteredFrame: number;
+          armed: boolean;
+          trackingTarget: boolean;
+          targetEntityId: number | null;
+          fuelExpirationFrame: number;
+          noTurnDistanceLeft: number;
+          speed: number;
+          currentX: number;
+          currentY: number;
+          currentZ: number;
+          velocityX: number;
+          velocityY: number;
+          velocityZ: number;
+          targetX: number;
+          targetY: number;
+          targetZ: number;
+          originalTargetX: number;
+          originalTargetY: number;
+          originalTargetZ: number;
+          usePreciseTargetY: boolean;
+        } | null;
+      }>;
+    };
+
+    const attacker = privateApi.spawnedEntities.get(1);
+    const target = privateApi.spawnedEntities.get(2);
+    if (!attacker || !target || !attacker.attackWeapon) {
+      throw new Error('Expected attacker/target with missile weapon');
+    }
+
+    privateApi.queueWeaponDamageEvent(attacker, target, attacker.attackWeapon);
+    const event = privateApi.pendingWeaponDamageEvents.find((entry) => entry.missileAIState !== null);
+    if (!event || !event.missileAIState) {
+      throw new Error('Expected queued MissileAI event');
+    }
+    expect(event.missileAIProfile?.preferredHeight).toBe(30);
+    const state = event.missileAIState;
+
+    // Force deterministic cruise path: far target at ground level from an elevated missile.
+    state.state = 'ATTACK';
+    state.stateEnteredFrame = privateApi.frameCounter;
+    state.armed = true;
+    state.trackingTarget = false;
+    state.targetEntityId = null;
+    state.fuelExpirationFrame = privateApi.frameCounter + 240;
+    state.noTurnDistanceLeft = 0;
+    state.speed = 10;
+    state.currentX = 0;
+    state.currentY = 30;
+    state.currentZ = 0;
+    state.velocityX = 1;
+    state.velocityY = 0;
+    state.velocityZ = 0;
+    state.targetX = 100;
+    state.targetY = 0;
+    state.targetZ = 0;
+    state.originalTargetX = 100;
+    state.originalTargetY = 0;
+    state.originalTargetZ = 0;
+    state.usePreciseTargetY = false;
+
+    // Remain in cruise mode while farther than dive distance (20).
+    for (let i = 0; i < 7; i++) {
+      privateApi.frameCounter += 1;
+      privateApi.updateMissileAIEvents();
+    }
+    expect(state.currentX).toBeCloseTo(70, 5);
+    expect(state.currentY).toBeCloseTo(30, 5);
+    expect(state.usePreciseTargetY).toBe(false);
+
+    // Cross dive threshold and switch to precise target Y tracking.
+    for (let i = 0; i < 5 && !state.usePreciseTargetY; i++) {
+      privateApi.frameCounter += 1;
+      privateApi.updateMissileAIEvents();
+    }
+    expect(state.usePreciseTargetY).toBe(true);
+    const preDiveY = state.currentY;
+
+    privateApi.frameCounter += 1;
+    privateApi.updateMissileAIEvents();
+    expect(state.currentY).toBeLessThan(preDiveY);
+  });
+
   it('keeps DamageDealtAtSelfPosition anchored at source even when ScatterTarget offsets are present', () => {
     const withoutScatterTarget = runDamageAtSelfScatterTargetTimeline(false);
     expect(withoutScatterTarget.targetHealthTimeline).toEqual([150, 150, 150, 150]);
