@@ -43387,7 +43387,7 @@ describe('Script condition groundwork', () => {
       params: ['AlphaProto', 'BravoProto', 0],
     })).toBe(true);
     expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
-    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
     expect(logic.executeScriptAction({
       actionType: 384, // TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM
       params: ['AlphaProto', 'BravoProto'],
@@ -43415,14 +43415,14 @@ describe('Script condition groundwork', () => {
       params: ['AlphaProto', 'China', 0],
     })).toBe(true);
     expect(logic.getEntityRelationship(1, 2)).toBe('enemies');
-    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
     expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 389, // TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER
       params: ['AlphaProto', 'China'],
     })).toBe(true);
     expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
-    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
     logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
       actionType: 389,
@@ -43435,14 +43435,14 @@ describe('Script condition groundwork', () => {
       params: ['China', 'AlphaProto', 0],
     })).toBe(true);
     expect(logic.getEntityRelationship(2, 1)).toBe('enemies');
-    expect(logic.getEntityRelationship(2, 3)).toBe('enemies');
+    expect(logic.getEntityRelationship(2, 3)).toBe('neutral');
     expect(logic.setScriptConditionTeamContext('AlphaInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 391, // PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM
       params: ['China', 'AlphaProto'],
     })).toBe(true);
     expect(logic.getEntityRelationship(2, 1)).toBe('neutral');
-    expect(logic.getEntityRelationship(2, 3)).toBe('enemies');
+    expect(logic.getEntityRelationship(2, 3)).toBe('neutral');
     logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
       actionType: 391,
@@ -43460,7 +43460,7 @@ describe('Script condition groundwork', () => {
       params: ['AlphaProto'],
     })).toBe(true);
     expect(logic.getEntityRelationship(1, 2)).toBe('neutral');
-    expect(logic.getEntityRelationship(3, 2)).toBe('enemies');
+    expect(logic.getEntityRelationship(3, 2)).toBe('neutral');
     logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
       actionType: 385,
@@ -44851,7 +44851,7 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptHasUnits({ teamName: 'teamThePlayer' })).toBe(false);
   });
 
-  it('clears TeamPrototype instances with THIS_TEAM precedence', () => {
+  it('clears a single getTeamNamed-resolved TeamPrototype instance with THIS_TEAM precedence', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('ContextUnit', 'America', ['INFANTRY'], [
@@ -44876,6 +44876,8 @@ describe('Script condition groundwork', () => {
     expect(logic.setScriptTeamPrototype('ClearInstanceB', 'ClearProto')).toBe(true);
     expect(logic.clearScriptTeam('ClearProto')).toBe(true);
     expect(logic.evaluateScriptHasUnits({ teamName: 'ClearInstanceA' })).toBe(false);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'ClearInstanceB' })).toBe(true);
+    expect(logic.clearScriptTeam('ClearProto')).toBe(true);
     expect(logic.evaluateScriptHasUnits({ teamName: 'ClearInstanceB' })).toBe(false);
 
     expect(logic.setScriptTeamMembers('ClearInstanceA', [1])).toBe(true);

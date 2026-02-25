@@ -12605,18 +12605,13 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: Team controlling player side override.
    */
   setScriptTeamControllingSide(teamName: string, side: string | null): boolean {
-    const resolvedTeams = this.resolveScriptConditionTeams(teamName);
-    const teams = resolvedTeams.length > 0
-      ? resolvedTeams
-      : [this.getOrCreateScriptTeamRecord(teamName)].filter((team): team is ScriptTeamRecord => team !== null);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName) ?? this.getOrCreateScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
     if (side === null) {
-      for (const team of teams) {
-        team.controllingSide = null;
-      }
+      team.controllingSide = null;
       return true;
     }
 
@@ -12625,9 +12620,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    for (const team of teams) {
-      team.controllingSide = normalizedSide;
-    }
+    team.controllingSide = normalizedSide;
     return true;
   }
 
@@ -12685,22 +12678,16 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveScriptTeamSidesForRelationship(teamName: string): string[] {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return [];
     }
 
-    const sides: string[] = [];
-    const seenSides = new Set<string>();
-    for (const team of teams) {
-      const side = this.resolveScriptTeamControllingSide(team);
-      if (!side || seenSides.has(side)) {
-        continue;
-      }
-      seenSides.add(side);
-      sides.push(side);
+    const side = this.resolveScriptTeamControllingSide(team);
+    if (!side) {
+      return [];
     }
-    return sides;
+    return [side];
   }
 
   private setScriptTeamOverrideRelationToTeam(
@@ -20214,24 +20201,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   clearScriptTeam(teamName: string): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
-
-    const handledTeamNames = new Set<string>();
-    let removedAny = false;
-    for (const team of teams) {
-      if (handledTeamNames.has(team.nameUpper)) {
-        continue;
-      }
-      handledTeamNames.add(team.nameUpper);
-      if (this.clearScriptTeamByNameUpper(team.nameUpper)) {
-        removedAny = true;
-      }
-    }
-
-    return removedAny;
+    return this.clearScriptTeamByNameUpper(team.nameUpper);
   }
 
   /**
