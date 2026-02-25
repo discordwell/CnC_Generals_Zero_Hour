@@ -1157,6 +1157,12 @@ interface ContainProfile {
   allowInsideKindOf: ReadonlySet<string> | null;
   /** Source parity: OpenContainModuleData::m_forbidInsideKindOf. */
   forbidInsideKindOf: ReadonlySet<string>;
+  /** Source parity: OpenContainModuleData::m_allowAlliesInside (default true). */
+  allowAlliesInside: boolean;
+  /** Source parity: OpenContainModuleData::m_allowEnemiesInside (default true). */
+  allowEnemiesInside: boolean;
+  /** Source parity: OpenContainModuleData::m_allowNeutralInside (default true). */
+  allowNeutralInside: boolean;
   passengersAllowedToFire: boolean;
   passengersAllowedToFireDefault: boolean;
   portableStructureTemplateNames?: string[];
@@ -19678,6 +19684,25 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private isScriptContainRelationshipAllowed(container: MapEntity, rider: MapEntity): boolean {
+    const containProfile = container.containProfile;
+    if (!containProfile) {
+      return false;
+    }
+
+    const relationship = this.getTeamRelationship(rider, container);
+    switch (relationship) {
+      case RELATIONSHIP_ALLIES:
+        return containProfile.allowAlliesInside;
+      case RELATIONSHIP_ENEMIES:
+        return containProfile.allowEnemiesInside;
+      case RELATIONSHIP_NEUTRAL:
+        return containProfile.allowNeutralInside;
+      default:
+        return false;
+    }
+  }
+
   private resolveScriptContainerUsedTransportSlots(container: MapEntity): number {
     let usedSlots = 0;
     for (const containedEntityId of this.collectContainedEntityIds(container.id)) {
@@ -21020,6 +21045,9 @@ export class GameLogicSubsystem implements Subsystem {
     const transportSide = this.normalizeSide(transport.side);
     const unitSide = this.normalizeSide(validationUnit.side);
     if (transportSide && unitSide && transportSide !== unitSide) {
+      return false;
+    }
+    if (!this.isScriptContainRelationshipAllowed(transport, validationUnit)) {
       return false;
     }
     if (!this.isScriptContainKindAllowed(transport, validationUnit)) {
@@ -27945,6 +27973,12 @@ export class GameLogicSubsystem implements Subsystem {
         .filter((kindOfName) => kindOfName.length > 0);
       const allowInsideKindOf = allowInsideKindOfTokens.length > 0 ? new Set<string>(allowInsideKindOfTokens) : null;
       const forbidInsideKindOf = new Set<string>(forbidInsideKindOfTokens);
+      const allowAlliesInsideRaw = readBooleanField(block.fields, ['AllowAlliesInside']);
+      const allowEnemiesInsideRaw = readBooleanField(block.fields, ['AllowEnemiesInside']);
+      const allowNeutralInsideRaw = readBooleanField(block.fields, ['AllowNeutralInside']);
+      const allowAlliesInside = allowAlliesInsideRaw !== false;
+      const allowEnemiesInside = allowEnemiesInsideRaw !== false;
+      const allowNeutralInside = allowNeutralInsideRaw !== false;
       const containMax = readNumericField(block.fields, ['ContainMax']) ?? 0;
       const payloadTemplateNames = readStringList(block.fields, ['PayloadTemplateName']).map((templateName) =>
         templateName.toUpperCase(),
@@ -27961,6 +27995,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'OPEN',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -27974,6 +28011,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'TRANSPORT',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -27987,6 +28027,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'OVERLORD',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -28002,6 +28045,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'HELIX',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           portableStructureTemplateNames: payloadTemplateNames,
@@ -28019,6 +28065,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'PARACHUTE',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
@@ -28034,6 +28083,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'GARRISON',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire: true,
           passengersAllowedToFireDefault: true,
           garrisonCapacity: containMax > 0 ? containMax : 10,
@@ -28050,6 +28102,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'TUNNEL',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -28066,6 +28121,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'CAVE',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -28083,6 +28141,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'HEAL',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -28098,6 +28159,9 @@ export class GameLogicSubsystem implements Subsystem {
           moduleType: 'INTERNET_HACK',
           allowInsideKindOf,
           forbidInsideKindOf,
+          allowAlliesInside,
+          allowEnemiesInside,
+          allowNeutralInside,
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
@@ -37598,6 +37662,7 @@ export class GameLogicSubsystem implements Subsystem {
       // special-zero-slot container (e.g. parachute shell), validate against its rider.
       const validationPassenger = this.resolveScriptTransportValidationEntity(passenger);
       if (this.normalizeSide(validationPassenger.side) !== this.normalizeSide(transport.side)) return;
+      if (!this.isScriptContainRelationshipAllowed(transport, validationPassenger)) return;
       if (!this.isScriptContainKindAllowed(transport, validationPassenger)) return;
 
       const kindOf = this.resolveEntityKindOfSet(validationPassenger);
@@ -37609,7 +37674,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       if (!this.canScriptContainerFitEntity(transport, passenger)) return;
     } else {
-      if (this.normalizeSide(passenger.side) !== this.normalizeSide(transport.side)) return;
+      if (!this.isScriptContainRelationshipAllowed(transport, passenger)) return;
       if (!this.isScriptContainKindAllowed(transport, passenger)) return;
       if (!this.canScriptContainerFitEntity(transport, passenger)) return;
     }
@@ -37717,6 +37782,10 @@ export class GameLogicSubsystem implements Subsystem {
           this.pendingTransportActions.delete(passengerId);
           continue;
         }
+        if (!this.isScriptContainRelationshipAllowed(transport, validationPassenger)) {
+          this.pendingTransportActions.delete(passengerId);
+          continue;
+        }
         if (!this.isScriptContainKindAllowed(transport, validationPassenger)) {
           this.pendingTransportActions.delete(passengerId);
           continue;
@@ -37726,6 +37795,9 @@ export class GameLogicSubsystem implements Subsystem {
         && containProfile.moduleType !== 'HEAL'
         && containProfile.moduleType !== 'INTERNET_HACK'
       ) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      } else if (!this.isScriptContainRelationshipAllowed(transport, passenger)) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       } else if (!this.isScriptContainKindAllowed(transport, passenger)) {

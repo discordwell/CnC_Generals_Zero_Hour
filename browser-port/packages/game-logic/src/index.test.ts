@@ -34670,6 +34670,74 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBeNull();
   });
 
+  it('respects OpenContain relationship allow flags for script enter actions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OpenBunkerDenied', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'OpenContain ModuleTag_Contain', {
+            ContainMax: 2,
+            AllowAlliesInside: true,
+            AllowEnemiesInside: false,
+            AllowNeutralInside: false,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('OpenBunkerAllowed', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'OpenContain ModuleTag_Contain', {
+            ContainMax: 2,
+            AllowAlliesInside: true,
+            AllowEnemiesInside: true,
+            AllowNeutralInside: true,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('RangerA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('RangerC', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('OpenBunkerDenied', 20, 20), // id 1
+        makeMapObject('OpenBunkerAllowed', 40, 20), // id 2
+        makeMapObject('RangerA', 20, 20), // id 3
+        makeMapObject('RangerC', 40, 20), // id 4
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [3, 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [4, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+    expect(privateApi.spawnedEntities.get(4)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [4, 2],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(4)?.transportContainerId).toBe(2);
+  });
+
   it('executes script named-set-topple-direction action using source action id', () => {
     const bundle = makeBundle({
       objects: [
