@@ -29478,6 +29478,33 @@ describe('Script condition groundwork', () => {
     expect(logic.setScriptTeamControllingSide('TransferInstanceB', 'America')).toBe(true);
     expect(logic.setScriptTeamPrototype('TransferInstanceB', 'TransferProto')).toBe(true);
     expect(logic.executeScriptAction({
+      actionType: 'TEAM_SET_STATE',
+      params: ['TransferProto', 'HUNTING'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_STATE_IS',
+      params: ['TransferInstanceA', 'HUNTING'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_STATE_IS',
+      params: ['TransferInstanceB', 'HUNTING'],
+    })).toBe(true);
+    expect(logic.setScriptConditionTeamContext('TransferInstanceA')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 'TEAM_SET_STATE',
+      params: ['TransferProto', 'AMBUSH'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_STATE_IS',
+      params: ['TransferInstanceA', 'AMBUSH'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_STATE_IS',
+      params: ['TransferInstanceB', 'HUNTING'],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.executeScriptAction({
       actionType: 153,
       params: ['TransferProto', 'China'],
     })).toBe(true);

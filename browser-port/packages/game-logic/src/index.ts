@@ -12585,11 +12585,18 @@ export class GameLogicSubsystem implements Subsystem {
    * TODO(source-parity): tie this to Team state machine updates.
    */
   setScriptTeamState(teamName: string, stateName: string): boolean {
-    const team = this.getOrCreateScriptTeamRecord(teamName);
-    if (!team) {
+    const resolvedTeams = this.resolveScriptConditionTeams(teamName);
+    const teams = resolvedTeams.length > 0
+      ? resolvedTeams
+      : [this.getOrCreateScriptTeamRecord(teamName)].filter((team): team is ScriptTeamRecord => team !== null);
+    if (teams.length === 0) {
       return false;
     }
-    team.stateName = stateName.trim();
+
+    const normalizedStateName = stateName.trim();
+    for (const team of teams) {
+      team.stateName = normalizedStateName;
+    }
     return true;
   }
 
