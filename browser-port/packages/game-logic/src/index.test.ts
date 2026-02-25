@@ -6641,6 +6641,144 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(impactFx).toBeUndefined();
   });
 
+  it('silently destroys MissileAI shots that move below world without impact FX', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('BelowWorldMissileAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BelowWorldMissileWeapon'] }),
+    ]);
+    const targetDef = makeObjectDef('BelowWorldMissileTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const projectileDef = makeObjectDef('BelowWorldMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'No',
+        InitialVelocity: 5,
+        IgnitionDelay: 0,
+        FuelLifetime: 8000,
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 0,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('BelowWorldMissileWeapon', {
+      PrimaryDamage: 80,
+      PrimaryDamageRadius: 15,
+      AttackRange: 600,
+      WeaponSpeed: 5,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'BelowWorldMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BelowWorldMissileAttacker', 0, 0),
+        makeMapObject('BelowWorldMissileTarget', 100, 0),
+      ], 256, 256),
+      makeRegistry(makeBundle({
+        objects: [attackerDef, targetDef, projectileDef],
+        weapons: [weaponDef],
+      })),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      frameCounter: number;
+      spawnedEntities: Map<number, {
+        attackWeapon: unknown;
+      }>;
+      queueWeaponDamageEvent: (
+        attacker: { attackWeapon: unknown },
+        target: unknown,
+        weapon: unknown,
+      ) => void;
+      updateMissileAIEvents: () => void;
+      updatePendingWeaponDamage: () => void;
+      pendingWeaponDamageEvents: Array<{
+        executeFrame: number;
+        primaryVictimEntityId: number | null;
+        countermeasureNoDamage: boolean;
+        suppressImpactVisual: boolean;
+        missileAIState: {
+          state: string;
+          stateEnteredFrame: number;
+          armed: boolean;
+          trackingTarget: boolean;
+          targetEntityId: number | null;
+          fuelExpirationFrame: number;
+          noTurnDistanceLeft: number;
+          speed: number;
+          currentX: number;
+          currentY: number;
+          currentZ: number;
+          velocityX: number;
+          velocityY: number;
+          velocityZ: number;
+          targetX: number;
+          targetY: number;
+          targetZ: number;
+          originalTargetX: number;
+          originalTargetY: number;
+          originalTargetZ: number;
+        } | null;
+      }>;
+      visualEventBuffer: Array<{ type: string }>;
+    };
+
+    const attacker = privateApi.spawnedEntities.get(1);
+    const target = privateApi.spawnedEntities.get(2);
+    if (!attacker || !target || !attacker.attackWeapon) {
+      throw new Error('Expected attacker/target with missile weapon');
+    }
+
+    privateApi.queueWeaponDamageEvent(attacker, target, attacker.attackWeapon);
+    const event = privateApi.pendingWeaponDamageEvents.find((entry) => entry.missileAIState !== null);
+    if (!event || !event.missileAIState) {
+      throw new Error('Expected queued MissileAI event');
+    }
+    const state = event.missileAIState;
+
+    // Force downward movement so missile drops under world in one update.
+    state.state = 'ATTACK';
+    state.stateEnteredFrame = privateApi.frameCounter;
+    state.armed = true;
+    state.trackingTarget = false;
+    state.targetEntityId = null;
+    state.fuelExpirationFrame = privateApi.frameCounter + 120;
+    state.noTurnDistanceLeft = 0;
+    state.speed = 5;
+    state.currentX = 50;
+    state.currentY = 1;
+    state.currentZ = 0;
+    state.velocityX = 0;
+    state.velocityY = -1;
+    state.velocityZ = 0;
+    state.targetX = 50;
+    state.targetY = -20;
+    state.targetZ = 0;
+    state.originalTargetX = 50;
+    state.originalTargetY = -20;
+    state.originalTargetZ = 0;
+
+    privateApi.frameCounter += 1;
+    privateApi.updateMissileAIEvents();
+
+    expect(event.executeFrame).toBe(privateApi.frameCounter);
+    expect(event.countermeasureNoDamage).toBe(true);
+    expect(event.suppressImpactVisual).toBe(true);
+    expect(event.primaryVictimEntityId).toBeNull();
+
+    privateApi.visualEventBuffer.length = 0;
+    privateApi.updatePendingWeaponDamage();
+    const impactFx = privateApi.visualEventBuffer.find((entry) => entry.type === 'WEAPON_IMPACT');
+    expect(impactFx).toBeUndefined();
+  });
+
   it('keeps DamageDealtAtSelfPosition anchored at source even when ScatterTarget offsets are present', () => {
     const withoutScatterTarget = runDamageAtSelfScatterTargetTimeline(false);
     expect(withoutScatterTarget.targetHealthTimeline).toEqual([150, 150, 150, 150]);

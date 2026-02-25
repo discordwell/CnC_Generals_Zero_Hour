@@ -47137,6 +47137,8 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: below world is silently destroyed.
       if (state.currentY < 0) {
         event.countermeasureNoDamage = true;
+        event.primaryVictimEntityId = null;
+        event.suppressImpactVisual = true;
         event.impactX = state.currentX;
         event.impactY = state.currentY;
         event.impactZ = state.currentZ;
