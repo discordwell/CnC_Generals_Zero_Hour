@@ -37713,6 +37713,86 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('treats EXIT/EVACUATE/RAILED/BEACON script command-button execution as unsupported', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCommandUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          CommandSet: 'ScriptUnsupportedCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ExitContainer', {
+          Command: 'EXIT_CONTAINER',
+        }),
+        makeCommandButtonDef('Command_Evacuate', {
+          Command: 'EVACUATE',
+        }),
+        makeCommandButtonDef('Command_RailedTransport', {
+          Command: 'EXECUTE_RAILED_TRANSPORT',
+        }),
+        makeCommandButtonDef('Command_BeaconDelete', {
+          Command: 'BEACON_DELETE',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptUnsupportedCommandSet', {
+          1: 'Command_ExitContainer',
+          2: 'Command_Evacuate',
+          3: 'Command_RailedTransport',
+          4: 'Command_BeaconDelete',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptCommandUnit', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'UnsupportedWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const commandNames = [
+      'Command_ExitContainer',
+      'Command_Evacuate',
+      'Command_RailedTransport',
+      'Command_BeaconDelete',
+    ];
+    for (const commandName of commandNames) {
+      expect(logic.executeScriptAction({
+        actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+        params: [1, commandName],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+        params: [1, commandName, 2],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+        params: [1, commandName, 'UnsupportedWaypoint'],
+      })).toBe(false);
+    }
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [

@@ -13398,29 +13398,12 @@ export class GameLogicSubsystem implements Subsystem {
         // does not implement TOGGLE_OVERCHARGE for script command-button execution.
         return false;
       case 'EXIT_CONTAINER':
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'exitContainer', entityId: sourceEntity.id });
-        return true;
       case 'EVACUATE':
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'evacuate', entityId: sourceEntity.id });
-        return true;
       case 'EXECUTE_RAILED_TRANSPORT':
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'executeRailedTransport', entityId: sourceEntity.id });
-        return true;
       case 'BEACON_DELETE':
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'beaconDelete', entityId: sourceEntity.id });
-        return true;
+        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition}
+        // does not implement these command-button types for script execution.
+        return false;
       case 'SELL':
         // Source parity: GeneralsMD Object::doCommandButton only implements SELL for
         // no-target script invocation; object/position variants are not implemented.
