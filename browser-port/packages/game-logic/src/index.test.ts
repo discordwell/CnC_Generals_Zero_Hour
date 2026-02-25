@@ -33038,7 +33038,7 @@ describe('Script condition groundwork', () => {
       params: ['MoveProto', 'TargetBeacon', 'MoveArea'],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
-    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
 
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
@@ -33056,6 +33056,18 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
     expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+    logic.clearScriptConditionTeamContext();
+    moveOne.moveTarget = null;
+    moveOne.movePath = [];
+    moveTwo.moveTarget = null;
+    moveTwo.movePath = [];
+    expect(logic.setScriptConditionTeamContext('MoveInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 433,
+      params: ['MoveProto', 'TargetBeacon', 'MoveArea'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({

@@ -17300,69 +17300,64 @@ export class GameLogicSubsystem implements Subsystem {
     objectTypeName: string,
     triggerName: string,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
+    const teamMembers = this.getScriptTeamMemberEntities(team);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
     let movedAny = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team)
-        .filter((member) => !handledEntityIds.has(member.id));
-      if (teamMembers.length === 0) {
+    let mapStatusEntity: MapEntity | null = null;
+    let sourceX = 0;
+    let sourceZ = 0;
+    let sourceCount = 0;
+    for (const member of teamMembers) {
+      if (member.destroyed || !member.canMove) {
         continue;
       }
-
-      let mapStatusEntity: MapEntity | null = null;
-      let sourceX = 0;
-      let sourceZ = 0;
-      let sourceCount = 0;
-      for (const member of teamMembers) {
-        if (member.destroyed || !member.canMove) {
-          continue;
-        }
-        if (!mapStatusEntity) {
-          mapStatusEntity = member;
-        }
-        sourceX += member.x;
-        sourceZ += member.z;
-        sourceCount += 1;
+      if (!mapStatusEntity) {
+        mapStatusEntity = member;
       }
-      if (!mapStatusEntity || sourceCount <= 0) {
+      sourceX += member.x;
+      sourceZ += member.z;
+      sourceCount += 1;
+    }
+    if (!mapStatusEntity || sourceCount <= 0) {
+      return movedAny;
+    }
+
+    const target = this.findNearestScriptMoveTargetByType(
+      sourceX / sourceCount,
+      sourceZ / sourceCount,
+      mapStatusEntity,
+      objectTypeName,
+      triggerName,
+    );
+    if (!target) {
+      return movedAny;
+    }
+
+    for (const member of teamMembers) {
+      if (member.destroyed || !member.canMove) {
         return movedAny;
       }
-
-      const target = this.findNearestScriptMoveTargetByType(
-        sourceX / sourceCount,
-        sourceZ / sourceCount,
-        mapStatusEntity,
-        objectTypeName,
-        triggerName,
+      this.setEntityLocomotorSet(member.id, LOCOMOTORSET_NORMAL);
+      const interactionDistance = this.resolveEntityInteractionDistance(member, target);
+      this.issueMoveTo(
+        member.id,
+        target.x,
+        target.z,
+        interactionDistance,
       );
-      if (!target) {
-        return movedAny;
+      if (member.moveTarget === null) {
+        this.issueMoveTo(member.id, target.x, target.z, interactionDistance, true);
       }
-
-      for (const member of teamMembers) {
-        handledEntityIds.add(member.id);
-        if (member.destroyed || !member.canMove) {
-          return movedAny;
-        }
-        this.setEntityLocomotorSet(member.id, LOCOMOTORSET_NORMAL);
-        const interactionDistance = this.resolveEntityInteractionDistance(member, target);
-        this.issueMoveTo(
-          member.id,
-          target.x,
-          target.z,
-          interactionDistance,
-        );
-        if (member.moveTarget === null) {
-          this.issueMoveTo(member.id, target.x, target.z, interactionDistance, true);
-        }
-        if (member.moving) {
-          movedAny = true;
-        }
+      if (member.moving) {
+        movedAny = true;
       }
     }
 
