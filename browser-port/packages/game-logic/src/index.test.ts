@@ -44594,6 +44594,122 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(podId)?.transportContainerId).toBe(carrierId);
   });
 
+  it('forces DeliverPayloadAIUpdate reinforcement transports to exit even when teamTransportsExit is false', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
+          makeBlock('Behavior', 'DeliverPayloadAIUpdate ModuleTag_DeliverPayload', {
+            DeliveryDistance: 0,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 350, InitialHealth: 350 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 80),
+        makeLocomotorDef('TestVehicleLoco', 120),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([], 64, 64);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'DropOrigin',
+          position: { x: 10, y: 10, z: 0 },
+        },
+        {
+          id: 2,
+          name: 'DropDest',
+          position: { x: 14, y: 10, z: 0 },
+        },
+      ],
+      links: [],
+    };
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'AlphaProto',
+          teamOwner: 'Player_1',
+          teamIsSingleton: false,
+          teamMaxInstances: 2,
+          teamUnitType1: 'AmericaInfantry',
+          teamUnitMaxCount1: 1,
+          teamTransport: 'ReinforceCarrier',
+          teamStartsFull: true,
+          teamTransportsExit: false,
+          teamReinforcementOrigin: 'DropOrigin',
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      scriptTeamsByName: Map<string, {
+        memberEntityIds: Set<number>;
+      }>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 241, // CREATE_REINFORCEMENT_TEAM
+      params: ['AlphaProto', 'DropDest'],
+    })).toBe(true);
+
+    const createdTeam = privateApi.scriptTeamsByName.get('ALPHAPROTO#1');
+    expect(createdTeam).toBeDefined();
+
+    const memberIds = Array.from(createdTeam?.memberEntityIds ?? []);
+    const carrierIds = memberIds.filter(
+      (entityId) => privateApi.spawnedEntities.get(entityId)?.templateName === 'ReinforceCarrier',
+    );
+    const infantryIds = memberIds.filter(
+      (entityId) => privateApi.spawnedEntities.get(entityId)?.templateName === 'AmericaInfantry',
+    );
+    expect(carrierIds).toHaveLength(1);
+    expect(infantryIds).toHaveLength(1);
+
+    const carrierId = carrierIds[0]!;
+    const infantryId = infantryIds[0]!;
+    for (let i = 0; i < 240; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(privateApi.spawnedEntities.has(carrierId)).toBe(false);
+    expect(privateApi.spawnedEntities.get(infantryId)?.transportContainerId).toBeNull();
+  });
+
   it('materializes non-singleton build/recruit team instances and enforces max instances while delayed', () => {
     const bundle = makeBundle({
       objects: [

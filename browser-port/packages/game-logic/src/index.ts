@@ -20414,6 +20414,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (primaryTransport) {
+      const transportObjectDef = this.resolveObjectDefByTemplateName(primaryTransport.templateName);
+      const transportUsesDeliverPayload = this.hasScriptReinforcementDeliverPayloadModule(transportObjectDef);
       for (const member of this.getScriptTeamMemberEntities(team)) {
         if (member.destroyed) {
           continue;
@@ -20425,7 +20427,10 @@ export class GameLogicSubsystem implements Subsystem {
             targetZ: destination.z,
             originX: member.x,
             originZ: member.z,
-            transportsExit: prototype.reinforcementTransportsExit,
+            // Source parity: ScriptActions::doCreateReinforcements always routes
+            // DeliverPayloadAIUpdate transports through deliverPayloadViaModuleData(),
+            // which exits/deletes regardless of TeamTemplate::m_transportsExit.
+            transportsExit: transportUsesDeliverPayload || prototype.reinforcementTransportsExit,
             evacuationIssued: false,
             exitMoveIssued: false,
           });
@@ -20628,6 +20633,22 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return null;
+  }
+
+  private hasScriptReinforcementDeliverPayloadModule(objectDef: ObjectDef | null): boolean {
+    if (!objectDef) {
+      return false;
+    }
+    for (const block of objectDef.blocks) {
+      if (block.type.toUpperCase() !== 'BEHAVIOR') {
+        continue;
+      }
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType === 'DELIVERPAYLOADAIUPDATE') {
+        return true;
+      }
+    }
+    return false;
   }
 
   private updatePendingScriptReinforcementTransportArrivals(): void {
