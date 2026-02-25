@@ -18841,58 +18841,46 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doMergeTeamIntoTeam.
+   * Source parity: ScriptActions::doMergeTeamIntoTeam.
    */
   private executeScriptTeamMergeIntoTeam(sourceTeamName: string, targetTeamName: string): boolean {
-    const sourceTeams = this.resolveScriptConditionTeams(sourceTeamName);
+    const sourceTeam = this.getScriptTeamRecord(sourceTeamName);
     const targetTeam = this.getScriptTeamRecord(targetTeamName);
-    if (sourceTeams.length === 0 || !targetTeam) {
+    if (!sourceTeam || !targetTeam) {
       return false;
     }
-
-    const processedSourceTeamNames = new Set<string>();
-    let mergedAny = false;
-    for (const sourceTeam of sourceTeams) {
-      if (processedSourceTeamNames.has(sourceTeam.nameUpper)) {
-        continue;
-      }
-      processedSourceTeamNames.add(sourceTeam.nameUpper);
-
-      if (sourceTeam.nameUpper === targetTeam.nameUpper) {
-        mergedAny = true;
-        continue;
-      }
-
-      const mergedEntityIds = new Set<number>(targetTeam.memberEntityIds);
-      const targetSide = this.resolveScriptTeamControllingSide(targetTeam);
-      for (const entityId of sourceTeam.memberEntityIds) {
-        mergedEntityIds.add(entityId);
-        const entity = this.spawnedEntities.get(entityId);
-        if (!entity || entity.destroyed || !targetSide) {
-          continue;
-        }
-        this.transferScriptEntityToSide(entity, targetSide);
-      }
-      targetTeam.memberEntityIds = mergedEntityIds;
-      targetTeam.created = true;
-      if (targetTeam.recruitableOverride === null && sourceTeam.recruitableOverride !== null) {
-        targetTeam.recruitableOverride = sourceTeam.recruitableOverride;
-      }
-      sourceTeam.memberEntityIds = new Set<number>();
-      sourceTeam.created = false;
-      this.scriptTeamCreatedReadyFrameByName.delete(sourceTeam.nameUpper);
-
-      // Source parity bridge: Team::deleteTeam empties members but singleton teams persist.
-      // Non-prototype synthetic instances are removed after transfer.
-      if (sourceTeam.nameUpper !== sourceTeam.prototypeNameUpper) {
-        if (!this.clearScriptTeam(sourceTeam.nameUpper)) {
-          return false;
-        }
-      }
-      mergedAny = true;
+    if (sourceTeam.nameUpper === targetTeam.nameUpper) {
+      return true;
     }
 
-    return mergedAny;
+    const mergedEntityIds = new Set<number>(targetTeam.memberEntityIds);
+    const targetSide = this.resolveScriptTeamControllingSide(targetTeam);
+    for (const entityId of sourceTeam.memberEntityIds) {
+      mergedEntityIds.add(entityId);
+      const entity = this.spawnedEntities.get(entityId);
+      if (!entity || entity.destroyed || !targetSide) {
+        continue;
+      }
+      this.transferScriptEntityToSide(entity, targetSide);
+    }
+    targetTeam.memberEntityIds = mergedEntityIds;
+    targetTeam.created = true;
+    if (targetTeam.recruitableOverride === null && sourceTeam.recruitableOverride !== null) {
+      targetTeam.recruitableOverride = sourceTeam.recruitableOverride;
+    }
+    sourceTeam.memberEntityIds = new Set<number>();
+    sourceTeam.created = false;
+    this.scriptTeamCreatedReadyFrameByName.delete(sourceTeam.nameUpper);
+
+    // Source parity bridge: Team::deleteTeam empties members but singleton teams persist.
+    // Non-prototype synthetic instances are removed after transfer.
+    if (sourceTeam.nameUpper !== sourceTeam.prototypeNameUpper) {
+      if (!this.clearScriptTeam(sourceTeam.nameUpper)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /**
