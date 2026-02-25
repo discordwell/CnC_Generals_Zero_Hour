@@ -15322,7 +15322,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamCaptureNearestUnownedFactionUnit.
-   * TODO(source-parity): port full AIGroup::groupEnter/partition filters for enterable targets.
    */
   private executeScriptTeamCaptureNearestUnownedFactionUnit(teamName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -15363,10 +15362,6 @@ export class GameLogicSubsystem implements Subsystem {
 
       const relation = this.getTeamRelationshipBySides(controllingSide, candidate.side ?? '');
       if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
-        continue;
-      }
-      if (!teamMembers.some((entity) =>
-        this.canQueueEnterObjectAction(entity, candidate, 'captureUnmannedFactionUnit'))) {
         continue;
       }
 
@@ -35539,10 +35534,34 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     action: EnterObjectCommand['action'],
   ): boolean {
-    if (source.id === target.id) {
+    if (!source.canMove) {
       return false;
     }
-    if (!source.canMove) {
+    if (!this.passesCommonEnterObjectValidation(source, target)) {
+      return false;
+    }
+
+    switch (action) {
+      case 'hijackVehicle':
+        return this.canExecuteHijackVehicleEnterAction(source, target);
+      case 'convertToCarBomb':
+        return this.canExecuteConvertToCarBombEnterAction(source, target);
+      case 'sabotageBuilding':
+        return this.resolveSabotageBuildingProfile(source, target) !== null;
+      case 'repairVehicle':
+        return this.canExecuteRepairVehicleEnterAction(source, target);
+      case 'captureUnmannedFactionUnit':
+        return this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target);
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Source parity: shared ActionManager::canEnterObject pre-checks.
+   */
+  private passesCommonEnterObjectValidation(source: MapEntity, target: MapEntity): boolean {
+    if (source.id === target.id) {
       return false;
     }
     if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION')) {
@@ -35568,21 +35587,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (targetKindOf.has('IGNORED_IN_GUI')) {
       return false;
     }
-
-    switch (action) {
-      case 'hijackVehicle':
-        return this.canExecuteHijackVehicleEnterAction(source, target);
-      case 'convertToCarBomb':
-        return this.canExecuteConvertToCarBombEnterAction(source, target);
-      case 'sabotageBuilding':
-        return this.resolveSabotageBuildingProfile(source, target) !== null;
-      case 'repairVehicle':
-        return this.canExecuteRepairVehicleEnterAction(source, target);
-      case 'captureUnmannedFactionUnit':
-        return this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target);
-      default:
-        return false;
-    }
+    return true;
   }
 
   private isEntityDozerCapable(entity: MapEntity): boolean {
@@ -37476,10 +37481,13 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIGroup::groupEnter against unmanned faction units.
-   * TODO(source-parity): port generic Object::isEnterable/getInOrOn mechanics for all groupEnter targets.
+   * Source parity subset: ActionManager::canEnterObject special-case for unmanned vehicles.
    */
   private canExecuteCaptureUnmannedFactionUnitEnterAction(source: MapEntity, target: MapEntity): boolean {
+    if (!this.passesCommonEnterObjectValidation(source, target)) {
+      return false;
+    }
+
     const sourceKindOf = this.resolveEntityKindOfSet(source);
     if (!sourceKindOf.has('INFANTRY')) {
       return false;

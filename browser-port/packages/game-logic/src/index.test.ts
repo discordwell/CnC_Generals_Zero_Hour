@@ -38497,6 +38497,68 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
   });
 
+  it('keeps closest unmanned target selection even when entry validation rejects that target', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CaptureInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AbandonedVehicle', 'Civilian', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CaptureInfantry', 20, 20), // id 1
+        makeMapObject('AbandonedVehicle', 24, 20), // id 2 (closest)
+        makeMapObject('AbandonedVehicle', 34, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('CaptureTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        side: string | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(2)?.objectStatusFlags.add('DISABLED_UNMANNED');
+    privateApi.spawnedEntities.get(3)?.objectStatusFlags.add('DISABLED_UNMANNED');
+    privateApi.spawnedEntities.get(2)?.objectStatusFlags.add('SOLD');
+
+    // Source parity: script picks closest filtered target first and does not fall back.
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeam'],
+    })).toBe(false);
+    expect((privateApi.spawnedEntities.get(2)?.side ?? '').toLowerCase()).toBe('civilian');
+    expect((privateApi.spawnedEntities.get(3)?.side ?? '').toLowerCase()).toBe('civilian');
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+    expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+
+    privateApi.spawnedEntities.get(2)?.objectStatusFlags.delete('SOLD');
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeam'],
+    })).toBe(true);
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect((privateApi.spawnedEntities.get(2)?.side ?? '').toLowerCase()).toBe('america');
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+    expect((privateApi.spawnedEntities.get(3)?.side ?? '').toLowerCase()).toBe('civilian');
+    expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+  });
+
   it('requires infantry and non-REJECT_UNMANNED sources for team-capture-nearest-unowned-faction-unit', () => {
     const bundle = makeBundle({
       objects: [
