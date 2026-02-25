@@ -32028,6 +32028,12 @@ describe('Script condition groundwork', () => {
       params: ['EmoteProto', 'Emotion_Calm', 1],
     })).toBe(true);
     logic.clearScriptConditionTeamContext();
+    expect(logic.setScriptConditionTeamContext('EmoteInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 488,
+      params: ['EmoteProto', 'Emotion_Focused', 0.5],
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
     expect(logic.drainScriptEmoticonRequests()).toEqual([
       {
         entityId: 1,
@@ -32036,15 +32042,15 @@ describe('Script condition groundwork', () => {
         frame: 0,
       },
       {
-        entityId: 2,
-        emoticonName: 'Emotion_Surprised',
-        durationFrames: 60,
-        frame: 0,
-      },
-      {
         entityId: 1,
         emoticonName: 'Emotion_Calm',
         durationFrames: 30,
+        frame: 0,
+      },
+      {
+        entityId: 2,
+        emoticonName: 'Emotion_Focused',
+        durationFrames: 15,
         frame: 0,
       },
     ]);
