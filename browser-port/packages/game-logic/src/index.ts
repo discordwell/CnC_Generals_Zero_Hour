@@ -13277,19 +13277,9 @@ export class GameLogicSubsystem implements Subsystem {
         });
         return true;
       case 'SET_RALLY_POINT':
-        if (target.kind !== 'POSITION') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'setRallyPoint',
-          entityId: sourceEntity.id,
-          targetX: target.targetX,
-          targetZ: target.targetZ,
-        });
-        return true;
+        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition}
+        // does not implement SET_RALLY_POINT for script command-button execution.
+        return false;
       case 'GUARD':
       case 'GUARD_WITHOUT_PURSUIT':
       case 'GUARD_FLYING_UNITS_ONLY': {

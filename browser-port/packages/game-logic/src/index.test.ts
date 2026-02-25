@@ -37956,6 +37956,66 @@ describe('Script condition groundwork', () => {
     expect(logic.getSideCredits('America')).toBe(350);
   });
 
+  it('treats SET_RALLY_POINT script command-button execution as unsupported', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ], {
+          CommandSet: 'ScriptRallyCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_SetRally', {
+          Command: 'SET_RALLY_POINT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptRallyCommandSet', {
+          1: 'Command_SetRally',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptFactory', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'RallyWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_SetRally'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_SetRally', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_SetRally', 'RallyWaypoint'],
+    })).toBe(false);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
