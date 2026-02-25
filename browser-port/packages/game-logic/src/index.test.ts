@@ -34771,6 +34771,94 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('applies as-team offsets and exact waypoint routes for team follow-waypoints', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 20), // id 1
+      makeMapObject('Ranger', 14, 20), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 101, name: 'Offset_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'OffsetPath', biDirectional: false },
+        { id: 102, name: 'Offset_B', position: { x: 40, y: 20, z: 0 }, pathLabel1: 'OffsetPath', biDirectional: false },
+      ],
+      links: [
+        { waypoint1: 101, waypoint2: 102 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('OffsetTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+        moving: boolean;
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 36, // TEAM_FOLLOW_WAYPOINTS
+      params: ['OffsetTeam', 'OffsetPath', 1],
+    })).toBe(true);
+
+    const nonExactOne = privateApi.spawnedEntities.get(1)!;
+    const nonExactTwo = privateApi.spawnedEntities.get(2)!;
+    const nonExactCenterX = (nonExactOne.x + nonExactTwo.x) / 2;
+    const nonExactOffsetOneX = nonExactOne.x - nonExactCenterX;
+    const nonExactOffsetTwoX = nonExactTwo.x - nonExactCenterX;
+    expect(nonExactOne.movePath.length).toBeGreaterThan(0);
+    expect(nonExactTwo.movePath.length).toBeGreaterThan(0);
+    const nonExactOneFinal = nonExactOne.movePath[nonExactOne.movePath.length - 1]!;
+    const nonExactTwoFinal = nonExactTwo.movePath[nonExactTwo.movePath.length - 1]!;
+    expect(nonExactOneFinal.x).toBeCloseTo(40 + nonExactOffsetOneX, 4);
+    expect(nonExactTwoFinal.x).toBeCloseTo(40 + nonExactOffsetTwoX, 4);
+    expect(nonExactOneFinal.x).toBeLessThan(nonExactTwoFinal.x);
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.submitCommand({ type: 'stop', entityId: 2 });
+    logic.update(1 / 30);
+
+    expect(logic.executeScriptAction({
+      actionType: 281, // TEAM_FOLLOW_WAYPOINTS_EXACT
+      params: ['OffsetTeam', 'OffsetPath', 1],
+    })).toBe(true);
+
+    const exactOne = privateApi.spawnedEntities.get(1)!;
+    const exactTwo = privateApi.spawnedEntities.get(2)!;
+    const exactCenterX = (exactOne.x + exactTwo.x) / 2;
+    const exactOffsetOneX = exactOne.x - exactCenterX;
+    const exactOffsetTwoX = exactTwo.x - exactCenterX;
+
+    expect(exactOne.movePath.length).toBe(3);
+    expect(exactTwo.movePath.length).toBe(3);
+    expect(exactOne.movePath[0]?.x).toBeCloseTo(exactOne.x, 5);
+    expect(exactTwo.movePath[0]?.x).toBeCloseTo(exactTwo.x, 5);
+    expect(exactOne.movePath[1]?.x).toBeCloseTo(20 + exactOffsetOneX, 5);
+    expect(exactTwo.movePath[1]?.x).toBeCloseTo(20 + exactOffsetTwoX, 5);
+    expect(exactOne.movePath[2]?.x).toBeCloseTo(40 + exactOffsetOneX, 5);
+    expect(exactTwo.movePath[2]?.x).toBeCloseTo(40 + exactOffsetTwoX, 5);
+  });
+
   it('records waypoint-path completion from follow-waypoints actions', () => {
     const bundle = makeBundle({
       objects: [

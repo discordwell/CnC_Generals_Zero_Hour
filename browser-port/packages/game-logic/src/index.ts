@@ -16247,10 +16247,10 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // TODO(source-parity): exact-follow uses aiFollowWaypointPathExact and can preserve
-    // tighter corner traversal than this shared route queue implementation.
-    void exact;
     this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
+    if (exact) {
+      return this.enqueueScriptWaypointRouteExact(entity, route, waypointPathLabel);
+    }
     return this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel);
   }
 
@@ -16267,11 +16267,6 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team) {
       return false;
     }
-
-    // TODO(source-parity): "asTeam" and exact-follow variants should use group-level
-    // waypoint followers (groupFollowWaypointPath{AsTeam}{Exact}) instead of per-unit queues.
-    void asTeam;
-    void exact;
 
     const teamMembers = this.getScriptTeamMemberEntities(team)
       .filter((entity) => !entity.destroyed && entity.canMove);
@@ -16295,11 +16290,75 @@ export class GameLogicSubsystem implements Subsystem {
 
     let movedAny = false;
     for (const entity of teamMembers) {
-      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
+      const routeToUse = asTeam
+        ? this.buildScriptWaypointRouteWithOffset(route, entity.x - center.x, entity.z - center.z)
+        : route;
+      const moved = exact
+        ? this.enqueueScriptWaypointRouteExact(entity, routeToUse, waypointPathLabel)
+        : this.enqueueScriptWaypointRoute(entity, routeToUse, waypointPathLabel);
+      if (moved) {
         movedAny = true;
       }
     }
     return movedAny;
+  }
+
+  private buildScriptWaypointRouteWithOffset(
+    route: readonly { x: number; z: number }[],
+    offsetX: number,
+    offsetZ: number,
+  ): Array<{ x: number; z: number }> {
+    if (offsetX === 0 && offsetZ === 0) {
+      return route.map((node) => ({ x: node.x, z: node.z }));
+    }
+    return route.map((node) => ({
+      x: node.x + offsetX,
+      z: node.z + offsetZ,
+    }));
+  }
+
+  /**
+   * Source parity subset: AIUpdateInterface::setPathFromWaypoint used by
+   * aiFollowWaypointPathExact{AsTeam}. Exact mode follows waypoint nodes
+   * directly without pathfinder-generated intermediate routing.
+   */
+  private enqueueScriptWaypointRouteExact(
+    entity: MapEntity,
+    route: readonly { x: number; z: number }[],
+    completionPathName?: string,
+  ): boolean {
+    if (route.length === 0) {
+      return false;
+    }
+
+    this.cancelEntityCommandPathActions(entity.id);
+    this.clearAttackTarget(entity.id);
+
+    const directPath: VectorXZ[] = [{ x: entity.x, z: entity.z }];
+    for (const waypoint of route) {
+      directPath.push({ x: waypoint.x, z: waypoint.z });
+    }
+
+    entity.moving = true;
+    entity.movePath = directPath;
+    entity.pathIndex = 0;
+    entity.moveTarget = entity.movePath[0]!;
+    this.updatePathfindGoalCellFromPath(entity);
+
+    const normalizedPathName = completionPathName
+      ? this.normalizeScriptCompletionName(completionPathName)
+      : '';
+    if (normalizedPathName) {
+      const finalWaypoint = route[route.length - 1]!;
+      this.scriptPendingWaypointPathByEntityId.set(entity.id, {
+        pathName: normalizedPathName,
+        finalX: finalWaypoint.x,
+        finalZ: finalWaypoint.z,
+      });
+    } else {
+      this.scriptPendingWaypointPathByEntityId.delete(entity.id);
+    }
+    return true;
   }
 
   private findScriptBuildDozerForTemplate(side: string, templateName: string): MapEntity | null {
@@ -16379,9 +16438,6 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // TODO(source-parity): "asTeam" should use group-follow-as-team semantics instead of per-unit routes.
-    void asTeam;
-
     const teamMembers = this.getScriptTeamMemberEntities(team)
       .filter((entity) => !entity.destroyed && entity.canMove);
     if (teamMembers.length === 0) {
@@ -16405,7 +16461,10 @@ export class GameLogicSubsystem implements Subsystem {
 
     let movedAny = false;
     for (const entity of teamMembers) {
-      if (this.enqueueScriptWaypointRoute(entity, route)) {
+      const routeToUse = asTeam
+        ? this.buildScriptWaypointRouteWithOffset(route, entity.x - center.x, entity.z - center.z)
+        : route;
+      if (this.enqueueScriptWaypointRoute(entity, routeToUse)) {
         movedAny = true;
       }
     }
