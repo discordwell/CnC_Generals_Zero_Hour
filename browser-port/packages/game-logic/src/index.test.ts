@@ -28492,6 +28492,104 @@ describe('Map script execution', () => {
     expect(logic.getSideCredits('America')).toBe(1500);
   });
 
+  it('emits source warning debug messages for scripts with multiple non-singleton team conditions', () => {
+    const bundle = makeBundle({
+      objects: [],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [{
+            name: 'AmbiguousTeamScript',
+            comment: '',
+            conditionComment: '',
+            actionComment: '',
+            active: true,
+            oneShot: false,
+            easy: true,
+            normal: true,
+            hard: true,
+            subroutine: false,
+            delayEvaluationSeconds: 0,
+            conditions: [{
+              conditions: [{
+                conditionType: 10, // TEAM_HAS_UNITS
+                params: [
+                  { type: 3, intValue: 0, realValue: 0, stringValue: 'AlphaTeam' },
+                ],
+              }, {
+                conditionType: 10, // TEAM_HAS_UNITS
+                params: [
+                  { type: 3, intValue: 0, realValue: 0, stringValue: 'BravoTeam' },
+                ],
+              }],
+            }],
+            actions: [],
+            falseActions: [],
+          }],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'AlphaTeam',
+          teamOwner: 'Player_1',
+          teamIsSingleton: false,
+          teamMaxInstances: 3,
+        },
+      }, {
+        dict: {
+          teamName: 'BravoTeam',
+          teamOwner: 'Player_1',
+          teamIsSingleton: false,
+          teamMaxInstances: 3,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+
+    expect(logic.drainScriptDebugMessageRequests()).toEqual([
+      {
+        message: '***WARNING: Script contains multiple non-singleton team conditions::***',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+      {
+        message: 'AmbiguousTeamScript',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+      {
+        message: 'AlphaTeam',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+      {
+        message: 'BravoTeam',
+        crashRequested: false,
+        pauseRequested: false,
+        frame: 0,
+      },
+    ]);
+  });
+
   it('uses first-defined script when subroutine names collide across side script lists', () => {
     const bundle = makeBundle({
       objects: [],

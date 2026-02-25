@@ -6180,6 +6180,7 @@ export class GameLogicSubsystem implements Subsystem {
   private checkMapScriptConditionsForTeamNames(script: MapScriptRuntime): void {
     let singletonTeamName: string | null = null;
     let multiTeamName: string | null = null;
+    let multiTeamDisplayName: string | null = null;
 
     for (const orCondition of script.conditions) {
       for (const condition of orCondition.conditions) {
@@ -6204,8 +6205,17 @@ export class GameLogicSubsystem implements Subsystem {
             singletonTeamName = teamNameUpper;
           } else if (!multiTeamName) {
             multiTeamName = teamNameUpper;
+            multiTeamDisplayName = rawName;
           } else if (multiTeamName !== teamNameUpper) {
-            // TODO(source-parity): ScriptEngine logs a warning for multiple non-singleton team refs.
+            // Source parity: ScriptEngine::checkConditionsForTeamNames warning/debug append chain.
+            this.executeScriptDebugMessage(
+              '***WARNING: Script contains multiple non-singleton team conditions::***',
+              false,
+              false,
+            );
+            this.executeScriptDebugMessage(script.name, false, false);
+            this.executeScriptDebugMessage(multiTeamDisplayName ?? multiTeamName, false, false);
+            this.executeScriptDebugMessage(rawName, false, false);
           }
         }
       }
