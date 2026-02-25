@@ -20371,34 +20371,55 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  clearScriptTeam(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
+  private clearScriptTeamByNameUpper(teamNameUpper: string): boolean {
+    const team = this.scriptTeamsByName.get(teamNameUpper) ?? null;
     if (!team) {
       return false;
     }
-    const teamNameUpper = team.nameUpper;
+
     this.unregisterScriptTeamPrototypeInstance(team);
-    const removed = this.scriptTeamsByName.delete(teamNameUpper);
+    const removed = this.scriptTeamsByName.delete(team.nameUpper);
     if (removed) {
-      this.removeAllSequentialScriptsForTeam(teamNameUpper);
-      this.scriptTeamCreatedReadyFrameByName.delete(teamNameUpper);
-      this.scriptTeamCreatedAutoClearFrameByName.delete(teamNameUpper);
+      this.removeAllSequentialScriptsForTeam(team.nameUpper);
+      this.scriptTeamCreatedReadyFrameByName.delete(team.nameUpper);
+      this.scriptTeamCreatedAutoClearFrameByName.delete(team.nameUpper);
       for (const [side, defaultTeamNameUpper] of this.scriptDefaultTeamNameBySide) {
-        if (defaultTeamNameUpper === teamNameUpper) {
+        if (defaultTeamNameUpper === team.nameUpper) {
           this.scriptDefaultTeamNameBySide.delete(side);
         }
       }
-      if (this.scriptCallingTeamNameUpper === teamNameUpper) {
+      if (this.scriptCallingTeamNameUpper === team.nameUpper) {
         this.scriptCallingTeamNameUpper = null;
       }
-      if (this.scriptConditionTeamNameUpper === teamNameUpper) {
+      if (this.scriptConditionTeamNameUpper === team.nameUpper) {
         this.scriptConditionTeamNameUpper = null;
       }
-      if (this.scriptLocalPlayerTeamNameUpper === teamNameUpper) {
+      if (this.scriptLocalPlayerTeamNameUpper === team.nameUpper) {
         this.scriptLocalPlayerTeamNameUpper = null;
       }
     }
     return removed;
+  }
+
+  clearScriptTeam(teamName: string): boolean {
+    const teams = this.resolveScriptConditionTeams(teamName);
+    if (teams.length === 0) {
+      return false;
+    }
+
+    const handledTeamNames = new Set<string>();
+    let removedAny = false;
+    for (const team of teams) {
+      if (handledTeamNames.has(team.nameUpper)) {
+        continue;
+      }
+      handledTeamNames.add(team.nameUpper);
+      if (this.clearScriptTeamByNameUpper(team.nameUpper)) {
+        removedAny = true;
+      }
+    }
+
+    return removedAny;
   }
 
   /**

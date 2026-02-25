@@ -43662,6 +43662,46 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptHasUnits({ teamName: 'teamThePlayer' })).toBe(false);
   });
 
+  it('clears TeamPrototype instances with THIS_TEAM precedence', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ContextUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ContextUnit', 10, 10), // id 1
+        makeMapObject('ContextUnit', 18, 10), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('ClearInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ClearInstanceA', 'ClearProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('ClearInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ClearInstanceB', 'ClearProto')).toBe(true);
+    expect(logic.clearScriptTeam('ClearProto')).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'ClearInstanceA' })).toBe(false);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'ClearInstanceB' })).toBe(false);
+
+    expect(logic.setScriptTeamMembers('ClearInstanceA', [1])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ClearInstanceA', 'ClearProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('ClearInstanceB', [2])).toBe(true);
+    expect(logic.setScriptTeamPrototype('ClearInstanceB', 'ClearProto')).toBe(true);
+    expect(logic.setScriptConditionTeamContext('ClearInstanceA')).toBe(true);
+    expect(logic.clearScriptTeam('ClearProto')).toBe(true);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'ClearInstanceA' })).toBe(false);
+    expect(logic.evaluateScriptHasUnits({ teamName: 'ClearInstanceB' })).toBe(true);
+    logic.clearScriptConditionTeamContext();
+
+    expect(logic.clearScriptTeam('MissingTeam')).toBe(false);
+  });
+
   it('resolves THIS_TEAM and THIS_OBJECT via script context setters', () => {
     const bundle = makeBundle({
       objects: [
