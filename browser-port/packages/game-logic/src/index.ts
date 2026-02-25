@@ -44464,10 +44464,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // TODO(source-parity): TerrainLogic::setWaterHeight forces pathfinder recalculation
-    // when water height changes. The current nav grid only uses water area footprint,
-    // not height, so we skip the heavy recomputation for now.
-    void forcePathfindUpdate;
+    // Source parity: TerrainLogic::setWaterHeight forces pathfinder recalculation.
+    if (forcePathfindUpdate) {
+      this.refreshNavigationGridFromCurrentMap();
+    }
   }
 
   private updateDynamicWaterHeights(): void {

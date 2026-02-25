@@ -36203,8 +36203,10 @@ describe('Script condition groundwork', () => {
     const privateApi = logic as unknown as {
       waterPolygonData: Array<{ waterHeight: number }>;
       spawnedEntities: Map<number, { destroyed: boolean }>;
+      navigationGrid: object | null;
     };
     expect(privateApi.waterPolygonData[0]?.waterHeight).toBe(0);
+    const navBefore = privateApi.navigationGrid;
 
     expect(logic.executeScriptAction({
       actionType: 402, // WATER_CHANGE_HEIGHT
@@ -36212,6 +36214,8 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.waterPolygonData[0]?.waterHeight).toBe(10);
     expect(privateApi.spawnedEntities.get(1)?.destroyed).toBe(true);
+    expect(privateApi.navigationGrid).not.toBeNull();
+    expect(privateApi.navigationGrid).not.toBe(navBefore);
 
     const mapOverTime = makeMap([
       makeMapObject('Ranger', 50, 50), // id 1
