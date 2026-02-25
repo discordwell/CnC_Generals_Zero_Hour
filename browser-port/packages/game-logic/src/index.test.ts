@@ -6390,6 +6390,150 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(sawKillState).toBe(true);
   });
 
+  it('detonates armed MissileAI shots when transitioning from bridge layer to ground inside bridge footprint', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const markerDef = makeObjectDef('BridgeMarker', 'Neutral', ['IMMOBILE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const attackerDef = makeObjectDef('BridgeLayerMissileAttacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BridgeLayerMissileWeapon'] }),
+    ]);
+    const targetDef = makeObjectDef('BridgeLayerMissileTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const projectileDef = makeObjectDef('BridgeLayerMissileProjectile', 'Neutral', ['PROJECTILE', 'SMALL_MISSILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+      makeBlock('Behavior', 'MissileAIUpdate ModuleTag_MissileAI', {
+        TryToFollowTarget: 'No',
+        InitialVelocity: 10,
+        IgnitionDelay: 0,
+        FuelLifetime: 8000,
+        DistanceToTravelBeforeTurning: 0,
+        DistanceToTargetForLock: 20,
+      }),
+    ]);
+    const weaponDef = makeWeaponDef('BridgeLayerMissileWeapon', {
+      PrimaryDamage: 50,
+      PrimaryDamageRadius: 0,
+      AttackRange: 500,
+      WeaponSpeed: 10,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'BridgeLayerMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const bridgeStart = makeMapObject('BridgeMarker', 40, 40);
+    bridgeStart.flags = 0x010;
+    bridgeStart.position.z = 10;
+    const bridgeEnd = makeMapObject('BridgeMarker', 80, 40);
+    bridgeEnd.flags = 0x020;
+    bridgeEnd.position.z = 10;
+
+    const registry = makeRegistry(makeBundle({
+      objects: [markerDef, attackerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    logic.loadMapObjects(
+      makeMap([
+        bridgeStart,
+        bridgeEnd,
+        makeMapObject('BridgeLayerMissileAttacker', 0, 0),
+        makeMapObject('BridgeLayerMissileTarget', 120, 0),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      frameCounter: number;
+      spawnedEntities: Map<number, {
+        attackWeapon: unknown;
+      }>;
+      queueWeaponDamageEvent: (
+        attacker: { attackWeapon: unknown },
+        target: unknown,
+        weapon: unknown,
+      ) => void;
+      updateMissileAIEvents: () => void;
+      pendingWeaponDamageEvents: Array<{
+        executeFrame: number;
+        impactX: number;
+        impactY: number;
+        impactZ: number;
+        missileAIState: {
+          state: string;
+          stateEnteredFrame: number;
+          armed: boolean;
+          trackingTarget: boolean;
+          targetEntityId: number | null;
+          fuelExpirationFrame: number;
+          noTurnDistanceLeft: number;
+          speed: number;
+          currentX: number;
+          currentY: number;
+          currentZ: number;
+          velocityX: number;
+          velocityY: number;
+          velocityZ: number;
+          targetX: number;
+          targetY: number;
+          targetZ: number;
+          originalTargetX: number;
+          originalTargetY: number;
+          originalTargetZ: number;
+        } | null;
+      }>;
+    };
+
+    const attacker = privateApi.spawnedEntities.get(3);
+    const target = privateApi.spawnedEntities.get(4);
+    if (!attacker || !target || !attacker.attackWeapon) {
+      throw new Error('Expected attacker/target with missile weapon');
+    }
+
+    privateApi.queueWeaponDamageEvent(attacker, target, attacker.attackWeapon);
+    const event = privateApi.pendingWeaponDamageEvents.find((entry) => entry.missileAIState !== null);
+    if (!event || !event.missileAIState) {
+      throw new Error('Expected queued MissileAI event');
+    }
+    const state = event.missileAIState;
+
+    // Force a one-frame bridge->ground transition while inside bridge XY footprint.
+    state.state = 'ATTACK';
+    state.stateEnteredFrame = privateApi.frameCounter;
+    state.armed = true;
+    state.trackingTarget = false;
+    state.targetEntityId = null;
+    state.fuelExpirationFrame = privateApi.frameCounter + 120;
+    state.noTurnDistanceLeft = 0;
+    state.speed = 10;
+    state.currentX = 60;
+    state.currentY = 14; // above bridge deck (10)
+    state.currentZ = 40;
+    state.velocityX = 0;
+    state.velocityY = -1;
+    state.velocityZ = 0;
+    state.targetX = 60;
+    state.targetY = 0;
+    state.targetZ = 40;
+    state.originalTargetX = 60;
+    state.originalTargetY = 0;
+    state.originalTargetZ = 40;
+
+    privateApi.updateMissileAIEvents();
+
+    expect(event.executeFrame).toBe(privateApi.frameCounter);
+    expect(event.impactX).toBeCloseTo(60, 5);
+    expect(event.impactZ).toBeCloseTo(40, 5);
+    expect(event.impactY).toBeCloseTo(12, 5); // bridge deck (10) + fudge (2)
+    expect(state.currentY).toBeCloseTo(12, 5);
+  });
+
   it('enters KILL_SELF when a tracking MissileAI target disappears and tears down without impact FX', () => {
     const scene = new THREE.Scene();
     const logic = new GameLogicSubsystem(scene);

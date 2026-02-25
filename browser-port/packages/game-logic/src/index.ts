@@ -42372,6 +42372,19 @@ export class GameLogicSubsystem implements Subsystem {
    * Returns null when destination resolves to ground.
    */
   private resolveHighestBridgeLayerHeightForDestination(worldX: number, worldZ: number, worldY: number): number | null {
+    const layer = this.resolveHighestBridgeLayerForDestination(worldX, worldZ, worldY);
+    return layer ? layer.layerHeight : null;
+  }
+
+  /**
+   * Source parity subset: TerrainLogic::getHighestLayerForDestination bridge-layer
+   * selection (layer id + height), choosing the closest layer at-or-below destination Y.
+   */
+  private resolveHighestBridgeLayerForDestination(
+    worldX: number,
+    worldZ: number,
+    worldY: number,
+  ): { segmentId: number; layerHeight: number } | null {
     const grid = this.navigationGrid;
     if (!grid) {
       return null;
@@ -42393,6 +42406,7 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
+    let bestSegmentId = -1;
     let bestLayerHeight: number | null = null;
     let bestDelta = Number.POSITIVE_INFINITY;
     for (const segmentId of segmentIds) {
@@ -42412,11 +42426,19 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (delta < bestDelta) {
         bestDelta = delta;
+        bestSegmentId = segmentId;
         bestLayerHeight = layerHeight;
       }
     }
 
-    return bestLayerHeight;
+    if (bestSegmentId < 0 || bestLayerHeight === null) {
+      return null;
+    }
+
+    return {
+      segmentId: bestSegmentId,
+      layerHeight: bestLayerHeight,
+    };
   }
 
   /**
@@ -47120,6 +47142,37 @@ export class GameLogicSubsystem implements Subsystem {
         event.impactZ = state.currentZ;
         event.executeFrame = this.frameCounter;
         continue;
+      }
+
+      // Source parity: MissileAIUpdate::update bridge-layer transition handling.
+      // If an armed missile transitions from a bridge layer to ground while still in the
+      // same bridge XY footprint, detonate slightly above the bridge surface.
+      const oldBridgeLayer = this.resolveHighestBridgeLayerForDestination(
+        state.prevX,
+        state.prevZ,
+        state.prevY,
+      );
+      const newBridgeLayer = this.resolveHighestBridgeLayerForDestination(
+        state.currentX,
+        state.currentZ,
+        state.currentY,
+      );
+      if (state.armed && oldBridgeLayer && !newBridgeLayer) {
+        const bridgeLayerAtHighProbe = this.resolveHighestBridgeLayerForDestination(
+          state.currentX,
+          state.currentZ,
+          9999,
+        );
+        if (bridgeLayerAtHighProbe && bridgeLayerAtHighProbe.segmentId === oldBridgeLayer.segmentId) {
+          const BRIDGE_MISSILE_FUDGE_Y = 2.0;
+          const detonationY = bridgeLayerAtHighProbe.layerHeight + BRIDGE_MISSILE_FUDGE_Y;
+          state.currentY = detonationY;
+          event.impactX = state.currentX;
+          event.impactY = detonationY;
+          event.impactZ = state.currentZ;
+          event.executeFrame = this.frameCounter;
+          continue;
+        }
       }
 
       event.impactX = state.targetX;
