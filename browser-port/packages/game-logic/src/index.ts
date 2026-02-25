@@ -13394,11 +13394,9 @@ export class GameLogicSubsystem implements Subsystem {
         this.applyCommand({ type: 'hackInternet', entityId: sourceEntity.id });
         return true;
       case 'TOGGLE_OVERCHARGE':
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'toggleOvercharge', entityId: sourceEntity.id });
-        return true;
+        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition}
+        // does not implement TOGGLE_OVERCHARGE for script command-button execution.
+        return false;
       case 'EXIT_CONTAINER':
         if (validateOnly) {
           return true;

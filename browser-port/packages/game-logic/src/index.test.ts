@@ -37653,6 +37653,66 @@ describe('Script condition groundwork', () => {
     expect(logic.getSideCredits('China')).toBe(100);
   });
 
+  it('treats TOGGLE_OVERCHARGE script command-button execution as unsupported', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptOverchargeUnit', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ], {
+          CommandSet: 'ScriptOverchargeCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ToggleOvercharge', {
+          Command: 'TOGGLE_OVERCHARGE',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptOverchargeCommandSet', {
+          1: 'Command_ToggleOvercharge',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptOverchargeUnit', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'OverchargeWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_ToggleOvercharge'],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_ToggleOvercharge', 2],
+    })).toBe(false);
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_ToggleOvercharge', 'OverchargeWaypoint'],
+    })).toBe(false);
+  });
+
   it('enforces source fire-weapon command-button target-context requirements', () => {
     const bundle = makeBundle({
       objects: [
