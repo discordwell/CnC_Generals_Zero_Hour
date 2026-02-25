@@ -15231,6 +15231,10 @@ export class GameLogicSubsystem implements Subsystem {
       if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
         continue;
       }
+      if (!teamMembers.some((entity) =>
+        this.canQueueEnterObjectAction(entity, candidate, 'captureUnmannedFactionUnit'))) {
+        continue;
+      }
 
       const dx = candidate.x - center.x;
       const dz = candidate.z - center.z;
@@ -15246,7 +15250,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     let issuedAny = false;
     for (const entity of teamMembers) {
-      if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(entity, closestTarget)) {
+      if (!this.canQueueEnterObjectAction(entity, closestTarget, 'captureUnmannedFactionUnit')) {
         continue;
       }
       this.applyCommand({
