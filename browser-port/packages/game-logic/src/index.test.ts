@@ -18271,6 +18271,107 @@ describe('PilotFindVehicleUpdate', () => {
     // After scan finds no vehicle, pilot should move to base once.
     expect(pilot!.pilotFindVehicleDidMoveToBase).toBe(true);
   });
+
+  it('uses SidesList build-list locations for AI base-center movement', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Pilot', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+          makeBlock('Behavior', 'PilotFindVehicleUpdate ModuleTag_PFV', {
+            ScanRate: 100,
+            ScanRange: 1,
+            MinHealth: 0.5,
+          }),
+        ]),
+        makeObjectDef('EmptyTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+        makeObjectDef('BaseBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Pilot', 5, 5),
+      makeMapObject('EmptyTank', 60, 60),
+      // Live structure near the pilot; base-center should come from build list instead.
+      makeMapObject('BaseBuilding', 12, 12),
+    ], 256, 256);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'AmericaPlayer',
+            playerFaction: 'America',
+            skirmishDifficulty: 1,
+          },
+          buildList: [
+            {
+              buildingName: 'PlannedBaseA',
+              templateName: 'BaseBuilding',
+              location: { x: 100, y: 150, z: 0 },
+              angle: 0,
+              initiallyBuilt: false,
+              numRebuilds: 1,
+            },
+            {
+              buildingName: 'PlannedBaseB',
+              templateName: 'BaseBuilding',
+              location: { x: 120, y: 150, z: 0 },
+              angle: 0,
+              initiallyBuilt: false,
+              numRebuilds: 1,
+            },
+            {
+              buildingName: 'PlannedBaseC',
+              templateName: 'BaseBuilding',
+              location: { x: 80, y: 180, z: 0 },
+              angle: 0,
+              initiallyBuilt: false,
+              numRebuilds: 1,
+            },
+          ],
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        templateName: string;
+        pilotFindVehicleDidMoveToBase: boolean;
+      }>;
+      resolveAiBaseCenterAndRadius(side: string | null): { centerX: number; centerZ: number; radius: number } | null;
+    };
+
+    const baseCenter = privateApi.resolveAiBaseCenterAndRadius('America');
+    expect(baseCenter).not.toBeNull();
+    expect(baseCenter?.centerX ?? 0).toBeCloseTo(100, 4);
+    expect(baseCenter?.centerZ ?? 0).toBeCloseTo(160, 4);
+
+    let pilot: { templateName: string; pilotFindVehicleDidMoveToBase: boolean } | undefined;
+    for (const [, entity] of privateApi.spawnedEntities) {
+      if (entity.templateName === 'Pilot') {
+        pilot = entity;
+        break;
+      }
+    }
+
+    for (let i = 0; i < 15; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(pilot?.pilotFindVehicleDidMoveToBase).toBe(true);
+  });
 });
 
 // ── ToppleUpdate ──────────────────────────────────────────────────────────────
@@ -36507,6 +36608,117 @@ describe('Script condition groundwork', () => {
     expect(front!.z).toBeLessThan(120); // Center1 vector points toward the front.
     expect(backdoor!.x).toBeGreaterThan(95); // First flank build uses Backdoor1.
     expect(flank!.x).toBeLessThan(25); // Second flank build alternates to Flank1.
+  });
+
+  it('uses sides-list build-list center for front skirmish defense placement without live structures', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], {
+          CommandSet: 'DozerConstructSet',
+          GeometryMajorRadius: 5,
+          GeometryMinorRadius: 5,
+        }),
+        makeObjectDef('PatriotBattery', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
+        ], {
+          GeometryMajorRadius: 10,
+          GeometryMinorRadius: 10,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ConstructPatriot', {
+          Command: 'DOZER_CONSTRUCT',
+          Object: 'PatriotBattery',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('DozerConstructSet', {
+          1: 'Command_ConstructPatriot',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('USADozer', 20, 20), // id 1
+    ], 512, 512);
+    map.waypoints = {
+      nodes: [
+        { id: 701, name: 'Center1_A', position: { x: 220, y: 140, z: 0 }, pathLabel1: 'Center1', biDirectional: false },
+      ],
+      links: [],
+    };
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'AmericaPlayer',
+            playerFaction: 'America',
+            skirmishDifficulty: 1,
+          },
+          buildList: [
+            {
+              buildingName: 'PlannedBaseA',
+              templateName: 'PatriotBattery',
+              location: { x: 200, y: 220, z: 0 },
+              angle: 0,
+              initiallyBuilt: false,
+              numRebuilds: 1,
+            },
+            {
+              buildingName: 'PlannedBaseB',
+              templateName: 'PatriotBattery',
+              location: { x: 240, y: 220, z: 0 },
+              angle: 0,
+              initiallyBuilt: false,
+              numRebuilds: 1,
+            },
+            {
+              buildingName: 'PlannedBaseC',
+              templateName: 'PatriotBattery',
+              location: { x: 220, y: 260, z: 0 },
+              angle: 0,
+              initiallyBuilt: false,
+              numRebuilds: 1,
+            },
+          ],
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(512, 512),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 15000 });
+    expect(logic.setSkirmishPlayerStartPosition('America', 1)).toBe(true);
+    expect(logic.setScriptCurrentPlayerSide('America')).toBe(true);
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingConstructionActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        templateName: string;
+        x: number;
+        z: number;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 455, // SKIRMISH_BUILD_BASE_DEFENSE_FRONT
+    })).toBe(true);
+
+    const builtId = privateApi.pendingConstructionActions.get(1);
+    expect(builtId).toBeDefined();
+    const built = privateApi.spawnedEntities.get(builtId!);
+    expect(built?.templateName).toBe('PatriotBattery');
+    expect(built!.x).toBeGreaterThan(150);
+    expect(built!.z).toBeGreaterThan(120);
+    expect(Math.hypot(built!.x - 20, built!.z - 20)).toBeGreaterThan(160);
   });
 
   it('uses enemy structure bounds fallback for front skirmish structure builds when center path is missing', () => {

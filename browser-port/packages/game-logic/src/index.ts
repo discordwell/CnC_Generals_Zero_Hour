@@ -31,6 +31,7 @@ import {
   type HeightmapGrid,
   type MapDataJSON,
   type MapObjectJSON,
+  type MapSideBuildListEntryJSON,
   type MapSidesListJSON,
   type ScriptActionJSON,
   type ScriptConditionJSON,
@@ -4241,6 +4242,12 @@ interface ScriptBaseCenterAndRadius {
   radius: number;
 }
 
+interface ScriptAiBuildListEntry {
+  templateNameUpper: string;
+  locationX: number;
+  locationZ: number;
+}
+
 interface DynamicWaterUpdateState {
   waterIndex: number;
   targetHeight: number;
@@ -5275,6 +5282,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptDefaultTeamNameBySide = new Map<string, string>();
   private readonly mapScriptSideByIndex: string[] = [];
   private readonly mapScriptDifficultyByIndex: number[] = [];
+  /** Source parity: Player::getBuildList mapped by normalized side. */
+  private readonly scriptAiBuildListEntriesBySide = new Map<string, ScriptAiBuildListEntry[]>();
   private readonly sidePowerBonus = new Map<string, SidePowerState>();
   private readonly sideRadarState = new Map<string, SideRadarState>();
   private readonly sideRankState = new Map<string, SideRankState>();
@@ -5763,6 +5772,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDefaultTeamNameBySide.clear();
     this.mapScriptSideByIndex.length = 0;
     this.mapScriptDifficultyByIndex.length = 0;
+    this.scriptAiBuildListEntriesBySide.clear();
 
     const sidesList = mapData.sidesList;
     if (!sidesList) {
@@ -5780,6 +5790,15 @@ export class GameLogicSubsystem implements Subsystem {
       const resolvedSide = this.resolveScriptSideFromPlayerFaction(playerFaction);
       if (resolvedSide) {
         this.mapScriptSideByIndex[sideIndex] = resolvedSide;
+      }
+      const buildListEntries = this.resolveScriptAiBuildListEntries(side.buildList ?? []);
+      if (resolvedSide && buildListEntries.length > 0) {
+        const existingEntries = this.scriptAiBuildListEntriesBySide.get(resolvedSide);
+        if (existingEntries) {
+          existingEntries.push(...buildListEntries);
+        } else {
+          this.scriptAiBuildListEntriesBySide.set(resolvedSide, buildListEntries);
+        }
       }
       const normalizedPlayerName = playerName.trim().toUpperCase();
       if (normalizedPlayerName && resolvedSide) {
@@ -5927,6 +5946,34 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const normalized = this.normalizeSide(trimmed);
     return normalized || null;
+  }
+
+  private resolveScriptAiBuildListEntries(
+    buildList: readonly MapSideBuildListEntryJSON[],
+  ): ScriptAiBuildListEntry[] {
+    const registry = this.iniDataRegistry;
+    if (!registry || buildList.length === 0) {
+      return [];
+    }
+
+    const entries: ScriptAiBuildListEntry[] = [];
+    for (const entry of buildList) {
+      const templateName = entry.templateName?.trim();
+      if (!templateName) {
+        continue;
+      }
+      const objectDef = findObjectDefByName(registry, templateName);
+      if (!objectDef) {
+        continue;
+      }
+      entries.push({
+        templateNameUpper: objectDef.name.trim().toUpperCase(),
+        locationX: Number.isFinite(entry.location.x) ? entry.location.x : 0,
+        // Source parity: map build-list Coord3D y maps to world Z in this port.
+        locationZ: Number.isFinite(entry.location.y) ? entry.location.y : 0,
+      });
+    }
+    return entries;
   }
 
   private createMapScriptListRuntime(scriptList: ScriptListJSON, sideIndex: number): MapScriptListRuntime {
@@ -14242,7 +14289,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const baseCenterAndRadius = this.resolveCachedSkirmishBaseCenterAndRadius(side);
     if (!baseCenterAndRadius) {
-      // TODO(source-parity): compute center/radius from AI build-list locations when build-list tracking is ported.
+      // Source parity fallback: no usable base center, so fall back to generic build placement.
       return this.executeScriptSkirmishBuildBuilding(objectDef.name, side);
     }
 
@@ -50364,15 +50411,61 @@ export class GameLogicSubsystem implements Subsystem {
     };
   }
 
+  private resolveAiBuildListCenterAndRadius(
+    normalizedSide: string,
+  ): { centerX: number; centerZ: number; radius: number } | null {
+    const buildListEntries = this.scriptAiBuildListEntriesBySide.get(normalizedSide);
+    if (!buildListEntries || buildListEntries.length === 0) {
+      return null;
+    }
+
+    let totalX = 0;
+    let totalZ = 0;
+    for (const entry of buildListEntries) {
+      totalX += entry.locationX;
+      totalZ += entry.locationZ;
+    }
+
+    const centerX = totalX / buildListEntries.length;
+    const centerZ = totalZ / buildListEntries.length;
+
+    let maxRadSqr = 0;
+    for (const entry of buildListEntries) {
+      const objectDef = this.resolveObjectDefByTemplateName(entry.templateNameUpper);
+      if (!objectDef) {
+        continue;
+      }
+      const buildingRadius = this.resolveObjectDefBoundingCircleRadius2D(objectDef);
+      const dx = Math.abs(entry.locationX - centerX) + (buildingRadius * 0.4);
+      const dz = Math.abs(entry.locationZ - centerZ) + (buildingRadius * 0.4);
+      const radSqr = (dx * dx) + (dz * dz);
+      if (radSqr > maxRadSqr) {
+        maxRadSqr = radSqr;
+      }
+    }
+
+    return {
+      centerX,
+      centerZ,
+      radius: Math.sqrt(maxRadSqr),
+    };
+  }
+
   /**
    * Source parity subset: AIPlayer::computeCenterAndRadiusOfBase.
-   * C++ computes this from AI build-list locations; this port computes from live side-owned structures.
+   * Uses map SidesList build-list locations when available, with live-structure fallback.
    */
   private resolveAiBaseCenterAndRadius(
     side: string | null,
   ): { centerX: number; centerZ: number; radius: number } | null {
-    if (!side) {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
       return null;
+    }
+
+    const buildListCenterAndRadius = this.resolveAiBuildListCenterAndRadius(normalizedSide);
+    if (buildListCenterAndRadius) {
+      return buildListCenterAndRadius;
     }
 
     const ownedBuildings: MapEntity[] = [];
@@ -50382,7 +50475,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
       if (entity.category !== 'building') continue;
       const entitySide = entity.side ? this.normalizeSide(entity.side) : null;
-      if (entitySide !== side) continue;
+      if (entitySide !== normalizedSide) continue;
       ownedBuildings.push(entity);
       totalX += entity.x;
       totalZ += entity.z;
@@ -55886,6 +55979,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptDefaultTeamNameBySide.clear();
     this.mapScriptSideByIndex.length = 0;
     this.mapScriptDifficultyByIndex.length = 0;
+    this.scriptAiBuildListEntriesBySide.clear();
     this.scriptObjectTopologyVersion = 0;
     this.scriptObjectCountChangedFrame = 0;
     this.scriptConditionCacheById.clear();
