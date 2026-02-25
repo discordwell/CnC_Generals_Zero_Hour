@@ -12581,22 +12581,17 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: Team::getState storage.
-   * TODO(source-parity): tie this to Team state machine updates.
+   * Source parity: ScriptActions::doSetTeamState -> Team::setState.
+   * Uses getTeamNamed-style single-team resolution and does not implicitly create teams.
    */
   setScriptTeamState(teamName: string, stateName: string): boolean {
-    const resolvedTeams = this.resolveScriptConditionTeams(teamName);
-    const teams = resolvedTeams.length > 0
-      ? resolvedTeams
-      : [this.getOrCreateScriptTeamRecord(teamName)].filter((team): team is ScriptTeamRecord => team !== null);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
     const normalizedStateName = stateName.trim();
-    for (const team of teams) {
-      team.stateName = normalizedStateName;
-    }
+    team.stateName = normalizedStateName;
     return true;
   }
 
@@ -16115,10 +16110,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedFireWeaponFollowingWaypointPath.
-   * C++ fires a waypoint-following projectile from the closest node on the path.
-   * TODO(source-parity): waypoint-following projectile locomotion is pending; this subset
-   * fires a projectile weapon at the final route waypoint.
+   * Source parity: ScriptActions::doNamedFireWeaponFollowingWaypointPath.
+   * C++ selects a waypoint-following-capable weapon, force-fires a projectile, then orders
+   * the projectile AI to follow the waypoint path from the closest node.
+   * This implementation mirrors that behavior by queuing a projectile damage event directly
+   * (without requiring a target object) and using route-length travel time from source to path end.
    */
   private executeScriptNamedFireWeaponFollowingWaypointPath(
     entityId: number,
@@ -16139,16 +16135,141 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const finalWaypoint = route[route.length - 1]!;
-    this.applyCommand({
-      type: 'fireWeapon',
-      entityId: entity.id,
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+
+    const weapon = this.resolveAttackWeaponProfileForSetSelection(
+      entity.weaponTemplateSets,
+      entity.weaponSetFlagsMask,
+      registry,
       weaponSlot,
-      maxShotsToFire: 1,
-      targetObjectId: null,
-      targetPosition: [finalWaypoint.x, 0, finalWaypoint.z],
-    });
+    );
+    if (!weapon || !weapon.projectileObjectName) {
+      return false;
+    }
+
+    this.queueWaypointPathProjectileEvent(entity, weapon, route);
     return true;
+  }
+
+  private queueWaypointPathProjectileEvent(
+    attacker: MapEntity,
+    weapon: AttackWeaponProfile,
+    route: readonly { x: number; z: number }[],
+  ): void {
+    if (route.length === 0) {
+      return;
+    }
+
+    const finalWaypoint = route[route.length - 1]!;
+    const sourceX = attacker.x;
+    const sourceY = attacker.y;
+    const sourceZ = attacker.z;
+    const impactX = finalWaypoint.x;
+    const impactZ = finalWaypoint.z;
+    const impactY = this.mapHeightmap ? this.mapHeightmap.getInterpolatedHeight(impactX, impactZ) : 0;
+
+    const directDistance = Math.hypot(impactX - sourceX, impactZ - sourceZ);
+    const travelSpeed = this.resolveScaledProjectileTravelSpeed(weapon, directDistance);
+    const normalizedTravelSpeed = Number.isFinite(travelSpeed) && travelSpeed > 0 ? travelSpeed : 1;
+    const routeDistance = this.computeWaypointRouteTravelDistance(sourceX, sourceZ, route);
+    const travelFrames = routeDistance / normalizedTravelSpeed;
+    const delayFrames = Math.max(
+      1,
+      Number.isFinite(travelFrames) && travelFrames > 0 ? Math.ceil(travelFrames) : 1,
+    );
+    const primaryVictim = this.findFireWeaponTargetForPositionUsingWeapon(attacker, weapon, impactX, impactZ);
+
+    // Source parity: projectile fire path may notify SpecialPowerCompletionDie immediately.
+    this.notifyScriptCompletedSpecialPowerOnProjectileFired(attacker);
+
+    const event: PendingWeaponDamageEvent = {
+      sourceEntityId: attacker.id,
+      primaryVictimEntityId: primaryVictim?.id ?? null,
+      impactX,
+      impactZ,
+      executeFrame: this.frameCounter + delayFrames,
+      delivery: 'PROJECTILE',
+      weapon,
+      launchFrame: this.frameCounter,
+      sourceX,
+      sourceY,
+      sourceZ,
+      projectileVisualId: this.nextProjectileVisualId++,
+      cachedVisualType: this.classifyWeaponVisualType(weapon),
+      impactY,
+      bezierP1Y: 0,
+      bezierP2Y: 0,
+      bezierFirstPercentIndent: 0,
+      bezierSecondPercentIndent: 0,
+      hasBezierArc: false,
+      countermeasureDivertFrame: 0,
+      countermeasureNoDamage: false,
+      suppressImpactVisual: false,
+      missileAIProfile: null,
+      missileAIState: null,
+    };
+
+    this.emitWeaponFiredVisualEvent(attacker, weapon);
+    this.pendingWeaponDamageEvents.push(event);
+  }
+
+  private computeWaypointRouteTravelDistance(
+    sourceX: number,
+    sourceZ: number,
+    route: readonly { x: number; z: number }[],
+  ): number {
+    let previousX = sourceX;
+    let previousZ = sourceZ;
+    let totalDistance = 0;
+    for (const waypoint of route) {
+      const segmentDistance = Math.hypot(waypoint.x - previousX, waypoint.z - previousZ);
+      if (Number.isFinite(segmentDistance) && segmentDistance > 0) {
+        totalDistance += segmentDistance;
+      }
+      previousX = waypoint.x;
+      previousZ = waypoint.z;
+    }
+    return Math.max(0, totalDistance);
+  }
+
+  private findFireWeaponTargetForPositionUsingWeapon(
+    attacker: MapEntity,
+    weapon: AttackWeaponProfile,
+    targetX: number,
+    targetZ: number,
+  ): MapEntity | null {
+    const attackRange = Math.max(0, weapon.attackRange);
+    const attackRangeSqr = attackRange * attackRange;
+    let bestTarget: MapEntity | null = null;
+    let bestDistanceSqr = Number.POSITIVE_INFINITY;
+
+    for (const candidate of this.spawnedEntities.values()) {
+      if (!candidate.canTakeDamage || candidate.destroyed) {
+        continue;
+      }
+      if (candidate.id === attacker.id) {
+        continue;
+      }
+      if (!this.canAttackerTargetEntity(attacker, candidate, 'SCRIPT')) {
+        continue;
+      }
+      const dx = candidate.x - targetX;
+      const dz = candidate.z - targetZ;
+      const distanceSqr = dx * dx + dz * dz;
+      if (distanceSqr > attackRangeSqr) {
+        continue;
+      }
+      if (distanceSqr >= bestDistanceSqr) {
+        continue;
+      }
+      bestTarget = candidate;
+      bestDistanceSqr = distanceSqr;
+    }
+
+    return bestTarget;
   }
 
   private findWaypointFollowingCapableWeaponSlot(entity: MapEntity): number | null {

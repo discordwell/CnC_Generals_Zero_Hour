@@ -29446,6 +29446,7 @@ describe('Script condition groundwork', () => {
       params: ['MissionFlag', 1],
     })).toBe(true);
 
+    expect(logic.setScriptTeamMembers('AlphaTeam', [])).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 'TEAM_SET_STATE',
       params: ['AlphaTeam', 'ATTACKING'],
@@ -29488,7 +29489,7 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_STATE_IS',
       params: ['TransferInstanceB', 'HUNTING'],
-    })).toBe(true);
+    })).toBe(false);
     expect(logic.setScriptConditionTeamContext('TransferInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 'TEAM_SET_STATE',
@@ -29501,7 +29502,7 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 'TEAM_STATE_IS',
       params: ['TransferInstanceB', 'HUNTING'],
-    })).toBe(true);
+    })).toBe(false);
     logic.clearScriptConditionTeamContext();
 
     expect(logic.executeScriptAction({
@@ -30427,21 +30428,135 @@ describe('Script condition groundwork', () => {
     logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
     logic.setTeamRelationship('America', 'China', 0);
     const privateApi = logic as unknown as {
-      spawnedEntities: Map<number, { forcedWeaponSlot: number | null }>;
+      spawnedEntities: Map<number, { forcedWeaponSlot: number | null; attackTargetEntityId: number | null }>;
+      pendingWeaponDamageEvents: Array<{
+        impactX: number;
+        impactZ: number;
+        primaryVictimEntityId: number | null;
+      }>;
     };
 
     expect(logic.executeScriptAction({
       actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
       params: [1, 'WeaponPath'],
     })).toBe(true);
-    // Source parity: WeaponSet::findWaypointFollowingCapableWeapon checks higher slots first.
-    expect(privateApi.spawnedEntities.get(1)?.forcedWeaponSlot).toBe(1);
-    expect(logic.getEntityState(1)?.attackTargetEntityId).toBe(2);
+    // Source parity: doNamedFireWeaponFollowingWaypointPath force-fires a projectile and
+    // does not require an explicit target object lock.
+    expect(privateApi.spawnedEntities.get(1)?.forcedWeaponSlot).toBeNull();
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
+    expect(privateApi.pendingWeaponDamageEvents).toHaveLength(1);
+    // Source parity subset: projectile is fired without an explicit target lock, but
+    // the queued impact may resolve a victim at the impact point.
+    expect(privateApi.pendingWeaponDamageEvents[0]?.primaryVictimEntityId).toBe(2);
+    expect(privateApi.pendingWeaponDamageEvents[0]?.impactX).toBeCloseTo(40, 6);
+    expect(privateApi.pendingWeaponDamageEvents[0]?.impactZ).toBeCloseTo(20, 6);
+
+    // Run one frame so the queued projectile impact resolves.
+    logic.update(1 / 30);
+    expect(logic.getEntityState(2)?.health).toBeLessThan(250);
 
     expect(logic.executeScriptAction({
       actionType: 387,
       params: [1, 'MissingPath'],
     })).toBe(false);
+  });
+
+  it('uses waypoint route length for NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH travel timing', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WaypointLauncher', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [
+              'PRIMARY WaypointMissileWeapon',
+            ],
+          }),
+        ]),
+        makeObjectDef('WaypointProjectile', 'America', ['SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('WaypointMissileWeapon', {
+          AttackRange: 1000,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 1,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('WaypointLauncher', 10, 10), // id 1
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        // SHORT path: source -> (20,20) -> (60,20)
+        {
+          id: 1,
+          name: 'SHORT_START',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'ShortPath',
+        },
+        {
+          id: 2,
+          name: 'SHORT_END',
+          position: { x: 60, y: 20, z: 0 },
+          pathLabel1: 'ShortPath',
+        },
+        // LONG path: source -> (20,20) -> (20,60) -> (60,20)
+        {
+          id: 3,
+          name: 'LONG_START',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'LongPath',
+        },
+        {
+          id: 4,
+          name: 'LONG_MID',
+          position: { x: 20, y: 60, z: 0 },
+          pathLabel1: 'LongPath',
+        },
+        {
+          id: 5,
+          name: 'LONG_END',
+          position: { x: 60, y: 20, z: 0 },
+          pathLabel1: 'LongPath',
+        },
+      ],
+      links: [
+        { waypoint1: 1, waypoint2: 2 },
+        { waypoint1: 3, waypoint2: 4 },
+        { waypoint1: 4, waypoint2: 5 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { attackTargetEntityId: number | null }>;
+      pendingWeaponDamageEvents: Array<{ executeFrame: number; primaryVictimEntityId: number | null }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
+      params: [1, 'ShortPath'],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
+      params: [1, 'LongPath'],
+    })).toBe(true);
+
+    expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
+    expect(privateApi.pendingWeaponDamageEvents).toHaveLength(2);
+    expect(privateApi.pendingWeaponDamageEvents[0]?.primaryVictimEntityId).toBeNull();
+    expect(privateApi.pendingWeaponDamageEvents[1]?.primaryVictimEntityId).toBeNull();
+    expect(privateApi.pendingWeaponDamageEvents[1]!.executeFrame)
+      .toBeGreaterThan(privateApi.pendingWeaponDamageEvents[0]!.executeFrame);
   });
 
   it('executes script volume and border-shroud actions using source action ids', () => {
@@ -44846,6 +44961,57 @@ describe('Script condition groundwork', () => {
       conditionType: 'TEAM_STATE_IS_NOT',
       params: ['AlphaProto', 'ATTACKING'],
     })).toBe(true);
+  });
+
+  it('applies TEAM_SET_STATE to a single getTeamNamed-resolved team and does not create missing teams', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 64, 64),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(64, 64),
+    );
+
+    // Source parity: doSetTeamState uses getTeamNamed and does nothing when team is missing.
+    expect(logic.setScriptTeamState('MissingTeam', 'PATROL')).toBe(false);
+    expect(logic.evaluateScriptTeamStateIs({
+      teamName: 'MissingTeam',
+      stateName: 'PATROL',
+    })).toBe(false);
+
+    expect(logic.setScriptTeamMembers('AlphaInstanceA', [])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceA', 'AlphaProto')).toBe(true);
+    expect(logic.setScriptTeamMembers('AlphaInstanceB', [])).toBe(true);
+    expect(logic.setScriptTeamPrototype('AlphaInstanceB', 'AlphaProto')).toBe(true);
+
+    // No context: prototype token resolves to first active instance.
+    expect(logic.executeScriptAction({
+      actionType: 'TEAM_SET_STATE',
+      params: ['AlphaProto', 'SCOUT'],
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamStateIs({
+      teamName: 'AlphaInstanceA',
+      stateName: 'SCOUT',
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamStateIs({
+      teamName: 'AlphaInstanceB',
+      stateName: 'SCOUT',
+    })).toBe(false);
+
+    // Context precedence: when THIS_TEAM context matches the prototype, set that instance.
+    expect(logic.setScriptConditionTeamContext('AlphaInstanceB')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 'TEAM_SET_STATE',
+      params: ['AlphaProto', 'PATROL'],
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamStateIs({
+      teamName: 'AlphaInstanceA',
+      stateName: 'SCOUT',
+    })).toBe(true);
+    expect(logic.evaluateScriptTeamStateIs({
+      teamName: 'AlphaInstanceB',
+      stateName: 'PATROL',
+    })).toBe(true);
+    logic.clearScriptConditionTeamContext();
   });
 
   it('evaluates TEAM_CREATED across TeamPrototype instances with THIS_TEAM precedence', () => {
