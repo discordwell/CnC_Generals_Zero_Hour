@@ -33583,14 +33583,14 @@ describe('Script condition groundwork', () => {
       params: ['RepulsorProto', 1],
     })).toBe(true);
     expect(logic.getEntityState(1)?.statusFlags).toContain('REPULSOR');
-    expect(logic.getEntityState(2)?.statusFlags).toContain('REPULSOR');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('REPULSOR');
     expect(logic.setScriptConditionTeamContext('RepulsorInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 437,
       params: ['RepulsorProto', 0],
     })).toBe(true);
     expect(logic.getEntityState(1)?.statusFlags).not.toContain('REPULSOR');
-    expect(logic.getEntityState(2)?.statusFlags).toContain('REPULSOR');
+    expect(logic.getEntityState(2)?.statusFlags).not.toContain('REPULSOR');
     logic.clearScriptConditionTeamContext();
     expect(logic.executeScriptAction({
       actionType: 437,

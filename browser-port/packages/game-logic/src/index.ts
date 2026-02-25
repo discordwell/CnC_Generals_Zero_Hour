@@ -18305,23 +18305,19 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptActions::doTeamSetRepulsor.
    */
   private executeScriptTeamSetRepulsor(teamName: string, repulsor: boolean): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    for (const team of teams) {
-      for (const entity of this.getScriptTeamMemberEntities(team)) {
-        if (entity.destroyed || handledEntityIds.has(entity.id)) {
-          continue;
-        }
-        handledEntityIds.add(entity.id);
-        if (repulsor) {
-          entity.objectStatusFlags.add('REPULSOR');
-        } else {
-          entity.objectStatusFlags.delete('REPULSOR');
-        }
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (repulsor) {
+        entity.objectStatusFlags.add('REPULSOR');
+      } else {
+        entity.objectStatusFlags.delete('REPULSOR');
       }
     }
     return true;
