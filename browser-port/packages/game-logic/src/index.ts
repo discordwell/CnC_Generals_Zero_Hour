@@ -16256,6 +16256,7 @@ export class GameLogicSubsystem implements Subsystem {
     // TODO(source-parity): exact-follow uses aiFollowWaypointPathExact and can preserve
     // tighter corner traversal than this shared route queue implementation.
     void exact;
+    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
     return this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel);
   }
 
@@ -18988,6 +18989,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
+    this.setEntityLocomotorSet(attacker.id, LOCOMOTORSET_NORMAL);
     this.cancelEntityCommandPathActions(attacker.id);
     this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
     return true;
@@ -19120,6 +19122,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
+    this.setEntityLocomotorSet(attacker.id, LOCOMOTORSET_NORMAL);
     this.cancelEntityCommandPathActions(attacker.id);
     this.clearAttackTarget(attacker.id);
     this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
@@ -19152,6 +19155,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
+    this.setEntityLocomotorSet(attacker.id, LOCOMOTORSET_NORMAL);
     this.cancelEntityCommandPathActions(attacker.id);
     this.clearAttackTarget(attacker.id);
     if (victims.length === 0) {

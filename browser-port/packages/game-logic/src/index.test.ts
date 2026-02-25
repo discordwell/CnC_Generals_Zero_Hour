@@ -34303,11 +34303,13 @@ describe('Script condition groundwork', () => {
       objects: [
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfantryWanderLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         ]),
       ],
       locomotors: [
         makeLocomotorDef('TestInfantryLoco', 60),
+        makeLocomotorDef('TestInfantryWanderLoco', 30),
       ],
     });
 
@@ -34342,6 +34344,7 @@ describe('Script condition groundwork', () => {
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
         moving: boolean;
+        activeLocomotorSet: string;
         moveTarget: { x: number; z: number } | null;
         movePath: Array<{ x: number; z: number }>;
       }>;
@@ -34358,6 +34361,8 @@ describe('Script condition groundwork', () => {
       actionType: 241, // TEAM_FOLLOW_WAYPOINTS (offset id)
       params: ['PatrolTeam', 'PatrolPathA', 0],
     })).toBe(true);
+    expect(logic.setEntityLocomotorSet(1, 'SET_WANDER')).toBe(true);
+    expect(logic.setEntityLocomotorSet(2, 'SET_WANDER')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 56, // NAMED_FOLLOW_WAYPOINTS (raw id)
       params: [1, 'PatrolPathA'],
@@ -34366,6 +34371,8 @@ describe('Script condition groundwork', () => {
       actionType: 261, // NAMED_FOLLOW_WAYPOINTS (offset id)
       params: [2, 'PatrolPathA'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_NORMAL');
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_NORMAL');
     expect(logic.executeScriptAction({
       actionType: 281, // TEAM_FOLLOW_WAYPOINTS_EXACT (raw id)
       params: ['PatrolTeam', 'PatrolPathA', 0],
@@ -34374,6 +34381,8 @@ describe('Script condition groundwork', () => {
       actionType: 486, // TEAM_FOLLOW_WAYPOINTS_EXACT (offset id)
       params: ['PatrolTeam', 'PatrolPathA', 0],
     })).toBe(true);
+    expect(logic.setEntityLocomotorSet(1, 'SET_WANDER')).toBe(true);
+    expect(logic.setEntityLocomotorSet(2, 'SET_WANDER')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 282, // NAMED_FOLLOW_WAYPOINTS_EXACT (raw id)
       params: [1, 'PatrolPathA'],
@@ -34382,6 +34391,8 @@ describe('Script condition groundwork', () => {
       actionType: 487, // NAMED_FOLLOW_WAYPOINTS_EXACT (offset id)
       params: [2, 'PatrolPathA'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_NORMAL');
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_NORMAL');
 
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
@@ -39556,16 +39567,19 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
         ]),
         makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
         ]),
       ],
       locomotors: [
         makeLocomotorDef('TestInfLoco', 80),
+        makeLocomotorDef('TestInfWanderLoco', 40),
       ],
       weapons: [
         makeWeaponDef('TestRifle', {
@@ -39612,6 +39626,7 @@ describe('Script condition groundwork', () => {
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
+        activeLocomotorSet: string;
         health: number;
         moving: boolean;
         movePath: Array<{ x: number; z: number }>;
@@ -39695,10 +39710,12 @@ describe('Script condition groundwork', () => {
       params: [999, 'MoveB'],
     })).toBe(false);
 
+    expect(logic.setEntityLocomotorSet(1, 'SET_WANDER')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 39, // NAMED_ATTACK_NAMED
       params: [1, 3],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_NORMAL');
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBe(3);
     expect(logic.executeScriptAction({
       actionType: 39,
@@ -39741,16 +39758,19 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
         ]),
         makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
         ]),
       ],
       locomotors: [
         makeLocomotorDef('TestInfLoco', 80),
+        makeLocomotorDef('TestInfWanderLoco', 40),
       ],
       weapons: [
         makeWeaponDef('TestRifle', {
@@ -39819,11 +39839,13 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
         ]),
         makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
         ]),
         makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
@@ -39833,6 +39855,7 @@ describe('Script condition groundwork', () => {
       ],
       locomotors: [
         makeLocomotorDef('TestInfLoco', 80),
+        makeLocomotorDef('TestInfWanderLoco', 40),
       ],
       weapons: [
         makeWeaponDef('TestRifle', {
@@ -39898,22 +39921,27 @@ describe('Script condition groundwork', () => {
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
+        activeLocomotorSet: string;
         attackTargetEntityId: number | null;
         autoTargetScanNextFrame: number;
         transportContainerId: number | null;
       }>;
     };
 
+    expect(logic.setEntityLocomotorSet(1, 'SET_WANDER')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 47, // NAMED_ATTACK_AREA
       params: [1, 'AttackAreaA'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_NORMAL');
     expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
 
+    expect(logic.setEntityLocomotorSet(1, 'SET_WANDER')).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 48, // NAMED_ATTACK_TEAM
       params: [1, 'Victims'],
     })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_NORMAL');
     expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
     expect(logic.executeScriptAction({
       actionType: 48,
