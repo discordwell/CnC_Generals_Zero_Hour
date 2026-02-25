@@ -34565,6 +34565,72 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('resets locomotor to normal for script named enter/exit and team load-transports actions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            ContainMax: 2,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestVehicleWanderLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopTransport', 20, 20), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2
+        makeMapObject('Ranger', 20, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('LoadTeam', [1, 2, 3])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        activeLocomotorSet: string;
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.setEntityLocomotorSet(2, 'SET_WANDER')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [2, 1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_NORMAL');
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+
+    expect(logic.setEntityLocomotorSet(1, 'SET_WANDER')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 54, // NAMED_EXIT_ALL
+      params: [1],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.activeLocomotorSet).toBe('SET_NORMAL');
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+
+    expect(logic.setEntityLocomotorSet(2, 'SET_WANDER')).toBe(true);
+    expect(logic.setEntityLocomotorSet(3, 'SET_WANDER')).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 51, // TEAM_LOAD_TRANSPORTS
+      params: ['LoadTeam'],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.activeLocomotorSet).toBe('SET_NORMAL');
+    expect(privateApi.spawnedEntities.get(3)?.activeLocomotorSet).toBe('SET_NORMAL');
+  });
+
   it('allows script enter actions to route cross-side units into tunnel networks', () => {
     const bundle = makeBundle({
       objects: [

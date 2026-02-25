@@ -17857,6 +17857,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || !container || entity.destroyed || container.destroyed) {
       return false;
     }
+    // Source parity: ScriptActions::doNamedEnterNamed chooses LOCOMOTORSET_NORMAL
+    // before issuing aiEnter.
+    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
     return this.issueScriptEnterContainer(entity, container);
   }
 
@@ -17890,6 +17893,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity || entity.destroyed || !entity.containProfile) {
       return false;
     }
+    // Source parity: ScriptActions::doNamedExitAll chooses LOCOMOTORSET_NORMAL
+    // before issuing aiEvacuate.
+    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
     this.applyCommand({
       type: 'evacuate',
       entityId: entity.id,
@@ -19818,6 +19824,9 @@ export class GameLogicSubsystem implements Subsystem {
       if (!unit || !transport || unit.destroyed || transport.destroyed) {
         continue;
       }
+      // Source parity: ScriptActions::doLoadAllTransports chooses LOCOMOTORSET_NORMAL
+      // for each assigned unit before issuing aiEnter.
+      this.setEntityLocomotorSet(unit.id, LOCOMOTORSET_NORMAL);
       this.applyCommand({
         type: 'enterTransport',
         entityId: unit.id,
