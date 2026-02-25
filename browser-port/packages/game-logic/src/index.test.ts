@@ -35178,14 +35178,30 @@ describe('Script condition groundwork', () => {
       params: [1, 'RouteAlpha'],
     })).toBe(true);
 
-    for (let frame = 0; frame < 80; frame += 1) {
+    let completionObserved = false;
+    for (let frame = 0; frame < 120; frame += 1) {
       logic.update(1 / 30);
+      if (logic.evaluateScriptNamedReachedWaypointsEnd({
+        entityId: 1,
+        waypointPathName: 'RouteAlpha',
+      })) {
+        completionObserved = true;
+        break;
+      }
     }
 
+    expect(completionObserved).toBe(true);
+    // Source parity: completed waypoint is visible for the rest of the frame.
     expect(logic.evaluateScriptNamedReachedWaypointsEnd({
       entityId: 1,
       waypointPathName: 'RouteAlpha',
     })).toBe(true);
+    // Source parity: AIUpdate resets completed-waypoint at the next update.
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'RouteAlpha',
+    })).toBe(false);
   });
 
   it('executes script skirmish-build-base-defense-front action using source action id', () => {
@@ -44477,6 +44493,17 @@ describe('Script condition groundwork', () => {
       entityId: 1,
       waypointPathName: 'DifferentPath',
     })).toBe(false);
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'PatrolPathA',
+    })).toBe(false);
+
+    logic.notifyScriptWaypointPathCompleted(1, 'PatrolPathA');
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'PatrolPathA',
+    })).toBe(true);
 
     const privateApi = logic as unknown as {
       applyWeaponDamageAmount: (sourceEntityId: number | null, target: unknown, amount: number, damageType: string) => void;

@@ -6519,6 +6519,7 @@ export class GameLogicSubsystem implements Subsystem {
   update(dt: number): void {
     this.animationTime += dt;
     this.frameCounter++;
+    this.resetScriptWaypointPathCompletions();
     this.updateScriptCountdownTimers();
     this.updateScriptEntityFlashes();
     this.resetBridgeDamageStateChanges();
@@ -6641,6 +6642,17 @@ export class GameLogicSubsystem implements Subsystem {
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
     this.checkVictoryConditions();
+  }
+
+  /**
+   * Source parity: AIUpdateInterface::update resets m_completedWaypoint each frame.
+   * Waypoint completion conditions are one-frame signals.
+   */
+  private resetScriptWaypointPathCompletions(): void {
+    if (this.scriptCompletedWaypointPathsByEntityId.size === 0) {
+      return;
+    }
+    this.scriptCompletedWaypointPathsByEntityId.clear();
   }
 
   private updateScriptCountdownTimers(): void {
@@ -20513,7 +20525,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: AIUpdateInterface::getCompletedWaypoint() notification.
-   * TODO(source-parity): drive this from script waypoint-path movement actions.
    */
   notifyScriptWaypointPathCompleted(entityId: number, waypointPathName: string): void {
     if (!Number.isFinite(entityId)) {
@@ -20537,7 +20548,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptConditions::evaluateNamedReachedWaypointsEnd.
-   * TODO(source-parity): populate completion labels from waypoint path follower AI.
    */
   evaluateScriptNamedReachedWaypointsEnd(filter: {
     entityId: number;
