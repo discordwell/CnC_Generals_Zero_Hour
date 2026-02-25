@@ -35232,6 +35232,17 @@ export class GameLogicSubsystem implements Subsystem {
     if (this.entityHasObjectStatus(target, 'DISABLED_SUBDUED')) {
       return false;
     }
+    const sourceKindOf = this.resolveEntityKindOfSet(source);
+    if (sourceKindOf.has('STRUCTURE') || sourceKindOf.has('IMMOBILE')) {
+      return false;
+    }
+    if (sourceKindOf.has('IGNORED_IN_GUI') || sourceKindOf.has('MOB_NEXUS')) {
+      return false;
+    }
+    const targetKindOf = this.resolveEntityKindOfSet(target);
+    if (targetKindOf.has('IGNORED_IN_GUI')) {
+      return false;
+    }
 
     switch (action) {
       case 'hijackVehicle':
@@ -37129,6 +37140,13 @@ export class GameLogicSubsystem implements Subsystem {
    * TODO(source-parity): port generic Object::isEnterable/getInOrOn mechanics for all groupEnter targets.
    */
   private canExecuteCaptureUnmannedFactionUnitEnterAction(source: MapEntity, target: MapEntity): boolean {
+    const sourceKindOf = this.resolveEntityKindOfSet(source);
+    if (!sourceKindOf.has('INFANTRY')) {
+      return false;
+    }
+    if (sourceKindOf.has('REJECT_UNMANNED')) {
+      return false;
+    }
     if (!this.entityHasObjectStatus(target, 'DISABLED_UNMANNED')) {
       return false;
     }

@@ -36930,6 +36930,79 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
   });
 
+  it('requires infantry and non-REJECT_UNMANNED sources for team-capture-nearest-unowned-faction-unit', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CaptureVehicleSource', 'America', ['VEHICLE'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+        makeObjectDef('RejectUnmannedInfantry', 'America', ['INFANTRY', 'REJECT_UNMANNED'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('CaptureInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AbandonedVehicle', 'Civilian', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestVehicleLoco', 45),
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CaptureVehicleSource', 20, 20), // id 1
+        makeMapObject('RejectUnmannedInfantry', 24, 20), // id 2
+        makeMapObject('CaptureInfantry', 28, 20), // id 3
+        makeMapObject('AbandonedVehicle', 34, 20), // id 4
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('CaptureTeamVehicle', [1])).toBe(true);
+    expect(logic.setScriptTeamMembers('CaptureTeamReject', [2])).toBe(true);
+    expect(logic.setScriptTeamMembers('CaptureTeamInfantry', [3])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        side: string | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(4)?.objectStatusFlags.add('DISABLED_UNMANNED');
+
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeamVehicle'],
+    })).toBe(false);
+    expect((privateApi.spawnedEntities.get(4)?.side ?? '').toLowerCase()).toBe('civilian');
+    expect(privateApi.spawnedEntities.get(4)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeamReject'],
+    })).toBe(false);
+    expect((privateApi.spawnedEntities.get(4)?.side ?? '').toLowerCase()).toBe('civilian');
+    expect(privateApi.spawnedEntities.get(4)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeamInfantry'],
+    })).toBe(true);
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect((privateApi.spawnedEntities.get(4)?.side ?? '').toLowerCase()).toBe('america');
+    expect(privateApi.spawnedEntities.get(4)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+  });
+
   it('executes script player-create-team-from-captured-units action using source action id', () => {
     const bundle = makeBundle({
       objects: [
