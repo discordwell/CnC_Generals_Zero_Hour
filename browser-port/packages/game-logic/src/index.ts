@@ -4143,6 +4143,10 @@ interface ScriptTeamRecord {
   attackPrioritySetName: string;
   /** Source parity: Team::setRecruitable explicit override state. */
   recruitableOverride: boolean | null;
+  /** Source parity: TeamTemplateInfo::m_isAIRecruitable. */
+  isAIRecruitable: boolean;
+  /** Source parity: TeamTemplateInfo::m_homeLocation resolved via teamHome waypoint token. */
+  homeWaypointName: string;
   controllingSide: string | null;
   isSingleton: boolean;
   maxInstances: number;
@@ -5927,6 +5931,14 @@ export class GameLogicSubsystem implements Subsystem {
       const reinforcementTransportsExit = this.readScriptDictBoolean(dict, 'teamTransportsExit');
       if (reinforcementTransportsExit !== null) {
         teamRecord.reinforcementTransportsExit = reinforcementTransportsExit;
+      }
+      const teamHomeWaypointName = this.readScriptDictString(dict, 'teamHome');
+      if (teamHomeWaypointName) {
+        teamRecord.homeWaypointName = teamHomeWaypointName;
+      }
+      const teamIsAIRecruitable = this.readScriptDictBoolean(dict, 'teamIsAIRecruitable');
+      if (teamIsAIRecruitable !== null) {
+        teamRecord.isAIRecruitable = teamIsAIRecruitable;
       }
     }
 
@@ -20409,11 +20421,178 @@ export class GameLogicSubsystem implements Subsystem {
     if (!prototype) {
       return false;
     }
+
+    // Source parity: singleton teams with live members cannot be recruited again.
+    // Keep existing created-pulse behavior for templates that don't define recruit entries.
+    const hasRecruitEntries = prototype.reinforcementUnitEntries.length > 0;
+    if (hasRecruitEntries && this.isScriptTeamPrototypeSingleton(prototype)) {
+      const singletonTeam = this.getScriptTeamRecord(prototype.nameUpper);
+      if (singletonTeam && this.getScriptTeamMemberEntities(singletonTeam)
+        .some((entity) => this.isScriptTeamMemberAliveForObjects(entity))) {
+        return true;
+      }
+    }
+
     const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
     if (team) {
+      this.executeScriptRecruitUnitsIntoTeam(team, prototype, _recruitRadius);
       this.scheduleScriptTeamCreatedByConfiguredDelay(team);
     }
     return true;
+  }
+
+  /**
+   * Source parity subset: AISkirmishPlayer::recruitSpecificAITeam + Team::tryToRecruit.
+   * Recruits nearest eligible units of requested template(s) into the target team.
+   */
+  private executeScriptRecruitUnitsIntoTeam(
+    targetTeam: ScriptTeamRecord,
+    prototype: ScriptTeamRecord,
+    recruitRadius: number,
+  ): number {
+    const controllingSide = this.resolveScriptTeamControllingSide(targetTeam)
+      ?? this.resolveScriptTeamControllingSide(prototype);
+    if (!controllingSide) {
+      return 0;
+    }
+    const home = this.resolveScriptTeamRecruitHomePosition(prototype);
+    const maxDistance = recruitRadius < 1 ? 99999 : recruitRadius;
+
+    let recruited = 0;
+    for (const unitEntry of prototype.reinforcementUnitEntries) {
+      let remaining = unitEntry.maxUnits;
+      while (remaining > 0) {
+        const candidate = this.findScriptTeamRecruitCandidate(
+          targetTeam,
+          unitEntry.templateName,
+          controllingSide,
+          home.x,
+          home.z,
+          maxDistance,
+        );
+        if (!candidate) {
+          break;
+        }
+        if (candidate.sourceTeam.nameUpper !== targetTeam.nameUpper) {
+          candidate.sourceTeam.memberEntityIds.delete(candidate.entity.id);
+        }
+        targetTeam.memberEntityIds.add(candidate.entity.id);
+        if (candidate.entity.canMove && !this.entityHasObjectStatus(candidate.entity, 'DISABLED_HELD')) {
+          this.issueMoveTo(candidate.entity.id, home.x, home.z);
+        }
+        recruited += 1;
+        remaining -= 1;
+      }
+    }
+
+    return recruited;
+  }
+
+  private resolveScriptTeamRecruitHomePosition(team: ScriptTeamRecord): { x: number; z: number } {
+    const waypointName = team.homeWaypointName.trim();
+    if (!waypointName) {
+      return { x: 0, z: 0 };
+    }
+    const waypoint = this.resolveScriptWaypointPosition(waypointName);
+    if (!waypoint) {
+      return { x: 0, z: 0 };
+    }
+    return waypoint;
+  }
+
+  private isScriptTeamRecruitSourceActive(team: ScriptTeamRecord): boolean {
+    return team.created || team.memberEntityIds.size > 0;
+  }
+
+  private isScriptTeamRecruitSourceEligible(
+    sourceTeam: ScriptTeamRecord,
+    targetTeam: ScriptTeamRecord,
+    controllingSide: string,
+  ): boolean {
+    if (!this.isScriptTeamRecruitSourceActive(sourceTeam)) {
+      return false;
+    }
+    const sourceControllingSide = this.resolveScriptTeamControllingSide(sourceTeam);
+    if (!sourceControllingSide || sourceControllingSide !== controllingSide) {
+      return false;
+    }
+    if (sourceTeam.productionPriority >= targetTeam.productionPriority) {
+      return false;
+    }
+
+    const defaultTeamNameUpper = this.scriptDefaultTeamNameBySide.get(controllingSide) ?? '';
+    let teamIsRecruitable = sourceTeam.nameUpper === defaultTeamNameUpper;
+    if (sourceTeam.isAIRecruitable) {
+      teamIsRecruitable = true;
+    }
+    if (sourceTeam.recruitableOverride !== null) {
+      teamIsRecruitable = sourceTeam.recruitableOverride;
+    }
+    return teamIsRecruitable;
+  }
+
+  private findScriptTeamRecruitCandidate(
+    targetTeam: ScriptTeamRecord,
+    templateName: string,
+    controllingSide: string,
+    homeX: number,
+    homeZ: number,
+    maxDistance: number,
+  ): { entity: MapEntity; sourceTeam: ScriptTeamRecord } | null {
+    const maxDistanceSqr = maxDistance * maxDistance;
+    let bestEntity: MapEntity | null = null;
+    let bestSourceTeam: ScriptTeamRecord | null = null;
+    let bestDistSqr = maxDistanceSqr;
+
+    for (const sourceTeam of this.scriptTeamsByName.values()) {
+      if (!this.isScriptTeamRecruitSourceEligible(sourceTeam, targetTeam, controllingSide)) {
+        continue;
+      }
+      const isDefaultTeam = sourceTeam.nameUpper === (this.scriptDefaultTeamNameBySide.get(controllingSide) ?? '');
+
+      for (const entity of this.getScriptTeamMemberEntities(sourceTeam)) {
+        if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
+          continue;
+        }
+        if (this.normalizeSide(entity.side) !== controllingSide) {
+          continue;
+        }
+        if (!this.areEquivalentTemplateNames(entity.templateName, templateName)) {
+          continue;
+        }
+        if (!entity.scriptAiRecruitable) {
+          continue;
+        }
+        if (entity.objectStatusFlags.has('DISABLED_HELD')) {
+          continue;
+        }
+
+        const dx = homeX - entity.x;
+        const dz = homeZ - entity.z;
+        const distSqr = dx * dx + dz * dz;
+        if (distSqr > maxDistanceSqr) {
+          continue;
+        }
+
+        if (!bestEntity && isDefaultTeam) {
+          bestEntity = entity;
+          bestSourceTeam = sourceTeam;
+          bestDistSqr = distSqr;
+          continue;
+        }
+
+        if (distSqr <= bestDistSqr) {
+          bestEntity = entity;
+          bestSourceTeam = sourceTeam;
+          bestDistSqr = distSqr;
+        }
+      }
+    }
+
+    if (!bestEntity || !bestSourceTeam) {
+      return null;
+    }
+    return { entity: bestEntity, sourceTeam: bestSourceTeam };
   }
 
   /**
@@ -20992,6 +21171,8 @@ export class GameLogicSubsystem implements Subsystem {
       stateName: '',
       attackPrioritySetName: '',
       recruitableOverride: prototype.recruitableOverride,
+      isAIRecruitable: prototype.isAIRecruitable,
+      homeWaypointName: prototype.homeWaypointName,
       controllingSide: prototype.controllingSide,
       isSingleton: false,
       maxInstances: prototype.maxInstances,
@@ -33998,6 +34179,8 @@ export class GameLogicSubsystem implements Subsystem {
       stateName: '',
       attackPrioritySetName: '',
       recruitableOverride: null,
+      isAIRecruitable: false,
+      homeWaypointName: '',
       controllingSide: null,
       isSingleton: true,
       maxInstances: 0,

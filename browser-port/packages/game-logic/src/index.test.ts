@@ -44300,6 +44300,120 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('recruits units using team and object recruitability source rules', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericaInfantry', 20, 20), // id 1
+      makeMapObject('AmericaInfantry', 60, 60), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [{
+        id: 1,
+        name: 'RecruitHome',
+        position: { x: 96, y: 96, z: 0 },
+      }],
+      links: [],
+    };
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [{
+        dict: {
+          teamName: 'teamPlayer_1',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+          teamProductionPriority: 0,
+        },
+      }, {
+        dict: {
+          teamName: 'RecruitTeam',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+          teamProductionPriority: 10,
+          teamUnitType1: 'AmericaInfantry',
+          teamUnitMaxCount1: 1,
+          teamUnitMinCount1: 0,
+          teamHome: 'RecruitHome',
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('teamPlayer_1', [1, 2])).toBe(true);
+    expect(logic.setScriptTeamCreated('teamPlayer_1', true)).toBe(true);
+    expect(logic.setScriptTeamMembers('RecruitTeam', [])).toBe(true);
+    expect(logic.setScriptTeamCreated('RecruitTeam', false)).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        scriptAiRecruitable: boolean;
+        moveTarget: { x: number; z: number } | null;
+      }>;
+      scriptTeamsByName: Map<string, {
+        memberEntityIds: Set<number>;
+      }>;
+    };
+
+    privateApi.spawnedEntities.get(1)!.scriptAiRecruitable = false;
+    privateApi.spawnedEntities.get(2)!.scriptAiRecruitable = true;
+
+    expect(logic.executeScriptAction({
+      actionType: 91, // TEAM_AVAILABLE_FOR_RECRUITMENT
+      params: ['teamPlayer_1', 0],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 177, // RECRUIT_TEAM
+      params: ['RecruitTeam', 200],
+    })).toBe(true);
+    expect(Array.from(privateApi.scriptTeamsByName.get('RECRUITTEAM')?.memberEntityIds ?? []))
+      .toEqual([]);
+
+    expect(logic.executeScriptAction({
+      actionType: 91,
+      params: ['teamPlayer_1', 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 177,
+      params: ['RecruitTeam', 200],
+    })).toBe(true);
+
+    expect(Array.from(privateApi.scriptTeamsByName.get('RECRUITTEAM')?.memberEntityIds ?? []))
+      .toEqual([2]);
+    expect(Array.from(privateApi.scriptTeamsByName.get('TEAMPLAYER_1')?.memberEntityIds ?? []))
+      .toEqual([1]);
+  });
+
   it('executes script create-reinforcement-team action using source action id', () => {
     const bundle = makeBundle({
       objects: [
