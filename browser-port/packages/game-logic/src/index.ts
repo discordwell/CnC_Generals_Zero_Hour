@@ -12900,17 +12900,6 @@ export class GameLogicSubsystem implements Subsystem {
     return upgradeName;
   }
 
-  private resolveScriptGuardModeForCommandType(commandTypeName: string): number {
-    switch (commandTypeName) {
-      case 'GUARD_WITHOUT_PURSUIT':
-        return 1;
-      case 'GUARD_FLYING_UNITS_ONLY':
-        return 2;
-      default:
-        return 0;
-    }
-  }
-
   private resolveScriptCommandButtonSpecialPowerName(commandButtonDef: CommandButtonDef): string | null {
     const rawName = readStringField(commandButtonDef.fields, ['SpecialPower'])
       ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
