@@ -14386,8 +14386,8 @@ export class GameLogicSubsystem implements Subsystem {
     comparison: number,
     value: number,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
@@ -14398,38 +14398,34 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
+    const teamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed && entity.canMove);
+    if (teamMembers.length === 0) {
+      return false;
+    }
+
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
+    }
+
+    const source = teamMembers[0]!;
+    const target = this.resolveScriptNearestEnemyGroupLocationWithValue(team, source, center, value);
+    if (!target) {
+      return false;
+    }
+
     let movedAny = false;
-    for (const team of teams) {
-      const teamMembers = this.getScriptTeamMemberEntities(team)
-        .filter((entity) => !entity.destroyed && entity.canMove && !handledEntityIds.has(entity.id));
-      if (teamMembers.length === 0) {
-        continue;
-      }
-
-      const center = this.resolveScriptTeamCenter(teamMembers);
-      if (!center) {
-        continue;
-      }
-
-      const source = teamMembers[0]!;
-      const target = this.resolveScriptNearestEnemyGroupLocationWithValue(team, source, center, value);
-      if (!target) {
-        continue;
-      }
-
-      for (const entity of teamMembers) {
-        handledEntityIds.add(entity.id);
-        this.applyCommand({
-          type: 'attackMoveTo',
-          entityId: entity.id,
-          targetX: target.x,
-          targetZ: target.z,
-          commandSource: 'SCRIPT',
-        });
-        if (entity.moveTarget !== null || entity.attackTargetPosition !== null) {
-          movedAny = true;
-        }
+    for (const entity of teamMembers) {
+      this.applyCommand({
+        type: 'attackMoveTo',
+        entityId: entity.id,
+        targetX: target.x,
+        targetZ: target.z,
+        commandSource: 'SCRIPT',
+      });
+      if (entity.moveTarget !== null || entity.attackTargetPosition !== null) {
+        movedAny = true;
       }
     }
     return movedAny;
@@ -14564,8 +14560,8 @@ export class GameLogicSubsystem implements Subsystem {
     range: number,
     allTeamMembers: boolean,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
 
@@ -14579,71 +14575,62 @@ export class GameLogicSubsystem implements Subsystem {
 
     const searchRange = Number.isFinite(range) ? Math.max(0, range) : 0;
     const searchRangeSqr = searchRange * searchRange;
-    const handledEntityIds = new Set<number>();
-    let executedAny = false;
-    for (const team of teams) {
-      const resolved = this.resolveScriptTeamCommandButtonSource(team, normalizedAbilityName, handledEntityIds);
-      if (!resolved) {
-        continue;
-      }
-      const { teamMembers, sourceEntity, commandButtonDef } = resolved;
+    const resolved = this.resolveScriptTeamCommandButtonSource(team, normalizedAbilityName);
+    if (!resolved) {
+      return false;
+    }
+    const { teamMembers, sourceEntity, commandButtonDef } = resolved;
 
-      const center = this.resolveScriptTeamCenter(teamMembers);
-      if (!center) {
-        continue;
-      }
-
-      const sourceOffMap = this.isEntityOffMap(sourceEntity);
-      const candidates: Array<{ entity: MapEntity; buildCost: number }> = [];
-      for (const candidate of this.spawnedEntities.values()) {
-        if (candidate.destroyed) {
-          continue;
-        }
-        if (this.isEntityOffMap(candidate) !== sourceOffMap) {
-          continue;
-        }
-        if (this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
-          continue;
-        }
-
-        const dx = candidate.x - center.x;
-        const dz = candidate.z - center.z;
-        const distSqr = (dx * dx) + (dz * dz);
-        if (distSqr >= searchRangeSqr) {
-          continue;
-        }
-
-        if (!this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
-          kind: 'OBJECT',
-          targetEntity: candidate,
-        }, true)) {
-          continue;
-        }
-
-        candidates.push({
-          entity: candidate,
-          buildCost: this.resolveEntityBuildCostRaw(candidate),
-        });
-      }
-
-      candidates.sort((left, right) => right.buildCost - left.buildCost);
-
-      const target = candidates[0]?.entity;
-      if (!target) {
-        continue;
-      }
-
-      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(
-        team,
-        commandButtonDef.name,
-        target,
-        handledEntityIds,
-      )) {
-        executedAny = true;
-      }
+    const center = this.resolveScriptTeamCenter(teamMembers);
+    if (!center) {
+      return false;
     }
 
-    return executedAny;
+    const sourceOffMap = this.isEntityOffMap(sourceEntity);
+    const candidates: Array<{ entity: MapEntity; buildCost: number }> = [];
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.destroyed) {
+        continue;
+      }
+      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
+        continue;
+      }
+      if (this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
+        continue;
+      }
+
+      const dx = candidate.x - center.x;
+      const dz = candidate.z - center.z;
+      const distSqr = (dx * dx) + (dz * dz);
+      if (distSqr >= searchRangeSqr) {
+        continue;
+      }
+
+      if (!this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
+        kind: 'OBJECT',
+        targetEntity: candidate,
+      }, true)) {
+        continue;
+      }
+
+      candidates.push({
+        entity: candidate,
+        buildCost: this.resolveEntityBuildCostRaw(candidate),
+      });
+    }
+
+    candidates.sort((left, right) => right.buildCost - left.buildCost);
+
+    const target = candidates[0]?.entity;
+    if (!target) {
+      return false;
+    }
+
+    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(
+      team,
+      commandButtonDef.name,
+      target,
+    );
   }
 
   private appendScriptSequentialScript(script: ScriptSequentialScriptState): void {
@@ -14929,12 +14916,12 @@ export class GameLogicSubsystem implements Subsystem {
    * TEAM_WAIT_FOR_NOT_CONTAINED_{ALL|PARTIAL}.
    */
   private executeScriptTeamWaitForNotContained(teamName: string, allContained: boolean): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
     return !this.evaluateScriptTeamIsContained({
-      teamName,
+      teamName: team.nameUpper,
       allContained,
     });
   }
@@ -15018,19 +15005,11 @@ export class GameLogicSubsystem implements Subsystem {
       requiredTemplateNames?: string[] | null;
     },
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
-
-    const handledEntityIds = new Set<number>();
-    let executedAny = false;
-    for (const team of teams) {
-      if (this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, filter, handledEntityIds)) {
-        executedAny = true;
-      }
-    }
-    return executedAny;
+    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, filter);
   }
 
   /**
@@ -15041,38 +15020,30 @@ export class GameLogicSubsystem implements Subsystem {
     commandButtonName: string,
     targetEntityId: unknown,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
+    const team = this.getScriptTeamRecord(teamName);
     const resolvedTargetId = this.resolveScriptEntityId(targetEntityId);
     const targetEntity = resolvedTargetId !== null ? this.spawnedEntities.get(resolvedTargetId) : null;
-    if (teams.length === 0 || !targetEntity || targetEntity.destroyed) {
+    if (!team || !targetEntity || targetEntity.destroyed) {
       return false;
     }
 
-    const handledEntityIds = new Set<number>();
-    let executedAny = false;
-    for (const team of teams) {
-      const resolved = this.resolveScriptTeamCommandButtonSource(team, commandButtonName, handledEntityIds);
-      if (!resolved) {
-        continue;
-      }
-      if (!this.executeScriptCommandButtonForEntity(
-        resolved.sourceEntity,
-        resolved.commandButtonDef,
-        { kind: 'OBJECT', targetEntity },
-        true,
-      )) {
-        continue;
-      }
-      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(
-        team,
-        resolved.commandButtonDef.name,
-        targetEntity,
-        handledEntityIds,
-      )) {
-        executedAny = true;
-      }
+    const resolved = this.resolveScriptTeamCommandButtonSource(team, commandButtonName);
+    if (!resolved) {
+      return false;
     }
-    return executedAny;
+    if (!this.executeScriptCommandButtonForEntity(
+      resolved.sourceEntity,
+      resolved.commandButtonDef,
+      { kind: 'OBJECT', targetEntity },
+      true,
+    )) {
+      return false;
+    }
+    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(
+      team,
+      resolved.commandButtonDef.name,
+      targetEntity,
+    );
   }
 
   /**
@@ -21726,26 +21697,11 @@ export class GameLogicSubsystem implements Subsystem {
     commandButtonName: string,
     allReady: boolean,
   ): boolean {
-    const teams = this.resolveScriptConditionTeams(teamName);
-    if (teams.length === 0) {
+    const team = this.getScriptTeamRecord(teamName);
+    if (!team) {
       return false;
     }
-
-    if (allReady) {
-      for (const team of teams) {
-        if (!this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, true)) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    for (const team of teams) {
-      if (this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, false)) {
-        return true;
-      }
-    }
-    return false;
+    return this.evaluateScriptTeamCommandButtonIsReady(team, commandButtonName, allReady);
   }
 
   /**

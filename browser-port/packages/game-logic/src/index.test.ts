@@ -35254,12 +35254,20 @@ describe('Script condition groundwork', () => {
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
     logic.update(1 / 30);
+    const attackOneAfterStop = privateApi.spawnedEntities.get(1)!;
+    const attackTwoAfterStop = privateApi.spawnedEntities.get(2)!;
+    attackOneAfterStop.moveTarget = null;
+    attackOneAfterStop.movePath = [];
+    attackOneAfterStop.attackTargetPosition = null;
+    attackTwoAfterStop.moveTarget = null;
+    attackTwoAfterStop.movePath = [];
+    attackTwoAfterStop.attackTargetPosition = null;
     expect(logic.executeScriptAction({
       actionType: 462,
       params: ['AttackValueProto', 3, 1200],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.moveTarget).not.toBeNull();
-    expect(privateApi.spawnedEntities.get(2)?.moveTarget).not.toBeNull();
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
 
     logic.submitCommand({ type: 'stop', entityId: 1 });
     logic.submitCommand({ type: 'stop', entityId: 2 });
@@ -35463,11 +35471,7 @@ describe('Script condition groundwork', () => {
       dispatchType: 'OBJECT',
       targetEntityId: 4,
     });
-    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toMatchObject({
-      specialPowerTemplateName: 'SCRIPTPOWERONNAMED',
-      dispatchType: 'OBJECT',
-      targetEntityId: 6,
-    });
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
 
     expect(logic.executeScriptAction({
       actionType: 463,
@@ -35610,7 +35614,7 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 465,
       params: ['America', 'WaitProto', 'Command_ScriptNoTarget'],
-    })).toBe(true);
+    })).toBe(false);
 
     expect(logic.setScriptConditionTeamContext('WaitInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -35719,7 +35723,7 @@ describe('Script condition groundwork', () => {
     expect(logic.executeScriptAction({
       actionType: 485,
       params: ['ContainProto'],
-    })).toBe(false);
+    })).toBe(true);
 
     expect(logic.setScriptConditionTeamContext('ContainInstanceA')).toBe(true);
     expect(logic.executeScriptAction({
@@ -36390,17 +36394,19 @@ describe('Script condition groundwork', () => {
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(7);
     expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(7);
 
+    const allUseOne = privateApi.spawnedEntities.get(1);
+    const allUseTwo = privateApi.spawnedEntities.get(2);
+    expect(allUseOne).toBeDefined();
+    expect(allUseTwo).toBeDefined();
+    allUseOne!.lastSpecialPowerDispatch = null;
+    allUseTwo!.lastSpecialPowerDispatch = null;
     expect(logic.executeScriptAction({
       actionType: 468, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT
       params: ['AllUseProto', 'Command_ScriptOnNamed'],
     })).toBe(true);
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
-    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(3);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch).toBeNull();
 
-    const allUseOne = privateApi.spawnedEntities.get(1);
-    const allUseTwo = privateApi.spawnedEntities.get(2);
-    expect(allUseOne).toBeDefined();
-    expect(allUseTwo).toBeDefined();
     allUseOne!.lastSpecialPowerDispatch = null;
     allUseTwo!.lastSpecialPowerDispatch = null;
     expect(logic.setScriptConditionTeamContext('AllUseInstanceA')).toBe(true);
@@ -46165,7 +46171,7 @@ describe('Script condition groundwork', () => {
       teamName: 'PowerProto',
       commandButtonName: 'Command_ParticleCannon',
       allReady: true,
-    })).toBe(false);
+    })).toBe(true);
     expect(logic.evaluateScriptSkirmishCommandButtonIsReady({
       side: 'America',
       teamName: 'PowerProto',
