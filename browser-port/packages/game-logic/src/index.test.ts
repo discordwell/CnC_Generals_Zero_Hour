@@ -40957,6 +40957,65 @@ describe('Script condition groundwork', () => {
       .toEqual([3, 4, 5, 6]);
   });
 
+  it('deforms terrain and refreshes pathfinding grid for BLAST_CRATER script creates', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BlastCraterObj', 'Neutral', ['BLAST_CRATER', 'STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          Geometry: 'CYLINDER',
+          GeometryMajorRadius: 20,
+          GeometryMinorRadius: 20,
+        }),
+      ],
+    });
+
+    const map = makeMap([], 64, 64);
+    const rawHeights = new Uint8Array(64 * 64).fill(20);
+    map.heightmap.data = uint8ArrayToBase64(rawHeights);
+    const heightmap = HeightmapGrid.fromJSON(map.heightmap);
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      heightmap,
+    );
+
+    const privateApi = logic as unknown as {
+      navigationGrid: unknown;
+      spawnedEntities: Map<number, {
+        kindOf: Set<string>;
+      }>;
+    };
+
+    const beforeHeights = new Uint8Array(heightmap.rawData);
+    const previousNavigationGrid = privateApi.navigationGrid;
+
+    expect(logic.executeScriptAction({
+      actionType: 23, // CREATE_OBJECT
+      params: ['BlastCraterObj', 'CraterTeam', { x: 40, y: 40, z: 0 }, 0],
+    })).toBe(true);
+    expect(privateApi.spawnedEntities.get(1)?.kindOf.has('BLAST_CRATER')).toBe(true);
+    expect(privateApi.navigationGrid).not.toBe(previousNavigationGrid);
+
+    let changedCellCount = 0;
+    let minChangedHeight = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < heightmap.rawData.length; index += 1) {
+      const nextHeight = heightmap.rawData[index] ?? 0;
+      if (nextHeight === beforeHeights[index]) {
+        continue;
+      }
+      changedCellCount += 1;
+      if (nextHeight < minChangedHeight) {
+        minChangedHeight = nextHeight;
+      }
+    }
+
+    expect(changedCellCount).toBeGreaterThan(0);
+    expect(minChangedHeight).toBe(1);
+  });
+
   it('executes script damage/move/attack team actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

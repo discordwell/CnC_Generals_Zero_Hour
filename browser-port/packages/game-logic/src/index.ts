@@ -25,6 +25,7 @@ import {
   type WeaponDef,
 } from '@generals/ini-data';
 import {
+  MAP_HEIGHT_SCALE,
   MAP_XY_FACTOR,
   base64ToUint8Array,
   type HeightmapGrid,
@@ -19769,7 +19770,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doCreateObject.
-   * TODO(source-parity): BLAST_CRATER script creates should deform terrain and refresh pathfinding.
    */
   private executeScriptCreateObjectAtPosition(
     templateName: string,
@@ -19892,6 +19892,12 @@ export class GameLogicSubsystem implements Subsystem {
     if (worldY !== undefined && Number.isFinite(worldY)) {
       created.y = worldY + created.baseHeight;
     }
+    if (created.kindOf.has('BLAST_CRATER')) {
+      this.createCraterInTerrain(created);
+      // Source parity (GeneralsMD): ScriptActions::doCreateObject adds blast
+      // crater footprint to pathfind map immediately after terrain deformation.
+      this.refreshNavigationGridFromCurrentMap();
+    }
 
     team.memberEntityIds.add(created.id);
     team.created = true;
@@ -19902,6 +19908,54 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return true;
+  }
+
+  /**
+   * Source parity: TerrainLogic::createCraterInTerrain (GeneralsMD).
+   * Digs a circular crater beneath BLAST_CRATER objects by lowering raw map
+   * height samples and clamping to at least 1.
+   */
+  private createCraterInTerrain(entity: MapEntity): void {
+    const heightmap = this.mapHeightmap;
+    if (!heightmap) {
+      return;
+    }
+    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
+    if (objectDef && this.isSmallGeometry(objectDef.fields)) {
+      return;
+    }
+
+    const radius = entity.geometryMajorRadius;
+    if (!(radius > 0)) {
+      return;
+    }
+
+    const minCellX = Math.floor((entity.x - radius) / MAP_XY_FACTOR);
+    const maxCellX = Math.floor((entity.x + radius) / MAP_XY_FACTOR);
+    const maxCellZ = Math.floor((entity.z + radius) / MAP_XY_FACTOR);
+
+    for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+      // Source parity: C++ currently iterates 0..maxY here (not minY..maxY).
+      for (let cellZ = 0; cellZ <= maxCellZ; cellZ += 1) {
+        if (cellX < 0 || cellX >= heightmap.width || cellZ < 0 || cellZ >= heightmap.height) {
+          continue;
+        }
+
+        const deltaX = (cellX * MAP_XY_FACTOR) - entity.x;
+        const deltaZ = (cellZ * MAP_XY_FACTOR) - entity.z;
+        const distance = Math.sqrt((deltaX * deltaX) + (deltaZ * deltaZ));
+        if (distance >= radius) {
+          continue;
+        }
+
+        const displacementAmount = radius * (1 - distance / radius);
+        const index = cellZ * heightmap.width + cellX;
+        const currentRawHeight = heightmap.rawData[index] ?? 0;
+        const targetRawHeight = Math.max(1, Math.trunc(currentRawHeight - displacementAmount));
+        heightmap.rawData[index] = targetRawHeight;
+        heightmap.worldHeights[index] = targetRawHeight * MAP_HEIGHT_SCALE;
+      }
+    }
   }
 
   private resolveScriptNamedEntityByName(objectName: string): MapEntity | null {
