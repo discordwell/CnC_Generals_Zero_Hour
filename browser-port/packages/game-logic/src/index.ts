@@ -4119,6 +4119,12 @@ interface ScriptRadarEventState {
   sourceTeamName: string | null;
 }
 
+interface ScriptTeamTemplateUnitEntry {
+  templateName: string;
+  minUnits: number;
+  maxUnits: number;
+}
+
 interface ScriptTeamRecord {
   nameUpper: string;
   /** Source parity: Team::getName() / TeamPrototype name binding for instance resolution. */
@@ -4139,6 +4145,16 @@ interface ScriptTeamRecord {
   productionPrioritySuccessIncrease: number;
   /** Source parity: TeamTemplateInfo::m_productionPriorityFailureDecrease. */
   productionPriorityFailureDecrease: number;
+  /** Source parity: TeamTemplateInfo::m_unitsInfo (teamUnitType/teamUnitMinCount/teamUnitMaxCount). */
+  reinforcementUnitEntries: ScriptTeamTemplateUnitEntry[];
+  /** Source parity: TeamTemplateInfo::m_transportUnitType. */
+  reinforcementTransportTemplateName: string;
+  /** Source parity: TeamTemplateInfo::m_startReinforceWaypoint. */
+  reinforcementStartWaypointName: string;
+  /** Source parity: TeamTemplateInfo::m_teamStartsFull. */
+  reinforcementTeamStartsFull: boolean;
+  /** Source parity: TeamTemplateInfo::m_transportsExit. */
+  reinforcementTransportsExit: boolean;
 }
 
 interface ScriptAttackPrioritySetRecord {
@@ -4223,6 +4239,12 @@ interface ScriptAttackAreaState {
 
 interface ScriptHuntState {
   nextEnemyScanFrame: number;
+}
+
+interface ScriptReinforcementTransportArrivalState {
+  targetX: number;
+  targetZ: number;
+  transportsExit: boolean;
 }
 
 interface ScriptSkirmishBaseDefenseState {
@@ -5272,6 +5294,8 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptAttackAreaStateByEntityId = new Map<number, ScriptAttackAreaState>();
   /** Source parity subset: AIHuntState runtime keyed by hunting entity id. */
   private readonly scriptHuntStateByEntityId = new Map<number, ScriptHuntState>();
+  /** Source parity subset: ScriptActions::doCreateReinforcements transport arrival + evacuate state. */
+  private readonly pendingScriptReinforcementTransportArrivalByEntityId = new Map<number, ScriptReinforcementTransportArrivalState>();
   /** Source parity: ScriptEngine sequential script queue. */
   private readonly scriptSequentialScripts: ScriptSequentialScriptState[] = [];
   /** Source parity: ScriptEngine script lists loaded from map SidesList. */
@@ -5867,6 +5891,23 @@ export class GameLogicSubsystem implements Subsystem {
       if (productionPriorityFailureDecrease !== null) {
         teamRecord.productionPriorityFailureDecrease = Math.trunc(productionPriorityFailureDecrease);
       }
+      teamRecord.reinforcementUnitEntries = this.resolveScriptTeamTemplateUnitEntries(dict);
+      const reinforcementTransportTemplateName = this.readScriptDictString(dict, 'teamTransport');
+      if (reinforcementTransportTemplateName) {
+        teamRecord.reinforcementTransportTemplateName = reinforcementTransportTemplateName;
+      }
+      const reinforcementStartWaypointName = this.readScriptDictString(dict, 'teamReinforcementOrigin');
+      if (reinforcementStartWaypointName) {
+        teamRecord.reinforcementStartWaypointName = reinforcementStartWaypointName;
+      }
+      const reinforcementTeamStartsFull = this.readScriptDictBoolean(dict, 'teamStartsFull');
+      if (reinforcementTeamStartsFull !== null) {
+        teamRecord.reinforcementTeamStartsFull = reinforcementTeamStartsFull;
+      }
+      const reinforcementTransportsExit = this.readScriptDictBoolean(dict, 'teamTransportsExit');
+      if (reinforcementTransportsExit !== null) {
+        teamRecord.reinforcementTransportsExit = reinforcementTransportsExit;
+      }
     }
 
     for (let sideIndex = 0; sideIndex < sidesList.sides.length; sideIndex += 1) {
@@ -5933,6 +5974,36 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return null;
+  }
+
+  private resolveScriptTeamTemplateUnitEntries(
+    dict: Record<string, unknown>,
+  ): ScriptTeamTemplateUnitEntry[] {
+    const entries: ScriptTeamTemplateUnitEntry[] = [];
+    for (let slot = 1; slot <= 7; slot += 1) {
+      const templateName = this.readScriptDictString(dict, `teamUnitType${slot}`).trim();
+      if (!templateName) {
+        continue;
+      }
+      const maxUnitsValue = this.readScriptDictNumber(dict, `teamUnitMaxCount${slot}`);
+      if (maxUnitsValue === null || !Number.isFinite(maxUnitsValue)) {
+        continue;
+      }
+      const maxUnits = Math.trunc(maxUnitsValue);
+      if (maxUnits <= 0) {
+        continue;
+      }
+      const minUnitsValue = this.readScriptDictNumber(dict, `teamUnitMinCount${slot}`);
+      const minUnits = minUnitsValue === null || !Number.isFinite(minUnitsValue)
+        ? 0
+        : Math.max(0, Math.trunc(minUnitsValue));
+      entries.push({
+        templateName,
+        minUnits,
+        maxUnits,
+      });
+    }
+    return entries;
   }
 
   private resolveScriptSideFromPlayerFaction(playerFaction: string): string | null {
@@ -6627,6 +6698,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePendingRepairDockActions();
     this.updatePendingGarrisonActions();
     this.updatePendingTransportActions();
+    this.updatePendingScriptReinforcementTransportArrivals();
     this.updatePendingTunnelActions();
     this.updatePendingRepairActions();
     this.updatePendingConstructionActions();
@@ -20225,9 +20297,10 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doCreateReinforcements.
-   * Full TeamPrototype transport/payload spawning is not wired yet in this port.
-   * TODO(source-parity): materialize reinforcement members from TeamTemplate data
-   * (including transport, teamStartsFull, and DeliverPayload packaging).
+   * Materializes TeamTemplate reinforcement members (unit entries + optional transport),
+   * including teamStartsFull loading and arrival evacuation behavior.
+   * TODO(source-parity): DeliverPayload/PutInContainer packaging is not wired yet.
+   * TODO(source-parity): aiMoveToAndEvacuateAndExit transport exit removal is not wired yet.
    */
   private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
     const prototype = this.getScriptTeamPrototypeRecord(teamName);
@@ -20246,9 +20319,294 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.scheduleScriptTeamCreatedByConfiguredDelay(team);
-    // Source parity subset: move currently materialized team members to the destination waypoint.
-    this.executeScriptMoveTeamToWaypoint(team.nameUpper, waypointName);
+    this.materializeScriptReinforcementMembers(prototype, team, waypoint);
     return true;
+  }
+
+  private materializeScriptReinforcementMembers(
+    prototype: ScriptTeamRecord,
+    team: ScriptTeamRecord,
+    destination: { x: number; z: number },
+  ): void {
+    const controllingSide = this.resolveScriptTeamControllingSide(team) ?? prototype.controllingSide ?? undefined;
+    let originX = destination.x;
+    let originZ = destination.z;
+    let needToMoveToDestination = false;
+
+    const reinforceOriginName = prototype.reinforcementStartWaypointName.trim();
+    if (reinforceOriginName) {
+      const reinforceOrigin = this.resolveScriptWaypointPosition(reinforceOriginName);
+      if (reinforceOrigin) {
+        originX = reinforceOrigin.x;
+        originZ = reinforceOrigin.z;
+        if (originX !== destination.x || originZ !== destination.z) {
+          needToMoveToDestination = true;
+        }
+      }
+    }
+
+    const transportTemplateName = prototype.reinforcementTransportTemplateName.trim();
+    const transportTemplateUpper = transportTemplateName.toUpperCase();
+    let primaryTransport: MapEntity | null = null;
+
+    if (transportTemplateName) {
+      const spawnedTransport = this.spawnEntityFromTemplate(
+        transportTemplateName,
+        originX,
+        originZ,
+        0,
+        controllingSide,
+      );
+      if (spawnedTransport) {
+        this.positionEntityAtWorldXZ(spawnedTransport, originX, originZ);
+        team.memberEntityIds.add(spawnedTransport.id);
+        primaryTransport = spawnedTransport;
+      }
+    }
+
+    for (const unitEntry of prototype.reinforcementUnitEntries) {
+      let lastSpawnedUnit: MapEntity | null = null;
+      for (let unitIndex = 0; unitIndex < unitEntry.maxUnits; unitIndex += 1) {
+        const spawnedUnit = this.spawnEntityFromTemplate(
+          unitEntry.templateName,
+          originX,
+          originZ,
+          0,
+          controllingSide,
+        );
+        if (!spawnedUnit) {
+          continue;
+        }
+        const xOffset = 2.25 * unitIndex * Math.max(spawnedUnit.geometryMajorRadius, MAP_XY_FACTOR * 0.5);
+        this.positionEntityAtWorldXZ(spawnedUnit, originX + xOffset, originZ);
+        team.memberEntityIds.add(spawnedUnit.id);
+        lastSpawnedUnit = spawnedUnit;
+      }
+
+      if (lastSpawnedUnit) {
+        // Source parity: C++ increments origin.y by 2 * majorRadius between unit type rows.
+        // In this port Y is vertical, so we advance on world Z (engine horizontal Y).
+        originZ += 2 * Math.max(lastSpawnedUnit.geometryMajorRadius, MAP_XY_FACTOR * 0.5);
+      }
+    }
+
+    if (!team.controllingSide && controllingSide) {
+      team.controllingSide = controllingSide;
+    }
+
+    if (primaryTransport && prototype.reinforcementTeamStartsFull) {
+      this.loadScriptReinforcementTeamIntoExistingTransports(team, primaryTransport.id);
+    }
+
+    if (primaryTransport) {
+      this.loadScriptReinforcementMembersIntoTransportTemplate(
+        team,
+        primaryTransport,
+        transportTemplateUpper,
+        controllingSide,
+        originX,
+        originZ,
+      );
+    }
+
+    if (primaryTransport) {
+      for (const member of this.getScriptTeamMemberEntities(team)) {
+        if (member.destroyed) {
+          continue;
+        }
+        if (member.templateName.trim().toUpperCase() === transportTemplateUpper) {
+          this.issueMoveTo(member.id, destination.x, destination.z, NO_ATTACK_DISTANCE, true);
+          this.pendingScriptReinforcementTransportArrivalByEntityId.set(member.id, {
+            targetX: destination.x,
+            targetZ: destination.z,
+            transportsExit: prototype.reinforcementTransportsExit,
+          });
+          continue;
+        }
+        if (this.isEntityContained(member)) {
+          continue;
+        }
+        if (!member.objectStatusFlags.has('DISABLED_HELD') && member.canMove) {
+          this.issueMoveTo(member.id, destination.x, destination.z, NO_ATTACK_DISTANCE, true);
+        }
+      }
+      return;
+    }
+
+    if (!needToMoveToDestination) {
+      return;
+    }
+
+    for (const member of this.getScriptTeamMemberEntities(team)) {
+      if (member.destroyed || this.isEntityContained(member) || !member.canMove) {
+        continue;
+      }
+      this.issueMoveTo(member.id, destination.x, destination.z, NO_ATTACK_DISTANCE, true);
+    }
+  }
+
+  private positionEntityAtWorldXZ(entity: MapEntity, worldX: number, worldZ: number): void {
+    entity.x = worldX;
+    entity.z = worldZ;
+    entity.y = this.resolveGroundHeight(worldX, worldZ) + entity.baseHeight;
+    this.updatePathfindPosCell(entity);
+  }
+
+  private loadScriptReinforcementTeamIntoExistingTransports(
+    team: ScriptTeamRecord,
+    primaryTransportId: number,
+  ): void {
+    const entries: Array<{ entityId: number; size: number }> = [];
+    const spaces: Array<{ entityId: number; capacity: number }> = [];
+
+    for (const entity of this.getScriptTeamMemberEntities(team)) {
+      if (entity.destroyed || this.isEntityContained(entity)) {
+        continue;
+      }
+      if (entity.kindOf.has('TRANSPORT')) {
+        if (entity.id === primaryTransportId || !entity.containProfile) {
+          continue;
+        }
+        spaces.push({
+          entityId: entity.id,
+          capacity: Math.max(0, this.resolveScriptContainerCapacity(entity)),
+        });
+        continue;
+      }
+      entries.push({
+        entityId: entity.id,
+        size: this.resolveScriptEntityTransportSlotCount(entity),
+      });
+    }
+
+    if (entries.length === 0 || spaces.length === 0) {
+      return;
+    }
+
+    const assignments = this.solveScriptFastPartitionAssignments(entries, spaces);
+    for (const assignment of assignments) {
+      const unit = this.spawnedEntities.get(assignment.entryEntityId);
+      const transport = this.spawnedEntities.get(assignment.spaceEntityId);
+      if (!unit || !transport || unit.destroyed || transport.destroyed) {
+        continue;
+      }
+      this.enterTransport(unit, transport);
+    }
+  }
+
+  private loadScriptReinforcementMembersIntoTransportTemplate(
+    team: ScriptTeamRecord,
+    primaryTransport: MapEntity,
+    transportTemplateUpper: string,
+    side: string | undefined,
+    originX: number,
+    originZ: number,
+  ): void {
+    let activeTransport = primaryTransport;
+    let transportCount = 1;
+
+    for (const member of this.getScriptTeamMemberEntities(team)) {
+      if (member.destroyed || member.id === activeTransport.id || this.isEntityContained(member)) {
+        continue;
+      }
+      if (member.templateName.trim().toUpperCase() === transportTemplateUpper) {
+        continue;
+      }
+      if (!this.isScriptReinforcementTransportValidForUnit(activeTransport, member)) {
+        continue;
+      }
+
+      let activeCapacity = this.resolveScriptContainerCapacity(activeTransport);
+      let activeOccupants = this.collectContainedEntityIds(activeTransport.id).length;
+      if (activeCapacity > 0 && activeOccupants >= activeCapacity) {
+        const spawnX = originX + transportCount * Math.max(activeTransport.geometryMajorRadius, MAP_XY_FACTOR);
+        const spawnedTransport = this.spawnEntityFromTemplate(
+          activeTransport.templateName,
+          spawnX,
+          originZ,
+          0,
+          side,
+        );
+        if (!spawnedTransport) {
+          continue;
+        }
+        this.positionEntityAtWorldXZ(spawnedTransport, spawnX, originZ);
+        team.memberEntityIds.add(spawnedTransport.id);
+        activeTransport = spawnedTransport;
+        transportCount += 1;
+        if (!this.isScriptReinforcementTransportValidForUnit(activeTransport, member)) {
+          continue;
+        }
+        activeCapacity = this.resolveScriptContainerCapacity(activeTransport);
+        activeOccupants = this.collectContainedEntityIds(activeTransport.id).length;
+        if (activeCapacity > 0 && activeOccupants >= activeCapacity) {
+          continue;
+        }
+      }
+
+      this.enterTransport(member, activeTransport);
+    }
+  }
+
+  private isScriptReinforcementTransportValidForUnit(transport: MapEntity, unit: MapEntity): boolean {
+    const containProfile = transport.containProfile;
+    if (!containProfile) {
+      return false;
+    }
+    const transportSide = this.normalizeSide(transport.side);
+    const unitSide = this.normalizeSide(unit.side);
+    if (transportSide && unitSide && transportSide !== unitSide) {
+      return false;
+    }
+
+    const unitKindOf = this.resolveEntityKindOfSet(unit);
+    switch (containProfile.moduleType) {
+      case 'TRANSPORT':
+        return unitKindOf.has('INFANTRY') || unitKindOf.has('VEHICLE');
+      case 'OVERLORD':
+      case 'HELIX':
+        return unitKindOf.has('INFANTRY') || unitKindOf.has('PORTABLE_STRUCTURE');
+      case 'OPEN':
+      case 'HEAL':
+      case 'INTERNET_HACK':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private updatePendingScriptReinforcementTransportArrivals(): void {
+    for (const [entityId, pending] of this.pendingScriptReinforcementTransportArrivalByEntityId.entries()) {
+      const transport = this.spawnedEntities.get(entityId);
+      if (!transport || transport.destroyed) {
+        this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+        continue;
+      }
+
+      if (transport.moving) {
+        continue;
+      }
+
+      const distanceToTarget = Math.hypot(transport.x - pending.targetX, transport.z - pending.targetZ);
+      const reachDistance = Math.max(
+        MAP_XY_FACTOR,
+        this.resolveEntityMajorRadius(transport) + MAP_XY_FACTOR,
+      );
+      if (distanceToTarget > reachDistance) {
+        this.issueMoveTo(transport.id, pending.targetX, pending.targetZ, NO_ATTACK_DISTANCE, true);
+        continue;
+      }
+
+      if (transport.containProfile && this.collectContainedEntityIds(transport.id).length > 0) {
+        this.applyCommand({ type: 'evacuate', entityId: transport.id });
+      }
+
+      if (pending.transportsExit) {
+        // TODO(source-parity): ScriptActions::doCreateReinforcements uses
+        // aiMoveToAndEvacuateAndExit for m_transportsExit teams.
+      }
+      this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
+    }
   }
 
   private isScriptTeamPrototypeSingleton(team: ScriptTeamRecord): boolean {
@@ -20280,6 +20638,11 @@ export class GameLogicSubsystem implements Subsystem {
       productionPriority: prototype.productionPriority,
       productionPrioritySuccessIncrease: prototype.productionPrioritySuccessIncrease,
       productionPriorityFailureDecrease: prototype.productionPriorityFailureDecrease,
+      reinforcementUnitEntries: prototype.reinforcementUnitEntries.map((entry) => ({ ...entry })),
+      reinforcementTransportTemplateName: prototype.reinforcementTransportTemplateName,
+      reinforcementStartWaypointName: prototype.reinforcementStartWaypointName,
+      reinforcementTeamStartsFull: prototype.reinforcementTeamStartsFull,
+      reinforcementTransportsExit: prototype.reinforcementTransportsExit,
     };
     this.scriptTeamsByName.set(instanceNameUpper, instance);
     this.registerScriptTeamPrototypeInstance(instance);
@@ -33281,6 +33644,11 @@ export class GameLogicSubsystem implements Subsystem {
       productionPriority: 0,
       productionPrioritySuccessIncrease: 0,
       productionPriorityFailureDecrease: 0,
+      reinforcementUnitEntries: [],
+      reinforcementTransportTemplateName: '',
+      reinforcementStartWaypointName: '',
+      reinforcementTeamStartsFull: false,
+      reinforcementTransportsExit: false,
     };
     this.scriptTeamsByName.set(teamNameUpper, created);
     this.registerScriptTeamPrototypeInstance(created);
@@ -56064,6 +56432,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptTeamInstanceNamesByPrototypeName.clear();
     this.scriptAttackAreaStateByEntityId.clear();
     this.scriptHuntStateByEntityId.clear();
+    this.pendingScriptReinforcementTransportArrivalByEntityId.clear();
     this.scriptSequentialScripts.length = 0;
     this.mapScriptLists.length = 0;
     this.mapScriptsByNameUpper.clear();
