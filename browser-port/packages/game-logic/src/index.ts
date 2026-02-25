@@ -18367,12 +18367,71 @@ export class GameLogicSubsystem implements Subsystem {
     this.issueMoveTo(entity.id, targetX, targetZ);
   }
 
+  private findClosestRepulsorEntity(source: MapEntity, range: number): MapEntity | null {
+    if (!(range > 0)) {
+      return null;
+    }
+    const rangeSqr = range * range;
+    let closest: MapEntity | null = null;
+    let closestDistSqr = rangeSqr;
+    for (const candidate of this.spawnedEntities.values()) {
+      if (candidate.id === source.id || candidate.destroyed) {
+        continue;
+      }
+      if (!this.isRepulsorEntityForSource(source, candidate)) {
+        continue;
+      }
+      const dx = candidate.x - source.x;
+      const dz = candidate.z - source.z;
+      const distSqr = (dx * dx) + (dz * dz);
+      if (distSqr > closestDistSqr) {
+        continue;
+      }
+      closest = candidate;
+      closestDistSqr = distSqr;
+    }
+    return closest;
+  }
+
+  private isRepulsorEntityForSource(source: MapEntity, candidate: MapEntity): boolean {
+    if (candidate.objectStatusFlags.has('REPULSOR')) {
+      return true;
+    }
+    if (this.getTeamRelationship(source, candidate) !== RELATIONSHIP_ENEMIES) {
+      return false;
+    }
+    if (candidate.kindOf.has('INERT')) {
+      return false;
+    }
+    return this.canEntityAttackFromStatus(candidate);
+  }
+
+  private setScriptWanderAwayFromRepulsorGoal(entity: MapEntity, repulsor: MapEntity): void {
+    let awayX = entity.x - repulsor.x;
+    let awayZ = entity.z - repulsor.z;
+    if ((awayX * awayX) + (awayZ * awayZ) < 1e-6) {
+      const angle = this.gameRandom.next() * Math.PI * 2;
+      awayX = Math.cos(angle);
+      awayZ = Math.sin(angle);
+    }
+    const magnitude = Math.hypot(awayX, awayZ);
+    if (magnitude <= 0) {
+      return;
+    }
+    const fleeDistance = Math.max(PATHFIND_CELL_SIZE * 2, entity.visionRange);
+    const targetX = entity.x + (awayX / magnitude) * fleeDistance;
+    const targetZ = entity.z + (awayZ / magnitude) * fleeDistance;
+    const [clampedX, clampedZ] = this.clampWorldPositionToMapBounds(targetX, targetZ);
+    this.issueMoveTo(entity.id, clampedX, clampedZ);
+  }
+
   private clearScriptWanderInPlace(entityId: number): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
       return;
     }
     entity.scriptWanderInPlaceActive = false;
+    entity.modelConditionFlags.delete('PANICKING');
   }
 
   /**
@@ -48932,8 +48991,24 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.attackTargetEntityId !== null || entity.guardState !== 'NONE') continue;
       if (entity.moving && entity.moveTarget !== null) continue;
 
-      // TODO(source-parity): AI_WANDER_IN_PLACE transitions to AI_MOVE_AWAY_FROM_REPULSORS
-      // for CAN_BE_REPULSED objects when repulsors are nearby.
+      // Source parity subset: AI_WANDER_IN_PLACE transitions to AI_MOVE_AWAY_FROM_REPULSORS
+      // for CAN_BE_REPULSED units when repulsors are nearby.
+      if (entity.kindOf.has('CAN_BE_REPULSED')) {
+        const repulsor = this.findClosestRepulsorEntity(entity, entity.visionRange);
+        if (repulsor) {
+          if (entity.locomotorSets.has(LOCOMOTORSET_PANIC)) {
+            this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
+          }
+          entity.modelConditionFlags.add('PANICKING');
+          this.setScriptWanderAwayFromRepulsorGoal(entity, repulsor);
+          continue;
+        }
+        entity.modelConditionFlags.delete('PANICKING');
+        if (entity.activeLocomotorSet === LOCOMOTORSET_PANIC && entity.locomotorSets.has(LOCOMOTORSET_WANDER)) {
+          this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
+        }
+      }
+
       this.setScriptWanderInPlaceGoal(entity);
     }
   }

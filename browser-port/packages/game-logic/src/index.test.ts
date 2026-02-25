@@ -33730,6 +33730,93 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('moves CAN_BE_REPULSED wander-in-place units away from nearby repulsors', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('RepulsableCivilian', 'America', ['INFANTRY', 'CAN_BE_REPULSED'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('LocomotorSet', 'SET_NORMAL NormalLoco', {}),
+          makeBlock('LocomotorSet', 'SET_WANDER WanderLoco', {}),
+          makeBlock('LocomotorSet', 'SET_PANIC PanicLoco', {}),
+        ], { VisionRange: 30 }),
+        makeObjectDef('RepulsorUnit', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('NormalLoco', 50),
+        makeLocomotorDef('WanderLoco', 60),
+        makeLocomotorDef('PanicLoco', 90),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepulsableCivilian', 20, 20), // id 1
+        makeMapObject('RepulsorUnit', 24, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('WanderTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number;
+        z: number;
+        activeLocomotorSet: string;
+        scriptWanderInPlaceActive: boolean;
+        moving: boolean;
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+        pathIndex: number;
+        modelConditionFlags: Set<string>;
+      }>;
+    };
+    const wanderer = privateApi.spawnedEntities.get(1)!;
+
+    expect(logic.executeScriptAction({
+      actionType: 438, // TEAM_WANDER_IN_PLACE
+      params: ['WanderTeam'],
+    })).toBe(true);
+    expect(wanderer.scriptWanderInPlaceActive).toBe(true);
+
+    // Start from an idle frame so repulsor handling runs immediately.
+    wanderer.moving = false;
+    wanderer.moveTarget = null;
+    wanderer.movePath = [];
+    wanderer.pathIndex = 0;
+
+    expect(logic.executeScriptAction({
+      actionType: 436, // NAMED_SET_REPULSOR
+      params: [2, 1],
+    })).toBe(true);
+
+    const preRepulseX = wanderer.x;
+    logic.update(1 / 30);
+
+    expect(wanderer.activeLocomotorSet).toBe('SET_PANIC');
+    expect(wanderer.modelConditionFlags.has('PANICKING')).toBe(true);
+    expect(wanderer.moveTarget).not.toBeNull();
+    expect(wanderer.movePath.length).toBeGreaterThan(0);
+    const fleeGoal = wanderer.movePath[wanderer.movePath.length - 1]!;
+    expect(fleeGoal.x).toBeLessThan(preRepulseX);
+
+    expect(logic.executeScriptAction({
+      actionType: 436,
+      params: [2, 0],
+    })).toBe(true);
+    wanderer.moving = false;
+    wanderer.moveTarget = null;
+    wanderer.movePath = [];
+    wanderer.pathIndex = 0;
+    logic.update(1 / 30);
+
+    expect(wanderer.modelConditionFlags.has('PANICKING')).toBe(false);
+    expect(wanderer.activeLocomotorSet).toBe('SET_WANDER');
+  });
+
   it('executes script team-wander/team-panic actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
