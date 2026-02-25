@@ -16211,7 +16211,9 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
 
-    for (let slot = 0; slot < selectedSet.weaponNamesBySlot.length; slot += 1) {
+    // Source parity: WeaponSet::findWaypointFollowingCapableWeapon iterates
+    // from tertiary down to primary and returns the first capable slot.
+    for (let slot = selectedSet.weaponNamesBySlot.length - 1; slot >= 0; slot -= 1) {
       const weaponName = selectedSet.weaponNamesBySlot[slot];
       if (!weaponName) {
         continue;

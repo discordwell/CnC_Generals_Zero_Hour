@@ -30363,7 +30363,12 @@ describe('Script condition groundwork', () => {
       objects: [
         makeObjectDef('WaypointLauncher', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'WaypointMissileWeapon'] }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [
+              'PRIMARY WaypointMissileWeaponPrimary',
+              'SECONDARY WaypointMissileWeaponSecondary',
+            ],
+          }),
         ]),
         makeObjectDef('WaypointProjectile', 'America', ['SMALL_MISSILE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
@@ -30373,7 +30378,16 @@ describe('Script condition groundwork', () => {
         ]),
       ],
       weapons: [
-        makeWeaponDef('WaypointMissileWeapon', {
+        makeWeaponDef('WaypointMissileWeaponPrimary', {
+          AttackRange: 500,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 999999,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+        makeWeaponDef('WaypointMissileWeaponSecondary', {
           AttackRange: 500,
           PrimaryDamage: 80,
           PrimaryDamageRadius: 0,
@@ -30412,11 +30426,16 @@ describe('Script condition groundwork', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
     logic.setTeamRelationship('America', 'China', 0);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { forcedWeaponSlot: number | null }>;
+    };
 
     expect(logic.executeScriptAction({
       actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
       params: [1, 'WeaponPath'],
     })).toBe(true);
+    // Source parity: WeaponSet::findWaypointFollowingCapableWeapon checks higher slots first.
+    expect(privateApi.spawnedEntities.get(1)?.forcedWeaponSlot).toBe(1);
     expect(logic.getEntityState(1)?.attackTargetEntityId).toBe(2);
 
     expect(logic.executeScriptAction({
