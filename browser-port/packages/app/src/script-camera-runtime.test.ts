@@ -24,6 +24,7 @@ interface MutableScriptCameraState {
   defaultViewState: ScriptCameraDefaultViewState | null;
   lookTowardObjectState: ScriptCameraLookTowardObjectState | null;
   lookTowardWaypointState: ScriptCameraLookTowardWaypointState | null;
+  waypointPaths: Map<string, ReadonlyArray<{ x: number; z: number }>>;
   entityPositions: Map<number, readonly [number, number, number]>;
   renderableEntities: Array<{
     id: number;
@@ -44,6 +45,7 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
     defaultViewState: null,
     lookTowardObjectState: null,
     lookTowardWaypointState: null,
+    waypointPaths: new Map<string, ReadonlyArray<{ x: number; z: number }>>(),
     entityPositions: new Map<number, readonly [number, number, number]>(),
     renderableEntities: [],
   };
@@ -82,6 +84,15 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
 
   getScriptCameraLookTowardWaypointState(): ScriptCameraLookTowardWaypointState | null {
     return this.state.lookTowardWaypointState ? { ...this.state.lookTowardWaypointState } : null;
+  }
+
+  resolveScriptCameraWaypointPath(waypointName: string): ReadonlyArray<{ x: number; z: number }> | null {
+    const key = waypointName.trim().toUpperCase();
+    if (!key) {
+      return null;
+    }
+    const path = this.state.waypointPaths.get(key);
+    return path ? path.map((point) => ({ ...point })) : null;
   }
 
   getEntityWorldPosition(entityId: number): readonly [number, number, number] | null {
@@ -267,6 +278,37 @@ describe('script camera runtime bridge', () => {
 
     bridge.syncAfterSimulationStep(30);
     expect(cameraController.getState().targetX).toBeCloseTo(90, 4);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
+  it('follows linked waypoint path geometry for MOVE_ALONG_WAYPOINT_PATH', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.waypointPaths.set('CAM_PATH', [
+      { x: 100, z: 0 },
+      { x: 100, z: 100 },
+    ]);
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_PATH',
+      x: 100,
+      z: 100,
+      durationMs: 1000,
+      cameraStutterMs: 0,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    bridge.syncAfterSimulationStep(15);
+    const mid = cameraController.getState();
+    expect(mid.targetX).toBeCloseTo(100, 2);
+    expect(mid.targetZ).toBeCloseTo(0, 2);
+
+    bridge.syncAfterSimulationStep(30);
+    const end = cameraController.getState();
+    expect(end.targetX).toBeCloseTo(100, 4);
+    expect(end.targetZ).toBeCloseTo(100, 4);
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 

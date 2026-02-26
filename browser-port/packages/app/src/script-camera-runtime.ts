@@ -87,6 +87,7 @@ export interface ScriptCameraSlaveModeState {
 export interface ScriptCameraRuntimeGameLogic {
   drainScriptCameraActionRequests(): ScriptCameraActionRequestState[];
   drainScriptCameraModifierRequests(): ScriptCameraModifierRequestState[];
+  resolveScriptCameraWaypointPath?(waypointName: string): ReadonlyArray<{ x: number; z: number }> | null;
   getScriptCameraTetherState?(): ScriptCameraTetherState | null;
   getScriptCameraFollowState?(): ScriptCameraFollowState | null;
   getScriptCameraSlaveModeState?(): ScriptCameraSlaveModeState | null;
@@ -143,6 +144,17 @@ interface TargetTransition {
   shutterFrames: number;
 }
 
+interface WaypointPathTransition {
+  startFrame: number;
+  durationFrames: number;
+  points: ReadonlyArray<{ x: number; z: number }>;
+  cumulativeDistances: ReadonlyArray<number>;
+  totalDistance: number;
+  easeIn: number;
+  easeOut: number;
+  shutterFrames: number;
+}
+
 function normalizeAngle(angle: number): number {
   let normalized = angle;
   while (normalized > Math.PI) {
@@ -168,6 +180,27 @@ function toShutterFrames(cameraStutterMs: number): number {
     return 1;
   }
   return Math.max(1, Math.trunc((normalizedMs * 30) / 1000));
+}
+
+function getStutteredLinearProgress(
+  currentLogicFrame: number,
+  startFrame: number,
+  durationFrames: number,
+  shutterFrames: number,
+): number {
+  const elapsedFrames = currentLogicFrame - startFrame + 1;
+  if (elapsedFrames <= 0) {
+    return 0;
+  }
+  if (elapsedFrames >= durationFrames) {
+    return 1;
+  }
+  const normalizedShutterFrames = Math.max(1, shutterFrames);
+  if (elapsedFrames < normalizedShutterFrames) {
+    return 0;
+  }
+  const sampledElapsedFrames = Math.trunc(elapsedFrames / normalizedShutterFrames) * normalizedShutterFrames;
+  return sampledElapsedFrames / durationFrames;
 }
 
 function clamp01(value: number): number {
@@ -235,21 +268,12 @@ function evaluateTargetTransition(
   transition: TargetTransition,
   currentLogicFrame: number,
 ): { x: number; z: number } {
-  const elapsedFrames = currentLogicFrame - transition.startFrame + 1;
-  let linearProgress = 0;
-  if (elapsedFrames <= 0) {
-    linearProgress = 0;
-  } else if (elapsedFrames >= transition.durationFrames) {
-    linearProgress = 1;
-  } else {
-    const shutterFrames = Math.max(1, transition.shutterFrames);
-    if (elapsedFrames < shutterFrames) {
-      linearProgress = 0;
-    } else {
-      const sampledElapsedFrames = Math.trunc(elapsedFrames / shutterFrames) * shutterFrames;
-      linearProgress = sampledElapsedFrames / transition.durationFrames;
-    }
-  }
+  const linearProgress = getStutteredLinearProgress(
+    currentLogicFrame,
+    transition.startFrame,
+    transition.durationFrames,
+    transition.shutterFrames,
+  );
   const progress = evaluateParabolicEase(linearProgress, transition.easeIn, transition.easeOut);
   return {
     x: transition.fromX + (transition.toX - transition.fromX) * progress,
@@ -257,8 +281,53 @@ function evaluateTargetTransition(
   };
 }
 
+function evaluateWaypointPathTransition(
+  transition: WaypointPathTransition,
+  currentLogicFrame: number,
+): { x: number; z: number } {
+  const linearProgress = getStutteredLinearProgress(
+    currentLogicFrame,
+    transition.startFrame,
+    transition.durationFrames,
+    transition.shutterFrames,
+  );
+  const progress = evaluateParabolicEase(linearProgress, transition.easeIn, transition.easeOut);
+  const travelledDistance = transition.totalDistance * progress;
+  const points = transition.points;
+  const cumulativeDistances = transition.cumulativeDistances;
+  const lastPoint = points[points.length - 1]!;
+  if (travelledDistance <= 0) {
+    return { x: points[0]!.x, z: points[0]!.z };
+  }
+  if (travelledDistance >= transition.totalDistance) {
+    return { x: lastPoint.x, z: lastPoint.z };
+  }
+
+  for (let i = 1; i < cumulativeDistances.length; i += 1) {
+    const segmentEndDistance = cumulativeDistances[i]!;
+    if (travelledDistance > segmentEndDistance) {
+      continue;
+    }
+    const segmentStartDistance = cumulativeDistances[i - 1]!;
+    const segmentLength = segmentEndDistance - segmentStartDistance;
+    if (segmentLength <= 0) {
+      const point = points[i]!;
+      return { x: point.x, z: point.z };
+    }
+    const segmentProgress = (travelledDistance - segmentStartDistance) / segmentLength;
+    const start = points[i - 1]!;
+    const end = points[i]!;
+    return {
+      x: start.x + (end.x - start.x) * segmentProgress,
+      z: start.z + (end.z - start.z) * segmentProgress,
+    };
+  }
+
+  return { x: lastPoint.x, z: lastPoint.z };
+}
+
 function isTransitionComplete(
-  transition: ScalarTransition | TargetTransition,
+  transition: ScalarTransition | TargetTransition | WaypointPathTransition,
   currentLogicFrame: number,
 ): boolean {
   return getTransitionProgress(
@@ -269,7 +338,7 @@ function isTransitionComplete(
 }
 
 function getRemainingFrames(
-  transition: ScalarTransition | TargetTransition | null,
+  transition: ScalarTransition | TargetTransition | WaypointPathTransition | null,
   currentLogicFrame: number,
 ): number {
   if (!transition) {
@@ -319,6 +388,7 @@ export function createScriptCameraRuntimeBridge(
   const defaultCameraState = cameraController.getState();
 
   let targetTransition: TargetTransition | null = null;
+  let waypointPathTransition: WaypointPathTransition | null = null;
   let angleTransition: ScalarTransition | null = null;
   let zoomTransition: ScalarTransition | null = null;
   let pitchTransition: ScalarTransition | null = null;
@@ -341,6 +411,7 @@ export function createScriptCameraRuntimeBridge(
     shutterFrames = 1,
   ): void => {
     const state = cameraController.getState();
+    waypointPathTransition = null;
     targetTransition = {
       startFrame: currentLogicFrame,
       durationFrames,
@@ -348,6 +419,50 @@ export function createScriptCameraRuntimeBridge(
       fromZ: state.targetZ,
       toX,
       toZ,
+      easeIn: clamp01(easeIn),
+      easeOut: clamp01(easeOut),
+      shutterFrames: Math.max(1, Math.trunc(shutterFrames)),
+    };
+  };
+
+  const beginWaypointPathTransition = (
+    currentLogicFrame: number,
+    pathPoints: ReadonlyArray<{ x: number; z: number }>,
+    durationFrames: number,
+    easeIn = 0,
+    easeOut = 0,
+    shutterFrames = 1,
+  ): void => {
+    const state = cameraController.getState();
+    const points: Array<{ x: number; z: number }> = [
+      { x: state.targetX, z: state.targetZ },
+      ...pathPoints.map((point) => ({ x: point.x, z: point.z })),
+    ];
+    if (points.length < 2) {
+      return;
+    }
+
+    const cumulativeDistances: number[] = [0];
+    for (let i = 1; i < points.length; i += 1) {
+      const previous = points[i - 1]!;
+      const current = points[i]!;
+      const segmentLength = Math.hypot(current.x - previous.x, current.z - previous.z);
+      cumulativeDistances.push(cumulativeDistances[i - 1]! + segmentLength);
+    }
+    const totalDistance = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
+    if (totalDistance <= 0) {
+      const finalPoint = points[points.length - 1]!;
+      beginTargetTransition(currentLogicFrame, finalPoint.x, finalPoint.z, durationFrames, easeIn, easeOut);
+      return;
+    }
+
+    targetTransition = null;
+    waypointPathTransition = {
+      startFrame: currentLogicFrame,
+      durationFrames,
+      points,
+      cumulativeDistances,
+      totalDistance,
       easeIn: clamp01(easeIn),
       easeOut: clamp01(easeOut),
       shutterFrames: Math.max(1, Math.trunc(shutterFrames)),
@@ -416,7 +531,13 @@ export function createScriptCameraRuntimeBridge(
   };
 
   const applyActiveTransitions = (currentLogicFrame: number): void => {
-    if (!targetTransition && !angleTransition && !zoomTransition && !pitchTransition) {
+    if (
+      !targetTransition
+      && !waypointPathTransition
+      && !angleTransition
+      && !zoomTransition
+      && !pitchTransition
+    ) {
       if (!timeMultiplierTransition) {
         return;
       }
@@ -445,6 +566,16 @@ export function createScriptCameraRuntimeBridge(
       stateChanged = true;
       if (isTransitionComplete(targetTransition, currentLogicFrame)) {
         targetTransition = null;
+      }
+    }
+
+    if (waypointPathTransition) {
+      const interpolated = evaluateWaypointPathTransition(waypointPathTransition, currentLogicFrame);
+      nextTargetX = interpolated.x;
+      nextTargetZ = interpolated.z;
+      stateChanged = true;
+      if (isTransitionComplete(waypointPathTransition, currentLogicFrame)) {
+        waypointPathTransition = null;
       }
     }
 
@@ -486,6 +617,7 @@ export function createScriptCameraRuntimeBridge(
   const getMaxVisualMovementRemainingFrames = (currentLogicFrame: number): number => {
     return Math.max(
       getRemainingFrames(targetTransition, currentLogicFrame),
+      getRemainingFrames(waypointPathTransition, currentLogicFrame),
       getRemainingFrames(angleTransition, currentLogicFrame),
       getRemainingFrames(zoomTransition, currentLogicFrame),
       getRemainingFrames(pitchTransition, currentLogicFrame),
@@ -515,14 +647,32 @@ export function createScriptCameraRuntimeBridge(
           if (request.x === null || request.z === null) {
             break;
           }
+          const durationFrames = toDurationFrames(request.durationMs);
+          const easeIn = toEaseRatioFromDuration(request.easeInMs, request.durationMs);
+          const easeOut = toEaseRatioFromDuration(request.easeOutMs, request.durationMs);
+          const shutterFrames = toShutterFrames(request.cameraStutterMs);
+          const waypointPath = request.waypointName
+            ? (gameLogic.resolveScriptCameraWaypointPath?.(request.waypointName) ?? null)
+            : null;
+          if (waypointPath && waypointPath.length > 0) {
+            beginWaypointPathTransition(
+              currentLogicFrame,
+              waypointPath,
+              durationFrames,
+              easeIn,
+              easeOut,
+              shutterFrames,
+            );
+            break;
+          }
           beginTargetTransition(
             currentLogicFrame,
             request.x,
             request.z,
-            toDurationFrames(request.durationMs),
-            toEaseRatioFromDuration(request.easeInMs, request.durationMs),
-            toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
-            toShutterFrames(request.cameraStutterMs),
+            durationFrames,
+            easeIn,
+            easeOut,
+            shutterFrames,
           );
           break;
         }
@@ -593,6 +743,7 @@ export function createScriptCameraRuntimeBridge(
           }
           cameraController.setState(nextState);
           targetTransition = null;
+          waypointPathTransition = null;
           angleTransition = null;
           zoomTransition = null;
           pitchTransition = null;
@@ -664,32 +815,69 @@ export function createScriptCameraRuntimeBridge(
         }
 
         case 'MOVE_TO_SELECTION': {
-          if (!targetTransition || request.x === null || request.z === null) {
+          if (request.x === null || request.z === null) {
             break;
           }
-          targetTransition = {
-            ...targetTransition,
-            toX: request.x,
-            toZ: request.z,
+          if (targetTransition) {
+            targetTransition = {
+              ...targetTransition,
+              toX: request.x,
+              toZ: request.z,
+            };
+            break;
+          }
+          if (!waypointPathTransition) {
+            break;
+          }
+          const points = waypointPathTransition.points.map((point) => ({ ...point }));
+          const finalPoint = points[points.length - 1]!;
+          const deltaX = request.x - finalPoint.x;
+          const deltaZ = request.z - finalPoint.z;
+          for (let i = 1; i < points.length; i += 1) {
+            points[i]!.x += deltaX;
+            points[i]!.z += deltaZ;
+          }
+          const cumulativeDistances: number[] = [0];
+          for (let i = 1; i < points.length; i += 1) {
+            const previous = points[i - 1]!;
+            const current = points[i]!;
+            const segmentLength = Math.hypot(current.x - previous.x, current.z - previous.z);
+            cumulativeDistances.push(cumulativeDistances[i - 1]! + segmentLength);
+          }
+          waypointPathTransition = {
+            ...waypointPathTransition,
+            points,
+            cumulativeDistances,
+            totalDistance: cumulativeDistances[cumulativeDistances.length - 1] ?? 0,
           };
           break;
         }
 
         case 'FINAL_LOOK_TOWARD':
         case 'LOOK_TOWARD': {
-          if (!targetTransition || request.x === null || request.z === null) {
+          if ((!targetTransition && !waypointPathTransition) || request.x === null || request.z === null) {
+            break;
+          }
+          const lookFrom = targetTransition
+            ? { x: targetTransition.toX, z: targetTransition.toZ }
+            : waypointPathTransition
+              ? waypointPathTransition.points[waypointPathTransition.points.length - 1]!
+              : null;
+          if (!lookFrom) {
             break;
           }
           const lookTowardAngle = resolveLookTowardAngle(
-            targetTransition.toX,
-            targetTransition.toZ,
+            lookFrom.x,
+            lookFrom.z,
             request.x,
             request.z,
           );
           if (lookTowardAngle === null) {
             break;
           }
-          const remainingFrames = getRemainingFrames(targetTransition, currentLogicFrame);
+          const remainingFrames = targetTransition
+            ? getRemainingFrames(targetTransition, currentLogicFrame)
+            : getRemainingFrames(waypointPathTransition, currentLogicFrame);
           if (remainingFrames < 1) {
             break;
           }
@@ -906,6 +1094,7 @@ export function createScriptCameraRuntimeBridge(
 
     // Source parity: object camera-lock mode cancels scripted camera-move tracks.
     targetTransition = null;
+    waypointPathTransition = null;
     angleTransition = null;
     zoomTransition = null;
     pitchTransition = null;
@@ -915,6 +1104,7 @@ export function createScriptCameraRuntimeBridge(
   const updateMovementFinished = (currentLogicFrame: number): void => {
     movementFinished = (
       !targetTransition
+      && !waypointPathTransition
       && !angleTransition
       && !zoomTransition
       && !pitchTransition

@@ -44149,6 +44149,40 @@ describe('Script condition groundwork', () => {
     expect(logic.drainScriptCameraFilterRequests()).toEqual([]);
   });
 
+  it('resolves script camera waypoint paths via first outgoing link chain', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const map = makeMap([], 128, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 1, name: 'CamA', position: { x: 10, y: 20, z: 0 } },
+        { id: 2, name: 'CamB', position: { x: 30, y: 40, z: 0 } },
+        { id: 3, name: 'CamC', position: { x: 50, y: 60, z: 0 } },
+        { id: 4, name: 'CamAlt', position: { x: 70, y: 80, z: 0 } },
+      ],
+      links: [
+        { waypoint1: 1, waypoint2: 2 },
+        { waypoint1: 1, waypoint2: 4 },
+        { waypoint1: 2, waypoint2: 3 },
+      ],
+    };
+
+    logic.loadMapObjects(
+      map,
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.resolveScriptCameraWaypointPath('CamA')).toEqual([
+      { x: 10, z: 20 },
+      { x: 30, z: 40 },
+      { x: 50, z: 60 },
+    ]);
+    expect(logic.resolveScriptCameraWaypointPath('CamC')).toEqual([
+      { x: 50, z: 60 },
+    ]);
+    expect(logic.resolveScriptCameraWaypointPath('Missing')).toBeNull();
+  });
+
   it('executes script camera-slave and camera-shaker actions using source id collisions', () => {
     const map = makeMap([], 128, 128);
     map.waypoints = {

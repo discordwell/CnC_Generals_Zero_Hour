@@ -8501,6 +8501,49 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptCameraLookTowardWaypointState };
   }
 
+  /**
+   * Source parity bridge: ScriptActions::doMoveCameraAlongWaypointPath follows
+   * the first outgoing waypoint link chain (Waypoint::getLink(0)).
+   */
+  resolveScriptCameraWaypointPath(waypointName: string): ReadonlyArray<{ x: number; z: number }> | null {
+    const normalizedWaypointName = waypointName.trim().toUpperCase();
+    if (!normalizedWaypointName) {
+      return null;
+    }
+    const waypointData = this.loadedMapData?.waypoints;
+    if (!waypointData) {
+      return null;
+    }
+
+    const nodesById = new Map<number, (typeof waypointData.nodes)[number]>();
+    for (const node of waypointData.nodes) {
+      nodesById.set(node.id, node);
+    }
+
+    let currentNode = waypointData.nodes.find(
+      (node) => node.name.trim().toUpperCase() === normalizedWaypointName,
+    ) ?? null;
+    if (!currentNode) {
+      return null;
+    }
+
+    const maxWaypoints = 25;
+    const path: Array<{ x: number; z: number }> = [];
+    while (currentNode && path.length < maxWaypoints) {
+      path.push({
+        x: currentNode.position.x,
+        z: currentNode.position.y,
+      });
+      const nextLink = waypointData.links.find((link) => link.waypoint1 === currentNode!.id);
+      if (!nextLink) {
+        break;
+      }
+      currentNode = nodesById.get(nextLink.waypoint2) ?? null;
+    }
+
+    return path;
+  }
+
   private queueScriptCameraActionRequest(request: Omit<ScriptCameraActionRequestState, 'frame'>): void {
     this.scriptCameraActionRequests.push({
       ...request,
