@@ -44529,7 +44529,9 @@ describe('Script condition groundwork', () => {
           makeBlock('Behavior', 'RailedTransportAIUpdate ModuleTag_Rail', {
             PathPrefixName: 'TrainRoute',
           }),
-        ]),
+        ], {
+          SoundAmbient: 'TrainAmbientLoop',
+        }),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         ]),
@@ -44581,16 +44583,52 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
 
     expect(privateApi.spawnedEntities.get(1)?.scriptAmbientSoundEnabled).toBe(true);
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'TrainAmbientLoop',
+        enabled: true,
+        toggleRevision: 0,
+      },
+    ]);
     expect(logic.executeScriptAction({
       actionType: 336, // DISABLE_OBJECT_SOUND
       params: [1],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAmbientSoundEnabled).toBe(false);
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'TrainAmbientLoop',
+        enabled: false,
+        toggleRevision: 1,
+      },
+    ]);
     expect(logic.executeScriptAction({
       actionType: 335, // ENABLE_OBJECT_SOUND
       params: [1],
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.scriptAmbientSoundEnabled).toBe(true);
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'TrainAmbientLoop',
+        enabled: true,
+        toggleRevision: 2,
+      },
+    ]);
+    expect(logic.executeScriptAction({
+      actionType: 335,
+      params: [1],
+    })).toBe(true);
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'TrainAmbientLoop',
+        enabled: true,
+        toggleRevision: 3,
+      },
+    ]);
 
     expect(logic.executeScriptAction({
       actionType: 335,
@@ -44600,6 +44638,74 @@ describe('Script condition groundwork', () => {
       actionType: 336,
       params: [999],
     })).toBe(false);
+  });
+
+  it('resolves ambient sound variants from body damage state with source fallback rules', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmbientTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          SoundAmbient: 'AmbientPristine',
+          SoundAmbientDamaged: 'AmbientDamaged',
+          SoundAmbientRubble: 'AmbientRubble',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmbientTarget', 12, 12)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, unknown>;
+      applyWeaponDamageAmount(attackerId: number | null, target: unknown, amount: number, damageType: string): void;
+    };
+    const target = privateApi.spawnedEntities.get(1);
+    expect(target).toBeDefined();
+
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'AmbientPristine',
+        enabled: true,
+        toggleRevision: 0,
+      },
+    ]);
+
+    privateApi.applyWeaponDamageAmount(null, target, 60, 'SMALL_ARMS');
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'AmbientDamaged',
+        enabled: true,
+        toggleRevision: 0,
+      },
+    ]);
+
+    // No SoundAmbientReallyDamaged is defined; source falls back to pristine.
+    privateApi.applyWeaponDamageAmount(null, target, 35, 'SMALL_ARMS');
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'AmbientPristine',
+        enabled: true,
+        toggleRevision: 0,
+      },
+    ]);
+
+    privateApi.applyWeaponDamageAmount(null, target, 10, 'UNRESISTABLE');
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'AmbientRubble',
+        enabled: true,
+        toggleRevision: 0,
+      },
+    ]);
   });
 
   it('executes script freeze-time and weather actions using source action ids', () => {

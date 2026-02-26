@@ -39,6 +39,12 @@ export interface RenderableEntityState {
   scriptFlashCount?: number;
   /** Source parity bridge: Drawable indicator flash color (0xRRGGBB). */
   scriptFlashColor?: number;
+  /** Source parity bridge: Drawable ambient event selected by current body damage state. */
+  ambientSoundEventName?: string | null;
+  /** Source parity bridge: Drawable::m_ambientSoundEnabledFromScript script gate. */
+  scriptAmbientSoundEnabled?: boolean;
+  /** Source parity bridge: increments on every ENABLE/DISABLE_OBJECT_SOUND action. */
+  scriptAmbientSoundRevision?: number;
   /** Source parity: ObjectShroudStatus — visibility from the local player's perspective. */
   shroudStatus: 'CLEAR' | 'FOGGED' | 'SHROUDED';
   /** Source parity: Object::m_constructionPercent — 0..100 during build, -1 when complete. */
@@ -51,6 +57,13 @@ export interface RenderableEntityState {
   toppleDirZ: number;
   /** Source parity: TurretAI — turret rotation angles in radians (relative to body), one per turret. */
   turretAngles: number[];
+}
+
+export interface ScriptObjectAmbientSoundState {
+  entityId: number;
+  audioName: string;
+  enabled: boolean;
+  toggleRevision: number;
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';

@@ -512,7 +512,7 @@ export class AudioManager implements Subsystem {
       if (!this.resolveEventPosition(active.event)) {
         // Source behavior from MilesAudioManager::processPlayingList:
         // positional sounds stop when no current world position can be resolved.
-        this.activeAudioEvents.delete(active.handle);
+        this.stopPlaybackNode(active.handle);
         continue;
       }
 
@@ -531,7 +531,7 @@ export class AudioManager implements Subsystem {
         && !isGlobal
         && !isCritical
       ) {
-        this.activeAudioEvents.delete(active.handle);
+        this.stopPlaybackNode(active.handle);
         continue;
       }
 
@@ -1903,7 +1903,7 @@ export class AudioManager implements Subsystem {
     // 3D positional audio setup.
     let pannerNode: PannerNode | null = null;
     const is3D = (resolved.affectMask & AudioAffect.AudioAffect_Sound3D) !== 0;
-    const pos = resolved.event.position;
+    const pos = this.resolveEventPosition(resolved.event);
 
     if (is3D && pos) {
       pannerNode = ctx.createPanner();
@@ -2001,7 +2001,7 @@ export class AudioManager implements Subsystem {
       }
 
       // Resolve current position from event's object/drawable.
-      const pos = active.event.position;
+      const pos = this.resolveEventPosition(active.event);
       if (pos) {
         node.pannerNode.setPosition(pos[0], pos[1], pos[2]);
       }

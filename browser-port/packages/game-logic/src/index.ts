@@ -248,6 +248,7 @@ import {
   type RenderAnimationStateClipCandidates,
   type RenderableEntityState,
   type RenderableObjectCategory,
+  type ScriptObjectAmbientSoundState,
   type SellCommand,
   type SelectedEntityInfo,
   type ToggleOverchargeCommand,
@@ -1675,6 +1676,17 @@ interface ChinookAIProfile {
   ropeFinalHeight: number;
 }
 
+/**
+ * Source parity subset: ThingTemplate ambient sound fields consumed by Drawable.
+ * (SoundAmbient, SoundAmbientDamaged, SoundAmbientReallyDamaged, SoundAmbientRubble)
+ */
+interface AmbientSoundProfile {
+  pristine: string | null;
+  damaged: string | null;
+  reallyDamaged: string | null;
+  rubble: string | null;
+}
+
 interface MapEntity {
   id: number;
   templateName: string;
@@ -1816,6 +1828,10 @@ interface MapEntity {
   scriptFlashColor: number;
   /** Source parity subset: Drawable ambient sound toggle from script actions. */
   scriptAmbientSoundEnabled: boolean;
+  /** Source parity: increments for every ENABLE/DISABLE_OBJECT_SOUND action call. */
+  scriptAmbientSoundRevision: number;
+  /** Source parity subset: ambient sound variants by body damage state. */
+  ambientSoundProfile: AmbientSoundProfile | null;
   /** Source parity: Object::m_customIndicatorColor override set by script action. */
   customIndicatorColor: number | null;
   commandSetStringOverride: string | null;
@@ -6462,6 +6478,23 @@ export class GameLogicSubsystem implements Subsystem {
     return [...renderableStates, ...pendingDyingStates];
   }
 
+  getScriptObjectAmbientSoundStates(): ScriptObjectAmbientSoundState[] {
+    const states: ScriptObjectAmbientSoundState[] = [];
+    for (const entity of this.spawnedEntities.values()) {
+      const audioName = this.resolveEntityAmbientSoundEventName(entity);
+      if (!audioName) {
+        continue;
+      }
+      states.push({
+        entityId: entity.id,
+        audioName,
+        enabled: entity.scriptAmbientSoundEnabled,
+        toggleRevision: entity.scriptAmbientSoundRevision,
+      });
+    }
+    return states;
+  }
+
   private makeRenderableEntityState(entity: MapEntity): RenderableEntityState {
     return {
       id: entity.id,
@@ -6486,6 +6519,9 @@ export class GameLogicSubsystem implements Subsystem {
       isDetected: entity.objectStatusFlags.has('DETECTED'),
       scriptFlashCount: entity.scriptFlashCount,
       scriptFlashColor: entity.scriptFlashColor,
+      ambientSoundEventName: this.resolveEntityAmbientSoundEventName(entity),
+      scriptAmbientSoundEnabled: entity.scriptAmbientSoundEnabled,
+      scriptAmbientSoundRevision: entity.scriptAmbientSoundRevision,
       shroudStatus: this.resolveEntityShroudStatusForLocalPlayer(entity),
       constructionPercent: entity.constructionPercent,
       toppleAngle: entity.toppleAngularAccumulation,
@@ -6494,6 +6530,25 @@ export class GameLogicSubsystem implements Subsystem {
       /** Turret rotation angles (one per turret module), in radians relative to body. */
       turretAngles: entity.turretStates.map(ts => ts.currentAngle),
     };
+  }
+
+  private resolveEntityAmbientSoundEventName(entity: MapEntity): string | null {
+    const profile = entity.ambientSoundProfile;
+    if (!profile) {
+      return null;
+    }
+
+    const bodyDamageState = calcBodyDamageState(entity.health, entity.maxHealth);
+    switch (bodyDamageState) {
+      case 1:
+        return profile.damaged ?? profile.pristine;
+      case 2:
+        return profile.reallyDamaged ?? profile.pristine;
+      case 3:
+        return profile.rubble;
+      default:
+        return profile.pristine;
+    }
   }
 
   /**
@@ -19084,13 +19139,16 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doEnableObjectSound.
-   * TODO(source-parity): forward this flag to drawable/audio ambient channel playback.
+   * App runtime consumes this state via getScriptObjectAmbientSoundStates().
    */
   private executeScriptSetObjectAmbientSound(entityId: number, enabled: boolean): boolean {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || entity.destroyed) {
       return false;
     }
+    // Source parity: Drawable::enableAmbientSoundFromScript deliberately does not
+    // short-circuit repeated toggles so re-enable can retrigger one-shot ambients.
+    entity.scriptAmbientSoundRevision += 1;
     entity.scriptAmbientSoundEnabled = enabled;
     return true;
   }
@@ -25843,6 +25901,7 @@ export class GameLogicSubsystem implements Subsystem {
     const dozerAIProfile = this.extractDozerAIProfile(objectDef);
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
     const experienceProfile = this.extractExperienceProfile(objectDef);
+    const ambientSoundProfile = this.extractAmbientSoundProfile(objectDef);
     const jetAIProfile = this.extractJetAIProfile(objectDef);
     const animationSteeringProfile = this.extractAnimationSteeringProfile(objectDef);
     const tensileFormationProfile = this.extractTensileFormationProfile(objectDef);
@@ -25957,6 +26016,8 @@ export class GameLogicSubsystem implements Subsystem {
       scriptFlashCount: 0,
       scriptFlashColor: 0,
       scriptAmbientSoundEnabled: true,
+      scriptAmbientSoundRevision: 0,
+      ambientSoundProfile,
       customIndicatorColor: null,
       commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,
@@ -26740,6 +26801,42 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private extractDynamicAudioEventName(fields: Record<string, IniValue>, fieldName: string): string | null {
+    const value = this.readIniFieldValue(fields, fieldName);
+    for (const tokenGroup of this.extractIniValueTokens(value)) {
+      const eventName = tokenGroup[0]?.trim();
+      if (!eventName) {
+        continue;
+      }
+      const normalized = eventName.toUpperCase();
+      if (normalized === 'NONE' || normalized === 'NOSOUND') {
+        return null;
+      }
+      return eventName;
+    }
+    return null;
+  }
+
+  private extractAmbientSoundProfile(objectDef: ObjectDef | undefined): AmbientSoundProfile | null {
+    if (!objectDef) {
+      return null;
+    }
+
+    const pristine = this.extractDynamicAudioEventName(objectDef.fields, 'SoundAmbient');
+    const damaged = this.extractDynamicAudioEventName(objectDef.fields, 'SoundAmbientDamaged');
+    const reallyDamaged = this.extractDynamicAudioEventName(objectDef.fields, 'SoundAmbientReallyDamaged');
+    const rubble = this.extractDynamicAudioEventName(objectDef.fields, 'SoundAmbientRubble');
+    if (!pristine && !damaged && !reallyDamaged && !rubble) {
+      return null;
+    }
+    return {
+      pristine,
+      damaged,
+      reallyDamaged,
+      rubble,
+    };
   }
 
   private extractWeaponNamesFromTokens(tokens: string[]): string[] {

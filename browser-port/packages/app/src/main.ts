@@ -61,6 +61,7 @@ import { createScriptCameraRuntimeBridge } from './script-camera-runtime.js';
 import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
 import { createScriptEmoticonRuntimeBridge } from './script-emoticon-runtime.js';
 import { createScriptMessageRuntimeBridge } from './script-message-runtime.js';
+import { createScriptObjectAmbientAudioRuntimeBridge } from './script-object-ambient-audio-runtime.js';
 import { createScriptUiEffectsRuntimeBridge } from './script-ui-effects-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
 
@@ -652,6 +653,10 @@ async function startGame(
     gameLogic,
     audioManager,
     getLocalPlayerIndex: () => networkManager.getLocalPlayerID(),
+  });
+  const scriptObjectAmbientAudioRuntimeBridge = createScriptObjectAmbientAudioRuntimeBridge({
+    gameLogic,
+    audioManager,
   });
 
   // ========================================================================
@@ -2417,6 +2422,7 @@ async function startGame(
       scriptCameraTimeFrozen = scriptCameraRuntimeBridge.isCameraTimeFrozen();
       scriptCameraTimeMultiplier = scriptCameraRuntimeBridge.getCameraTimeMultiplier();
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
+      scriptObjectAmbientAudioRuntimeBridge.syncAfterSimulationStep();
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
       scriptUiEffectsRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
       scriptEmoticonRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
