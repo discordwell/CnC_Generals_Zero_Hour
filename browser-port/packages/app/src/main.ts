@@ -53,6 +53,7 @@ import {
   loadOptionPreferencesFromStorage,
 } from './option-preferences.js';
 import { applyScriptInputLock } from './script-input-lock.js';
+import { resolveScriptRadarVisibility } from './script-radar-visibility.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
 import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
@@ -2322,7 +2323,14 @@ async function startGame(
 
     onRender(_alpha: number) {
       renderer.render(scene, camera);
-      updateMinimap();
+      const radarVisible = resolveScriptRadarVisibility(
+        gameLogic.isScriptRadarHidden(),
+        gameLogic.isScriptRadarForced(),
+      );
+      minimapCanvas.style.display = radarVisible ? 'block' : 'none';
+      if (radarVisible) {
+        updateMinimap();
+      }
       updateProductionPanel();
       updateRallyPointVisual();
       updateMoveIndicators();
