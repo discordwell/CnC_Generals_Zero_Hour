@@ -361,6 +361,39 @@ describe('script camera runtime bridge', () => {
     expect(smoothedAngle).toBeGreaterThan(-Math.PI / 2);
   });
 
+  it('FREEZE_ANGLE holds waypoint-path camera heading for remaining movement', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.waypointPaths.set('CAM_FREEZE', [
+      { x: 100, z: 0 },
+      { x: 100, z: 100 },
+    ]);
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_FREEZE',
+      x: 100,
+      z: 100,
+      durationMs: 1000,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    bridge.syncAfterSimulationStep(10);
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FREEZE_ANGLE',
+    }));
+    bridge.syncAfterSimulationStep(11);
+    const frozenAngle = cameraController.getState().angle;
+
+    bridge.syncAfterSimulationStep(20);
+    expect(cameraController.getState().angle).toBeCloseTo(frozenAngle, 6);
+
+    bridge.syncAfterSimulationStep(30);
+    expect(cameraController.getState().angle).toBeCloseTo(frozenAngle, 6);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
   it('applies ROTATE requests over the scripted duration', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();

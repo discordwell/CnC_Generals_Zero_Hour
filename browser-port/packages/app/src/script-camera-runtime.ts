@@ -443,6 +443,7 @@ export function createScriptCameraRuntimeBridge(
   let cameraTimeMultiplier = 1;
   let timeMultiplierTransition: ScalarTransition | null = null;
   let waypointPathRollingAverageFrames = 1;
+  let frozenWaypointPathAngle: number | null = null;
   let lastCameraLockSignature: string | null = null;
   let lastLookTowardObjectSignature: string | null = null;
   let lastLookTowardWaypointSignature: string | null = null;
@@ -457,6 +458,7 @@ export function createScriptCameraRuntimeBridge(
     shutterFrames = 1,
   ): void => {
     const state = cameraController.getState();
+    frozenWaypointPathAngle = null;
     waypointPathTransition = null;
     targetTransition = {
       startFrame: currentLogicFrame,
@@ -480,6 +482,7 @@ export function createScriptCameraRuntimeBridge(
     shutterFrames = 1,
   ): void => {
     const state = cameraController.getState();
+    frozenWaypointPathAngle = null;
     waypointPathRollingAverageFrames = 1;
     const points: Array<{ x: number; z: number }> = [
       { x: state.targetX, z: state.targetZ },
@@ -622,18 +625,27 @@ export function createScriptCameraRuntimeBridge(
       nextTargetZ = pathSample.z;
       stateChanged = true;
       if (!angleTransition && pathSample.advancedThisFrame && pathSample.headingAngle !== null) {
-        const rollingAverageFrames = Math.max(1, waypointPathRollingAverageFrames);
-        let avgFactor = 1 / rollingAverageFrames;
-        if (pathSample.segmentIndex === waypointPathTransition.points.length - 1) {
-          avgFactor = avgFactor + ((1 - avgFactor) * pathSample.segmentProgress);
+        if (frozenWaypointPathAngle !== null) {
+          nextAngle = frozenWaypointPathAngle;
+          stateChanged = true;
+        } else {
+          const rollingAverageFrames = Math.max(1, waypointPathRollingAverageFrames);
+          let avgFactor = 1 / rollingAverageFrames;
+          if (pathSample.segmentIndex === waypointPathTransition.points.length - 1) {
+            avgFactor = avgFactor + ((1 - avgFactor) * pathSample.segmentProgress);
+          }
+          let deltaAngle = pathSample.headingAngle - nextAngle;
+          deltaAngle = normalizeAngle(deltaAngle);
+          nextAngle = normalizeAngle(nextAngle + (avgFactor * deltaAngle));
+          stateChanged = true;
         }
-        let deltaAngle = pathSample.headingAngle - nextAngle;
-        deltaAngle = normalizeAngle(deltaAngle);
-        nextAngle = normalizeAngle(nextAngle + (avgFactor * deltaAngle));
+      } else if (!angleTransition && frozenWaypointPathAngle !== null) {
+        nextAngle = frozenWaypointPathAngle;
         stateChanged = true;
       }
       if (isTransitionComplete(waypointPathTransition, currentLogicFrame)) {
         waypointPathTransition = null;
+        frozenWaypointPathAngle = null;
       }
     }
 
@@ -802,6 +814,7 @@ export function createScriptCameraRuntimeBridge(
           cameraController.setState(nextState);
           targetTransition = null;
           waypointPathTransition = null;
+          frozenWaypointPathAngle = null;
           angleTransition = null;
           zoomTransition = null;
           pitchTransition = null;
@@ -844,13 +857,19 @@ export function createScriptCameraRuntimeBridge(
     for (const request of requests) {
       switch (request.requestType) {
         case 'FREEZE_ANGLE': {
-          if (!angleTransition) {
+          if (!angleTransition && !waypointPathTransition) {
             break;
           }
-          const state = cameraController.getState();
-          const frozenAngle = evaluateScalarTransition(angleTransition, currentLogicFrame);
-          cameraController.setState({ ...state, angle: frozenAngle });
-          angleTransition = null;
+          if (angleTransition) {
+            const state = cameraController.getState();
+            const frozenAngle = evaluateScalarTransition(angleTransition, currentLogicFrame);
+            cameraController.setState({ ...state, angle: frozenAngle });
+            angleTransition = null;
+          }
+          if (waypointPathTransition) {
+            const state = cameraController.getState();
+            frozenWaypointPathAngle = state.angle;
+          }
           break;
         }
 
@@ -1156,6 +1175,7 @@ export function createScriptCameraRuntimeBridge(
     // Source parity: object camera-lock mode cancels scripted camera-move tracks.
     targetTransition = null;
     waypointPathTransition = null;
+    frozenWaypointPathAngle = null;
     angleTransition = null;
     zoomTransition = null;
     pitchTransition = null;
