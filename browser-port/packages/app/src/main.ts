@@ -54,6 +54,7 @@ import {
 } from './option-preferences.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
+import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
 import { createScriptMessageRuntimeBridge } from './script-message-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
 
@@ -957,6 +958,54 @@ async function startGame(
   });
   entityInfoPanel.appendChild(entityInfoDetails);
 
+  // Script-driven cinematic overlays (letterbox + text).
+  const cinematicLetterboxTop = document.createElement('div');
+  const cinematicLetterboxBottom = document.createElement('div');
+  const cinematicTextOverlay = document.createElement('div');
+  Object.assign(cinematicLetterboxTop.style, {
+    position: 'absolute',
+    top: '0',
+    left: '0',
+    width: '100%',
+    height: '11%',
+    background: 'rgba(0, 0, 0, 0.9)',
+    zIndex: '250',
+    display: 'none',
+    pointerEvents: 'none',
+  });
+  Object.assign(cinematicLetterboxBottom.style, {
+    position: 'absolute',
+    bottom: '0',
+    left: '0',
+    width: '100%',
+    height: '11%',
+    background: 'rgba(0, 0, 0, 0.9)',
+    zIndex: '250',
+    display: 'none',
+    pointerEvents: 'none',
+  });
+  Object.assign(cinematicTextOverlay.style, {
+    position: 'absolute',
+    left: '50%',
+    bottom: '12%',
+    transform: 'translateX(-50%)',
+    maxWidth: '82vw',
+    color: '#f4efe1',
+    fontFamily: '"Times New Roman", Georgia, serif',
+    fontSize: '28px',
+    fontWeight: '700',
+    letterSpacing: '0.03em',
+    textAlign: 'center',
+    textShadow: '0 0 10px rgba(0,0,0,0.95), 0 2px 8px rgba(0,0,0,0.95)',
+    zIndex: '260',
+    pointerEvents: 'none',
+    display: 'none',
+  });
+  const gameContainer = document.getElementById('game-container')!;
+  gameContainer.appendChild(cinematicLetterboxTop);
+  gameContainer.appendChild(cinematicLetterboxBottom);
+  gameContainer.appendChild(cinematicTextOverlay);
+
   const updateEntityInfoPanel = (): void => {
     const selectedIds = gameLogic.getLocalPlayerSelectionIds();
     if (selectedIds.length === 0) {
@@ -1059,7 +1108,7 @@ async function startGame(
       letter-spacing: 0.1em;
     ">Return to Menu</button>
   `;
-  document.getElementById('game-container')!.appendChild(endGameOverlay);
+  gameContainer.appendChild(endGameOverlay);
 
   document.getElementById('endgame-menu-btn')!.addEventListener('click', () => {
     window.location.reload();
@@ -1088,7 +1137,7 @@ async function startGame(
     cursor: 'pointer',
     pointerEvents: 'auto',
   });
-  document.getElementById('game-container')!.appendChild(minimapCanvas);
+  gameContainer.appendChild(minimapCanvas);
   const minimapCtx = minimapCanvas.getContext('2d')!;
 
   // Pre-render terrain base image once.
@@ -1959,6 +2008,32 @@ async function startGame(
   // ========================================================================
 
   const gameLoop = new GameLoop(30);
+  const scriptCinematicRuntimeBridge = createScriptCinematicRuntimeBridge({
+    gameLogic,
+    view: {
+      setLetterboxEnabled(enabled): void {
+        const display = enabled ? 'block' : 'none';
+        cinematicLetterboxTop.style.display = display;
+        cinematicLetterboxBottom.style.display = display;
+      },
+      showCinematicText(text, fontType): void {
+        const normalizedFontType = fontType.trim().toUpperCase();
+        if (normalizedFontType.includes('SMALL')) {
+          cinematicTextOverlay.style.fontSize = '22px';
+        } else if (normalizedFontType.includes('LARGE')) {
+          cinematicTextOverlay.style.fontSize = '34px';
+        } else {
+          cinematicTextOverlay.style.fontSize = '28px';
+        }
+        cinematicTextOverlay.textContent = text;
+        cinematicTextOverlay.style.display = 'block';
+      },
+      clearCinematicText(): void {
+        cinematicTextOverlay.textContent = '';
+        cinematicTextOverlay.style.display = 'none';
+      },
+    },
+  });
   const scriptMessageRuntimeBridge = createScriptMessageRuntimeBridge({
     gameLogic,
     uiRuntime,
@@ -2200,6 +2275,7 @@ async function startGame(
       subsystems.updateAll(dt);
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
+      scriptCinematicRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
 
       // Move sun light to follow camera target for consistent shadows.
       const camState = rtsCamera.getState();
