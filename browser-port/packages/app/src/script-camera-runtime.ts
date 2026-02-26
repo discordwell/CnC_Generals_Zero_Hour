@@ -1,6 +1,5 @@
 import type { CameraState } from '@generals/input';
 
-const LOGIC_FRAME_DURATION_MS = 1000 / 30;
 const TWO_PI = Math.PI * 2;
 const MIN_DIRECTION_LENGTH = 0.1;
 
@@ -45,15 +44,50 @@ export interface ScriptCameraModifierRequestState {
   frame: number;
 }
 
+export interface ScriptCameraTetherState {
+  entityId: number;
+  immediate: boolean;
+  play: number;
+}
+
+export interface ScriptCameraFollowState {
+  entityId: number;
+  snapToUnit: boolean;
+}
+
+export interface ScriptCameraLookTowardObjectState {
+  entityId: number;
+  durationMs: number;
+  holdMs: number;
+  easeInMs: number;
+  easeOutMs: number;
+}
+
+export interface ScriptCameraLookTowardWaypointState {
+  waypointName: string;
+  x: number;
+  z: number;
+  durationMs: number;
+  easeInMs: number;
+  easeOutMs: number;
+  reverseRotation: boolean;
+}
+
 export interface ScriptCameraRuntimeGameLogic {
   drainScriptCameraActionRequests(): ScriptCameraActionRequestState[];
   drainScriptCameraModifierRequests(): ScriptCameraModifierRequestState[];
+  getScriptCameraTetherState?(): ScriptCameraTetherState | null;
+  getScriptCameraFollowState?(): ScriptCameraFollowState | null;
+  getScriptCameraLookTowardObjectState?(): ScriptCameraLookTowardObjectState | null;
+  getScriptCameraLookTowardWaypointState?(): ScriptCameraLookTowardWaypointState | null;
+  getEntityWorldPosition?(entityId: number): readonly [number, number, number] | null;
 }
 
 export interface ScriptCameraRuntimeController {
   getState(): CameraState;
   setState(state: CameraState): void;
   lookAt(worldX: number, worldZ: number): void;
+  panTo?(worldX: number, worldZ: number): void;
 }
 
 export interface ScriptCameraRuntimeBridge {
@@ -163,6 +197,8 @@ function resolveLookTowardAngle(
   fromZ: number,
   toX: number,
   toZ: number,
+  reverseRotation = false,
+  currentAngle = 0,
 ): number | null {
   const dirX = toX - fromX;
   const dirZ = toZ - fromZ;
@@ -177,7 +213,15 @@ function resolveLookTowardAngle(
     angle = -angle;
   }
   angle -= Math.PI / 2;
-  return normalizeAngle(angle);
+  const normalizedAngle = normalizeAngle(angle);
+  if (!reverseRotation) {
+    return normalizedAngle;
+  }
+
+  if (currentAngle < normalizedAngle) {
+    return normalizedAngle - TWO_PI;
+  }
+  return normalizedAngle + TWO_PI;
 }
 
 export function createScriptCameraRuntimeBridge(
@@ -192,6 +236,9 @@ export function createScriptCameraRuntimeBridge(
   let zoomTransition: ScalarTransition | null = null;
   let nonVisualMovementEndFrame = -1;
   let movementFinished = true;
+  let lastCameraLockSignature: string | null = null;
+  let lastLookTowardObjectSignature: string | null = null;
+  let lastLookTowardWaypointSignature: string | null = null;
 
   const beginTargetTransition = (
     currentLogicFrame: number,
@@ -470,6 +517,124 @@ export function createScriptCameraRuntimeBridge(
     }
   };
 
+  const processLookTowardStates = (currentLogicFrame: number): void => {
+    const lookTowardObjectState = gameLogic.getScriptCameraLookTowardObjectState?.() ?? null;
+    if (!lookTowardObjectState) {
+      lastLookTowardObjectSignature = null;
+    } else {
+      const signature = [
+        lookTowardObjectState.entityId,
+        lookTowardObjectState.durationMs,
+        lookTowardObjectState.holdMs,
+        lookTowardObjectState.easeInMs,
+        lookTowardObjectState.easeOutMs,
+      ].join(':');
+      if (signature !== lastLookTowardObjectSignature) {
+        const worldPosition = gameLogic.getEntityWorldPosition?.(lookTowardObjectState.entityId) ?? null;
+        if (worldPosition) {
+          const state = cameraController.getState();
+          const lookTowardAngle = resolveLookTowardAngle(
+            state.targetX,
+            state.targetZ,
+            worldPosition[0],
+            worldPosition[2],
+            false,
+            state.angle,
+          );
+          if (lookTowardAngle !== null) {
+            const durationFrames = toDurationFrames(lookTowardObjectState.durationMs);
+            beginAngleTransition(currentLogicFrame, lookTowardAngle, durationFrames);
+            const holdFrames = toDurationFrames(lookTowardObjectState.holdMs);
+            nonVisualMovementEndFrame = Math.max(
+              nonVisualMovementEndFrame,
+              currentLogicFrame + durationFrames + holdFrames - 1,
+            );
+          }
+        }
+        lastLookTowardObjectSignature = signature;
+      }
+    }
+
+    const lookTowardWaypointState = gameLogic.getScriptCameraLookTowardWaypointState?.() ?? null;
+    if (!lookTowardWaypointState) {
+      lastLookTowardWaypointSignature = null;
+      return;
+    }
+
+    const signature = [
+      lookTowardWaypointState.waypointName,
+      lookTowardWaypointState.x,
+      lookTowardWaypointState.z,
+      lookTowardWaypointState.durationMs,
+      lookTowardWaypointState.easeInMs,
+      lookTowardWaypointState.easeOutMs,
+      lookTowardWaypointState.reverseRotation ? 1 : 0,
+    ].join(':');
+    if (signature === lastLookTowardWaypointSignature) {
+      return;
+    }
+
+    const state = cameraController.getState();
+    const lookTowardAngle = resolveLookTowardAngle(
+      state.targetX,
+      state.targetZ,
+      lookTowardWaypointState.x,
+      lookTowardWaypointState.z,
+      lookTowardWaypointState.reverseRotation,
+      state.angle,
+    );
+    if (lookTowardAngle !== null) {
+      beginAngleTransition(
+        currentLogicFrame,
+        lookTowardAngle,
+        toDurationFrames(lookTowardWaypointState.durationMs),
+      );
+    }
+    lastLookTowardWaypointSignature = signature;
+  };
+
+  const processCameraLockStates = (): void => {
+    const tetherState = gameLogic.getScriptCameraTetherState?.() ?? null;
+    const followState = tetherState
+      ? null
+      : (gameLogic.getScriptCameraFollowState?.() ?? null);
+
+    if (!tetherState && !followState) {
+      lastCameraLockSignature = null;
+      return;
+    }
+
+    const entityId = tetherState?.entityId ?? followState?.entityId ?? null;
+    if (entityId === null) {
+      return;
+    }
+
+    const worldPosition = gameLogic.getEntityWorldPosition?.(entityId) ?? null;
+    if (!worldPosition) {
+      return;
+    }
+
+    const lockSignature = tetherState
+      ? `TETHER:${entityId}:${tetherState.immediate ? 1 : 0}:${tetherState.play}`
+      : `FOLLOW:${entityId}:${followState?.snapToUnit ? 1 : 0}`;
+    const shouldSnapNow = lastCameraLockSignature !== lockSignature
+      && (tetherState?.immediate ?? followState?.snapToUnit ?? false);
+
+    if (shouldSnapNow) {
+      cameraController.lookAt(worldPosition[0], worldPosition[2]);
+    } else if (cameraController.panTo) {
+      cameraController.panTo(worldPosition[0], worldPosition[2]);
+    } else {
+      cameraController.lookAt(worldPosition[0], worldPosition[2]);
+    }
+
+    // Source parity: object camera-lock mode cancels scripted camera-move tracks.
+    targetTransition = null;
+    angleTransition = null;
+    zoomTransition = null;
+    lastCameraLockSignature = lockSignature;
+  };
+
   const updateMovementFinished = (currentLogicFrame: number): void => {
     movementFinished = (
       !targetTransition
@@ -484,6 +649,8 @@ export function createScriptCameraRuntimeBridge(
       applyActiveTransitions(currentLogicFrame);
       processActionRequests(currentLogicFrame);
       processModifierRequests(currentLogicFrame);
+      processLookTowardStates(currentLogicFrame);
+      processCameraLockStates();
       applyActiveTransitions(currentLogicFrame);
       updateMovementFinished(currentLogicFrame);
     },

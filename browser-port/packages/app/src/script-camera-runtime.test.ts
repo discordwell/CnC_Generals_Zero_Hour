@@ -6,18 +6,32 @@ import {
   createScriptCameraRuntimeBridge,
   type ScriptCameraRuntimeGameLogic,
   type ScriptCameraActionRequestState,
+  type ScriptCameraFollowState,
+  type ScriptCameraLookTowardObjectState,
+  type ScriptCameraLookTowardWaypointState,
   type ScriptCameraModifierRequestState,
+  type ScriptCameraTetherState,
 } from './script-camera-runtime.js';
 
 interface MutableScriptCameraState {
   actionRequests: ScriptCameraActionRequestState[];
   modifierRequests: ScriptCameraModifierRequestState[];
+  tetherState: ScriptCameraTetherState | null;
+  followState: ScriptCameraFollowState | null;
+  lookTowardObjectState: ScriptCameraLookTowardObjectState | null;
+  lookTowardWaypointState: ScriptCameraLookTowardWaypointState | null;
+  entityPositions: Map<number, readonly [number, number, number]>;
 }
 
 class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
   readonly state: MutableScriptCameraState = {
     actionRequests: [],
     modifierRequests: [],
+    tetherState: null,
+    followState: null,
+    lookTowardObjectState: null,
+    lookTowardWaypointState: null,
+    entityPositions: new Map<number, readonly [number, number, number]>(),
   };
 
   drainScriptCameraActionRequests(): ScriptCameraActionRequestState[] {
@@ -30,6 +44,26 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
     const drained = this.state.modifierRequests.map((request) => ({ ...request }));
     this.state.modifierRequests.length = 0;
     return drained;
+  }
+
+  getScriptCameraTetherState(): ScriptCameraTetherState | null {
+    return this.state.tetherState ? { ...this.state.tetherState } : null;
+  }
+
+  getScriptCameraFollowState(): ScriptCameraFollowState | null {
+    return this.state.followState ? { ...this.state.followState } : null;
+  }
+
+  getScriptCameraLookTowardObjectState(): ScriptCameraLookTowardObjectState | null {
+    return this.state.lookTowardObjectState ? { ...this.state.lookTowardObjectState } : null;
+  }
+
+  getScriptCameraLookTowardWaypointState(): ScriptCameraLookTowardWaypointState | null {
+    return this.state.lookTowardWaypointState ? { ...this.state.lookTowardWaypointState } : null;
+  }
+
+  getEntityWorldPosition(entityId: number): readonly [number, number, number] | null {
+    return this.state.entityPositions.get(entityId) ?? null;
   }
 }
 
@@ -50,6 +84,14 @@ class RecordingCameraController {
   }
 
   lookAt(worldX: number, worldZ: number): void {
+    this.state = {
+      ...this.state,
+      targetX: worldX,
+      targetZ: worldZ,
+    };
+  }
+
+  panTo(worldX: number, worldZ: number): void {
     this.state = {
       ...this.state,
       targetX: worldX,
@@ -215,6 +257,55 @@ describe('script camera runtime bridge', () => {
 
     bridge.syncAfterSimulationStep(20);
     expect(cameraController.getState().angle).toBeCloseTo(frozenAngle, 6);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
+  it('applies persistent FOLLOW camera lock states each frame', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.followState = {
+      entityId: 7,
+      snapToUnit: false,
+    };
+    gameLogic.state.entityPositions.set(7, [100, 0, 200]);
+
+    bridge.syncAfterSimulationStep(1);
+    expect(cameraController.getState().targetX).toBe(100);
+    expect(cameraController.getState().targetZ).toBe(200);
+
+    gameLogic.state.entityPositions.set(7, [120, 0, 240]);
+    bridge.syncAfterSimulationStep(2);
+    expect(cameraController.getState().targetX).toBe(120);
+    expect(cameraController.getState().targetZ).toBe(240);
+  });
+
+  it('triggers waypoint look-toward rotation once per new state signature', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.lookTowardWaypointState = {
+      waypointName: 'LookAtA',
+      x: 0,
+      z: 100,
+      durationMs: 1000,
+      easeInMs: 0,
+      easeOutMs: 0,
+      reverseRotation: false,
+    };
+
+    bridge.syncAfterSimulationStep(1);
+    expect(bridge.isCameraMovementFinished()).toBe(false);
+
+    bridge.syncAfterSimulationStep(30);
+    const firstAngle = cameraController.getState().angle;
+    expect(firstAngle).toBeCloseTo(0, 5);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+
+    bridge.syncAfterSimulationStep(31);
+    expect(cameraController.getState().angle).toBeCloseTo(firstAngle, 5);
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 });
