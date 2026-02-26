@@ -140,6 +140,7 @@ interface TargetTransition {
   toZ: number;
   easeIn: number;
   easeOut: number;
+  shutterFrames: number;
 }
 
 function normalizeAngle(angle: number): number {
@@ -155,6 +156,14 @@ function normalizeAngle(angle: number): number {
 
 function toDurationFrames(durationMs: number): number {
   const normalizedMs = Number.isFinite(durationMs) ? Math.trunc(durationMs) : 0;
+  if (normalizedMs < 1) {
+    return 1;
+  }
+  return Math.max(1, Math.trunc((normalizedMs * 30) / 1000));
+}
+
+function toShutterFrames(cameraStutterMs: number): number {
+  const normalizedMs = Number.isFinite(cameraStutterMs) ? Math.trunc(cameraStutterMs) : 0;
   if (normalizedMs < 1) {
     return 1;
   }
@@ -226,11 +235,21 @@ function evaluateTargetTransition(
   transition: TargetTransition,
   currentLogicFrame: number,
 ): { x: number; z: number } {
-  const linearProgress = getTransitionProgress(
-    currentLogicFrame,
-    transition.startFrame,
-    transition.durationFrames,
-  );
+  const elapsedFrames = currentLogicFrame - transition.startFrame + 1;
+  let linearProgress = 0;
+  if (elapsedFrames <= 0) {
+    linearProgress = 0;
+  } else if (elapsedFrames >= transition.durationFrames) {
+    linearProgress = 1;
+  } else {
+    const shutterFrames = Math.max(1, transition.shutterFrames);
+    if (elapsedFrames < shutterFrames) {
+      linearProgress = 0;
+    } else {
+      const sampledElapsedFrames = Math.trunc(elapsedFrames / shutterFrames) * shutterFrames;
+      linearProgress = sampledElapsedFrames / transition.durationFrames;
+    }
+  }
   const progress = evaluateParabolicEase(linearProgress, transition.easeIn, transition.easeOut);
   return {
     x: transition.fromX + (transition.toX - transition.fromX) * progress,
@@ -319,6 +338,7 @@ export function createScriptCameraRuntimeBridge(
     durationFrames: number,
     easeIn = 0,
     easeOut = 0,
+    shutterFrames = 1,
   ): void => {
     const state = cameraController.getState();
     targetTransition = {
@@ -330,6 +350,7 @@ export function createScriptCameraRuntimeBridge(
       toZ,
       easeIn: clamp01(easeIn),
       easeOut: clamp01(easeOut),
+      shutterFrames: Math.max(1, Math.trunc(shutterFrames)),
     };
   };
 
@@ -475,7 +496,21 @@ export function createScriptCameraRuntimeBridge(
     const requests = gameLogic.drainScriptCameraActionRequests();
     for (const request of requests) {
       switch (request.requestType) {
-        case 'MOVE_TO':
+        case 'MOVE_TO': {
+          if (request.x === null || request.z === null) {
+            break;
+          }
+          beginTargetTransition(
+            currentLogicFrame,
+            request.x,
+            request.z,
+            toDurationFrames(request.durationMs),
+            toEaseRatioFromDuration(request.easeInMs, request.durationMs),
+            toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
+          );
+          break;
+        }
+
         case 'MOVE_ALONG_WAYPOINT_PATH': {
           if (request.x === null || request.z === null) {
             break;
@@ -487,6 +522,7 @@ export function createScriptCameraRuntimeBridge(
             toDurationFrames(request.durationMs),
             toEaseRatioFromDuration(request.easeInMs, request.durationMs),
             toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
+            toShutterFrames(request.cameraStutterMs),
           );
           break;
         }

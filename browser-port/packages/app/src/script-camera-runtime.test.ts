@@ -236,6 +236,40 @@ describe('script camera runtime bridge', () => {
     expect(easedX).toBeLessThan(linearX);
   });
 
+  it('applies camera stutter cadence for MOVE_ALONG_WAYPOINT_PATH', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      x: 90,
+      z: 0,
+      durationMs: 1000,
+      cameraStutterMs: 100,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    const frame1X = cameraController.getState().targetX;
+    expect(frame1X).toBeCloseTo(0, 6);
+
+    bridge.syncAfterSimulationStep(3);
+    const frame3X = cameraController.getState().targetX;
+    expect(frame3X).toBeGreaterThan(frame1X);
+
+    bridge.syncAfterSimulationStep(4);
+    const frame4X = cameraController.getState().targetX;
+    expect(frame4X).toBeCloseTo(frame3X, 6);
+
+    bridge.syncAfterSimulationStep(6);
+    const frame6X = cameraController.getState().targetX;
+    expect(frame6X).toBeGreaterThan(frame4X);
+
+    bridge.syncAfterSimulationStep(30);
+    expect(cameraController.getState().targetX).toBeCloseTo(90, 4);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
   it('applies ROTATE requests over the scripted duration', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();
