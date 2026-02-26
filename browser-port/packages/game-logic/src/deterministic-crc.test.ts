@@ -121,6 +121,11 @@ describe('GameLogic deterministic CRC ownership', () => {
       subsystem.executeScriptAction({ actionType: 'RADAR_FORCE_ENABLE' });
       const withScriptRuntimeState = computeGameLogicCrc(subsystem, 0);
       expect(withScriptRuntimeState).not.toBe(withLazyDeadline);
+
+      subsystem.setScriptTeamMembers('TeamCRC', [1]);
+      subsystem.setScriptTeamPrototype('TeamCRC', 'TeamProtoCRC');
+      const withScriptTeamState = computeGameLogicCrc(subsystem, 0);
+      expect(withScriptTeamState).not.toBe(withScriptRuntimeState);
     } finally {
       subsystem.dispose();
     }

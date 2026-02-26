@@ -133,6 +133,35 @@ interface ScriptCounterStateLike {
   isCountdownTimer: boolean;
 }
 
+interface ScriptTeamTemplateUnitEntryLike {
+  templateName: string;
+  minUnits: number;
+  maxUnits: number;
+}
+
+interface ScriptTeamRecordLike {
+  nameUpper: string;
+  prototypeNameUpper: string;
+  memberEntityIds: ReadonlySet<number>;
+  created: boolean;
+  stateName: string;
+  attackPrioritySetName: string;
+  recruitableOverride: boolean | null;
+  isAIRecruitable: boolean;
+  homeWaypointName: string;
+  controllingSide: string | null;
+  isSingleton: boolean;
+  maxInstances: number;
+  productionPriority: number;
+  productionPrioritySuccessIncrease: number;
+  productionPriorityFailureDecrease: number;
+  reinforcementUnitEntries: readonly ScriptTeamTemplateUnitEntryLike[];
+  reinforcementTransportTemplateName: string;
+  reinforcementStartWaypointName: string;
+  reinforcementTeamStartsFull: boolean;
+  reinforcementTransportsExit: boolean;
+}
+
 interface GameLogicConfigLike {
   renderUnknownObjects: boolean;
   attackUsesLineOfSight: boolean;
@@ -168,6 +197,7 @@ export interface DeterministicGameLogicCrcContext {
   scriptCameraMovementFinished: boolean;
   scriptRadarForced: boolean;
   scriptRadarRefreshFrame: number;
+  scriptTeamsByName: ReadonlyMap<string, ScriptTeamRecordLike>;
   frameCounter: number;
   nextId: number;
   animationTime: number;
@@ -414,6 +444,7 @@ function writeDeterministicAiCrc(
   crc.addUnsignedByte(context.gameLogic.scriptCameraMovementFinished ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.scriptRadarForced ? 1 : 0);
   addSignedIntCrc(context, crc, context.gameLogic.scriptRadarRefreshFrame);
+  writeScriptTeamStateCrc(context, crc, context.gameLogic.scriptTeamsByName);
 
   crc.addUnsignedByte(context.gameLogic.config.renderUnknownObjects ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.config.attackUsesLineOfSight ? 1 : 0);
@@ -767,6 +798,48 @@ function writeNamedBooleanSetCrc(
   crc.addUnsignedInt(entries.length >>> 0);
   for (const name of entries) {
     crc.addAsciiString(name);
+  }
+}
+
+function writeScriptTeamStateCrc(
+  context: DeterministicWriterContext,
+  crc: XferCrcAccumulator,
+  teamsByName: ReadonlyMap<string, ScriptTeamRecordLike>,
+): void {
+  const entries = Array.from(teamsByName.entries()).sort(([left], [right]) => left.localeCompare(right));
+  crc.addUnsignedInt(entries.length >>> 0);
+  for (const [key, team] of entries) {
+    crc.addAsciiString(key);
+    crc.addAsciiString(team.nameUpper);
+    crc.addAsciiString(team.prototypeNameUpper);
+    writeSignedNumberArrayCrc(context, crc, Array.from(team.memberEntityIds.values()), true);
+    crc.addUnsignedByte(team.created ? 1 : 0);
+    crc.addAsciiString(team.stateName);
+    crc.addAsciiString(team.attackPrioritySetName);
+    if (team.recruitableOverride === null) {
+      crc.addUnsignedByte(2);
+    } else {
+      crc.addUnsignedByte(team.recruitableOverride ? 1 : 0);
+    }
+    crc.addUnsignedByte(team.isAIRecruitable ? 1 : 0);
+    crc.addAsciiString(team.homeWaypointName);
+    crc.addAsciiString(team.controllingSide ?? '');
+    crc.addUnsignedByte(team.isSingleton ? 1 : 0);
+    addSignedIntCrc(context, crc, team.maxInstances);
+    addSignedIntCrc(context, crc, team.productionPriority);
+    addSignedIntCrc(context, crc, team.productionPrioritySuccessIncrease);
+    addSignedIntCrc(context, crc, team.productionPriorityFailureDecrease);
+
+    crc.addUnsignedInt(team.reinforcementUnitEntries.length >>> 0);
+    for (const entry of team.reinforcementUnitEntries) {
+      crc.addAsciiString(entry.templateName);
+      addSignedIntCrc(context, crc, entry.minUnits);
+      addSignedIntCrc(context, crc, entry.maxUnits);
+    }
+    crc.addAsciiString(team.reinforcementTransportTemplateName);
+    crc.addAsciiString(team.reinforcementStartWaypointName);
+    crc.addUnsignedByte(team.reinforcementTeamStartsFull ? 1 : 0);
+    crc.addUnsignedByte(team.reinforcementTransportsExit ? 1 : 0);
   }
 }
 
