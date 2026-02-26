@@ -111,6 +111,16 @@ describe('GameLogic deterministic CRC ownership', () => {
       subsystem.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechLine_CRC_Timed' });
       const withLazyDeadline = computeGameLogicCrc(subsystem, 0);
       expect(withLazyDeadline).not.toBe(withAudioLengthMetadata);
+
+      subsystem.setScriptCounter('MissionCounter_CRC', 7);
+      subsystem.setScriptFlag('MissionFlag_CRC', true);
+      subsystem.notifyScriptUIInteraction('UIHook_CRC');
+      subsystem.setScriptActive('Subroutine_CRC', false);
+      subsystem.notifyScriptSubroutineCall('Subroutine_CRC');
+      subsystem.setScriptCameraMovementFinished(false);
+      subsystem.executeScriptAction({ actionType: 'RADAR_FORCE_ENABLE' });
+      const withScriptRuntimeState = computeGameLogicCrc(subsystem, 0);
+      expect(withScriptRuntimeState).not.toBe(withLazyDeadline);
     } finally {
       subsystem.dispose();
     }

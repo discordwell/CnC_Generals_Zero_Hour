@@ -128,6 +128,11 @@ interface ScriptMusicCompletedEventLike {
   index: number;
 }
 
+interface ScriptCounterStateLike {
+  value: number;
+  isCountdownTimer: boolean;
+}
+
 interface GameLogicConfigLike {
   renderUnknownObjects: boolean;
   attackUsesLineOfSight: boolean;
@@ -155,6 +160,14 @@ export interface DeterministicGameLogicCrcContext {
   scriptTestingSpeechCompletionFrameByName: ReadonlyMap<string, number>;
   scriptTestingAudioCompletionFrameByName: ReadonlyMap<string, number>;
   scriptCompletedMusic: readonly ScriptMusicCompletedEventLike[];
+  scriptCountersByName: ReadonlyMap<string, ScriptCounterStateLike>;
+  scriptFlagsByName: ReadonlyMap<string, boolean>;
+  scriptUIInteractions: ReadonlySet<string>;
+  scriptActiveByName: ReadonlyMap<string, boolean>;
+  scriptSubroutineCalls: readonly string[];
+  scriptCameraMovementFinished: boolean;
+  scriptRadarForced: boolean;
+  scriptRadarRefreshFrame: number;
   frameCounter: number;
   nextId: number;
   animationTime: number;
@@ -393,6 +406,14 @@ function writeDeterministicAiCrc(
   writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingSpeechCompletionFrameByName);
   writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingAudioCompletionFrameByName);
   writeScriptCompletedMusicCrc(context, crc, context.gameLogic.scriptCompletedMusic);
+  writeScriptCounterStateCrc(context, crc, context.gameLogic.scriptCountersByName);
+  writeNamedBooleanMapCrc(crc, context.gameLogic.scriptFlagsByName);
+  writeNamedBooleanSetCrc(crc, context.gameLogic.scriptUIInteractions);
+  writeNamedBooleanMapCrc(crc, context.gameLogic.scriptActiveByName);
+  writeOrderedStringListCrc(crc, context.gameLogic.scriptSubroutineCalls);
+  crc.addUnsignedByte(context.gameLogic.scriptCameraMovementFinished ? 1 : 0);
+  crc.addUnsignedByte(context.gameLogic.scriptRadarForced ? 1 : 0);
+  addSignedIntCrc(context, crc, context.gameLogic.scriptRadarRefreshFrame);
 
   crc.addUnsignedByte(context.gameLogic.config.renderUnknownObjects ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.config.attackUsesLineOfSight ? 1 : 0);
@@ -709,6 +730,43 @@ function writeScriptCompletedMusicCrc(
   for (const value of values) {
     crc.addAsciiString(value.name);
     addSignedIntCrc(context, crc, value.index);
+  }
+}
+
+function writeScriptCounterStateCrc(
+  context: DeterministicWriterContext,
+  crc: XferCrcAccumulator,
+  counters: ReadonlyMap<string, ScriptCounterStateLike>,
+): void {
+  const entries = Array.from(counters.entries()).sort(([left], [right]) => left.localeCompare(right));
+  crc.addUnsignedInt(entries.length >>> 0);
+  for (const [name, counter] of entries) {
+    crc.addAsciiString(name);
+    addSignedIntCrc(context, crc, counter.value);
+    crc.addUnsignedByte(counter.isCountdownTimer ? 1 : 0);
+  }
+}
+
+function writeNamedBooleanMapCrc(
+  crc: XferCrcAccumulator,
+  values: ReadonlyMap<string, boolean>,
+): void {
+  const entries = Array.from(values.entries()).sort(([left], [right]) => left.localeCompare(right));
+  crc.addUnsignedInt(entries.length >>> 0);
+  for (const [name, value] of entries) {
+    crc.addAsciiString(name);
+    crc.addUnsignedByte(value ? 1 : 0);
+  }
+}
+
+function writeNamedBooleanSetCrc(
+  crc: XferCrcAccumulator,
+  values: ReadonlySet<string>,
+): void {
+  const entries = Array.from(values.values()).sort((left, right) => left.localeCompare(right));
+  crc.addUnsignedInt(entries.length >>> 0);
+  for (const name of entries) {
+    crc.addAsciiString(name);
   }
 }
 
