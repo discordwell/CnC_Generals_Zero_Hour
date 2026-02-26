@@ -306,6 +306,7 @@ export interface PurchaseScienceCommand {
 
 export interface IssueSpecialPowerCommand {
   type: 'issueSpecialPower';
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
   commandButtonId: string;
   specialPowerName: string;
   commandOption: number;

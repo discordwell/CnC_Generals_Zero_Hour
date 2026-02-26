@@ -13,6 +13,7 @@ const COMMAND_OPTION_NEED_TARGET_POS = 0x00000020;
 const COMMAND_OPTION_NEED_OBJECT_TARGET = COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT
   | COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT
   | COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT;
+type SpecialPowerCommandSource = NonNullable<IssueSpecialPowerCommand['commandSource']>;
 
 interface SpecialPowerCommandEntity {
   id: number;
@@ -34,6 +35,11 @@ interface SpecialPowerCommandContext<TEntity extends SpecialPowerCommandEntity> 
     isShared: boolean,
     readyFrame: number,
   ): void;
+  isObjectShroudedForAction(
+    sourceEntity: TEntity,
+    targetEntity: TEntity,
+    commandSource: SpecialPowerCommandSource,
+  ): boolean;
   getTeamRelationship(sourceEntity: TEntity, targetEntity: TEntity): number;
   onIssueSpecialPowerNoTarget(
     sourceEntityId: number,
@@ -248,6 +254,7 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
   if (!sourceEntity || sourceEntity.destroyed) {
     return;
   }
+  const commandSource: SpecialPowerCommandSource = command.commandSource ?? 'PLAYER';
 
   // Source parity: shared special powers gate globally by power name; non-shared powers
   // gate per source entity via its tracked shortcut-ready frame.
@@ -275,6 +282,9 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
     const targetEntityId = Math.trunc(command.targetEntityId);
     const targetEntity = context.spawnedEntities.get(targetEntityId);
     if (!targetEntity || targetEntity.destroyed) {
+      return;
+    }
+    if (context.isObjectShroudedForAction(sourceEntity, targetEntity, commandSource)) {
       return;
     }
 

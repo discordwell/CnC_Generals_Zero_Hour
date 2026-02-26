@@ -13432,6 +13432,7 @@ export class GameLogicSubsystem implements Subsystem {
 
         this.applyCommand({
           type: 'issueSpecialPower',
+          commandSource: 'SCRIPT',
           commandButtonId: commandButtonDef.name,
           specialPowerName: validated.specialPowerName,
           commandOption: validated.commandOption,
@@ -13837,6 +13838,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       this.applyCommand({
         type: 'issueSpecialPower',
+        commandSource: 'SCRIPT',
         commandButtonId: commandButtonDef.name,
         specialPowerName: resolved.specialPowerName,
         commandOption: resolved.commandOption,
@@ -16001,6 +16003,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.applyCommand({
       type: 'issueSpecialPower',
+      commandSource: 'SCRIPT',
       commandButtonId: '',
       specialPowerName: resolved.specialPowerToken,
       commandOption: SCRIPT_COMMAND_OPTION_NEED_TARGET_POS,
@@ -16029,6 +16032,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.applyCommand({
       type: 'issueSpecialPower',
+      commandSource: 'SCRIPT',
       commandButtonId: '',
       specialPowerName: resolved.specialPowerToken,
       commandOption: SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET,
@@ -16098,6 +16102,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.applyCommand({
       type: 'issueSpecialPower',
+      commandSource: 'SCRIPT',
       commandButtonId: '',
       specialPowerName: specialPowerToken,
       commandOption: 0x20, // NEED_TARGET_POS
@@ -35917,6 +35922,7 @@ export class GameLogicSubsystem implements Subsystem {
         );
       },
       setReadyFrame: this.setSpecialPowerReadyFrame.bind(this),
+      isObjectShroudedForAction: this.isSpecialPowerObjectTargetShrouded.bind(this),
       getTeamRelationship: this.getTeamRelationship.bind(this),
       onIssueSpecialPowerNoTarget: this.onIssueSpecialPowerNoTarget.bind(this),
       onIssueSpecialPowerTargetPosition: this.onIssueSpecialPowerTargetPosition.bind(this),
@@ -36029,6 +36035,24 @@ export class GameLogicSubsystem implements Subsystem {
         break;
       }
     }
+  }
+
+  private isSpecialPowerObjectTargetShrouded(
+    source: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
+    if (commandSource === 'SCRIPT') {
+      return false;
+    }
+    const sourceSide = this.normalizeSide(source.side);
+    if (!sourceSide) {
+      return false;
+    }
+    if (this.getSidePlayerType(sourceSide) !== 'HUMAN') {
+      return false;
+    }
+    return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
   }
 
   protected onIssueSpecialPowerTargetPosition(

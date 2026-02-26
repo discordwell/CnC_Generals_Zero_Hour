@@ -9034,6 +9034,8 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       makeHeightmap(),
     );
     logic.setTeamRelationship('America', 'China', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
 
     logic.submitCommand({
       type: 'issueSpecialPower',
@@ -9058,6 +9060,89 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       targetEntityId: 2,
       targetX: null,
       targetZ: null,
+    });
+  });
+
+  it('blocks human object-target special powers on shrouded targets for non-script command sources', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceObject', {
+            SpecialPowerTemplate: 'SpecialPowerAtObject',
+          }),
+        ], {
+          VisionRange: 30,
+        }),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerAtObject', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10), makeMapObject('EnemyTarget', 200, 200)], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandSource: 'PLAYER',
+      commandButtonId: 'CMD_OBJECT',
+      specialPowerName: 'SpecialPowerAtObject',
+      commandOption: 0x1,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandSource: 'AI',
+      commandButtonId: 'CMD_OBJECT',
+      specialPowerName: 'SpecialPowerAtObject',
+      commandOption: 0x1,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandSource: 'SCRIPT',
+      commandButtonId: 'CMD_OBJECT',
+      specialPowerName: 'SpecialPowerAtObject',
+      commandOption: 0x1,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'OBJECT',
+      targetEntityId: 2,
     });
   });
 
@@ -11019,6 +11104,8 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
     logic.setTeamRelationship('China', 'America', 0); // enemies
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'China', playerType: 'COMPUTER' });
+    logic.update(0);
 
     // Give enemy some credits.
     logic.setSideCredits('America', 5000);
