@@ -225,7 +225,7 @@ export class UiRuntime implements Subsystem {
     this.commandNode.style.bottom = `${Math.max(16, Math.floor(safeHeight * 0.02))}px`;
   }
 
-  showMessage(message: string): void {
+  showMessage(message: string, durationMs = MESSAGE_VISIBLE_MS): void {
     if (!this.messageNode) {
       return;
     }
@@ -242,12 +242,14 @@ export class UiRuntime implements Subsystem {
 
     this.messageNode.textContent = message;
     this.messageNode.style.display = 'block';
-    this.messageTimeout = setTimeout(() => {
-      if (this.messageNode) {
-        this.messageNode.style.display = 'none';
-      }
-      this.messageTimeout = null;
-    }, MESSAGE_VISIBLE_MS);
+    if (durationMs > 0) {
+      this.messageTimeout = setTimeout(() => {
+        if (this.messageNode) {
+          this.messageNode.style.display = 'none';
+        }
+        this.messageTimeout = null;
+      }, durationMs);
+    }
   }
 
   clearMessage(): void {

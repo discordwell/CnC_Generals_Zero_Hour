@@ -54,6 +54,7 @@ import {
 } from './option-preferences.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
+import { createScriptMessageRuntimeBridge } from './script-message-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
 
 // ============================================================================
@@ -1958,6 +1959,13 @@ async function startGame(
   // ========================================================================
 
   const gameLoop = new GameLoop(30);
+  const scriptMessageRuntimeBridge = createScriptMessageRuntimeBridge({
+    gameLogic,
+    uiRuntime,
+    setSimulationPaused: (paused) => {
+      gameLoop.paused = paused;
+    },
+  });
   const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
 
   gameLoop.start({
@@ -2191,6 +2199,7 @@ async function startGame(
       // RTSCamera processes input, WaterVisual animates UVs)
       subsystems.updateAll(dt);
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
+      scriptMessageRuntimeBridge.syncAfterSimulationStep();
 
       // Move sun light to follow camera target for consistent shadows.
       const camState = rtsCamera.getState();
