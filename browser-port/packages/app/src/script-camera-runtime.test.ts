@@ -6,6 +6,7 @@ import {
   createScriptCameraRuntimeBridge,
   type ScriptCameraRuntimeGameLogic,
   type ScriptCameraActionRequestState,
+  type ScriptCameraDefaultViewState,
   type ScriptCameraFollowState,
   type ScriptCameraLookTowardObjectState,
   type ScriptCameraLookTowardWaypointState,
@@ -20,6 +21,7 @@ interface MutableScriptCameraState {
   tetherState: ScriptCameraTetherState | null;
   followState: ScriptCameraFollowState | null;
   slaveModeState: ScriptCameraSlaveModeState | null;
+  defaultViewState: ScriptCameraDefaultViewState | null;
   lookTowardObjectState: ScriptCameraLookTowardObjectState | null;
   lookTowardWaypointState: ScriptCameraLookTowardWaypointState | null;
   entityPositions: Map<number, readonly [number, number, number]>;
@@ -39,6 +41,7 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
     tetherState: null,
     followState: null,
     slaveModeState: null,
+    defaultViewState: null,
     lookTowardObjectState: null,
     lookTowardWaypointState: null,
     entityPositions: new Map<number, readonly [number, number, number]>(),
@@ -67,6 +70,10 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
 
   getScriptCameraSlaveModeState(): ScriptCameraSlaveModeState | null {
     return this.state.slaveModeState ? { ...this.state.slaveModeState } : null;
+  }
+
+  getScriptCameraDefaultViewState(): ScriptCameraDefaultViewState | null {
+    return this.state.defaultViewState ? { ...this.state.defaultViewState } : null;
   }
 
   getScriptCameraLookTowardObjectState(): ScriptCameraLookTowardObjectState | null {
@@ -207,6 +214,33 @@ describe('script camera runtime bridge', () => {
     bridge.syncAfterSimulationStep(30);
     expect(cameraController.getState().angle).toBeCloseTo(Math.PI, 4);
     expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
+  it('applies RESET defaults from script camera default view state', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.defaultViewState = {
+      pitch: 35,
+      angle: 90,
+      maxHeight: 480,
+    };
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'RESET',
+      x: 64,
+      z: 96,
+      durationMs: 1000,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    bridge.syncAfterSimulationStep(30);
+
+    const state = cameraController.getState();
+    expect(state.targetX).toBeCloseTo(64, 4);
+    expect(state.targetZ).toBeCloseTo(96, 4);
+    expect(state.angle).toBeCloseTo(Math.PI / 2, 4);
+    expect(state.zoom).toBeCloseTo(480, 4);
   });
 
   it('applies SETUP requests immediately with look-at orientation and zoom', () => {

@@ -55,6 +55,12 @@ export interface ScriptCameraFollowState {
   snapToUnit: boolean;
 }
 
+export interface ScriptCameraDefaultViewState {
+  pitch: number;
+  angle: number;
+  maxHeight: number;
+}
+
 export interface ScriptCameraLookTowardObjectState {
   entityId: number;
   durationMs: number;
@@ -84,6 +90,7 @@ export interface ScriptCameraRuntimeGameLogic {
   getScriptCameraTetherState?(): ScriptCameraTetherState | null;
   getScriptCameraFollowState?(): ScriptCameraFollowState | null;
   getScriptCameraSlaveModeState?(): ScriptCameraSlaveModeState | null;
+  getScriptCameraDefaultViewState?(): ScriptCameraDefaultViewState | null;
   getScriptCameraLookTowardObjectState?(): ScriptCameraLookTowardObjectState | null;
   getScriptCameraLookTowardWaypointState?(): ScriptCameraLookTowardWaypointState | null;
   getEntityWorldPosition?(entityId: number): readonly [number, number, number] | null;
@@ -383,10 +390,24 @@ export function createScriptCameraRuntimeBridge(
           if (request.x === null || request.z === null) {
             break;
           }
+          const scriptDefaultView = gameLogic.getScriptCameraDefaultViewState?.() ?? null;
           const durationFrames = toDurationFrames(request.durationMs);
+          const resetAngle = scriptDefaultView && Number.isFinite(scriptDefaultView.angle)
+            ? normalizeAngle((scriptDefaultView.angle * Math.PI) / 180)
+            : 0;
+          const resetZoom = scriptDefaultView
+            && Number.isFinite(scriptDefaultView.maxHeight)
+            && scriptDefaultView.maxHeight > 0
+            ? scriptDefaultView.maxHeight
+            : defaultCameraState.zoom;
+
           beginTargetTransition(currentLogicFrame, request.x, request.z, durationFrames);
-          beginAngleTransition(currentLogicFrame, 0, durationFrames);
-          beginZoomTransition(currentLogicFrame, defaultCameraState.zoom, durationFrames);
+          beginAngleTransition(currentLogicFrame, resetAngle, durationFrames);
+          beginZoomTransition(currentLogicFrame, resetZoom, durationFrames);
+          if (scriptDefaultView && Number.isFinite(scriptDefaultView.pitch)) {
+            // Source-parity TODO: RTSCamera currently has a fixed pitch-angle config.
+            holdMovementForFrames(currentLogicFrame, durationFrames);
+          }
           break;
         }
 
