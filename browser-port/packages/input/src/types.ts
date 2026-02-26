@@ -89,4 +89,6 @@ export interface CameraState {
   angle: number;
   /** Zoom distance. */
   zoom: number;
+  /** Scripted pitch multiplier (1.0 = default, 0.0 = toward horizon, >1 toward ground). */
+  pitch: number;
 }

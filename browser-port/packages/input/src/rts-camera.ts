@@ -32,12 +32,14 @@ export class RTSCamera implements Subsystem {
   private desiredTargetZ: number;
   private desiredAngle: number;
   private desiredZoom: number;
+  private desiredPitch: number;
 
   // Current state (lerps toward desired)
   private currentTargetX: number;
   private currentTargetZ: number;
   private currentAngle: number;
   private currentZoom: number;
+  private currentPitch: number;
 
   // Map bounds for clamping (set after map load)
   private mapMinX = -Infinity;
@@ -62,11 +64,13 @@ export class RTSCamera implements Subsystem {
     this.desiredTargetZ = 0;
     this.desiredAngle = 0;
     this.desiredZoom = this.config.defaultZoom;
+    this.desiredPitch = 1;
 
     this.currentTargetX = 0;
     this.currentTargetZ = 0;
     this.currentAngle = 0;
     this.currentZoom = this.config.defaultZoom;
+    this.currentPitch = 1;
   }
 
   init(): void {
@@ -128,6 +132,7 @@ export class RTSCamera implements Subsystem {
       targetZ: this.desiredTargetZ,
       angle: this.desiredAngle,
       zoom: this.desiredZoom,
+      pitch: this.desiredPitch,
     };
   }
 
@@ -136,11 +141,13 @@ export class RTSCamera implements Subsystem {
     this.desiredTargetZ = state.targetZ;
     this.desiredAngle = state.angle;
     this.desiredZoom = state.zoom;
+    this.desiredPitch = state.pitch;
     // Snap current to desired (no interpolation)
     this.currentTargetX = state.targetX;
     this.currentTargetZ = state.targetZ;
     this.currentAngle = state.angle;
     this.currentZoom = state.zoom;
+    this.currentPitch = state.pitch;
     this.applyToCamera();
   }
 
@@ -168,10 +175,12 @@ export class RTSCamera implements Subsystem {
     this.desiredTargetZ = 0;
     this.desiredAngle = 0;
     this.desiredZoom = this.config.defaultZoom;
+    this.desiredPitch = 1;
     this.currentTargetX = 0;
     this.currentTargetZ = 0;
     this.currentAngle = 0;
     this.currentZoom = this.config.defaultZoom;
+    this.currentPitch = 1;
     this.applyToCamera();
   }
 
@@ -299,6 +308,7 @@ export class RTSCamera implements Subsystem {
     this.currentTargetX += (this.desiredTargetX - this.currentTargetX) * factor;
     this.currentTargetZ += (this.desiredTargetZ - this.currentTargetZ) * factor;
     this.currentZoom += (this.desiredZoom - this.currentZoom) * factor;
+    this.currentPitch += (this.desiredPitch - this.currentPitch) * factor;
 
     // Angle interpolation (handle wrap-around)
     let angleDiff = this.desiredAngle - this.currentAngle;
@@ -308,14 +318,14 @@ export class RTSCamera implements Subsystem {
   }
 
   private applyToCamera(): void {
-    const pitch = this.config.pitchAngle;
+    const orbitPitch = this.config.pitchAngle;
 
     // Camera orbits the target at the current angle and zoom
-    const horizontalDist = this.currentZoom * Math.sin(pitch);
-    const verticalDist = this.currentZoom * Math.cos(pitch);
+    const horizontalDist = this.currentZoom * Math.sin(orbitPitch);
+    const verticalDist = this.currentZoom * Math.cos(orbitPitch);
 
-    const camX = this.currentTargetX + Math.sin(this.currentAngle) * horizontalDist;
-    const camZ = this.currentTargetZ + Math.cos(this.currentAngle) * horizontalDist;
+    let camX = this.currentTargetX + Math.sin(this.currentAngle) * horizontalDist;
+    let camZ = this.currentTargetZ + Math.cos(this.currentAngle) * horizontalDist;
 
     // Terrain height at the look-at target
     let targetY = 0;
@@ -324,8 +334,17 @@ export class RTSCamera implements Subsystem {
     }
 
     const camY = targetY + verticalDist;
+    let lookAtY = targetY;
+
+    if (this.currentPitch <= 1) {
+      const height = camY - targetY;
+      lookAtY = camY - height * this.currentPitch;
+    } else {
+      camX = this.currentTargetX + ((camX - this.currentTargetX) / this.currentPitch);
+      camZ = this.currentTargetZ + ((camZ - this.currentTargetZ) / this.currentPitch);
+    }
 
     this.camera.position.set(camX, camY, camZ);
-    this.camera.lookAt(this.currentTargetX, targetY, this.currentTargetZ);
+    this.camera.lookAt(this.currentTargetX, lookAtY, this.currentTargetZ);
   }
 }

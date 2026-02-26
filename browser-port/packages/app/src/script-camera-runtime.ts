@@ -256,6 +256,7 @@ export function createScriptCameraRuntimeBridge(
   let targetTransition: TargetTransition | null = null;
   let angleTransition: ScalarTransition | null = null;
   let zoomTransition: ScalarTransition | null = null;
+  let pitchTransition: ScalarTransition | null = null;
   let nonVisualMovementEndFrame = -1;
   let movementFinished = true;
   let freezeTimeForMovement = false;
@@ -310,6 +311,20 @@ export function createScriptCameraRuntimeBridge(
     };
   };
 
+  const beginPitchTransition = (
+    currentLogicFrame: number,
+    toPitch: number,
+    durationFrames: number,
+  ): void => {
+    const state = cameraController.getState();
+    pitchTransition = {
+      startFrame: currentLogicFrame,
+      durationFrames,
+      from: state.pitch,
+      to: toPitch,
+    };
+  };
+
   const holdMovementForFrames = (currentLogicFrame: number, durationFrames: number): void => {
     if (durationFrames < 1) {
       return;
@@ -318,7 +333,7 @@ export function createScriptCameraRuntimeBridge(
   };
 
   const applyActiveTransitions = (currentLogicFrame: number): void => {
-    if (!targetTransition && !angleTransition && !zoomTransition) {
+    if (!targetTransition && !angleTransition && !zoomTransition && !pitchTransition) {
       if (!timeMultiplierTransition) {
         return;
       }
@@ -337,6 +352,7 @@ export function createScriptCameraRuntimeBridge(
     let nextTargetZ = currentState.targetZ;
     let nextAngle = currentState.angle;
     let nextZoom = currentState.zoom;
+    let nextPitch = currentState.pitch;
     let stateChanged = false;
 
     if (targetTransition) {
@@ -365,12 +381,21 @@ export function createScriptCameraRuntimeBridge(
       }
     }
 
+    if (pitchTransition) {
+      nextPitch = evaluateScalarTransition(pitchTransition, currentLogicFrame);
+      stateChanged = true;
+      if (isTransitionComplete(pitchTransition, currentLogicFrame)) {
+        pitchTransition = null;
+      }
+    }
+
     if (stateChanged) {
       cameraController.setState({
         targetX: nextTargetX,
         targetZ: nextTargetZ,
         angle: nextAngle,
         zoom: nextZoom,
+        pitch: nextPitch,
       });
     }
   };
@@ -380,6 +405,7 @@ export function createScriptCameraRuntimeBridge(
       getRemainingFrames(targetTransition, currentLogicFrame),
       getRemainingFrames(angleTransition, currentLogicFrame),
       getRemainingFrames(zoomTransition, currentLogicFrame),
+      getRemainingFrames(pitchTransition, currentLogicFrame),
     );
   };
 
@@ -419,10 +445,7 @@ export function createScriptCameraRuntimeBridge(
           beginTargetTransition(currentLogicFrame, request.x, request.z, durationFrames);
           beginAngleTransition(currentLogicFrame, resetAngle, durationFrames);
           beginZoomTransition(currentLogicFrame, resetZoom, durationFrames);
-          if (scriptDefaultView && Number.isFinite(scriptDefaultView.pitch)) {
-            // Source-parity TODO: RTSCamera currently has a fixed pitch-angle config.
-            holdMovementForFrames(currentLogicFrame, durationFrames);
-          }
+          beginPitchTransition(currentLogicFrame, 1, durationFrames);
           break;
         }
 
@@ -461,10 +484,14 @@ export function createScriptCameraRuntimeBridge(
           if (request.zoom !== null && Number.isFinite(request.zoom)) {
             nextState.zoom = request.zoom;
           }
+          if (request.pitch !== null && Number.isFinite(request.pitch)) {
+            nextState.pitch = request.pitch;
+          }
           cameraController.setState(nextState);
           targetTransition = null;
           angleTransition = null;
           zoomTransition = null;
+          pitchTransition = null;
           break;
         }
 
@@ -481,8 +508,14 @@ export function createScriptCameraRuntimeBridge(
         }
 
         case 'PITCH': {
-          // Source-parity TODO: RTSCamera currently has a fixed pitch-angle config.
-          holdMovementForFrames(currentLogicFrame, toDurationFrames(request.durationMs));
+          if (request.pitch === null || !Number.isFinite(request.pitch)) {
+            break;
+          }
+          beginPitchTransition(
+            currentLogicFrame,
+            request.pitch,
+            toDurationFrames(request.durationMs),
+          );
           break;
         }
       }
@@ -551,9 +584,14 @@ export function createScriptCameraRuntimeBridge(
         }
 
         case 'FINAL_PITCH': {
-          // Source-parity TODO: RTSCamera currently has a fixed pitch-angle config.
+          if (request.pitch === null || !Number.isFinite(request.pitch)) {
+            break;
+          }
           const remainingFrames = getMaxVisualMovementRemainingFrames(currentLogicFrame);
-          holdMovementForFrames(currentLogicFrame, remainingFrames);
+          if (remainingFrames < 1) {
+            break;
+          }
+          beginPitchTransition(currentLogicFrame, request.pitch, remainingFrames);
           break;
         }
 
@@ -734,6 +772,7 @@ export function createScriptCameraRuntimeBridge(
     targetTransition = null;
     angleTransition = null;
     zoomTransition = null;
+    pitchTransition = null;
     lastCameraLockSignature = lockSignature;
   };
 
@@ -742,6 +781,7 @@ export function createScriptCameraRuntimeBridge(
       !targetTransition
       && !angleTransition
       && !zoomTransition
+      && !pitchTransition
       && currentLogicFrame >= nonVisualMovementEndFrame
     );
     if (movementFinished) {

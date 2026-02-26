@@ -99,6 +99,7 @@ class RecordingCameraController {
     targetZ: 0,
     angle: 0,
     zoom: 300,
+    pitch: 1,
   };
 
   getState(): CameraState {
@@ -241,6 +242,7 @@ describe('script camera runtime bridge', () => {
     expect(state.targetZ).toBeCloseTo(96, 4);
     expect(state.angle).toBeCloseTo(Math.PI / 2, 4);
     expect(state.zoom).toBeCloseTo(480, 4);
+    expect(state.pitch).toBeCloseTo(1, 4);
   });
 
   it('applies SETUP requests immediately with look-at orientation and zoom', () => {
@@ -263,27 +265,56 @@ describe('script camera runtime bridge', () => {
     expect(state.targetX).toBe(50);
     expect(state.targetZ).toBe(60);
     expect(state.zoom).toBe(420);
+    expect(state.pitch).toBe(35);
     expect(state.angle).toBeCloseTo(0, 6);
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 
-  it('tracks PITCH duration as non-visual movement until the scripted timer elapses', () => {
+  it('animates PITCH requests over the scripted duration', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();
     const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
 
-    const before = cameraController.getState();
     gameLogic.state.actionRequests.push(makeActionRequest({
       requestType: 'PITCH',
-      pitch: 40,
+      pitch: 0.4,
       durationMs: 1000,
     }));
 
     bridge.syncAfterSimulationStep(1);
+    const earlyState = cameraController.getState();
     expect(bridge.isCameraMovementFinished()).toBe(false);
-    expect(cameraController.getState()).toEqual(before);
+    expect(earlyState.pitch).toBeLessThan(1);
+    expect(earlyState.pitch).toBeGreaterThan(0.4);
 
     bridge.syncAfterSimulationStep(30);
+    expect(cameraController.getState().pitch).toBeCloseTo(0.4, 4);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
+  it('applies FINAL_PITCH over the remaining scripted movement duration', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_TO',
+      x: 100,
+      z: 100,
+      durationMs: 1000,
+    }));
+    bridge.syncAfterSimulationStep(1);
+
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FINAL_PITCH',
+      pitch: 0.6,
+    }));
+    bridge.syncAfterSimulationStep(2);
+    expect(bridge.isCameraMovementFinished()).toBe(false);
+    expect(cameraController.getState().pitch).toBeLessThan(1);
+
+    bridge.syncAfterSimulationStep(30);
+    expect(cameraController.getState().pitch).toBeCloseTo(0.6, 4);
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 

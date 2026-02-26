@@ -46,6 +46,11 @@ describe('RTSCamera', () => {
       const state = rtsCamera.getState();
       expect(state.zoom).toBe(DEFAULT_CAMERA_CONFIG.defaultZoom);
     });
+
+    it('starts with default scripted pitch multiplier', () => {
+      const state = rtsCamera.getState();
+      expect(state.pitch).toBe(1);
+    });
   });
 
   describe('keyboard scrolling', () => {
@@ -221,6 +226,7 @@ describe('RTSCamera', () => {
       expect(restored.targetX).toBe(saved.targetX);
       expect(restored.targetZ).toBe(saved.targetZ);
       expect(restored.zoom).toBe(saved.zoom);
+      expect(restored.pitch).toBe(saved.pitch);
     });
   });
 
@@ -257,6 +263,20 @@ describe('RTSCamera', () => {
 
       // Camera Y should be terrain height + vertical distance
       expect(camera.position.y).toBeGreaterThan(50);
+    });
+  });
+
+  describe('scripted pitch', () => {
+    it('reduces downward tilt when scripted pitch is below 1', () => {
+      rtsCamera.setState({ ...rtsCamera.getState(), pitch: 1 });
+      const forwardDefault = new THREE.Vector3();
+      camera.getWorldDirection(forwardDefault);
+
+      rtsCamera.setState({ ...rtsCamera.getState(), pitch: 0.35 });
+      const forwardPitched = new THREE.Vector3();
+      camera.getWorldDirection(forwardPitched);
+
+      expect(Math.abs(forwardPitched.y)).toBeLessThan(Math.abs(forwardDefault.y));
     });
   });
 });
