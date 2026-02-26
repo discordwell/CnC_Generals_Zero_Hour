@@ -1,6 +1,6 @@
 import type { IniDataRegistry, SpecialPowerDef } from '@generals/ini-data';
 
-import { readBooleanField, readNumericField } from './ini-readers.js';
+import { readBooleanField, readNumericField, readStringField } from './ini-readers.js';
 import type { IssueSpecialPowerCommand } from './types.js';
 
 const RELATIONSHIP_ENEMIES = 0;
@@ -14,6 +14,35 @@ const COMMAND_OPTION_NEED_OBJECT_TARGET = COMMAND_OPTION_NEED_TARGET_ENEMY_OBJEC
   | COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT
   | COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT;
 type SpecialPowerCommandSource = NonNullable<IssueSpecialPowerCommand['commandSource']>;
+
+// Source parity: ActionManager::canDoSpecialPowerAtLocation.
+const LOCATION_TARGET_SHROUD_RESTRICTED_SPECIAL_POWERS = new Set<string>([
+  'SPECIAL_DAISY_CUTTER',
+  'SPECIAL_PARADROP_AMERICA',
+  'SPECIAL_CARPET_BOMB',
+  'SPECIAL_CLUSTER_MINES',
+  'SPECIAL_EMP_PULSE',
+  'SPECIAL_CRATE_DROP',
+  'SPECIAL_NAPALM_STRIKE',
+  'SPECIAL_BLACK_MARKET_NUKE',
+  'SPECIAL_ANTHRAX_BOMB',
+  'SPECIAL_TERROR_CELL',
+  'SPECIAL_AMBUSH',
+  'SPECIAL_NEUTRON_MISSILE',
+  'SPECIAL_SCUD_STORM',
+  'SPECIAL_DEMORALIZE',
+  'SPECIAL_A10_THUNDERBOLT_STRIKE',
+  'SPECIAL_REPAIR_VEHICLES',
+  'SPECIAL_ARTILLERY_BARRAGE',
+  'SPECIAL_PARTICLE_UPLINK_CANNON',
+  'SPECIAL_CLEANUP_AREA',
+]);
+const LOCATION_TARGET_UNRESTRICTED_SPECIAL_POWERS = new Set<string>([
+  'SPECIAL_SPY_SATELLITE',
+  'SPECIAL_RADAR_VAN_SCAN',
+  'SPECIAL_SPY_DRONE',
+  'SPECIAL_LAUNCH_BAIKONUR_ROCKET',
+]);
 
 interface SpecialPowerCommandEntity {
   id: number;
@@ -40,6 +69,7 @@ interface SpecialPowerCommandContext<TEntity extends SpecialPowerCommandEntity> 
     targetEntity: TEntity,
     commandSource: SpecialPowerCommandSource,
   ): boolean;
+  isLocationShroudedForAction(sourceEntity: TEntity, targetX: number, targetZ: number): boolean;
   getTeamRelationship(sourceEntity: TEntity, targetEntity: TEntity): number;
   onIssueSpecialPowerNoTarget(
     sourceEntityId: number,
@@ -74,6 +104,21 @@ type TrackShortcutSpecialPowerSourceEntity = (
   sourceEntityId: number,
   readyFrame: number,
 ) => boolean;
+
+function resolveSpecialPowerEnum(specialPowerDef: SpecialPowerDef): string | null {
+  const enumToken = readStringField(specialPowerDef.fields, ['Enum'])?.trim().toUpperCase() ?? '';
+  return enumToken.length > 0 ? enumToken : null;
+}
+
+function shouldApplyLocationShroudGate(specialPowerEnum: string | null): boolean {
+  if (!specialPowerEnum) {
+    return false;
+  }
+  if (LOCATION_TARGET_UNRESTRICTED_SPECIAL_POWERS.has(specialPowerEnum)) {
+    return false;
+  }
+  return LOCATION_TARGET_SHROUD_RESTRICTED_SPECIAL_POWERS.has(specialPowerEnum);
+}
 
 function resolveIssueSpecialPowerSourceEntityId<TEntity extends SpecialPowerCommandEntity>(
   command: IssueSpecialPowerCommand,
@@ -312,6 +357,14 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
 
     const targetX = command.targetX as number;
     const targetZ = command.targetZ as number;
+    const specialPowerEnum = resolveSpecialPowerEnum(specialPowerDef);
+    if (
+      shouldApplyLocationShroudGate(specialPowerEnum)
+      && context.isLocationShroudedForAction(sourceEntity, targetX, targetZ)
+    ) {
+      return;
+    }
+
     context.onIssueSpecialPowerTargetPosition(
       sourceEntity.id,
       normalizedSpecialPowerName,

@@ -35923,6 +35923,7 @@ export class GameLogicSubsystem implements Subsystem {
       },
       setReadyFrame: this.setSpecialPowerReadyFrame.bind(this),
       isObjectShroudedForAction: this.isSpecialPowerObjectTargetShrouded.bind(this),
+      isLocationShroudedForAction: this.isSpecialPowerLocationTargetShrouded.bind(this),
       getTeamRelationship: this.getTeamRelationship.bind(this),
       onIssueSpecialPowerNoTarget: this.onIssueSpecialPowerNoTarget.bind(this),
       onIssueSpecialPowerTargetPosition: this.onIssueSpecialPowerTargetPosition.bind(this),
@@ -36053,6 +36054,22 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
+  }
+
+  /**
+   * Source parity: ActionManager::canDoSpecialPowerAtLocation.
+   * Location-target powers in the restricted enum set may not target SHROUDED cells.
+   */
+  private isSpecialPowerLocationTargetShrouded(
+    source: MapEntity,
+    targetX: number,
+    targetZ: number,
+  ): boolean {
+    const sourceSide = this.normalizeSide(source.side);
+    if (!sourceSide) {
+      return false;
+    }
+    return this.getCellVisibility(sourceSide, targetX, targetZ) === CELL_SHROUDED;
   }
 
   protected onIssueSpecialPowerTargetPosition(
