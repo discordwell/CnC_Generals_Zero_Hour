@@ -56,6 +56,7 @@ import { applyScriptInputLock } from './script-input-lock.js';
 import { resolveScriptRadarVisibility } from './script-radar-visibility.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
+import { createScriptCameraRuntimeBridge } from './script-camera-runtime.js';
 import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
 import { createScriptMessageRuntimeBridge } from './script-message-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
@@ -530,9 +531,11 @@ async function startGame(
   // Game logic + object visuals
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
   const objectVisualManager = new ObjectVisualManager(scene, assets);
+  let scriptCameraMovementFinished = true;
   const gameLogic = new GameLogicSubsystem(scene, {
     attackUsesLineOfSight,
     pickObjectByInput: (input, cam) => objectVisualManager.pickObjectByInput(input, cam),
+    isCameraMovementFinished: () => scriptCameraMovementFinished,
   });
   const maybeSetDeterministicGameLogicCrcSectionWriters = (
     networkManager as unknown as {
@@ -2043,6 +2046,11 @@ async function startGame(
       gameLoop.paused = paused;
     },
   });
+  const scriptCameraRuntimeBridge = createScriptCameraRuntimeBridge({
+    gameLogic,
+    cameraController: rtsCamera,
+  });
+  scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
   const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
 
   gameLoop.start({
@@ -2296,6 +2304,8 @@ async function startGame(
       // Update all subsystems (InputManager resets accumulators,
       // RTSCamera processes input, WaterVisual animates UVs)
       subsystems.updateAll(dt);
+      scriptCameraRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
+      scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
       scriptCinematicRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
