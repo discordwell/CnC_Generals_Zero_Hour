@@ -483,6 +483,37 @@ describe('script camera runtime bridge', () => {
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 
+  it('FREEZE_ANGLE snaps waypoint-path heading to starting camera-angle profile', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.waypointPaths.set('CAM_FREEZE_RESET', [
+      { x: 100, z: 0 },
+      { x: 100, z: 100 },
+      { x: 0, z: 100 },
+    ]);
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_FREEZE_RESET',
+      x: 0,
+      z: 100,
+      durationMs: 1000,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    bridge.syncAfterSimulationStep(20);
+    const turningAngle = cameraController.getState().angle;
+    expect(turningAngle).toBeGreaterThan(0);
+
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FREEZE_ANGLE',
+    }));
+    bridge.syncAfterSimulationStep(21);
+    expect(cameraController.getState().angle).toBeLessThan(turningAngle);
+    expect(cameraController.getState().angle).toBeCloseTo(0, 6);
+  });
+
   it('applies LOOK_TOWARD and FINAL_LOOK_TOWARD heading modifiers on waypoint paths', () => {
     const runScenario = (modifierType: 'LOOK_TOWARD' | 'FINAL_LOOK_TOWARD' | null): {
       early: CameraState;

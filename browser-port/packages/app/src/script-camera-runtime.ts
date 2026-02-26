@@ -1036,8 +1036,8 @@ export function createScriptCameraRuntimeBridge(
             angleTransition = null;
           }
           if (waypointPathTransition) {
-            const state = cameraController.getState();
-            frozenWaypointPathAngle = state.angle;
+            frozenWaypointPathAngle = waypointPathTransition.cameraAngles[0]
+              ?? cameraController.getState().angle;
           }
           break;
         }
