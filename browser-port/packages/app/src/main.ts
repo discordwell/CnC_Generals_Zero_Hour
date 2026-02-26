@@ -56,6 +56,7 @@ import { applyScriptInputLock } from './script-input-lock.js';
 import { resolveScriptRadarVisibility } from './script-radar-visibility.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
+import { createScriptCameraEffectsRuntimeBridge } from './script-camera-effects-runtime.js';
 import { createScriptCameraRuntimeBridge } from './script-camera-runtime.js';
 import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
 import { createScriptEmoticonRuntimeBridge } from './script-emoticon-runtime.js';
@@ -969,6 +970,7 @@ async function startGame(
   const cinematicLetterboxTop = document.createElement('div');
   const cinematicLetterboxBottom = document.createElement('div');
   const cinematicTextOverlay = document.createElement('div');
+  const scriptCameraFadeOverlay = document.createElement('div');
   const emoticonOverlay = document.createElement('div');
   Object.assign(cinematicLetterboxTop.style, {
     position: 'absolute',
@@ -1009,6 +1011,17 @@ async function startGame(
     pointerEvents: 'none',
     display: 'none',
   });
+  Object.assign(scriptCameraFadeOverlay.style, {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    width: '100%',
+    height: '100%',
+    zIndex: '255',
+    pointerEvents: 'none',
+    display: 'none',
+    opacity: '0',
+  });
   Object.assign(emoticonOverlay.style, {
     position: 'absolute',
     left: '0',
@@ -1021,6 +1034,7 @@ async function startGame(
   const gameContainer = document.getElementById('game-container')!;
   gameContainer.appendChild(cinematicLetterboxTop);
   gameContainer.appendChild(cinematicLetterboxBottom);
+  gameContainer.appendChild(scriptCameraFadeOverlay);
   gameContainer.appendChild(cinematicTextOverlay);
   gameContainer.appendChild(emoticonOverlay);
 
@@ -2118,6 +2132,10 @@ async function startGame(
   const scriptEmoticonRuntimeBridge = createScriptEmoticonRuntimeBridge({
     gameLogic,
   });
+  const scriptCameraEffectsRuntimeBridge = createScriptCameraEffectsRuntimeBridge({
+    gameLogic,
+  });
+  let scriptCameraEffectsState = scriptCameraEffectsRuntimeBridge.syncAfterSimulationStep(0);
   const scriptCameraRuntimeBridge = createScriptCameraRuntimeBridge({
     gameLogic,
     cameraController: rtsCamera,
@@ -2384,6 +2402,7 @@ async function startGame(
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
       scriptUiEffectsRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
       scriptEmoticonRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
+      scriptCameraEffectsState = scriptCameraEffectsRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
       scriptCinematicRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
 
       // Move sun light to follow camera target for consistent shadows.
@@ -2408,6 +2427,57 @@ async function startGame(
     },
 
     onRender(_alpha: number) {
+      const cameraFilterParts: string[] = [];
+      if (scriptCameraEffectsState.grayscale > 0.001) {
+        cameraFilterParts.push(`grayscale(${Math.round(scriptCameraEffectsState.grayscale * 100)}%)`);
+      }
+      if (Math.abs(scriptCameraEffectsState.saturation - 1) > 0.001) {
+        cameraFilterParts.push(`saturate(${scriptCameraEffectsState.saturation.toFixed(2)})`);
+      }
+      if (scriptCameraEffectsState.blurPixels > 0.001) {
+        cameraFilterParts.push(`blur(${scriptCameraEffectsState.blurPixels.toFixed(2)}px)`);
+      }
+      canvas.style.filter = cameraFilterParts.length > 0
+        ? cameraFilterParts.join(' ')
+        : 'none';
+
+      if (
+        Math.abs(scriptCameraEffectsState.shakeOffsetX) > 0.001
+        || Math.abs(scriptCameraEffectsState.shakeOffsetY) > 0.001
+      ) {
+        canvas.style.transform =
+          `translate(${scriptCameraEffectsState.shakeOffsetX.toFixed(2)}px, ${scriptCameraEffectsState.shakeOffsetY.toFixed(2)}px)`;
+      } else {
+        canvas.style.transform = 'none';
+      }
+
+      if (scriptCameraEffectsState.fadeAmount > 0.001) {
+        scriptCameraFadeOverlay.style.display = 'block';
+        scriptCameraFadeOverlay.style.opacity = scriptCameraEffectsState.fadeAmount.toFixed(3);
+        switch (scriptCameraEffectsState.fadeType) {
+          case 'ADD':
+            scriptCameraFadeOverlay.style.background = '#ffffff';
+            scriptCameraFadeOverlay.style.mixBlendMode = 'screen';
+            break;
+          case 'SATURATE':
+            scriptCameraFadeOverlay.style.background = '#ffffff';
+            scriptCameraFadeOverlay.style.mixBlendMode = 'saturation';
+            break;
+          case 'SUBTRACT':
+            scriptCameraFadeOverlay.style.background = '#000000';
+            scriptCameraFadeOverlay.style.mixBlendMode = 'multiply';
+            break;
+          case 'MULTIPLY':
+          default:
+            scriptCameraFadeOverlay.style.background = '#000000';
+            scriptCameraFadeOverlay.style.mixBlendMode = 'multiply';
+            break;
+        }
+      } else {
+        scriptCameraFadeOverlay.style.display = 'none';
+        scriptCameraFadeOverlay.style.opacity = '0';
+      }
+
       renderer.render(scene, camera);
       const radarVisible = resolveScriptRadarVisibility(
         gameLogic.isScriptRadarHidden(),

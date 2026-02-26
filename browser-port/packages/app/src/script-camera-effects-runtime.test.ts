@@ -1,0 +1,199 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  createScriptCameraEffectsRuntimeBridge,
+  type ScriptCameraEffectsRuntimeGameLogic,
+} from './script-camera-effects-runtime.js';
+
+interface MutableScriptCameraEffectsState {
+  blackWhiteRequests: Array<{
+    enabled: boolean;
+    fadeFrames: number;
+    frame: number;
+  }>;
+  fadeRequests: Array<{
+    fadeType: 'ADD' | 'SUBTRACT' | 'SATURATE' | 'MULTIPLY';
+    minFade: number;
+    maxFade: number;
+    increaseFrames: number;
+    holdFrames: number;
+    decreaseFrames: number;
+    frame: number;
+  }>;
+  filterRequests: Array<{
+    requestType: 'MOTION_BLUR' | 'MOTION_BLUR_JUMP' | 'MOTION_BLUR_FOLLOW' | 'MOTION_BLUR_END_FOLLOW';
+    zoomIn: boolean | null;
+    saturate: boolean | null;
+    waypointName: string | null;
+    x: number | null;
+    z: number | null;
+    followMode: number | null;
+    frame: number;
+  }>;
+  shakerRequests: Array<{
+    waypointName: string;
+    x: number;
+    z: number;
+    amplitude: number;
+    durationSeconds: number;
+    radius: number;
+    frame: number;
+  }>;
+  screenShakeState: {
+    intensity: number;
+    frame: number;
+  } | null;
+}
+
+class RecordingGameLogic implements ScriptCameraEffectsRuntimeGameLogic {
+  readonly state: MutableScriptCameraEffectsState = {
+    blackWhiteRequests: [],
+    fadeRequests: [],
+    filterRequests: [],
+    shakerRequests: [],
+    screenShakeState: null,
+  };
+
+  drainScriptCameraBlackWhiteRequests(): MutableScriptCameraEffectsState['blackWhiteRequests'] {
+    const drained = this.state.blackWhiteRequests.map((request) => ({ ...request }));
+    this.state.blackWhiteRequests.length = 0;
+    return drained;
+  }
+
+  drainScriptCameraFadeRequests(): MutableScriptCameraEffectsState['fadeRequests'] {
+    const drained = this.state.fadeRequests.map((request) => ({ ...request }));
+    this.state.fadeRequests.length = 0;
+    return drained;
+  }
+
+  drainScriptCameraFilterRequests(): MutableScriptCameraEffectsState['filterRequests'] {
+    const drained = this.state.filterRequests.map((request) => ({ ...request }));
+    this.state.filterRequests.length = 0;
+    return drained;
+  }
+
+  drainScriptCameraShakerRequests(): MutableScriptCameraEffectsState['shakerRequests'] {
+    const drained = this.state.shakerRequests.map((request) => ({ ...request }));
+    this.state.shakerRequests.length = 0;
+    return drained;
+  }
+
+  getScriptScreenShakeState(): MutableScriptCameraEffectsState['screenShakeState'] {
+    return this.state.screenShakeState ? { ...this.state.screenShakeState } : null;
+  }
+}
+
+describe('script camera effects runtime bridge', () => {
+  it('interpolates black-white transitions based on fadeFrames', () => {
+    const gameLogic = new RecordingGameLogic();
+    const bridge = createScriptCameraEffectsRuntimeBridge({ gameLogic });
+
+    gameLogic.state.blackWhiteRequests.push({
+      enabled: true,
+      fadeFrames: 30,
+      frame: 1,
+    });
+
+    const early = bridge.syncAfterSimulationStep(1);
+    expect(early.grayscale).toBeCloseTo(0, 3);
+
+    const middle = bridge.syncAfterSimulationStep(16);
+    expect(middle.grayscale).toBeGreaterThan(0.45);
+    expect(middle.grayscale).toBeLessThan(0.6);
+
+    const final = bridge.syncAfterSimulationStep(31);
+    expect(final.grayscale).toBeCloseTo(1, 5);
+  });
+
+  it('evaluates fade envelopes with increase/hold/decrease frame windows', () => {
+    const gameLogic = new RecordingGameLogic();
+    const bridge = createScriptCameraEffectsRuntimeBridge({ gameLogic });
+
+    gameLogic.state.fadeRequests.push({
+      fadeType: 'ADD',
+      minFade: 0.1,
+      maxFade: 0.9,
+      increaseFrames: 10,
+      holdFrames: 5,
+      decreaseFrames: 10,
+      frame: 3,
+    });
+
+    const start = bridge.syncAfterSimulationStep(3);
+    expect(start.fadeType).toBe('ADD');
+    expect(start.fadeAmount).toBeCloseTo(0.1, 4);
+
+    const peak = bridge.syncAfterSimulationStep(14);
+    expect(peak.fadeAmount).toBeCloseTo(0.9, 3);
+
+    const tail = bridge.syncAfterSimulationStep(23);
+    expect(tail.fadeAmount).toBeLessThanOrEqual(0.5);
+    expect(tail.fadeAmount).toBeGreaterThan(0.1);
+
+    const settled = bridge.syncAfterSimulationStep(30);
+    expect(settled.fadeAmount).toBeCloseTo(0.1, 4);
+  });
+
+  it('enables and clears motion blur filter states from camera filter requests', () => {
+    const gameLogic = new RecordingGameLogic();
+    const bridge = createScriptCameraEffectsRuntimeBridge({ gameLogic });
+
+    gameLogic.state.filterRequests.push({
+      requestType: 'MOTION_BLUR',
+      zoomIn: true,
+      saturate: true,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: null,
+      frame: 4,
+    });
+
+    const active = bridge.syncAfterSimulationStep(4);
+    expect(active.blurPixels).toBeGreaterThan(0);
+    expect(active.saturation).toBeGreaterThan(1);
+
+    const expired = bridge.syncAfterSimulationStep(40);
+    expect(expired.blurPixels).toBe(0);
+    expect(expired.saturation).toBeCloseTo(1, 6);
+
+    gameLogic.state.filterRequests.push({
+      requestType: 'MOTION_BLUR_END_FOLLOW',
+      zoomIn: null,
+      saturate: null,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: null,
+      frame: 41,
+    });
+    const ended = bridge.syncAfterSimulationStep(41);
+    expect(ended.blurPixels).toBe(0);
+  });
+
+  it('accumulates shaker and screen-shake requests into transient camera offsets', () => {
+    const gameLogic = new RecordingGameLogic();
+    const bridge = createScriptCameraEffectsRuntimeBridge({ gameLogic });
+
+    gameLogic.state.shakerRequests.push({
+      waypointName: 'ShakePoint',
+      x: 30,
+      z: 45,
+      amplitude: 3,
+      durationSeconds: 1,
+      radius: 80,
+      frame: 1,
+    });
+    gameLogic.state.screenShakeState = {
+      intensity: 4,
+      frame: 1,
+    };
+
+    const active = bridge.syncAfterSimulationStep(1);
+    expect(Math.abs(active.shakeOffsetX) + Math.abs(active.shakeOffsetY)).toBeGreaterThan(0);
+
+    const settled = bridge.syncAfterSimulationStep(80);
+    expect(Math.abs(settled.shakeOffsetX)).toBeLessThan(0.001);
+    expect(Math.abs(settled.shakeOffsetY)).toBeLessThan(0.001);
+  });
+});
