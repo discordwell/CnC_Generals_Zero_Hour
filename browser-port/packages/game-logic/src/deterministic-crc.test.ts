@@ -126,6 +126,55 @@ describe('GameLogic deterministic CRC ownership', () => {
       subsystem.setScriptTeamPrototype('TeamCRC', 'TeamProtoCRC');
       const withScriptTeamState = computeGameLogicCrc(subsystem, 0);
       expect(withScriptTeamState).not.toBe(withScriptRuntimeState);
+
+      const privateApi = subsystem as unknown as {
+        scriptTeamCreatedReadyFrameByName: Map<string, number>;
+        scriptTeamCreatedAutoClearFrameByName: Map<string, number>;
+        pendingScriptReinforcementTransportArrivalByEntityId: Map<number, {
+          targetX: number;
+          targetZ: number;
+          originX: number;
+          originZ: number;
+          deliveryDistance: number;
+          deliverPayloadMode: boolean;
+          deliverPayloadDoorDelayFrames: number;
+          deliverPayloadDropDelayFrames: number;
+          deliverPayloadNextDropFrame: number;
+          deliverPayloadDropOffsetX: number;
+          deliverPayloadDropOffsetZ: number;
+          deliverPayloadDropVarianceX: number;
+          deliverPayloadDropVarianceZ: number;
+          exitTargetX: number;
+          exitTargetZ: number;
+          transportsExit: boolean;
+          evacuationIssued: boolean;
+          exitMoveIssued: boolean;
+        }>;
+      };
+      privateApi.scriptTeamCreatedReadyFrameByName.set('TEAMCRC', 123);
+      privateApi.scriptTeamCreatedAutoClearFrameByName.set('TEAMCRC', 124);
+      privateApi.pendingScriptReinforcementTransportArrivalByEntityId.set(1, {
+        targetX: 10,
+        targetZ: 20,
+        originX: 5,
+        originZ: 6,
+        deliveryDistance: 7,
+        deliverPayloadMode: true,
+        deliverPayloadDoorDelayFrames: 8,
+        deliverPayloadDropDelayFrames: 9,
+        deliverPayloadNextDropFrame: 10,
+        deliverPayloadDropOffsetX: 11,
+        deliverPayloadDropOffsetZ: 12,
+        deliverPayloadDropVarianceX: 13,
+        deliverPayloadDropVarianceZ: 14,
+        exitTargetX: 15,
+        exitTargetZ: 16,
+        transportsExit: true,
+        evacuationIssued: false,
+        exitMoveIssued: true,
+      });
+      const withScriptReinforcementState = computeGameLogicCrc(subsystem, 0);
+      expect(withScriptReinforcementState).not.toBe(withScriptTeamState);
     } finally {
       subsystem.dispose();
     }

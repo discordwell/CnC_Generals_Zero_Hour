@@ -162,6 +162,27 @@ interface ScriptTeamRecordLike {
   reinforcementTransportsExit: boolean;
 }
 
+interface ScriptReinforcementTransportArrivalStateLike {
+  targetX: number;
+  targetZ: number;
+  originX: number;
+  originZ: number;
+  deliveryDistance: number;
+  deliverPayloadMode: boolean;
+  deliverPayloadDoorDelayFrames: number;
+  deliverPayloadDropDelayFrames: number;
+  deliverPayloadNextDropFrame: number;
+  deliverPayloadDropOffsetX: number;
+  deliverPayloadDropOffsetZ: number;
+  deliverPayloadDropVarianceX: number;
+  deliverPayloadDropVarianceZ: number;
+  exitTargetX: number;
+  exitTargetZ: number;
+  transportsExit: boolean;
+  evacuationIssued: boolean;
+  exitMoveIssued: boolean;
+}
+
 interface GameLogicConfigLike {
   renderUnknownObjects: boolean;
   attackUsesLineOfSight: boolean;
@@ -198,6 +219,10 @@ export interface DeterministicGameLogicCrcContext {
   scriptRadarForced: boolean;
   scriptRadarRefreshFrame: number;
   scriptTeamsByName: ReadonlyMap<string, ScriptTeamRecordLike>;
+  scriptTeamCreatedReadyFrameByName: ReadonlyMap<string, number>;
+  scriptTeamCreatedAutoClearFrameByName: ReadonlyMap<string, number>;
+  pendingScriptReinforcementTransportArrivalByEntityId:
+    ReadonlyMap<number, ScriptReinforcementTransportArrivalStateLike>;
   frameCounter: number;
   nextId: number;
   animationTime: number;
@@ -445,6 +470,13 @@ function writeDeterministicAiCrc(
   crc.addUnsignedByte(context.gameLogic.scriptRadarForced ? 1 : 0);
   addSignedIntCrc(context, crc, context.gameLogic.scriptRadarRefreshFrame);
   writeScriptTeamStateCrc(context, crc, context.gameLogic.scriptTeamsByName);
+  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTeamCreatedReadyFrameByName);
+  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTeamCreatedAutoClearFrameByName);
+  writePendingScriptReinforcementTransportArrivalCrc(
+    context,
+    crc,
+    context.gameLogic.pendingScriptReinforcementTransportArrivalByEntityId,
+  );
 
   crc.addUnsignedByte(context.gameLogic.config.renderUnknownObjects ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.config.attackUsesLineOfSight ? 1 : 0);
@@ -840,6 +872,36 @@ function writeScriptTeamStateCrc(
     crc.addAsciiString(team.reinforcementStartWaypointName);
     crc.addUnsignedByte(team.reinforcementTeamStartsFull ? 1 : 0);
     crc.addUnsignedByte(team.reinforcementTransportsExit ? 1 : 0);
+  }
+}
+
+function writePendingScriptReinforcementTransportArrivalCrc(
+  context: DeterministicWriterContext,
+  crc: XferCrcAccumulator,
+  pendingByEntityId: ReadonlyMap<number, ScriptReinforcementTransportArrivalStateLike>,
+): void {
+  const entries = Array.from(pendingByEntityId.entries()).sort(([left], [right]) => left - right);
+  crc.addUnsignedInt(entries.length >>> 0);
+  for (const [entityId, pending] of entries) {
+    addSignedIntCrc(context, crc, entityId);
+    addFloat32Crc(context, crc, pending.targetX);
+    addFloat32Crc(context, crc, pending.targetZ);
+    addFloat32Crc(context, crc, pending.originX);
+    addFloat32Crc(context, crc, pending.originZ);
+    addFloat32Crc(context, crc, pending.deliveryDistance);
+    crc.addUnsignedByte(pending.deliverPayloadMode ? 1 : 0);
+    addSignedIntCrc(context, crc, pending.deliverPayloadDoorDelayFrames);
+    addSignedIntCrc(context, crc, pending.deliverPayloadDropDelayFrames);
+    addSignedIntCrc(context, crc, pending.deliverPayloadNextDropFrame);
+    addFloat32Crc(context, crc, pending.deliverPayloadDropOffsetX);
+    addFloat32Crc(context, crc, pending.deliverPayloadDropOffsetZ);
+    addFloat32Crc(context, crc, pending.deliverPayloadDropVarianceX);
+    addFloat32Crc(context, crc, pending.deliverPayloadDropVarianceZ);
+    addFloat32Crc(context, crc, pending.exitTargetX);
+    addFloat32Crc(context, crc, pending.exitTargetZ);
+    crc.addUnsignedByte(pending.transportsExit ? 1 : 0);
+    crc.addUnsignedByte(pending.evacuationIssued ? 1 : 0);
+    crc.addUnsignedByte(pending.exitMoveIssued ? 1 : 0);
   }
 }
 

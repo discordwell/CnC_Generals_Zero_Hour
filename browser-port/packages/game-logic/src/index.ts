@@ -6532,6 +6532,10 @@ export class GameLogicSubsystem implements Subsystem {
       scriptRadarForced: this.scriptRadarForced,
       scriptRadarRefreshFrame: this.scriptRadarRefreshFrame,
       scriptTeamsByName: this.scriptTeamsByName,
+      scriptTeamCreatedReadyFrameByName: this.scriptTeamCreatedReadyFrameByName,
+      scriptTeamCreatedAutoClearFrameByName: this.scriptTeamCreatedAutoClearFrameByName,
+      pendingScriptReinforcementTransportArrivalByEntityId:
+        this.pendingScriptReinforcementTransportArrivalByEntityId,
       frameCounter: this.frameCounter,
       nextId: this.nextId,
       animationTime: this.animationTime,
