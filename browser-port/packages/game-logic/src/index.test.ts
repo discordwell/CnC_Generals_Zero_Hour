@@ -9242,6 +9242,62 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     });
   });
 
+  it('allows shroud-restricted location special powers on fogged cells', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourcePos', {
+            SpecialPowerTemplate: 'SpecialPowerAtPos',
+          }),
+        ]),
+        makeObjectDef('Scout', 'America', ['INFANTRY'], [], {
+          VisionRange: 30,
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerAtPos', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_CARPET_BOMB',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 200, 200), makeMapObject('Scout', 50, 50)], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 50, 50)).toBe(CELL_CLEAR);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, { destroyed: boolean }> };
+    const scout = priv.spawnedEntities.get(2)!;
+    scout.destroyed = true;
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 50, 50)).toBe(CELL_FOGGED);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandSource: 'PLAYER',
+      commandButtonId: 'CMD_POSITION',
+      specialPowerName: 'SpecialPowerAtPos',
+      commandOption: 0x20,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 50,
+      targetZ: 50,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'POSITION',
+      targetX: 50,
+      targetZ: 50,
+    });
+  });
+
   it('enforces no-target-only special power enums regardless of command options', () => {
     const bundle = makeBundle({
       objects: [
