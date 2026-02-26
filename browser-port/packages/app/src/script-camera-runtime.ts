@@ -113,6 +113,7 @@ export interface ScriptCameraRuntimeController {
 export interface ScriptCameraRuntimeBridge {
   syncAfterSimulationStep(currentLogicFrame: number): void;
   isCameraMovementFinished(): boolean;
+  isCameraTimeFrozen(): boolean;
 }
 
 export interface CreateScriptCameraRuntimeBridgeOptions {
@@ -256,6 +257,7 @@ export function createScriptCameraRuntimeBridge(
   let zoomTransition: ScalarTransition | null = null;
   let nonVisualMovementEndFrame = -1;
   let movementFinished = true;
+  let freezeTimeForMovement = false;
   let lastCameraLockSignature: string | null = null;
   let lastLookTowardObjectSignature: string | null = null;
   let lastLookTowardWaypointSignature: string | null = null;
@@ -543,6 +545,8 @@ export function createScriptCameraRuntimeBridge(
         }
 
         case 'FREEZE_TIME':
+          freezeTimeForMovement = true;
+          break;
         case 'FINAL_SPEED_MULTIPLIER':
         case 'ROLLING_AVERAGE':
           // Source-parity TODO: these camera movement-timing modifiers are not yet wired.
@@ -709,6 +713,9 @@ export function createScriptCameraRuntimeBridge(
       && !zoomTransition
       && currentLogicFrame >= nonVisualMovementEndFrame
     );
+    if (movementFinished) {
+      freezeTimeForMovement = false;
+    }
   };
 
   return {
@@ -724,6 +731,10 @@ export function createScriptCameraRuntimeBridge(
 
     isCameraMovementFinished(): boolean {
       return movementFinished;
+    },
+
+    isCameraTimeFrozen(): boolean {
+      return freezeTimeForMovement && !movementFinished;
     },
   };
 }

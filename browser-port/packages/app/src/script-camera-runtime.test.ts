@@ -313,6 +313,36 @@ describe('script camera runtime bridge', () => {
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 
+  it('reports camera time frozen while FREEZE_TIME is active and movement is in progress', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FREEZE_TIME',
+    }));
+    bridge.syncAfterSimulationStep(1);
+    expect(bridge.isCameraTimeFrozen()).toBe(false);
+
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_TO',
+      x: 120,
+      z: 20,
+      durationMs: 1000,
+    }));
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FREEZE_TIME',
+    }));
+
+    bridge.syncAfterSimulationStep(2);
+    expect(bridge.isCameraMovementFinished()).toBe(false);
+    expect(bridge.isCameraTimeFrozen()).toBe(true);
+
+    bridge.syncAfterSimulationStep(31);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+    expect(bridge.isCameraTimeFrozen()).toBe(false);
+  });
+
   it('applies persistent FOLLOW camera lock states each frame', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();

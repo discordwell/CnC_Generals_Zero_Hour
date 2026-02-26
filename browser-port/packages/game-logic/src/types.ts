@@ -505,6 +505,12 @@ export interface GameLogicConfig {
    */
   isCameraMovementFinished?: () => boolean;
   /**
+   * Source parity: View::isTimeFrozen && !View::isCameraMovementFinished gate.
+   * Allows app camera runtime bridges to freeze simulation while scripted camera
+   * movements are active.
+   */
+  isCameraTimeFrozen?: () => boolean;
+  /**
    * Include unresolved objects as magenta placeholders.
    * If false, unresolved templates are skipped entirely.
    */

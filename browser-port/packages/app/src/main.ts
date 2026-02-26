@@ -535,10 +535,12 @@ async function startGame(
   const attackUsesLineOfSight = iniDataRegistry.getAiConfig()?.attackUsesLineOfSight ?? true;
   const objectVisualManager = new ObjectVisualManager(scene, assets);
   let scriptCameraMovementFinished = true;
+  let scriptCameraTimeFrozen = false;
   const gameLogic = new GameLogicSubsystem(scene, {
     attackUsesLineOfSight,
     pickObjectByInput: (input, cam) => objectVisualManager.pickObjectByInput(input, cam),
     isCameraMovementFinished: () => scriptCameraMovementFinished,
+    isCameraTimeFrozen: () => scriptCameraTimeFrozen,
   });
   const maybeSetDeterministicGameLogicCrcSectionWriters = (
     networkManager as unknown as {
@@ -2141,6 +2143,7 @@ async function startGame(
     cameraController: rtsCamera,
   });
   scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
+  scriptCameraTimeFrozen = scriptCameraRuntimeBridge.isCameraTimeFrozen();
   const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
   let currentLogicFrame = 0;
 
@@ -2398,6 +2401,7 @@ async function startGame(
       subsystems.updateAll(dt);
       scriptCameraRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
       scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
+      scriptCameraTimeFrozen = scriptCameraRuntimeBridge.isCameraTimeFrozen();
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
       scriptUiEffectsRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);

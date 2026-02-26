@@ -44577,6 +44577,41 @@ describe('Script condition groundwork', () => {
     expect(logic.isScriptWeatherVisible()).toBe(true);
   });
 
+  it('freezes simulation updates while camera runtime reports frozen time', () => {
+    let cameraTimeFrozen = true;
+    const logic = new GameLogicSubsystem(new THREE.Scene(), {
+      isCameraTimeFrozen: () => cameraTimeFrozen,
+    });
+    logic.loadMapObjects(
+      makeMap([makeMapObject('FrozenMover', 10, 10)], 128, 128),
+      makeRegistry(makeBundle({
+        objects: [
+          makeObjectDef('FrozenMover', 'America', ['VEHICLE'], [
+            makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+            makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+          ]),
+        ],
+        locomotors: [
+          makeLocomotorDef('LocomotorFast', 60),
+        ],
+      })),
+      makeHeightmap(128, 128),
+    );
+
+    logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 70, targetZ: 10 });
+
+    for (let frame = 0; frame < 10; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.getEntityState(1)?.x).toBeCloseTo(10, 5);
+
+    cameraTimeFrozen = false;
+    for (let frame = 0; frame < 10; frame += 1) {
+      logic.update(1 / 30);
+    }
+    expect(logic.getEntityState(1)?.x ?? 0).toBeGreaterThan(10.5);
+  });
+
   it('executes script camera-fade actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

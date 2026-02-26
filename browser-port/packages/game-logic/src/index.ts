@@ -6744,6 +6744,14 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateScriptEntityFlashes();
     this.resetBridgeDamageStateChanges();
     this.resetContainPlayerEnteredSides();
+    if (this.isSimulationTimeFrozen()) {
+      this.updatePendingScriptTeamCreated();
+      this.updateScriptTeamCreatedPulses();
+      this.executeMapScripts();
+      this.clearScriptUIInteractions();
+      this.updateScriptSequentialScripts();
+      return;
+    }
     this.flushCommands();
     this.updateDisabledHackedStatuses();
     this.updateDisabledEmpStatuses();
@@ -6863,6 +6871,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
     this.checkVictoryConditions();
+  }
+
+  private isSimulationTimeFrozen(): boolean {
+    return this.scriptTimeFrozenByScript || (this.config.isCameraTimeFrozen?.() ?? false);
   }
 
   /**
