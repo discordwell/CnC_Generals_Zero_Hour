@@ -31793,6 +31793,37 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptMusicHasCompleted({ musicName: 'TrackA', index: 2 })).toBe(false);
   });
 
+  it('uses source-style speech/audio completion deadlines when audio lengths are known', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([], 128, 128),
+      makeRegistry(makeBundle({ objects: [] })),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptAudioLengthMs('SpeechTimed', 100)).toBe(true);
+    expect(logic.setScriptAudioLengthMs('AudioTimed', 200)).toBe(true);
+
+    // First query initializes C++-style testing deadlines from audio length metadata.
+    expect(logic.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechTimed' })).toBe(false);
+    expect(logic.evaluateScriptAudioHasCompleted({ audioName: 'AudioTimed' })).toBe(false);
+
+    logic.update(1 / 30); // frame 1
+    logic.update(1 / 30); // frame 2
+    expect(logic.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechTimed' })).toBe(false);
+
+    logic.update(1 / 30); // frame 3 (100ms ~= 3 frames)
+    expect(logic.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechTimed' })).toBe(true);
+    expect(logic.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechTimed' })).toBe(false);
+
+    logic.update(1 / 30); // frame 4
+    logic.update(1 / 30); // frame 5
+    expect(logic.evaluateScriptAudioHasCompleted({ audioName: 'AudioTimed' })).toBe(false);
+
+    logic.update(1 / 30); // frame 6 (200ms ~= 6 frames)
+    expect(logic.evaluateScriptAudioHasCompleted({ audioName: 'AudioTimed' })).toBe(true);
+  });
+
   it('dispatches script conditions using source enum names/indices and positional params', () => {
     const bundle = makeBundle({
       objects: [

@@ -5312,15 +5312,24 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: ScriptEngine::m_completedVideo consumed by evaluateVideoHasCompleted. */
   private readonly scriptCompletedVideos: string[] = [];
   /**
-   * Source parity subset: ScriptEngine::isSpeechComplete.
-   * TODO(source-parity): query audio lengths and frame deadlines like C++ m_testingSpeech.
+   * Source parity: ScriptEngine::isSpeechComplete immediate-completion notifications.
+   * Separate from lazy frame-deadline testing (m_testingSpeech parity).
    */
   private readonly scriptCompletedSpeech: string[] = [];
   /**
-   * Source parity subset: ScriptEngine::isAudioComplete.
-   * TODO(source-parity): query audio lengths and frame deadlines like C++ m_testingAudio.
+   * Source parity: ScriptEngine::isAudioComplete immediate-completion notifications.
+   * Separate from lazy frame-deadline testing (m_testingAudio parity).
    */
   private readonly scriptCompletedAudio: string[] = [];
+  /** Source parity: ScriptEngine::m_testingSpeech (speech name -> completion frame). */
+  private readonly scriptTestingSpeechCompletionFrameByName = new Map<string, number>();
+  /** Source parity: ScriptEngine::m_testingAudio (audio name -> completion frame). */
+  private readonly scriptTestingAudioCompletionFrameByName = new Map<string, number>();
+  /**
+   * Source parity bridge: Audio::getAudioLengthMS lookup cache.
+   * Populated by host/runtime via setScriptAudioLengthMs().
+   */
+  private readonly scriptAudioLengthMsByName = new Map<string, number>();
   /** Source parity: Audio::hasMusicTrackCompleted consumed by evaluateMusicHasCompleted. */
   private readonly scriptCompletedMusic: ScriptMusicCompletedEvent[] = [];
   /** Source parity subset: ScriptEngine team registry keyed by uppercase team name. */
@@ -20764,8 +20773,8 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: ScriptActions::doCreateReinforcements.
    * Materializes TeamTemplate reinforcement members (unit entries + optional transport),
    * including teamStartsFull loading and arrival evacuation behavior.
-   * Source parity subset: PutInContainer packaging from DeliverPayloadAIUpdate is wired.
-   * TODO(source-parity): DeliverPayloadAIUpdate flight/drop behavior is not wired yet.
+   * Source parity subset: DeliverPayloadAIUpdate PutInContainer + staged drop/exit behavior
+   * is wired through pendingScriptReinforcementTransportArrivalByEntityId.
    */
   private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
     const prototype = this.getScriptTeamPrototypeRecord(teamName);
@@ -21692,8 +21701,22 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine speech completion notifications.
-   * TODO(source-parity): speech completion should be computed from audio length.
+   * Source parity bridge: Audio::getAudioLengthMS lookup used by ScriptEngine::isSpeechComplete /
+   * isAudioComplete lazy completion tests.
+   */
+  setScriptAudioLengthMs(audioName: string, milliseconds: number): boolean {
+    const normalizedName = this.normalizeScriptCompletionName(audioName);
+    if (!normalizedName || !Number.isFinite(milliseconds) || milliseconds < 0) {
+      return false;
+    }
+    this.scriptAudioLengthMsByName.set(normalizedName, milliseconds);
+    this.scriptTestingSpeechCompletionFrameByName.delete(normalizedName);
+    this.scriptTestingAudioCompletionFrameByName.delete(normalizedName);
+    return true;
+  }
+
+  /**
+   * Source parity bridge: immediate speech completion notifications from host runtime.
    */
   notifyScriptSpeechCompleted(speechName: string): void {
     const normalizedName = this.normalizeScriptCompletionName(speechName);
@@ -21704,8 +21727,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine audio completion notifications.
-   * TODO(source-parity): audio completion should be computed from audio length.
+   * Source parity bridge: immediate audio completion notifications from host runtime.
    */
   notifyScriptAudioCompleted(audioName: string): void {
     const normalizedName = this.normalizeScriptCompletionName(audioName);
@@ -21791,8 +21813,9 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateSpeechHasCompleted.
-   * TODO(source-parity): compute completion deadlines from audio metadata.
+   * Source parity: ScriptConditions::evaluateSpeechHasCompleted.
+   * Matches ScriptEngine::isSpeechComplete lazy completion-frame behavior when
+   * audio metadata is available through setScriptAudioLengthMs().
    */
   evaluateScriptSpeechHasCompleted(filter: {
     speechName: string;
@@ -21801,12 +21824,17 @@ export class GameLogicSubsystem implements Subsystem {
     if (!normalizedName) {
       return false;
     }
-    return this.consumeScriptCompletedName(this.scriptCompletedSpeech, normalizedName);
+    return this.consumeScriptTimedAudioCompletion(
+      normalizedName,
+      this.scriptCompletedSpeech,
+      this.scriptTestingSpeechCompletionFrameByName,
+    );
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateAudioHasCompleted.
-   * TODO(source-parity): compute completion deadlines from audio metadata.
+   * Source parity: ScriptConditions::evaluateAudioHasCompleted.
+   * Matches ScriptEngine::isAudioComplete lazy completion-frame behavior when
+   * audio metadata is available through setScriptAudioLengthMs().
    */
   evaluateScriptAudioHasCompleted(filter: {
     audioName: string;
@@ -21815,7 +21843,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (!normalizedName) {
       return false;
     }
-    return this.consumeScriptCompletedName(this.scriptCompletedAudio, normalizedName);
+    return this.consumeScriptTimedAudioCompletion(
+      normalizedName,
+      this.scriptCompletedAudio,
+      this.scriptTestingAudioCompletionFrameByName,
+    );
   }
 
   /**
@@ -25563,6 +25595,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideScriptMidwaySpecialPowerEvents.clear();
     this.sideScriptCompletedSpecialPowerEvents.clear();
     this.sideScriptCompletedUpgradeEvents.clear();
+    this.scriptTestingSpeechCompletionFrameByName.clear();
+    this.scriptTestingAudioCompletionFrameByName.clear();
     this.localPlayerScienceAvailability.clear();
     this.sidePowerBonus.clear();
     this.sideRadarState.clear();
@@ -34067,6 +34101,39 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       list.splice(index, 1);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Source parity: ScriptEngine::isSpeechComplete / isAudioComplete.
+   * If a completion event has already arrived, consume it first.
+   * Otherwise, lazily create a completion deadline from audio length metadata.
+   */
+  private consumeScriptTimedAudioCompletion(
+    name: string,
+    explicitCompletedList: string[],
+    testingCompletionFrameByName: Map<string, number>,
+  ): boolean {
+    if (this.consumeScriptCompletedName(explicitCompletedList, name)) {
+      testingCompletionFrameByName.delete(name);
+      return true;
+    }
+
+    let completionFrame = testingCompletionFrameByName.get(name);
+    if (completionFrame === undefined) {
+      const audioLengthMs = this.scriptAudioLengthMsByName.get(name);
+      if (audioLengthMs === undefined) {
+        return false;
+      }
+      const frameCount = Math.max(0, Math.trunc(audioLengthMs / LOGIC_FRAME_MS));
+      completionFrame = this.frameCounter + frameCount;
+      testingCompletionFrameByName.set(name, completionFrame);
+    }
+
+    if (this.frameCounter >= completionFrame) {
+      testingCompletionFrameByName.delete(name);
       return true;
     }
     return false;
@@ -57601,6 +57668,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptCompletedVideos.length = 0;
     this.scriptCompletedSpeech.length = 0;
     this.scriptCompletedAudio.length = 0;
+    this.scriptTestingSpeechCompletionFrameByName.clear();
+    this.scriptTestingAudioCompletionFrameByName.clear();
     this.scriptCompletedMusic.length = 0;
     this.scriptTeamsByName.clear();
     this.scriptTeamInstanceNamesByPrototypeName.clear();
