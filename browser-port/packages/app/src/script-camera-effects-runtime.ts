@@ -101,15 +101,20 @@ interface ActiveMotionBlurFollowState {
   ending: boolean;
 }
 
+interface ActiveOneShotMotionBlurState {
+  maxCount: number;
+  decrement: boolean;
+  saturationBoost: number;
+  doZoomTo: boolean;
+  jumpTarget: { x: number; z: number } | null;
+}
+
 const LOGIC_FRAME_RATE = 30;
-const MOTION_BLUR_DURATION_FRAMES = Math.max(1, Math.trunc(LOGIC_FRAME_RATE / 2));
 const SCREEN_SHAKE_DURATION_FRAMES = Math.max(1, Math.trunc(LOGIC_FRAME_RATE * 0.4));
 const MOTION_BLUR_MAX_COUNT = 60;
 const MOTION_BLUR_COUNT_STEP = 5;
 const MOTION_BLUR_DEFAULT_PAN_FACTOR = 30;
 const MOTION_BLUR_END_MIN_COUNT = 2;
-const MOTION_BLUR_JUMP_TRIGGER_FRAMES = Math.max(1, Math.trunc(MOTION_BLUR_MAX_COUNT / MOTION_BLUR_COUNT_STEP));
-const MOTION_BLUR_JUMP_DURATION_FRAMES = MOTION_BLUR_JUMP_TRIGGER_FRAMES * 2;
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
@@ -184,11 +189,9 @@ export function createScriptCameraEffectsRuntimeBridge(
   let grayscale = 0;
   let grayscaleTransition: ScalarTransition | null = null;
   let activeFade: ActiveFadeState | null = null;
-  let blurSaturationBoost = 0;
-  let blurExpireFrame = -1;
+  let activeOneShotMotionBlur: ActiveOneShotMotionBlurState | null = null;
   let activeMotionBlurFollow: ActiveMotionBlurFollowState | null = null;
   let previousCameraTarget: { x: number; z: number } | null = null;
-  let pendingMotionBlurJump: { x: number; z: number; triggerFrame: number } | null = null;
   let lastScreenShakeFrame = -1;
   const activeShakes: ActiveShakeState[] = [];
 
@@ -235,21 +238,33 @@ export function createScriptCameraEffectsRuntimeBridge(
       const filterRequests = gameLogic.drainScriptCameraFilterRequests();
       for (const request of filterRequests) {
         switch (request.requestType) {
-          case 'MOTION_BLUR':
-            blurExpireFrame = Math.max(blurExpireFrame, currentLogicFrame + MOTION_BLUR_DURATION_FRAMES);
-            blurSaturationBoost = request.saturate ? 0.35 : 0;
+          case 'MOTION_BLUR': {
+            const saturationBoost = request.saturate ? 0.35 : 0;
+            const zoomIn = request.zoomIn !== false;
+            activeOneShotMotionBlur = {
+              maxCount: zoomIn ? 0 : MOTION_BLUR_MAX_COUNT,
+              decrement: !zoomIn,
+              saturationBoost,
+              doZoomTo: false,
+              jumpTarget: null,
+            };
             break;
-          case 'MOTION_BLUR_JUMP':
-            blurExpireFrame = Math.max(blurExpireFrame, currentLogicFrame + MOTION_BLUR_JUMP_DURATION_FRAMES);
-            blurSaturationBoost = request.saturate ? 0.35 : 0;
-            if (request.x !== null && request.z !== null && Number.isFinite(request.x) && Number.isFinite(request.z)) {
-              pendingMotionBlurJump = {
-                x: request.x,
-                z: request.z,
-                triggerFrame: currentLogicFrame + MOTION_BLUR_JUMP_TRIGGER_FRAMES - 1,
-              };
-            }
+          }
+          case 'MOTION_BLUR_JUMP': {
+            const saturationBoost = request.saturate ? 0.35 : 0;
+            const jumpTarget = (request.x !== null && request.z !== null
+              && Number.isFinite(request.x) && Number.isFinite(request.z))
+              ? { x: request.x, z: request.z }
+              : null;
+            activeOneShotMotionBlur = {
+              maxCount: 0,
+              decrement: false,
+              saturationBoost,
+              doZoomTo: true,
+              jumpTarget,
+            };
             break;
+          }
           case 'MOTION_BLUR_FOLLOW': {
             const followMode = request.followMode !== null ? Math.trunc(request.followMode) : 0;
             const panFactor = followMode > 0 ? followMode : MOTION_BLUR_DEFAULT_PAN_FACTOR;
@@ -336,9 +351,40 @@ export function createScriptCameraEffectsRuntimeBridge(
       } else {
         previousCameraTarget = null;
       }
-      if (pendingMotionBlurJump && currentLogicFrame >= pendingMotionBlurJump.triggerFrame) {
-        onMotionBlurJumpToPosition?.(pendingMotionBlurJump.x, pendingMotionBlurJump.z);
-        pendingMotionBlurJump = null;
+      let oneShotBlurPixels = 0;
+      let oneShotSaturation = 1;
+      if (activeOneShotMotionBlur) {
+        let clearOneShotAfterFrame = false;
+        if (activeOneShotMotionBlur.decrement) {
+          activeOneShotMotionBlur.maxCount -= MOTION_BLUR_COUNT_STEP;
+          if (activeOneShotMotionBlur.maxCount < 1) {
+            activeOneShotMotionBlur.maxCount = 0;
+            clearOneShotAfterFrame = true;
+          }
+        } else {
+          activeOneShotMotionBlur.maxCount += MOTION_BLUR_COUNT_STEP;
+          if (activeOneShotMotionBlur.maxCount >= MOTION_BLUR_MAX_COUNT) {
+            activeOneShotMotionBlur.maxCount = MOTION_BLUR_MAX_COUNT;
+            activeOneShotMotionBlur.decrement = true;
+            if (activeOneShotMotionBlur.doZoomTo) {
+              if (activeOneShotMotionBlur.jumpTarget) {
+                onMotionBlurJumpToPosition?.(
+                  activeOneShotMotionBlur.jumpTarget.x,
+                  activeOneShotMotionBlur.jumpTarget.z,
+                );
+              }
+            } else {
+              clearOneShotAfterFrame = true;
+            }
+          }
+        }
+
+        oneShotBlurPixels = 2 * (activeOneShotMotionBlur.maxCount / MOTION_BLUR_MAX_COUNT);
+        oneShotSaturation = 1 + activeOneShotMotionBlur.saturationBoost;
+
+        if (clearOneShotAfterFrame) {
+          activeOneShotMotionBlur = null;
+        }
       }
 
       let shakeOffsetX = 0;
@@ -368,8 +414,6 @@ export function createScriptCameraEffectsRuntimeBridge(
         shakeOffsetY += Math.cos((ageFrames + shake.seed) * 0.91) * frameAmplitude;
       }
 
-      const blurActive = currentLogicFrame <= blurExpireFrame;
-      const oneShotBlurPixels = blurActive ? 2 : 0;
       const followBlurPixels = activeMotionBlurFollow
         ? 2 * (activeMotionBlurFollow.maxCount / Math.max(1, activeMotionBlurFollow.panFactor))
         : 0;
@@ -377,7 +421,7 @@ export function createScriptCameraEffectsRuntimeBridge(
         oneShotBlurPixels,
         Number.isFinite(followBlurPixels) ? Math.max(0, followBlurPixels) : 0,
       );
-      const saturation = blurActive ? (1 + blurSaturationBoost) : 1;
+      const saturation = oneShotBlurPixels > 0 ? oneShotSaturation : 1;
       const fadeAmount = clamp01(evaluateFadeAmount(activeFade, currentLogicFrame));
       const fadeType = activeFade ? activeFade.fadeType : null;
 

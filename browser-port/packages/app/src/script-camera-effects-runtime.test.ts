@@ -153,7 +153,10 @@ describe('script camera effects runtime bridge', () => {
     expect(active.blurPixels).toBeGreaterThan(0);
     expect(active.saturation).toBeGreaterThan(1);
 
-    const expired = bridge.syncAfterSimulationStep(40);
+    let expired = active;
+    for (let frame = 5; frame <= 40; frame++) {
+      expired = bridge.syncAfterSimulationStep(frame);
+    }
     expect(expired.blurPixels).toBe(0);
     expect(expired.saturation).toBeCloseTo(1, 6);
 
@@ -215,6 +218,34 @@ describe('script camera effects runtime bridge', () => {
       finished = bridge.syncAfterSimulationStep(frame);
     }
     expect(finished.blurPixels).toBe(0);
+  });
+
+  it('runs zoom-out motion blur as a decay from high initial strength', () => {
+    const gameLogic = new RecordingGameLogic();
+    const bridge = createScriptCameraEffectsRuntimeBridge({ gameLogic });
+
+    gameLogic.state.filterRequests.push({
+      requestType: 'MOTION_BLUR',
+      zoomIn: false,
+      saturate: false,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: null,
+      frame: 1,
+    });
+
+    const initial = bridge.syncAfterSimulationStep(1);
+    expect(initial.blurPixels).toBeGreaterThan(1);
+
+    const later = bridge.syncAfterSimulationStep(6);
+    expect(later.blurPixels).toBeLessThan(initial.blurPixels);
+
+    let settled = later;
+    for (let frame = 7; frame <= 20; frame++) {
+      settled = bridge.syncAfterSimulationStep(frame);
+    }
+    expect(settled.blurPixels).toBe(0);
   });
 
   it('triggers midpoint camera look-at for motion blur jump requests', () => {
