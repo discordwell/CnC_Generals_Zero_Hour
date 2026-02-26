@@ -52,6 +52,7 @@ import {
   extractAudioOptionPreferences,
   loadOptionPreferencesFromStorage,
 } from './option-preferences.js';
+import { applyScriptInputLock } from './script-input-lock.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
 import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
@@ -2046,7 +2047,11 @@ async function startGame(
   gameLoop.start({
     onSimulationStep(_frameNumber: number, dt: number) {
       const inputState = inputManager.getState();
-      let inputStateForGameLogic: InputState = inputState;
+      const scriptInputDisabled = gameLogic.isScriptInputDisabled();
+      let inputStateForGameLogic: InputState = applyScriptInputLock(
+        inputState,
+        scriptInputDisabled,
+      );
       camera.getWorldDirection(cameraForward);
       cameraUp.copy(camera.up).normalize();
       audioManager.setLocalPlayerIndex(networkManager.getLocalPlayerID());
@@ -2063,7 +2068,10 @@ async function startGame(
       scriptAudioRuntimeBridge.syncBeforeSimulationStep();
 
       const pendingControlBarCommand = uiRuntime.getPendingControlBarCommand();
-      if (pendingControlBarCommand && inputState.rightMouseClick) {
+      if (scriptInputDisabled && pendingControlBarCommand) {
+        uiRuntime.cancelPendingControlBarCommand();
+      }
+      if (!scriptInputDisabled && pendingControlBarCommand && inputState.rightMouseClick) {
         inputStateForGameLogic = {
           ...inputState,
           rightMouseClick: false,
@@ -2152,49 +2160,59 @@ async function startGame(
       }
 
       // Drag-select logic: track left mouse drag for box selection.
-      if (inputState.leftMouseDown && !wasLeftMouseDown) {
-        // Mouse just pressed — record start position.
-        dragStartX = inputState.mouseX;
-        dragStartY = inputState.mouseY;
-        isDragSelecting = false;
-      }
-
-      if (inputState.leftMouseDown) {
-        const dx = inputState.mouseX - dragStartX;
-        const dy = inputState.mouseY - dragStartY;
-        if (Math.abs(dx) > DRAG_SELECT_THRESHOLD || Math.abs(dy) > DRAG_SELECT_THRESHOLD) {
-          isDragSelecting = true;
-        }
-        if (isDragSelecting) {
-          const left = Math.min(dragStartX, inputState.mouseX);
-          const top = Math.min(dragStartY, inputState.mouseY);
-          const width = Math.abs(dx);
-          const height = Math.abs(dy);
-          selectionBox.style.display = 'block';
-          selectionBox.style.left = `${left}px`;
-          selectionBox.style.top = `${top}px`;
-          selectionBox.style.width = `${width}px`;
-          selectionBox.style.height = `${height}px`;
-        }
-      }
-
-      if (!inputState.leftMouseDown && wasLeftMouseDown) {
-        // Mouse just released.
-        if (isDragSelecting) {
-          performDragSelect(dragStartX, dragStartY, inputState.mouseX, inputState.mouseY);
+      if (!scriptInputDisabled) {
+        if (inputState.leftMouseDown && !wasLeftMouseDown) {
+          // Mouse just pressed — record start position.
+          dragStartX = inputState.mouseX;
+          dragStartY = inputState.mouseY;
           isDragSelecting = false;
         }
-        selectionBox.style.display = 'none';
-      }
 
-      wasLeftMouseDown = inputState.leftMouseDown;
+        if (inputState.leftMouseDown) {
+          const dx = inputState.mouseX - dragStartX;
+          const dy = inputState.mouseY - dragStartY;
+          if (Math.abs(dx) > DRAG_SELECT_THRESHOLD || Math.abs(dy) > DRAG_SELECT_THRESHOLD) {
+            isDragSelecting = true;
+          }
+          if (isDragSelecting) {
+            const left = Math.min(dragStartX, inputState.mouseX);
+            const top = Math.min(dragStartY, inputState.mouseY);
+            const width = Math.abs(dx);
+            const height = Math.abs(dy);
+            selectionBox.style.display = 'block';
+            selectionBox.style.left = `${left}px`;
+            selectionBox.style.top = `${top}px`;
+            selectionBox.style.width = `${width}px`;
+            selectionBox.style.height = `${height}px`;
+          }
+        }
+
+        if (!inputState.leftMouseDown && wasLeftMouseDown) {
+          // Mouse just released.
+          if (isDragSelecting) {
+            performDragSelect(dragStartX, dragStartY, inputState.mouseX, inputState.mouseY);
+            isDragSelecting = false;
+          }
+          selectionBox.style.display = 'none';
+        }
+
+        wasLeftMouseDown = inputState.leftMouseDown;
+      } else {
+        selectionBox.style.display = 'none';
+        isDragSelecting = false;
+        wasLeftMouseDown = false;
+      }
 
       // Suppress normal click selection during drag-select.
       if (isDragSelecting) {
         inputStateForGameLogic = { ...inputStateForGameLogic, leftMouseClick: false };
       }
 
-      updateBuildingGhost(inputState);
+      if (!scriptInputDisabled) {
+        updateBuildingGhost(inputState);
+      } else {
+        buildingGhostMesh.visible = false;
+      }
 
       // Spawn move indicator on right-click command.
       if (inputStateForGameLogic.rightMouseClick && gameLogic.getLocalPlayerSelectionIds().length > 0) {
@@ -2206,21 +2224,25 @@ async function startGame(
       }
 
       gameLogic.handlePointerInput(inputStateForGameLogic, camera);
-      dispatchIssuedControlBarCommands(
-        uiRuntime.consumeIssuedCommands(),
-        iniDataRegistry,
-        gameLogic,
-        uiRuntime,
-        audioManager,
-        networkManager.getLocalPlayerID(),
-      );
+      if (!scriptInputDisabled) {
+        dispatchIssuedControlBarCommands(
+          uiRuntime.consumeIssuedCommands(),
+          iniDataRegistry,
+          gameLogic,
+          uiRuntime,
+          audioManager,
+          networkManager.getLocalPlayerID(),
+        );
+      } else {
+        uiRuntime.consumeIssuedCommands();
+      }
 
       // ----------------------------------------------------------------
       // Keyboard shortcuts (one-shot key presses)
       // ----------------------------------------------------------------
 
       // Space — center camera on selected unit(s).
-      if (inputState.keysPressed.has(' ')) {
+      if (!scriptInputDisabled && inputState.keysPressed.has(' ')) {
         const selIds = gameLogic.getLocalPlayerSelectionIds();
         if (selIds.length > 0) {
           let cx = 0;
@@ -2241,7 +2263,7 @@ async function startGame(
       }
 
       // S — stop all selected units (only on one-shot press with active selection).
-      if (inputState.keysPressed.has('s')) {
+      if (!scriptInputDisabled && inputState.keysPressed.has('s')) {
         const selIds = gameLogic.getLocalPlayerSelectionIds();
         if (selIds.length > 0) {
           for (const id of selIds) {
@@ -2251,7 +2273,7 @@ async function startGame(
       }
 
       // Delete — sell selected building.
-      if (inputState.keysPressed.has('delete')) {
+      if (!scriptInputDisabled && inputState.keysPressed.has('delete')) {
         const selIds = gameLogic.getLocalPlayerSelectionIds();
         for (const id of selIds) {
           gameLogic.submitCommand({ type: 'sell', entityId: id });
@@ -2259,7 +2281,7 @@ async function startGame(
       }
 
       // Escape — cancel pending control bar target or clear selection.
-      if (inputState.keysPressed.has('escape')) {
+      if (!scriptInputDisabled && inputState.keysPressed.has('escape')) {
         if (uiRuntime.getPendingControlBarCommand()) {
           uiRuntime.cancelPendingControlBarCommand();
         } else {
@@ -2268,7 +2290,7 @@ async function startGame(
       }
 
       // Feed input to camera
-      rtsCamera.setInputState(inputState);
+      rtsCamera.setInputState(inputStateForGameLogic);
 
       // Update all subsystems (InputManager resets accumulators,
       // RTSCamera processes input, WaterVisual animates UVs)
