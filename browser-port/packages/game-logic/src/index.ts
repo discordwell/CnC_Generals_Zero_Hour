@@ -37672,6 +37672,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     // Source parity: ActionManager::canEnterObject — cannot enter self.
     if (passenger.id === transport.id) return;
+    if (this.isScriptEntityEffectivelyDead(passenger) || this.isScriptEntityEffectivelyDead(transport)) return;
 
     // Source parity: OpenContain::addToContain — cannot enter if already contained.
     if (this.isEntityContained(passenger)) return;
@@ -37803,6 +37804,10 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (passenger.id === transport.id) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+      if (this.isScriptEntityEffectivelyDead(passenger) || this.isScriptEntityEffectivelyDead(transport)) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }

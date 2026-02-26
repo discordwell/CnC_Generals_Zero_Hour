@@ -34648,6 +34648,55 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
   });
 
+  it('blocks script enter when target container is in an effectively-dead state', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            ContainMax: 2,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopTransport', 20, 20), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        slowDeathState: object | null;
+        transportContainerId: number | null;
+      }>;
+    };
+
+    privateApi.spawnedEntities.get(1)!.slowDeathState = {};
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+
+    privateApi.spawnedEntities.get(1)!.slowDeathState = null;
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+  });
+
   it('resets locomotor to normal for script named enter/exit and team load-transports actions', () => {
     const bundle = makeBundle({
       objects: [
