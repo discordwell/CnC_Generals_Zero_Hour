@@ -383,6 +383,7 @@ export interface EnterObjectCommand {
   type: 'enterObject';
   entityId: number;
   targetObjectId: number;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
   action:
     | 'hijackVehicle'
     | 'convertToCarBomb'

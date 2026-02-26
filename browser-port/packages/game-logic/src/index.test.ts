@@ -8152,7 +8152,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       objects: [
         makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
           makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
-        ]),
+        ], {
+          VisionRange: 100,
+        }),
         makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], []),
       ],
     });
@@ -8166,6 +8168,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     );
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
+    logic.update(1 / 30);
     logic.submitCommand({
       type: 'enterObject',
       entityId: 1,
@@ -8177,6 +8180,54 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     expect(logic.getEntityState(1)).toBeNull();
     expect(logic.getEntityIdsByTemplateAndSide('EnemyVehicle', 'America')).toEqual([2]);
+  });
+
+  it('blocks human player enterObject on shrouded targets but allows script command source', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+        ], {
+          VisionRange: 30,
+        }),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], []),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Hijacker', 10, 10), makeMapObject('EnemyVehicle', 200, 200)], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+    };
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+    expect(privateApi.pendingEnterObjectActions.has(1)).toBe(false);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      commandSource: 'SCRIPT',
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+    expect(privateApi.pendingEnterObjectActions.has(1)).toBe(true);
   });
 
   it('rejects invalid enterObject hijack actions at command issue time', () => {
@@ -14117,7 +14168,7 @@ describe('crush damage during movement', () => {
           makeBlock('Collide', 'SquishCollide ModuleTag_Squish', {}),
           makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
           makeBlock('LocomotorSet', 'SET_NORMAL InfLocomotor', {}),
-        ], { CrushableLevel: 0 }),
+        ], { CrushableLevel: 0, VisionRange: 120 }),
       ],
       locomotors: [
         makeLocomotorDef('TankLocomotor', 180),
@@ -14140,6 +14191,7 @@ describe('crush damage during movement', () => {
 
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
+    logic.update(1 / 30);
 
     // Issue hijack command — hijacker will move toward the tank.
     logic.submitCommand({
@@ -23280,7 +23332,9 @@ describe('HijackerUpdate', () => {
           makeBlock('Behavior', 'HijackerUpdate ModuleTag_HijackerUpdate', {
             ParachuteName: 'GLA_Parachute',
           }),
-        ]),
+        ], {
+          VisionRange: 100,
+        }),
         makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
         ]),
@@ -23312,6 +23366,7 @@ describe('HijackerUpdate', () => {
     );
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
+    logic.update(1 / 30);
 
     // Issue hijack command.
     logic.submitCommand({
@@ -23366,7 +23421,9 @@ describe('HijackerUpdate', () => {
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
           makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
           makeBlock('Behavior', 'HijackerUpdate ModuleTag_HijackerUpdate', {}),
-        ]),
+        ], {
+          VisionRange: 100,
+        }),
         makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
         ]),
@@ -23384,6 +23441,7 @@ describe('HijackerUpdate', () => {
     );
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
+    logic.update(1 / 30);
 
     // Give the vehicle veteran status before hijack.
     const priv = logic as unknown as {
@@ -23419,7 +23477,9 @@ describe('HijackerUpdate', () => {
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
           makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
           makeBlock('Behavior', 'HijackerUpdate ModuleTag_HijackerUpdate', {}),
-        ]),
+        ], {
+          VisionRange: 100,
+        }),
         makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
         ]),
@@ -23437,6 +23497,7 @@ describe('HijackerUpdate', () => {
     );
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
+    logic.update(1 / 30);
 
     // Issue hijack (entities are close enough for immediate resolution).
     logic.submitCommand({
@@ -23469,7 +23530,9 @@ describe('HijackerUpdate', () => {
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
           makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
           // No HijackerUpdate module!
-        ]),
+        ], {
+          VisionRange: 100,
+        }),
         makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
         ]),
@@ -23487,6 +23550,7 @@ describe('HijackerUpdate', () => {
     );
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
+    logic.update(1 / 30);
 
     logic.submitCommand({
       type: 'enterObject',
@@ -27831,7 +27895,9 @@ describe('Sabotage building effects', () => {
           makeBlock('Behavior', 'SabotagePowerPlantCrateCollide ModuleTag_SabotagePP', {
             SabotagePowerDuration: 3000, // 3 seconds = ~90 frames
           }),
-        ]),
+        ], {
+          VisionRange: 100,
+        }),
         makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'FS_POWER'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
         ], { EnergyBonus: 5 }),
@@ -27854,6 +27920,7 @@ describe('Sabotage building effects', () => {
     );
     logic.setTeamRelationship('China', 'America', 0);
     logic.setTeamRelationship('America', 'China', 0);
+    logic.update(1 / 30);
 
     // Verify side is NOT browned out initially (5 production > 3 consumption).
     expect(logic.getSidePowerState('America').brownedOut).toBe(false);
@@ -27884,7 +27951,9 @@ describe('Sabotage building effects', () => {
       objects: [
         makeObjectDef('BlackLotus', 'China', ['INFANTRY'], [
           makeBlock('Behavior', 'SabotageCommandCenterCrateCollide ModuleTag_SabotageCC', {}),
-        ]),
+        ], {
+          VisionRange: 100,
+        }),
         makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'COMMANDCENTER'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
           makeBlock('Behavior', 'OCLSpecialPower ModuleTag_SP', { SpecialPowerTemplate: 'SuperweaponParticleCannon' }),
@@ -27912,6 +27981,7 @@ describe('Sabotage building effects', () => {
     );
     logic.setTeamRelationship('China', 'America', 0);
     logic.setTeamRelationship('America', 'China', 0);
+    logic.update(1 / 30);
 
     const priv = logic as any;
 

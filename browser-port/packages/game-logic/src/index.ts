@@ -13684,6 +13684,7 @@ export class GameLogicSubsystem implements Subsystem {
           type: 'enterObject',
           entityId: sourceEntity.id,
           targetObjectId: target.targetEntity.id,
+          commandSource: 'SCRIPT',
           action: commandTypeName === 'HIJACK_VEHICLE'
             ? 'hijackVehicle'
             : commandTypeName === 'CONVERT_TO_CARBOMB'
@@ -15560,13 +15561,14 @@ export class GameLogicSubsystem implements Subsystem {
 
     let issuedAny = false;
     for (const entity of teamMembers) {
-      if (!this.canQueueEnterObjectAction(entity, closestTarget, 'captureUnmannedFactionUnit')) {
+      if (!this.canQueueEnterObjectAction(entity, closestTarget, 'captureUnmannedFactionUnit', 'SCRIPT')) {
         continue;
       }
       this.applyCommand({
         type: 'enterObject',
         entityId: entity.id,
         targetObjectId: closestTarget.id,
+        commandSource: 'SCRIPT',
         action: 'captureUnmannedFactionUnit',
       });
       issuedAny = true;
@@ -36754,8 +36756,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!source || !target || source.destroyed || target.destroyed) {
       return;
     }
+    const commandSource = command.commandSource ?? 'PLAYER';
 
-    if (!this.canQueueEnterObjectAction(source, target, command.action)) {
+    if (!this.canQueueEnterObjectAction(source, target, command.action, commandSource)) {
       return;
     }
 
@@ -36775,11 +36778,12 @@ export class GameLogicSubsystem implements Subsystem {
     source: MapEntity,
     target: MapEntity,
     action: EnterObjectCommand['action'],
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
   ): boolean {
     if (!source.canMove) {
       return false;
     }
-    if (!this.passesCommonEnterObjectValidation(source, target)) {
+    if (!this.passesCommonEnterObjectValidation(source, target, commandSource)) {
       return false;
     }
 
@@ -36793,7 +36797,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'repairVehicle':
         return this.canExecuteRepairVehicleEnterAction(source, target);
       case 'captureUnmannedFactionUnit':
-        return this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target);
+        return this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target, commandSource);
       default:
         return false;
     }
@@ -36802,8 +36806,15 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: shared ActionManager::canEnterObject pre-checks.
    */
-  private passesCommonEnterObjectValidation(source: MapEntity, target: MapEntity): boolean {
+  private passesCommonEnterObjectValidation(
+    source: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
     if (source.id === target.id) {
+      return false;
+    }
+    if (this.isContainerEnterTargetShrouded(source, target, commandSource)) {
       return false;
     }
     if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION')) {
@@ -38893,8 +38904,12 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity subset: ActionManager::canEnterObject special-case for unmanned vehicles.
    */
-  private canExecuteCaptureUnmannedFactionUnitEnterAction(source: MapEntity, target: MapEntity): boolean {
-    if (!this.passesCommonEnterObjectValidation(source, target)) {
+  private canExecuteCaptureUnmannedFactionUnitEnterAction(
+    source: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
+    if (!this.passesCommonEnterObjectValidation(source, target, commandSource)) {
       return false;
     }
 
@@ -38919,7 +38934,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity subset: capture nearest unowned faction unit enter resolution.
    */
   private resolveCaptureUnmannedFactionUnitEnterAction(source: MapEntity, target: MapEntity): void {
-    if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target)) {
+    if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target, 'AI')) {
       return;
     }
 
