@@ -217,6 +217,39 @@ describe('script camera effects runtime bridge', () => {
     expect(finished.blurPixels).toBe(0);
   });
 
+  it('triggers midpoint camera look-at for motion blur jump requests', () => {
+    const gameLogic = new RecordingGameLogic();
+    const jumpTargets: Array<{ x: number; z: number }> = [];
+    const bridge = createScriptCameraEffectsRuntimeBridge({
+      gameLogic,
+      onMotionBlurJumpToPosition: (x, z) => {
+        jumpTargets.push({ x, z });
+      },
+    });
+
+    gameLogic.state.filterRequests.push({
+      requestType: 'MOTION_BLUR_JUMP',
+      zoomIn: null,
+      saturate: false,
+      waypointName: 'JumpPoint',
+      x: 320,
+      z: 480,
+      followMode: null,
+      frame: 1,
+    });
+
+    for (let frame = 1; frame <= 11; frame++) {
+      bridge.syncAfterSimulationStep(frame);
+    }
+    expect(jumpTargets).toHaveLength(0);
+
+    bridge.syncAfterSimulationStep(12);
+    expect(jumpTargets).toEqual([{ x: 320, z: 480 }]);
+
+    bridge.syncAfterSimulationStep(13);
+    expect(jumpTargets).toHaveLength(1);
+  });
+
   it('accumulates shaker and screen-shake requests into transient camera offsets', () => {
     const gameLogic = new RecordingGameLogic();
     const bridge = createScriptCameraEffectsRuntimeBridge({ gameLogic });

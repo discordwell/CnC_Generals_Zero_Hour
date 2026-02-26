@@ -2145,6 +2145,9 @@ async function startGame(
         z: state.targetZ,
       };
     },
+    onMotionBlurJumpToPosition: (x, z) => {
+      rtsCamera.lookAt(x, z);
+    },
   });
   let scriptCameraEffectsState = scriptCameraEffectsRuntimeBridge.syncAfterSimulationStep(0);
   const scriptCameraRuntimeBridge = createScriptCameraRuntimeBridge({

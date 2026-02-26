@@ -65,6 +65,7 @@ export interface ScriptCameraEffectsRuntimeBridge {
 export interface CreateScriptCameraEffectsRuntimeBridgeOptions {
   gameLogic: ScriptCameraEffectsRuntimeGameLogic;
   getCameraTargetPosition?: () => { x: number; z: number } | null;
+  onMotionBlurJumpToPosition?: (x: number, z: number) => void;
 }
 
 interface ScalarTransition {
@@ -104,8 +105,11 @@ const LOGIC_FRAME_RATE = 30;
 const MOTION_BLUR_DURATION_FRAMES = Math.max(1, Math.trunc(LOGIC_FRAME_RATE / 2));
 const SCREEN_SHAKE_DURATION_FRAMES = Math.max(1, Math.trunc(LOGIC_FRAME_RATE * 0.4));
 const MOTION_BLUR_MAX_COUNT = 60;
+const MOTION_BLUR_COUNT_STEP = 5;
 const MOTION_BLUR_DEFAULT_PAN_FACTOR = 30;
 const MOTION_BLUR_END_MIN_COUNT = 2;
+const MOTION_BLUR_JUMP_TRIGGER_FRAMES = Math.max(1, Math.trunc(MOTION_BLUR_MAX_COUNT / MOTION_BLUR_COUNT_STEP));
+const MOTION_BLUR_JUMP_DURATION_FRAMES = MOTION_BLUR_JUMP_TRIGGER_FRAMES * 2;
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
@@ -175,7 +179,7 @@ function evaluateFadeAmount(
 export function createScriptCameraEffectsRuntimeBridge(
   options: CreateScriptCameraEffectsRuntimeBridgeOptions,
 ): ScriptCameraEffectsRuntimeBridge {
-  const { gameLogic, getCameraTargetPosition } = options;
+  const { gameLogic, getCameraTargetPosition, onMotionBlurJumpToPosition } = options;
 
   let grayscale = 0;
   let grayscaleTransition: ScalarTransition | null = null;
@@ -184,6 +188,7 @@ export function createScriptCameraEffectsRuntimeBridge(
   let blurExpireFrame = -1;
   let activeMotionBlurFollow: ActiveMotionBlurFollowState | null = null;
   let previousCameraTarget: { x: number; z: number } | null = null;
+  let pendingMotionBlurJump: { x: number; z: number; triggerFrame: number } | null = null;
   let lastScreenShakeFrame = -1;
   const activeShakes: ActiveShakeState[] = [];
 
@@ -231,9 +236,19 @@ export function createScriptCameraEffectsRuntimeBridge(
       for (const request of filterRequests) {
         switch (request.requestType) {
           case 'MOTION_BLUR':
-          case 'MOTION_BLUR_JUMP':
             blurExpireFrame = Math.max(blurExpireFrame, currentLogicFrame + MOTION_BLUR_DURATION_FRAMES);
             blurSaturationBoost = request.saturate ? 0.35 : 0;
+            break;
+          case 'MOTION_BLUR_JUMP':
+            blurExpireFrame = Math.max(blurExpireFrame, currentLogicFrame + MOTION_BLUR_JUMP_DURATION_FRAMES);
+            blurSaturationBoost = request.saturate ? 0.35 : 0;
+            if (request.x !== null && request.z !== null && Number.isFinite(request.x) && Number.isFinite(request.z)) {
+              pendingMotionBlurJump = {
+                x: request.x,
+                z: request.z,
+                triggerFrame: currentLogicFrame + MOTION_BLUR_JUMP_TRIGGER_FRAMES - 1,
+              };
+            }
             break;
           case 'MOTION_BLUR_FOLLOW': {
             const followMode = request.followMode !== null ? Math.trunc(request.followMode) : 0;
@@ -320,6 +335,10 @@ export function createScriptCameraEffectsRuntimeBridge(
         previousCameraTarget = { x: cameraTargetX, z: cameraTargetZ };
       } else {
         previousCameraTarget = null;
+      }
+      if (pendingMotionBlurJump && currentLogicFrame >= pendingMotionBlurJump.triggerFrame) {
+        onMotionBlurJumpToPosition?.(pendingMotionBlurJump.x, pendingMotionBlurJump.z);
+        pendingMotionBlurJump = null;
       }
 
       let shakeOffsetX = 0;
