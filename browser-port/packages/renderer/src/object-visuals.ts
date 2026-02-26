@@ -29,6 +29,8 @@ export interface RenderableEntityState {
   veterancyLevel?: number;
   isStealthed?: boolean;
   isDetected?: boolean;
+  scriptFlashCount?: number;
+  scriptFlashColor?: number;
 }
 
 export interface LoadedModelAsset {
@@ -49,6 +51,7 @@ interface VisualAssetState {
   healthBarGroup: THREE.Group | null;
   healthBarFill: THREE.Mesh | null;
   selectionRing: THREE.Mesh | null;
+  scriptFlashRing: THREE.Mesh | null;
   veterancyBadge: THREE.Group | null;
   currentVeterancyLevel: number;
   /** Cloned materials for stealth opacity mutation (avoids mutating shared GLTF materials). */
@@ -124,6 +127,7 @@ export class ObjectVisualManager {
       this.syncVisualAsset(visual, state);
       this.syncHealthBar(visual, state);
       this.syncSelectionRing(visual, state);
+      this.syncScriptFlashRing(visual, state);
       this.syncVeterancyBadge(visual, state);
       this.syncStealthOpacity(visual, state);
       this.applyAnimationState(visual, state.animationState);
@@ -202,6 +206,7 @@ export class ObjectVisualManager {
       healthBarGroup: null,
       healthBarFill: null,
       selectionRing: null,
+      scriptFlashRing: null,
       veterancyBadge: null,
       currentVeterancyLevel: 0,
       stealthMaterialClones: new WeakMap(),
@@ -424,6 +429,7 @@ export class ObjectVisualManager {
     visual.healthBarGroup = null;
     visual.healthBarFill = null;
     visual.selectionRing = null;
+    visual.scriptFlashRing = null;
     if (visual.veterancyBadge) {
       this.disposeObject3D(visual.veterancyBadge);
     }
@@ -619,11 +625,13 @@ export class ObjectVisualManager {
   private static readonly HEALTH_BAR_HEIGHT = 0.15;
   private static readonly HEALTH_BAR_Y_OFFSET = 2.5;
   private static readonly SELECTION_RING_RADIUS = 1.2;
+  private static readonly SCRIPT_FLASH_RING_RADIUS = 1.38;
   private static readonly SELECTION_RING_SEGMENTS = 48;
 
   private static healthBarBgGeometry: THREE.PlaneGeometry | null = null;
   private static healthBarFillGeometry: THREE.PlaneGeometry | null = null;
   private static selectionRingGeometry: THREE.RingGeometry | null = null;
+  private static scriptFlashRingGeometry: THREE.RingGeometry | null = null;
 
   private static getHealthBarBgGeometry(): THREE.PlaneGeometry {
     if (!ObjectVisualManager.healthBarBgGeometry) {
@@ -651,6 +659,17 @@ export class ObjectVisualManager {
       );
     }
     return ObjectVisualManager.selectionRingGeometry;
+  }
+
+  private static getScriptFlashRingGeometry(): THREE.RingGeometry {
+    if (!ObjectVisualManager.scriptFlashRingGeometry) {
+      ObjectVisualManager.scriptFlashRingGeometry = new THREE.RingGeometry(
+        ObjectVisualManager.SCRIPT_FLASH_RING_RADIUS - 0.08,
+        ObjectVisualManager.SCRIPT_FLASH_RING_RADIUS,
+        ObjectVisualManager.SELECTION_RING_SEGMENTS,
+      );
+    }
+    return ObjectVisualManager.scriptFlashRingGeometry;
   }
 
   private static healthColorForRatio(ratio: number): number {
@@ -749,6 +768,39 @@ export class ObjectVisualManager {
     }
 
     visual.selectionRing.visible = true;
+  }
+
+  private syncScriptFlashRing(visual: VisualAssetState, state: RenderableEntityState): void {
+    const flashCount = state.scriptFlashCount ?? 0;
+    const shouldShow = flashCount > 0 && flashCount % 2 === 1;
+    if (!shouldShow) {
+      if (visual.scriptFlashRing) {
+        visual.scriptFlashRing.visible = false;
+      }
+      return;
+    }
+
+    const flashColor = (state.scriptFlashColor ?? 0xffffff) & 0xffffff;
+    if (!visual.scriptFlashRing) {
+      const material = new THREE.MeshBasicMaterial({
+        color: flashColor,
+        transparent: true,
+        opacity: 0.72,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(ObjectVisualManager.getScriptFlashRingGeometry(), material);
+      ring.renderOrder = 997;
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.06;
+      ring.name = 'script-flash-ring';
+      visual.scriptFlashRing = ring;
+      visual.root.add(ring);
+    }
+
+    const material = visual.scriptFlashRing.material as THREE.MeshBasicMaterial;
+    material.color.setHex(flashColor);
+    visual.scriptFlashRing.visible = true;
   }
 
   // Shared geometry for veterancy chevrons.

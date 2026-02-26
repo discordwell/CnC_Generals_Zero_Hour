@@ -43158,6 +43158,43 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('includes script flash fields in renderable snapshots for renderer bridge parity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Ranger', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 453, // NAMED_CUSTOM_COLOR
+      params: [1, 0x2244aa],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 78, // NAMED_FLASH
+      params: [1, 2],
+    })).toBe(true);
+
+    const initial = logic.getRenderableEntityStates().find((state) => state.id === 1);
+    expect(initial?.scriptFlashCount).toBe(4);
+    expect(initial?.scriptFlashColor).toBe(0x2244aa);
+
+    for (let frame = 0; frame < 15; frame += 1) {
+      logic.update(1 / 30);
+    }
+    const later = logic.getRenderableEntityStates().find((state) => state.id === 1);
+    expect(later?.scriptFlashCount).toBe(3);
+    expect(later?.scriptFlashColor).toBe(0x2244aa);
+  });
+
   it('executes script named-custom-color action using source action id', () => {
     const bundle = makeBundle({
       objects: [

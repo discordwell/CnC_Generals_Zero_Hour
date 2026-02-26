@@ -35,6 +35,10 @@ export interface RenderableEntityState {
   veterancyLevel: number;
   isStealthed: boolean;
   isDetected: boolean;
+  /** Source parity bridge: Drawable::setFlash count remaining. */
+  scriptFlashCount?: number;
+  /** Source parity bridge: Drawable indicator flash color (0xRRGGBB). */
+  scriptFlashColor?: number;
   /** Source parity: ObjectShroudStatus — visibility from the local player's perspective. */
   shroudStatus: 'CLEAR' | 'FOGGED' | 'SHROUDED';
   /** Source parity: Object::m_constructionPercent — 0..100 during build, -1 when complete. */

@@ -58,6 +58,15 @@ function getPlaceholderMesh(manager: ObjectVisualManager, entityId: number): THR
   return placeholder instanceof THREE.Mesh ? placeholder : null;
 }
 
+function getScriptFlashRing(manager: ObjectVisualManager, entityId: number): THREE.Mesh | null {
+  const root = manager.getVisualRoot(entityId);
+  if (!root) {
+    return null;
+  }
+  const ring = root.getObjectByName('script-flash-ring');
+  return ring instanceof THREE.Mesh ? ring : null;
+}
+
 describe('ObjectVisualManager', () => {
   it('creates and syncs visual nodes from render-state snapshots', async () => {
     const scene = new THREE.Scene();
@@ -201,6 +210,44 @@ describe('ObjectVisualManager', () => {
     expect(scene.children.filter((entry) => entry.name.startsWith('object-visual-')).length).toBe(1);
     expect(placeholder).toBeTruthy();
     expect(placeholder?.visible).toBe(true);
+  });
+
+  it('renders script flash ring with scripted color while flash count is active', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle']),
+    });
+
+    manager.sync([makeMeshState({
+      id: 31,
+      scriptFlashCount: 3,
+      scriptFlashColor: 0x3366cc,
+    })], 1 / 30);
+    await flushModelLoadQueue();
+
+    const firstRing = getScriptFlashRing(manager, 31);
+    expect(firstRing).toBeTruthy();
+    expect(firstRing?.visible).toBe(true);
+    const firstMaterial = firstRing?.material as THREE.MeshBasicMaterial;
+    expect(firstMaterial.color.getHex()).toBe(0x3366cc);
+
+    manager.sync([makeMeshState({
+      id: 31,
+      scriptFlashCount: 2,
+      scriptFlashColor: 0x3366cc,
+    })], 1 / 30);
+    const hiddenRing = getScriptFlashRing(manager, 31);
+    expect(hiddenRing?.visible).toBe(false);
+
+    manager.sync([makeMeshState({
+      id: 31,
+      scriptFlashCount: 1,
+      scriptFlashColor: 0xff4400,
+    })], 1 / 30);
+    const recoloredRing = getScriptFlashRing(manager, 31);
+    expect(recoloredRing?.visible).toBe(true);
+    const recoloredMaterial = recoloredRing?.material as THREE.MeshBasicMaterial;
+    expect(recoloredMaterial.color.getHex()).toBe(0xff4400);
   });
 
   it('returns unresolved entity IDs in deterministic ascending order', async () => {

@@ -6484,6 +6484,8 @@ export class GameLogicSubsystem implements Subsystem {
       veterancyLevel: entity.experienceState.currentLevel,
       isStealthed: entity.objectStatusFlags.has('STEALTHED'),
       isDetected: entity.objectStatusFlags.has('DETECTED'),
+      scriptFlashCount: entity.scriptFlashCount,
+      scriptFlashColor: entity.scriptFlashColor,
       shroudStatus: this.resolveEntityShroudStatusForLocalPlayer(entity),
       constructionPercent: entity.constructionPercent,
       toppleAngle: entity.toppleAngularAccumulation,
