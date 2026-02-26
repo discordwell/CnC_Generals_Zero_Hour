@@ -312,6 +312,55 @@ describe('script camera runtime bridge', () => {
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 
+  it('orients camera along waypoint path direction and honors ROLLING_AVERAGE smoothing', () => {
+    const baseLogic = new RecordingGameLogic();
+    const baseCamera = new RecordingCameraController();
+    const baseBridge = createScriptCameraRuntimeBridge({ gameLogic: baseLogic, cameraController: baseCamera });
+    baseLogic.state.waypointPaths.set('CAM_TURN', [
+      { x: 100, z: 0 },
+      { x: 100, z: 100 },
+    ]);
+    baseLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_TURN',
+      x: 100,
+      z: 100,
+      durationMs: 1000,
+    }));
+    baseBridge.syncAfterSimulationStep(1);
+    baseBridge.syncAfterSimulationStep(16);
+    const unsmoothedAngle = baseCamera.getState().angle;
+
+    const smoothedLogic = new RecordingGameLogic();
+    const smoothedCamera = new RecordingCameraController();
+    const smoothedBridge = createScriptCameraRuntimeBridge({
+      gameLogic: smoothedLogic,
+      cameraController: smoothedCamera,
+    });
+    smoothedLogic.state.waypointPaths.set('CAM_TURN', [
+      { x: 100, z: 0 },
+      { x: 100, z: 100 },
+    ]);
+    smoothedLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_TURN',
+      x: 100,
+      z: 100,
+      durationMs: 1000,
+    }));
+    smoothedLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'ROLLING_AVERAGE',
+      rollingAverageFrames: 4,
+    }));
+    smoothedBridge.syncAfterSimulationStep(1);
+    smoothedBridge.syncAfterSimulationStep(16);
+    const smoothedAngle = smoothedCamera.getState().angle;
+
+    expect(unsmoothedAngle).toBeCloseTo(0, 2);
+    expect(smoothedAngle).toBeLessThan(0);
+    expect(smoothedAngle).toBeGreaterThan(-Math.PI / 2);
+  });
+
   it('applies ROTATE requests over the scripted duration', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();

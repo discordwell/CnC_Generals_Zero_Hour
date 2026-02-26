@@ -182,25 +182,28 @@ function toShutterFrames(cameraStutterMs: number): number {
   return Math.max(1, Math.trunc((normalizedMs * 30) / 1000));
 }
 
-function getStutteredLinearProgress(
+function getStutteredProgressState(
   currentLogicFrame: number,
   startFrame: number,
   durationFrames: number,
   shutterFrames: number,
-): number {
+): { linearProgress: number; advancedThisFrame: boolean } {
   const elapsedFrames = currentLogicFrame - startFrame + 1;
   if (elapsedFrames <= 0) {
-    return 0;
+    return { linearProgress: 0, advancedThisFrame: false };
   }
   if (elapsedFrames >= durationFrames) {
-    return 1;
+    return { linearProgress: 1, advancedThisFrame: true };
   }
   const normalizedShutterFrames = Math.max(1, shutterFrames);
   if (elapsedFrames < normalizedShutterFrames) {
-    return 0;
+    return { linearProgress: 0, advancedThisFrame: false };
   }
   const sampledElapsedFrames = Math.trunc(elapsedFrames / normalizedShutterFrames) * normalizedShutterFrames;
-  return sampledElapsedFrames / durationFrames;
+  return {
+    linearProgress: sampledElapsedFrames / durationFrames,
+    advancedThisFrame: elapsedFrames % normalizedShutterFrames === 0,
+  };
 }
 
 function clamp01(value: number): number {
@@ -268,7 +271,7 @@ function evaluateTargetTransition(
   transition: TargetTransition,
   currentLogicFrame: number,
 ): { x: number; z: number } {
-  const linearProgress = getStutteredLinearProgress(
+  const { linearProgress } = getStutteredProgressState(
     currentLogicFrame,
     transition.startFrame,
     transition.durationFrames,
@@ -284,8 +287,8 @@ function evaluateTargetTransition(
 function evaluateWaypointPathTransition(
   transition: WaypointPathTransition,
   currentLogicFrame: number,
-): { x: number; z: number } {
-  const linearProgress = getStutteredLinearProgress(
+): { x: number; z: number; segmentIndex: number; segmentProgress: number; headingAngle: number | null; advancedThisFrame: boolean } {
+  const { linearProgress, advancedThisFrame } = getStutteredProgressState(
     currentLogicFrame,
     transition.startFrame,
     transition.durationFrames,
@@ -297,10 +300,29 @@ function evaluateWaypointPathTransition(
   const cumulativeDistances = transition.cumulativeDistances;
   const lastPoint = points[points.length - 1]!;
   if (travelledDistance <= 0) {
-    return { x: points[0]!.x, z: points[0]!.z };
+    const headingAngle = points.length > 1
+      ? resolveLookTowardAngle(points[0]!.x, points[0]!.z, points[1]!.x, points[1]!.z)
+      : null;
+    return {
+      x: points[0]!.x,
+      z: points[0]!.z,
+      segmentIndex: 1,
+      segmentProgress: 0,
+      headingAngle,
+      advancedThisFrame,
+    };
   }
   if (travelledDistance >= transition.totalDistance) {
-    return { x: lastPoint.x, z: lastPoint.z };
+    const prevPoint = points[Math.max(0, points.length - 2)]!;
+    const headingAngle = resolveLookTowardAngle(prevPoint.x, prevPoint.z, lastPoint.x, lastPoint.z);
+    return {
+      x: lastPoint.x,
+      z: lastPoint.z,
+      segmentIndex: Math.max(1, points.length - 1),
+      segmentProgress: 1,
+      headingAngle,
+      advancedThisFrame,
+    };
   }
 
   for (let i = 1; i < cumulativeDistances.length; i += 1) {
@@ -312,18 +334,41 @@ function evaluateWaypointPathTransition(
     const segmentLength = segmentEndDistance - segmentStartDistance;
     if (segmentLength <= 0) {
       const point = points[i]!;
-      return { x: point.x, z: point.z };
+      const previous = points[Math.max(0, i - 1)]!;
+      const headingAngle = resolveLookTowardAngle(previous.x, previous.z, point.x, point.z);
+      return {
+        x: point.x,
+        z: point.z,
+        segmentIndex: i,
+        segmentProgress: 1,
+        headingAngle,
+        advancedThisFrame,
+      };
     }
     const segmentProgress = (travelledDistance - segmentStartDistance) / segmentLength;
     const start = points[i - 1]!;
     const end = points[i]!;
+    const headingAngle = resolveLookTowardAngle(start.x, start.z, end.x, end.z);
     return {
       x: start.x + (end.x - start.x) * segmentProgress,
       z: start.z + (end.z - start.z) * segmentProgress,
+      segmentIndex: i,
+      segmentProgress,
+      headingAngle,
+      advancedThisFrame,
     };
   }
 
-  return { x: lastPoint.x, z: lastPoint.z };
+  const prevPoint = points[Math.max(0, points.length - 2)]!;
+  const headingAngle = resolveLookTowardAngle(prevPoint.x, prevPoint.z, lastPoint.x, lastPoint.z);
+  return {
+    x: lastPoint.x,
+    z: lastPoint.z,
+    segmentIndex: Math.max(1, points.length - 1),
+    segmentProgress: 1,
+    headingAngle,
+    advancedThisFrame,
+  };
 }
 
 function isTransitionComplete(
@@ -397,6 +442,7 @@ export function createScriptCameraRuntimeBridge(
   let freezeTimeForMovement = false;
   let cameraTimeMultiplier = 1;
   let timeMultiplierTransition: ScalarTransition | null = null;
+  let waypointPathRollingAverageFrames = 1;
   let lastCameraLockSignature: string | null = null;
   let lastLookTowardObjectSignature: string | null = null;
   let lastLookTowardWaypointSignature: string | null = null;
@@ -434,6 +480,7 @@ export function createScriptCameraRuntimeBridge(
     shutterFrames = 1,
   ): void => {
     const state = cameraController.getState();
+    waypointPathRollingAverageFrames = 1;
     const points: Array<{ x: number; z: number }> = [
       { x: state.targetX, z: state.targetZ },
       ...pathPoints.map((point) => ({ x: point.x, z: point.z })),
@@ -570,10 +617,21 @@ export function createScriptCameraRuntimeBridge(
     }
 
     if (waypointPathTransition) {
-      const interpolated = evaluateWaypointPathTransition(waypointPathTransition, currentLogicFrame);
-      nextTargetX = interpolated.x;
-      nextTargetZ = interpolated.z;
+      const pathSample = evaluateWaypointPathTransition(waypointPathTransition, currentLogicFrame);
+      nextTargetX = pathSample.x;
+      nextTargetZ = pathSample.z;
       stateChanged = true;
+      if (!angleTransition && pathSample.advancedThisFrame && pathSample.headingAngle !== null) {
+        const rollingAverageFrames = Math.max(1, waypointPathRollingAverageFrames);
+        let avgFactor = 1 / rollingAverageFrames;
+        if (pathSample.segmentIndex === waypointPathTransition.points.length - 1) {
+          avgFactor = avgFactor + ((1 - avgFactor) * pathSample.segmentProgress);
+        }
+        let deltaAngle = pathSample.headingAngle - nextAngle;
+        deltaAngle = normalizeAngle(deltaAngle);
+        nextAngle = normalizeAngle(nextAngle + (avgFactor * deltaAngle));
+        stateChanged = true;
+      }
       if (isTransitionComplete(waypointPathTransition, currentLogicFrame)) {
         waypointPathTransition = null;
       }
@@ -934,7 +992,10 @@ export function createScriptCameraRuntimeBridge(
           break;
         }
         case 'ROLLING_AVERAGE':
-          // Source-parity TODO: camera movement rolling-average smoothing is not yet wired.
+          waypointPathRollingAverageFrames = Math.max(
+            1,
+            Math.trunc(request.rollingAverageFrames ?? 1),
+          );
           break;
       }
     }
