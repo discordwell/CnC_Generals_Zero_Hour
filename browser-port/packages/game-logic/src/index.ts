@@ -37670,6 +37670,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!passenger || !transport || passenger.destroyed || transport.destroyed) {
       return;
     }
+    // Source parity: ActionManager::canEnterObject — cannot enter self.
+    if (passenger.id === transport.id) return;
 
     // Source parity: OpenContain::addToContain — cannot enter if already contained.
     if (this.isEntityContained(passenger)) return;
@@ -37796,6 +37798,10 @@ export class GameLogicSubsystem implements Subsystem {
       const passenger = this.spawnedEntities.get(passengerId);
       const transport = this.spawnedEntities.get(transportId);
       if (!passenger || !transport || passenger.destroyed || transport.destroyed) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+      if (passenger.id === transport.id) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }

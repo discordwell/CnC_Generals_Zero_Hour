@@ -34565,6 +34565,39 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('does not allow script enter actions to enter an object into itself', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            ContainMax: 2,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TroopTransport', 20, 20)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [1, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(1)?.transportContainerId).toBeNull();
+  });
+
   it('resets locomotor to normal for script named enter/exit and team load-transports actions', () => {
     const bundle = makeBundle({
       objects: [
