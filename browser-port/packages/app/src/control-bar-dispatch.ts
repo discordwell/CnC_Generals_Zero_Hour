@@ -24,6 +24,7 @@ type ControlBarDispatchGameLogic = Pick<
   | 'getAttackMoveDistanceForEntity'
   | 'getEntityIdsByTemplateAndSide'
   | 'getPlayerSide'
+  | 'getProductionState'
   | 'getLocalPlayerSciencePurchasePoints'
   | 'getLocalPlayerDisabledScienceNames'
   | 'getLocalPlayerHiddenScienceNames'
@@ -1040,16 +1041,22 @@ export function dispatchIssuedControlBarCommands(
           break;
         }
         const contextPayload = resolveContextCommandPayload(command.contextPayload);
-        if (contextPayload.productionId === null) {
+        let productionId = contextPayload.productionId;
+        if (productionId === null) {
+          const productionState = gameLogic.getProductionState(selectedEntityId);
+          const queuedUnit = productionState?.queue.find((entry) => entry.type === 'UNIT');
+          productionId = queuedUnit?.productionId ?? null;
+        }
+        if (productionId === null) {
           uiRuntime.showMessage(
-            `TODO: ${command.sourceButtonId} cancel unit build needs a queued production id context to dispatch.`,
+            'Cancel Unit Build requires queued unit production context to dispatch.',
           );
           break;
         }
         gameLogic.submitCommand({
           type: 'cancelUnitProduction',
           entityId: selectedEntityId,
-          productionId: contextPayload.productionId,
+          productionId,
         });
         playCommandAudio();
         break;
@@ -1078,10 +1085,19 @@ export function dispatchIssuedControlBarCommands(
           break;
         }
         const contextPayload = resolveContextCommandPayload(command.contextPayload);
-        const upgradeName = contextPayload.upgradeName;
+        let upgradeName = contextPayload.upgradeName;
+        if (!upgradeName) {
+          const upgradeFromCommandButton = resolveRequiredCommandButtonToken(commandButton, 'Upgrade');
+          upgradeName = upgradeFromCommandButton ? upgradeFromCommandButton.trim().toUpperCase() : null;
+        }
+        if (!upgradeName) {
+          const productionState = gameLogic.getProductionState(selectedEntityId);
+          const queuedUpgrade = productionState?.queue.find((entry) => entry.type === 'UPGRADE');
+          upgradeName = queuedUpgrade?.upgradeName.trim().toUpperCase() ?? null;
+        }
         if (!upgradeName) {
           uiRuntime.showMessage(
-            `TODO: ${command.sourceButtonId} cancel upgrade needs queued upgrade context to dispatch.`,
+            'Cancel Upgrade requires queued upgrade context to dispatch.',
           );
           break;
         }

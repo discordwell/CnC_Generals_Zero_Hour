@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AudioManager } from '@generals/audio';
-import { GuardMode, type GameLogicCommand } from '@generals/game-logic';
+import { GuardMode, type GameLogicCommand, type GameLogicSubsystem } from '@generals/game-logic';
 import { IniDataRegistry } from '@generals/ini-data';
 import { CommandOption, GUICommandType, type IssuedControlBarCommand } from '@generals/ui';
 
@@ -29,6 +29,7 @@ class FakeGameLogic {
   localPlayerSciencePurchasePoints = 0;
   disabledScienceNames: string[] = [];
   hiddenScienceNames: string[] = [];
+  private readonly productionStateByEntityId = new Map<number, ReturnType<GameLogicSubsystem['getProductionState']>>();
   private readonly entityTemplateById = new Map<number, string>();
   private readonly entitySideById = new Map<number, string>();
   private readonly attackMoveDistanceByEntity = new Map<number, number>();
@@ -89,6 +90,10 @@ class FakeGameLogic {
     return [...this.hiddenScienceNames];
   }
 
+  getProductionState(entityId: number): ReturnType<GameLogicSubsystem['getProductionState']> {
+    return this.productionStateByEntityId.get(entityId) ?? null;
+  }
+
   resolveShortcutSpecialPowerSourceEntityId(specialPowerName: string): number | null {
     return this.shortcutSpecialPowerSourceByName.get(
       specialPowerName.trim().toUpperCase(),
@@ -122,6 +127,13 @@ class FakeGameLogic {
       specialPowerName.trim().toUpperCase(),
       entityId,
     );
+  }
+
+  setProductionState(
+    entityId: number,
+    state: NonNullable<ReturnType<GameLogicSubsystem['getProductionState']>>,
+  ): void {
+    this.productionStateByEntityId.set(entityId, state);
   }
 
   submitCommand(command: GameLogicCommand): void {
@@ -545,7 +557,61 @@ describe('dispatchIssuedControlBarCommands', () => {
     ]);
   });
 
-  it('shows TODO guidance for CANCEL_UNIT_BUILD without queue context', () => {
+  it('dispatches CANCEL_UNIT_BUILD from queued unit production when queue context is missing', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUnitBuild', {
+        Command: 'CANCEL_UNIT_BUILD',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.setProductionState(8, {
+      queueEntryCount: 1,
+      queue: [
+        {
+          type: 'UNIT',
+          unitTemplateName: 'AmericaTankCrusader',
+          productionId: 14,
+          buildCost: 900,
+          totalProductionFrames: 300,
+          framesUnderConstruction: 150,
+          percentComplete: 50,
+          productionQuantityTotal: 1,
+          productionQuantityProduced: 0,
+        },
+      ],
+    });
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CancelUnitBuild',
+          GUICommandType.GUI_COMMAND_CANCEL_UNIT_BUILD,
+          {
+            selectedObjectIds: [8],
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'cancelUnitProduction',
+        entityId: 8,
+        productionId: 14,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('shows guidance for CANCEL_UNIT_BUILD without queue context or queued unit production', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_CancelUnitBuild', {
@@ -575,7 +641,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_CancelUnitBuild cancel unit build needs a queued production id context to dispatch.',
+      'Cancel Unit Build requires queued unit production context to dispatch.',
     ]);
   });
 
@@ -717,7 +783,91 @@ describe('dispatchIssuedControlBarCommands', () => {
     ]);
   });
 
-  it('shows TODO guidance for CANCEL_UPGRADE without queued upgrade context', () => {
+  it('dispatches CANCEL_UPGRADE from command-button Upgrade field when queue context is missing', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUpgrade', {
+        Command: 'CANCEL_UPGRADE',
+        Upgrade: 'Upgrade_Garrison',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_CancelUpgrade', GUICommandType.GUI_COMMAND_CANCEL_UPGRADE, {
+          selectedObjectIds: [6],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'cancelUpgradeProduction',
+        entityId: 6,
+        upgradeName: 'UPGRADE_GARRISON',
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('dispatches CANCEL_UPGRADE from queued upgrade when queue context and Upgrade field are missing', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CancelUpgrade', {
+        Command: 'CANCEL_UPGRADE',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.setProductionState(6, {
+      queueEntryCount: 1,
+      queue: [
+        {
+          type: 'UPGRADE',
+          upgradeName: 'Upgrade_CompositeArmor',
+          productionId: 22,
+          buildCost: 2500,
+          totalProductionFrames: 450,
+          framesUnderConstruction: 180,
+          percentComplete: 40,
+          upgradeType: 'OBJECT',
+        },
+      ],
+    });
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_CancelUpgrade', GUICommandType.GUI_COMMAND_CANCEL_UPGRADE, {
+          selectedObjectIds: [6],
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([
+      {
+        type: 'cancelUpgradeProduction',
+        entityId: 6,
+        upgradeName: 'UPGRADE_COMPOSITEARMOR',
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('shows guidance for CANCEL_UPGRADE without queued upgrade context', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_CancelUpgrade', {
@@ -743,7 +893,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_CancelUpgrade cancel upgrade needs queued upgrade context to dispatch.',
+      'Cancel Upgrade requires queued upgrade context to dispatch.',
     ]);
   });
 
