@@ -17412,6 +17412,7 @@ export class GameLogicSubsystem implements Subsystem {
         type: 'enterTransport',
         entityId: entity.id,
         targetTransportId: tunnel.id,
+        commandSource: 'SCRIPT',
       });
       issuedAny = true;
     }
@@ -17844,6 +17845,7 @@ export class GameLogicSubsystem implements Subsystem {
       type: 'enterTransport',
       entityId: entity.id,
       targetTransportId: container.id,
+      commandSource: 'SCRIPT',
     });
     return true;
   }
@@ -19831,6 +19833,7 @@ export class GameLogicSubsystem implements Subsystem {
         type: 'enterTransport',
         entityId: unit.id,
         targetTransportId: transport.id,
+        commandSource: 'SCRIPT',
       });
     }
     return true;
@@ -37583,6 +37586,27 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  /**
+   * Source parity: ActionManager::isObjectShroudedForAction gate used by canEnterObject.
+   */
+  private isContainerEnterTargetShrouded(
+    source: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
+    if (commandSource !== 'PLAYER') {
+      return false;
+    }
+    const sourceSide = this.normalizeSide(source.side);
+    if (!sourceSide) {
+      return false;
+    }
+    if (this.getSidePlayerType(sourceSide) !== 'HUMAN') {
+      return false;
+    }
+    return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
+  }
+
   private handleGarrisonBuildingCommand(command: GarrisonBuildingCommand): void {
     const infantry = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
@@ -37670,9 +37694,11 @@ export class GameLogicSubsystem implements Subsystem {
     if (!passenger || !transport || passenger.destroyed || transport.destroyed) {
       return;
     }
+    const commandSource = command.commandSource ?? 'PLAYER';
     // Source parity: ActionManager::canEnterObject — cannot enter self.
     if (passenger.id === transport.id) return;
     if (this.isScriptEntityEffectivelyDead(passenger) || this.isScriptEntityEffectivelyDead(transport)) return;
+    if (this.isContainerEnterTargetShrouded(passenger, transport, commandSource)) return;
 
     // Source parity: OpenContain::addToContain — cannot enter if already contained.
     if (this.isEntityContained(passenger)) return;
@@ -40359,7 +40385,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (!memberEntity || memberEntity.destroyed) continue;
       if (!this.isEntityContained(memberEntity)) {
         // Order member to re-enter transport.
-        this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: entityId });
+        this.commandQueue.push({
+          type: 'enterTransport',
+          entityId: member.entityId,
+          targetTransportId: entityId,
+          commandSource: 'AI',
+        });
       }
     }
     this.assaultTransportStateByEntityId.delete(entityId);
@@ -40436,7 +40467,12 @@ export class GameLogicSubsystem implements Subsystem {
         for (const member of state.members) {
           const memberEntity = this.spawnedEntities.get(member.entityId);
           if (memberEntity && !memberEntity.destroyed && !this.isEntityContained(memberEntity)) {
-            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+            this.commandQueue.push({
+              type: 'enterTransport',
+              entityId: member.entityId,
+              targetTransportId: transportId,
+              commandSource: 'AI',
+            });
           }
         }
         state.designatedTargetId = null;
@@ -40470,7 +40506,12 @@ export class GameLogicSubsystem implements Subsystem {
           } else if (!contained && isWounded) {
             // Recall wounded members.
             member.isHealing = true;
-            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+            this.commandQueue.push({
+              type: 'enterTransport',
+              entityId: member.entityId,
+              targetTransportId: transportId,
+              commandSource: 'AI',
+            });
           } else if (!contained && !isWounded) {
             // Order healthy outside members to attack target.
             member.isHealing = false;
@@ -40486,7 +40527,12 @@ export class GameLogicSubsystem implements Subsystem {
           const memberEntity = this.spawnedEntities.get(member.entityId);
           if (!memberEntity || memberEntity.destroyed) continue;
           if (!this.isEntityContained(memberEntity)) {
-            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+            this.commandQueue.push({
+              type: 'enterTransport',
+              entityId: member.entityId,
+              targetTransportId: transportId,
+              commandSource: 'AI',
+            });
           }
         }
         state.designatedTargetId = null;
@@ -40506,7 +40552,12 @@ export class GameLogicSubsystem implements Subsystem {
           const memberEntity = this.spawnedEntities.get(member.entityId);
           if (!memberEntity || memberEntity.destroyed) continue;
           if (!this.isEntityContained(memberEntity)) {
-            this.commandQueue.push({ type: 'enterTransport', entityId: member.entityId, targetTransportId: transportId });
+            this.commandQueue.push({
+              type: 'enterTransport',
+              entityId: member.entityId,
+              targetTransportId: transportId,
+              commandSource: 'AI',
+            });
           }
         }
         state.isAttackObject = false;
@@ -42887,6 +42938,7 @@ export class GameLogicSubsystem implements Subsystem {
           type: 'enterTransport',
           entityId: entity.id,
           targetTransportId: closestHealPad.id,
+          commandSource: 'AI',
         });
       }
     }

@@ -422,6 +422,7 @@ export interface EnterTransportCommand {
   type: 'enterTransport';
   entityId: number;
   targetTransportId: number;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export type GameLogicCommand =

@@ -34598,6 +34598,62 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.transportContainerId).toBeNull();
   });
 
+  it('blocks human player enter-transport on shrouded targets but allows script enter actions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('OpenBunker', 'GLA', ['STRUCTURE'], [
+          makeBlock('Behavior', 'OpenContain ModuleTag_Contain', {
+            ContainMax: 2,
+            AllowAlliesInside: true,
+            AllowEnemiesInside: true,
+            AllowNeutralInside: true,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          VisionRange: 30,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('OpenBunker', 200, 200), // id 1
+        makeMapObject('Ranger', 10, 10), // id 2
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+
+    const privateApi = logic as unknown as {
+      pendingTransportActions: Map<number, number>;
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+      }>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    expect(privateApi.pendingTransportActions.has(2)).toBe(false);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.pendingTransportActions.has(2)).toBe(true);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+  });
+
   it('blocks script enter into HEAL contain when source health is full', () => {
     const bundle = makeBundle({
       objects: [
