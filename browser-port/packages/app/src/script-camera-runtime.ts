@@ -557,7 +557,6 @@ export function createScriptCameraRuntimeBridge(
   let timeMultiplierTransition: ScalarTransition | null = null;
   let waypointPathRollingAverageFrames = 1;
   let frozenWaypointPathAngle: number | null = null;
-  let waypointPathLookTowardTarget: { x: number; z: number; finalOnly: boolean } | null = null;
   let lastCameraLockSignature: string | null = null;
   let lastLookTowardObjectSignature: string | null = null;
   let lastLookTowardWaypointSignature: string | null = null;
@@ -573,7 +572,6 @@ export function createScriptCameraRuntimeBridge(
   ): void => {
     const state = cameraController.getState();
     frozenWaypointPathAngle = null;
-    waypointPathLookTowardTarget = null;
     waypointPathTransition = null;
     targetTransition = {
       startFrame: currentLogicFrame,
@@ -598,7 +596,6 @@ export function createScriptCameraRuntimeBridge(
   ): void => {
     const state = cameraController.getState();
     frozenWaypointPathAngle = null;
-    waypointPathLookTowardTarget = null;
     waypointPathRollingAverageFrames = 1;
     const points: Array<{ x: number; z: number }> = [{ x: state.targetX, z: state.targetZ }];
     for (let i = 0; i < pathPoints.length; i += 1) {
@@ -795,36 +792,7 @@ export function createScriptCameraRuntimeBridge(
           nextAngle = frozenWaypointPathAngle;
           stateChanged = true;
         } else {
-          let desiredHeading = pathSample.headingAngle;
-          if (waypointPathLookTowardTarget) {
-            const lastSegmentIndex = waypointPathTransition.points.length - 1;
-            const firstFinalLookSegmentIndex = Math.max(1, lastSegmentIndex - 1);
-            if (
-              !waypointPathLookTowardTarget.finalOnly
-              || pathSample.segmentIndex >= firstFinalLookSegmentIndex
-            ) {
-              const lookTowardHeading = resolveLookTowardAngle(
-                pathSample.x,
-                pathSample.z,
-                waypointPathLookTowardTarget.x,
-                waypointPathLookTowardTarget.z,
-              );
-              if (lookTowardHeading !== null) {
-                if (
-                  waypointPathLookTowardTarget.finalOnly
-                  && pathSample.segmentIndex === firstFinalLookSegmentIndex
-                  && firstFinalLookSegmentIndex !== lastSegmentIndex
-                ) {
-                  // Source parity: FINAL_LOOK_TOWARD blends penultimate segment heading.
-                  let deltaToLookToward = normalizeAngle(lookTowardHeading - desiredHeading);
-                  deltaToLookToward *= 0.5;
-                  desiredHeading = normalizeAngle(desiredHeading + deltaToLookToward);
-                } else {
-                  desiredHeading = lookTowardHeading;
-                }
-              }
-            }
-          }
+          const desiredHeading = pathSample.headingAngle;
           const rollingAverageFrames = Math.max(1, waypointPathRollingAverageFrames);
           let avgFactor = 1 / rollingAverageFrames;
           if (pathSample.segmentIndex === waypointPathTransition.points.length - 1) {
@@ -842,7 +810,6 @@ export function createScriptCameraRuntimeBridge(
       if (isTransitionComplete(waypointPathTransition, currentLogicFrame)) {
         waypointPathTransition = null;
         frozenWaypointPathAngle = null;
-        waypointPathLookTowardTarget = null;
       }
     }
 
@@ -1012,7 +979,6 @@ export function createScriptCameraRuntimeBridge(
           targetTransition = null;
           waypointPathTransition = null;
           frozenWaypointPathAngle = null;
-          waypointPathLookTowardTarget = null;
           angleTransition = null;
           zoomTransition = null;
           pitchTransition = null;
@@ -1134,10 +1100,34 @@ export function createScriptCameraRuntimeBridge(
             break;
           }
           if (waypointPathTransition) {
-            waypointPathLookTowardTarget = {
-              x: request.x,
-              z: request.z,
-              finalOnly: request.requestType === 'FINAL_LOOK_TOWARD',
+            const lastPointIndex = waypointPathTransition.points.length - 1;
+            const isFinalLookToward = request.requestType === 'FINAL_LOOK_TOWARD';
+            const firstPointIndex = isFinalLookToward
+              ? Math.max(1, lastPointIndex - 1)
+              : 1;
+            const cameraAngles = [...waypointPathTransition.cameraAngles];
+            for (let pointIndex = firstPointIndex; pointIndex <= lastPointIndex; pointIndex += 1) {
+              const lookSample = sampleWaypointPathCurve(waypointPathTransition.points, pointIndex, 0);
+              const lookTowardHeading = resolveLookTowardAngle(
+                lookSample.x,
+                lookSample.z,
+                request.x,
+                request.z,
+              );
+              if (lookTowardHeading === null) {
+                continue;
+              }
+              if (isFinalLookToward && pointIndex < lastPointIndex) {
+                const currentAngle = cameraAngles[pointIndex] ?? lookTowardHeading;
+                const deltaAngle = normalizeAngle(lookTowardHeading - currentAngle);
+                cameraAngles[pointIndex] = normalizeAngle(currentAngle + (deltaAngle * 0.5));
+              } else {
+                cameraAngles[pointIndex] = lookTowardHeading;
+              }
+            }
+            waypointPathTransition = {
+              ...waypointPathTransition,
+              cameraAngles,
             };
             // Keep request order semantics: later look-toward overrides earlier FREEZE_ANGLE.
             frozenWaypointPathAngle = null;

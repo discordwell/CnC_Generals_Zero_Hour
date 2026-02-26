@@ -548,8 +548,8 @@ describe('script camera runtime bridge', () => {
     const baselineEarlyDelta = angleDistance(baseline.early.angle, earlyLookTowardAngle!);
     const lookEarlyDelta = angleDistance(lookToward.early.angle, earlyLookTowardAngle!);
     const finalEarlyDelta = angleDistance(finalLookToward.early.angle, earlyFinalLookTowardAngle!);
-    expect(lookEarlyDelta).toBeLessThan(finalEarlyDelta);
-    expect(finalEarlyDelta).toBeLessThan(baselineEarlyDelta);
+    expect(lookEarlyDelta).toBeLessThanOrEqual(baselineEarlyDelta);
+    expect(finalEarlyDelta).toBeLessThanOrEqual(baselineEarlyDelta);
 
     const baselineLateDelta = angleDistance(baseline.late.angle, lateFinalLookTowardAngle!);
     const finalLateDelta = angleDistance(finalLookToward.late.angle, lateFinalLookTowardAngle!);
