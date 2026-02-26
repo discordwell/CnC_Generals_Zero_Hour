@@ -9668,6 +9668,171 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     });
   });
 
+  it('enforces black-lotus steal-cash target visibility and kind restrictions when enum is set', () => {
+    const logic = new GameLogicSubsystem();
+
+    const lotusDef = makeObjectDef('BlackLotus', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      makeBlock('Behavior', 'CashHackSpecialPower CashHackModule', {
+        SpecialPowerTemplate: 'SpecialPowerLotusCashHack',
+      }),
+    ]);
+    const enemyCashDef = makeObjectDef('EnemyCash', 'America', ['STRUCTURE', 'CAPTURABLE', 'CASH_GENERATOR'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [lotusDef, enemyCashDef],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerLotusCashHack', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_BLACKLOTUS_STEAL_CASH_HACK',
+        }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([makeMapObject('BlackLotus', 10, 10), makeMapObject('EnemyCash', 20, 10)], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'China', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const target = priv.spawnedEntities.get(2)!;
+    target.objectStatusFlags.add('STEALTHED');
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_LOTUS_STEAL_STEALTHED',
+      specialPowerName: 'SpecialPowerLotusCashHack',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    target.objectStatusFlags.add('DETECTED');
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_LOTUS_STEAL_DETECTED',
+      specialPowerName: 'SpecialPowerLotusCashHack',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'OBJECT',
+      targetEntityId: 2,
+    });
+  });
+
+  it('enforces black-lotus disable-vehicle-hack target class and stealth restrictions when enum is set', () => {
+    const logic = new GameLogicSubsystem();
+
+    const lotusDef = makeObjectDef('BlackLotus', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      makeBlock('Behavior', 'SpecialPowerModule DisableVehicleModule', {
+        SpecialPowerTemplate: 'SpecialPowerLotusDisableVehicle',
+      }),
+    ]);
+    const enemyAirDef = makeObjectDef('EnemyAirVehicle', 'America', ['VEHICLE', 'AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+    ]);
+    const enemyGroundDef = makeObjectDef('EnemyGroundVehicle', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [lotusDef, enemyAirDef, enemyGroundDef],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerLotusDisableVehicle', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK',
+        }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BlackLotus', 10, 10),
+        makeMapObject('EnemyAirVehicle', 20, 10),
+        makeMapObject('EnemyGroundVehicle', 24, 10),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'China', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_LOTUS_DISABLE_AIR',
+      specialPowerName: 'SpecialPowerLotusDisableVehicle',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const groundTarget = priv.spawnedEntities.get(3)!;
+    groundTarget.objectStatusFlags.add('STEALTHED');
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_LOTUS_DISABLE_STEALTHED',
+      specialPowerName: 'SpecialPowerLotusDisableVehicle',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 3,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    groundTarget.objectStatusFlags.add('DETECTED');
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_LOTUS_DISABLE_DETECTED',
+      specialPowerName: 'SpecialPowerLotusDisableVehicle',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 3,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'OBJECT',
+      targetEntityId: 3,
+    });
+  });
+
   it('blocks object-target special powers against effectively dead targets', () => {
     const bundle = makeBundle({
       objects: [

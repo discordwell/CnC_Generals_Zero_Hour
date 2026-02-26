@@ -36078,6 +36078,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const targetKindOf = this.resolveEntityKindOfSet(target);
     const relationship = this.getTeamRelationship(source, target);
+    const targetStealthedUndetected = target.objectStatusFlags.has('STEALTHED')
+      && !target.objectStatusFlags.has('DETECTED');
 
     switch (specialPowerEnum) {
       case 'SPECIAL_TANKHUNTER_TNT_ATTACK':
@@ -36097,6 +36099,19 @@ export class GameLogicSubsystem implements Subsystem {
           && targetKindOf.has('CASH_GENERATOR')
           && !targetKindOf.has('REBUILD_HOLE')
           && !target.objectStatusFlags.has('UNDER_CONSTRUCTION');
+      case 'SPECIAL_BLACKLOTUS_STEAL_CASH_HACK':
+        return relationship === RELATIONSHIP_ENEMIES
+          && targetKindOf.has('CASH_GENERATOR')
+          && targetKindOf.has('CAPTURABLE')
+          && !targetKindOf.has('REBUILD_HOLE')
+          && !target.objectStatusFlags.has('UNDER_CONSTRUCTION')
+          && !targetStealthedUndetected;
+      case 'SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK':
+        return relationship === RELATIONSHIP_ENEMIES
+          && targetKindOf.has('VEHICLE')
+          && !targetKindOf.has('AIRCRAFT')
+          && !this.entityHasObjectStatus(target, 'AIRBORNE_TARGET')
+          && !targetStealthedUndetected;
       case 'SPECIAL_DISGUISE_AS_VEHICLE':
         return targetKindOf.has('VEHICLE')
           && !targetKindOf.has('AIRCRAFT')
