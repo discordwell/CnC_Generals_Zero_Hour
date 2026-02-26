@@ -36064,6 +36064,50 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: appearsToContainFriendlies(ActionManager.cpp) —
+   * only stealth-contained passengers can spoof apparent allegiance.
+   */
+  private doesSpecialPowerTargetAppearToContainFriendlies(source: MapEntity, target: MapEntity): boolean {
+    if (!target.containProfile) {
+      return false;
+    }
+    for (const passengerId of this.collectContainedEntityIds(target.id)) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        continue;
+      }
+      if (!passenger.objectStatusFlags.has('STEALTHED')) {
+        continue;
+      }
+      if (this.getTeamRelationship(source, passenger) !== RELATIONSHIP_ENEMIES) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Source parity: canCaptureBuilding() garrison gate —
+   * capture is blocked when a garrisonable building has any non-stealth occupants.
+   */
+  private isCaptureBlockedByGarrisonOccupants(target: MapEntity): boolean {
+    const profile = target.containProfile;
+    if (!profile || profile.garrisonCapacity <= 0) {
+      return false;
+    }
+    for (const passengerId of this.collectContainedEntityIds(target.id)) {
+      const passenger = this.spawnedEntities.get(passengerId);
+      if (!passenger || passenger.destroyed) {
+        continue;
+      }
+      if (!passenger.objectStatusFlags.has('STEALTHED')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Source parity: ActionManager::canDoSpecialPowerAtObject.
    * Applies enum-specific object-target legality checks before dispatch.
    */
@@ -36092,6 +36136,28 @@ export class GameLogicSubsystem implements Subsystem {
           && relationship === RELATIONSHIP_ENEMIES
           && targetKindOf.has('CAPTURABLE')
           && !targetKindOf.has('REBUILD_HOLE');
+      case 'SPECIAL_INFANTRY_CAPTURE_BUILDING':
+      case 'SPECIAL_BLACKLOTUS_CAPTURE_BUILDING':
+        if (targetKindOf.has('IMMUNE_TO_CAPTURE')) {
+          return false;
+        }
+        if (!targetKindOf.has('STRUCTURE')) {
+          return false;
+        }
+        if (target.objectStatusFlags.has('UNDER_CONSTRUCTION') || target.objectStatusFlags.has('SOLD')) {
+          return false;
+        }
+        if (targetStealthedUndetected) {
+          return false;
+        }
+        if (this.isCaptureBlockedByGarrisonOccupants(target)) {
+          return false;
+        }
+        if (this.doesSpecialPowerTargetAppearToContainFriendlies(source, target)) {
+          return false;
+        }
+        return relationship === RELATIONSHIP_ENEMIES
+          || (targetKindOf.has('CAPTURABLE') && relationship !== RELATIONSHIP_ALLIES);
       case 'SPECIAL_CASH_HACK':
         return targetKindOf.has('STRUCTURE')
           && relationship === RELATIONSHIP_ENEMIES
@@ -36105,13 +36171,15 @@ export class GameLogicSubsystem implements Subsystem {
           && targetKindOf.has('CAPTURABLE')
           && !targetKindOf.has('REBUILD_HOLE')
           && !target.objectStatusFlags.has('UNDER_CONSTRUCTION')
-          && !targetStealthedUndetected;
+          && !targetStealthedUndetected
+          && !this.doesSpecialPowerTargetAppearToContainFriendlies(source, target);
       case 'SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK':
         return relationship === RELATIONSHIP_ENEMIES
           && targetKindOf.has('VEHICLE')
           && !targetKindOf.has('AIRCRAFT')
           && !this.entityHasObjectStatus(target, 'AIRBORNE_TARGET')
-          && !targetStealthedUndetected;
+          && !targetStealthedUndetected
+          && !this.doesSpecialPowerTargetAppearToContainFriendlies(source, target);
       case 'SPECIAL_DISGUISE_AS_VEHICLE':
         return targetKindOf.has('VEHICLE')
           && !targetKindOf.has('AIRCRAFT')

@@ -9833,6 +9833,109 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     });
   });
 
+  it('enforces capture-building garrison occupancy and stealth-apparent-owner restrictions when enum is set', () => {
+    const logic = new GameLogicSubsystem();
+
+    const capturerDef = makeObjectDef('Capturer', 'America', ['INFANTRY'], [
+      makeBlock('Behavior', 'SpecialPowerModule CaptureModule', {
+        SpecialPowerTemplate: 'SpecialPowerCapture',
+      }),
+    ]);
+    const targetBuildingDef = makeObjectDef('TargetBuilding', 'China', ['STRUCTURE', 'CAPTURABLE'], [
+      makeBlock('Behavior', 'GarrisonContain ModuleTag_Garrison', {
+        ContainMax: 5,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+    const occupantDef = makeObjectDef('Occupant', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [capturerDef, targetBuildingDef, occupantDef],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerCapture', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_INFANTRY_CAPTURE_BUILDING',
+        }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Capturer', 10, 10),
+        makeMapObject('TargetBuilding', 20, 10),
+        makeMapObject('Occupant', 24, 10),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        garrisonContainerId: number | null;
+        objectStatusFlags: Set<string>;
+        side: string;
+        lastSpecialPowerDispatch: unknown;
+      }>;
+    };
+    const occupant = priv.spawnedEntities.get(3)!;
+    occupant.garrisonContainerId = 2;
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_CAPTURE_NON_STEALTH',
+      specialPowerName: 'SpecialPowerCapture',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    occupant.objectStatusFlags.add('STEALTHED');
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_CAPTURE_STEALTH_ENEMY',
+      specialPowerName: 'SpecialPowerCapture',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'OBJECT',
+      targetEntityId: 2,
+    });
+
+    const source = priv.spawnedEntities.get(1)!;
+    source.lastSpecialPowerDispatch = null;
+    occupant.side = 'America';
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_CAPTURE_STEALTH_FRIENDLY',
+      specialPowerName: 'SpecialPowerCapture',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+  });
+
   it('blocks object-target special powers against effectively dead targets', () => {
     const bundle = makeBundle({
       objects: [
