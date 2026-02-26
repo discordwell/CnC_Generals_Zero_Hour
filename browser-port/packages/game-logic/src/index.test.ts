@@ -34598,6 +34598,56 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.transportContainerId).toBeNull();
   });
 
+  it('blocks script enter into HEAL contain when source health is full', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('HealingDock', 'America', ['STRUCTURE', 'HEAL_PAD'], [
+          makeBlock('Behavior', 'HealContain ModuleTag_Heal', {
+            ContainMax: 1,
+            TimeForFullHeal: 60000,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('HealingDock', 20, 20), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        maxHealth: number;
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+
+    privateApi.spawnedEntities.get(2)!.health = privateApi.spawnedEntities.get(2)!.maxHealth / 2;
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBe(1);
+  });
+
   it('resets locomotor to normal for script named enter/exit and team load-transports actions', () => {
     const bundle = makeBundle({
       objects: [

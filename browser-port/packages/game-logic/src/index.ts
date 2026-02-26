@@ -37681,6 +37681,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Validate: target must have a transport-style contain profile.
     const containProfile = transport.containProfile;
     if (!containProfile) return;
+    if (containProfile.moduleType === 'HEAL' && passenger.health >= passenger.maxHealth) return;
 
     // Source parity: TunnelContain/CaveContain — route to shared-network entry.
     if (containProfile.moduleType === 'TUNNEL' || containProfile.moduleType === 'CAVE') {
@@ -37865,6 +37866,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       if (!this.canScriptContainerFitEntity(transport, passenger)) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+      if (containProfile.moduleType === 'HEAL' && passenger.health >= passenger.maxHealth) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
