@@ -68,4 +68,28 @@ describe('GameLogicSubsystem shortcut special-power source resolution', () => {
       gameLogic.resolveShortcutSpecialPowerSourceEntityId('SpecialPowerFuelAirBomb'),
     ).toBeNull();
   });
+
+  it('resolves live ready frames for a specific tracked source entity', () => {
+    const gameLogic = new GameLogicSubsystem(new THREE.Scene());
+    const internals = getMutableInternals(gameLogic);
+    internals.spawnedEntities.set(41, {
+      destroyed: false,
+      specialPowerModules: new Map<string, unknown>([['SPECIALPOWERSPECTREGUNSHIP', {}]]),
+    });
+
+    gameLogic.trackShortcutSpecialPowerSourceEntity('SpecialPowerSpectreGunship', 41, 90);
+
+    expect(
+      gameLogic.resolveShortcutSpecialPowerReadyFrameForSourceEntity(
+        'SpecialPowerSpectreGunship',
+        41,
+      ),
+    ).toBe(90);
+    expect(
+      gameLogic.resolveShortcutSpecialPowerReadyFrameForSourceEntity(
+        'SpecialPowerCarpetBombing',
+        41,
+      ),
+    ).toBeNull();
+  });
 });

@@ -7546,6 +7546,30 @@ export class GameLogicSubsystem implements Subsystem {
     return bestReadyFrame;
   }
 
+  resolveShortcutSpecialPowerReadyFrameForSourceEntity(
+    specialPowerName: string,
+    sourceEntityId: number,
+  ): number | null {
+    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
+    if (!normalizedSpecialPowerName || !Number.isFinite(sourceEntityId)) {
+      return null;
+    }
+
+    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
+    const sourceEntity = this.spawnedEntities.get(normalizedSourceEntityId);
+    if (!sourceEntity || sourceEntity.destroyed) {
+      return null;
+    }
+    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
+      return null;
+    }
+
+    return this.resolveSpecialPowerReadyFrameForSourceEntity(
+      normalizedSpecialPowerName,
+      normalizedSourceEntityId,
+    );
+  }
+
   resolveMoveTargetFromInput(input: InputState, camera: THREE.Camera): { x: number; z: number } | null {
     return this.getMoveTargetFromMouse(input, camera);
   }

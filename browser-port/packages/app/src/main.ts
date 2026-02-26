@@ -2570,15 +2570,17 @@ async function startGame(
         // Source behavior from Player::findMostReadyShortcutSpecialPowerOfType:
         // candidate source objects are tracked per special power and resolved by
         // lowest ready frame.
-        // TODO: Source parity gap: ready-frame values currently come from command
-        // card enabled state, not live SpecialPowerModule cooldown frames.
         for (const sourceEntityId of selectedEntityIds) {
           gameLogic.clearTrackedShortcutSpecialPowerSourceEntity(sourceEntityId);
           for (const [specialPowerName, readyFrame] of currentShortcutSpecialPowerReadyFrames) {
+            const liveReadyFrame = gameLogic.resolveShortcutSpecialPowerReadyFrameForSourceEntity(
+              specialPowerName,
+              sourceEntityId,
+            );
             gameLogic.trackShortcutSpecialPowerSourceEntity(
               specialPowerName,
               sourceEntityId,
-              readyFrame,
+              liveReadyFrame ?? readyFrame,
             );
           }
           trackedShortcutSpecialPowerSourceEntityIds.add(sourceEntityId);
