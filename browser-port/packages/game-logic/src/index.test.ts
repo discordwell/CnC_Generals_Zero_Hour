@@ -9382,6 +9382,88 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     });
   });
 
+  it('blocks paradrop and crate-drop special powers at underwater locations', () => {
+    for (const specialPowerEnum of ['SPECIAL_PARADROP_AMERICA', 'SPECIAL_CRATE_DROP'] as const) {
+      const bundle = makeBundle({
+        objects: [
+          makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+            makeBlock('Behavior', 'SpecialPowerModule SourceWaterCheck', {
+              SpecialPowerTemplate: 'SpecialPowerWaterCheck',
+            }),
+          ], {
+            VisionRange: 500,
+          }),
+        ],
+        specialPowers: [
+          makeSpecialPowerDef('SpecialPowerWaterCheck', {
+            ReloadTime: 0,
+            Enum: specialPowerEnum,
+          }),
+        ],
+      });
+
+      const mapData: MapDataJSON = {
+        heightmap: {
+          width: 256,
+          height: 256,
+          borderSize: 0,
+          data: uint8ArrayToBase64(new Uint8Array(256 * 256).fill(0)),
+        },
+        objects: [makeMapObject('SpecialPowerSource', 120, 120)],
+        triggers: [{
+          name: 'WaterArea1',
+          id: 1,
+          isWaterArea: true,
+          isRiver: false,
+          points: [
+            { x: 0, y: 0, z: 20 },
+            { x: 100, y: 0, z: 20 },
+            { x: 100, y: 100, z: 20 },
+            { x: 0, y: 100, z: 20 },
+          ],
+        }],
+        textureClasses: [],
+        blendTileCount: 0,
+      };
+
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(mapData, makeRegistry(bundle), makeHeightmap(256, 256));
+      logic.update(1 / 30);
+
+      logic.submitCommand({
+        type: 'issueSpecialPower',
+        commandButtonId: 'CMD_WATER',
+        specialPowerName: 'SpecialPowerWaterCheck',
+        commandOption: 0x20,
+        issuingEntityIds: [1],
+        sourceEntityId: 1,
+        targetEntityId: null,
+        targetX: 50,
+        targetZ: 50,
+      });
+      logic.update(0);
+      expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+      logic.submitCommand({
+        type: 'issueSpecialPower',
+        commandButtonId: 'CMD_LAND',
+        specialPowerName: 'SpecialPowerWaterCheck',
+        commandOption: 0x20,
+        issuingEntityIds: [1],
+        sourceEntityId: 1,
+        targetEntityId: null,
+        targetX: 180,
+        targetZ: 180,
+      });
+      logic.update(0);
+      expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+        dispatchType: 'POSITION',
+        targetX: 180,
+        targetZ: 180,
+      });
+    }
+  });
+
   it('ignores special power dispatch when source entity is missing matching module', () => {
     const bundle = makeBundle({
       objects: [

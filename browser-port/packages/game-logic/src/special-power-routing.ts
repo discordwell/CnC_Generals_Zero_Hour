@@ -37,6 +37,10 @@ const LOCATION_TARGET_SHROUD_RESTRICTED_SPECIAL_POWERS = new Set<string>([
   'SPECIAL_PARTICLE_UPLINK_CANNON',
   'SPECIAL_CLEANUP_AREA',
 ]);
+const LOCATION_TARGET_REJECTS_UNDERWATER_SPECIAL_POWERS = new Set<string>([
+  'SPECIAL_PARADROP_AMERICA',
+  'SPECIAL_CRATE_DROP',
+]);
 const LOCATION_TARGET_UNRESTRICTED_SPECIAL_POWERS = new Set<string>([
   'SPECIAL_SPY_SATELLITE',
   'SPECIAL_RADAR_VAN_SCAN',
@@ -94,6 +98,7 @@ interface SpecialPowerCommandContext<TEntity extends SpecialPowerCommandEntity> 
     targetEntity: TEntity,
     commandSource: SpecialPowerCommandSource,
   ): boolean;
+  isPositionUnderwater(targetX: number, targetZ: number): boolean;
   isLocationShroudedForAction(sourceEntity: TEntity, targetX: number, targetZ: number): boolean;
   getTeamRelationship(sourceEntity: TEntity, targetEntity: TEntity): number;
   onIssueSpecialPowerNoTarget(
@@ -408,6 +413,13 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
 
     const targetX = command.targetX as number;
     const targetZ = command.targetZ as number;
+    if (
+      specialPowerEnum
+      && LOCATION_TARGET_REJECTS_UNDERWATER_SPECIAL_POWERS.has(specialPowerEnum)
+      && context.isPositionUnderwater(targetX, targetZ)
+    ) {
+      return;
+    }
     if (
       shouldApplyLocationShroudGate(specialPowerEnum)
       && context.isLocationShroudedForAction(sourceEntity, targetX, targetZ)

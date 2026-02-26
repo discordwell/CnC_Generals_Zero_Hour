@@ -35923,6 +35923,7 @@ export class GameLogicSubsystem implements Subsystem {
       },
       setReadyFrame: this.setSpecialPowerReadyFrame.bind(this),
       isObjectShroudedForAction: this.isSpecialPowerObjectTargetShrouded.bind(this),
+      isPositionUnderwater: this.isSpecialPowerLocationUnderwater.bind(this),
       isLocationShroudedForAction: this.isSpecialPowerLocationTargetShrouded.bind(this),
       getTeamRelationship: this.getTeamRelationship.bind(this),
       onIssueSpecialPowerNoTarget: this.onIssueSpecialPowerNoTarget.bind(this),
@@ -36054,6 +36055,10 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
+  }
+
+  private isSpecialPowerLocationUnderwater(targetX: number, targetZ: number): boolean {
+    return this.getWaterHeightAt(targetX, targetZ) !== null;
   }
 
   /**
