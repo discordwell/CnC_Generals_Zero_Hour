@@ -105,9 +105,12 @@ describe('GameLogic deterministic CRC ownership', () => {
       expect(withCompletionQueue).not.toBe(baseline);
 
       subsystem.setScriptAudioLengthMs('SpeechLine_CRC_Timed', 1000);
+      const withAudioLengthMetadata = computeGameLogicCrc(subsystem, 0);
+      expect(withAudioLengthMetadata).not.toBe(withCompletionQueue);
+
       subsystem.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechLine_CRC_Timed' });
       const withLazyDeadline = computeGameLogicCrc(subsystem, 0);
-      expect(withLazyDeadline).not.toBe(withCompletionQueue);
+      expect(withLazyDeadline).not.toBe(withAudioLengthMetadata);
     } finally {
       subsystem.dispose();
     }

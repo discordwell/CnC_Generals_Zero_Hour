@@ -151,6 +151,7 @@ export interface DeterministicGameLogicCrcContext {
   scriptCompletedVideos: readonly string[];
   scriptCompletedSpeech: readonly string[];
   scriptCompletedAudio: readonly string[];
+  scriptAudioLengthMsByName: ReadonlyMap<string, number>;
   scriptTestingSpeechCompletionFrameByName: ReadonlyMap<string, number>;
   scriptTestingAudioCompletionFrameByName: ReadonlyMap<string, number>;
   scriptCompletedMusic: readonly ScriptMusicCompletedEventLike[];
@@ -388,6 +389,7 @@ function writeDeterministicAiCrc(
   writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedVideos);
   writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedSpeech);
   writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedAudio);
+  writeNamedRealMapCrc(context, crc, context.gameLogic.scriptAudioLengthMsByName);
   writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingSpeechCompletionFrameByName);
   writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingAudioCompletionFrameByName);
   writeScriptCompletedMusicCrc(context, crc, context.gameLogic.scriptCompletedMusic);
@@ -682,6 +684,19 @@ function writeNamedFrameMapCrc(
   for (const [name, frame] of entries) {
     crc.addAsciiString(name);
     addSignedIntCrc(context, crc, frame);
+  }
+}
+
+function writeNamedRealMapCrc(
+  context: DeterministicWriterContext,
+  crc: XferCrcAccumulator,
+  values: ReadonlyMap<string, number>,
+): void {
+  const entries = Array.from(values.entries()).sort(([left], [right]) => left.localeCompare(right));
+  crc.addUnsignedInt(entries.length >>> 0);
+  for (const [name, value] of entries) {
+    crc.addAsciiString(name);
+    addFloat32Crc(context, crc, value);
   }
 }
 

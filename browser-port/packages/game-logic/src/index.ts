@@ -6519,6 +6519,7 @@ export class GameLogicSubsystem implements Subsystem {
       scriptCompletedVideos: this.scriptCompletedVideos,
       scriptCompletedSpeech: this.scriptCompletedSpeech,
       scriptCompletedAudio: this.scriptCompletedAudio,
+      scriptAudioLengthMsByName: this.scriptAudioLengthMsByName,
       scriptTestingSpeechCompletionFrameByName: this.scriptTestingSpeechCompletionFrameByName,
       scriptTestingAudioCompletionFrameByName: this.scriptTestingAudioCompletionFrameByName,
       scriptCompletedMusic: this.scriptCompletedMusic,
