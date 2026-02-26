@@ -41,6 +41,7 @@ export class UiRuntime implements Subsystem {
   private debugEnabled = false;
   private containerWidth = 0;
   private containerHeight = 0;
+  private readonly flashingControlBarButtonIds = new Set<string>();
   private readonly controlBarModel = new ControlBarModel();
 
   constructor(options: UiRuntimeOptions = {}) {
@@ -169,6 +170,7 @@ export class UiRuntime implements Subsystem {
   reset(): void {
     this.selectedText = '';
     this.selectedObjectIds = [];
+    this.flashingControlBarButtonIds.clear();
     this.controlBarModel.setSelectionState({
       selectedObjectIds: [],
       selectedObjectName: '',
@@ -193,6 +195,7 @@ export class UiRuntime implements Subsystem {
     this.root = null;
     this.selectedText = '';
     this.selectedObjectIds = [];
+    this.flashingControlBarButtonIds.clear();
   }
 
   resize(_width = 0, _height = 0): void {
@@ -293,6 +296,18 @@ export class UiRuntime implements Subsystem {
     this.renderControlBar();
   }
 
+  setFlashingControlBarButtons(buttonIds: readonly string[]): void {
+    this.flashingControlBarButtonIds.clear();
+    for (const buttonId of buttonIds) {
+      const normalized = buttonId.trim();
+      if (!normalized) {
+        continue;
+      }
+      this.flashingControlBarButtonIds.add(normalized);
+    }
+    this.renderControlBar();
+  }
+
   getControlBarButtons(): readonly ControlBarButton[] {
     return this.controlBarModel.getButtons();
   }
@@ -351,7 +366,11 @@ export class UiRuntime implements Subsystem {
       if (slot.state === 'empty') {
         return `${slot.slot}. ${hotkey}<empty>`;
       }
-      return `${slot.slot}. ${hotkey}${slot.label} (${slot.state}, ${describeTargetRequirement(slot.targetRequirement)})`;
+      const isFlashing = slot.sourceButtonId !== undefined
+        && this.flashingControlBarButtonIds.has(slot.sourceButtonId);
+      const flashPrefix = isFlashing ? '* ' : '';
+      return `${slot.slot}. ${hotkey}${flashPrefix}${slot.label} ` +
+        `(${slot.state}, ${describeTargetRequirement(slot.targetRequirement)})`;
     };
 
     const rowLength = 6;

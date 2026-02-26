@@ -59,6 +59,7 @@ import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
 import { createScriptCameraRuntimeBridge } from './script-camera-runtime.js';
 import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
 import { createScriptMessageRuntimeBridge } from './script-message-runtime.js';
+import { createScriptUiEffectsRuntimeBridge } from './script-ui-effects-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
 
 // ============================================================================
@@ -2046,6 +2047,10 @@ async function startGame(
       gameLoop.paused = paused;
     },
   });
+  const scriptUiEffectsRuntimeBridge = createScriptUiEffectsRuntimeBridge({
+    gameLogic,
+    uiRuntime,
+  });
   const scriptCameraRuntimeBridge = createScriptCameraRuntimeBridge({
     gameLogic,
     cameraController: rtsCamera,
@@ -2308,6 +2313,7 @@ async function startGame(
       scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
+      scriptUiEffectsRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
       scriptCinematicRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
 
       // Move sun light to follow camera target for consistent shadows.
