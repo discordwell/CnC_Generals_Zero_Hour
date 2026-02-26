@@ -123,6 +123,11 @@ interface SideRadarStateLike {
   radarDisabled: boolean;
 }
 
+interface ScriptMusicCompletedEventLike {
+  name: string;
+  index: number;
+}
+
 interface GameLogicConfigLike {
   renderUnknownObjects: boolean;
   attackUsesLineOfSight: boolean;
@@ -143,6 +148,12 @@ export interface DeterministicGameLogicCrcContext {
   sideKindOfProductionCostModifiers: ReadonlyMap<string, KindOfProductionCostModifierLike[]>;
   sidePowerBonus: ReadonlyMap<string, SidePowerStateLike>;
   sideRadarState: ReadonlyMap<string, SideRadarStateLike>;
+  scriptCompletedVideos: readonly string[];
+  scriptCompletedSpeech: readonly string[];
+  scriptCompletedAudio: readonly string[];
+  scriptTestingSpeechCompletionFrameByName: ReadonlyMap<string, number>;
+  scriptTestingAudioCompletionFrameByName: ReadonlyMap<string, number>;
+  scriptCompletedMusic: readonly ScriptMusicCompletedEventLike[];
   frameCounter: number;
   nextId: number;
   animationTime: number;
@@ -371,6 +382,16 @@ function writeDeterministicAiCrc(
   crc.addUnsignedByte(context.gameLogic.isAttackMoveToMode ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.previousAttackMoveToggleDown ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.scriptInputDisabled ? 1 : 0);
+
+  // Source parity bridge: ScriptEngine completion lists / lazy audio test state.
+  // These values alter script-condition outcomes and must participate in CRC.
+  writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedVideos);
+  writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedSpeech);
+  writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedAudio);
+  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingSpeechCompletionFrameByName);
+  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingAudioCompletionFrameByName);
+  writeScriptCompletedMusicCrc(context, crc, context.gameLogic.scriptCompletedMusic);
+
   crc.addUnsignedByte(context.gameLogic.config.renderUnknownObjects ? 1 : 0);
   crc.addUnsignedByte(context.gameLogic.config.attackUsesLineOfSight ? 1 : 0);
   addFloat32Crc(context, crc, context.gameLogic.config.defaultMoveSpeed);
@@ -638,6 +659,41 @@ function writeSideRadarStateCrc(
     crc.addUnsignedInt(state.radarCount >>> 0);
     crc.addUnsignedInt(state.disableProofRadarCount >>> 0);
     crc.addUnsignedInt(state.radarDisabled ? 1 : 0);
+  }
+}
+
+function writeOrderedStringListCrc(
+  crc: XferCrcAccumulator,
+  values: readonly string[],
+): void {
+  crc.addUnsignedInt(values.length >>> 0);
+  for (const value of values) {
+    crc.addAsciiString(value);
+  }
+}
+
+function writeNamedFrameMapCrc(
+  context: DeterministicWriterContext,
+  crc: XferCrcAccumulator,
+  values: ReadonlyMap<string, number>,
+): void {
+  const entries = Array.from(values.entries()).sort(([left], [right]) => left.localeCompare(right));
+  crc.addUnsignedInt(entries.length >>> 0);
+  for (const [name, frame] of entries) {
+    crc.addAsciiString(name);
+    addSignedIntCrc(context, crc, frame);
+  }
+}
+
+function writeScriptCompletedMusicCrc(
+  context: DeterministicWriterContext,
+  crc: XferCrcAccumulator,
+  values: readonly ScriptMusicCompletedEventLike[],
+): void {
+  crc.addUnsignedInt(values.length >>> 0);
+  for (const value of values) {
+    crc.addAsciiString(value.name);
+    addSignedIntCrc(context, crc, value.index);
   }
 }
 

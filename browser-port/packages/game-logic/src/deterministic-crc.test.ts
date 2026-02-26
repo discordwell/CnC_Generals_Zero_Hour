@@ -94,4 +94,22 @@ describe('GameLogic deterministic CRC ownership', () => {
       subsystem.dispose();
     }
   });
+
+  it('changes CRC when script completion queues and lazy audio-test state change', () => {
+    const subsystem = createSubsystem();
+    try {
+      const baseline = computeGameLogicCrc(subsystem, 0);
+
+      subsystem.notifyScriptSpeechCompleted('SpeechLine_CRC');
+      const withCompletionQueue = computeGameLogicCrc(subsystem, 0);
+      expect(withCompletionQueue).not.toBe(baseline);
+
+      subsystem.setScriptAudioLengthMs('SpeechLine_CRC_Timed', 1000);
+      subsystem.evaluateScriptSpeechHasCompleted({ speechName: 'SpeechLine_CRC_Timed' });
+      const withLazyDeadline = computeGameLogicCrc(subsystem, 0);
+      expect(withLazyDeadline).not.toBe(withCompletionQueue);
+    } finally {
+      subsystem.dispose();
+    }
+  });
 });
