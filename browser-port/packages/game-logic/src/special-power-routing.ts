@@ -98,6 +98,7 @@ interface SpecialPowerCommandContext<TEntity extends SpecialPowerCommandEntity> 
     targetEntity: TEntity,
     commandSource: SpecialPowerCommandSource,
   ): boolean;
+  isObjectEffectivelyDead(targetEntity: TEntity): boolean;
   isObjectTargetAllowedForSpecialPower(
     sourceEntity: TEntity,
     targetEntity: TEntity,
@@ -389,6 +390,9 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
     const targetEntityId = Math.trunc(command.targetEntityId);
     const targetEntity = context.spawnedEntities.get(targetEntityId);
     if (!targetEntity || targetEntity.destroyed) {
+      return;
+    }
+    if (context.isObjectEffectivelyDead(targetEntity)) {
       return;
     }
     if (context.isObjectShroudedForAction(sourceEntity, targetEntity, commandSource)) {

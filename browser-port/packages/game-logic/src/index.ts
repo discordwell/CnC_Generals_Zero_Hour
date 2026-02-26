@@ -35923,6 +35923,7 @@ export class GameLogicSubsystem implements Subsystem {
       },
       setReadyFrame: this.setSpecialPowerReadyFrame.bind(this),
       isObjectShroudedForAction: this.isSpecialPowerObjectTargetShrouded.bind(this),
+      isObjectEffectivelyDead: this.isSpecialPowerObjectEffectivelyDead.bind(this),
       isObjectTargetAllowedForSpecialPower: this.isSpecialPowerObjectTargetAllowed.bind(this),
       isPositionUnderwater: this.isSpecialPowerLocationUnderwater.bind(this),
       isLocationShroudedForAction: this.isSpecialPowerLocationTargetShrouded.bind(this),
@@ -36056,6 +36057,10 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
+  }
+
+  private isSpecialPowerObjectEffectivelyDead(target: MapEntity): boolean {
+    return this.isScriptEntityEffectivelyDead(target);
   }
 
   /**

@@ -9612,6 +9612,56 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     });
   });
 
+  it('blocks object-target special powers against effectively dead targets', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceObject', {
+            SpecialPowerTemplate: 'SpecialPowerAtObject',
+          }),
+        ]),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerAtObject', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10), makeMapObject('EnemyTarget', 20, 10)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, { slowDeathState: unknown }> };
+    const target = priv.spawnedEntities.get(2)!;
+    target.slowDeathState = { active: true };
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_OBJECT',
+      specialPowerName: 'SpecialPowerAtObject',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+  });
+
   it('ignores special power dispatch when source entity is missing matching module', () => {
     const bundle = makeBundle({
       objects: [
