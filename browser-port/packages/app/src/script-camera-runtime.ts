@@ -2,6 +2,7 @@ import type { CameraState } from '@generals/input';
 
 const TWO_PI = Math.PI * 2;
 const MIN_DIRECTION_LENGTH = 0.1;
+const WAYPOINT_PATH_MIN_DELTA = 10;
 
 export interface ScriptCameraActionRequestState {
   requestType: 'MOVE_TO' | 'MOVE_ALONG_WAYPOINT_PATH' | 'RESET' | 'ROTATE' | 'SETUP' | 'ZOOM' | 'PITCH';
@@ -575,10 +576,35 @@ export function createScriptCameraRuntimeBridge(
     frozenWaypointPathAngle = null;
     waypointPathLookTowardTarget = null;
     waypointPathRollingAverageFrames = 1;
-    const points: Array<{ x: number; z: number }> = [
-      { x: state.targetX, z: state.targetZ },
-      ...pathPoints.map((point) => ({ x: point.x, z: point.z })),
-    ];
+    const points: Array<{ x: number; z: number }> = [{ x: state.targetX, z: state.targetZ }];
+    for (let i = 0; i < pathPoints.length; i += 1) {
+      const point = pathPoints[i]!;
+      points.push({ x: point.x, z: point.z });
+      if (points.length < 2) {
+        continue;
+      }
+
+      const previous = points[points.length - 2]!;
+      const current = points[points.length - 1]!;
+      const segmentLength = Math.hypot(current.x - previous.x, current.z - previous.z);
+      if (segmentLength >= WAYPOINT_PATH_MIN_DELTA) {
+        continue;
+      }
+
+      const hasMoreWaypoints = i < pathPoints.length - 1;
+      if (hasMoreWaypoints) {
+        points.pop();
+        continue;
+      }
+
+      if (points.length >= 3) {
+        points[points.length - 2] = { ...current };
+        points.pop();
+      } else {
+        // Source parity: a final near-zero movement collapses to no waypoint path move.
+        points.length = 1;
+      }
+    }
     if (points.length < 2) {
       return;
     }

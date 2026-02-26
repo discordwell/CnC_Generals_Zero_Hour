@@ -372,6 +372,32 @@ describe('script camera runtime bridge', () => {
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 
+  it('ignores waypoint-path moves shorter than source MIN_DELTA', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.waypointPaths.set('CAM_TINY', [
+      { x: 5, z: 0 },
+    ]);
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_TINY',
+      x: 5,
+      z: 0,
+      durationMs: 1000,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    expect(cameraController.getState().targetX).toBeCloseTo(0, 6);
+    expect(cameraController.getState().targetZ).toBeCloseTo(0, 6);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+
+    bridge.syncAfterSimulationStep(30);
+    expect(cameraController.getState().targetX).toBeCloseTo(0, 6);
+    expect(cameraController.getState().targetZ).toBeCloseTo(0, 6);
+  });
+
   it('orients camera along waypoint path direction and honors ROLLING_AVERAGE smoothing', () => {
     const baseLogic = new RecordingGameLogic();
     const baseCamera = new RecordingCameraController();
