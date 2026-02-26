@@ -43,6 +43,31 @@ const LOCATION_TARGET_UNRESTRICTED_SPECIAL_POWERS = new Set<string>([
   'SPECIAL_SPY_DRONE',
   'SPECIAL_LAUNCH_BAIKONUR_ROCKET',
 ]);
+const LOCATION_TARGET_SPECIAL_POWERS = new Set<string>([
+  ...LOCATION_TARGET_SHROUD_RESTRICTED_SPECIAL_POWERS,
+  ...LOCATION_TARGET_UNRESTRICTED_SPECIAL_POWERS,
+]);
+const OBJECT_TARGET_SPECIAL_POWERS = new Set<string>([
+  'SPECIAL_MISSILE_DEFENDER_LASER_GUIDED_MISSILES',
+  'SPECIAL_HACKER_DISABLE_BUILDING',
+  'SPECIAL_TANKHUNTER_TNT_ATTACK',
+  'SPECIAL_CASH_HACK',
+  'SPECIAL_DEFECTOR',
+  'SPECIAL_BLACKLOTUS_CAPTURE_BUILDING',
+  'SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK',
+  'SPECIAL_BLACKLOTUS_STEAL_CASH_HACK',
+  'SPECIAL_INFANTRY_CAPTURE_BUILDING',
+  'SPECIAL_DISGUISE_AS_VEHICLE',
+  'SPECIAL_REMOTE_CHARGES',
+  'SPECIAL_TIMED_CHARGES',
+]);
+const NO_TARGET_SPECIAL_POWERS = new Set<string>([
+  'SPECIAL_REMOTE_CHARGES',
+  'SPECIAL_CIA_INTELLIGENCE',
+  'SPECIAL_DETONATE_DIRTY_NUKE',
+  'SPECIAL_CHANGE_BATTLE_PLANS',
+  'SPECIAL_LAUNCH_BAIKONUR_ROCKET',
+]);
 
 interface SpecialPowerCommandEntity {
   id: number;
@@ -104,6 +129,7 @@ type TrackShortcutSpecialPowerSourceEntity = (
   sourceEntityId: number,
   readyFrame: number,
 ) => boolean;
+type SpecialPowerDispatchMode = 'NO_TARGET' | 'POSITION' | 'OBJECT';
 
 function resolveSpecialPowerEnum(specialPowerDef: SpecialPowerDef): string | null {
   const enumToken = readStringField(specialPowerDef.fields, ['Enum'])?.trim().toUpperCase() ?? '';
@@ -118,6 +144,22 @@ function shouldApplyLocationShroudGate(specialPowerEnum: string | null): boolean
     return false;
   }
   return LOCATION_TARGET_SHROUD_RESTRICTED_SPECIAL_POWERS.has(specialPowerEnum);
+}
+
+function isDispatchModeAllowedForSpecialPowerEnum(
+  specialPowerEnum: string | null,
+  dispatchMode: SpecialPowerDispatchMode,
+): boolean {
+  if (!specialPowerEnum) {
+    return true;
+  }
+  if (dispatchMode === 'OBJECT') {
+    return OBJECT_TARGET_SPECIAL_POWERS.has(specialPowerEnum);
+  }
+  if (dispatchMode === 'POSITION') {
+    return LOCATION_TARGET_SPECIAL_POWERS.has(specialPowerEnum);
+  }
+  return NO_TARGET_SPECIAL_POWERS.has(specialPowerEnum);
 }
 
 function resolveIssueSpecialPowerSourceEntityId<TEntity extends SpecialPowerCommandEntity>(
@@ -318,6 +360,15 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
   const commandOption = Number.isFinite(command.commandOption) ? command.commandOption | 0 : 0;
   const needsObjectTarget = (commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
   const needsTargetPosition = (commandOption & COMMAND_OPTION_NEED_TARGET_POS) !== 0;
+  const specialPowerEnum = resolveSpecialPowerEnum(specialPowerDef);
+  const dispatchMode: SpecialPowerDispatchMode = needsObjectTarget
+    ? 'OBJECT'
+    : needsTargetPosition
+      ? 'POSITION'
+      : 'NO_TARGET';
+  if (!isDispatchModeAllowedForSpecialPowerEnum(specialPowerEnum, dispatchMode)) {
+    return;
+  }
 
   if (needsObjectTarget) {
     if (command.targetEntityId === null || !Number.isFinite(command.targetEntityId)) {
@@ -357,7 +408,6 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
 
     const targetX = command.targetX as number;
     const targetZ = command.targetZ as number;
-    const specialPowerEnum = resolveSpecialPowerEnum(specialPowerDef);
     if (
       shouldApplyLocationShroudGate(specialPowerEnum)
       && context.isLocationShroudedForAction(sourceEntity, targetX, targetZ)

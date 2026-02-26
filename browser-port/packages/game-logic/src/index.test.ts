@@ -9242,6 +9242,146 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     });
   });
 
+  it('enforces no-target-only special power enums regardless of command options', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceNoTarget', {
+            SpecialPowerTemplate: 'SpecialPowerNoTargetOnly',
+          }),
+        ]),
+        makeObjectDef('EnemyTarget', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerNoTargetOnly', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_CHANGE_BATTLE_PLANS',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10), makeMapObject('EnemyTarget', 24, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_BAD_POSITION',
+      specialPowerName: 'SpecialPowerNoTargetOnly',
+      commandOption: 0x20,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 40,
+      targetZ: 40,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_BAD_OBJECT',
+      specialPowerName: 'SpecialPowerNoTargetOnly',
+      commandOption: 0x1,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_GOOD_NO_TARGET',
+      specialPowerName: 'SpecialPowerNoTargetOnly',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'NO_TARGET',
+    });
+  });
+
+  it('supports dual-mode special power enums for no-target and position dispatch', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'SpecialPowerModule SourceDualMode', {
+            SpecialPowerTemplate: 'SpecialPowerDualMode',
+          }),
+        ], {
+          VisionRange: 30,
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerDualMode', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_LAUNCH_BAIKONUR_ROCKET',
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('SpecialPowerSource', 10, 10)], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_NO_TARGET',
+      specialPowerName: 'SpecialPowerDualMode',
+      commandOption: 0,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'NO_TARGET',
+    });
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_POSITION',
+      specialPowerName: 'SpecialPowerDualMode',
+      commandOption: 0x20,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: null,
+      targetX: 200,
+      targetZ: 200,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'POSITION',
+      targetX: 200,
+      targetZ: 200,
+    });
+  });
+
   it('ignores special power dispatch when source entity is missing matching module', () => {
     const bundle = makeBundle({
       objects: [
