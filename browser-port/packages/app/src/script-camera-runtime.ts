@@ -149,6 +149,7 @@ interface WaypointPathTransition {
   durationFrames: number;
   points: ReadonlyArray<{ x: number; z: number }>;
   cumulativeDistances: ReadonlyArray<number>;
+  cameraAngles: ReadonlyArray<number>;
   totalDistance: number;
   easeIn: number;
   easeOut: number;
@@ -284,6 +285,17 @@ function evaluateTargetTransition(
   };
 }
 
+function interpolateHeadingAngle(fromAngle: number, toAngle: number, factor: number): number {
+  let from = fromAngle;
+  const to = toAngle;
+  if (to - from > Math.PI) {
+    from += TWO_PI;
+  } else if (to - from < -Math.PI) {
+    from -= TWO_PI;
+  }
+  return normalizeAngle((from * (1 - factor)) + (to * factor));
+}
+
 function evaluateWaypointPathTransition(
   transition: WaypointPathTransition,
   currentLogicFrame: number,
@@ -298,11 +310,10 @@ function evaluateWaypointPathTransition(
   const travelledDistance = transition.totalDistance * progress;
   const points = transition.points;
   const cumulativeDistances = transition.cumulativeDistances;
+  const cameraAngles = transition.cameraAngles;
   const lastPoint = points[points.length - 1]!;
   if (travelledDistance <= 0) {
-    const headingAngle = points.length > 1
-      ? resolveLookTowardAngle(points[0]!.x, points[0]!.z, points[1]!.x, points[1]!.z)
-      : null;
+    const headingAngle = cameraAngles[0] ?? null;
     return {
       x: points[0]!.x,
       z: points[0]!.z,
@@ -313,8 +324,7 @@ function evaluateWaypointPathTransition(
     };
   }
   if (travelledDistance >= transition.totalDistance) {
-    const prevPoint = points[Math.max(0, points.length - 2)]!;
-    const headingAngle = resolveLookTowardAngle(prevPoint.x, prevPoint.z, lastPoint.x, lastPoint.z);
+    const headingAngle = cameraAngles[cameraAngles.length - 1] ?? null;
     return {
       x: lastPoint.x,
       z: lastPoint.z,
@@ -334,8 +344,7 @@ function evaluateWaypointPathTransition(
     const segmentLength = segmentEndDistance - segmentStartDistance;
     if (segmentLength <= 0) {
       const point = points[i]!;
-      const previous = points[Math.max(0, i - 1)]!;
-      const headingAngle = resolveLookTowardAngle(previous.x, previous.z, point.x, point.z);
+      const headingAngle = cameraAngles[i] ?? cameraAngles[i - 1] ?? null;
       return {
         x: point.x,
         z: point.z,
@@ -348,7 +357,9 @@ function evaluateWaypointPathTransition(
     const segmentProgress = (travelledDistance - segmentStartDistance) / segmentLength;
     const start = points[i - 1]!;
     const end = points[i]!;
-    const headingAngle = resolveLookTowardAngle(start.x, start.z, end.x, end.z);
+    const fromAngle = cameraAngles[i - 1] ?? 0;
+    const toAngle = cameraAngles[i] ?? fromAngle;
+    const headingAngle = interpolateHeadingAngle(fromAngle, toAngle, segmentProgress);
     return {
       x: start.x + (end.x - start.x) * segmentProgress,
       z: start.z + (end.z - start.z) * segmentProgress,
@@ -359,8 +370,7 @@ function evaluateWaypointPathTransition(
     };
   }
 
-  const prevPoint = points[Math.max(0, points.length - 2)]!;
-  const headingAngle = resolveLookTowardAngle(prevPoint.x, prevPoint.z, lastPoint.x, lastPoint.z);
+  const headingAngle = cameraAngles[cameraAngles.length - 1] ?? null;
   return {
     x: lastPoint.x,
     z: lastPoint.z,
@@ -502,6 +512,27 @@ export function createScriptCameraRuntimeBridge(
       const segmentLength = Math.hypot(current.x - previous.x, current.z - previous.z);
       cumulativeDistances.push(cumulativeDistances[i - 1]! + segmentLength);
     }
+    const cameraAngles: number[] = new Array(points.length).fill(state.angle);
+    let segmentHeading = state.angle;
+    for (let i = 1; i < points.length; i += 1) {
+      const previous = points[i - 1]!;
+      const current = points[i]!;
+      const headingAngle = resolveLookTowardAngle(previous.x, previous.z, current.x, current.z);
+      if (headingAngle !== null) {
+        segmentHeading = headingAngle;
+      }
+      cameraAngles[i - 1] = segmentHeading;
+    }
+    cameraAngles[0] = state.angle;
+    if (points.length > 1) {
+      cameraAngles[points.length - 1] = cameraAngles[points.length - 2] ?? state.angle;
+      for (let i = points.length - 2; i > 0; i -= 1) {
+        const previousAngle = cameraAngles[i - 1] ?? state.angle;
+        const currentAngle = cameraAngles[i] ?? previousAngle;
+        const deltaAngle = normalizeAngle(currentAngle - previousAngle);
+        cameraAngles[i] = normalizeAngle(previousAngle + (deltaAngle * 0.5));
+      }
+    }
     const totalDistance = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
     if (totalDistance <= 0) {
       const finalPoint = points[points.length - 1]!;
@@ -515,6 +546,7 @@ export function createScriptCameraRuntimeBridge(
       durationFrames,
       points,
       cumulativeDistances,
+      cameraAngles,
       totalDistance,
       easeIn: clamp01(easeIn),
       easeOut: clamp01(easeOut),

@@ -343,6 +343,33 @@ describe('script camera runtime bridge', () => {
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 
+  it('keeps heading for single-segment waypoint paths', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.waypointPaths.set('CAM_SINGLE', [
+      { x: 100, z: 0 },
+    ]);
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_SINGLE',
+      x: 100,
+      z: 0,
+      durationMs: 1000,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    expect(cameraController.getState().angle).toBeCloseTo(0, 6);
+
+    bridge.syncAfterSimulationStep(15);
+    expect(cameraController.getState().angle).toBeCloseTo(0, 6);
+
+    bridge.syncAfterSimulationStep(30);
+    expect(cameraController.getState().angle).toBeCloseTo(0, 6);
+    expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
   it('orients camera along waypoint path direction and honors ROLLING_AVERAGE smoothing', () => {
     const baseLogic = new RecordingGameLogic();
     const baseCamera = new RecordingCameraController();
@@ -350,6 +377,7 @@ describe('script camera runtime bridge', () => {
     baseLogic.state.waypointPaths.set('CAM_TURN', [
       { x: 100, z: 0 },
       { x: 100, z: 100 },
+      { x: 0, z: 100 },
     ]);
     baseLogic.state.actionRequests.push(makeActionRequest({
       requestType: 'MOVE_ALONG_WAYPOINT_PATH',
@@ -359,7 +387,7 @@ describe('script camera runtime bridge', () => {
       durationMs: 1000,
     }));
     baseBridge.syncAfterSimulationStep(1);
-    baseBridge.syncAfterSimulationStep(16);
+    baseBridge.syncAfterSimulationStep(20);
     const unsmoothedAngle = baseCamera.getState().angle;
 
     const smoothedLogic = new RecordingGameLogic();
@@ -371,6 +399,7 @@ describe('script camera runtime bridge', () => {
     smoothedLogic.state.waypointPaths.set('CAM_TURN', [
       { x: 100, z: 0 },
       { x: 100, z: 100 },
+      { x: 0, z: 100 },
     ]);
     smoothedLogic.state.actionRequests.push(makeActionRequest({
       requestType: 'MOVE_ALONG_WAYPOINT_PATH',
@@ -384,12 +413,13 @@ describe('script camera runtime bridge', () => {
       rollingAverageFrames: 4,
     }));
     smoothedBridge.syncAfterSimulationStep(1);
-    smoothedBridge.syncAfterSimulationStep(16);
+    smoothedBridge.syncAfterSimulationStep(20);
     const smoothedAngle = smoothedCamera.getState().angle;
 
-    expect(unsmoothedAngle).toBeCloseTo(0, 2);
-    expect(smoothedAngle).toBeLessThan(0);
-    expect(smoothedAngle).toBeGreaterThan(-Math.PI / 2);
+    expect(unsmoothedAngle).toBeGreaterThan(0);
+    expect(unsmoothedAngle).toBeLessThan(Math.PI / 2);
+    expect(smoothedAngle).toBeGreaterThanOrEqual(0);
+    expect(smoothedAngle).toBeLessThan(unsmoothedAngle);
   });
 
   it('FREEZE_ANGLE holds waypoint-path camera heading for remaining movement', () => {
