@@ -17757,7 +17757,6 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity subset: ScriptActions::doForceObjectSelection.
    * Selects the first matching object type in the team using C++ ID ordering.
-   * TODO(source-parity): mirror camera-centering and audio playback via TacticalView/Audio bridge.
    */
   private executeScriptObjectForceSelect(
     teamName: string,
@@ -17794,8 +17793,16 @@ export class GameLogicSubsystem implements Subsystem {
     this.selectedEntityIds = [bestGuess.id];
     this.selectedEntityId = bestGuess.id;
     this.updateSelectionHighlight();
-    void centerInView;
-    void audioToPlay;
+
+    if (centerInView) {
+      this.requestScriptCameraModMoveToSelection();
+    }
+
+    const normalizedAudioName = audioToPlay.trim();
+    if (normalizedAudioName) {
+      this.requestScriptPlaySoundEffect(normalizedAudioName);
+    }
+
     return true;
   }
 

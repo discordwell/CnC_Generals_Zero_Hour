@@ -48469,6 +48469,27 @@ describe('Script condition groundwork', () => {
 
     expect(logic.executeScriptAction({
       actionType: 410,
+      params: ['SelectTeam', 'Ranger', 1, 'SelectSound'],
+    })).toBe(true);
+    const forceSelectCameraRequests = logic.drainScriptCameraModifierRequests();
+    expect(forceSelectCameraRequests.length).toBe(1);
+    expect(forceSelectCameraRequests[0]?.requestType).toBe('MOVE_TO_SELECTION');
+    expect(forceSelectCameraRequests[0]?.x).toBeCloseTo(20, 5);
+    expect(forceSelectCameraRequests[0]?.z).toBeCloseTo(20, 5);
+    const forceSelectAudioRequests = logic.drainScriptAudioPlaybackRequests();
+    expect(forceSelectAudioRequests.length).toBe(1);
+    expect(forceSelectAudioRequests[0]).toMatchObject({
+      audioName: 'SelectSound',
+      playbackType: 'SOUND_EFFECT',
+      allowOverlap: true,
+      sourceEntityId: null,
+      x: null,
+      y: null,
+      z: null,
+    });
+
+    expect(logic.executeScriptAction({
+      actionType: 410,
       params: ['SelectProto', 'Ranger', 0, ''],
     })).toBe(true);
     expect(logic.getLocalPlayerSelectionIds()).toEqual([3]);
