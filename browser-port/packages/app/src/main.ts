@@ -58,6 +58,7 @@ import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
 import { createScriptCameraRuntimeBridge } from './script-camera-runtime.js';
 import { createScriptCinematicRuntimeBridge } from './script-cinematic-runtime.js';
+import { createScriptEmoticonRuntimeBridge } from './script-emoticon-runtime.js';
 import { createScriptMessageRuntimeBridge } from './script-message-runtime.js';
 import { createScriptUiEffectsRuntimeBridge } from './script-ui-effects-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
@@ -968,6 +969,7 @@ async function startGame(
   const cinematicLetterboxTop = document.createElement('div');
   const cinematicLetterboxBottom = document.createElement('div');
   const cinematicTextOverlay = document.createElement('div');
+  const emoticonOverlay = document.createElement('div');
   Object.assign(cinematicLetterboxTop.style, {
     position: 'absolute',
     top: '0',
@@ -1007,10 +1009,20 @@ async function startGame(
     pointerEvents: 'none',
     display: 'none',
   });
+  Object.assign(emoticonOverlay.style, {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    width: '100%',
+    height: '100%',
+    zIndex: '270',
+    pointerEvents: 'none',
+  });
   const gameContainer = document.getElementById('game-container')!;
   gameContainer.appendChild(cinematicLetterboxTop);
   gameContainer.appendChild(cinematicLetterboxBottom);
   gameContainer.appendChild(cinematicTextOverlay);
+  gameContainer.appendChild(emoticonOverlay);
 
   const updateEntityInfoPanel = (): void => {
     const selectedIds = gameLogic.getLocalPlayerSelectionIds();
@@ -2009,6 +2021,58 @@ async function startGame(
     }
   };
 
+  const emoticonNodeByEntityId = new Map<number, HTMLDivElement>();
+  const updateScriptEmoticonOverlay = (currentLogicFrame: number): void => {
+    const activeEmoticons = scriptEmoticonRuntimeBridge.getActiveEmoticons(currentLogicFrame);
+    const activeEntityIds = new Set<number>();
+
+    for (const emoticon of activeEmoticons) {
+      const worldPosition = gameLogic.getEntityWorldPosition(emoticon.entityId);
+      if (!worldPosition) {
+        continue;
+      }
+
+      const screen = projectToScreen(
+        worldPosition[0],
+        worldPosition[1] + 8,
+        worldPosition[2],
+      );
+
+      let node = emoticonNodeByEntityId.get(emoticon.entityId) ?? null;
+      if (!node) {
+        node = document.createElement('div');
+        Object.assign(node.style, {
+          position: 'absolute',
+          transform: 'translate(-50%, -100%)',
+          color: '#f4efe1',
+          fontFamily: '"Trebuchet MS", "Segoe UI", sans-serif',
+          fontSize: '13px',
+          fontWeight: '700',
+          letterSpacing: '0.02em',
+          textShadow: '0 0 6px rgba(0,0,0,0.95), 0 1px 4px rgba(0,0,0,0.95)',
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+        });
+        emoticonOverlay.appendChild(node);
+        emoticonNodeByEntityId.set(emoticon.entityId, node);
+      }
+
+      node.textContent = emoticon.emoticonName;
+      node.style.left = `${Math.round(screen.sx)}px`;
+      node.style.top = `${Math.round(screen.sy)}px`;
+      node.style.display = 'block';
+      activeEntityIds.add(emoticon.entityId);
+    }
+
+    for (const [entityId, node] of emoticonNodeByEntityId) {
+      if (activeEntityIds.has(entityId)) {
+        continue;
+      }
+      node.remove();
+      emoticonNodeByEntityId.delete(entityId);
+    }
+  };
+
   // ========================================================================
   // Game loop
   // ========================================================================
@@ -2051,15 +2115,20 @@ async function startGame(
     gameLogic,
     uiRuntime,
   });
+  const scriptEmoticonRuntimeBridge = createScriptEmoticonRuntimeBridge({
+    gameLogic,
+  });
   const scriptCameraRuntimeBridge = createScriptCameraRuntimeBridge({
     gameLogic,
     cameraController: rtsCamera,
   });
   scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
   const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
+  let currentLogicFrame = 0;
 
   gameLoop.start({
     onSimulationStep(_frameNumber: number, dt: number) {
+      currentLogicFrame = _frameNumber + 1;
       const inputState = inputManager.getState();
       const scriptInputDisabled = gameLogic.isScriptInputDisabled();
       let inputStateForGameLogic: InputState = applyScriptInputLock(
@@ -2314,6 +2383,7 @@ async function startGame(
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
       scriptUiEffectsRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
+      scriptEmoticonRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
       scriptCinematicRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
 
       // Move sun light to follow camera target for consistent shadows.
@@ -2352,6 +2422,7 @@ async function startGame(
       updateMoveIndicators();
       updateProjectileVisuals();
       updateEntityInfoPanel();
+      updateScriptEmoticonOverlay(currentLogicFrame);
 
       // FPS counter
       frameCount++;
