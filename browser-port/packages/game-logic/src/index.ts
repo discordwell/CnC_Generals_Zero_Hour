@@ -38353,7 +38353,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (this.getSidePlayerType(dozerSide) !== 'HUMAN') {
       return false;
     }
-    return this.resolveEntityShroudStatusForSide(target, dozerSide) === 'SHROUDED';
+    return this.resolveEntityShroudStatusForSide(target, dozerSide) !== 'CLEAR';
   }
 
   /**

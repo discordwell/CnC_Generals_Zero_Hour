@@ -10411,6 +10411,58 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.pendingRepairActions.has(1)).toBe(false);
   });
 
+  it('blocks player repair commands on fogged targets', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], {
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+      VisionRange: 80,
+      Speed: 120,
+    });
+
+    const buildingDef = makeObjectDef('CivilianRepairTarget', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('CivilianRepairTarget', 200, 200), // id 2
+      ], 256, 256),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(256, 256),
+    );
+
+    const priv = logic as unknown as {
+      pendingRepairActions: Map<number, number>;
+    };
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.setTeamRelationship('America', 'Civilian', 1);
+    logic.setTeamRelationship('Civilian', 'America', 1);
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+
+    expect(logic.executeScriptAction({
+      actionType: 102, // MAP_REVEAL_ALL
+      params: ['America'],
+    })).toBe(true);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_FOGGED);
+
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+  });
+
   it('idle dozer auto-seeks nearby repairs after bored time', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
