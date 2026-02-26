@@ -35923,6 +35923,7 @@ export class GameLogicSubsystem implements Subsystem {
       },
       setReadyFrame: this.setSpecialPowerReadyFrame.bind(this),
       isObjectShroudedForAction: this.isSpecialPowerObjectTargetShrouded.bind(this),
+      isObjectTargetAllowedForSpecialPower: this.isSpecialPowerObjectTargetAllowed.bind(this),
       isPositionUnderwater: this.isSpecialPowerLocationUnderwater.bind(this),
       isLocationShroudedForAction: this.isSpecialPowerLocationTargetShrouded.bind(this),
       getTeamRelationship: this.getTeamRelationship.bind(this),
@@ -36055,6 +36056,57 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
+  }
+
+  /**
+   * Source parity: ActionManager::canDoSpecialPowerAtObject.
+   * Applies enum-specific object-target legality checks before dispatch.
+   */
+  private isSpecialPowerObjectTargetAllowed(
+    source: MapEntity,
+    target: MapEntity,
+    specialPowerEnum: string | null,
+    _commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
+    if (!specialPowerEnum) {
+      return true;
+    }
+    const targetKindOf = this.resolveEntityKindOfSet(target);
+    const relationship = this.getTeamRelationship(source, target);
+
+    switch (specialPowerEnum) {
+      case 'SPECIAL_TANKHUNTER_TNT_ATTACK':
+        return targetKindOf.has('STRUCTURE')
+          || (targetKindOf.has('VEHICLE') && !targetKindOf.has('AIRCRAFT'));
+      case 'SPECIAL_MISSILE_DEFENDER_LASER_GUIDED_MISSILES':
+        return targetKindOf.has('VEHICLE') && relationship === RELATIONSHIP_ENEMIES;
+      case 'SPECIAL_HACKER_DISABLE_BUILDING':
+        return targetKindOf.has('STRUCTURE')
+          && relationship === RELATIONSHIP_ENEMIES
+          && targetKindOf.has('CAPTURABLE')
+          && !targetKindOf.has('REBUILD_HOLE');
+      case 'SPECIAL_CASH_HACK':
+        return targetKindOf.has('STRUCTURE')
+          && relationship === RELATIONSHIP_ENEMIES
+          && targetKindOf.has('CAPTURABLE')
+          && targetKindOf.has('CASH_GENERATOR')
+          && !targetKindOf.has('REBUILD_HOLE')
+          && !target.objectStatusFlags.has('UNDER_CONSTRUCTION');
+      case 'SPECIAL_DISGUISE_AS_VEHICLE':
+        return targetKindOf.has('VEHICLE')
+          && !targetKindOf.has('AIRCRAFT')
+          && !targetKindOf.has('BOAT');
+      case 'SPECIAL_DEFECTOR':
+        return !targetKindOf.has('STRUCTURE') && relationship === RELATIONSHIP_ENEMIES;
+      case 'SPECIAL_REMOTE_CHARGES':
+      case 'SPECIAL_TIMED_CHARGES':
+        if (targetKindOf.has('BRIDGE') || targetKindOf.has('BRIDGE_TOWER')) {
+          return false;
+        }
+        return targetKindOf.has('STRUCTURE') || targetKindOf.has('VEHICLE');
+      default:
+        return true;
+    }
   }
 
   private isSpecialPowerLocationUnderwater(targetX: number, targetZ: number): boolean {

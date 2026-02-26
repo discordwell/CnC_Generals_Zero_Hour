@@ -98,6 +98,12 @@ interface SpecialPowerCommandContext<TEntity extends SpecialPowerCommandEntity> 
     targetEntity: TEntity,
     commandSource: SpecialPowerCommandSource,
   ): boolean;
+  isObjectTargetAllowedForSpecialPower(
+    sourceEntity: TEntity,
+    targetEntity: TEntity,
+    specialPowerEnum: string | null,
+    commandSource: SpecialPowerCommandSource,
+  ): boolean;
   isPositionUnderwater(targetX: number, targetZ: number): boolean;
   isLocationShroudedForAction(sourceEntity: TEntity, targetX: number, targetZ: number): boolean;
   getTeamRelationship(sourceEntity: TEntity, targetEntity: TEntity): number;
@@ -386,6 +392,9 @@ export function routeIssueSpecialPowerCommand<TEntity extends SpecialPowerComman
       return;
     }
     if (context.isObjectShroudedForAction(sourceEntity, targetEntity, commandSource)) {
+      return;
+    }
+    if (!context.isObjectTargetAllowedForSpecialPower(sourceEntity, targetEntity, specialPowerEnum, commandSource)) {
       return;
     }
 

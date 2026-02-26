@@ -9464,6 +9464,154 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     }
   });
 
+  it('enforces cash-hack target kind restrictions when enum is set', () => {
+    const logic = new GameLogicSubsystem();
+
+    const hackerDef = makeObjectDef('Hacker', 'China', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      makeBlock('Behavior', 'CashHackSpecialPower HackModule', {
+        SpecialPowerTemplate: 'SpecialPowerCashHack',
+      }),
+    ]);
+    const enemyNonCashDef = makeObjectDef('EnemyNonCash', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+    const enemyCashDef = makeObjectDef('EnemyCash', 'America', ['STRUCTURE', 'CAPTURABLE', 'CASH_GENERATOR'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [hackerDef, enemyNonCashDef, enemyCashDef],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerCashHack', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_CASH_HACK',
+        }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hacker', 10, 10),
+        makeMapObject('EnemyNonCash', 20, 10),
+        makeMapObject('EnemyCash', 24, 10),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'China', playerType: 'COMPUTER' });
+    logic.update(0);
+    logic.setSideCredits('America', 5000);
+    const chinaBefore = logic.getSideCredits('China');
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_HACK_NON_CASH',
+      specialPowerName: 'SpecialPowerCashHack',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+    expect(logic.getSideCredits('China')).toBe(chinaBefore);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_HACK_CASH',
+      specialPowerName: 'SpecialPowerCashHack',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 3,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'OBJECT',
+      targetEntityId: 3,
+    });
+    expect(logic.getSideCredits('China')).toBeGreaterThan(chinaBefore);
+  });
+
+  it('enforces defector object-target structure rejection when enum is set', () => {
+    const logic = new GameLogicSubsystem();
+
+    const defectorDef = makeObjectDef('Defector', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+      makeBlock('Behavior', 'DefectorSpecialPower DefectModule', {
+        SpecialPowerTemplate: 'SpecialPowerDefector',
+      }),
+    ]);
+    const enemyStructureDef = makeObjectDef('EnemyStructure', 'China', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const enemyVehicleDef = makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    const registry = makeRegistry(makeBundle({
+      objects: [defectorDef, enemyStructureDef, enemyVehicleDef],
+      specialPowers: [
+        makeSpecialPowerDef('SpecialPowerDefector', {
+          ReloadTime: 0,
+          Enum: 'SPECIAL_DEFECTOR',
+        }),
+      ],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Defector', 10, 10),
+        makeMapObject('EnemyStructure', 20, 10),
+        makeMapObject('EnemyVehicle', 24, 10),
+      ], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_DEFECT_STRUCTURE',
+      specialPowerName: 'SpecialPowerDefector',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 2,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toBeNull();
+
+    logic.submitCommand({
+      type: 'issueSpecialPower',
+      commandButtonId: 'CMD_DEFECT_VEHICLE',
+      specialPowerName: 'SpecialPowerDefector',
+      commandOption: 0x01,
+      issuingEntityIds: [1],
+      sourceEntityId: 1,
+      targetEntityId: 3,
+      targetX: null,
+      targetZ: null,
+    });
+    logic.update(0);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      dispatchType: 'OBJECT',
+      targetEntityId: 3,
+    });
+  });
+
   it('ignores special power dispatch when source entity is missing matching module', () => {
     const bundle = makeBundle({
       objects: [
