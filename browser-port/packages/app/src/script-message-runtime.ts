@@ -75,6 +75,8 @@ export function createScriptMessageRuntimeBridge(
         logger.warn(
           `[ScriptDebugCrashBox frame=${request.frame}] ${request.message}`,
         );
+        // Source-parity bridge: DEBUG_CRASH_BOX halts progression until user intervention.
+        setSimulationPaused(true);
       }
       uiRuntime.showMessage(request.message);
       if (request.pauseRequested) {

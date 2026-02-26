@@ -117,7 +117,7 @@ describe('script message runtime bridge', () => {
     expect(logger.warnMessages).toEqual([
       '[ScriptDebugCrashBox frame=11] Debug message',
     ]);
-    expect(pauseCalls).toEqual([true, true]);
+    expect(pauseCalls).toEqual([true, true, true]);
   });
 
   it('maps display message durations for military captions', () => {
@@ -157,6 +157,37 @@ describe('script message runtime bridge', () => {
       { message: 'Mission text', durationMs: undefined },
       { message: 'Military subtitle', durationMs: 3000 },
       { message: 'Default duration subtitle', durationMs: 4000 },
+    ]);
+  });
+
+  it('pauses simulation on debug crash-box requests even without explicit pause flag', () => {
+    const gameLogic = new RecordingGameLogic();
+    const uiRuntime = new RecordingUiRuntime();
+    const logger = new RecordingLogger();
+    const pauseCalls: boolean[] = [];
+
+    const bridge = createScriptMessageRuntimeBridge({
+      gameLogic,
+      uiRuntime,
+      setSimulationPaused: (paused) => pauseCalls.push(paused),
+      logger,
+    });
+
+    gameLogic.state.debugRequests.push({
+      message: 'Crash-box debug',
+      crashRequested: true,
+      pauseRequested: false,
+      frame: 42,
+    });
+
+    bridge.syncAfterSimulationStep();
+
+    expect(pauseCalls).toEqual([true]);
+    expect(logger.warnMessages).toEqual([
+      '[ScriptDebugCrashBox frame=42] Crash-box debug',
+    ]);
+    expect(uiRuntime.shownMessages).toEqual([
+      { message: 'Crash-box debug', durationMs: undefined },
     ]);
   });
 });
