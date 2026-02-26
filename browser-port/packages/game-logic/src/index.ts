@@ -1593,6 +1593,7 @@ interface SabotageBuildingProfile {
 interface PendingEnterObjectActionState {
   targetObjectId: number;
   action: EnterObjectCommand['action'];
+  commandSource: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 interface PendingRepairDockActionState {
@@ -36771,6 +36772,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.pendingEnterObjectActions.set(source.id, {
       targetObjectId: target.id,
       action: command.action,
+      commandSource,
     });
   }
 
@@ -37605,7 +37607,7 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
   ): boolean {
-    if (commandSource !== 'PLAYER') {
+    if (commandSource === 'SCRIPT') {
       return false;
     }
     const sourceSide = this.normalizeSide(source.side);
@@ -38343,7 +38345,7 @@ export class GameLogicSubsystem implements Subsystem {
     target: MapEntity,
     commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
   ): boolean {
-    if (commandSource !== 'PLAYER') {
+    if (commandSource === 'SCRIPT') {
       return false;
     }
     const dozerSide = this.normalizeSide(dozer.side);
@@ -38675,7 +38677,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      this.resolvePendingEnterObjectAction(source, target, pending.action);
+      this.resolvePendingEnterObjectAction(source, target, pending.action, pending.commandSource);
       this.pendingEnterObjectActions.delete(sourceId);
     }
   }
@@ -38763,6 +38765,7 @@ export class GameLogicSubsystem implements Subsystem {
     source: MapEntity,
     target: MapEntity,
     action: EnterObjectCommand['action'],
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
   ): void {
     if (source.destroyed || target.destroyed) {
       return;
@@ -38789,7 +38792,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (action === 'captureUnmannedFactionUnit') {
-      this.resolveCaptureUnmannedFactionUnitEnterAction(source, target);
+      this.resolveCaptureUnmannedFactionUnitEnterAction(source, target, commandSource);
     }
   }
 
@@ -38933,8 +38936,12 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity subset: capture nearest unowned faction unit enter resolution.
    */
-  private resolveCaptureUnmannedFactionUnitEnterAction(source: MapEntity, target: MapEntity): void {
-    if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target, 'AI')) {
+  private resolveCaptureUnmannedFactionUnitEnterAction(
+    source: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): void {
+    if (!this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target, commandSource)) {
       return;
     }
 

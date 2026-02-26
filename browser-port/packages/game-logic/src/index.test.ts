@@ -8223,6 +8223,16 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       type: 'enterObject',
       entityId: 1,
       targetObjectId: 2,
+      commandSource: 'AI',
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+    expect(privateApi.pendingEnterObjectActions.has(1)).toBe(false);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
       commandSource: 'SCRIPT',
       action: 'hijackVehicle',
     });
@@ -10192,7 +10202,8 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     logic.setTeamRelationship('America', 'Civilian', 1);
     logic.setTeamRelationship('Civilian', 'America', 1);
-    logic.update(0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(1 / 30);
     const before = logic.getEntityState(2)!.health;
     logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2, commandSource: 'AI' });
     logic.update(1 / 30);
@@ -10407,6 +10418,10 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
     logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2, commandSource: 'AI' });
     logic.update(1 / 30);
     expect(priv.pendingRepairActions.has(1)).toBe(false);
   });
@@ -34763,6 +34778,11 @@ describe('Script condition groundwork', () => {
     };
 
     logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.update(1 / 30);
+    expect(privateApi.pendingTransportActions.has(2)).toBe(false);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1, commandSource: 'AI' });
     logic.update(1 / 30);
     expect(privateApi.pendingTransportActions.has(2)).toBe(false);
     expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
