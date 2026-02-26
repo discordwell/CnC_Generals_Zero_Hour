@@ -198,6 +198,44 @@ describe('script camera runtime bridge', () => {
     expect(bridge.isCameraMovementFinished()).toBe(true);
   });
 
+  it('uses script ease-in for MOVE_TO transitions', () => {
+    const linearLogic = new RecordingGameLogic();
+    const linearCamera = new RecordingCameraController();
+    const linearBridge = createScriptCameraRuntimeBridge({
+      gameLogic: linearLogic,
+      cameraController: linearCamera,
+    });
+    linearLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_TO',
+      x: 90,
+      z: 0,
+      durationMs: 1000,
+      easeInMs: 0,
+      easeOutMs: 0,
+    }));
+    linearBridge.syncAfterSimulationStep(1);
+    const linearX = linearCamera.getState().targetX;
+
+    const easedLogic = new RecordingGameLogic();
+    const easedCamera = new RecordingCameraController();
+    const easedBridge = createScriptCameraRuntimeBridge({
+      gameLogic: easedLogic,
+      cameraController: easedCamera,
+    });
+    easedLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_TO',
+      x: 90,
+      z: 0,
+      durationMs: 1000,
+      easeInMs: 500,
+      easeOutMs: 0,
+    }));
+    easedBridge.syncAfterSimulationStep(1);
+    const easedX = easedCamera.getState().targetX;
+
+    expect(easedX).toBeLessThan(linearX);
+  });
+
   it('applies ROTATE requests over the scripted duration', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();

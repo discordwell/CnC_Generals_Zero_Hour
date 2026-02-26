@@ -127,6 +127,8 @@ interface ScalarTransition {
   durationFrames: number;
   from: number;
   to: number;
+  easeIn: number;
+  easeOut: number;
 }
 
 interface TargetTransition {
@@ -136,6 +138,8 @@ interface TargetTransition {
   fromZ: number;
   toX: number;
   toZ: number;
+  easeIn: number;
+  easeOut: number;
 }
 
 function normalizeAngle(angle: number): number {
@@ -157,6 +161,46 @@ function toDurationFrames(durationMs: number): number {
   return Math.max(1, Math.trunc((normalizedMs * 30) / 1000));
 }
 
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function toEaseRatioFromDuration(easeMs: number, durationMs: number): number {
+  const normalizedDurationMs = Number.isFinite(durationMs)
+    ? Math.max(1, Math.trunc(durationMs))
+    : 1;
+  return clamp01(easeMs / normalizedDurationMs);
+}
+
+function evaluateParabolicEase(progress: number, easeIn: number, easeOut: number): number {
+  const normalizedProgress = clamp01(progress);
+  let inTime = clamp01(easeIn);
+  const outTime = clamp01(easeOut);
+  const outStart = 1 - outTime;
+  if (inTime > outStart) {
+    inTime = outStart;
+  }
+  const v0 = 1 + outStart - inTime;
+  if (normalizedProgress < inTime) {
+    return (normalizedProgress * normalizedProgress) / (v0 * inTime);
+  }
+  if (normalizedProgress <= outStart) {
+    return (inTime + 2 * (normalizedProgress - inTime)) / v0;
+  }
+  return (
+    inTime
+    + 2 * (outStart - inTime)
+    + (
+      2 * (normalizedProgress - outStart)
+      + (outStart * outStart)
+      - (normalizedProgress * normalizedProgress)
+    ) / (1 - outStart)
+  ) / v0;
+}
+
 function getTransitionProgress(currentLogicFrame: number, startFrame: number, durationFrames: number): number {
   const elapsedFrames = currentLogicFrame - startFrame + 1;
   if (elapsedFrames <= 0) {
@@ -169,11 +213,12 @@ function getTransitionProgress(currentLogicFrame: number, startFrame: number, du
 }
 
 function evaluateScalarTransition(transition: ScalarTransition, currentLogicFrame: number): number {
-  const progress = getTransitionProgress(
+  const linearProgress = getTransitionProgress(
     currentLogicFrame,
     transition.startFrame,
     transition.durationFrames,
   );
+  const progress = evaluateParabolicEase(linearProgress, transition.easeIn, transition.easeOut);
   return transition.from + (transition.to - transition.from) * progress;
 }
 
@@ -181,11 +226,12 @@ function evaluateTargetTransition(
   transition: TargetTransition,
   currentLogicFrame: number,
 ): { x: number; z: number } {
-  const progress = getTransitionProgress(
+  const linearProgress = getTransitionProgress(
     currentLogicFrame,
     transition.startFrame,
     transition.durationFrames,
   );
+  const progress = evaluateParabolicEase(linearProgress, transition.easeIn, transition.easeOut);
   return {
     x: transition.fromX + (transition.toX - transition.fromX) * progress,
     z: transition.fromZ + (transition.toZ - transition.fromZ) * progress,
@@ -271,6 +317,8 @@ export function createScriptCameraRuntimeBridge(
     toX: number,
     toZ: number,
     durationFrames: number,
+    easeIn = 0,
+    easeOut = 0,
   ): void => {
     const state = cameraController.getState();
     targetTransition = {
@@ -280,6 +328,8 @@ export function createScriptCameraRuntimeBridge(
       fromZ: state.targetZ,
       toX,
       toZ,
+      easeIn: clamp01(easeIn),
+      easeOut: clamp01(easeOut),
     };
   };
 
@@ -287,6 +337,8 @@ export function createScriptCameraRuntimeBridge(
     currentLogicFrame: number,
     toAngle: number,
     durationFrames: number,
+    easeIn = 0,
+    easeOut = 0,
   ): void => {
     const state = cameraController.getState();
     angleTransition = {
@@ -294,6 +346,8 @@ export function createScriptCameraRuntimeBridge(
       durationFrames,
       from: state.angle,
       to: toAngle,
+      easeIn: clamp01(easeIn),
+      easeOut: clamp01(easeOut),
     };
   };
 
@@ -301,6 +355,8 @@ export function createScriptCameraRuntimeBridge(
     currentLogicFrame: number,
     toZoom: number,
     durationFrames: number,
+    easeIn = 0,
+    easeOut = 0,
   ): void => {
     const state = cameraController.getState();
     zoomTransition = {
@@ -308,6 +364,8 @@ export function createScriptCameraRuntimeBridge(
       durationFrames,
       from: state.zoom,
       to: toZoom,
+      easeIn: clamp01(easeIn),
+      easeOut: clamp01(easeOut),
     };
   };
 
@@ -315,6 +373,8 @@ export function createScriptCameraRuntimeBridge(
     currentLogicFrame: number,
     toPitch: number,
     durationFrames: number,
+    easeIn = 0,
+    easeOut = 0,
   ): void => {
     const state = cameraController.getState();
     pitchTransition = {
@@ -322,6 +382,8 @@ export function createScriptCameraRuntimeBridge(
       durationFrames,
       from: state.pitch,
       to: toPitch,
+      easeIn: clamp01(easeIn),
+      easeOut: clamp01(easeOut),
     };
   };
 
@@ -423,6 +485,8 @@ export function createScriptCameraRuntimeBridge(
             request.x,
             request.z,
             toDurationFrames(request.durationMs),
+            toEaseRatioFromDuration(request.easeInMs, request.durationMs),
+            toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
           );
           break;
         }
@@ -441,11 +505,13 @@ export function createScriptCameraRuntimeBridge(
             && scriptDefaultView.maxHeight > 0
             ? scriptDefaultView.maxHeight
             : defaultCameraState.zoom;
+          const easeIn = toEaseRatioFromDuration(request.easeInMs, request.durationMs);
+          const easeOut = toEaseRatioFromDuration(request.easeOutMs, request.durationMs);
 
-          beginTargetTransition(currentLogicFrame, request.x, request.z, durationFrames);
-          beginAngleTransition(currentLogicFrame, resetAngle, durationFrames);
-          beginZoomTransition(currentLogicFrame, resetZoom, durationFrames);
-          beginPitchTransition(currentLogicFrame, 1, durationFrames);
+          beginTargetTransition(currentLogicFrame, request.x, request.z, durationFrames, easeIn, easeOut);
+          beginAngleTransition(currentLogicFrame, resetAngle, durationFrames, easeIn, easeOut);
+          beginZoomTransition(currentLogicFrame, resetZoom, durationFrames, easeIn, easeOut);
+          beginPitchTransition(currentLogicFrame, 1, durationFrames, easeIn, easeOut);
           break;
         }
 
@@ -458,6 +524,8 @@ export function createScriptCameraRuntimeBridge(
             currentLogicFrame,
             state.angle + TWO_PI * request.rotations,
             toDurationFrames(request.durationMs),
+            toEaseRatioFromDuration(request.easeInMs, request.durationMs),
+            toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
           );
           break;
         }
@@ -503,6 +571,8 @@ export function createScriptCameraRuntimeBridge(
             currentLogicFrame,
             request.zoom,
             toDurationFrames(request.durationMs),
+            toEaseRatioFromDuration(request.easeInMs, request.durationMs),
+            toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
           );
           break;
         }
@@ -515,6 +585,8 @@ export function createScriptCameraRuntimeBridge(
             currentLogicFrame,
             request.pitch,
             toDurationFrames(request.durationMs),
+            toEaseRatioFromDuration(request.easeInMs, request.durationMs),
+            toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
           );
           break;
         }
@@ -545,7 +617,13 @@ export function createScriptCameraRuntimeBridge(
           if (remainingFrames < 1) {
             break;
           }
-          beginZoomTransition(currentLogicFrame, request.zoom, remainingFrames);
+          beginZoomTransition(
+            currentLogicFrame,
+            request.zoom,
+            remainingFrames,
+            clamp01(request.easeIn ?? 0),
+            clamp01(request.easeOut ?? 0),
+          );
           break;
         }
 
@@ -579,7 +657,13 @@ export function createScriptCameraRuntimeBridge(
           if (remainingFrames < 1) {
             break;
           }
-          beginAngleTransition(currentLogicFrame, lookTowardAngle, remainingFrames);
+          beginAngleTransition(
+            currentLogicFrame,
+            lookTowardAngle,
+            remainingFrames,
+            0,
+            0,
+          );
           break;
         }
 
@@ -591,7 +675,13 @@ export function createScriptCameraRuntimeBridge(
           if (remainingFrames < 1) {
             break;
           }
-          beginPitchTransition(currentLogicFrame, request.pitch, remainingFrames);
+          beginPitchTransition(
+            currentLogicFrame,
+            request.pitch,
+            remainingFrames,
+            clamp01(request.easeIn ?? 0),
+            clamp01(request.easeOut ?? 0),
+          );
           break;
         }
 
@@ -614,6 +704,8 @@ export function createScriptCameraRuntimeBridge(
             durationFrames: remainingFrames,
             from: cameraTimeMultiplier,
             to: finalMultiplier,
+            easeIn: 0,
+            easeOut: 0,
           };
           break;
         }
@@ -650,7 +742,13 @@ export function createScriptCameraRuntimeBridge(
           );
           if (lookTowardAngle !== null) {
             const durationFrames = toDurationFrames(lookTowardObjectState.durationMs);
-            beginAngleTransition(currentLogicFrame, lookTowardAngle, durationFrames);
+            beginAngleTransition(
+              currentLogicFrame,
+              lookTowardAngle,
+              durationFrames,
+              toEaseRatioFromDuration(lookTowardObjectState.easeInMs, lookTowardObjectState.durationMs),
+              toEaseRatioFromDuration(lookTowardObjectState.easeOutMs, lookTowardObjectState.durationMs),
+            );
             const holdFrames = toDurationFrames(lookTowardObjectState.holdMs);
             nonVisualMovementEndFrame = Math.max(
               nonVisualMovementEndFrame,
@@ -695,6 +793,8 @@ export function createScriptCameraRuntimeBridge(
         currentLogicFrame,
         lookTowardAngle,
         toDurationFrames(lookTowardWaypointState.durationMs),
+        toEaseRatioFromDuration(lookTowardWaypointState.easeInMs, lookTowardWaypointState.durationMs),
+        toEaseRatioFromDuration(lookTowardWaypointState.easeOutMs, lookTowardWaypointState.durationMs),
       );
     }
     lastLookTowardWaypointSignature = signature;
