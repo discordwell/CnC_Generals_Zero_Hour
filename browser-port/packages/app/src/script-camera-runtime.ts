@@ -151,6 +151,7 @@ interface WaypointPathTransition {
   points: ReadonlyArray<{ x: number; z: number }>;
   cumulativeDistances: ReadonlyArray<number>;
   cameraAngles: ReadonlyArray<number>;
+  timeMultipliers: ReadonlyArray<number>;
   totalDistance: number;
   easeIn: number;
   easeOut: number;
@@ -379,7 +380,15 @@ function sampleWaypointPathCurve(
 function evaluateWaypointPathTransition(
   transition: WaypointPathTransition,
   currentLogicFrame: number,
-): { x: number; z: number; segmentIndex: number; segmentProgress: number; headingAngle: number | null; advancedThisFrame: boolean } {
+): {
+  x: number;
+  z: number;
+  segmentIndex: number;
+  segmentProgress: number;
+  headingAngle: number | null;
+  timeMultiplier: number;
+  advancedThisFrame: boolean;
+} {
   const { linearProgress, advancedThisFrame } = getStutteredProgressState(
     currentLogicFrame,
     transition.startFrame,
@@ -391,26 +400,31 @@ function evaluateWaypointPathTransition(
   const points = transition.points;
   const cumulativeDistances = transition.cumulativeDistances;
   const cameraAngles = transition.cameraAngles;
+  const timeMultipliers = transition.timeMultipliers;
   const lastPoint = points[points.length - 1]!;
   if (travelledDistance <= 0) {
     const headingAngle = cameraAngles[0] ?? null;
+    const timeMultiplier = Math.floor(0.5 + (timeMultipliers[0] ?? 1));
     return {
       x: points[0]!.x,
       z: points[0]!.z,
       segmentIndex: 1,
       segmentProgress: 0,
       headingAngle,
+      timeMultiplier,
       advancedThisFrame,
     };
   }
   if (travelledDistance >= transition.totalDistance) {
     const headingAngle = cameraAngles[cameraAngles.length - 1] ?? null;
+    const timeMultiplier = Math.floor(0.5 + (timeMultipliers[timeMultipliers.length - 1] ?? 1));
     return {
       x: lastPoint.x,
       z: lastPoint.z,
       segmentIndex: Math.max(1, points.length - 1),
       segmentProgress: 1,
       headingAngle,
+      timeMultiplier,
       advancedThisFrame,
     };
   }
@@ -425,12 +439,14 @@ function evaluateWaypointPathTransition(
     if (segmentLength <= 0) {
       const point = points[i]!;
       const headingAngle = cameraAngles[i] ?? cameraAngles[i - 1] ?? null;
+      const timeMultiplier = Math.floor(0.5 + (timeMultipliers[i] ?? timeMultipliers[i - 1] ?? 1));
       return {
         x: point.x,
         z: point.z,
         segmentIndex: i,
         segmentProgress: 1,
         headingAngle,
+        timeMultiplier,
         advancedThisFrame,
       };
     }
@@ -438,6 +454,11 @@ function evaluateWaypointPathTransition(
     const fromAngle = cameraAngles[i - 1] ?? 0;
     const toAngle = cameraAngles[i] ?? fromAngle;
     const headingAngle = interpolateHeadingAngle(fromAngle, toAngle, segmentProgress);
+    const fromMultiplier = timeMultipliers[i - 1] ?? 1;
+    const toMultiplier = timeMultipliers[i] ?? fromMultiplier;
+    const timeMultiplier = Math.floor(
+      0.5 + ((fromMultiplier * (1 - segmentProgress)) + (toMultiplier * segmentProgress)),
+    );
     const curvedPoint = sampleWaypointPathCurve(points, i, segmentProgress);
     return {
       x: curvedPoint.x,
@@ -445,17 +466,20 @@ function evaluateWaypointPathTransition(
       segmentIndex: i,
       segmentProgress,
       headingAngle,
+      timeMultiplier,
       advancedThisFrame,
     };
   }
 
   const headingAngle = cameraAngles[cameraAngles.length - 1] ?? null;
+  const timeMultiplier = Math.floor(0.5 + (timeMultipliers[timeMultipliers.length - 1] ?? 1));
   return {
     x: lastPoint.x,
     z: lastPoint.z,
     segmentIndex: Math.max(1, points.length - 1),
     segmentProgress: 1,
     headingAngle,
+    timeMultiplier,
     advancedThisFrame,
   };
 }
@@ -617,6 +641,7 @@ export function createScriptCameraRuntimeBridge(
       cumulativeDistances.push(cumulativeDistances[i - 1]! + segmentLength);
     }
     const cameraAngles: number[] = new Array(points.length).fill(state.angle);
+    const timeMultipliers: number[] = new Array(points.length).fill(cameraTimeMultiplier);
     let segmentHeading = state.angle;
     for (let i = 1; i < points.length; i += 1) {
       const previous = points[i - 1]!;
@@ -651,6 +676,7 @@ export function createScriptCameraRuntimeBridge(
       points,
       cumulativeDistances,
       cameraAngles,
+      timeMultipliers,
       totalDistance,
       easeIn: clamp01(easeIn),
       easeOut: clamp01(easeOut),
@@ -762,6 +788,7 @@ export function createScriptCameraRuntimeBridge(
       const pathSample = evaluateWaypointPathTransition(waypointPathTransition, currentLogicFrame);
       nextTargetX = pathSample.x;
       nextTargetZ = pathSample.z;
+      cameraTimeMultiplier = pathSample.timeMultiplier;
       stateChanged = true;
       if (!angleTransition && pathSample.advancedThisFrame && pathSample.headingAngle !== null) {
         if (frozenWaypointPathAngle !== null) {
@@ -1173,6 +1200,25 @@ export function createScriptCameraRuntimeBridge(
             break;
           }
           const finalMultiplier = request.speedMultiplier;
+          if (waypointPathTransition) {
+            const activeWaypointPathTransition = waypointPathTransition;
+            const totalDistance = activeWaypointPathTransition.totalDistance;
+            const nextMultipliers = activeWaypointPathTransition.timeMultipliers.map((currentMultiplier, index) => {
+              if (totalDistance <= 0) {
+                return Math.floor(0.5 + finalMultiplier);
+              }
+              const travelledDistance = activeWaypointPathTransition.cumulativeDistances[index] ?? totalDistance;
+              const factor2 = clamp01(travelledDistance / totalDistance);
+              const factor1 = 1 - factor2;
+              return Math.floor(0.5 + ((currentMultiplier * factor1) + (finalMultiplier * factor2)));
+            });
+            waypointPathTransition = {
+              ...activeWaypointPathTransition,
+              timeMultipliers: nextMultipliers,
+            };
+            timeMultiplierTransition = null;
+            break;
+          }
           const remainingFrames = getMaxVisualMovementRemainingFrames(currentLogicFrame);
           if (remainingFrames < 1) {
             cameraTimeMultiplier = finalMultiplier;

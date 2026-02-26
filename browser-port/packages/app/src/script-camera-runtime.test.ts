@@ -763,6 +763,37 @@ describe('script camera runtime bridge', () => {
     expect(bridge.getCameraTimeMultiplier()).toBeCloseTo(5, 6);
   });
 
+  it('applies FINAL_SPEED_MULTIPLIER along waypoint-path distance profile', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.waypointPaths.set('CAM_SPEED', [
+      { x: 100, z: 0 },
+      { x: 100, z: 100 },
+    ]);
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+      waypointName: 'CAM_SPEED',
+      x: 100,
+      z: 100,
+      durationMs: 1000,
+    }));
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FINAL_SPEED_MULTIPLIER',
+      speedMultiplier: 4,
+    }));
+
+    bridge.syncAfterSimulationStep(1);
+    expect(bridge.getCameraTimeMultiplier()).toBe(1);
+
+    bridge.syncAfterSimulationStep(15);
+    expect(bridge.getCameraTimeMultiplier()).toBe(3);
+
+    bridge.syncAfterSimulationStep(30);
+    expect(bridge.getCameraTimeMultiplier()).toBe(4);
+  });
+
   it('applies persistent FOLLOW camera lock states each frame', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();
