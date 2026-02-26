@@ -296,6 +296,85 @@ function interpolateHeadingAngle(fromAngle: number, toAngle: number, factor: num
   return normalizeAngle((from * (1 - factor)) + (to * factor));
 }
 
+function midpoint(a: { x: number; z: number }, b: { x: number; z: number }): { x: number; z: number } {
+  return {
+    x: (a.x + b.x) * 0.5,
+    z: (a.z + b.z) * 0.5,
+  };
+}
+
+function getWaypointPathPointWithPadding(
+  points: ReadonlyArray<{ x: number; z: number }>,
+  index: number,
+): { x: number; z: number } {
+  if (points.length === 0) {
+    return { x: 0, z: 0 };
+  }
+  if (points.length === 1) {
+    return { x: points[0]!.x, z: points[0]!.z };
+  }
+
+  const pointCount = points.length;
+  if (index <= 0) {
+    const first = points[0]!;
+    const second = points[1]!;
+    return {
+      x: first.x - (second.x - first.x),
+      z: first.z - (second.z - first.z),
+    };
+  }
+  if (index >= pointCount + 1) {
+    const last = points[pointCount - 1]!;
+    const previous = points[pointCount - 2]!;
+    return {
+      x: last.x + (last.x - previous.x),
+      z: last.z + (last.z - previous.z),
+    };
+  }
+  return {
+    x: points[index - 1]!.x,
+    z: points[index - 1]!.z,
+  };
+}
+
+function sampleWaypointPathCurve(
+  points: ReadonlyArray<{ x: number; z: number }>,
+  segmentIndex: number,
+  segmentProgress: number,
+): { x: number; z: number } {
+  let factor = segmentProgress;
+  let start: { x: number; z: number };
+  let mid: { x: number; z: number };
+  let end: { x: number; z: number };
+
+  if (factor < 0.5) {
+    const previous = getWaypointPathPointWithPadding(points, segmentIndex - 1);
+    const current = getWaypointPathPointWithPadding(points, segmentIndex);
+    const next = getWaypointPathPointWithPadding(points, segmentIndex + 1);
+    start = midpoint(previous, current);
+    mid = current;
+    end = midpoint(current, next);
+    factor += 0.5;
+  } else {
+    const current = getWaypointPathPointWithPadding(points, segmentIndex);
+    const next = getWaypointPathPointWithPadding(points, segmentIndex + 1);
+    const nextNext = getWaypointPathPointWithPadding(points, segmentIndex + 2);
+    start = midpoint(current, next);
+    mid = next;
+    end = midpoint(next, nextNext);
+    factor -= 0.5;
+  }
+
+  return {
+    x: start.x
+      + (factor * (end.x - start.x))
+      + ((1 - factor) * factor * (mid.x - end.x + mid.x - start.x)),
+    z: start.z
+      + (factor * (end.z - start.z))
+      + ((1 - factor) * factor * (mid.z - end.z + mid.z - start.z)),
+  };
+}
+
 function evaluateWaypointPathTransition(
   transition: WaypointPathTransition,
   currentLogicFrame: number,
@@ -355,14 +434,13 @@ function evaluateWaypointPathTransition(
       };
     }
     const segmentProgress = (travelledDistance - segmentStartDistance) / segmentLength;
-    const start = points[i - 1]!;
-    const end = points[i]!;
     const fromAngle = cameraAngles[i - 1] ?? 0;
     const toAngle = cameraAngles[i] ?? fromAngle;
     const headingAngle = interpolateHeadingAngle(fromAngle, toAngle, segmentProgress);
+    const curvedPoint = sampleWaypointPathCurve(points, i, segmentProgress);
     return {
-      x: start.x + (end.x - start.x) * segmentProgress,
-      z: start.z + (end.z - start.z) * segmentProgress,
+      x: curvedPoint.x,
+      z: curvedPoint.z,
       segmentIndex: i,
       segmentProgress,
       headingAngle,

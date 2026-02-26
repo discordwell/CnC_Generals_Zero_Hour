@@ -333,8 +333,10 @@ describe('script camera runtime bridge', () => {
     bridge.syncAfterSimulationStep(1);
     bridge.syncAfterSimulationStep(15);
     const mid = cameraController.getState();
-    expect(mid.targetX).toBeCloseTo(100, 2);
-    expect(mid.targetZ).toBeCloseTo(0, 2);
+    expect(mid.targetX).toBeGreaterThan(80);
+    expect(mid.targetX).toBeLessThan(100);
+    expect(mid.targetZ).toBeGreaterThan(0);
+    expect(mid.targetZ).toBeLessThan(30);
 
     bridge.syncAfterSimulationStep(30);
     const end = cameraController.getState();
