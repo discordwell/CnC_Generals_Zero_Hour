@@ -180,6 +180,37 @@ function makeModifierRequest(
   };
 }
 
+function normalizeAngle(angle: number): number {
+  let normalized = angle;
+  while (normalized > Math.PI) {
+    normalized -= Math.PI * 2;
+  }
+  while (normalized <= -Math.PI) {
+    normalized += Math.PI * 2;
+  }
+  return normalized;
+}
+
+function angleDistance(from: number, to: number): number {
+  return Math.abs(normalizeAngle(from - to));
+}
+
+function resolveLookTowardAngle(fromX: number, fromZ: number, toX: number, toZ: number): number | null {
+  const dirX = toX - fromX;
+  const dirZ = toZ - fromZ;
+  const dirLength = Math.hypot(dirX, dirZ);
+  if (dirLength < 0.1) {
+    return null;
+  }
+  const clampedX = Math.max(-1, Math.min(1, dirX / dirLength));
+  let angle = Math.acos(clampedX);
+  if (dirZ < 0) {
+    angle = -angle;
+  }
+  angle -= Math.PI / 2;
+  return normalizeAngle(angle);
+}
+
 describe('script camera runtime bridge', () => {
   it('animates MOVE_TO requests and reports camera movement completion', () => {
     const gameLogic = new RecordingGameLogic();
@@ -392,6 +423,79 @@ describe('script camera runtime bridge', () => {
     bridge.syncAfterSimulationStep(30);
     expect(cameraController.getState().angle).toBeCloseTo(frozenAngle, 6);
     expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
+  it('applies LOOK_TOWARD and FINAL_LOOK_TOWARD heading modifiers on waypoint paths', () => {
+    const runScenario = (modifierType: 'LOOK_TOWARD' | 'FINAL_LOOK_TOWARD' | null): {
+      early: CameraState;
+      late: CameraState;
+    } => {
+      const gameLogic = new RecordingGameLogic();
+      const cameraController = new RecordingCameraController();
+      const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+      gameLogic.state.waypointPaths.set('CAM_LOOK', [
+        { x: 100, z: 0 },
+        { x: 100, z: 100 },
+      ]);
+      gameLogic.state.actionRequests.push(makeActionRequest({
+        requestType: 'MOVE_ALONG_WAYPOINT_PATH',
+        waypointName: 'CAM_LOOK',
+        x: 100,
+        z: 100,
+        durationMs: 1000,
+      }));
+      if (modifierType) {
+        gameLogic.state.modifierRequests.push(makeModifierRequest({
+          requestType: modifierType,
+          x: 0,
+          z: 100,
+        }));
+      }
+
+      bridge.syncAfterSimulationStep(1);
+      bridge.syncAfterSimulationStep(10);
+      const early = cameraController.getState();
+      bridge.syncAfterSimulationStep(27);
+      const late = cameraController.getState();
+      return { early, late };
+    };
+
+    const baseline = runScenario(null);
+    const lookToward = runScenario('LOOK_TOWARD');
+    const finalLookToward = runScenario('FINAL_LOOK_TOWARD');
+
+    const earlyLookTowardAngle = resolveLookTowardAngle(
+      lookToward.early.targetX,
+      lookToward.early.targetZ,
+      0,
+      100,
+    );
+    const earlyFinalLookTowardAngle = resolveLookTowardAngle(
+      finalLookToward.early.targetX,
+      finalLookToward.early.targetZ,
+      0,
+      100,
+    );
+    const lateFinalLookTowardAngle = resolveLookTowardAngle(
+      finalLookToward.late.targetX,
+      finalLookToward.late.targetZ,
+      0,
+      100,
+    );
+    expect(earlyLookTowardAngle).not.toBeNull();
+    expect(earlyFinalLookTowardAngle).not.toBeNull();
+    expect(lateFinalLookTowardAngle).not.toBeNull();
+
+    const baselineEarlyDelta = angleDistance(baseline.early.angle, earlyLookTowardAngle!);
+    const lookEarlyDelta = angleDistance(lookToward.early.angle, earlyLookTowardAngle!);
+    const finalEarlyDelta = angleDistance(finalLookToward.early.angle, earlyFinalLookTowardAngle!);
+    expect(lookEarlyDelta).toBeLessThan(finalEarlyDelta);
+    expect(finalEarlyDelta).toBeLessThan(baselineEarlyDelta);
+
+    const baselineLateDelta = angleDistance(baseline.late.angle, lateFinalLookTowardAngle!);
+    const finalLateDelta = angleDistance(finalLookToward.late.angle, lateFinalLookTowardAngle!);
+    expect(finalLateDelta).toBeLessThan(baselineLateDelta);
   });
 
   it('applies ROTATE requests over the scripted duration', () => {
