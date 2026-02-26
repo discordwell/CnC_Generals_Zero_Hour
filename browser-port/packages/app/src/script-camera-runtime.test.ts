@@ -10,6 +10,7 @@ import {
   type ScriptCameraLookTowardObjectState,
   type ScriptCameraLookTowardWaypointState,
   type ScriptCameraModifierRequestState,
+  type ScriptCameraSlaveModeState,
   type ScriptCameraTetherState,
 } from './script-camera-runtime.js';
 
@@ -18,9 +19,17 @@ interface MutableScriptCameraState {
   modifierRequests: ScriptCameraModifierRequestState[];
   tetherState: ScriptCameraTetherState | null;
   followState: ScriptCameraFollowState | null;
+  slaveModeState: ScriptCameraSlaveModeState | null;
   lookTowardObjectState: ScriptCameraLookTowardObjectState | null;
   lookTowardWaypointState: ScriptCameraLookTowardWaypointState | null;
   entityPositions: Map<number, readonly [number, number, number]>;
+  renderableEntities: Array<{
+    id: number;
+    templateName: string;
+    x: number;
+    y: number;
+    z: number;
+  }>;
 }
 
 class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
@@ -29,9 +38,11 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
     modifierRequests: [],
     tetherState: null,
     followState: null,
+    slaveModeState: null,
     lookTowardObjectState: null,
     lookTowardWaypointState: null,
     entityPositions: new Map<number, readonly [number, number, number]>(),
+    renderableEntities: [],
   };
 
   drainScriptCameraActionRequests(): ScriptCameraActionRequestState[] {
@@ -54,6 +65,10 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
     return this.state.followState ? { ...this.state.followState } : null;
   }
 
+  getScriptCameraSlaveModeState(): ScriptCameraSlaveModeState | null {
+    return this.state.slaveModeState ? { ...this.state.slaveModeState } : null;
+  }
+
   getScriptCameraLookTowardObjectState(): ScriptCameraLookTowardObjectState | null {
     return this.state.lookTowardObjectState ? { ...this.state.lookTowardObjectState } : null;
   }
@@ -64,6 +79,10 @@ class RecordingGameLogic implements ScriptCameraRuntimeGameLogic {
 
   getEntityWorldPosition(entityId: number): readonly [number, number, number] | null {
     return this.state.entityPositions.get(entityId) ?? null;
+  }
+
+  getRenderableEntityStates(): MutableScriptCameraState['renderableEntities'] {
+    return this.state.renderableEntities.map((entity) => ({ ...entity }));
   }
 }
 
@@ -307,5 +326,31 @@ describe('script camera runtime bridge', () => {
     bridge.syncAfterSimulationStep(31);
     expect(cameraController.getState().angle).toBeCloseTo(firstAngle, 5);
     expect(bridge.isCameraMovementFinished()).toBe(true);
+  });
+
+  it('follows slave-mode template targets when no explicit follow/tether lock is active', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    gameLogic.state.slaveModeState = {
+      thingTemplateName: 'CameraDrone',
+      boneName: 'BONE01',
+    };
+    gameLogic.state.renderableEntities = [
+      { id: 4, templateName: 'Ranger', x: 10, y: 0, z: 20 },
+      { id: 9, templateName: 'CameraDrone', x: 120, y: 0, z: 240 },
+    ];
+
+    bridge.syncAfterSimulationStep(1);
+    expect(cameraController.getState().targetX).toBe(120);
+    expect(cameraController.getState().targetZ).toBe(240);
+
+    gameLogic.state.renderableEntities = [
+      { id: 9, templateName: 'CameraDrone', x: 150, y: 0, z: 260 },
+    ];
+    bridge.syncAfterSimulationStep(2);
+    expect(cameraController.getState().targetX).toBe(150);
+    expect(cameraController.getState().targetZ).toBe(260);
   });
 });

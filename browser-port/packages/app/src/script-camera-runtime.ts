@@ -73,14 +73,27 @@ export interface ScriptCameraLookTowardWaypointState {
   reverseRotation: boolean;
 }
 
+export interface ScriptCameraSlaveModeState {
+  thingTemplateName: string;
+  boneName: string;
+}
+
 export interface ScriptCameraRuntimeGameLogic {
   drainScriptCameraActionRequests(): ScriptCameraActionRequestState[];
   drainScriptCameraModifierRequests(): ScriptCameraModifierRequestState[];
   getScriptCameraTetherState?(): ScriptCameraTetherState | null;
   getScriptCameraFollowState?(): ScriptCameraFollowState | null;
+  getScriptCameraSlaveModeState?(): ScriptCameraSlaveModeState | null;
   getScriptCameraLookTowardObjectState?(): ScriptCameraLookTowardObjectState | null;
   getScriptCameraLookTowardWaypointState?(): ScriptCameraLookTowardWaypointState | null;
   getEntityWorldPosition?(entityId: number): readonly [number, number, number] | null;
+  getRenderableEntityStates?(): readonly Array<{
+    id: number;
+    templateName: string;
+    x: number;
+    y: number;
+    z: number;
+  }>;
 }
 
 export interface ScriptCameraRuntimeController {
@@ -598,34 +611,67 @@ export function createScriptCameraRuntimeBridge(
     const followState = tetherState
       ? null
       : (gameLogic.getScriptCameraFollowState?.() ?? null);
+    const slaveState = (!tetherState && !followState)
+      ? (gameLogic.getScriptCameraSlaveModeState?.() ?? null)
+      : null;
 
-    if (!tetherState && !followState) {
+    if (!tetherState && !followState && !slaveState) {
       lastCameraLockSignature = null;
       return;
     }
 
-    const entityId = tetherState?.entityId ?? followState?.entityId ?? null;
-    if (entityId === null) {
+    let lockSignature = '';
+    let worldX = 0;
+    let worldZ = 0;
+    let shouldSnapOnAcquire = false;
+
+    if (tetherState || followState) {
+      const entityId = tetherState?.entityId ?? followState?.entityId ?? null;
+      if (entityId === null) {
+        return;
+      }
+
+      const worldPosition = gameLogic.getEntityWorldPosition?.(entityId) ?? null;
+      if (!worldPosition) {
+        return;
+      }
+      worldX = worldPosition[0];
+      worldZ = worldPosition[2];
+
+      lockSignature = tetherState
+        ? `TETHER:${entityId}:${tetherState.immediate ? 1 : 0}:${tetherState.play}`
+        : `FOLLOW:${entityId}:${followState?.snapToUnit ? 1 : 0}`;
+      shouldSnapOnAcquire = tetherState?.immediate ?? followState?.snapToUnit ?? false;
+    } else if (slaveState) {
+      const normalizedTemplateName = slaveState.thingTemplateName.trim().toUpperCase();
+      if (!normalizedTemplateName) {
+        return;
+      }
+      const candidates = gameLogic.getRenderableEntityStates?.() ?? [];
+      const matchedEntity = [...candidates]
+        .sort((left, right) => left.id - right.id)
+        .find((candidate) => candidate.templateName.trim().toUpperCase() === normalizedTemplateName);
+      if (!matchedEntity) {
+        return;
+      }
+
+      worldX = matchedEntity.x;
+      worldZ = matchedEntity.z;
+      lockSignature = `SLAVE:${normalizedTemplateName}:${slaveState.boneName.trim().toUpperCase()}`;
+      shouldSnapOnAcquire = true;
+    } else {
       return;
     }
 
-    const worldPosition = gameLogic.getEntityWorldPosition?.(entityId) ?? null;
-    if (!worldPosition) {
-      return;
-    }
-
-    const lockSignature = tetherState
-      ? `TETHER:${entityId}:${tetherState.immediate ? 1 : 0}:${tetherState.play}`
-      : `FOLLOW:${entityId}:${followState?.snapToUnit ? 1 : 0}`;
     const shouldSnapNow = lastCameraLockSignature !== lockSignature
-      && (tetherState?.immediate ?? followState?.snapToUnit ?? false);
+      && shouldSnapOnAcquire;
 
     if (shouldSnapNow) {
-      cameraController.lookAt(worldPosition[0], worldPosition[2]);
+      cameraController.lookAt(worldX, worldZ);
     } else if (cameraController.panTo) {
-      cameraController.panTo(worldPosition[0], worldPosition[2]);
+      cameraController.panTo(worldX, worldZ);
     } else {
-      cameraController.lookAt(worldPosition[0], worldPosition[2]);
+      cameraController.lookAt(worldX, worldZ);
     }
 
     // Source parity: object camera-lock mode cancels scripted camera-move tracks.
