@@ -64,6 +64,7 @@ export interface ScriptCameraEffectsRuntimeBridge {
 
 export interface CreateScriptCameraEffectsRuntimeBridgeOptions {
   gameLogic: ScriptCameraEffectsRuntimeGameLogic;
+  getCameraTargetPosition?: () => { x: number; z: number } | null;
 }
 
 interface ScalarTransition {
@@ -88,6 +89,9 @@ interface ActiveShakeState {
   durationFrames: number;
   amplitude: number;
   seed: number;
+  x: number;
+  z: number;
+  radius: number;
 }
 
 const LOGIC_FRAME_RATE = 30;
@@ -163,7 +167,7 @@ function evaluateFadeAmount(
 export function createScriptCameraEffectsRuntimeBridge(
   options: CreateScriptCameraEffectsRuntimeBridgeOptions,
 ): ScriptCameraEffectsRuntimeBridge {
-  const { gameLogic } = options;
+  const { gameLogic, getCameraTargetPosition } = options;
 
   let grayscale = 0;
   let grayscaleTransition: ScalarTransition | null = null;
@@ -242,6 +246,9 @@ export function createScriptCameraEffectsRuntimeBridge(
           durationFrames,
           amplitude: request.amplitude,
           seed: request.frame + request.x * 0.17 + request.z * 0.29,
+          x: request.x,
+          z: request.z,
+          radius: request.radius,
         });
       }
 
@@ -255,9 +262,16 @@ export function createScriptCameraEffectsRuntimeBridge(
             durationFrames: SCREEN_SHAKE_DURATION_FRAMES,
             amplitude: amplitude * 0.75,
             seed: screenShake.frame,
+            x: 0,
+            z: 0,
+            radius: 0,
           });
         }
       }
+
+      const cameraTarget = getCameraTargetPosition?.() ?? null;
+      const cameraTargetX = cameraTarget && Number.isFinite(cameraTarget.x) ? cameraTarget.x : null;
+      const cameraTargetZ = cameraTarget && Number.isFinite(cameraTarget.z) ? cameraTarget.z : null;
 
       let shakeOffsetX = 0;
       let shakeOffsetY = 0;
@@ -269,7 +283,19 @@ export function createScriptCameraEffectsRuntimeBridge(
           continue;
         }
         const normalizedAge = ageFrames / shake.durationFrames;
-        const frameAmplitude = shake.amplitude * (1 - normalizedAge);
+        let frameAmplitude = shake.amplitude * (1 - normalizedAge);
+        if (shake.radius > 0 && cameraTargetX !== null && cameraTargetZ !== null) {
+          const dx = cameraTargetX - shake.x;
+          const dz = cameraTargetZ - shake.z;
+          const distance = Math.hypot(dx, dz);
+          if (distance > shake.radius) {
+            continue;
+          }
+          frameAmplitude *= (1 - distance / shake.radius);
+        }
+        if (frameAmplitude <= 0) {
+          continue;
+        }
         shakeOffsetX += Math.sin((ageFrames + shake.seed) * 0.73) * frameAmplitude;
         shakeOffsetY += Math.cos((ageFrames + shake.seed) * 0.91) * frameAmplitude;
       }

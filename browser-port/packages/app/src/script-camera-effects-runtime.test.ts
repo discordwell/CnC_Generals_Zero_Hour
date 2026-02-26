@@ -196,4 +196,38 @@ describe('script camera effects runtime bridge', () => {
     expect(Math.abs(settled.shakeOffsetX)).toBeLessThan(0.001);
     expect(Math.abs(settled.shakeOffsetY)).toBeLessThan(0.001);
   });
+
+  it('attenuates shaker contribution by distance from camera target', () => {
+    const measureShakeStrength = (cameraTargetX: number, cameraTargetZ: number): number => {
+      const gameLogic = new RecordingGameLogic();
+      const bridge = createScriptCameraEffectsRuntimeBridge({
+        gameLogic,
+        getCameraTargetPosition: () => ({
+          x: cameraTargetX,
+          z: cameraTargetZ,
+        }),
+      });
+
+      gameLogic.state.shakerRequests.push({
+        waypointName: 'DistanceShakePoint',
+        x: 30,
+        z: 45,
+        amplitude: 3,
+        durationSeconds: 1,
+        radius: 80,
+        frame: 1,
+      });
+
+      const state = bridge.syncAfterSimulationStep(1);
+      return Math.abs(state.shakeOffsetX) + Math.abs(state.shakeOffsetY);
+    };
+
+    const near = measureShakeStrength(30, 45);
+    const mid = measureShakeStrength(70, 45);
+    const outside = measureShakeStrength(200, 200);
+
+    expect(near).toBeGreaterThan(0.1);
+    expect(mid).toBeCloseTo(near * 0.5, 6);
+    expect(outside).toBeLessThan(0.001);
+  });
 });

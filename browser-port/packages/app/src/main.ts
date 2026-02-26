@@ -2138,6 +2138,13 @@ async function startGame(
   });
   const scriptCameraEffectsRuntimeBridge = createScriptCameraEffectsRuntimeBridge({
     gameLogic,
+    getCameraTargetPosition: () => {
+      const state = rtsCamera.getState();
+      return {
+        x: state.targetX,
+        z: state.targetZ,
+      };
+    },
   });
   let scriptCameraEffectsState = scriptCameraEffectsRuntimeBridge.syncAfterSimulationStep(0);
   const scriptCameraRuntimeBridge = createScriptCameraRuntimeBridge({
