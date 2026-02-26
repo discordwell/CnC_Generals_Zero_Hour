@@ -655,7 +655,7 @@ export class AudioManager implements Subsystem {
       return AudioHandleSpecialValues.AHSV_NoSound;
     }
 
-    if (!this.shouldPlayLocally(event, info)) {
+    if (!event.uninterruptable && !this.shouldPlayLocally(event, info)) {
       return AudioHandleSpecialValues.AHSV_NotForLocal;
     }
 
@@ -1159,6 +1159,7 @@ export class AudioManager implements Subsystem {
   stopAllAudioImmediately(): void {
     this.removeAllAudioRequests();
     this.activeAudioEvents.clear();
+    this.disallowSpeech = false;
   }
 
   getActiveAudioEventCount(): number {
@@ -1769,6 +1770,23 @@ export class AudioManager implements Subsystem {
     this.stopByAffect(AudioAffect.AudioAffect_Music);
   }
 
+  private refreshDisallowSpeechFromActiveStreams(): void {
+    if (!this.disallowSpeech) {
+      return;
+    }
+
+    for (const active of this.activeAudioEvents.values()) {
+      if (active.info.soundType !== AudioType.AT_Streaming) {
+        continue;
+      }
+      if (active.event.uninterruptable) {
+        return;
+      }
+    }
+
+    this.disallowSpeech = false;
+  }
+
   // ──── Web Audio playback implementation ──────────────────────────────────
 
   /**
@@ -1916,7 +1934,15 @@ export class AudioManager implements Subsystem {
     sourceNode.onended = () => {
       this.playbackNodes.delete(handle);
       this.activeAudioEvents.delete(handle);
+      this.refreshDisallowSpeechFromActiveStreams();
     };
+
+    if (
+      resolved.info.soundType === AudioType.AT_Streaming
+      && resolved.event.uninterruptable
+    ) {
+      this.disallowSpeech = true;
+    }
 
     sourceNode.start();
 
@@ -1946,6 +1972,8 @@ export class AudioManager implements Subsystem {
       }
     }
     this.playbackNodes.delete(handle);
+    this.activeAudioEvents.delete(handle);
+    this.refreshDisallowSpeechFromActiveStreams();
   }
 
   /**
@@ -2014,6 +2042,7 @@ export interface AudioEventRTS {
   volume?: number;
   audioAffect?: AudioAffect;
   playerIndex?: number;
+  uninterruptable?: boolean;
 }
 
 /**

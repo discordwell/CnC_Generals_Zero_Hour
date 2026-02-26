@@ -53,6 +53,7 @@ import {
   loadOptionPreferencesFromStorage,
 } from './option-preferences.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
+import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
 
 // ============================================================================
@@ -633,6 +634,11 @@ async function startGame(
   };
   registerCombatAudio();
   syncPlayerSidesFromNetwork(networkManager, gameLogic);
+  const scriptAudioRuntimeBridge = createScriptAudioRuntimeBridge({
+    gameLogic,
+    audioManager,
+    getLocalPlayerIndex: () => networkManager.getLocalPlayerID(),
+  });
 
   // ========================================================================
   // Apply skirmish settings (player side, AI, credits)
@@ -1971,6 +1977,7 @@ async function startGame(
         [cameraForward.x, cameraForward.y, cameraForward.z],
         [cameraUp.x, cameraUp.y, cameraUp.z],
       );
+      scriptAudioRuntimeBridge.syncBeforeSimulationStep();
 
       const pendingControlBarCommand = uiRuntime.getPendingControlBarCommand();
       if (pendingControlBarCommand && inputState.rightMouseClick) {
@@ -2183,6 +2190,7 @@ async function startGame(
       // Update all subsystems (InputManager resets accumulators,
       // RTSCamera processes input, WaterVisual animates UVs)
       subsystems.updateAll(dt);
+      scriptAudioRuntimeBridge.syncAfterSimulationStep();
 
       // Move sun light to follow camera target for consistent shadows.
       const camState = rtsCamera.getState();

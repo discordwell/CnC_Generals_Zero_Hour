@@ -401,6 +401,35 @@ describe('AudioManager', () => {
     ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
   });
 
+  it('allows uninterruptable speech to bypass local-player filtering like source', () => {
+    const manager = new AudioManager({
+      localPlayerIndex: 1,
+      eventInfos: [
+        {
+          audioName: 'ScriptSpeech',
+          soundType: AudioType.AT_Streaming,
+          type: SoundType.ST_PLAYER,
+        },
+      ],
+    });
+    manager.init();
+
+    expect(
+      manager.addAudioEvent({
+        eventName: 'ScriptSpeech',
+        playerIndex: 2,
+      }),
+    ).toBe(AudioHandleSpecialValues.AHSV_NotForLocal);
+
+    expect(
+      manager.addAudioEvent({
+        eventName: 'ScriptSpeech',
+        playerIndex: 2,
+        uninterruptable: true,
+      }),
+    ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+  });
+
   it('allows player-scoped UI sounds with no player index like source fallback', () => {
     const manager = new AudioManager({
       eventInfos: [
