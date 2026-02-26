@@ -171,6 +171,52 @@ describe('script camera effects runtime bridge', () => {
     expect(ended.blurPixels).toBe(0);
   });
 
+  it('keeps motion blur follow active until end-follow request', () => {
+    const gameLogic = new RecordingGameLogic();
+    let cameraTarget = { x: 200, z: 300 };
+    const bridge = createScriptCameraEffectsRuntimeBridge({
+      gameLogic,
+      getCameraTargetPosition: () => cameraTarget,
+    });
+
+    gameLogic.state.filterRequests.push({
+      requestType: 'MOTION_BLUR_FOLLOW',
+      zoomIn: null,
+      saturate: null,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: 12,
+      frame: 1,
+    });
+
+    const started = bridge.syncAfterSimulationStep(1);
+    expect(started.blurPixels).toBeGreaterThan(0);
+
+    cameraTarget = { x: 200, z: 300 };
+    const stillFollowing = bridge.syncAfterSimulationStep(200);
+    expect(stillFollowing.blurPixels).toBeGreaterThan(0);
+
+    gameLogic.state.filterRequests.push({
+      requestType: 'MOTION_BLUR_END_FOLLOW',
+      zoomIn: null,
+      saturate: null,
+      waypointName: null,
+      x: null,
+      z: null,
+      followMode: null,
+      frame: 201,
+    });
+    const ending = bridge.syncAfterSimulationStep(201);
+    expect(ending.blurPixels).toBeGreaterThan(0);
+
+    let finished = ending;
+    for (let frame = 202; frame <= 220; frame++) {
+      finished = bridge.syncAfterSimulationStep(frame);
+    }
+    expect(finished.blurPixels).toBe(0);
+  });
+
   it('accumulates shaker and screen-shake requests into transient camera offsets', () => {
     const gameLogic = new RecordingGameLogic();
     const bridge = createScriptCameraEffectsRuntimeBridge({ gameLogic });
