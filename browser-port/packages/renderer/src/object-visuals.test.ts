@@ -67,6 +67,22 @@ function getScriptFlashRing(manager: ObjectVisualManager, entityId: number): THR
   return ring instanceof THREE.Mesh ? ring : null;
 }
 
+function collectRenderableNodes(manager: ObjectVisualManager, entityId: number): THREE.Object3D[] {
+  const root = manager.getVisualRoot(entityId);
+  if (!root) {
+    return [];
+  }
+  const renderables: THREE.Object3D[] = [];
+  root.traverse((child) => {
+    const renderable = child as THREE.Mesh | THREE.Line | THREE.Points | THREE.Sprite;
+    if (!renderable.isMesh && !renderable.isLine && !renderable.isPoints && !renderable.isSprite) {
+      return;
+    }
+    renderables.push(child);
+  });
+  return renderables;
+}
+
 describe('ObjectVisualManager', () => {
   it('creates and syncs visual nodes from render-state snapshots', async () => {
     const scene = new THREE.Scene();
@@ -248,6 +264,41 @@ describe('ObjectVisualManager', () => {
     expect(recoloredRing?.visible).toBe(true);
     const recoloredMaterial = recoloredRing?.material as THREE.MeshBasicMaterial;
     expect(recoloredMaterial.color.getHex()).toBe(0xff4400);
+  });
+
+  it('disables frustum culling while script guard-band bias is active', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle']),
+    });
+
+    manager.sync([makeMeshState({ id: 41 })], 1 / 30);
+    await flushModelLoadQueue();
+    const defaultRenderables = collectRenderableNodes(manager, 41);
+    expect(defaultRenderables.length).toBeGreaterThan(0);
+    for (const renderable of defaultRenderables) {
+      expect(renderable.frustumCulled).toBe(true);
+    }
+
+    manager.setViewGuardBandBias(12, 8);
+    const biasedRenderables = collectRenderableNodes(manager, 41);
+    for (const renderable of biasedRenderables) {
+      expect(renderable.frustumCulled).toBe(false);
+    }
+
+    manager.sync([makeMeshState({ id: 42, x: 20 })], 1 / 30);
+    await flushModelLoadQueue();
+    const newRenderables = collectRenderableNodes(manager, 42);
+    expect(newRenderables.length).toBeGreaterThan(0);
+    for (const renderable of newRenderables) {
+      expect(renderable.frustumCulled).toBe(false);
+    }
+
+    manager.setViewGuardBandBias(0, 0);
+    const resetRenderables = collectRenderableNodes(manager, 41);
+    for (const renderable of resetRenderables) {
+      expect(renderable.frustumCulled).toBe(true);
+    }
   });
 
   it('returns unresolved entity IDs in deterministic ascending order', async () => {

@@ -2429,6 +2429,11 @@ async function startGame(
       sunLight.target.position.set(camState.targetX, 0, camState.targetZ);
       sunLight.target.updateMatrixWorld();
 
+      const scriptViewGuardBandBias = gameLogic.getScriptViewGuardbandBias();
+      objectVisualManager.setViewGuardBandBias(
+        scriptViewGuardBandBias?.x ?? 0,
+        scriptViewGuardBandBias?.y ?? 0,
+      );
       objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
 
       // Process visual events (explosions, muzzle flashes, etc.) and update particles.

@@ -90,6 +90,8 @@ export class ObjectVisualManager {
   private readonly modelCache = new Map<string, LoadedModelAsset>();
   private readonly modelLoadPromises = new Map<string, Promise<LoadedModelAsset>>();
   private readonly unresolvedEntityIds = new Set<number>();
+  private viewGuardBandBiasX = 0;
+  private viewGuardBandBiasY = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -171,6 +173,24 @@ export class ObjectVisualManager {
    */
   getUnresolvedEntityIds(): number[] {
     return Array.from(this.unresolvedEntityIds.values()).sort((left, right) => left - right);
+  }
+
+  /**
+   * Source parity bridge: TacticalView::setGuardBandBias.
+   * Positive values expand drawable culling margins; this renderer bridge disables
+   * frustum culling while script guard-band bias is active.
+   */
+  setViewGuardBandBias(guardBandX: number, guardBandY: number): void {
+    const normalizedX = Number.isFinite(guardBandX) ? guardBandX : 0;
+    const normalizedY = Number.isFinite(guardBandY) ? guardBandY : 0;
+    if (normalizedX === this.viewGuardBandBiasX && normalizedY === this.viewGuardBandBiasY) {
+      return;
+    }
+    this.viewGuardBandBiasX = normalizedX;
+    this.viewGuardBandBiasY = normalizedY;
+    for (const visual of this.visuals.values()) {
+      this.applyGuardBandFrustumPolicy(visual.root);
+    }
   }
 
   dispose(): void {
@@ -317,6 +337,7 @@ export class ObjectVisualManager {
             child.castShadow = true;
             child.receiveShadow = true;
           });
+          this.applyGuardBandFrustumPolicy(clone);
           currentVisual.currentModel = clone;
           currentVisual.mixer = mixer;
           currentVisual.actions = actions;
@@ -719,6 +740,7 @@ export class ObjectVisualManager {
       visual.healthBarGroup = group;
       visual.healthBarFill = fillMesh;
       visual.root.add(group);
+      this.applyGuardBandFrustumPolicy(group);
     }
 
     const ratio = Math.max(0, Math.min(1, health / maxHealth));
@@ -765,6 +787,7 @@ export class ObjectVisualManager {
       ring.name = 'selection-ring';
       visual.selectionRing = ring;
       visual.root.add(ring);
+      this.applyGuardBandFrustumPolicy(ring);
     }
 
     visual.selectionRing.visible = true;
@@ -796,6 +819,7 @@ export class ObjectVisualManager {
       ring.name = 'script-flash-ring';
       visual.scriptFlashRing = ring;
       visual.root.add(ring);
+      this.applyGuardBandFrustumPolicy(ring);
     }
 
     const material = visual.scriptFlashRing.material as THREE.MeshBasicMaterial;
@@ -872,6 +896,7 @@ export class ObjectVisualManager {
       group.renderOrder = 1001;
       visual.veterancyBadge = group;
       visual.root.add(group);
+      this.applyGuardBandFrustumPolicy(group);
     }
 
     visual.veterancyBadge.visible = true;
@@ -953,7 +978,23 @@ export class ObjectVisualManager {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = `placeholder-${entityId}`;
     mesh.userData = { entityId };
+    this.applyGuardBandFrustumPolicy(mesh);
     return mesh;
+  }
+
+  private isGuardBandBiasActive(): boolean {
+    return this.viewGuardBandBiasX > 0 || this.viewGuardBandBiasY > 0;
+  }
+
+  private applyGuardBandFrustumPolicy(root: THREE.Object3D): void {
+    const disableFrustumCulling = this.isGuardBandBiasActive();
+    root.traverse((child) => {
+      const renderable = child as THREE.Mesh | THREE.Line | THREE.Points | THREE.Sprite;
+      if (!renderable.isMesh && !renderable.isLine && !renderable.isPoints && !renderable.isSprite) {
+        return;
+      }
+      renderable.frustumCulled = !disableFrustumCulling;
+    });
   }
 
   private ensurePlaceholderMesh(entityId: number): THREE.Mesh {
