@@ -6737,7 +6737,8 @@ export class GameLogicSubsystem implements Subsystem {
    * Update movement and placeholder animation.
    */
   update(dt: number): void {
-    this.animationTime += dt;
+    const effectiveDt = this.resolveEffectiveSimulationDeltaTime(dt);
+    this.animationTime += effectiveDt;
     this.frameCounter++;
     this.resetScriptWaypointPathCompletions();
     this.updateScriptCountdownTimers();
@@ -6769,7 +6770,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateGuardBehavior();
     this.updateJetAI();
     this.updateChinookAI();
-    this.updateEntityMovement(dt);
+    this.updateEntityMovement(effectiveDt);
     this.updateAnimationSteering();
     this.updateUnitCollisionSeparation();
     this.updateCrushCollisions();
@@ -6875,6 +6876,18 @@ export class GameLogicSubsystem implements Subsystem {
 
   private isSimulationTimeFrozen(): boolean {
     return this.scriptTimeFrozenByScript || (this.config.isCameraTimeFrozen?.() ?? false);
+  }
+
+  private resolveEffectiveSimulationDeltaTime(dt: number): number {
+    const cameraTimeMultiplier = this.config.getCameraTimeMultiplier?.();
+    const validCameraMultiplier = Number.isFinite(cameraTimeMultiplier)
+      ? cameraTimeMultiplier!
+      : 1;
+    const combinedMultiplier = this.scriptVisualSpeedMultiplier * validCameraMultiplier;
+    if (!Number.isFinite(combinedMultiplier) || combinedMultiplier <= 0) {
+      return 0;
+    }
+    return dt * combinedMultiplier;
   }
 
   /**

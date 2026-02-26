@@ -114,6 +114,7 @@ export interface ScriptCameraRuntimeBridge {
   syncAfterSimulationStep(currentLogicFrame: number): void;
   isCameraMovementFinished(): boolean;
   isCameraTimeFrozen(): boolean;
+  getCameraTimeMultiplier(): number;
 }
 
 export interface CreateScriptCameraRuntimeBridgeOptions {
@@ -258,6 +259,8 @@ export function createScriptCameraRuntimeBridge(
   let nonVisualMovementEndFrame = -1;
   let movementFinished = true;
   let freezeTimeForMovement = false;
+  let cameraTimeMultiplier = 1;
+  let timeMultiplierTransition: ScalarTransition | null = null;
   let lastCameraLockSignature: string | null = null;
   let lastLookTowardObjectSignature: string | null = null;
   let lastLookTowardWaypointSignature: string | null = null;
@@ -316,7 +319,17 @@ export function createScriptCameraRuntimeBridge(
 
   const applyActiveTransitions = (currentLogicFrame: number): void => {
     if (!targetTransition && !angleTransition && !zoomTransition) {
-      return;
+      if (!timeMultiplierTransition) {
+        return;
+      }
+    }
+
+    if (timeMultiplierTransition) {
+      cameraTimeMultiplier = evaluateScalarTransition(timeMultiplierTransition, currentLogicFrame);
+      if (isTransitionComplete(timeMultiplierTransition, currentLogicFrame)) {
+        cameraTimeMultiplier = timeMultiplierTransition.to;
+        timeMultiplierTransition = null;
+      }
     }
 
     const currentState = cameraController.getState();
@@ -547,9 +560,27 @@ export function createScriptCameraRuntimeBridge(
         case 'FREEZE_TIME':
           freezeTimeForMovement = true;
           break;
-        case 'FINAL_SPEED_MULTIPLIER':
+        case 'FINAL_SPEED_MULTIPLIER': {
+          if (request.speedMultiplier === null || !Number.isFinite(request.speedMultiplier)) {
+            break;
+          }
+          const finalMultiplier = request.speedMultiplier;
+          const remainingFrames = getMaxVisualMovementRemainingFrames(currentLogicFrame);
+          if (remainingFrames < 1) {
+            cameraTimeMultiplier = finalMultiplier;
+            timeMultiplierTransition = null;
+            break;
+          }
+          timeMultiplierTransition = {
+            startFrame: currentLogicFrame,
+            durationFrames: remainingFrames,
+            from: cameraTimeMultiplier,
+            to: finalMultiplier,
+          };
+          break;
+        }
         case 'ROLLING_AVERAGE':
-          // Source-parity TODO: these camera movement-timing modifiers are not yet wired.
+          // Source-parity TODO: camera movement rolling-average smoothing is not yet wired.
           break;
       }
     }
@@ -735,6 +766,10 @@ export function createScriptCameraRuntimeBridge(
 
     isCameraTimeFrozen(): boolean {
       return freezeTimeForMovement && !movementFinished;
+    },
+
+    getCameraTimeMultiplier(): number {
+      return cameraTimeMultiplier;
     },
   };
 }

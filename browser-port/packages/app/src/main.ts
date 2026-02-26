@@ -536,11 +536,13 @@ async function startGame(
   const objectVisualManager = new ObjectVisualManager(scene, assets);
   let scriptCameraMovementFinished = true;
   let scriptCameraTimeFrozen = false;
+  let scriptCameraTimeMultiplier = 1;
   const gameLogic = new GameLogicSubsystem(scene, {
     attackUsesLineOfSight,
     pickObjectByInput: (input, cam) => objectVisualManager.pickObjectByInput(input, cam),
     isCameraMovementFinished: () => scriptCameraMovementFinished,
     isCameraTimeFrozen: () => scriptCameraTimeFrozen,
+    getCameraTimeMultiplier: () => scriptCameraTimeMultiplier,
   });
   const maybeSetDeterministicGameLogicCrcSectionWriters = (
     networkManager as unknown as {
@@ -2144,6 +2146,7 @@ async function startGame(
   });
   scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
   scriptCameraTimeFrozen = scriptCameraRuntimeBridge.isCameraTimeFrozen();
+  scriptCameraTimeMultiplier = scriptCameraRuntimeBridge.getCameraTimeMultiplier();
   const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
   let currentLogicFrame = 0;
 
@@ -2402,6 +2405,7 @@ async function startGame(
       scriptCameraRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);
       scriptCameraMovementFinished = scriptCameraRuntimeBridge.isCameraMovementFinished();
       scriptCameraTimeFrozen = scriptCameraRuntimeBridge.isCameraTimeFrozen();
+      scriptCameraTimeMultiplier = scriptCameraRuntimeBridge.getCameraTimeMultiplier();
       scriptAudioRuntimeBridge.syncAfterSimulationStep();
       scriptMessageRuntimeBridge.syncAfterSimulationStep();
       scriptUiEffectsRuntimeBridge.syncAfterSimulationStep(_frameNumber + 1);

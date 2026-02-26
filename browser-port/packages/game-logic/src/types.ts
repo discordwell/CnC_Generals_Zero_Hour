@@ -511,6 +511,11 @@ export interface GameLogicConfig {
    */
   isCameraTimeFrozen?: () => boolean;
   /**
+   * Source parity: View::getTimeMultiplier. Camera script modifiers can adjust
+   * simulation speed while cinematic movements run.
+   */
+  getCameraTimeMultiplier?: () => number;
+  /**
    * Include unresolved objects as magenta placeholders.
    * If false, unresolved templates are skipped entirely.
    */

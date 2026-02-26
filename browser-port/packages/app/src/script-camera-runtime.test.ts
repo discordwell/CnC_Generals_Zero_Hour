@@ -343,6 +343,37 @@ describe('script camera runtime bridge', () => {
     expect(bridge.isCameraTimeFrozen()).toBe(false);
   });
 
+  it('applies FINAL_SPEED_MULTIPLIER to camera time-multiplier state', () => {
+    const gameLogic = new RecordingGameLogic();
+    const cameraController = new RecordingCameraController();
+    const bridge = createScriptCameraRuntimeBridge({ gameLogic, cameraController });
+
+    expect(bridge.getCameraTimeMultiplier()).toBe(1);
+
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FINAL_SPEED_MULTIPLIER',
+      speedMultiplier: 3,
+    }));
+    bridge.syncAfterSimulationStep(1);
+    expect(bridge.getCameraTimeMultiplier()).toBe(3);
+
+    gameLogic.state.actionRequests.push(makeActionRequest({
+      requestType: 'MOVE_TO',
+      x: 100,
+      z: 20,
+      durationMs: 1000,
+    }));
+    gameLogic.state.modifierRequests.push(makeModifierRequest({
+      requestType: 'FINAL_SPEED_MULTIPLIER',
+      speedMultiplier: 5,
+    }));
+    bridge.syncAfterSimulationStep(2);
+    expect(bridge.getCameraTimeMultiplier()).toBeGreaterThan(3);
+
+    bridge.syncAfterSimulationStep(31);
+    expect(bridge.getCameraTimeMultiplier()).toBeCloseTo(5, 6);
+  });
+
   it('applies persistent FOLLOW camera lock states each frame', () => {
     const gameLogic = new RecordingGameLogic();
     const cameraController = new RecordingCameraController();

@@ -44612,6 +44612,46 @@ describe('Script condition groundwork', () => {
     expect(logic.getEntityState(1)?.x ?? 0).toBeGreaterThan(10.5);
   });
 
+  it('scales movement updates by camera and script visual speed multipliers', () => {
+    const runMovementSample = (cameraMultiplier: number, scriptMultiplier: number): number => {
+      const logic = new GameLogicSubsystem(new THREE.Scene(), {
+        getCameraTimeMultiplier: () => cameraMultiplier,
+      });
+      logic.loadMapObjects(
+        makeMap([makeMapObject('SpeedScaledMover', 10, 10)], 128, 128),
+        makeRegistry(makeBundle({
+          objects: [
+            makeObjectDef('SpeedScaledMover', 'America', ['VEHICLE'], [
+              makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+              makeBlock('LocomotorSet', 'SET_NORMAL LocomotorFast', {}),
+            ]),
+          ],
+          locomotors: [
+            makeLocomotorDef('LocomotorFast', 60),
+          ],
+        })),
+        makeHeightmap(128, 128),
+      );
+
+      expect(logic.executeScriptAction({
+        actionType: 22, // SET_VISUAL_SPEED_MULTIPLIER
+        params: [scriptMultiplier],
+      })).toBe(true);
+      logic.submitCommand({ type: 'moveTo', entityId: 1, targetX: 70, targetZ: 10 });
+      for (let frame = 0; frame < 12; frame += 1) {
+        logic.update(1 / 30);
+      }
+      return logic.getEntityState(1)?.x ?? 0;
+    };
+
+    const baselineX = runMovementSample(1, 1);
+    const cameraScaledX = runMovementSample(2, 1);
+    const scriptScaledX = runMovementSample(1, 2);
+
+    expect(cameraScaledX).toBeGreaterThan(baselineX + 0.5);
+    expect(scriptScaledX).toBeGreaterThan(baselineX + 0.5);
+  });
+
   it('executes script camera-fade actions using source action ids', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(
