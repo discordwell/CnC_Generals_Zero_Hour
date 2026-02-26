@@ -757,7 +757,7 @@ describe('script camera runtime bridge', () => {
       speedMultiplier: 5,
     }));
     bridge.syncAfterSimulationStep(2);
-    expect(bridge.getCameraTimeMultiplier()).toBeGreaterThan(3);
+    expect(bridge.getCameraTimeMultiplier()).toBe(3);
 
     bridge.syncAfterSimulationStep(31);
     expect(bridge.getCameraTimeMultiplier()).toBeCloseTo(5, 6);

@@ -593,6 +593,7 @@ export function createScriptCameraRuntimeBridge(
     easeIn = 0,
     easeOut = 0,
     shutterFrames = 1,
+    applyMinDeltaFilter = true,
   ): void => {
     const state = cameraController.getState();
     frozenWaypointPathAngle = null;
@@ -601,6 +602,9 @@ export function createScriptCameraRuntimeBridge(
     for (let i = 0; i < pathPoints.length; i += 1) {
       const point = pathPoints[i]!;
       points.push({ x: point.x, z: point.z });
+      if (!applyMinDeltaFilter) {
+        continue;
+      }
       if (points.length < 2) {
         continue;
       }
@@ -866,13 +870,14 @@ export function createScriptCameraRuntimeBridge(
           if (request.x === null || request.z === null) {
             break;
           }
-          beginTargetTransition(
+          beginWaypointPathTransition(
             currentLogicFrame,
-            request.x,
-            request.z,
+            [{ x: request.x, z: request.z }],
             toDurationFrames(request.durationMs),
             toEaseRatioFromDuration(request.easeInMs, request.durationMs),
             toEaseRatioFromDuration(request.easeOutMs, request.durationMs),
+            1,
+            false,
           );
           break;
         }
