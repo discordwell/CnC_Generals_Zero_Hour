@@ -31,6 +31,8 @@ export class TerrainVisual implements Subsystem {
 
   /** Terrain chunks data (for reference). */
   private chunks: TerrainChunk[] = [];
+  /** Source parity bridge: ScriptActions::doOversizeTheTerrain amount. */
+  private scriptTerrainOversizeAmount = 0;
 
   constructor(scene: THREE.Scene, config?: Partial<TerrainConfig>) {
     this.scene = scene;
@@ -96,6 +98,19 @@ export class TerrainVisual implements Subsystem {
     // Terrain is static — no per-frame updates needed
   }
 
+  /**
+   * Source parity bridge: HeightMapRenderObjClass::oversizeTerrain.
+   * Source supports values 1..4; other values restore normal culling behavior.
+   */
+  setScriptTerrainOversizeAmount(amount: number): void {
+    const normalizedAmount = Number.isFinite(amount) ? Math.trunc(amount) : 0;
+    if (normalizedAmount === this.scriptTerrainOversizeAmount) {
+      return;
+    }
+    this.scriptTerrainOversizeAmount = normalizedAmount;
+    this.applyTerrainOversizeFrustumPolicy();
+  }
+
   reset(): void {
     this.clearTerrain();
   }
@@ -115,10 +130,10 @@ export class TerrainVisual implements Subsystem {
     for (const chunk of this.chunks) {
       const mesh = new THREE.Mesh(chunk.geometry, this.material);
       mesh.receiveShadow = true;
-      mesh.frustumCulled = true;
       this.scene.add(mesh);
       this.meshes.push(mesh);
     }
+    this.applyTerrainOversizeFrustumPolicy();
   }
 
   private clearTerrain(): void {
@@ -129,5 +144,12 @@ export class TerrainVisual implements Subsystem {
     this.meshes.length = 0;
     this.chunks.length = 0;
     this.heightmap = null;
+  }
+
+  private applyTerrainOversizeFrustumPolicy(): void {
+    const oversizeActive = this.scriptTerrainOversizeAmount > 0 && this.scriptTerrainOversizeAmount < 5;
+    for (const mesh of this.meshes) {
+      mesh.frustumCulled = !oversizeActive;
+    }
   }
 }

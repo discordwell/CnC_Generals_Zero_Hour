@@ -2434,6 +2434,7 @@ async function startGame(
         scriptViewGuardBandBias?.x ?? 0,
         scriptViewGuardBandBias?.y ?? 0,
       );
+      terrainVisual.setScriptTerrainOversizeAmount(gameLogic.getScriptTerrainOversizeAmount());
       objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
 
       // Process visual events (explosions, muzzle flashes, etc.) and update particles.
