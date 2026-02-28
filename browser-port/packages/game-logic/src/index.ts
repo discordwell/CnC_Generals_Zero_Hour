@@ -38849,6 +38849,43 @@ export class GameLogicSubsystem implements Subsystem {
     return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
   }
 
+  private isSameControllingPlayerOrSide(left: MapEntity, right: MapEntity): boolean {
+    const leftOwner = this.normalizeControllingPlayerToken(left.controllingPlayerToken ?? undefined);
+    const rightOwner = this.normalizeControllingPlayerToken(right.controllingPlayerToken ?? undefined);
+    if (leftOwner !== null && rightOwner !== null) {
+      return leftOwner === rightOwner;
+    }
+    const leftSide = this.normalizeSide(left.side);
+    const rightSide = this.normalizeSide(right.side);
+    return leftSide !== null && leftSide === rightSide;
+  }
+
+  private hasVisibleContainedUnits(containerId: number): boolean {
+    for (const containedId of this.collectContainedEntityIds(containerId)) {
+      const contained = this.spawnedEntities.get(containedId);
+      if (!contained || contained.destroyed) {
+        continue;
+      }
+      if (!contained.objectStatusFlags.has('STEALTHED')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private blocksNonOwnerContainerEnter(source: MapEntity, target: MapEntity): boolean {
+    if (this.isSameControllingPlayerOrSide(source, target)) {
+      return false;
+    }
+    // Source parity: ActionManager::canEnterObject blocks non-owner enters
+    // into containers with visible occupants.
+    if (this.hasVisibleContainedUnits(target.id)) {
+      return true;
+    }
+    // Source parity: ActionManager::canEnterObject blocks non-owner faction-structure enters.
+    return this.isFactionStructure(target);
+  }
+
   private handleGarrisonBuildingCommand(command: GarrisonBuildingCommand): void {
     const infantry = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
@@ -38951,6 +38988,7 @@ export class GameLogicSubsystem implements Subsystem {
     const containProfile = transport.containProfile;
     if (!containProfile) return;
     if (containProfile.moduleType === 'HEAL' && passenger.health >= passenger.maxHealth) return;
+    if (this.blocksNonOwnerContainerEnter(passenger, transport)) return;
 
     // Source parity: TunnelContain/CaveContain — route to shared-network entry.
     if (containProfile.moduleType === 'TUNNEL' || containProfile.moduleType === 'CAVE') {
@@ -39080,6 +39118,10 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (!this.canSourceAttemptContainerEnter(passenger) || !this.canTargetAcceptContainerEnter(transport)) {
+        this.pendingTransportActions.delete(passengerId);
+        continue;
+      }
+      if (this.blocksNonOwnerContainerEnter(passenger, transport)) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
@@ -51225,7 +51267,7 @@ export class GameLogicSubsystem implements Subsystem {
       || this.isFactionStructureRetaliationSource(source);
   }
 
-  private isFactionStructureRetaliationSource(source: MapEntity): boolean {
+  private isFactionStructure(source: MapEntity): boolean {
     if (!source.kindOf.has('STRUCTURE')) {
       return false;
     }
@@ -51235,6 +51277,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return false;
+  }
+
+  private isFactionStructureRetaliationSource(source: MapEntity): boolean {
+    return this.isFactionStructure(source);
   }
 
   private adjustDamageByArmorSet(target: MapEntity, amount: number, damageType: string): number {
