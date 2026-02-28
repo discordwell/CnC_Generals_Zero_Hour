@@ -28301,6 +28301,136 @@ describe('RepairDockUpdate', () => {
     expect(enemy.health).toBe(150);
     expect(priv.pendingRepairDockActions.has(2)).toBe(false);
   });
+
+  it('rejects aircraft repairVehicle enter when airfield has no parking space and no reservation', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Airfield', 'America', ['STRUCTURE', 'AIRFIELD', 'FS_AIRFIELD'], [
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+        ]),
+        makeObjectDef('DamagedJet', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL JetLocomotor', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 150 }),
+        ]),
+        makeObjectDef('OccupyingJet', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL JetLocomotor', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('JetLocomotor', 250),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Airfield', 55, 55), // id 1
+        makeMapObject('DamagedJet', 75, 55), // id 2
+        makeMapObject('OccupyingJet', 55, 55), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+      spawnedEntities: Map<number, {
+        y: number;
+        baseHeight: number;
+        parkingSpaceProducerId: number | null;
+        moveTarget: { x: number; z: number } | null;
+        parkingPlaceProfile: { occupiedSpaceEntityIds: Set<number> } | null;
+      }>;
+    };
+
+    const airfield = privateApi.spawnedEntities.get(1)!;
+    const damagedJet = privateApi.spawnedEntities.get(2)!;
+    const occupyingJet = privateApi.spawnedEntities.get(3)!;
+
+    // Force occupied parking state and airborne repair source.
+    occupyingJet.parkingSpaceProducerId = 1;
+    airfield.parkingPlaceProfile?.occupiedSpaceEntityIds.add(3);
+    damagedJet.y = damagedJet.baseHeight + 20;
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingEnterObjectActions.has(2)).toBe(false);
+    expect(damagedJet.moveTarget).toBeNull();
+  });
+
+  it('allows aircraft repairVehicle enter when aircraft has reserved parking space at the airfield', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Airfield', 'America', ['STRUCTURE', 'AIRFIELD', 'FS_AIRFIELD'], [
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+        ]),
+        makeObjectDef('DamagedJet', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL JetLocomotor', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 150 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('JetLocomotor', 250),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Airfield', 55, 55), // id 1
+        makeMapObject('DamagedJet', 75, 55), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+      spawnedEntities: Map<number, {
+        y: number;
+        baseHeight: number;
+        moveTarget: { x: number; z: number } | null;
+        parkingPlaceProfile: { occupiedSpaceEntityIds: Set<number> } | null;
+      }>;
+    };
+
+    const airfield = privateApi.spawnedEntities.get(1)!;
+    const damagedJet = privateApi.spawnedEntities.get(2)!;
+
+    // Source parity: ActionManager::canEnterObject allows aircraft when
+    // ParkingPlaceBehavior::hasReservedSpace(sourceId) is true.
+    airfield.parkingPlaceProfile?.occupiedSpaceEntityIds.add(2);
+    damagedJet.y = damagedJet.baseHeight + 20;
+    expect((logic as unknown as {
+      canExecuteRepairVehicleEnterAction: (source: unknown, target: unknown) => boolean;
+    }).canExecuteRepairVehicleEnterAction(damagedJet, airfield)).toBe(true);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingEnterObjectActions.has(2)).toBe(true);
+    expect(damagedJet.moveTarget).not.toBeNull();
+  });
 });
 
 describe('SupplyWarehouseCripplingBehavior', () => {

@@ -40057,7 +40057,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!targetKindOf.has('AIRFIELD') && !targetKindOf.has('FS_AIRFIELD')) {
         return false;
       }
-      return target.parkingPlaceProfile !== null;
+      return this.canAircraftEnterAirfieldForRepair(source, target);
     }
 
     const targetProfile = target.repairDockProfile;
@@ -40080,6 +40080,24 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return true;
+  }
+
+  private canAircraftEnterAirfieldForRepair(source: MapEntity, airfield: MapEntity): boolean {
+    const parkingProfile = airfield.parkingPlaceProfile;
+    if (!parkingProfile) {
+      return false;
+    }
+    // Source parity: ActionManager::canEnterObject uses ParkingPlaceBehavior::hasReservedSpace(obj->id).
+    if (parkingProfile.occupiedSpaceEntityIds.has(source.id)) {
+      return true;
+    }
+
+    const sourceObjectDef = this.resolveObjectDefByTemplateName(source.templateName) ?? undefined;
+    if (!shouldReserveParkingDoorWhenQueuedImpl(sourceObjectDef?.kindOf)) {
+      return false;
+    }
+
+    return hasAvailableParkingSpaceImpl(parkingProfile, airfield.productionQueue, this.spawnedEntities);
   }
 
   private resolveRepairVehicleEnterAction(source: MapEntity, target: MapEntity): void {
