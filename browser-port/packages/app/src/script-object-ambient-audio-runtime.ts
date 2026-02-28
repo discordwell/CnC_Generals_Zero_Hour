@@ -123,9 +123,9 @@ function registerCustomAudioEventInfoIfNeeded(
       nextInfo.priority = mappedPriority;
     }
   }
-
-  // TODO(source parity): loop-count override from map object properties is currently
-  // not represented in AudioManager playback state (AC_LOOP is supported, finite loop counts are not).
+  if (Number.isFinite(customAudioDefinition.loopCountOverride)) {
+    nextInfo.loopCount = Math.max(0, Math.trunc(customAudioDefinition.loopCountOverride));
+  }
   audioManager.addAudioEventInfo(nextInfo);
 }
 

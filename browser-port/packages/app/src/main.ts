@@ -183,6 +183,23 @@ function applyBitMaskNames(
   return mask;
 }
 
+function resolveAudioEventLoopCount(audioEvent: AudioEventDef): number | undefined {
+  for (const [rawKey, rawValue] of Object.entries(audioEvent.fields)) {
+    if (rawKey.trim().toLowerCase() !== 'loopcount') {
+      continue;
+    }
+    const candidate = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    const parsed = typeof candidate === 'number'
+      ? candidate
+      : (typeof candidate === 'string' ? Number(candidate.trim()) : Number.NaN);
+    if (!Number.isFinite(parsed)) {
+      return undefined;
+    }
+    return Math.max(0, Math.trunc(parsed));
+  }
+  return undefined;
+}
+
 function resolveAudioEventDefaults(
   iniDataRegistry: IniDataRegistry,
   audioEvent: AudioEventDef,
@@ -225,6 +242,7 @@ function registerIniAudioEvents(
       : undefined;
     const typeMask = applyBitMaskNames(resolved.typeNames, SOUND_TYPE_MASK_BY_NAME);
     const controlMask = applyBitMaskNames(resolved.controlNames, AUDIO_CONTROL_MASK_BY_NAME);
+    const loopCount = resolveAudioEventLoopCount(resolved);
 
     audioManager.addAudioEventInfo({
       audioName: resolved.name,
@@ -233,6 +251,7 @@ function registerIniAudioEvents(
       priority,
       type: typeMask,
       control: controlMask,
+      loopCount,
       volume: resolved.volume,
       minVolume: resolved.minVolume,
       limit: resolved.limit,

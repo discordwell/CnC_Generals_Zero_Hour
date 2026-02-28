@@ -228,6 +228,7 @@ describe('createScriptObjectAmbientAudioRuntimeBridge', () => {
       soundType: AudioType.AT_SoundEffect,
       type: SoundType.ST_WORLD,
       control: AudioControl.AC_LOOP,
+      loopCount: 0,
       volume: 0.8,
       minVolume: 0.1,
       minRange: 15,
@@ -243,6 +244,7 @@ describe('createScriptObjectAmbientAudioRuntimeBridge', () => {
       customAudioDefinition: {
         sourceAudioName: 'BaseAmbient',
         loopingOverride: false,
+        loopCountOverride: 3,
         volumeOverride: 0.35,
         minVolumeOverride: 0.2,
         minRangeOverride: 20,
@@ -258,6 +260,7 @@ describe('createScriptObjectAmbientAudioRuntimeBridge', () => {
       soundType: AudioType.AT_SoundEffect,
       type: SoundType.ST_WORLD,
       control: 0,
+      loopCount: 3,
       volume: 0.35,
       minVolume: 0.2,
       minRange: 20,

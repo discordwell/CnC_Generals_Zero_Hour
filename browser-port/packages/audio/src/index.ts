@@ -557,6 +557,7 @@ export class AudioManager implements Subsystem {
       priority: AudioPriority.AP_NORMAL,
       type: SoundType.ST_WORLD,
       control: 0,
+      loopCount: 1,
       volume: 1,
       minVolume: 0,
     };
@@ -574,6 +575,7 @@ export class AudioManager implements Subsystem {
       maxRange: this.normalizeNonNegativeReal(newEventInfo.maxRange),
       type: newEventInfo.type ?? SoundType.ST_WORLD,
       control: newEventInfo.control ?? 0,
+      loopCount: normalizeNonNegativeInteger(newEventInfo.loopCount, 1),
       priority: newEventInfo.priority ?? AudioPriority.AP_NORMAL,
       soundType: newEventInfo.soundType ?? AudioType.AT_SoundEffect,
     });
@@ -1893,8 +1895,14 @@ export class AudioManager implements Subsystem {
     sourceNode.buffer = buffer;
 
     // Loop control.
-    const isLooping = ((resolved.info.control ?? 0) & AudioControl.AC_LOOP) !== 0;
-    sourceNode.loop = isLooping;
+    const hasLoopControl = ((resolved.info.control ?? 0) & AudioControl.AC_LOOP) !== 0;
+    const loopCount = normalizeNonNegativeInteger(resolved.info.loopCount, 1);
+    const isInfiniteLoop = hasLoopControl && loopCount === 0;
+    // Source parity: AudioEventRTS loopCount semantics are total play count (0 = forever).
+    sourceNode.loop = hasLoopControl && (isInfiniteLoop || loopCount > 1);
+    if (hasLoopControl && loopCount > 1 && Number.isFinite(buffer.duration) && buffer.duration > 0) {
+      sourceNode.stop(ctx.currentTime + (buffer.duration * loopCount));
+    }
 
     // Per-event gain node.
     const gainNode = ctx.createGain();
@@ -2027,6 +2035,8 @@ export interface AudioEventInfo {
   priority?: AudioPriority;
   type?: number;
   control?: number;
+  /** Source parity: AudioEventInfo::m_loopCount (0 = loop forever, >0 = total play count). */
+  loopCount?: number;
   volume?: number;
   minVolume?: number;
   limit?: number;

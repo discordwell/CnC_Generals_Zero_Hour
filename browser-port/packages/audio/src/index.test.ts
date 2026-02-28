@@ -10,6 +10,73 @@ import {
   AudioType,
 } from './index.js';
 
+interface RecordingBufferSourceNode {
+  loop: boolean;
+  buffer: AudioBuffer | null;
+  onended: (() => void) | null;
+  stopCalls: number[];
+  connect(target?: unknown): void;
+  disconnect(): void;
+  start(when?: number, offset?: number, duration?: number): void;
+  stop(when?: number): void;
+}
+
+function createRecordingAudioContext() {
+  const createdSources: RecordingBufferSourceNode[] = [];
+  const fakeContext = {
+    state: 'running',
+    currentTime: 0,
+    destination: {},
+    listener: {
+      positionX: { value: 0 },
+      positionY: { value: 0 },
+      positionZ: { value: 0 },
+      forwardX: { value: 0 },
+      forwardY: { value: 0 },
+      forwardZ: { value: -1 },
+      upX: { value: 0 },
+      upY: { value: 1 },
+      upZ: { value: 0 },
+      setPosition: () => undefined,
+      setOrientation: () => undefined,
+    },
+    createGain: () => ({
+      gain: { value: 1 },
+      connect: () => undefined,
+      disconnect: () => undefined,
+    }),
+    createPanner: () => ({
+      panningModel: 'HRTF',
+      distanceModel: 'inverse',
+      refDistance: 1,
+      maxDistance: 1000,
+      rolloffFactor: 1,
+      setPosition: () => undefined,
+      connect: () => undefined,
+      disconnect: () => undefined,
+    }),
+    createBufferSource: () => {
+      const source: RecordingBufferSourceNode = {
+        loop: false,
+        buffer: null,
+        onended: null,
+        stopCalls: [],
+        connect: () => undefined,
+        disconnect: () => undefined,
+        start: () => undefined,
+        stop: (when?: number) => {
+          source.stopCalls.push(when ?? 0);
+        },
+      };
+      createdSources.push(source);
+      return source;
+    },
+    resume: async () => undefined,
+    close: async () => undefined,
+  } as unknown as AudioContext;
+  return { fakeContext, createdSources };
+}
+
 describe('AudioManager', () => {
   it('applies source-style script/system volume multiplication per affect', () => {
     const manager = new AudioManager();
@@ -196,6 +263,56 @@ describe('AudioManager', () => {
     expect(manager.addAudioEvent('UiPing')).toBe(
       AudioHandleSpecialValues.AHSV_Muted,
     );
+  });
+
+  it('schedules finite loop playback stop when AC_LOOP has loopCount > 1', () => {
+    const { fakeContext, createdSources } = createRecordingAudioContext();
+    const manager = new AudioManager({
+      context: fakeContext,
+      eventInfos: [
+        {
+          audioName: 'FiniteLoop',
+          soundType: AudioType.AT_SoundEffect,
+          type: SoundType.ST_UI,
+          control: AudioControl.AC_LOOP,
+          loopCount: 3,
+        },
+      ],
+    });
+    manager.init();
+    manager.preloadAudioBuffer('FiniteLoop', { duration: 2 } as AudioBuffer);
+
+    manager.addAudioEvent('FiniteLoop');
+    manager.update();
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0]!.loop).toBe(true);
+    expect(createdSources[0]!.stopCalls).toEqual([6]);
+  });
+
+  it('keeps AC_LOOP loopCount=0 as infinite looping without a scheduled stop', () => {
+    const { fakeContext, createdSources } = createRecordingAudioContext();
+    const manager = new AudioManager({
+      context: fakeContext,
+      eventInfos: [
+        {
+          audioName: 'InfiniteLoop',
+          soundType: AudioType.AT_SoundEffect,
+          type: SoundType.ST_UI,
+          control: AudioControl.AC_LOOP,
+          loopCount: 0,
+        },
+      ],
+    });
+    manager.init();
+    manager.preloadAudioBuffer('InfiniteLoop', { duration: 2 } as AudioBuffer);
+
+    manager.addAudioEvent('InfiniteLoop');
+    manager.update();
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0]!.loop).toBe(true);
+    expect(createdSources[0]!.stopCalls).toHaveLength(0);
   });
 
   it('cycles track names forward and backward like source vector behavior', () => {
