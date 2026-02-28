@@ -43839,6 +43839,52 @@ describe('Script condition groundwork', () => {
     expect(after).toBeGreaterThan(before);
   });
 
+  it('caps script AI repair queue to source MAX_STRUCTURES_TO_REPAIR', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('DamagedBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 200 }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('DamagedBuilding', 20, 20), // id 1
+        makeMapObject('DamagedBuilding', 30, 20), // id 2
+        makeMapObject('DamagedBuilding', 40, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      scriptSideRepairQueue: Map<string, Set<number>>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 458, // PLAYER_REPAIR_NAMED_STRUCTURE
+      params: ['America', 1],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 458,
+      params: ['America', 2],
+    })).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 458,
+      params: ['America', 3],
+    })).toBe(true);
+
+    const queued = privateApi.scriptSideRepairQueue.get('america');
+    expect(queued?.size).toBe(2);
+    expect(queued?.has(1)).toBe(true);
+    expect(queued?.has(2)).toBe(true);
+    expect(queued?.has(3)).toBe(false);
+  });
+
   it('executes script camera tether/default actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

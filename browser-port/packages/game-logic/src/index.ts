@@ -329,6 +329,8 @@ const SCRIPT_WAYPOINT_PATH_LIMIT = 1024;
 const SCRIPT_DIFFICULTY_EASY = 0;
 const SCRIPT_DIFFICULTY_NORMAL = 1;
 const SCRIPT_DIFFICULTY_HARD = 2;
+/** Source parity: AIPlayer::MAX_STRUCTURES_TO_REPAIR. */
+const SOURCE_MAX_STRUCTURES_TO_REPAIR = 2;
 
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
@@ -16603,6 +16605,13 @@ export class GameLogicSubsystem implements Subsystem {
     if (!queued) {
       queued = new Set<number>();
       this.scriptSideRepairQueue.set(normalizedSide, queued);
+    }
+    if (queued.has(target.id)) {
+      this.updateScriptSideRepairQueues();
+      return true;
+    }
+    if (queued.size >= SOURCE_MAX_STRUCTURES_TO_REPAIR) {
+      return true;
     }
     queued.add(target.id);
     this.updateScriptSideRepairQueues();
