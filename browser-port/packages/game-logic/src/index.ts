@@ -13,6 +13,7 @@ import type {
 import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
   IniDataRegistry,
+  type AudioEventDef,
   type ArmorDef,
   type CommandButtonDef,
   type CommandSetDef,
@@ -248,6 +249,7 @@ import {
   type RenderAnimationStateClipCandidates,
   type RenderableEntityState,
   type RenderableObjectCategory,
+  type ScriptObjectAmbientCustomAudioDefinition,
   type ScriptObjectAmbientSoundState,
   type SellCommand,
   type SelectedEntityInfo,
@@ -1687,6 +1689,11 @@ interface AmbientSoundProfile {
   rubble: string | null;
 }
 
+interface AmbientSoundCustomState {
+  audioName: string;
+  definition: ScriptObjectAmbientCustomAudioDefinition;
+}
+
 interface MapEntity {
   id: number;
   templateName: string;
@@ -1832,6 +1839,10 @@ interface MapEntity {
   scriptAmbientSoundRevision: number;
   /** Source parity subset: ambient sound variants by body damage state. */
   ambientSoundProfile: AmbientSoundProfile | null;
+  /** Source parity: Drawable::setCustomSoundAmbientOff map-object override marker. */
+  ambientSoundForcedOffExceptRubble: boolean;
+  /** Source parity: map-object customized ambient info + mangled event name per instance. */
+  ambientSoundCustomState: AmbientSoundCustomState | null;
   /** Source parity: Object::m_customIndicatorColor override set by script action. */
   customIndicatorColor: number | null;
   commandSetStringOverride: string | null;
@@ -6481,7 +6492,8 @@ export class GameLogicSubsystem implements Subsystem {
   getScriptObjectAmbientSoundStates(): ScriptObjectAmbientSoundState[] {
     const states: ScriptObjectAmbientSoundState[] = [];
     for (const entity of this.spawnedEntities.values()) {
-      const audioName = this.resolveEntityAmbientSoundEventName(entity);
+      const ambient = this.resolveEntityAmbientSoundState(entity);
+      const audioName = ambient.audioName;
       if (!audioName) {
         continue;
       }
@@ -6490,6 +6502,7 @@ export class GameLogicSubsystem implements Subsystem {
         audioName,
         enabled: entity.scriptAmbientSoundEnabled,
         toggleRevision: entity.scriptAmbientSoundRevision,
+        customAudioDefinition: ambient.customAudioDefinition ?? undefined,
       });
     }
     return states;
@@ -6533,12 +6546,20 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveEntityAmbientSoundEventName(entity: MapEntity): string | null {
+    const bodyDamageState = calcBodyDamageState(entity.health, entity.maxHealth);
+    if (bodyDamageState !== 3) {
+      if (entity.ambientSoundForcedOffExceptRubble) {
+        return null;
+      }
+      if (entity.ambientSoundCustomState) {
+        return entity.ambientSoundCustomState.audioName;
+      }
+    }
+
     const profile = entity.ambientSoundProfile;
     if (!profile) {
       return null;
     }
-
-    const bodyDamageState = calcBodyDamageState(entity.health, entity.maxHealth);
     switch (bodyDamageState) {
       case 1:
         return profile.damaged ?? profile.pristine;
@@ -6549,6 +6570,29 @@ export class GameLogicSubsystem implements Subsystem {
       default:
         return profile.pristine;
     }
+  }
+
+  private resolveEntityAmbientSoundState(entity: MapEntity): {
+    audioName: string | null;
+    customAudioDefinition: ScriptObjectAmbientCustomAudioDefinition | null;
+  } {
+    const audioName = this.resolveEntityAmbientSoundEventName(entity);
+    if (!audioName) {
+      return {
+        audioName: null,
+        customAudioDefinition: null,
+      };
+    }
+    if (entity.ambientSoundCustomState && entity.ambientSoundCustomState.audioName === audioName) {
+      return {
+        audioName,
+        customAudioDefinition: { ...entity.ambientSoundCustomState.definition },
+      };
+    }
+    return {
+      audioName,
+      customAudioDefinition: null,
+    };
   }
 
   /**
@@ -26018,6 +26062,8 @@ export class GameLogicSubsystem implements Subsystem {
       scriptAmbientSoundEnabled: true,
       scriptAmbientSoundRevision: 0,
       ambientSoundProfile,
+      ambientSoundForcedOffExceptRubble: false,
+      ambientSoundCustomState: null,
       customIndicatorColor: null,
       commandSetStringOverride: null,
       locomotorUpgradeEnabled: false,
@@ -26459,6 +26505,8 @@ export class GameLogicSubsystem implements Subsystem {
       currentSubdualDamage: 0,
       subdualHealingCountdown: 0,
     };
+
+    this.applyMapObjectAmbientSoundProperties(entity, mapObject, iniDataRegistry);
 
     // Source parity: PowerPlantUpdate init — extended=false, sleeping forever.
     if (entity.powerPlantUpdateProfile) {
@@ -35085,6 +35133,275 @@ export class GameLogicSubsystem implements Subsystem {
       return normalized || null;
     }
     return null;
+  }
+
+  private collectNormalizedMapObjectProperties(mapObject: MapObjectJSON): Map<string, string> {
+    const normalized = new Map<string, string>();
+    for (const [rawKey, rawValue] of Object.entries(mapObject.properties)) {
+      const key = rawKey.trim().toLowerCase();
+      if (!key) {
+        continue;
+      }
+      const value = typeof rawValue === 'string' ? rawValue : String(rawValue ?? '');
+      normalized.set(key, value);
+    }
+    return normalized;
+  }
+
+  private parseMapBooleanPropertyValue(value: string | undefined): boolean | null {
+    if (value === undefined) {
+      return null;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === 'yes' || normalized === '1' || normalized === 'on') {
+      return true;
+    }
+    if (normalized === 'false' || normalized === 'no' || normalized === '0' || normalized === 'off') {
+      return false;
+    }
+    return null;
+  }
+
+  private parseMapIntegerPropertyValue(value: string | undefined): number | null {
+    if (value === undefined) {
+      return null;
+    }
+    const parsed = Number(value.trim());
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return Math.trunc(parsed);
+  }
+
+  private parseMapRealPropertyValue(value: string | undefined): number | null {
+    if (value === undefined) {
+      return null;
+    }
+    const parsed = Number(value.trim());
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private resolveAmbientAudioPriorityNameFromInt(value: number): ScriptObjectAmbientCustomAudioDefinition['priorityNameOverride'] | null {
+    switch (Math.trunc(value)) {
+      case 0:
+        return 'LOWEST';
+      case 1:
+        return 'LOW';
+      case 2:
+        return 'NORMAL';
+      case 3:
+        return 'HIGH';
+      case 4:
+        return 'CRITICAL';
+      default:
+        return null;
+    }
+  }
+
+  private findAudioEventDefinitionByName(
+    iniDataRegistry: IniDataRegistry,
+    audioName: string,
+  ): AudioEventDef | null {
+    const direct = iniDataRegistry.getAudioEvent(audioName);
+    if (direct) {
+      return direct;
+    }
+    const normalizedName = audioName.trim().toUpperCase();
+    if (!normalizedName) {
+      return null;
+    }
+    for (const audioEvent of iniDataRegistry.audioEvents.values()) {
+      if (audioEvent.name.trim().toUpperCase() === normalizedName) {
+        return audioEvent;
+      }
+    }
+    return null;
+  }
+
+  private resolveAudioEventLoopCount(audioEvent: AudioEventDef): number {
+    const raw = readNumericField(audioEvent.fields, ['LoopCount']) ?? 0;
+    if (!Number.isFinite(raw)) {
+      return 0;
+    }
+    return Math.max(0, Math.trunc(raw));
+  }
+
+  private isPermanentAmbientAudioEvent(
+    audioEvent: AudioEventDef,
+    overrides: {
+      loopingOverride?: boolean;
+      loopCountOverride?: number;
+    } = {},
+  ): boolean {
+    const baseLooping = audioEvent.controlNames.some((name) => name.trim().toUpperCase() === 'LOOP');
+    const effectiveLooping = overrides.loopingOverride ?? baseLooping;
+    if (!effectiveLooping) {
+      return false;
+    }
+    const effectiveLoopCount = overrides.loopCountOverride ?? this.resolveAudioEventLoopCount(audioEvent);
+    return effectiveLoopCount === 0;
+  }
+
+  private resolveBaseAmbientAudioName(entity: MapEntity): string | null {
+    return entity.ambientSoundProfile?.pristine ?? null;
+  }
+
+  private applyMapObjectAmbientSoundProperties(
+    entity: MapEntity,
+    mapObject: MapObjectJSON,
+    iniDataRegistry: IniDataRegistry,
+  ): void {
+    const properties = this.collectNormalizedMapObjectProperties(mapObject);
+    if (properties.size === 0) {
+      return;
+    }
+
+    let soundEnabledExists = false;
+    let soundEnabled = entity.scriptAmbientSoundEnabled;
+
+    const explicitEnabled = this.parseMapBooleanPropertyValue(properties.get('objectsoundambientenabled'));
+    if (explicitEnabled !== null) {
+      soundEnabledExists = true;
+      soundEnabled = explicitEnabled;
+    }
+
+    let infoModified = false;
+    let customDefinition: ScriptObjectAmbientCustomAudioDefinition | null = null;
+    let customSourceAudioName: string | null = null;
+    const objectSoundAmbientRaw = properties.get('objectsoundambient');
+    const objectSoundAmbientExists = objectSoundAmbientRaw !== undefined;
+    const objectSoundAmbientName = objectSoundAmbientRaw?.trim() ?? '';
+
+    if (objectSoundAmbientExists) {
+      if (objectSoundAmbientName.length === 0) {
+        // Source parity: setCustomSoundAmbientOff() disables non-rubble ambient audio.
+        entity.ambientSoundForcedOffExceptRubble = true;
+        soundEnabledExists = true;
+        soundEnabled = false;
+      } else if (this.findAudioEventDefinitionByName(iniDataRegistry, objectSoundAmbientName)) {
+        customSourceAudioName = objectSoundAmbientName;
+        customDefinition = {
+          sourceAudioName: customSourceAudioName,
+        };
+        infoModified = true;
+      }
+    }
+
+    if (!(objectSoundAmbientExists && objectSoundAmbientName.length === 0)) {
+      const customized = this.parseMapBooleanPropertyValue(properties.get('objectsoundambientcustomized'));
+      if (customized === true) {
+        if (!customSourceAudioName) {
+          customSourceAudioName = this.resolveBaseAmbientAudioName(entity);
+        }
+        if (customSourceAudioName) {
+          if (!customDefinition) {
+            customDefinition = {
+              sourceAudioName: customSourceAudioName,
+            };
+          }
+
+          const sourceAudioEvent = this.findAudioEventDefinitionByName(iniDataRegistry, customSourceAudioName);
+          const loopOverride = this.parseMapBooleanPropertyValue(properties.get('objectsoundambientlooping'));
+          if (loopOverride !== null) {
+            customDefinition.loopingOverride = loopOverride;
+            infoModified = true;
+          }
+
+          const loopCountOverride = this.parseMapIntegerPropertyValue(properties.get('objectsoundambientloopcount'));
+          if (loopCountOverride !== null && sourceAudioEvent) {
+            const baseLooping = sourceAudioEvent.controlNames.some(
+              (name) => name.trim().toUpperCase() === 'LOOP',
+            );
+            const effectiveLooping = customDefinition.loopingOverride ?? baseLooping;
+            if (effectiveLooping) {
+              customDefinition.loopCountOverride = Math.max(0, loopCountOverride);
+              infoModified = true;
+            }
+          }
+
+          const minVolumeOverride = this.parseMapRealPropertyValue(properties.get('objectsoundambientminvolume'));
+          if (minVolumeOverride !== null) {
+            customDefinition.minVolumeOverride = minVolumeOverride;
+            infoModified = true;
+          }
+
+          const volumeOverride = this.parseMapRealPropertyValue(properties.get('objectsoundambientvolume'));
+          if (volumeOverride !== null) {
+            customDefinition.volumeOverride = volumeOverride;
+            infoModified = true;
+          }
+
+          const minRangeOverride = this.parseMapRealPropertyValue(properties.get('objectsoundambientminrange'));
+          if (minRangeOverride !== null) {
+            customDefinition.minRangeOverride = minRangeOverride;
+            infoModified = true;
+          }
+
+          const maxRangeOverride = this.parseMapRealPropertyValue(properties.get('objectsoundambientmaxrange'));
+          if (maxRangeOverride !== null) {
+            customDefinition.maxRangeOverride = maxRangeOverride;
+            infoModified = true;
+          }
+
+          const priorityOverride = this.parseMapIntegerPropertyValue(properties.get('objectsoundambientpriority'));
+          if (priorityOverride !== null) {
+            const priorityName = this.resolveAmbientAudioPriorityNameFromInt(priorityOverride);
+            if (priorityName) {
+              customDefinition.priorityNameOverride = priorityName;
+              infoModified = true;
+            }
+          }
+        }
+      }
+    }
+
+    if (!soundEnabledExists) {
+      if (customDefinition) {
+        const sourceAudioEvent = this.findAudioEventDefinitionByName(
+          iniDataRegistry,
+          customDefinition.sourceAudioName,
+        );
+        if (sourceAudioEvent) {
+          soundEnabled = this.isPermanentAmbientAudioEvent(sourceAudioEvent, {
+            loopingOverride: customDefinition.loopingOverride,
+            loopCountOverride: customDefinition.loopCountOverride,
+          });
+          soundEnabledExists = true;
+        }
+      } else {
+        const baseAudioName = this.resolveBaseAmbientAudioName(entity);
+        if (baseAudioName) {
+          const baseAudioEvent = this.findAudioEventDefinitionByName(iniDataRegistry, baseAudioName);
+          if (baseAudioEvent) {
+            soundEnabled = this.isPermanentAmbientAudioEvent(baseAudioEvent);
+            soundEnabledExists = true;
+          }
+        }
+      }
+    }
+
+    if (soundEnabledExists) {
+      entity.scriptAmbientSoundEnabled = soundEnabled;
+    }
+
+    if (objectSoundAmbientExists && objectSoundAmbientName.length === 0) {
+      entity.ambientSoundCustomState = null;
+      return;
+    }
+
+    if (infoModified && customDefinition) {
+      entity.ambientSoundForcedOffExceptRubble = false;
+      entity.ambientSoundCustomState = {
+        audioName: ` CUSTOM ${entity.id} ${customDefinition.sourceAudioName}`,
+        definition: customDefinition,
+      };
+      return;
+    }
+
+    entity.ambientSoundCustomState = null;
   }
 
   private relationshipKey(sourceSide: string, targetSide: string): string {

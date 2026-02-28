@@ -64,6 +64,20 @@ export interface ScriptObjectAmbientSoundState {
   audioName: string;
   enabled: boolean;
   toggleRevision: number;
+  /** Source parity subset: map-script customized ambient event definition for this object instance. */
+  customAudioDefinition?: ScriptObjectAmbientCustomAudioDefinition;
+}
+
+export interface ScriptObjectAmbientCustomAudioDefinition {
+  /** Base AudioEvent to clone before applying map customization overrides. */
+  sourceAudioName: string;
+  loopingOverride?: boolean;
+  loopCountOverride?: number;
+  minVolumeOverride?: number;
+  volumeOverride?: number;
+  minRangeOverride?: number;
+  maxRangeOverride?: number;
+  priorityNameOverride?: 'LOWEST' | 'LOW' | 'NORMAL' | 'HIGH' | 'CRITICAL';
 }
 
 export type GameEndStatus = 'ACTIVE' | 'VICTORY' | 'DEFEAT';

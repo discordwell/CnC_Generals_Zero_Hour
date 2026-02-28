@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { IniBlock } from '@generals/core';
 import type { InputState } from '@generals/input';
 import {
+  type AudioEventDef,
   type ArmorDef,
   type CommandButtonDef,
   type CommandSetDef,
@@ -107,6 +108,35 @@ function makeScienceDef(name: string, fields: Record<string, unknown>): ScienceD
   };
 }
 
+function makeAudioEventDef(
+  name: string,
+  fields: Record<string, unknown> = {},
+  options: {
+    soundType?: AudioEventDef['soundType'];
+    typeNames?: string[];
+    controlNames?: string[];
+    priorityName?: string;
+    volume?: number;
+    minVolume?: number;
+    minRange?: number;
+    maxRange?: number;
+  } = {},
+): AudioEventDef {
+  return {
+    name,
+    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
+    blocks: [],
+    soundType: options.soundType ?? 'sound',
+    typeNames: options.typeNames ? [...options.typeNames] : ['WORLD'],
+    controlNames: options.controlNames ? [...options.controlNames] : [],
+    priorityName: options.priorityName,
+    volume: options.volume,
+    minVolume: options.minVolume,
+    minRange: options.minRange,
+    maxRange: options.maxRange,
+  };
+}
+
 function makeSpecialPowerDef(name: string, fields: Record<string, unknown>): SpecialPowerDef {
   return {
     name,
@@ -125,6 +155,7 @@ function makeBundle(params: {
   sciences?: ScienceDef[];
   specialPowers?: SpecialPowerDef[];
   locomotors?: LocomotorDef[];
+  audioEvents?: AudioEventDef[];
   factions?: FactionDef[];
   ai?: {
     attackUsesLineOfSight?: boolean;
@@ -139,6 +170,7 @@ function makeBundle(params: {
   const sciences = params.sciences ?? [];
   const specialPowers = params.specialPowers ?? [];
   const locomotors = params.locomotors ?? [];
+  const audioEvents = params.audioEvents ?? [];
   const factions = params.factions ?? [];
   return {
     objects: params.objects,
@@ -151,6 +183,7 @@ function makeBundle(params: {
     specialPowers,
     factions,
     locomotors,
+    audioEvents,
     ai: {
       attackUsesLineOfSight: true,
       ...params.ai,
@@ -44703,6 +44736,121 @@ describe('Script condition groundwork', () => {
         entityId: 1,
         audioName: 'AmbientRubble',
         enabled: true,
+        toggleRevision: 0,
+      },
+    ]);
+  });
+
+  it('applies map object custom ambient overrides with source mangle-name and permanence defaults', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmbientTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          SoundAmbient: 'BaseAmbient',
+          SoundAmbientRubble: 'RubbleAmbient',
+        }),
+      ],
+      audioEvents: [
+        makeAudioEventDef('BaseAmbient', { LoopCount: 0 }, { controlNames: ['LOOP'] }),
+        makeAudioEventDef('MapAmbient', { LoopCount: 0 }, { controlNames: ['LOOP'] }),
+        makeAudioEventDef('RubbleAmbient'),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmbientTarget', 12, 12, {
+        objectSoundAmbient: 'MapAmbient',
+        objectSoundAmbientCustomized: 'true',
+        objectSoundAmbientLooping: 'no',
+        objectSoundAmbientMinVolume: '0.2',
+        objectSoundAmbientVolume: '0.4',
+        objectSoundAmbientMinRange: '8',
+        objectSoundAmbientMaxRange: '75',
+        objectSoundAmbientPriority: '4',
+      })], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: ' CUSTOM 1 MapAmbient',
+        enabled: false,
+        toggleRevision: 0,
+        customAudioDefinition: {
+          sourceAudioName: 'MapAmbient',
+          loopingOverride: false,
+          minVolumeOverride: 0.2,
+          volumeOverride: 0.4,
+          minRangeOverride: 8,
+          maxRangeOverride: 75,
+          priorityNameOverride: 'CRITICAL',
+        },
+      },
+    ]);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, unknown>;
+      applyWeaponDamageAmount(attackerId: number | null, target: unknown, amount: number, damageType: string): void;
+    };
+    const target = privateApi.spawnedEntities.get(1);
+    expect(target).toBeDefined();
+
+    privateApi.applyWeaponDamageAmount(null, target, 200, 'UNRESISTABLE');
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'RubbleAmbient',
+        enabled: false,
+        toggleRevision: 0,
+      },
+    ]);
+  });
+
+  it('supports map object ambient-off override for non-rubble states only', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmbientTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          SoundAmbient: 'BaseAmbient',
+          SoundAmbientRubble: 'RubbleAmbient',
+        }),
+      ],
+      audioEvents: [
+        makeAudioEventDef('BaseAmbient', { LoopCount: 0 }, { controlNames: ['LOOP'] }),
+        makeAudioEventDef('RubbleAmbient'),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmbientTarget', 12, 12, {
+        objectSoundAmbient: '',
+      })], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    // Source parity: setCustomSoundAmbientOff() mutes non-rubble ambients.
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([]);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, unknown>;
+      applyWeaponDamageAmount(attackerId: number | null, target: unknown, amount: number, damageType: string): void;
+    };
+    const target = privateApi.spawnedEntities.get(1);
+    expect(target).toBeDefined();
+
+    privateApi.applyWeaponDamageAmount(null, target, 200, 'UNRESISTABLE');
+    expect(logic.getScriptObjectAmbientSoundStates()).toEqual([
+      {
+        entityId: 1,
+        audioName: 'RubbleAmbient',
+        enabled: false,
         toggleRevision: 0,
       },
     ]);

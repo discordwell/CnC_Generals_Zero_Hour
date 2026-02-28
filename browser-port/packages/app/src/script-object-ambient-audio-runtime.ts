@@ -1,5 +1,8 @@
 import {
+  AudioControl,
+  AudioPriority,
   AudioHandleSpecialValues,
+  type AudioEventInfo,
   type AudioEventRTS,
   type AudioHandle,
 } from '@generals/audio';
@@ -18,6 +21,8 @@ export interface ScriptObjectAmbientAudioRuntimeGameLogic {
 
 export interface ScriptObjectAmbientAudioRuntimeAudioManager {
   addAudioEvent(event: AudioEventRTS): AudioHandle;
+  addAudioEventInfo(eventInfo: AudioEventInfo): void;
+  findAudioEventInfo(eventName: string): AudioEventInfo | null;
   removeAudioEvent(audioEvent: AudioHandle | string): void;
   isCurrentlyPlaying(handle: AudioHandle): boolean;
 }
@@ -45,6 +50,85 @@ function stopPlayback(
   }
 }
 
+function resolvePriorityByName(priorityName: string): AudioPriority | null {
+  switch (priorityName.trim().toUpperCase()) {
+    case 'LOWEST':
+      return AudioPriority.AP_LOWEST;
+    case 'LOW':
+      return AudioPriority.AP_LOW;
+    case 'NORMAL':
+      return AudioPriority.AP_NORMAL;
+    case 'HIGH':
+      return AudioPriority.AP_HIGH;
+    case 'CRITICAL':
+      return AudioPriority.AP_CRITICAL;
+    default:
+      return null;
+  }
+}
+
+function registerCustomAudioEventInfoIfNeeded(
+  audioManager: ScriptObjectAmbientAudioRuntimeAudioManager,
+  ambientState: ScriptObjectAmbientSoundState,
+): void {
+  const customAudioDefinition = ambientState.customAudioDefinition;
+  if (!customAudioDefinition) {
+    return;
+  }
+  const customAudioName = ambientState.audioName;
+  if (!customAudioName.trim()) {
+    return;
+  }
+  if (audioManager.findAudioEventInfo(customAudioName)) {
+    return;
+  }
+
+  const sourceAudioName = customAudioDefinition.sourceAudioName.trim();
+  if (!sourceAudioName) {
+    return;
+  }
+  const sourceInfo = audioManager.findAudioEventInfo(sourceAudioName);
+  if (!sourceInfo) {
+    return;
+  }
+
+  let control = sourceInfo.control ?? 0;
+  if (customAudioDefinition.loopingOverride === true) {
+    control |= AudioControl.AC_LOOP;
+  } else if (customAudioDefinition.loopingOverride === false) {
+    control &= ~AudioControl.AC_LOOP;
+  }
+
+  const nextInfo: AudioEventInfo = {
+    ...sourceInfo,
+    audioName: customAudioName,
+    control,
+  };
+
+  if (Number.isFinite(customAudioDefinition.volumeOverride)) {
+    nextInfo.volume = customAudioDefinition.volumeOverride;
+  }
+  if (Number.isFinite(customAudioDefinition.minVolumeOverride)) {
+    nextInfo.minVolume = customAudioDefinition.minVolumeOverride;
+  }
+  if (Number.isFinite(customAudioDefinition.minRangeOverride)) {
+    nextInfo.minRange = customAudioDefinition.minRangeOverride;
+  }
+  if (Number.isFinite(customAudioDefinition.maxRangeOverride)) {
+    nextInfo.maxRange = customAudioDefinition.maxRangeOverride;
+  }
+  if (customAudioDefinition.priorityNameOverride) {
+    const mappedPriority = resolvePriorityByName(customAudioDefinition.priorityNameOverride);
+    if (mappedPriority !== null) {
+      nextInfo.priority = mappedPriority;
+    }
+  }
+
+  // TODO(source parity): loop-count override from map object properties is currently
+  // not represented in AudioManager playback state (AC_LOOP is supported, finite loop counts are not).
+  audioManager.addAudioEventInfo(nextInfo);
+}
+
 export function createScriptObjectAmbientAudioRuntimeBridge(
   options: CreateScriptObjectAmbientAudioRuntimeBridgeOptions,
 ): ScriptObjectAmbientAudioRuntimeBridge {
@@ -65,10 +149,12 @@ export function createScriptObjectAmbientAudioRuntimeBridge(
           continue;
         }
 
-        const normalizedAudioName = ambientState.audioName.trim();
-        if (!normalizedAudioName) {
+        const audioName = ambientState.audioName;
+        if (!audioName.trim()) {
           continue;
         }
+
+        registerCustomAudioEventInfoIfNeeded(audioManager, ambientState);
 
         seenEntityIds.add(entityId);
 
@@ -76,7 +162,7 @@ export function createScriptObjectAmbientAudioRuntimeBridge(
         let shouldStartPlayback = false;
         if (!playback) {
           playback = {
-            audioName: normalizedAudioName,
+            audioName,
             handle: null,
             toggleRevision: Math.trunc(ambientState.toggleRevision),
           };
@@ -84,9 +170,9 @@ export function createScriptObjectAmbientAudioRuntimeBridge(
           shouldStartPlayback = ambientState.enabled;
         }
 
-        if (playback.audioName !== normalizedAudioName) {
+        if (playback.audioName !== audioName) {
           stopPlayback(audioManager, playback);
-          playback.audioName = normalizedAudioName;
+          playback.audioName = audioName;
           shouldStartPlayback = ambientState.enabled;
         }
 

@@ -1,15 +1,26 @@
 import { describe, expect, it } from 'vitest';
 
-import { AudioHandleSpecialValues, type AudioEventRTS, type AudioHandle } from '@generals/audio';
+import {
+  AudioControl,
+  AudioHandleSpecialValues,
+  AudioPriority,
+  AudioType,
+  SoundType,
+  type AudioEventInfo,
+  type AudioEventRTS,
+  type AudioHandle,
+} from '@generals/audio';
 import type { ScriptObjectAmbientSoundState } from '@generals/game-logic';
 
 import { createScriptObjectAmbientAudioRuntimeBridge } from './script-object-ambient-audio-runtime.js';
 
 class RecordingAudioManager {
   readonly addedEvents: AudioEventRTS[] = [];
+  readonly addedEventInfos: AudioEventInfo[] = [];
   readonly removedEvents: Array<AudioHandle | string> = [];
   private readonly playingHandles = new Set<AudioHandle>();
   private nextHandle = AudioHandleSpecialValues.AHSV_FirstHandle;
+  private readonly eventInfos = new Map<string, AudioEventInfo>();
 
   addAudioEvent(event: AudioEventRTS): AudioHandle {
     this.addedEvents.push({ ...event });
@@ -17,6 +28,15 @@ class RecordingAudioManager {
     this.nextHandle += 1;
     this.playingHandles.add(handle);
     return handle;
+  }
+
+  addAudioEventInfo(eventInfo: AudioEventInfo): void {
+    this.addedEventInfos.push({ ...eventInfo });
+    this.eventInfos.set(eventInfo.audioName, { ...eventInfo });
+  }
+
+  findAudioEventInfo(eventName: string): AudioEventInfo | null {
+    return this.eventInfos.get(eventName) ?? null;
   }
 
   removeAudioEvent(audioEvent: AudioHandle | string): void {
@@ -192,6 +212,60 @@ describe('createScriptObjectAmbientAudioRuntimeBridge', () => {
 
     expect(audioManager.removedEvents).toEqual([
       AudioHandleSpecialValues.AHSV_FirstHandle,
+    ]);
+  });
+
+  it('registers per-object custom ambient audio definitions before playback', () => {
+    const gameLogic = new RecordingGameLogic();
+    const audioManager = new RecordingAudioManager();
+    const bridge = createScriptObjectAmbientAudioRuntimeBridge({
+      gameLogic,
+      audioManager,
+    });
+
+    audioManager.addAudioEventInfo({
+      audioName: 'BaseAmbient',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_WORLD,
+      control: AudioControl.AC_LOOP,
+      volume: 0.8,
+      minVolume: 0.1,
+      minRange: 15,
+      maxRange: 120,
+      priority: AudioPriority.AP_NORMAL,
+    });
+
+    gameLogic.state = [{
+      entityId: 13,
+      audioName: ' CUSTOM 13 BaseAmbient',
+      enabled: true,
+      toggleRevision: 0,
+      customAudioDefinition: {
+        sourceAudioName: 'BaseAmbient',
+        loopingOverride: false,
+        volumeOverride: 0.35,
+        minVolumeOverride: 0.2,
+        minRangeOverride: 20,
+        maxRangeOverride: 180,
+        priorityNameOverride: 'CRITICAL',
+      },
+    }];
+
+    bridge.syncAfterSimulationStep();
+
+    expect(audioManager.findAudioEventInfo(' CUSTOM 13 BaseAmbient')).toEqual({
+      audioName: ' CUSTOM 13 BaseAmbient',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_WORLD,
+      control: 0,
+      volume: 0.35,
+      minVolume: 0.2,
+      minRange: 20,
+      maxRange: 180,
+      priority: AudioPriority.AP_CRITICAL,
+    });
+    expect(audioManager.addedEvents).toEqual([
+      { eventName: ' CUSTOM 13 BaseAmbient', objectId: 13 },
     ]);
   });
 });
