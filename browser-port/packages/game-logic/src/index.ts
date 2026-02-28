@@ -40038,6 +40038,13 @@ export class GameLogicSubsystem implements Subsystem {
     if (!sourceSide || sourceSide !== targetSide) {
       return false;
     }
+    const sourceOwnerToken = this.normalizeControllingPlayerToken(source.controllingPlayerToken ?? undefined);
+    const targetOwnerToken = this.normalizeControllingPlayerToken(target.controllingPlayerToken ?? undefined);
+    // Source parity: ActionManager::canEnterObject aircraft/airfield path requires same controlling player.
+    // Fallback to side-only check when explicit controlling-player metadata is unavailable.
+    if (sourceOwnerToken !== null && targetOwnerToken !== null && sourceOwnerToken !== targetOwnerToken) {
+      return false;
+    }
 
     // Source parity subset: repair docks service ground vehicles.
     const sourceKindOf = this.resolveEntityKindOfSet(source);
