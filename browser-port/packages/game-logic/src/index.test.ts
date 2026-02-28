@@ -11825,6 +11825,47 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getCellVisibility('China', 30, 30)).toBe(CELL_SHROUDED);
   });
 
+  it('uses geometry-based shroud-clearing radius while UNDER_CONSTRUCTION', () => {
+    const logic = new GameLogicSubsystem();
+
+    const scaffoldDef = makeObjectDef('Scaffold', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 200,
+      ShroudClearingRange: 200,
+      GeometryMajorRadius: 20,
+      GeometryMinorRadius: 10,
+      GeometryIsSmall: 'No',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [scaffoldDef],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Scaffold', 30, 30)], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { x: number; z: number; objectStatusFlags: Set<string> }>;
+    };
+    const scaffold = privateApi.spawnedEntities.get(1);
+    expect(scaffold).toBeDefined();
+    scaffold?.objectStatusFlags.add('UNDER_CONSTRUCTION');
+
+    logic.update(0.033);
+
+    const insideX = (scaffold?.x ?? 0) + 18;
+    const insideZ = (scaffold?.z ?? 0) + 8;
+    const outsideX = (scaffold?.x ?? 0) + 40;
+    const outsideZ = (scaffold?.z ?? 0) + 20;
+
+    expect(logic.getCellVisibility('America', insideX, insideZ)).toBe(CELL_CLEAR);
+    expect(logic.getCellVisibility('America', outsideX, outsideZ)).not.toBe(CELL_CLEAR);
+  });
+
   it('transitions cells from CLEAR to FOGGED when unit moves away', () => {
     const logic = new GameLogicSubsystem();
 

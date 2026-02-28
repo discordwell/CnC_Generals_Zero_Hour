@@ -43962,10 +43962,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       // Source parity: fog reveal uses shroud-clearing range, not vision range.
-      // Buildings under construction use bounding radius (Object.cpp line 5156).
-      // Use 0 for now until geometry-radius wiring is added here.
+      // Buildings under construction use geometry bounding-circle radius
+      // (Object::getShroudClearingRange, Object.cpp line 5156).
       const effectiveShroudClearingRange = entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
-        ? 0
+        ? this.resolveEntityBoundingCircleRadius2D(entity)
         : entity.shroudClearingRange;
 
       updateEntityVisionImpl(
@@ -44906,6 +44906,21 @@ export class GameLogicSubsystem implements Subsystem {
       return (entity.pathDiameter * MAP_XY_FACTOR) / 2;
     }
     return MAP_XY_FACTOR / 2;
+  }
+
+  /**
+   * Source parity: GeometryInfo::getBoundingCircleRadius() for runtime entities.
+   * SPHERE/CYLINDER use majorRadius; BOX uses sqrt(majorRadius^2 + minorRadius^2).
+   */
+  private resolveEntityBoundingCircleRadius2D(entity: MapEntity): number {
+    const geometry = entity.obstacleGeometry;
+    if (!geometry) {
+      return this.resolveEntityMajorRadius(entity);
+    }
+    if (geometry.shape === 'box') {
+      return Math.hypot(geometry.majorRadius, geometry.minorRadius);
+    }
+    return geometry.majorRadius;
   }
 
   private clampWorldPositionToMapBounds(worldX: number, worldZ: number): [number, number] {
