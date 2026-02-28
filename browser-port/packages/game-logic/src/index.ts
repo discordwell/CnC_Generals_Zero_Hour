@@ -19913,11 +19913,8 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
     }
-
-    // Source parity subset: transport-slot parsing is not fully wired for all template paths yet.
-    return (entity.kindOf.has('INFANTRY') || entity.kindOf.has('VEHICLE') || entity.kindOf.has('PORTABLE_STRUCTURE'))
-      ? 1
-      : 0;
+    // Source parity: ThingTemplate ctor defaults m_transportSlotCount = 0.
+    return 0;
   }
 
   private resolveScriptTransportValidationEntity(entity: MapEntity): MapEntity {

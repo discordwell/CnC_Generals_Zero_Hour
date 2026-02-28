@@ -8736,8 +8736,12 @@ describe('GameLogicSubsystem combat + upgrades', () => {
             InitialPayload: 0,
           }),
         ]),
-        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
-        makeObjectDef('Passenger', 'America', ['INFANTRY'], []),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], [], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -8813,8 +8817,12 @@ describe('GameLogicSubsystem combat + upgrades', () => {
             InitialPayload: 0,
           }),
         ]),
-        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
-        makeObjectDef('Passenger', 'America', ['INFANTRY'], []),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
+        makeObjectDef('Passenger', 'America', ['INFANTRY'], [], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -8882,7 +8890,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
         makeObjectDef('DropTarget', 'China', ['STRUCTURE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
         ]),
-        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
       ],
       locomotors: [
         makeLocomotorDef('ChinookLocomotor', 120),
@@ -10640,7 +10650,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
       const passengerDef = makeObjectDef('Passenger', 'America', ['INFANTRY'], [
         makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-      ]);
+      ], {
+        TransportSlotCount: 1,
+      });
 
       const registry = makeRegistry(makeBundle({
         objects: [warehouseDef, supplyCenterDef, chinookDef, passengerDef],
@@ -10717,7 +10729,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     const rappellerDef = makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-    ]);
+    ], {
+      TransportSlotCount: 1,
+    });
 
     const registry = makeRegistry(makeBundle({
       objects: [warehouseDef, supplyCenterDef, chinookDef, rappellerDef],
@@ -10795,7 +10809,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
             InitialPayload: 0,
           }),
         ]),
-        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -10859,7 +10875,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
           }),
           makeBlock('LocomotorSet', 'SET_NORMAL ChinookLocomotor', {}),
         ]),
-        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], []),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
       ],
       locomotors: [
         makeLocomotorDef('ChinookLocomotor', 120),
@@ -10921,7 +10939,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
         BoredRange: 300,
       }),
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
-    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5, TransportSlotCount: 1 });
 
     const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
@@ -10961,7 +10979,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
         BoredRange: 300,
       }),
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
-    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5, TransportSlotCount: 1 });
 
     const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
@@ -11131,7 +11149,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
         BoredRange: 300,
       }),
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
-    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5, TransportSlotCount: 1 });
 
     const neutralBuildingDef = makeObjectDef('CivilianBuilding', 'Civilian', ['STRUCTURE'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
@@ -11278,7 +11296,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
         BoredRange: 300,
       }),
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
-    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5, TransportSlotCount: 1 });
 
     const transportDef = makeObjectDef('TransportTruck', 'America', ['VEHICLE', 'TRANSPORT'], [
       makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
@@ -24313,7 +24331,9 @@ describe('EMPUpdate', () => {
         ]),
         makeObjectDef('Soldier', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('SpawnMaster', 'China', ['VEHICLE', 'SPAWNS_ARE_THE_WEAPONS'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
         ]),
@@ -25329,7 +25349,9 @@ describe('NeutronBlastBehavior', () => {
         ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 10 }),
         makeObjectDef('Soldier', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
     const scene = new THREE.Scene();
@@ -25390,7 +25412,9 @@ describe('processDamageToContained', () => {
         ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 5 }),
         makeObjectDef('Passenger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
     const scene = new THREE.Scene();
@@ -25442,7 +25466,9 @@ describe('processDamageToContained', () => {
         ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 5 }),
         makeObjectDef('ToughPassenger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
     const scene = new THREE.Scene();
@@ -25493,7 +25519,9 @@ describe('processDamageToContained', () => {
         ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 5 }),
         makeObjectDef('SafePassenger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
     const scene = new THREE.Scene();
@@ -25693,7 +25721,9 @@ describe('BunkerBusterBehavior', () => {
         ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 10 }),
         makeObjectDef('Soldier', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
       upgrades: [{ name: 'Upgrade_BunkerBuster', fields: {} }],
     });
@@ -25758,7 +25788,9 @@ describe('BunkerBusterBehavior', () => {
         ]),
         makeObjectDef('Soldier', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
     const scene = new THREE.Scene();
@@ -28413,7 +28445,9 @@ describe('TransportAI attack delegation', () => {
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'RangerGun'] }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('EnemyTank', 'GLA', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
         ]),
@@ -28833,7 +28867,9 @@ describe('AssaultTransportAIUpdate', () => {
         makeObjectDef('RedGuard', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'RedGuardGun'] }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('EnemyTank', 'GLA', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
         ]),
@@ -32044,7 +32080,9 @@ describe('Script condition groundwork', () => {
       objects: [
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -32956,7 +32994,9 @@ describe('Script condition groundwork', () => {
       objects: [
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('SupplyWarehouseRich', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
           makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
             StartingBoxes: 8, // 800 cash
@@ -33046,7 +33086,9 @@ describe('Script condition groundwork', () => {
         ]),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -35314,7 +35356,9 @@ describe('Script condition groundwork', () => {
         }),
         makeObjectDef('Passenger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -35717,7 +35761,9 @@ describe('Script condition groundwork', () => {
         ]),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -35981,7 +36027,9 @@ describe('Script condition groundwork', () => {
         ]),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -36030,7 +36078,9 @@ describe('Script condition groundwork', () => {
         ]),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -36083,7 +36133,9 @@ describe('Script condition groundwork', () => {
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
           makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
     });
 
@@ -36292,6 +36344,55 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(2);
   });
 
+  it('requires explicit TransportSlotCount for script TEAM_LOAD_TRANSPORTS passengers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            ContainMax: 2,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('SlotlessInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('SlottedInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          TransportSlotCount: 1,
+        }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TroopTransport', 20, 20), // id 1
+        makeMapObject('SlotlessInfantry', 20, 20), // id 2
+        makeMapObject('SlottedInfantry', 20, 20), // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('LoadTeam', [1, 2, 3])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        transportContainerId: number | null;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 51, // TEAM_LOAD_TRANSPORTS
+      params: ['LoadTeam'],
+    })).toBe(true);
+
+    logic.update(1 / 30);
+
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+    expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+  });
+
   it('honors AllowInsideKindOf containment filters for script team enter actions', () => {
     const bundle = makeBundle({
       objects: [
@@ -36304,7 +36405,9 @@ describe('Script condition groundwork', () => {
         ]),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('Humvee', 'America', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 220, InitialHealth: 220 }),
         ]),
@@ -45671,7 +45774,9 @@ describe('Script condition groundwork', () => {
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
           makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
@@ -45945,7 +46050,9 @@ describe('Script condition groundwork', () => {
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
           makeBlock('LocomotorSet', 'SET_WANDER TestInfWanderLoco', {}),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TestRifle'] }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfLoco', {}),
@@ -46583,7 +46690,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
       locomotors: [
         makeLocomotorDef('TestInfantryLoco', 60),
@@ -46634,7 +46743,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
       factions: [{
         name: 'FactionAmerica',
@@ -46799,7 +46910,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -46924,7 +47037,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -47038,7 +47153,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('TroopTransport', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -47175,7 +47292,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -47187,7 +47306,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('ParachutePod', 'America', ['INFANTRY'], [
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 1 }),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 60, InitialHealth: 60 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
       ],
       locomotors: [
         makeLocomotorDef('TestInfantryLoco', 80),
@@ -47296,7 +47417,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -47415,7 +47538,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -47543,7 +47668,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -47677,7 +47804,9 @@ describe('Script condition groundwork', () => {
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -47813,7 +47942,9 @@ describe('Script condition groundwork', () => {
       objects: [
         makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('ReinforceCarrier', 'America', ['VEHICLE', 'TRANSPORT'], [
           makeBlock('LocomotorSet', 'SET_NORMAL TestVehicleLoco', {}),
           makeBlock('Behavior', 'TransportContain ModuleTag_Contain', { ContainMax: 8 }),
@@ -49129,7 +49260,9 @@ describe('Script condition groundwork', () => {
         ]),
         makeObjectDef('Passenger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
-        ]),
+        ], {
+          TransportSlotCount: 1,
+        }),
         makeObjectDef('Ranger', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
         ]),
