@@ -5855,7 +5855,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Initialize fog of war grid based on map dimensions.
     if (heightmap) {
       this.fogOfWarGrid = new FogOfWarGrid(heightmap.worldWidth, heightmap.worldDepth, MAP_XY_FACTOR);
-      this.initializeReplayObserverMapReveal();
+      this.initializeObserverMapReveals();
     }
 
     // Source parity: script condition caches begin from the post-load baseline.
@@ -5866,15 +5866,27 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: GameLogic map load permanently reveals shroud for ReplayObserver.
-   * C++ file: GameLogic.cpp lines 3148+.
+   * Source parity: GameLogic map load permanently reveals shroud for ReplayObserver
+   * and observer players.
+   * C++ file: GameLogic.cpp lines 3148-3170.
    */
-  private initializeReplayObserverMapReveal(): void {
-    const observerSide = this.scriptPlayerSideByName.get('REPLAYOBSERVER');
-    if (!observerSide) {
-      return;
+  private initializeObserverMapReveals(): void {
+    const observerSides = new Set<string>();
+
+    const replayObserverSide = this.scriptPlayerSideByName.get('REPLAYOBSERVER');
+    if (replayObserverSide) {
+      observerSides.add(replayObserverSide);
     }
-    this.setMapRevealEntirePermanentlyForSide(observerSide, true);
+
+    for (const side of this.scriptPlayerSideByName.values()) {
+      if (this.normalizeSide(side) === 'observer') {
+        observerSides.add(side);
+      }
+    }
+
+    for (const observerSide of observerSides) {
+      this.setMapRevealEntirePermanentlyForSide(observerSide, true);
+    }
   }
 
   private loadMapScripts(mapData: MapDataJSON): void {

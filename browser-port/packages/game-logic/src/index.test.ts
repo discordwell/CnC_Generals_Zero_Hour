@@ -11928,6 +11928,41 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getCellVisibility('observer', 600, 600)).toBe(CELL_CLEAR);
   });
 
+  it('reveals map permanently for observer-faction players during map load', () => {
+    const logic = new GameLogicSubsystem();
+
+    const scoutDef = makeObjectDef('Scout', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 50,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [scoutDef],
+    }));
+
+    const map = makeMap([makeMapObject('Scout', 30, 30)], 64, 64);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_7',
+          playerFaction: 'Observer',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [],
+        },
+      }],
+      teams: [],
+    };
+
+    logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+    logic.update(0.033);
+
+    expect(logic.getCellVisibility('observer', 600, 600)).toBe(CELL_CLEAR);
+  });
+
   it('uses geometry-based shroud-clearing radius while UNDER_CONSTRUCTION', () => {
     const logic = new GameLogicSubsystem();
 
