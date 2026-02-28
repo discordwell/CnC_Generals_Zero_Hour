@@ -42864,30 +42864,14 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: revealMapForPlayer — reveals entire map fog-of-war for a side.
-   * Unlike spy vision which is temporary, the shroud crate permanently reveals the map.
+   * Used by shroud crates: marks map explored (FOGGED where no active lookers).
    */
   private revealEntireMapForSide(side: string): void {
     const grid = this.fogOfWarGrid;
     if (!grid) return;
     const playerIdx = this.resolvePlayerIndexForSide(side);
     if (playerIdx < 0) return;
-    // Source parity: PartitionManager::revealMapForPlayer — reveal with a massive radius.
-    // Use terrain dimensions for a guaranteed full-map reveal.
-    const hm = this.mapHeightmap;
-    const mapW = hm ? hm.worldWidth : 2000;
-    const mapH = hm ? hm.worldDepth : 2000;
-    const centerX = mapW / 2;
-    const centerZ = mapH / 2;
-    const maxRadius = Math.hypot(mapW, mapH);
-    grid.addLooker(playerIdx, centerX, centerZ, maxRadius);
-    // Add a long-duration temporary reveal (~10 minutes) so it persists through gameplay.
-    this.temporaryVisionReveals.push({
-      playerIndex: playerIdx,
-      worldX: centerX,
-      worldZ: centerZ,
-      radius: maxRadius,
-      expiryFrame: this.frameCounter + 18000, // ~10 minutes at 30fps
-    });
+    grid.revealMapForPlayer(playerIdx);
   }
 
   /**
@@ -57113,7 +57097,7 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: VictoryConditions::update() — on defeat: reveal map, kill remaining units.
     for (const side of newlyDefeated) {
       this.defeatedSides.add(side);
-      this.revealEntireMapForSide(side);
+      this.setMapRevealEntirePermanentlyForSide(side, true);
       this.killRemainingEntitiesForSide(side);
     }
 

@@ -11825,6 +11825,74 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getCellVisibility('China', 30, 30)).toBe(CELL_SHROUDED);
   });
 
+  it('revealEntireMapForSide marks map explored without creating temporary reveals', () => {
+    const logic = new GameLogicSubsystem();
+
+    const scoutDef = makeObjectDef('Scout', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 50,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [scoutDef],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Scout', 30, 30)], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.update(0.033);
+
+    // Establish a fully shrouded distant cell.
+    expect(logic.getCellVisibility('America', 600, 600)).toBe(CELL_SHROUDED);
+
+    const priv = logic as unknown as {
+      revealEntireMapForSide(side: string): void;
+      temporaryVisionReveals: unknown[];
+    };
+    priv.revealEntireMapForSide('America');
+
+    // Source parity: revealMapForPlayer marks map explored; unseen areas become FOGGED.
+    expect(logic.getCellVisibility('America', 600, 600)).toBe(CELL_FOGGED);
+    expect(priv.temporaryVisionReveals).toHaveLength(0);
+  });
+
+  it('setMapRevealEntirePermanentlyForSide toggles clear-map lookers without temporary reveals', () => {
+    const logic = new GameLogicSubsystem();
+
+    const scoutDef = makeObjectDef('Scout', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 50,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [scoutDef],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Scout', 30, 30)], 64, 64),
+      registry,
+      makeHeightmap(64, 64),
+    );
+    logic.update(0.033);
+
+    const priv = logic as unknown as {
+      setMapRevealEntirePermanentlyForSide(side: string, reveal: boolean): void;
+      temporaryVisionReveals: unknown[];
+    };
+
+    priv.setMapRevealEntirePermanentlyForSide('America', true);
+    expect(logic.getCellVisibility('America', 600, 600)).toBe(CELL_CLEAR);
+    expect(priv.temporaryVisionReveals).toHaveLength(0);
+
+    priv.setMapRevealEntirePermanentlyForSide('America', false);
+    expect(logic.getCellVisibility('America', 600, 600)).toBe(CELL_FOGGED);
+    expect(priv.temporaryVisionReveals).toHaveLength(0);
+  });
+
   it('uses geometry-based shroud-clearing radius while UNDER_CONSTRUCTION', () => {
     const logic = new GameLogicSubsystem();
 
