@@ -36194,6 +36194,8 @@ describe('Script condition groundwork', () => {
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
         slowDeathState: object | null;
+        health: number;
+        maxHealth: number;
         transportContainerId: number | null;
       }>;
     };
@@ -36207,6 +36209,15 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
 
     privateApi.spawnedEntities.get(1)!.slowDeathState = null;
+    privateApi.spawnedEntities.get(1)!.health = 0;
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.transportContainerId).toBeNull();
+
+    privateApi.spawnedEntities.get(1)!.health = privateApi.spawnedEntities.get(1)!.maxHealth;
     expect(logic.executeScriptAction({
       actionType: 52,
       params: [2, 1],

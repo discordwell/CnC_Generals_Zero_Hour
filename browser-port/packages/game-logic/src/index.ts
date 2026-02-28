@@ -38810,6 +38810,9 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ActionManager::canEnterObject target-object gates.
    */
   private canTargetAcceptContainerEnter(target: MapEntity): boolean {
+    if (this.isEntityEffectivelyDeadForEnter(target)) {
+      return false;
+    }
     if (this.entityHasObjectStatus(target, 'UNDER_CONSTRUCTION')) {
       return false;
     }
@@ -38936,7 +38939,7 @@ export class GameLogicSubsystem implements Subsystem {
     const commandSource = command.commandSource ?? 'PLAYER';
     // Source parity: ActionManager::canEnterObject — cannot enter self.
     if (passenger.id === transport.id) return;
-    if (this.isScriptEntityEffectivelyDead(passenger) || this.isScriptEntityEffectivelyDead(transport)) return;
+    if (this.isEntityEffectivelyDeadForEnter(passenger) || this.isEntityEffectivelyDeadForEnter(transport)) return;
     if (this.isContainerEnterTargetShrouded(passenger, transport, commandSource)) return;
 
     // Source parity: OpenContain::addToContain — cannot enter if already contained.
@@ -39072,7 +39075,7 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
-      if (this.isScriptEntityEffectivelyDead(passenger) || this.isScriptEntityEffectivelyDead(transport)) {
+      if (this.isEntityEffectivelyDeadForEnter(passenger) || this.isEntityEffectivelyDeadForEnter(transport)) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
