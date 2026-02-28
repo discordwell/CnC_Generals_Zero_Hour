@@ -38886,6 +38886,26 @@ export class GameLogicSubsystem implements Subsystem {
     return this.isFactionStructure(target);
   }
 
+  private shouldIgnoreCapacityForNonOwnerContainerEnter(source: MapEntity, target: MapEntity): boolean {
+    if (this.isSameControllingPlayerOrSide(source, target)) {
+      return false;
+    }
+    let stealthContainCount = 0;
+    for (const containedId of this.collectContainedEntityIds(target.id)) {
+      const contained = this.spawnedEntities.get(containedId);
+      if (!contained || contained.destroyed) {
+        continue;
+      }
+      if (!contained.objectStatusFlags.has('STEALTHED')) {
+        return false;
+      }
+      stealthContainCount += 1;
+    }
+    // Source parity: ActionManager::canEnterObject disables capacity checks
+    // when non-owner target has only stealthed contained units.
+    return stealthContainCount > 0;
+  }
+
   private handleGarrisonBuildingCommand(command: GarrisonBuildingCommand): void {
     const infantry = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
@@ -38989,6 +39009,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!containProfile) return;
     if (containProfile.moduleType === 'HEAL' && passenger.health >= passenger.maxHealth) return;
     if (this.blocksNonOwnerContainerEnter(passenger, transport)) return;
+    const ignoreCapacityCheck = this.shouldIgnoreCapacityForNonOwnerContainerEnter(passenger, transport);
 
     // Source parity: TunnelContain/CaveContain — route to shared-network entry.
     if (containProfile.moduleType === 'TUNNEL' || containProfile.moduleType === 'CAVE') {
@@ -39031,11 +39052,11 @@ export class GameLogicSubsystem implements Subsystem {
         if (!kindOf.has('INFANTRY') && !kindOf.has('PORTABLE_STRUCTURE')) return;
       }
 
-      if (!this.canScriptContainerFitEntity(transport, passenger)) return;
+      if (!ignoreCapacityCheck && !this.canScriptContainerFitEntity(transport, passenger)) return;
     } else {
       if (!this.isScriptContainRelationshipAllowed(transport, passenger)) return;
       if (!this.isScriptContainKindAllowed(transport, passenger)) return;
-      if (!this.canScriptContainerFitEntity(transport, passenger)) return;
+      if (!ignoreCapacityCheck && !this.canScriptContainerFitEntity(transport, passenger)) return;
     }
 
     // Move passenger to transport if not close enough.
@@ -39125,6 +39146,7 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
+      const ignoreCapacityCheck = this.shouldIgnoreCapacityForNonOwnerContainerEnter(passenger, transport);
 
       if (transport.chinookAIProfile && transport.chinookFlightStatus !== 'LANDED') {
         this.setChinookFlightStatus(transport, 'LANDING');
@@ -39180,7 +39202,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      if (!this.canScriptContainerFitEntity(transport, passenger)) {
+      if (!ignoreCapacityCheck && !this.canScriptContainerFitEntity(transport, passenger)) {
         this.pendingTransportActions.delete(passengerId);
         continue;
       }
