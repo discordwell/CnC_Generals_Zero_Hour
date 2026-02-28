@@ -1900,6 +1900,8 @@ interface MapEntity {
   experienceProfile: ExperienceProfile | null;
   experienceState: ExperienceState;
   visionRange: number;
+  /** Source parity: Object::m_shroudClearingRange — fog reveal radius, separate from vision range. */
+  shroudClearingRange: number;
   visionState: EntityVisionState;
   /** Source parity: StealthUpdate — parsed stealth module profile. */
   stealthProfile: StealthProfile | null;
@@ -2268,6 +2270,8 @@ interface MapEntity {
   battlePlanDamageScalar: number;
   /** Base vision range before battle plan modifiers. */
   baseVisionRange: number;
+  /** Base shroud-clearing range before battle plan modifiers. */
+  baseShroudClearingRange: number;
 
   // ── Source parity: PointDefenseLaserUpdate — anti-projectile defense ──
   pointDefenseLaserProfile: PointDefenseLaserProfile | null;
@@ -2378,7 +2382,7 @@ interface MapEntity {
   checkpointMaxMinorRadius: number;
   checkpointScanCountdown: number;
 
-  // ── Source parity: DynamicShroudClearingRangeUpdate — animated vision range ──
+  // ── Source parity: DynamicShroudClearingRangeUpdate — animated shroud-clearing range ──
   dynamicShroudProfile: DynamicShroudProfile | null;
   dynamicShroudState: DynamicShroudState;
   dynamicShroudStateCountdown: number;
@@ -2643,7 +2647,7 @@ interface CheckpointProfile {
 }
 
 /**
- * Source parity: DynamicShroudClearingRangeUpdate — animates vision range changes.
+ * Source parity: DynamicShroudClearingRangeUpdate — animates shroud-clearing range changes.
  * C++ file: DynamicShroudClearingRangeUpdate.cpp — used by Spy Satellite and similar abilities.
  * Timeline: growDelay → growing → sustaining → shrinkDelay → shrinking → done(finalVision).
  */
@@ -7720,6 +7724,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     weaponBonusConditionFlags: number;
     visionRange: number;
+    shroudClearingRange: number;
     shroudRange: number;
     battlePlanDamageScalar: number;
   } | null {
@@ -7765,6 +7770,7 @@ export class GameLogicSubsystem implements Subsystem {
       side: entity.side ?? '',
       weaponBonusConditionFlags: entity.weaponBonusConditionFlags,
       visionRange: entity.visionRange,
+      shroudClearingRange: entity.shroudClearingRange,
       shroudRange: entity.shroudRange,
       battlePlanDamageScalar: entity.battlePlanDamageScalar,
     };
@@ -25945,6 +25951,13 @@ export class GameLogicSubsystem implements Subsystem {
     const dozerAIProfile = this.extractDozerAIProfile(objectDef);
     const isSupplyCenter = this.detectIsSupplyCenter(objectDef);
     const experienceProfile = this.extractExperienceProfile(objectDef);
+    const visionRangeFromTemplate = readNumericField(objectDef?.fields ?? {}, ['VisionRange']) ?? 0;
+    const shroudClearingRangeFromTemplateRaw = readNumericField(objectDef?.fields ?? {}, ['ShroudClearingRange']);
+    // Source parity: Object ctor falls back to vision range when template shroud-clearing range is -1.
+    const shroudClearingRangeFromTemplate =
+      Number.isFinite(shroudClearingRangeFromTemplateRaw) && shroudClearingRangeFromTemplateRaw >= 0
+        ? shroudClearingRangeFromTemplateRaw
+        : visionRangeFromTemplate;
     const ambientSoundProfile = this.extractAmbientSoundProfile(objectDef);
     const jetAIProfile = this.extractJetAIProfile(objectDef);
     const animationSteeringProfile = this.extractAnimationSteeringProfile(objectDef);
@@ -26170,7 +26183,8 @@ export class GameLogicSubsystem implements Subsystem {
       isSupplyCenter,
       experienceProfile,
       experienceState: createExperienceStateImpl(),
-      visionRange: readNumericField(objectDef?.fields ?? {}, ['VisionRange', 'ShroudClearingRange']) ?? 0,
+      visionRange: visionRangeFromTemplate,
+      shroudClearingRange: shroudClearingRangeFromTemplate,
       visionState: createEntityVisionStateImpl(),
       stealthProfile: this.extractStealthProfile(objectDef),
       stealthDelayRemaining: 0,
@@ -26369,7 +26383,8 @@ export class GameLogicSubsystem implements Subsystem {
       battlePlanProfile: this.extractBattlePlanProfile(objectDef),
       battlePlanState: null,
       battlePlanDamageScalar: 1.0,
-      baseVisionRange: readNumericField(objectDef?.fields ?? {}, ['VisionRange', 'ShroudClearingRange']) ?? 0,
+      baseVisionRange: visionRangeFromTemplate,
+      baseShroudClearingRange: shroudClearingRangeFromTemplate,
       // Point defense laser
       pointDefenseLaserProfile: this.extractPointDefenseLaserProfile(objectDef),
       pdlNextScanFrame: 0,
@@ -26632,7 +26647,7 @@ export class GameLogicSubsystem implements Subsystem {
         console.warn(`DynamicShroudClearingRangeUpdate: growStartDeadline(${entity.dynamicShroudGrowStartDeadline}) < shrinkStartDeadline(${entity.dynamicShroudShrinkStartDeadline}) — invalid INI configuration`);
       }
       entity.dynamicShroudDoneForeverFrame = this.frameCounter + stateCountDown;
-      entity.dynamicShroudNativeClearingRange = entity.visionRange;
+      entity.dynamicShroudNativeClearingRange = entity.shroudClearingRange;
       entity.dynamicShroudCurrentClearingRange = 0;
       entity.dynamicShroudState = 'NOT_STARTED';
       entity.dynamicShroudChangeIntervalCountdown = 0;
@@ -30380,7 +30395,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: DynamicShroudClearingRangeUpdate — extract vision animation config from INI.
+   * Source parity: DynamicShroudClearingRangeUpdate — extract shroud-clearing animation config from INI.
    * C++ file: DynamicShroudClearingRangeUpdate.cpp lines 61-78.
    * All duration fields are parsed as durations (ms → frames).
    */
@@ -35340,8 +35355,9 @@ export class GameLogicSubsystem implements Subsystem {
       properties.get('objectshroudclearingdistance'),
     );
     if (objectShroudClearingDistance !== null) {
-      // TODO(source parity): map this to Object::m_shroudClearingRange when gameplay uses a
-      // separate shroud-clearing radius distinct from vision range.
+      const shroudClearingRange = Math.max(0, objectShroudClearingDistance);
+      entity.shroudClearingRange = shroudClearingRange;
+      entity.baseShroudClearingRange = shroudClearingRange;
     }
 
     // Source parity: Object::updateObjValuesFromMapProperties objectGrantUpgradeN loop.
@@ -43945,12 +43961,12 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      // Source parity: buildings under construction use bounding radius instead of
-      // full vision range (Object.cpp line 5156). Use 0 for simplicity until geometry
-      // bounding radius is wired into vision.
-      const effectiveVisionRange = entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
+      // Source parity: fog reveal uses shroud-clearing range, not vision range.
+      // Buildings under construction use bounding radius (Object.cpp line 5156).
+      // Use 0 for now until geometry-radius wiring is added here.
+      const effectiveShroudClearingRange = entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
         ? 0
-        : entity.visionRange;
+        : entity.shroudClearingRange;
 
       updateEntityVisionImpl(
         grid,
@@ -43958,7 +43974,7 @@ export class GameLogicSubsystem implements Subsystem {
         playerIdx,
         entity.x,
         entity.z,
-        effectiveVisionRange,
+        effectiveShroudClearingRange,
         !entity.destroyed,
       );
     }
@@ -52221,15 +52237,15 @@ export class GameLogicSubsystem implements Subsystem {
         entity.dynamicShroudStateCountdown--;
       }
 
-      // Source parity: C++ lines 275-284 — apply vision change at intervals.
+      // Source parity: C++ lines 275-284 — apply shroud-clearing range change at intervals.
       if (entity.dynamicShroudChangeIntervalCountdown > 0) {
         entity.dynamicShroudChangeIntervalCountdown--;
       } else {
         // Reset interval timer based on current state.
         entity.dynamicShroudChangeIntervalCountdown =
           entity.dynamicShroudState === 'GROWING' ? prof.growInterval : prof.changeInterval;
-        // Apply the vision range change.
-        entity.visionRange = entity.dynamicShroudCurrentClearingRange;
+        // Apply the shroud-clearing range change.
+        entity.shroudClearingRange = entity.dynamicShroudCurrentClearingRange;
         // Source parity: C++ line 281-283 — transition to SLEEPING after final update in DONE state.
         if (entity.dynamicShroudState === 'DONE') {
           entity.dynamicShroudState = 'SLEEPING';
@@ -57873,11 +57889,13 @@ export class GameLogicSubsystem implements Subsystem {
           entity.battlePlanDamageScalar = 1.0;
         }
 
-        // Sight range scalar — always use absolute computation from baseVisionRange.
+        // Sight range scalar — always use absolute computation from base ranges.
         if (apply && sightScalar !== 1.0) {
           entity.visionRange = Math.max(0, entity.baseVisionRange * sightScalar);
+          entity.shroudClearingRange = Math.max(0, entity.baseShroudClearingRange * sightScalar);
         } else if (!apply && plan === 'SEARCHANDDESTROY') {
           entity.visionRange = entity.baseVisionRange;
+          entity.shroudClearingRange = entity.baseShroudClearingRange;
         }
       }
     }
@@ -57901,8 +57919,13 @@ export class GameLogicSubsystem implements Subsystem {
       // Building sight range bonus + stealth detection.
       if (apply && profile.strategyCenterSearchAndDestroySightRangeScalar !== 1.0) {
         source.visionRange = Math.max(0, source.baseVisionRange * profile.strategyCenterSearchAndDestroySightRangeScalar);
+        source.shroudClearingRange = Math.max(
+          0,
+          source.baseShroudClearingRange * profile.strategyCenterSearchAndDestroySightRangeScalar,
+        );
       } else if (!apply) {
         source.visionRange = source.baseVisionRange;
+        source.shroudClearingRange = source.baseShroudClearingRange;
       }
       // Stealth detection toggling on the building.
       if (profile.strategyCenterSearchAndDestroyDetectsStealth) {

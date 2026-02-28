@@ -18069,15 +18069,20 @@ describe('DynamicShroudClearingRangeUpdate', () => {
     return { logic };
   }
 
-  function getEntityVisionRange(logic: GameLogicSubsystem): number {
-    const entities = (logic as unknown as { spawnedEntities: Map<number, { visionRange: number }> }).spawnedEntities;
+  function getEntityRanges(logic: GameLogicSubsystem): { visionRange: number; shroudClearingRange: number } {
+    const entities = (logic as unknown as {
+      spawnedEntities: Map<number, { visionRange: number; shroudClearingRange: number }>;
+    }).spawnedEntities;
     for (const entity of entities.values()) {
-      return entity.visionRange;
+      return {
+        visionRange: entity.visionRange,
+        shroudClearingRange: entity.shroudClearingRange,
+      };
     }
-    return 0;
+    return { visionRange: 0, shroudClearingRange: 0 };
   }
 
-  it('grows vision range from 0 to native during growing phase', () => {
+  it('animates shroud-clearing range over the full dynamic shroud lifecycle', () => {
     // growDelay=3 frames, growTime=6 frames, shrinkDelay=10 frames, shrinkTime=6 frames
     // stateCountDown = shrinkDelay + shrinkTime = 10 + 6 = 16
     // shrinkStartDeadline = 16 - 10 = 6
@@ -18092,30 +18097,28 @@ describe('DynamicShroudClearingRangeUpdate', () => {
       visionRange: 100,
     });
 
-    // Initial vision range should be entity's native range (set at creation before DynamicShroud modifies it).
-    // After first update, DynamicShroud starts modifying the vision range.
+    // Initial vision range should remain unchanged by DynamicShroud.
+    // DynamicShroud modifies shroud-clearing range.
     logic.update(1 / 30); // frame 1
 
     // After enough frames, the vision range should start growing.
     // The grow phase grows by nativeClearingRange/growTime per frame.
-    // Native = 100*MAP_XY_FACTOR = 1000, growTime = 6 frames, so +166.67 per frame.
-    // After 6 grow frames, vision should reach native.
     for (let i = 0; i < 20; i++) {
       logic.update(1 / 30);
     }
 
-    // After all phases complete, vision should reach finalVision = 5 (raw INI value).
+    // After all phases complete, shroud-clearing range should reach finalVision = 5.
     // Keep advancing until DONE/SLEEPING.
     for (let i = 0; i < 30; i++) {
       logic.update(1 / 30);
     }
 
-    const finalRange = getEntityVisionRange(logic);
-    // Should be at or near finalVision = 5.
-    expect(finalRange).toBeCloseTo(5, 0);
+    const finalRanges = getEntityRanges(logic);
+    expect(finalRanges.shroudClearingRange).toBeCloseTo(5, 0);
+    expect(finalRanges.visionRange).toBe(100);
   });
 
-  it('settles to final vision after full lifecycle', () => {
+  it('settles shroud-clearing range to finalVision after full lifecycle', () => {
     const { logic } = makeDynamicShroudSetup({
       growDelayMs: 33,    // 1 frame
       growTimeMs: 100,    // 3 frames
@@ -18134,12 +18137,12 @@ describe('DynamicShroudClearingRangeUpdate', () => {
       logic.update(1 / 30);
     }
 
-    const finalRange = getEntityVisionRange(logic);
-    // finalVision = 10 (raw INI value).
-    expect(finalRange).toBeCloseTo(10, 0);
+    const finalRanges = getEntityRanges(logic);
+    expect(finalRanges.shroudClearingRange).toBeCloseTo(10, 0);
+    expect(finalRanges.visionRange).toBe(50);
   });
 
-  it('does not modify vision range for entities without the module', () => {
+  it('does not modify vision or shroud-clearing range without the module', () => {
     const sz = 64;
     const objects = [
       makeObjectDef('Tank', 'USA', ['VEHICLE'], [
@@ -18157,9 +18160,9 @@ describe('DynamicShroudClearingRangeUpdate', () => {
       logic.update(1 / 30);
     }
 
-    const range = getEntityVisionRange(logic);
-    // VisionRange = 150 (raw INI value, not scaled), should be unchanged.
-    expect(range).toBe(150);
+    const ranges = getEntityRanges(logic);
+    expect(ranges.visionRange).toBe(150);
+    expect(ranges.shroudClearingRange).toBe(150);
   });
 });
 
@@ -44769,6 +44772,7 @@ describe('Script condition groundwork', () => {
         objectUnsellable: 'true',
         objectTargetable: 'true',
         objectVisualRange: '222',
+        objectShroudClearingDistance: '88',
         objectTime: '2',
         objectWeather: '2',
       })], 128, 128),
@@ -44787,6 +44791,8 @@ describe('Script condition groundwork', () => {
         scriptStoppingDistanceOverride: number | null;
         visionRange: number;
         baseVisionRange: number;
+        shroudClearingRange: number;
+        baseShroudClearingRange: number;
         isIndestructible: boolean;
         modelConditionFlags: Set<string>;
         objectStatusFlags: Set<string>;
@@ -44804,6 +44810,8 @@ describe('Script condition groundwork', () => {
     expect(entity?.scriptStoppingDistanceOverride).toBe(3.5);
     expect(entity?.visionRange).toBe(222);
     expect(entity?.baseVisionRange).toBe(222);
+    expect(entity?.shroudClearingRange).toBe(88);
+    expect(entity?.baseShroudClearingRange).toBe(88);
     expect(entity?.isIndestructible).toBe(true);
     expect(entity?.modelConditionFlags.has('NIGHT')).toBe(true);
     expect(entity?.modelConditionFlags.has('SNOW')).toBe(true);
