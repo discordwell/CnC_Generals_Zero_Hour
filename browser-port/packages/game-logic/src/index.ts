@@ -40061,7 +40061,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (source.y <= groundY + 0.01) {
         return false;
       }
-      if (!targetKindOf.has('AIRFIELD') && !targetKindOf.has('FS_AIRFIELD')) {
+      if (!targetKindOf.has('FS_AIRFIELD')) {
         return false;
       }
       return this.canAircraftEnterAirfieldForRepair(source, target);
@@ -40115,7 +40115,7 @@ export class GameLogicSubsystem implements Subsystem {
     const sourceKindOf = this.resolveEntityKindOfSet(source);
     if (sourceKindOf.has('AIRCRAFT')) {
       const targetKindOf = this.resolveEntityKindOfSet(target);
-      if (!targetKindOf.has('AIRFIELD') && !targetKindOf.has('FS_AIRFIELD')) {
+      if (!targetKindOf.has('FS_AIRFIELD')) {
         return;
       }
 

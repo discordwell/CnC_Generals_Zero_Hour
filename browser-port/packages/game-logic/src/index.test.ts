@@ -28356,6 +28356,60 @@ describe('RepairDockUpdate', () => {
     expect(damagedJet.moveTarget).toBeNull();
   });
 
+  it('rejects aircraft repairVehicle enter when target lacks FS_AIRFIELD kind', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AirfieldLike', 'America', ['STRUCTURE', 'AIRFIELD'], [
+          makeBlock('Behavior', 'ParkingPlaceBehavior ModuleTag_Parking', {
+            NumRows: 1,
+            NumCols: 1,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+        ]),
+        makeObjectDef('DamagedJet', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL JetLocomotor', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 150 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('JetLocomotor', 250),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AirfieldLike', 55, 55), // id 1
+        makeMapObject('DamagedJet', 75, 55), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+      spawnedEntities: Map<number, {
+        y: number;
+        baseHeight: number;
+        moveTarget: { x: number; z: number } | null;
+      }>;
+    };
+
+    const damagedJet = privateApi.spawnedEntities.get(2)!;
+    damagedJet.y = damagedJet.baseHeight + 20;
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingEnterObjectActions.has(2)).toBe(false);
+    expect(damagedJet.moveTarget).toBeNull();
+  });
+
   it('rejects aircraft repairVehicle enter when airfield has no parking space and no reservation', () => {
     const bundle = makeBundle({
       objects: [
