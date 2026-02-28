@@ -8639,6 +8639,141 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(transport!.x).toBeCloseTo(8, 1);
   });
 
+  it('blocks player combatDrop into faction structures', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 0,
+            PerRopeDelayMax: 0,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 0,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL ChinookLocomotor', {}),
+        ]),
+        makeObjectDef('FactionStructure', 'China', ['STRUCTURE', 'FS_FACTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('ChinookLocomotor', 90),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8),    // id 1
+        makeMapObject('FactionStructure', 120, 8), // id 2
+        makeMapObject('Rappeller', 8, 8),        // id 3
+      ], 128, 64),
+      makeRegistry(bundle),
+      makeHeightmap(128, 64),
+    );
+
+    const priv = logic as unknown as {
+      pendingCombatDropActions: Map<number, unknown>;
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let frame = 0; frame < 12; frame += 1) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(3)?.transportContainerId === 1) {
+        break;
+      }
+    }
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: 2,
+      targetPosition: null,
+    });
+    logic.update(1 / 30);
+
+    expect(priv.pendingCombatDropActions.has(1)).toBe(false);
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+    expect(logic.getEntityState(1)?.x).toBeCloseTo(8, 1);
+  });
+
+  it('allows script combatDrop into faction structures', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 0,
+            PerRopeDelayMax: 0,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 0,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL ChinookLocomotor', {}),
+        ]),
+        makeObjectDef('FactionStructure', 'China', ['STRUCTURE', 'FS_FACTORY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('ChinookLocomotor', 90),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8),    // id 1
+        makeMapObject('FactionStructure', 120, 8), // id 2
+        makeMapObject('Rappeller', 8, 8),        // id 3
+      ], 128, 64),
+      makeRegistry(bundle),
+      makeHeightmap(128, 64),
+    );
+
+    const priv = logic as unknown as {
+      pendingCombatDropActions: Map<number, unknown>;
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let frame = 0; frame < 12; frame += 1) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(3)?.transportContainerId === 1) {
+        break;
+      }
+    }
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: 2,
+      targetPosition: null,
+      commandSource: 'SCRIPT',
+    });
+    logic.update(1 / 30);
+
+    expect(priv.pendingCombatDropActions.has(1)).toBe(true);
+  });
+
   it('ignores combatDrop when contained passengers are not CAN_RAPPEL', () => {
     const bundle = makeBundle({
       objects: [
@@ -8749,6 +8884,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     logic.setTeamRelationship('America', 'China', 0);
     logic.setTeamRelationship('China', 'America', 0);
+    logic.setSidePlayerType('America', 'COMPUTER');
     logic.submitCommand({
       type: 'combatDrop',
       entityId: 1,
@@ -8954,6 +9090,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
       makeRegistry(bundle),
       makeHeightmap(64, 64),
     );
+    logic.setSidePlayerType('America', 'COMPUTER');
 
     const priv = logic as unknown as {
       spawnedEntities: Map<number, { transportContainerId: number | null; ignoredMovementObstacleId: number | null }>;

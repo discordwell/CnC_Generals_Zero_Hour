@@ -13931,6 +13931,7 @@ export class GameLogicSubsystem implements Subsystem {
           entityId: sourceEntity.id,
           targetObjectId,
           targetPosition,
+          commandSource: 'SCRIPT',
         });
         return true;
       }
@@ -37872,6 +37873,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!source || source.destroyed) {
       return;
     }
+    const commandSource = command.commandSource ?? 'PLAYER';
     if (this.countContainedRappellers(source.id) <= 0) {
       return;
     }
@@ -37882,6 +37884,12 @@ export class GameLogicSubsystem implements Subsystem {
     if (command.targetObjectId !== null) {
       const target = this.spawnedEntities.get(command.targetObjectId);
       if (!target || target.destroyed) {
+        return;
+      }
+      // Source parity: ChinookAIUpdate::privateCombatDrop calls
+      // ActionManager::canEnterObject(..., COMBATDROP_INTO) only for player-issued
+      // object-target combat drops.
+      if (commandSource === 'PLAYER' && !this.canPlayerCombatDropIntoTarget(source, target)) {
         return;
       }
       targetObjectId = target.id;
@@ -37908,6 +37916,15 @@ export class GameLogicSubsystem implements Subsystem {
       targetZ,
       nextDropFrame: 0,
     });
+  }
+
+  private canPlayerCombatDropIntoTarget(source: MapEntity, target: MapEntity): boolean {
+    if (!this.passesCommonEnterObjectValidation(source, target, 'PLAYER')) {
+      return false;
+    }
+    // Source parity: ActionManager::canEnterObject with COMBATDROP_INTO forbids
+    // combat drop into faction structures.
+    return !this.isFactionStructure(target);
   }
 
   private handlePlaceBeaconCommand(command: PlaceBeaconCommand): void {

@@ -404,6 +404,7 @@ export interface CombatDropCommand {
   entityId: number;
   targetObjectId: number | null;
   targetPosition: readonly [number, number, number] | null;
+  commandSource?: 'PLAYER' | 'AI' | 'SCRIPT';
 }
 
 export interface PlaceBeaconCommand {
