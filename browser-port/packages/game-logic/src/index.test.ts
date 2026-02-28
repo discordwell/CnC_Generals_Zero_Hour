@@ -8314,6 +8314,50 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getEntityIdsByTemplateAndSide('FriendlyVehicle', 'America')).toEqual([2]);
   });
 
+  it('rejects enterObject actions targeting effectively-dead entities', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+          makeBlock('LocomotorSet', 'SET_NORMAL FastLocomotor', {}),
+        ]),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('FastLocomotor', 120),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Hijacker', 8, 8), makeMapObject('EnemyVehicle', 30, 8)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { health: number }>;
+      pendingEnterObjectActions: Map<number, unknown>;
+      handleEnterObjectCommand: (command: unknown) => void;
+    };
+
+    // Source parity: ActionManager::canEnterObject rejects effectively-dead targets.
+    privateApi.spawnedEntities.get(2)!.health = 0;
+    privateApi.handleEnterObjectCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+      commandSource: 'PLAYER',
+    });
+
+    expect(privateApi.pendingEnterObjectActions.has(1)).toBe(false);
+  });
+
   it('starts HackInternet command loops and deposits periodic side credits', () => {
     const bundle = makeBundle({
       objects: [

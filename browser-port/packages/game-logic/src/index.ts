@@ -38029,6 +38029,10 @@ export class GameLogicSubsystem implements Subsystem {
     if (source.id === target.id) {
       return false;
     }
+    // Source parity: ActionManager::canEnterObject rejects dead/effectively-dead targets.
+    if (this.isEntityEffectivelyDeadForEnter(target)) {
+      return false;
+    }
     if (this.isContainerEnterTargetShrouded(source, target, commandSource)) {
       return false;
     }
@@ -38056,6 +38060,15 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return true;
+  }
+
+  private isEntityEffectivelyDeadForEnter(entity: MapEntity): boolean {
+    if (this.isScriptEntityEffectivelyDead(entity)) {
+      return true;
+    }
+    // Source parity: ActionManager::canEnterObject checks Object::isEffectivelyDead.
+    // Body-less objects can be enterable, so health-only death applies when damageable.
+    return entity.canTakeDamage && entity.health <= 0;
   }
 
   private isEntityDozerCapable(entity: MapEntity): boolean {
