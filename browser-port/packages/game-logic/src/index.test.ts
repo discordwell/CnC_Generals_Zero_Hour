@@ -41294,6 +41294,66 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
   });
 
+  it('uses full team ordering for controlling-side fallback in team-capture-nearest-unowned-faction-unit scans', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CaptureAnchorStructure', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+        ]),
+        makeObjectDef('CaptureInfantryChina', 'China', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('FriendlyAbandonedVehicle', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+        makeObjectDef('NeutralAbandonedVehicle', 'Civilian', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CaptureAnchorStructure', 20, 20), // id 1
+        makeMapObject('CaptureInfantryChina', 24, 20), // id 2
+        makeMapObject('FriendlyAbandonedVehicle', 30, 20), // id 3 (closest when America side is allowed)
+        makeMapObject('NeutralAbandonedVehicle', 44, 20), // id 4
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('CaptureTeam', [1, 2])).toBe(true);
+    logic.setTeamRelationship('China', 'America', 2); // allies
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        side: string | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(3)?.objectStatusFlags.add('DISABLED_UNMANNED');
+    privateApi.spawnedEntities.get(4)?.objectStatusFlags.add('DISABLED_UNMANNED');
+
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeam'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect((privateApi.spawnedEntities.get(3)?.side ?? '').toLowerCase()).toBe('china');
+    expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+    expect((privateApi.spawnedEntities.get(4)?.side ?? '').toLowerCase()).toBe('civilian');
+    expect(privateApi.spawnedEntities.get(4)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(true);
+  });
+
   it('includes same-player unmanned targets in team-capture-nearest-unowned-faction-unit scans', () => {
     const bundle = makeBundle({
       objects: [

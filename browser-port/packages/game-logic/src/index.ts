@@ -15775,21 +15775,21 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
-    if (teamMembers.length === 0) {
+    const allTeamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (allTeamMembers.length === 0) {
       return false;
     }
     // Source parity: ScriptActions::doTeamCaptureNearestUnownedFactionUnit uses
     // PartitionFilterPlayerAffiliation(team->getControllingPlayer(), ...), so
     // affiliation checks are based on controlling side, not the first member.
     const controllingSide = this.resolveScriptTeamControllingSide(team)
-      ?? this.normalizeSide(teamMembers[0]!.side);
+      ?? this.normalizeSide(allTeamMembers[0]!.side);
     if (!controllingSide) {
       return false;
     }
 
-    const center = this.resolveScriptAIGroupCenter(teamMembers);
+    const center = this.resolveScriptAIGroupCenter(allTeamMembers);
     if (!center) {
       return false;
     }
@@ -15830,9 +15830,12 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     let issuedAny = false;
-    for (const entity of teamMembers) {
-      if (!this.canQueueEnterObjectAction(entity, closestTarget, 'captureUnmannedFactionUnit', 'SCRIPT')) {
-        continue;
+    for (const entity of allTeamMembers) {
+      // Source parity: ScriptActions::doTeamCaptureNearestUnownedFactionUnit calls
+      // AIGroup::groupEnter on the full group membership; per-unit enter validation
+      // remains in enter-action handling.
+      if (this.canQueueEnterObjectAction(entity, closestTarget, 'captureUnmannedFactionUnit', 'SCRIPT')) {
+        issuedAny = true;
       }
       this.applyCommand({
         type: 'enterObject',
@@ -15841,7 +15844,6 @@ export class GameLogicSubsystem implements Subsystem {
         commandSource: 'SCRIPT',
         action: 'captureUnmannedFactionUnit',
       });
-      issuedAny = true;
     }
     return issuedAny;
   }
