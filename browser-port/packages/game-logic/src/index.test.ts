@@ -40682,6 +40682,67 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('uses AIGroup center semantics for nearest command-button scans by ignoring DISABLED_HELD members', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('HeldDummy', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('EnemyUnit', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ENEMY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptOnNamed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('HeldDummy', 20, 20), // id 1 (held, should not contribute to center)
+        makeMapObject('ScriptCaster', 60, 20), // id 2
+        makeMapObject('EnemyUnit', 24, 20), // id 3 (near held member)
+        makeMapObject('EnemyUnit', 90, 20), // id 4 (near active member center anchor)
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('HeldCenterTeam', [1, 2])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    privateApi.spawnedEntities.get(1)?.objectStatusFlags.add('DISABLED_HELD');
+
+    expect(logic.executeScriptAction({
+      actionType: 468, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT
+      params: ['HeldCenterTeam', 'Command_ScriptOnNamed'],
+    })).toBe(true);
+    expect(logic.getEntityState(2)?.lastSpecialPowerDispatch?.targetEntityId).toBe(4);
+  });
+
   it('supports ALLOW_SURRENDER kindof bit offsets for script kindof actions', () => {
     const makeKindOfBundle = (includeAllowSurrenderKindOf: boolean) => makeBundle({
       objects: [

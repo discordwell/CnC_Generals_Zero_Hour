@@ -14942,7 +14942,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const center = this.resolveScriptTeamCenter(teamMembers);
+    const center = this.resolveScriptAIGroupCenter(teamMembers);
     if (!center) {
       return false;
     }
@@ -15119,7 +15119,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const { teamMembers, sourceEntity, commandButtonDef } = resolved;
 
-    const center = this.resolveScriptTeamCenter(teamMembers);
+    const center = this.resolveScriptAIGroupCenter(teamMembers);
     if (!center) {
       return false;
     }
@@ -15789,7 +15789,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const center = this.resolveScriptTeamCenter(teamMembers);
+    const center = this.resolveScriptAIGroupCenter(teamMembers);
     if (!center) {
       return false;
     }
@@ -15940,7 +15940,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const { teamMembers, sourceEntity, commandButtonDef } = resolved;
 
-    const center = this.resolveScriptTeamCenter(teamMembers);
+    const center = this.resolveScriptAIGroupCenter(teamMembers);
     if (!center) {
       return false;
     }
@@ -17344,6 +17344,52 @@ export class GameLogicSubsystem implements Subsystem {
     return {
       x: sumX / teamMembers.length,
       z: sumZ / teamMembers.length,
+    };
+  }
+
+  /**
+   * Source parity: AIGroup::getCenter.
+   * Uses non-held members with AI first; if none exist, falls back to non-held members.
+   */
+  private resolveScriptAIGroupCenter(
+    teamMembers: readonly MapEntity[],
+  ): { x: number; z: number } | null {
+    if (teamMembers.length === 0) {
+      return null;
+    }
+
+    let sumX = 0;
+    let sumZ = 0;
+    let count = 0;
+    for (const member of teamMembers) {
+      if (member.objectStatusFlags.has('DISABLED_HELD')) {
+        continue;
+      }
+      if (!member.canMove) {
+        continue;
+      }
+      sumX += member.x;
+      sumZ += member.z;
+      count += 1;
+    }
+
+    if (count === 0) {
+      for (const member of teamMembers) {
+        if (member.objectStatusFlags.has('DISABLED_HELD')) {
+          continue;
+        }
+        sumX += member.x;
+        sumZ += member.z;
+        count += 1;
+      }
+    }
+
+    if (count <= 0) {
+      return null;
+    }
+    return {
+      x: sumX / count,
+      z: sumZ / count,
     };
   }
 
