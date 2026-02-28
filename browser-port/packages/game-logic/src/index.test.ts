@@ -28302,6 +28302,50 @@ describe('RepairDockUpdate', () => {
     expect(priv.pendingRepairDockActions.has(2)).toBe(false);
   });
 
+  it('allows repairVehicle enter actions from allied cross-side units', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepairDock', 55, 55),    // id 1
+        makeMapObject('EnemyVehicle', 75, 55),  // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('China', 'America', 2);
+    logic.setTeamRelationship('America', 'China', 2);
+
+    const priv = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+      pendingRepairDockActions: Map<number, unknown>;
+      spawnedEntities: Map<number, {
+        health: number;
+        moveTarget: { x: number; z: number } | null;
+      }>;
+    };
+
+    const allyVehicle = priv.spawnedEntities.get(2)!;
+    expect(allyVehicle.health).toBe(150);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(allyVehicle.moveTarget).not.toBeNull();
+    expect(
+      priv.pendingEnterObjectActions.has(2)
+      || priv.pendingRepairDockActions.has(2),
+    ).toBe(true);
+  });
+
   it('rejects aircraft repairVehicle enter across different controlling players on same side', () => {
     const bundle = makeBundle({
       objects: [

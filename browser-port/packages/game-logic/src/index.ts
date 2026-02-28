@@ -40032,17 +40032,8 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity: repair docks are side-owned service structures.
-    const sourceSide = this.normalizeSide(source.side);
-    const targetSide = this.normalizeSide(target.side);
-    if (!sourceSide || sourceSide !== targetSide) {
-      return false;
-    }
-    const sourceOwnerToken = this.normalizeControllingPlayerToken(source.controllingPlayerToken ?? undefined);
-    const targetOwnerToken = this.normalizeControllingPlayerToken(target.controllingPlayerToken ?? undefined);
-    // Source parity: ActionManager::canEnterObject aircraft/airfield path requires same controlling player.
-    // Fallback to side-only check when explicit controlling-player metadata is unavailable.
-    if (sourceOwnerToken !== null && targetOwnerToken !== null && sourceOwnerToken !== targetOwnerToken) {
+    // Source parity: ActionManager::canGetRepairedAt requires allied relationship.
+    if (this.getTeamRelationship(source, target) !== RELATIONSHIP_ALLIES) {
       return false;
     }
 
@@ -40057,6 +40048,22 @@ export class GameLogicSubsystem implements Subsystem {
 
     const targetKindOf = this.resolveEntityKindOfSet(target);
     if (sourceKindOf.has('AIRCRAFT')) {
+      const sourceOwnerToken = this.normalizeControllingPlayerToken(source.controllingPlayerToken ?? undefined);
+      const targetOwnerToken = this.normalizeControllingPlayerToken(target.controllingPlayerToken ?? undefined);
+      // Source parity: ActionManager::canEnterObject aircraft/airfield path requires same controlling player.
+      // Fallback to side-only check when explicit controlling-player metadata is unavailable.
+      if (sourceOwnerToken !== null && targetOwnerToken !== null) {
+        if (sourceOwnerToken !== targetOwnerToken) {
+          return false;
+        }
+      } else {
+        const sourceSide = this.normalizeSide(source.side);
+        const targetSide = this.normalizeSide(target.side);
+        if (!sourceSide || sourceSide !== targetSide) {
+          return false;
+        }
+      }
+
       const groundY = this.resolveGroundHeight(source.x, source.z) + source.baseHeight;
       if (source.y <= groundY + 0.01) {
         return false;
