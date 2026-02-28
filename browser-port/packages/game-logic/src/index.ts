@@ -4060,6 +4060,12 @@ interface ScriptScreenShakeState {
   frame: number;
 }
 
+interface ScriptWaypointRouteNode {
+  x: number;
+  z: number;
+  pathLabels: string[];
+}
+
 interface ScriptCinematicTextState {
   text: string;
   fontType: string;
@@ -5573,7 +5579,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptCompletedWaypointPathsByEntityId = new Map<number, Set<string>>();
   /** Tracks script-issued waypoint-path goals until completion/abort. */
   private readonly scriptPendingWaypointPathByEntityId = new Map<number, {
-    pathName: string;
+    pathNames: readonly string[];
   }>();
   /** Source parity subset: ScriptEngine named map reveals keyed by look-name token. */
   private readonly scriptNamedMapRevealByName = new Map<string, {
@@ -16648,7 +16654,7 @@ export class GameLogicSubsystem implements Subsystem {
   private queueWaypointPathProjectileEvent(
     attacker: MapEntity,
     weapon: AttackWeaponProfile,
-    route: readonly { x: number; z: number }[],
+    route: readonly ScriptWaypointRouteNode[],
   ): void {
     if (route.length === 0) {
       return;
@@ -16712,7 +16718,7 @@ export class GameLogicSubsystem implements Subsystem {
   private buildScriptProjectileWaypointPath(
     sourceX: number,
     sourceZ: number,
-    route: readonly { x: number; z: number }[],
+    route: readonly ScriptWaypointRouteNode[],
   ): VectorXZ[] {
     const path: VectorXZ[] = [{ x: sourceX, z: sourceZ }];
     for (const waypoint of route) {
@@ -16724,7 +16730,7 @@ export class GameLogicSubsystem implements Subsystem {
   private computeWaypointRouteTravelDistance(
     sourceX: number,
     sourceZ: number,
-    route: readonly { x: number; z: number }[],
+    route: readonly ScriptWaypointRouteNode[],
   ): number {
     let previousX = sourceX;
     let previousZ = sourceZ;
@@ -16949,16 +16955,21 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private buildScriptWaypointRouteWithOffset(
-    route: readonly { x: number; z: number }[],
+    route: readonly ScriptWaypointRouteNode[],
     offsetX: number,
     offsetZ: number,
-  ): Array<{ x: number; z: number }> {
+  ): ScriptWaypointRouteNode[] {
     if (offsetX === 0 && offsetZ === 0) {
-      return route.map((node) => ({ x: node.x, z: node.z }));
+      return route.map((node) => ({
+        x: node.x,
+        z: node.z,
+        pathLabels: [...node.pathLabels],
+      }));
     }
     return route.map((node) => ({
       x: node.x + offsetX,
       z: node.z + offsetZ,
+      pathLabels: [...node.pathLabels],
     }));
   }
 
@@ -16969,7 +16980,7 @@ export class GameLogicSubsystem implements Subsystem {
    */
   private enqueueScriptWaypointRouteExact(
     entity: MapEntity,
-    route: readonly { x: number; z: number }[],
+    route: readonly ScriptWaypointRouteNode[],
     completionPathName?: string,
   ): boolean {
     if (route.length === 0) {
@@ -16990,12 +17001,10 @@ export class GameLogicSubsystem implements Subsystem {
     entity.moveTarget = entity.movePath[0]!;
     this.updatePathfindGoalCellFromPath(entity);
 
-    const normalizedPathName = completionPathName
-      ? this.normalizeScriptCompletionName(completionPathName)
-      : '';
-    if (normalizedPathName) {
+    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route, completionPathName);
+    if (completionPathNames.length > 0) {
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
-        pathName: normalizedPathName,
+        pathNames: completionPathNames,
       });
     } else {
       this.scriptPendingWaypointPathByEntityId.delete(entity.id);
@@ -17194,7 +17203,7 @@ export class GameLogicSubsystem implements Subsystem {
     centerX: number,
     centerZ: number,
     exactRoute = false,
-  ): Array<{ x: number; z: number }> | null {
+  ): ScriptWaypointRouteNode[] | null {
     const basePathLabel = waypointPathLabel.trim();
     if (!basePathLabel) {
       return null;
@@ -17221,7 +17230,7 @@ export class GameLogicSubsystem implements Subsystem {
     centerX: number,
     centerZ: number,
     exactRoute = false,
-  ): Array<{ x: number; z: number }> | null {
+  ): ScriptWaypointRouteNode[] | null {
     const normalizedPathLabel = waypointPathLabel.trim().toUpperCase();
     if (!normalizedPathLabel) {
       return null;
@@ -17234,7 +17243,7 @@ export class GameLogicSubsystem implements Subsystem {
     centerX: number,
     centerZ: number,
     exactRoute = false,
-  ): Array<{ x: number; z: number }> | null {
+  ): ScriptWaypointRouteNode[] | null {
     const waypointData = this.loadedMapData?.waypoints;
     if (!waypointData) {
       return null;
@@ -17283,7 +17292,7 @@ export class GameLogicSubsystem implements Subsystem {
       outgoing.push(link.waypoint2);
     }
 
-    const route: Array<{ x: number; z: number }> = [];
+    const route: ScriptWaypointRouteNode[] = [];
     let currentNode: (typeof routeNodes)[number] | undefined = startNode;
     if (exactRoute) {
       // Source parity: AIUpdateInterface::setPathFromWaypoint() follows link(0)
@@ -17293,6 +17302,11 @@ export class GameLogicSubsystem implements Subsystem {
         route.push({
           x: currentNode.position.x,
           z: currentNode.position.y,
+          pathLabels: [
+            currentNode.pathLabel1 ?? '',
+            currentNode.pathLabel2 ?? '',
+            currentNode.pathLabel3 ?? '',
+          ].filter((label) => label.trim().length > 0),
         });
         count += 1;
 
@@ -17315,6 +17329,11 @@ export class GameLogicSubsystem implements Subsystem {
         route.push({
           x: currentNode.position.x,
           z: currentNode.position.y,
+          pathLabels: [
+            currentNode.pathLabel1 ?? '',
+            currentNode.pathLabel2 ?? '',
+            currentNode.pathLabel3 ?? '',
+          ].filter((label) => label.trim().length > 0),
         });
         count += 1;
 
@@ -17367,7 +17386,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private enqueueScriptWaypointRoute(
     entity: MapEntity,
-    route: readonly { x: number; z: number }[],
+    route: readonly ScriptWaypointRouteNode[],
     completionPathName?: string,
   ): boolean {
     if (route.length === 0) {
@@ -17394,12 +17413,10 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    const normalizedPathName = completionPathName
-      ? this.normalizeScriptCompletionName(completionPathName)
-      : '';
-    if (normalizedPathName) {
+    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route, completionPathName);
+    if (completionPathNames.length > 0) {
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
-        pathName: normalizedPathName,
+        pathNames: completionPathNames,
       });
     } else {
       this.scriptPendingWaypointPathByEntityId.delete(entity.id);
@@ -17407,12 +17424,39 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
+  private resolveScriptWaypointCompletionPathNames(
+    route: readonly ScriptWaypointRouteNode[],
+    completionPathName?: string,
+  ): string[] {
+    const completionNames = new Set<string>();
+    const normalizedRequestedName = completionPathName
+      ? this.normalizeScriptCompletionName(completionPathName)
+      : '';
+    if (normalizedRequestedName) {
+      completionNames.add(normalizedRequestedName);
+    }
+
+    const finalWaypoint = route[route.length - 1];
+    if (finalWaypoint) {
+      for (const pathLabel of finalWaypoint.pathLabels) {
+        const normalizedLabel = this.normalizeScriptCompletionName(pathLabel);
+        if (normalizedLabel) {
+          completionNames.add(normalizedLabel);
+        }
+      }
+    }
+
+    return Array.from(completionNames);
+  }
+
   private markScriptWaypointPathCompleted(entityId: number): void {
     const pendingPath = this.scriptPendingWaypointPathByEntityId.get(entityId);
     if (!pendingPath) {
       return;
     }
-    this.notifyScriptWaypointPathCompleted(entityId, pendingPath.pathName);
+    for (const pathName of pendingPath.pathNames) {
+      this.notifyScriptWaypointPathCompleted(entityId, pathName);
+    }
     this.scriptPendingWaypointPathByEntityId.delete(entityId);
   }
 

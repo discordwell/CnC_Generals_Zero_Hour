@@ -38539,7 +38539,14 @@ describe('Script condition groundwork', () => {
       nodes: [
         { id: 31, name: 'Route_A', position: { x: 20, y: 20, z: 0 }, pathLabel1: 'RouteAlpha', biDirectional: false },
         { id: 32, name: 'Route_B', position: { x: 40, y: 20, z: 0 }, pathLabel1: 'RouteAlpha', biDirectional: false },
-        { id: 33, name: 'Route_C', position: { x: 60, y: 20, z: 0 }, pathLabel1: 'RouteAlpha', biDirectional: false },
+        {
+          id: 33,
+          name: 'Route_C',
+          position: { x: 60, y: 20, z: 0 },
+          pathLabel1: 'RouteAlpha',
+          pathLabel2: 'RouteOmega',
+          biDirectional: false,
+        },
       ],
       links: [
         { waypoint1: 31, waypoint2: 32 },
@@ -38577,11 +38584,19 @@ describe('Script condition groundwork', () => {
       entityId: 1,
       waypointPathName: 'RouteAlpha',
     })).toBe(true);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'RouteOmega',
+    })).toBe(true);
     // Source parity: AIUpdate resets completed-waypoint at the next update.
     logic.update(1 / 30);
     expect(logic.evaluateScriptNamedReachedWaypointsEnd({
       entityId: 1,
       waypointPathName: 'RouteAlpha',
+    })).toBe(false);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'RouteOmega',
     })).toBe(false);
   });
 
