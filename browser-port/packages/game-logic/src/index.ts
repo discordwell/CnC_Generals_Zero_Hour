@@ -15806,9 +15806,15 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      const relation = this.getTeamRelationshipBySides(controllingSide, candidate.side ?? '');
-      if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
-        continue;
+      // Source parity: PartitionFilterPlayerAffiliation(ALLOW_ENEMIES | ALLOW_NEUTRAL)
+      // also admits objects controlled by the same player via its explicit self-player check.
+      const candidateSide = this.normalizeSide(candidate.side ?? '');
+      const sameControllingSide = candidateSide !== null && candidateSide === controllingSide;
+      if (!sameControllingSide) {
+        const relation = this.getTeamRelationshipBySides(controllingSide, candidate.side ?? '');
+        if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
+          continue;
+        }
       }
 
       const dx = candidate.x - center.x;
@@ -40072,10 +40078,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!this.entityHasObjectStatus(target, 'DISABLED_UNMANNED')) {
       return false;
     }
-    const relation = this.getTeamRelationship(source, target);
-    if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
-      return false;
-    }
+    // Source parity: ActionManager::canEnterObject returns true for infantry entering
+    // DISABLED_UNMANNED targets regardless of player relationship.
     return true;
   }
 
