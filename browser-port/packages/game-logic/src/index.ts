@@ -26506,6 +26506,7 @@ export class GameLogicSubsystem implements Subsystem {
       subdualHealingCountdown: 0,
     };
 
+    this.applyMapObjectCoreProperties(entity, mapObject);
     this.applyMapObjectAmbientSoundProperties(entity, mapObject, iniDataRegistry);
 
     // Source parity: PowerPlantUpdate init — extended=false, sleeping forever.
@@ -35247,6 +35248,105 @@ export class GameLogicSubsystem implements Subsystem {
 
   private resolveBaseAmbientAudioName(entity: MapEntity): string | null {
     return entity.ambientSoundProfile?.pristine ?? null;
+  }
+
+  private applyMapObjectCoreProperties(entity: MapEntity, mapObject: MapObjectJSON): void {
+    const properties = this.collectNormalizedMapObjectProperties(mapObject);
+    if (properties.size === 0) {
+      return;
+    }
+
+    const objectMaxHPs = this.parseMapIntegerPropertyValue(properties.get('objectmaxhps'));
+    if (objectMaxHPs !== null && objectMaxHPs >= 0) {
+      entity.maxHealth = objectMaxHPs;
+      if (entity.initialHealth > entity.maxHealth) {
+        entity.initialHealth = entity.maxHealth;
+      }
+      if (entity.health > entity.maxHealth) {
+        entity.health = entity.maxHealth;
+      }
+    }
+
+    const objectInitialHealth = this.parseMapIntegerPropertyValue(properties.get('objectinitialhealth'));
+    if (objectInitialHealth !== null) {
+      const cappedInitialHealth = Math.max(0, Math.min(objectInitialHealth, entity.maxHealth));
+      entity.initialHealth = cappedInitialHealth;
+      entity.health = cappedInitialHealth;
+    }
+
+    const objectAggressiveness = this.parseMapIntegerPropertyValue(properties.get('objectaggressiveness'));
+    if (objectAggressiveness !== null) {
+      entity.scriptAttitude = objectAggressiveness;
+    }
+
+    const objectRecruitable = this.parseMapBooleanPropertyValue(properties.get('objectrecruitableai'));
+    if (objectRecruitable !== null) {
+      this.applyScriptObjectPanelFlag(entity, 'AI_RECRUITABLE', objectRecruitable);
+    }
+
+    const objectSelectable = this.parseMapBooleanPropertyValue(properties.get('objectselectable'));
+    if (objectSelectable !== null) {
+      this.applyScriptObjectPanelFlag(entity, 'SELECTABLE', objectSelectable);
+    }
+
+    const objectStoppingDistance = this.parseMapRealPropertyValue(properties.get('objectstoppingdistance'));
+    if (objectStoppingDistance !== null && objectStoppingDistance >= 0.5) {
+      entity.scriptStoppingDistanceOverride = objectStoppingDistance;
+    }
+
+    const objectEnabled = this.parseMapBooleanPropertyValue(properties.get('objectenabled'));
+    if (objectEnabled !== null) {
+      this.applyScriptObjectPanelFlag(entity, 'ENABLED', objectEnabled);
+    }
+
+    const objectPowered = this.parseMapBooleanPropertyValue(properties.get('objectpowered'));
+    if (objectPowered !== null) {
+      this.applyScriptObjectPanelFlag(entity, 'POWERED', objectPowered);
+    }
+
+    const objectIndestructible = this.parseMapBooleanPropertyValue(properties.get('objectindestructible'));
+    if (objectIndestructible !== null) {
+      this.applyScriptObjectPanelFlag(entity, 'INDESTRUCTIBLE', objectIndestructible);
+    }
+
+    const objectUnsellable = this.parseMapBooleanPropertyValue(properties.get('objectunsellable'));
+    if (objectUnsellable !== null) {
+      this.applyScriptObjectPanelFlag(entity, 'UNSELLABLE', objectUnsellable);
+    }
+
+    const objectTargetable = this.parseMapBooleanPropertyValue(properties.get('objecttargetable'));
+    if (objectTargetable !== null) {
+      this.applyScriptObjectPanelFlag(entity, 'PLAYER_TARGETABLE', objectTargetable);
+    }
+
+    const objectVisualRange = this.parseMapIntegerPropertyValue(properties.get('objectvisualrange'));
+    if (objectVisualRange !== null) {
+      const visualRange = Math.max(0, objectVisualRange);
+      entity.visionRange = visualRange;
+      entity.baseVisionRange = visualRange;
+    }
+
+    const objectShroudClearingDistance = this.parseMapIntegerPropertyValue(
+      properties.get('objectshroudclearingdistance'),
+    );
+    if (objectShroudClearingDistance !== null) {
+      // TODO(source parity): map this to Object::m_shroudClearingRange when gameplay uses a
+      // separate shroud-clearing radius distinct from vision range.
+    }
+
+    const objectTime = this.parseMapIntegerPropertyValue(properties.get('objecttime'));
+    if (objectTime === 1) {
+      entity.modelConditionFlags.delete('NIGHT');
+    } else if (objectTime === 2) {
+      entity.modelConditionFlags.add('NIGHT');
+    }
+
+    const objectWeather = this.parseMapIntegerPropertyValue(properties.get('objectweather'));
+    if (objectWeather === 1) {
+      entity.modelConditionFlags.delete('SNOW');
+    } else if (objectWeather === 2) {
+      entity.modelConditionFlags.add('SNOW');
+    }
   }
 
   private applyMapObjectAmbientSoundProperties(

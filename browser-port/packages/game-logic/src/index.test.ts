@@ -44741,6 +44741,73 @@ describe('Script condition groundwork', () => {
     ]);
   });
 
+  it('applies core map object property overrides from updateObjValuesFromMapProperties', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('MapPropertyTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 90 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('MapPropertyTarget', 12, 12, {
+        objectMaxHPs: '140',
+        objectInitialHealth: '55',
+        objectAggressiveness: '1',
+        objectRecruitableAI: 'false',
+        objectSelectable: 'false',
+        objectStoppingDistance: '3.5',
+        objectEnabled: 'false',
+        objectPowered: 'false',
+        objectIndestructible: 'true',
+        objectUnsellable: 'true',
+        objectTargetable: 'true',
+        objectVisualRange: '222',
+        objectTime: '2',
+        objectWeather: '2',
+      })], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        maxHealth: number;
+        health: number;
+        initialHealth: number;
+        scriptAttitude: number;
+        scriptAiRecruitable: boolean;
+        scriptStoppingDistanceOverride: number | null;
+        visionRange: number;
+        baseVisionRange: number;
+        isIndestructible: boolean;
+        modelConditionFlags: Set<string>;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    const entity = privateApi.spawnedEntities.get(1);
+    expect(entity).toBeDefined();
+
+    expect(entity?.maxHealth).toBe(140);
+    expect(entity?.initialHealth).toBe(55);
+    expect(entity?.health).toBe(55);
+    expect(entity?.scriptAttitude).toBe(1);
+    expect(entity?.scriptAiRecruitable).toBe(false);
+    expect(entity?.scriptStoppingDistanceOverride).toBe(3.5);
+    expect(entity?.visionRange).toBe(222);
+    expect(entity?.baseVisionRange).toBe(222);
+    expect(entity?.isIndestructible).toBe(true);
+    expect(entity?.modelConditionFlags.has('NIGHT')).toBe(true);
+    expect(entity?.modelConditionFlags.has('SNOW')).toBe(true);
+    expect(entity?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(true);
+    expect(entity?.objectStatusFlags.has('SCRIPT_UNPOWERED')).toBe(true);
+    expect(entity?.objectStatusFlags.has('SCRIPT_UNSELLABLE')).toBe(true);
+    expect(entity?.objectStatusFlags.has('SCRIPT_TARGETABLE')).toBe(true);
+    expect(entity?.objectStatusFlags.has('UNSELECTABLE')).toBe(true);
+  });
+
   it('applies map object custom ambient overrides with source mangle-name and permanence defaults', () => {
     const bundle = makeBundle({
       objects: [
