@@ -38655,6 +38655,59 @@ describe('Script condition groundwork', () => {
     expect(exactTwo.movePath[2]?.x).toBeCloseTo(40 + exactOffsetTwoX, 5);
   });
 
+  it('anchors team follow-waypoints route selection to full team centroid including non-movers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AnchorBuilding', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 100, 20), // id 1 (movable)
+      makeMapObject('AnchorBuilding', 0, 20), // id 2 (non-mover; should still affect center)
+    ], 160, 128);
+    map.waypoints = {
+      nodes: [
+        { id: 701, name: 'Center_A', position: { x: 40, y: 20, z: 0 }, pathLabel1: 'CenterPath', biDirectional: false },
+        { id: 702, name: 'Center_B', position: { x: 110, y: 20, z: 0 }, pathLabel1: 'CenterPath', biDirectional: false },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(160, 128),
+    );
+    expect(logic.setScriptTeamMembers('CenterTeam', [1, 2])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+
+    expect(logic.executeScriptAction({
+      actionType: 36, // TEAM_FOLLOW_WAYPOINTS
+      params: ['CenterTeam', 'CenterPath', 0],
+    })).toBe(true);
+    const finalX = privateApi.spawnedEntities.get(1)?.movePath.at(-1)?.x;
+    expect(finalX).toBeDefined();
+    expect(Math.abs(finalX! - 40)).toBeLessThan(Math.abs(finalX! - 110));
+    expect(privateApi.spawnedEntities.get(2)?.moveTarget).toBeNull();
+  });
+
   it('follows link(0) chain with source path-limit behavior for NAMED_FOLLOW_WAYPOINTS_EXACT loop paths', () => {
     const bundle = makeBundle({
       objects: [

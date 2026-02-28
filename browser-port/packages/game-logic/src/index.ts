@@ -16944,13 +16944,18 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
+    const allTeamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (allTeamMembers.length === 0) {
+      return false;
+    }
+
+    const teamMembers = allTeamMembers.filter((entity) => entity.canMove);
     if (teamMembers.length === 0) {
       return false;
     }
 
-    const center = this.resolveScriptTeamCenter(teamMembers);
+    const center = this.resolveScriptTeamCenter(allTeamMembers);
     if (!center) {
       return false;
     }
@@ -17115,13 +17120,18 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
+    const allTeamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (allTeamMembers.length === 0) {
+      return false;
+    }
+
+    const teamMembers = allTeamMembers.filter((entity) => entity.canMove);
     if (teamMembers.length === 0) {
       return false;
     }
 
-    const center = this.resolveScriptTeamCenter(teamMembers);
+    const center = this.resolveScriptTeamCenter(allTeamMembers);
     if (!center) {
       return false;
     }
@@ -17136,7 +17146,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const firstUnit = teamMembers[0] ?? null;
+    const firstUnit = allTeamMembers[0] ?? null;
     if (firstUnit) {
       this.checkScriptSkirmishApproachPathBridges(side, firstUnit, route);
     }
@@ -17291,13 +17301,18 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
+    const allTeamMembers = this.getScriptTeamMemberEntities(team)
+      .filter((entity) => !entity.destroyed);
+    if (allTeamMembers.length === 0) {
+      return false;
+    }
+
+    const teamMembers = allTeamMembers.filter((entity) => entity.canMove);
     if (teamMembers.length === 0) {
       return false;
     }
 
-    const center = this.resolveScriptTeamCenter(teamMembers);
+    const center = this.resolveScriptTeamCenter(allTeamMembers);
     if (!center) {
       return false;
     }
