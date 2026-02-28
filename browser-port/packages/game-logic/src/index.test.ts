@@ -28346,6 +28346,41 @@ describe('RepairDockUpdate', () => {
     ).toBe(true);
   });
 
+  it('rejects repairVehicle enter from effectively-dead source units', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepairDock', 55, 55),     // id 1
+        makeMapObject('DamagedVehicle', 75, 55), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+      spawnedEntities: Map<number, { health: number }>;
+      canExecuteRepairVehicleEnterAction: (source: unknown, target: unknown) => boolean;
+    };
+    const dock = privateApi.spawnedEntities.get(1)!;
+    const vehicle = privateApi.spawnedEntities.get(2)!;
+
+    vehicle.health = 0;
+    expect(privateApi.canExecuteRepairVehicleEnterAction(vehicle, dock)).toBe(false);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingEnterObjectActions.has(2)).toBe(false);
+  });
+
   it('rejects aircraft repairVehicle enter across different controlling players on same side', () => {
     const bundle = makeBundle({
       objects: [

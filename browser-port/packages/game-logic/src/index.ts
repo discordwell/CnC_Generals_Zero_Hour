@@ -40031,6 +40031,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (this.isEntityContained(source)) {
       return false;
     }
+    if (this.isEntityEffectivelyDeadForEnter(source)) {
+      return false;
+    }
 
     // Source parity: ActionManager::canGetRepairedAt requires allied relationship.
     if (this.getTeamRelationship(source, target) !== RELATIONSHIP_ALLIES) {
