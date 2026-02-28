@@ -44808,6 +44808,47 @@ describe('Script condition groundwork', () => {
     expect(entity?.objectStatusFlags.has('UNSELECTABLE')).toBe(true);
   });
 
+  it('applies map object objectGrantUpgradeN entries with source contiguous-index behavior', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('MapPropertyTarget', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      upgrades: [
+        makeUpgradeDef('Upgrade_ObjectA', { Type: 'OBJECT' }),
+        makeUpgradeDef('Upgrade_ObjectB', { Type: 'OBJECT' }),
+        makeUpgradeDef('Upgrade_PlayerRadar', { Type: 'PLAYER' }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('MapPropertyTarget', 12, 12, {
+        objectGrantUpgrade0: 'Upgrade_ObjectA',
+        objectGrantUpgrade1: 'Upgrade_PlayerRadar',
+        objectGrantUpgrade3: 'Upgrade_ObjectB',
+      })], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { completedUpgrades: Set<string> }>;
+      sideCompletedUpgrades: Map<string, Set<string>>;
+    };
+    const entity = privateApi.spawnedEntities.get(1);
+    expect(entity).toBeDefined();
+
+    // Source parity: objectGrantUpgrade loop stops at first missing index (index 2 here),
+    // so objectGrantUpgrade3 is ignored.
+    expect(entity?.completedUpgrades.has('UPGRADE_OBJECTA')).toBe(true);
+    expect(entity?.completedUpgrades.has('UPGRADE_OBJECTB')).toBe(false);
+
+    const completedPlayerUpgrades = privateApi.sideCompletedUpgrades.get('america');
+    expect(completedPlayerUpgrades?.has('UPGRADE_PLAYERRADAR')).toBe(true);
+  });
+
   it('applies map object custom ambient overrides with source mangle-name and permanence defaults', () => {
     const bundle = makeBundle({
       objects: [

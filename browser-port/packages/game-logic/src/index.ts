@@ -35334,6 +35334,26 @@ export class GameLogicSubsystem implements Subsystem {
       // separate shroud-clearing radius distinct from vision range.
     }
 
+    // Source parity: Object::updateObjValuesFromMapProperties objectGrantUpgradeN loop.
+    // C++ scans contiguous indices and stops at first missing/empty value.
+    let upgradeNum = 0;
+    while (true) {
+      const upgradeNameRaw = properties.get(`objectgrantupgrade${upgradeNum}`);
+      if (upgradeNameRaw === undefined) {
+        break;
+      }
+      const upgradeName = upgradeNameRaw.trim().toUpperCase();
+      if (!upgradeName) {
+        break;
+      }
+      this.applyGrantUpgradeCreate(entity, {
+        upgradeName,
+        isPlayerUpgrade: false,
+        exemptUnderConstruction: false,
+      });
+      upgradeNum += 1;
+    }
+
     const objectTime = this.parseMapIntegerPropertyValue(properties.get('objecttime'));
     if (objectTime === 1) {
       entity.modelConditionFlags.delete('NIGHT');
