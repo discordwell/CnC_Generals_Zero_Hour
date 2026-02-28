@@ -44746,7 +44746,10 @@ describe('Script condition groundwork', () => {
       objects: [
         makeObjectDef('MapPropertyTarget', 'America', ['VEHICLE'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 90 }),
-        ]),
+        ], {
+          ExperienceRequired: [0, 10, 20, 30],
+          ExperienceValue: [1, 2, 3, 4],
+        }),
       ],
     });
 
@@ -44755,6 +44758,7 @@ describe('Script condition groundwork', () => {
       makeMap([makeMapObject('MapPropertyTarget', 12, 12, {
         objectMaxHPs: '140',
         objectInitialHealth: '55',
+        objectVeterancy: '2',
         objectAggressiveness: '1',
         objectRecruitableAI: 'false',
         objectSelectable: 'false',
@@ -44778,6 +44782,7 @@ describe('Script condition groundwork', () => {
         health: number;
         initialHealth: number;
         scriptAttitude: number;
+        experienceState: { currentLevel: number };
         scriptAiRecruitable: boolean;
         scriptStoppingDistanceOverride: number | null;
         visionRange: number;
@@ -44791,8 +44796,9 @@ describe('Script condition groundwork', () => {
     expect(entity).toBeDefined();
 
     expect(entity?.maxHealth).toBe(140);
-    expect(entity?.initialHealth).toBe(55);
-    expect(entity?.health).toBe(55);
+    expect(entity?.initialHealth).toBe(140);
+    expect(entity?.health).toBe(77);
+    expect(entity?.experienceState.currentLevel).toBe(2);
     expect(entity?.scriptAttitude).toBe(1);
     expect(entity?.scriptAiRecruitable).toBe(false);
     expect(entity?.scriptStoppingDistanceOverride).toBe(3.5);

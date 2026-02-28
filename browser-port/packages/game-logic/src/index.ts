@@ -35258,10 +35258,10 @@ export class GameLogicSubsystem implements Subsystem {
 
     const objectMaxHPs = this.parseMapIntegerPropertyValue(properties.get('objectmaxhps'));
     if (objectMaxHPs !== null && objectMaxHPs >= 0) {
+      // Source parity: BodyModuleInterface::setMaxHealth(valInt, SAME_CURRENTHEALTH)
+      // resets initial health to max and keeps current health unless clipped.
       entity.maxHealth = objectMaxHPs;
-      if (entity.initialHealth > entity.maxHealth) {
-        entity.initialHealth = entity.maxHealth;
-      }
+      entity.initialHealth = entity.maxHealth;
       if (entity.health > entity.maxHealth) {
         entity.health = entity.maxHealth;
       }
@@ -35269,9 +35269,19 @@ export class GameLogicSubsystem implements Subsystem {
 
     const objectInitialHealth = this.parseMapIntegerPropertyValue(properties.get('objectinitialhealth'));
     if (objectInitialHealth !== null) {
-      const cappedInitialHealth = Math.max(0, Math.min(objectInitialHealth, entity.maxHealth));
-      entity.initialHealth = cappedInitialHealth;
-      entity.health = cappedInitialHealth;
+      // Source parity: ActiveBody::setInitialHealth(Int initialPercent) sets current health
+      // as a percentage of current body initial-health baseline; it does not overwrite baseline.
+      const initialHealthFactor = objectInitialHealth / 100;
+      const nextHealth = entity.initialHealth * initialHealthFactor;
+      entity.health = Math.max(0, Math.min(nextHealth, entity.maxHealth));
+    }
+
+    const objectVeterancy = this.parseMapIntegerPropertyValue(properties.get('objectveterancy'));
+    if (objectVeterancy !== null) {
+      this.setExactVeterancyLevel(
+        entity,
+        Math.max(LEVEL_REGULAR, Math.min(LEVEL_HEROIC, objectVeterancy)) as VeterancyLevel,
+      );
     }
 
     const objectAggressiveness = this.parseMapIntegerPropertyValue(properties.get('objectaggressiveness'));
@@ -42816,6 +42826,20 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: C++ ExperienceTracker::setMinVeterancyLevel directly sets level and XP
     // rather than going through addExperiencePoints. This handles edge cases where
     // experienceRequired thresholds are 0.
+    const oldLevel = entity.experienceState.currentLevel;
+    entity.experienceState.currentLevel = targetLevel;
+    entity.experienceState.currentExperience = profile.experienceRequired[targetLevel] ?? 0;
+    this.onEntityLevelUp(entity, oldLevel, targetLevel);
+  }
+
+  /**
+   * Source parity: ExperienceTracker::setVeterancyLevel — set veterancy to an explicit level.
+   * Used by map-object property objectVeterancy in Object::updateObjValuesFromMapProperties.
+   */
+  private setExactVeterancyLevel(entity: MapEntity, targetLevel: VeterancyLevel): void {
+    const profile = entity.experienceProfile;
+    if (!profile) return;
+    if (entity.experienceState.currentLevel === targetLevel) return;
     const oldLevel = entity.experienceState.currentLevel;
     entity.experienceState.currentLevel = targetLevel;
     entity.experienceState.currentExperience = profile.experienceRequired[targetLevel] ?? 0;
