@@ -16559,8 +16559,9 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerRepairStructure -> Player::repairStructure.
-   * In source this queues repair requests on AI players; non-AI players no-op.
+   * Source parity: ScriptActions::doPlayerRepairStructure -> Player::repairStructure.
+   * Source only validates player + named object lookup, then forwards object ID to the
+   * AI repair queue (if this player has AI). Ownership is not validated here.
    */
   private executeScriptPlayerRepairNamedStructure(playerSide: string, targetBuildingId: number): boolean {
     const normalizedSide = this.normalizeSide(playerSide);
@@ -16572,19 +16573,29 @@ export class GameLogicSubsystem implements Subsystem {
     if (!building || building.destroyed) {
       return false;
     }
-    if (!building.kindOf.has('STRUCTURE')) {
-      return false;
-    }
-    if (this.normalizeSide(building.side) !== normalizedSide) {
-      return false;
-    }
 
     // Source parity: Player::repairStructure only delegates when the player has an AI controller.
     if (this.getSidePlayerType(normalizedSide) !== 'COMPUTER') {
       return true;
     }
 
-    if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) {
+    return this.queueScriptSideRepairRequest(normalizedSide, building.id);
+  }
+
+  /**
+   * Source parity subset: AIPlayer::repairStructure queueing.
+   * Queues one repair request per target ID for the owning AI player.
+   */
+  private queueScriptSideRepairRequest(side: string, targetId: number): boolean {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return false;
+    }
+    const target = this.spawnedEntities.get(targetId);
+    if (!target || target.destroyed) {
+      return false;
+    }
+    if (target.health >= target.maxHealth && target.constructionPercent === CONSTRUCTION_COMPLETE) {
       return true;
     }
 
@@ -16593,7 +16604,7 @@ export class GameLogicSubsystem implements Subsystem {
       queued = new Set<number>();
       this.scriptSideRepairQueue.set(normalizedSide, queued);
     }
-    queued.add(building.id);
+    queued.add(target.id);
     this.updateScriptSideRepairQueues();
     return true;
   }
@@ -17070,7 +17081,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamFollowSkirmishApproachPath.
+   * Source parity: ScriptActions::doTeamFollowSkirmishApproachPath.
    * Uses waypoint path labels suffixed with enemy MP start index (e.g. "AttackPath2").
    */
   private executeScriptTeamFollowSkirmishApproachPath(
@@ -17110,6 +17121,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
+    const firstUnit = teamMembers[0] ?? null;
+    if (firstUnit) {
+      this.checkScriptSkirmishApproachPathBridges(side, firstUnit, route);
+    }
+
     let movedAny = false;
     for (const entity of teamMembers) {
       const routeToUse = asTeam
@@ -17120,6 +17136,125 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return movedAny;
+  }
+
+  /**
+   * Source parity subset: AISkirmishPlayer::checkBridges preflight used by
+   * doTeamFollowSkirmishApproachPath. If a broken bridge is required for pathing,
+   * queue an AI repair request for the controlling player.
+   */
+  private checkScriptSkirmishApproachPathBridges(
+    controllingSide: string,
+    firstUnit: MapEntity,
+    route: readonly ScriptWaypointRouteNode[],
+  ): void {
+    if (route.length === 0) {
+      return;
+    }
+    if (this.getSidePlayerType(controllingSide) !== 'COMPUTER') {
+      return;
+    }
+    if (!this.navigationGrid || this.bridgeSegments.size === 0) {
+      return;
+    }
+
+    const startX = firstUnit.x;
+    const startZ = firstUnit.z;
+    for (const waypoint of route) {
+      const path = this.findPath(startX, startZ, waypoint.x, waypoint.z, firstUnit);
+      if (path.length > 0) {
+        continue;
+      }
+      const brokenBridgeRepairTargetId = this.findScriptBrokenBridgeRepairTarget(
+        startX,
+        startZ,
+        waypoint.x,
+        waypoint.z,
+        firstUnit,
+      );
+      if (brokenBridgeRepairTargetId !== null) {
+        this.queueScriptSideRepairRequest(controllingSide, brokenBridgeRepairTargetId);
+        return;
+      }
+    }
+  }
+
+  private findScriptBrokenBridgeRepairTarget(
+    startX: number,
+    startZ: number,
+    targetX: number,
+    targetZ: number,
+    mover: MapEntity,
+  ): number | null {
+    for (const [segmentId, segment] of this.bridgeSegments.entries()) {
+      if (segment.passable) {
+        continue;
+      }
+      const pathExistsIfRepaired = this.withTemporarilyPassableBridgeSegment(segmentId, () => {
+        const repairedPath = this.findPath(startX, startZ, targetX, targetZ, mover);
+        return repairedPath.length > 0;
+      });
+      if (!pathExistsIfRepaired) {
+        continue;
+      }
+      const repairControlEntityId = this.resolveScriptBridgeRepairControlEntityId(segmentId);
+      if (repairControlEntityId !== null) {
+        return repairControlEntityId;
+      }
+    }
+    return null;
+  }
+
+  private withTemporarilyPassableBridgeSegment<T>(segmentId: number, callback: () => T): T {
+    const grid = this.navigationGrid;
+    const segment = this.bridgeSegments.get(segmentId);
+    if (!grid || !segment || segment.passable) {
+      return callback();
+    }
+
+    const priorPassableValues = new Map<number, number>();
+    const priorTransitionValues = new Map<number, number>();
+    for (const index of segment.cellIndices) {
+      priorPassableValues.set(index, grid.bridgePassable[index] ?? 0);
+      grid.bridgePassable[index] = 1;
+    }
+    for (const index of segment.transitionIndices) {
+      priorTransitionValues.set(index, grid.bridgeTransitions[index] ?? 0);
+      grid.bridgeTransitions[index] = 1;
+    }
+
+    segment.passable = true;
+    try {
+      return callback();
+    } finally {
+      segment.passable = false;
+      for (const [index, value] of priorPassableValues.entries()) {
+        grid.bridgePassable[index] = value;
+      }
+      for (const [index, value] of priorTransitionValues.entries()) {
+        grid.bridgeTransitions[index] = value;
+      }
+    }
+  }
+
+  private resolveScriptBridgeRepairControlEntityId(segmentId: number): number | null {
+    let bridgeEntityId: number | null = null;
+    for (const [entityId, mappedSegmentId] of this.bridgeSegmentByControlEntity.entries()) {
+      if (mappedSegmentId !== segmentId) {
+        continue;
+      }
+      const controlEntity = this.spawnedEntities.get(entityId);
+      if (!controlEntity || controlEntity.destroyed) {
+        continue;
+      }
+      if (controlEntity.kindOf.has('BRIDGE_TOWER')) {
+        return entityId;
+      }
+      if (bridgeEntityId === null) {
+        bridgeEntityId = entityId;
+      }
+    }
+    return bridgeEntityId;
   }
 
   /**
@@ -39085,6 +39220,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Building fully repaired.
       if (building.health >= building.maxHealth) {
+        this.onObjectRepaired(building.id);
         this.pendingRepairActions.delete(dozerId);
         this.clearDozerTaskOrder(dozer, 'REPAIR');
         continue;
@@ -39117,6 +39253,9 @@ export class GameLogicSubsystem implements Subsystem {
         this.clearDozerTaskOrder(dozer, 'REPAIR');
         continue;
       }
+      if (building.health >= building.maxHealth) {
+        this.onObjectRepaired(building.id);
+      }
     }
   }
 
@@ -39129,10 +39268,6 @@ export class GameLogicSubsystem implements Subsystem {
       for (const buildingId of Array.from(queuedBuildingIds.values())) {
         const building = this.spawnedEntities.get(buildingId);
         if (!building || building.destroyed) {
-          queuedBuildingIds.delete(buildingId);
-          continue;
-        }
-        if (this.normalizeSide(building.side) !== side) {
           queuedBuildingIds.delete(buildingId);
           continue;
         }
@@ -39309,9 +39444,11 @@ export class GameLogicSubsystem implements Subsystem {
   ): boolean {
     if (!this.isEntityDozerCapable(dozer)) return false;
     if (this.isEntityContained(dozer)) return false;
-    if (!building.kindOf.has('STRUCTURE')) return false;
-    // Source parity: ActionManager::canRepairObject disallows bridge and bridge towers.
-    if (building.kindOf.has('BRIDGE') || building.kindOf.has('BRIDGE_TOWER')) return false;
+    const isBridgeTarget = building.kindOf.has('BRIDGE') || building.kindOf.has('BRIDGE_TOWER');
+    if (!building.kindOf.has('STRUCTURE') && !isBridgeTarget) return false;
+    // Source parity: player-issued repair command gating (ActionManager::canRepairObject)
+    // disallows bridge and bridge-tower targets, but AIPlayer::repairStructure may still queue them.
+    if (commandSource === 'PLAYER' && isBridgeTarget) return false;
     if (building.objectStatusFlags.has('SOLD')) return false;
     if (building.objectStatusFlags.has('UNDER_CONSTRUCTION')) return false;
     if (building.health >= building.maxHealth) return false;

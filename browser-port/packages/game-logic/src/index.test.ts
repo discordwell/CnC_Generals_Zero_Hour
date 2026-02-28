@@ -11229,6 +11229,59 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.pendingRepairActions.has(1)).toBe(false);
   });
 
+  it('allows AI repair commands for bridge towers and restores bridge passability when repaired', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const bridgeTowerDef = makeObjectDef('BridgeTower', 'America', ['STRUCTURE', 'BRIDGE_TOWER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 400 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('BridgeTower', 20, 20), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, bridgeTowerDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      bridgeSegments: Map<number, { passable: boolean; cellIndices: number[]; transitionIndices: number[] }>;
+      bridgeSegmentByControlEntity: Map<number, number>;
+      pendingRepairActions: Map<number, number>;
+    };
+    privateApi.bridgeSegments.set(0, { passable: false, cellIndices: [], transitionIndices: [] });
+    privateApi.bridgeSegmentByControlEntity.set(2, 0);
+
+    logic.submitCommand({
+      type: 'repairBuilding',
+      entityId: 1,
+      targetBuildingId: 2,
+      commandSource: 'AI',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingRepairActions.get(1)).toBe(2);
+    for (let i = 0; i < 40; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(2)?.health).toBeCloseTo(500, 5);
+    expect(logic.getBridgeSegmentStates()).toContainEqual({ segmentId: 0, passable: true });
+  });
+
   it('does not switch an under-construction building to repair when another builder is active', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
@@ -38176,6 +38229,80 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('queues bridge repairs during skirmish approach-path bridge preflight', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('BridgeTower', 'Civilian', ['STRUCTURE', 'BRIDGE_TOWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 200 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('BridgeTower', 60, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      bridgeSegments: Map<number, { passable: boolean; cellIndices: number[]; transitionIndices: number[] }>;
+      bridgeSegmentByControlEntity: Map<number, number>;
+      spawnedEntities: Map<number, { x: number; z: number }>;
+      scriptSideRepairQueue: Map<string, Set<number>>;
+      findPath: (
+        startX: number,
+        startZ: number,
+        targetX: number,
+        targetZ: number,
+      ) => Array<{ x: number; z: number }>;
+      checkScriptSkirmishApproachPathBridges: (
+        controllingSide: string,
+        firstUnit: { x: number; z: number },
+        route: Array<{ x: number; z: number; pathLabels: string[] }>,
+      ) => void;
+    };
+
+    privateApi.bridgeSegments.set(0, { passable: false, cellIndices: [], transitionIndices: [] });
+    privateApi.bridgeSegmentByControlEntity.set(2, 0);
+
+    const firstUnit = privateApi.spawnedEntities.get(1)!;
+    const originalFindPath = privateApi.findPath.bind(privateApi);
+    privateApi.findPath = (
+      _startX: number,
+      _startZ: number,
+      targetX: number,
+      targetZ: number,
+    ) => {
+      const segment = privateApi.bridgeSegments.get(0);
+      if (segment && !segment.passable) {
+        return [];
+      }
+      return [{ x: targetX, z: targetZ }];
+    };
+
+    privateApi.checkScriptSkirmishApproachPathBridges('America', firstUnit, [
+      { x: 90, z: 20, pathLabels: ['ApproachPath2'] },
+    ]);
+    privateApi.findPath = originalFindPath;
+
+    const queued = privateApi.scriptSideRepairQueue.get('america')
+      ?? privateApi.scriptSideRepairQueue.get('America');
+    expect(queued?.has(2)).toBe(true);
+  });
+
   it('executes follow-waypoints actions using raw and offset source action ids', () => {
     const bundle = makeBundle({
       objects: [
@@ -43663,6 +43790,53 @@ describe('Script condition groundwork', () => {
       actionType: 458,
       params: ['', 2],
     })).toBe(false);
+  });
+
+  it('allows script player-repair action on non-owned structures for AI players', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+          makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+            RepairHealthPercentPerSecond: '30%',
+            BoredTime: 999999,
+            BoredRange: 300,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 }),
+        makeObjectDef('CivilianBuilding', 'Civilian', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 200 }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('CivilianBuilding', 20, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'Civilian', 1);
+    logic.setTeamRelationship('Civilian', 'America', 1);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      pendingRepairActions: Map<number, number>;
+    };
+
+    const before = logic.getEntityState(2)!.health;
+    expect(logic.executeScriptAction({
+      actionType: 458, // PLAYER_REPAIR_NAMED_STRUCTURE
+      params: ['America', 2],
+    })).toBe(true);
+    expect(privateApi.pendingRepairActions.get(1)).toBe(2);
+
+    logic.update(1 / 30);
+    const after = logic.getEntityState(2)!.health;
+    expect(after).toBeGreaterThan(before);
   });
 
   it('executes script camera tether/default actions using source action ids', () => {
