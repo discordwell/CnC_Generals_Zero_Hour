@@ -18119,28 +18119,28 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     let movedAny = false;
+    // Source parity: Team::getEstimateTeamPosition returns the first team member position.
+    const estimatedAnchor = teamMembers[0] ?? null;
+    if (!estimatedAnchor) {
+      return movedAny;
+    }
+    // Source parity: doMoveTeamTowardsNearest selects map-status filter seed from the
+    // first team member with AIUpdateInterface.
     let mapStatusEntity: MapEntity | null = null;
-    let sourceX = 0;
-    let sourceZ = 0;
-    let sourceCount = 0;
     for (const member of teamMembers) {
       if (member.destroyed || !member.canMove) {
         continue;
       }
-      if (!mapStatusEntity) {
-        mapStatusEntity = member;
-      }
-      sourceX += member.x;
-      sourceZ += member.z;
-      sourceCount += 1;
+      mapStatusEntity = member;
+      break;
     }
-    if (!mapStatusEntity || sourceCount <= 0) {
+    if (!mapStatusEntity) {
       return movedAny;
     }
 
     const target = this.findNearestScriptMoveTargetByType(
-      sourceX / sourceCount,
-      sourceZ / sourceCount,
+      estimatedAnchor.x,
+      estimatedAnchor.z,
       mapStatusEntity,
       objectTypeName,
       triggerName,

@@ -36774,6 +36774,68 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('anchors TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE target selection to Team::getEstimateTeamPosition', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('TargetBeacon', 'Neutral', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 10, 10), // id 1 (first team member / estimate anchor)
+      makeMapObject('Ranger', 110, 10), // id 2
+      makeMapObject('TargetBeacon', 14, 10), // id 3 (nearest to id 1)
+      makeMapObject('TargetBeacon', 60, 10), // id 4 (nearest to centroid)
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'MoveArea',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 128, y: 0, z: 0 },
+        { x: 128, y: 128, z: 0 },
+        { x: 0, y: 128, z: 0 },
+      ],
+    }];
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    expect(logic.setScriptTeamMembers('AnchorTeam', [1, 2])).toBe(true);
+    expect(logic.executeScriptAction({
+      actionType: 433, // TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE
+      params: ['AnchorTeam', 'TargetBeacon', 'MoveArea'],
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        moveTarget: { x: number; z: number } | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+    const unitOne = privateApi.spawnedEntities.get(1);
+    const unitTwo = privateApi.spawnedEntities.get(2);
+    const unitOneFinal = unitOne?.movePath.at(-1);
+    const unitTwoFinal = unitTwo?.movePath.at(-1);
+    expect(unitOne?.moveTarget).not.toBeNull();
+    expect(unitTwo?.moveTarget).not.toBeNull();
+    expect(unitOneFinal).toBeDefined();
+    expect(unitTwoFinal).toBeDefined();
+
+    const unitOneNearDist = Math.hypot(unitOneFinal!.x - 14, unitOneFinal!.z - 10);
+    const unitOneMidDist = Math.hypot(unitOneFinal!.x - 60, unitOneFinal!.z - 10);
+    const unitTwoNearDist = Math.hypot(unitTwoFinal!.x - 14, unitTwoFinal!.z - 10);
+    const unitTwoMidDist = Math.hypot(unitTwoFinal!.x - 60, unitTwoFinal!.z - 10);
+    expect(unitOneNearDist).toBeLessThan(unitOneMidDist);
+    expect(unitTwoNearDist).toBeLessThan(unitTwoMidDist);
+  });
+
   it('executes script map-reveal-at-waypoint actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
