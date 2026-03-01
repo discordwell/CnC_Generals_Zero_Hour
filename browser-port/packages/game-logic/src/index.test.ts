@@ -24676,6 +24676,28 @@ describe('AutoFindHealingUpdate', () => {
 
     expect(enteredHealPad).toBe(true);
   });
+
+  it('applies scan cooldown for scanRateFrames plus one update frame', () => {
+    const { logic, infantry } = makeAutoHealSetup({
+      healthPercent: 50,
+      scanRate: 200,
+      scanRange: 200,
+    });
+    const profile = infantry.autoFindHealingProfile!;
+
+    const stateAfterFirstScan = logic as unknown as { frameCounter: number };
+    const firstScanFrame = stateAfterFirstScan.frameCounter;
+    const firstNextScanFrame = infantry.autoFindHealingNextScanFrame;
+    expect(firstNextScanFrame).toBe(firstScanFrame + profile.scanRateFrames + 1);
+
+    for (let i = 0; i < profile.scanRateFrames; i++) {
+      logic.update(1 / 30);
+      expect(infantry.autoFindHealingNextScanFrame).toBe(firstNextScanFrame);
+    }
+
+    logic.update(1 / 30);
+    expect(infantry.autoFindHealingNextScanFrame).toBeGreaterThan(firstNextScanFrame);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

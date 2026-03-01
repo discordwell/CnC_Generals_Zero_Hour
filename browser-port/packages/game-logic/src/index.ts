@@ -44450,7 +44450,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Scan rate throttle.
       if (this.frameCounter < entity.autoFindHealingNextScanFrame) continue;
-      entity.autoFindHealingNextScanFrame = this.frameCounter + prof.scanRateFrames;
+      entity.autoFindHealingNextScanFrame = this.frameCounter + prof.scanRateFrames + 1;
 
       // Source parity: skip if already contained (in a transport/heal container).
       if (this.isEntityContained(entity)) continue;
