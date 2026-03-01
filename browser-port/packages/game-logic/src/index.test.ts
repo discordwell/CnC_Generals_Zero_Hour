@@ -28590,6 +28590,78 @@ describe('RepairDockUpdate', () => {
     expect(privateApi.pendingEnterObjectActions.has(2)).toBe(false);
   });
 
+  it('rejects repairVehicle enter when target dock is sold', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepairDock', 55, 55),     // id 1
+        makeMapObject('DamagedVehicle', 75, 55), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+      pendingRepairDockActions: Map<number, unknown>;
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    const dock = privateApi.spawnedEntities.get(1)!;
+    dock.objectStatusFlags.add('SOLD');
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingEnterObjectActions.has(2)).toBe(false);
+    expect(privateApi.pendingRepairDockActions.has(2)).toBe(false);
+  });
+
+  it('stops active repairVehicle docking when the source becomes immobile', () => {
+    const bundle = makeRepairDockBundle(3000);
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('RepairDock', 55, 55),     // id 1
+        makeMapObject('DamagedVehicle', 55, 55), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      pendingRepairDockActions: Map<number, unknown>;
+      spawnedEntities: Map<number, { health: number; objectStatusFlags: Set<string> }>;
+    };
+    const vehicle = privateApi.spawnedEntities.get(2)!;
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 2,
+      targetObjectId: 1,
+      action: 'repairVehicle',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingRepairDockActions.has(2)).toBe(true);
+    const healedHealth = vehicle.health;
+
+    vehicle.objectStatusFlags.add('DISABLED_SUBDUED');
+    for (let i = 0; i < 5; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(privateApi.pendingRepairDockActions.has(2)).toBe(false);
+    expect(vehicle.health).toBeCloseTo(healedHealth, 5);
+  });
+
   it('rejects aircraft repairVehicle enter across different controlling players on same side', () => {
     const bundle = makeBundle({
       objects: [

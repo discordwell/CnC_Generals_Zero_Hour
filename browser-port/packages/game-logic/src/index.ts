@@ -1603,6 +1603,8 @@ interface PendingEnterObjectActionState {
 
 interface PendingRepairDockActionState {
   dockObjectId: number;
+  /** Source parity: ActionManager::canGetRepairedAt command source for shroud legality. */
+  commandSource: 'PLAYER' | 'AI' | 'SCRIPT';
   /**
    * Source parity: RepairDockUpdate::m_lastRepair per-dock cache.
    * We cache the dock object id that initialized healthToAddPerFrame.
@@ -38177,7 +38179,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'sabotageBuilding':
         return this.resolveSabotageBuildingProfile(source, target) !== null;
       case 'repairVehicle':
-        return this.canExecuteRepairVehicleEnterAction(source, target);
+        return this.canExecuteRepairVehicleEnterAction(source, target, commandSource);
       case 'captureUnmannedFactionUnit':
         return this.canExecuteCaptureUnmannedFactionUnitEnterAction(source, target, commandSource);
       default:
@@ -40157,7 +40159,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
-      if (!this.canExecuteRepairVehicleEnterAction(docker, dock)) {
+      if (!this.canExecuteRepairVehicleEnterAction(docker, dock, pending.commandSource)) {
         this.pendingRepairDockActions.delete(dockerId);
         continue;
       }
@@ -40249,7 +40251,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (action === 'repairVehicle') {
-      this.resolveRepairVehicleEnterAction(source, target);
+      this.resolveRepairVehicleEnterAction(source, target, commandSource);
       return;
     }
 
@@ -40258,11 +40260,30 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private canExecuteRepairVehicleEnterAction(source: MapEntity, target: MapEntity): boolean {
+  private canExecuteRepairVehicleEnterAction(
+    source: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT' = 'PLAYER',
+  ): boolean {
     if (this.isEntityContained(source)) {
       return false;
     }
     if (this.isEntityEffectivelyDeadForEnter(source)) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(target, 'SOLD')) {
+      return false;
+    }
+    if (!source.canMove || this.isEntityDisabledForMovement(source)) {
+      return false;
+    }
+    if (this.isContainerEnterTargetShrouded(source, target, commandSource)) {
       return false;
     }
 
@@ -40348,8 +40369,12 @@ export class GameLogicSubsystem implements Subsystem {
     return hasAvailableParkingSpaceImpl(parkingProfile, airfield.productionQueue, this.spawnedEntities);
   }
 
-  private resolveRepairVehicleEnterAction(source: MapEntity, target: MapEntity): void {
-    if (!this.canExecuteRepairVehicleEnterAction(source, target)) {
+  private resolveRepairVehicleEnterAction(
+    source: MapEntity,
+    target: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): void {
+    if (!this.canExecuteRepairVehicleEnterAction(source, target, commandSource)) {
       return;
     }
 
@@ -40396,6 +40421,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.pendingRepairDockActions.set(source.id, {
       dockObjectId: target.id,
+      commandSource,
       lastRepairDockObjectId: 0,
       healthToAddPerFrame: 0,
     });
