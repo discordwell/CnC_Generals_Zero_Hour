@@ -41581,7 +41581,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!warehouseState || warehouseState.currentBoxes <= 0) {
         return false;
       }
-      if (this.getTeamRelationship(source, dock) === RELATIONSHIP_ENEMIES) {
+      if (this.getTeamRelationship(dock, source) === RELATIONSHIP_ENEMIES) {
         return false;
       }
     }
