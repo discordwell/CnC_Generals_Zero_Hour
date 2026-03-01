@@ -40571,9 +40571,6 @@ export class GameLogicSubsystem implements Subsystem {
     if (target.category !== 'vehicle') {
       return false;
     }
-    if (this.getTeamRelationship(source, target) === RELATIONSHIP_ALLIES) {
-      return false;
-    }
 
     const sourceObjectDef = this.resolveObjectDefByTemplateName(source.templateName);
     if (!sourceObjectDef || !this.hasBehaviorModuleType(sourceObjectDef, 'CONVERTTOCARBOMBCRATECOLLIDE')) {

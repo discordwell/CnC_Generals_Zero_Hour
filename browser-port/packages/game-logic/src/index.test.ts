@@ -8314,6 +8314,51 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getEntityIdsByTemplateAndSide('FriendlyVehicle', 'America')).toEqual([2]);
   });
 
+  it('allows convertToCarBomb enter actions against allied vehicles', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Terrorist', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'ConvertToCarBombCrateCollide ModuleTag_CarBomb', {}),
+        ], {
+          VisionRange: 100,
+        }),
+        makeObjectDef('FriendlyVehicle', 'America', ['VEHICLE'], [
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Conditions: 'NONE',
+            Weapon: ['PRIMARY', 'BasicGun'],
+          }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Conditions: 'CARBOMB',
+            Weapon: ['PRIMARY', 'CarBombWeapon'],
+          }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('BasicGun', { AttackRange: 80, PrimaryDamage: 1, DelayBetweenShots: 100 }),
+        makeWeaponDef('CarBombWeapon', { AttackRange: 1, PrimaryDamage: 200, DelayBetweenShots: 100 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Terrorist', 8, 8), makeMapObject('FriendlyVehicle', 10, 8)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.update(1 / 30);
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'convertToCarBomb',
+    });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(1)).toBeNull();
+    expect(logic.getEntityState(2)?.statusFlags).toContain('CARBOMB');
+  });
+
   it('rejects enterObject actions targeting effectively-dead entities', () => {
     const bundle = makeBundle({
       objects: [
