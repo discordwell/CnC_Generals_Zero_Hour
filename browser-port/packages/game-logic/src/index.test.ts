@@ -8273,6 +8273,90 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(privateApi.pendingEnterObjectActions.has(1)).toBe(true);
   });
 
+  it('uses controlling player type to allow shrouded enterObject when controller is AI', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+        ], {
+          VisionRange: 30,
+        }),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], []),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hijacker', 10, 10, { OriginalOwner: 'AIPlayer' }),
+        makeMapObject('EnemyVehicle', 200, 200),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'AIPlayer', playerType: 'COMPUTER' });
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+    };
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+    expect(privateApi.pendingEnterObjectActions.has(1)).toBe(true);
+  });
+
+  it('uses controlling player type to block shrouded enterObject when controller is human', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Hijacker', 'America', ['INFANTRY'], [
+          makeBlock('Behavior', 'ConvertToHijackedVehicleCrateCollide ModuleTag_Hijack', {}),
+        ], {
+          VisionRange: 30,
+        }),
+        makeObjectDef('EnemyVehicle', 'China', ['VEHICLE'], []),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Hijacker', 10, 10, { OriginalOwner: 'HumanPlayer' }),
+        makeMapObject('EnemyVehicle', 200, 200),
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'HumanPlayer', playerType: 'HUMAN' });
+    logic.update(1 / 30);
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+    };
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'hijackVehicle',
+    });
+    logic.update(1 / 30);
+    expect(privateApi.pendingEnterObjectActions.has(1)).toBe(false);
+  });
+
   it('rejects invalid enterObject hijack actions at command issue time', () => {
     const bundle = makeBundle({
       objects: [

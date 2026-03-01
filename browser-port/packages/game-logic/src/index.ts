@@ -39043,11 +39043,17 @@ export class GameLogicSubsystem implements Subsystem {
     if (commandSource === 'SCRIPT') {
       return false;
     }
+    const sourceOwnerToken = this.normalizeControllingPlayerToken(source.controllingPlayerToken ?? undefined);
     const sourceSide = this.normalizeSide(source.side);
     if (!sourceSide) {
       return false;
     }
-    if (this.getSidePlayerType(sourceSide) !== 'HUMAN') {
+    const sourcePlayerType = (
+      sourceOwnerToken != null
+        ? this.sidePlayerTypes.get(sourceOwnerToken)
+        : undefined
+    ) ?? this.getSidePlayerType(sourceSide);
+    if (sourcePlayerType !== 'HUMAN') {
       return false;
     }
     return this.resolveEntityShroudStatusForSide(target, sourceSide) !== 'CLEAR';
