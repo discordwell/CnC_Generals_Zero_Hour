@@ -44462,13 +44462,14 @@ export class GameLogicSubsystem implements Subsystem {
       if (healthRatio >= prof.neverHeal) continue;
 
       // Source parity: AutoFindHealingUpdate.cpp:130 — ai->isIdle() checks all activity states.
+      // The following C++ always returns when not idle (the m_alwaysHeal branch is unreachable).
       // Approximation: check movement, attack, guard, special ability, and enter-transport states.
       const isIdle = !entity.moving
         && entity.attackTargetEntityId === null
         && entity.guardState === 'NONE'
         && (!entity.specialAbilityState || entity.specialAbilityState.packState === 'NONE')
         && entity.transportContainerId === null;
-      if (!isIdle && healthRatio > prof.alwaysHeal) continue;
+      if (!isIdle) continue;
 
       // Source parity: scan for closest HEAL_PAD entity in range.
       const rangeSqr = prof.scanRange * prof.scanRange;
