@@ -44481,10 +44481,6 @@ export class GameLogicSubsystem implements Subsystem {
         // Must be a heal pad (KINDOF HEAL_PAD).
         const kindOf = this.resolveEntityKindOfSet(candidate);
         if (!kindOf.has('HEAL_PAD')) continue;
-        // Must have a HEAL contain profile with capacity.
-        const containProfile = candidate.containProfile;
-        if (!containProfile || containProfile.moduleType !== 'HEAL') continue;
-        if (!this.canScriptContainerFitEntity(candidate, entity)) continue;
 
         const dx = candidate.x - entity.x;
         const dz = candidate.z - entity.z;

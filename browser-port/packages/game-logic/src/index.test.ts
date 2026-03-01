@@ -24545,6 +24545,59 @@ describe('AutoFindHealingUpdate', () => {
     expect(enteredAlliedFarPad).toBe(false);
   });
 
+  it('does not skip a nearer heal pad that lacks heal containment', () => {
+    const invalidHealPadDef = makeObjectDef('InvalidHealPad', 'America', ['STRUCTURE', 'HEAL_PAD'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+
+    const validHealPadDef = makeObjectDef('ValidHealPad', 'America', ['STRUCTURE', 'HEAL_PAD'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'HealContain ModuleTag_Contain', {
+        ContainMax: 3,
+        TimeForFullHeal: 1000,
+      }),
+    ]);
+
+    const infantryDef = makeObjectDef('Infantry', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+      makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+      makeBlock('Behavior', 'AutoFindHealing ModuleTag_AutoHeal', {
+        ScanRate: 200,
+        ScanRange: 400,
+        NeverHeal: 0.95,
+        AlwaysHeal: 0.25,
+      }),
+    ]);
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('InvalidHealPad', 50, 50), // id 1 (near, no contain module)
+        makeMapObject('ValidHealPad', 90, 50),   // id 2 (far, valid contain)
+        makeMapObject('Infantry', 52, 52),       // id 3
+      ]),
+      makeRegistry(makeBundle({ objects: [invalidHealPadDef, validHealPadDef, infantryDef] })),
+      makeHeightmap(),
+    );
+    logic.setSidePlayerType('America', 'COMPUTER');
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const infantry = priv.spawnedEntities.get(3)!;
+    infantry.health = 50;
+
+    let enteredFarValidPad = false;
+    for (let i = 0; i < 80; i++) {
+      logic.update(1 / 30);
+      if (infantry.transportContainerId === 2) {
+        enteredFarValidPad = true;
+      }
+    }
+
+    expect(enteredFarValidPad).toBe(false);
+  });
+
   it('does not auto-heal for human-controlled units', () => {
     const { logic, infantry } = makeAutoHealSetup({ healthPercent: 50, isHuman: true });
 
