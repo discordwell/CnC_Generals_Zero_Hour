@@ -38177,7 +38177,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'convertToCarBomb':
         return this.canExecuteConvertToCarBombEnterAction(source, target);
       case 'sabotageBuilding':
-        return this.resolveSabotageBuildingProfile(source, target) !== null;
+        return this.canExecuteSabotageBuildingEnterAction(source, target);
       case 'repairVehicle':
         return this.canExecuteRepairVehicleEnterAction(source, target, commandSource);
       case 'captureUnmannedFactionUnit':
@@ -40608,18 +40608,21 @@ export class GameLogicSubsystem implements Subsystem {
     return carbombSet.weaponNamesBySlot.some((weaponName) => weaponName !== null);
   }
 
-  private resolveSabotageBuildingEnterAction(source: MapEntity, target: MapEntity): void {
+  private canExecuteSabotageBuildingEnterAction(source: MapEntity, target: MapEntity): boolean {
     if (target.category !== 'building') {
-      return;
+      return false;
     }
     if (this.getTeamRelationship(source, target) !== RELATIONSHIP_ENEMIES) {
-      return;
+      return false;
     }
+    return this.resolveSabotageBuildingProfile(source, target) !== null;
+  }
 
-    const sabotageProfile = this.resolveSabotageBuildingProfile(source, target);
-    if (!sabotageProfile) {
+  private resolveSabotageBuildingEnterAction(source: MapEntity, target: MapEntity): void {
+    if (!this.canExecuteSabotageBuildingEnterAction(source, target)) {
       return;
     }
+    const sabotageProfile = this.resolveSabotageBuildingProfile(source, target)!;
 
     if (sabotageProfile.disableHackedDurationFrames > 0) {
       const disableUntilFrame = this.frameCounter + sabotageProfile.disableHackedDurationFrames;

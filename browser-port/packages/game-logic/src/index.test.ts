@@ -29942,6 +29942,51 @@ describe('AssaultTransportAIUpdate', () => {
 });
 
 describe('Sabotage building effects', () => {
+  it('rejects sabotage enter actions against non-enemy buildings at command issue', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BlackLotus', 'China', ['INFANTRY'], [
+          makeBlock('Behavior', 'SabotagePowerPlantCrateCollide ModuleTag_SabotagePP', {
+            SabotagePowerDuration: 3000,
+          }),
+        ], {
+          VisionRange: 100,
+        }),
+        makeObjectDef('PowerPlant', 'China', ['STRUCTURE', 'FS_POWER'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ], { EnergyBonus: 5 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BlackLotus', 10, 10),   // id 1
+        makeMapObject('PowerPlant', 30, 10),   // id 2
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      pendingEnterObjectActions: Map<number, unknown>;
+      spawnedEntities: Map<number, { moveTarget: { x: number; z: number } | null }>;
+    };
+
+    logic.submitCommand({
+      type: 'enterObject',
+      entityId: 1,
+      targetObjectId: 2,
+      action: 'sabotageBuilding',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingEnterObjectActions.has(1)).toBe(false);
+    expect(privateApi.spawnedEntities.get(1)?.moveTarget).toBeNull();
+    expect(logic.getEntityState(1)).not.toBeNull();
+    expect(logic.getEntityState(2)).not.toBeNull();
+  });
+
   it('sabotage power plant forces timed brownout on victim side', () => {
     const bundle = makeBundle({
       objects: [
