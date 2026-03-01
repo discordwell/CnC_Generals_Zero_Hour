@@ -24361,6 +24361,61 @@ describe('AutoFindHealingUpdate', () => {
     expect(infantry.transportContainerId).toBeNull();
   });
 
+  it('AI unit can auto-enter an allied cross-side heal pad', () => {
+    const healPadDef = makeObjectDef('HealPad', 'Civilian', ['STRUCTURE', 'HEAL_PAD'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'HealContain ModuleTag_Contain', {
+        ContainMax: 3,
+        TimeForFullHeal: 1000,
+      }),
+    ]);
+
+    const infantryDef = makeObjectDef('Infantry', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+      makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+      makeBlock('Behavior', 'AutoFindHealing ModuleTag_AutoHeal', {
+        ScanRate: 200,
+        ScanRange: 200,
+        NeverHeal: 0.95,
+        AlwaysHeal: 0.25,
+      }),
+    ]);
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('HealPad', 50, 50),
+        makeMapObject('Infantry', 52, 52),
+      ]),
+      makeRegistry(makeBundle({ objects: [healPadDef, infantryDef] })),
+      makeHeightmap(),
+    );
+    logic.setSidePlayerType('America', 'COMPUTER');
+    logic.setTeamRelationship('America', 'Civilian', 2);
+    logic.setTeamRelationship('Civilian', 'America', 2);
+    logic.update(0);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, MapEntity>;
+    };
+    expect(priv.spawnedEntities.get(1)?.side).toBe('Civilian');
+    expect(priv.spawnedEntities.get(2)?.side).toBe('America');
+    const infantry = priv.spawnedEntities.get(2)!;
+    infantry.health = 50;
+    expect(logic.getEntityRelationship(2, 1)).toBe('allies');
+
+    let enteredHealPad = false;
+    for (let i = 0; i < 40; i++) {
+      logic.update(1 / 30);
+      if (infantry.transportContainerId === 1) {
+        enteredHealPad = true;
+      }
+    }
+
+    expect(enteredHealPad).toBe(true);
+  });
+
   it('does not auto-heal for human-controlled units', () => {
     const { logic, infantry } = makeAutoHealSetup({ healthPercent: 50, isHuman: true });
 

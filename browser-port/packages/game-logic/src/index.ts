@@ -44454,6 +44454,8 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Source parity: skip if already contained (in a transport/heal container).
       if (this.isEntityContained(entity)) continue;
+      // Source parity: ActionManager::canGetHealedAt only allows infantry.
+      if (!this.resolveEntityKindOfSet(entity).has('INFANTRY')) continue;
 
       // Source parity: health threshold checks.
       const healthRatio = entity.health / Math.max(1, entity.maxHealth);
@@ -44478,8 +44480,8 @@ export class GameLogicSubsystem implements Subsystem {
         // Must be a heal pad (KINDOF HEAL_PAD).
         const kindOf = this.resolveEntityKindOfSet(candidate);
         if (!kindOf.has('HEAL_PAD')) continue;
-        // Must be same side.
-        if (this.normalizeSide(candidate.side) !== normalizedSide) continue;
+        // Source parity: ActionManager::canGetHealedAt requires allied relationship.
+        if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ALLIES) continue;
         // Must have a HEAL contain profile with capacity.
         const containProfile = candidate.containProfile;
         if (!containProfile || containProfile.moduleType !== 'HEAL') continue;
