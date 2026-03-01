@@ -24607,12 +24607,74 @@ describe('AutoFindHealingUpdate', () => {
     expect(infantry.health).toBe(50);
   });
 
+  it('seeks healing when health equals NeverHeal threshold', () => {
+    const { logic, infantry } = makeAutoHealSetup({ healthPercent: 95, neverHeal: 0.95 });
+
+    let enteredHealPad = false;
+    for (let i = 0; i < 40; i++) {
+      logic.update(1 / 30);
+      if (infantry.transportContainerId !== null) {
+        enteredHealPad = true;
+      }
+    }
+
+    expect(enteredHealPad).toBe(true);
+  });
+
   it('does not seek healing when health above NeverHeal threshold', () => {
     const { logic, infantry } = makeAutoHealSetup({ healthPercent: 96, neverHeal: 0.95 });
 
     for (let i = 0; i < 30; i++) logic.update(1 / 30);
 
     expect(infantry.transportContainerId).toBeNull();
+  });
+
+  it('includes heal pads exactly at ScanRange boundary', () => {
+    const healPadDef = makeObjectDef('HealPad', 'America', ['STRUCTURE', 'HEAL_PAD'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'HealContain ModuleTag_Contain', {
+        ContainMax: 3,
+        TimeForFullHeal: 1000,
+      }),
+    ]);
+
+    const infantryDef = makeObjectDef('Infantry', 'America', ['INFANTRY'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Locomotor', 'BasicLocomotor LocoTag', { Speed: 10 }),
+      makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+      makeBlock('Behavior', 'AutoFindHealing ModuleTag_AutoHeal', {
+        ScanRate: 200,
+        ScanRange: 2, // * MAP_XY_FACTOR => 20 world units
+        NeverHeal: 0.95,
+        AlwaysHeal: 0.25,
+      }),
+    ]);
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('HealPad', 54, 50),  // id 1
+        makeMapObject('Infantry', 52, 50), // id 2; distance is exactly 20 world units
+      ]),
+      makeRegistry(makeBundle({ objects: [healPadDef, infantryDef] })),
+      makeHeightmap(),
+    );
+    logic.setSidePlayerType('America', 'COMPUTER');
+    logic.update(0);
+
+    const priv = logic as unknown as { spawnedEntities: Map<number, MapEntity> };
+    const infantry = priv.spawnedEntities.get(2)!;
+    infantry.health = 50;
+
+    let enteredHealPad = false;
+    for (let i = 0; i < 40; i++) {
+      logic.update(1 / 30);
+      if (infantry.transportContainerId === 1) {
+        enteredHealPad = true;
+      }
+    }
+
+    expect(enteredHealPad).toBe(true);
   });
 });
 

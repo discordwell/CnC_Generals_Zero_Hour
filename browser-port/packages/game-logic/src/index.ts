@@ -44459,7 +44459,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Source parity: health threshold checks.
       const healthRatio = entity.health / Math.max(1, entity.maxHealth);
-      if (healthRatio >= prof.neverHeal) continue;
+      if (healthRatio > prof.neverHeal) continue;
 
       // Source parity: AutoFindHealingUpdate.cpp:130 — ai->isIdle() checks all activity states.
       // The following C++ always returns when not idle (the m_alwaysHeal branch is unreachable).
@@ -44485,7 +44485,7 @@ export class GameLogicSubsystem implements Subsystem {
         const dx = candidate.x - entity.x;
         const dz = candidate.z - entity.z;
         const distSqr = dx * dx + dz * dz;
-        if (distSqr < rangeSqr && distSqr < closestDistSqr) {
+        if (distSqr <= rangeSqr && distSqr < closestDistSqr) {
           closestDistSqr = distSqr;
           closestHealPad = candidate;
         }
