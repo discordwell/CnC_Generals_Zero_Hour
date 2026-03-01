@@ -12333,6 +12333,114 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.pendingRepairActions.has(1)).toBe(false);
   });
 
+  it('uses controlling player type to allow shrouded repair when controller is AI', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], {
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+      VisionRange: 30,
+    });
+
+    const buildingDef = makeObjectDef('CivilianRepairTarget', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 10, 10, { OriginalOwner: 'AIPlayer' }),
+        makeMapObject('CivilianRepairTarget', 200, 200),
+      ], 256, 256),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(256, 256),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        constructionPercent: number;
+        objectStatusFlags: Set<string>;
+      }>;
+      pendingRepairActions: Map<number, number>;
+    };
+    const targetBuilding = priv.spawnedEntities.get(2)!;
+    targetBuilding.constructionPercent = -1;
+    targetBuilding.objectStatusFlags.delete('UNDER_CONSTRUCTION');
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'HUMAN' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'AIPlayer', playerType: 'COMPUTER' });
+    logic.setTeamRelationship('America', 'Civilian', 1);
+    logic.setTeamRelationship('Civilian', 'America', 1);
+    logic.update(1 / 30);
+
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+    expect(priv.pendingRepairActions.has(1)).toBe(true);
+  });
+
+  it('uses controlling player type to block shrouded repair when controller is human', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], {
+      GeometryMajorRadius: 5,
+      GeometryMinorRadius: 5,
+      VisionRange: 30,
+    });
+
+    const buildingDef = makeObjectDef('CivilianRepairTarget', 'Civilian', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 10, 10, { OriginalOwner: 'HumanPlayer' }),
+        makeMapObject('CivilianRepairTarget', 200, 200),
+      ], 256, 256),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(256, 256),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        constructionPercent: number;
+        objectStatusFlags: Set<string>;
+      }>;
+      pendingRepairActions: Map<number, number>;
+    };
+    const targetBuilding = priv.spawnedEntities.get(2)!;
+    targetBuilding.constructionPercent = -1;
+    targetBuilding.objectStatusFlags.delete('UNDER_CONSTRUCTION');
+
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: 'COMPUTER' });
+    logic.submitCommand({ type: 'setSidePlayerType', side: 'HumanPlayer', playerType: 'HUMAN' });
+    logic.setTeamRelationship('America', 'Civilian', 1);
+    logic.setTeamRelationship('Civilian', 'America', 1);
+    logic.update(1 / 30);
+
+    expect(logic.getCellVisibility('America', 200, 200)).toBe(CELL_SHROUDED);
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+  });
+
   it('blocks player repair commands on fogged targets', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 

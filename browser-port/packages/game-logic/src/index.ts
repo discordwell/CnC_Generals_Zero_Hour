@@ -39860,11 +39860,17 @@ export class GameLogicSubsystem implements Subsystem {
     if (commandSource === 'SCRIPT') {
       return false;
     }
+    const dozerOwnerToken = this.normalizeControllingPlayerToken(dozer.controllingPlayerToken ?? undefined);
     const dozerSide = this.normalizeSide(dozer.side);
     if (!dozerSide) {
       return false;
     }
-    if (this.getSidePlayerType(dozerSide) !== 'HUMAN') {
+    const dozerPlayerType = (
+      dozerOwnerToken != null
+        ? this.sidePlayerTypes.get(dozerOwnerToken)
+        : undefined
+    ) ?? this.getSidePlayerType(dozerSide);
+    if (dozerPlayerType !== 'HUMAN') {
       return false;
     }
     return this.resolveEntityShroudStatusForSide(target, dozerSide) !== 'CLEAR';
