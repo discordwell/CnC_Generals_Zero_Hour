@@ -38998,6 +38998,41 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ActionManager::canGetHealedAt source/target gating.
+   */
+  private canEntityGetHealedAt(
+    source: MapEntity,
+    healTarget: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
+    if (this.getTeamRelationship(source, healTarget) !== RELATIONSHIP_ALLIES) {
+      return false;
+    }
+    if (this.isEntityEffectivelyDeadForEnter(healTarget)) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION') || this.entityHasObjectStatus(healTarget, 'UNDER_CONSTRUCTION')) {
+      return false;
+    }
+    if (this.entityHasObjectStatus(healTarget, 'SOLD')) {
+      return false;
+    }
+    if (!this.resolveEntityKindOfSet(source).has('INFANTRY')) {
+      return false;
+    }
+    if (!this.resolveEntityKindOfSet(healTarget).has('HEAL_PAD')) {
+      return false;
+    }
+    if (this.isContainerEnterTargetShrouded(source, healTarget, commandSource)) {
+      return false;
+    }
+    if (source.health >= source.maxHealth) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Source parity: ActionManager::isObjectShroudedForAction gate used by canEnterObject.
    */
   private isContainerEnterTargetShrouded(
@@ -44497,7 +44532,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       // Source parity: aiGetHealed — issue enter transport command to heal pad.
-      if (closestHealPad) {
+      if (closestHealPad && this.canEntityGetHealedAt(entity, closestHealPad, 'AI')) {
         this.handleEnterTransportCommand({
           type: 'enterTransport',
           entityId: entity.id,
