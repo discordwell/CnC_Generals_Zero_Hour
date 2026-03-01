@@ -37898,6 +37898,9 @@ export class GameLogicSubsystem implements Subsystem {
     } else if (command.targetPosition !== null) {
       targetX = command.targetPosition[0];
       targetZ = command.targetPosition[2];
+      const resolvedDropPosition = this.resolveCombatDropPositionWithoutTarget(source, targetX, targetZ);
+      targetX = resolvedDropPosition.x;
+      targetZ = resolvedDropPosition.z;
     } else {
       return;
     }
@@ -37925,6 +37928,153 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: ActionManager::canEnterObject with COMBATDROP_INTO forbids
     // combat drop into faction structures.
     return !this.isFactionStructure(target);
+  }
+
+  private resolveCombatDropPositionWithoutTarget(
+    source: MapEntity,
+    centerX: number,
+    centerZ: number,
+  ): { x: number; z: number } {
+    const heightmap = this.mapHeightmap;
+    if (heightmap && (
+      centerX < 0
+      || centerZ < 0
+      || centerX >= heightmap.worldWidth
+      || centerZ >= heightmap.worldDepth
+    )) {
+      // Source parity: PartitionManager::findPositionAround returns center unchanged
+      // when the requested position is off-map.
+      return { x: centerX, z: centerZ };
+    }
+
+    const maxRadius = Math.max(0, this.resolveEntityBoundingCircleRadius2D(source) * 100);
+    if (!Number.isFinite(maxRadius) || maxRadius <= 0) {
+      return { x: centerX, z: centerZ };
+    }
+
+    const ringSpacing = 5;
+    const twoPi = Math.PI * 2;
+    const startAngle = this.gameRandom.nextFloat() * twoPi;
+    const centerY = this.resolveGroundHeight(centerX, centerZ);
+
+    for (let dist = 0; dist <= maxRadius; dist += ringSpacing) {
+      const angleSpacing = dist === 0
+        ? twoPi
+        : (ringSpacing / (dist + 1)) * (twoPi / 6);
+      const samples = Math.ceil((twoPi / angleSpacing) / 2);
+      for (let i = 0; i < samples; i += 1) {
+        const left = this.tryCombatDropPositionCandidate(centerX, centerY, centerZ, dist, startAngle + (angleSpacing * i));
+        if (left) {
+          return left;
+        }
+        if (i !== 0) {
+          const right = this.tryCombatDropPositionCandidate(centerX, centerY, centerZ, dist, startAngle - (angleSpacing * i));
+          if (right) {
+            return right;
+          }
+        }
+      }
+    }
+
+    return { x: centerX, z: centerZ };
+  }
+
+  private tryCombatDropPositionCandidate(
+    centerX: number,
+    centerY: number,
+    centerZ: number,
+    distance: number,
+    angle: number,
+  ): { x: number; z: number } | null {
+    const worldX = (distance * Math.cos(angle)) + centerX;
+    const worldZ = (distance * Math.sin(angle)) + centerZ;
+
+    const heightmap = this.mapHeightmap;
+    if (heightmap && (
+      worldX < 0
+      || worldZ < 0
+      || worldX >= heightmap.worldWidth
+      || worldZ >= heightmap.worldDepth
+    )) {
+      return null;
+    }
+
+    const worldY = this.resolveGroundHeight(worldX, worldZ);
+    if (Math.abs(worldY - centerY) > 1e10) {
+      return null;
+    }
+
+    const navGrid = this.navigationGrid;
+    if (!navGrid) {
+      return null;
+    }
+    const [cellX, cellZ] = this.worldToGrid(worldX, worldZ);
+    if (cellX === null || cellZ === null) {
+      return null;
+    }
+    const cellIndex = (cellZ * navGrid.width) + cellX;
+    const terrainType = navGrid.terrainType[cellIndex]!;
+    if (terrainType === NAV_CLIFF) {
+      return null;
+    }
+    if (terrainType === NAV_IMPASSABLE || terrainType === NAV_BRIDGE_IMPASSABLE) {
+      return null;
+    }
+
+    const waterHeight = this.getWaterHeightAt(worldX, worldZ);
+    if (waterHeight !== null && worldY < waterHeight) {
+      return null;
+    }
+
+    if (this.doesCombatDropPositionOverlapAnyObject(worldX, worldZ, 5)) {
+      return null;
+    }
+
+    return { x: worldX, z: worldZ };
+  }
+
+  private doesCombatDropPositionOverlapAnyObject(worldX: number, worldZ: number, radius: number): boolean {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || this.isEntityOffMap(entity)) {
+        continue;
+      }
+      const geometry = entity.obstacleGeometry;
+      if (geometry) {
+        if (geometry.shape === 'box') {
+          if (this.doesCircleBoxGeometryOverlap(
+            { x: worldX, z: worldZ },
+            radius,
+            {
+              x: entity.x,
+              z: entity.z,
+              angle: entity.rotationY,
+              geometry,
+            },
+          )) {
+            return true;
+          }
+        } else if (this.doesCircleGeometryOverlap(
+          { x: worldX, z: worldZ },
+          radius,
+          { x: entity.x, z: entity.z },
+          geometry.majorRadius,
+        )) {
+          return true;
+        }
+        continue;
+      }
+
+      const entityRadius = this.resolveEntityBoundingCircleRadius2D(entity);
+      if (this.doesCircleGeometryOverlap(
+        { x: worldX, z: worldZ },
+        radius,
+        { x: entity.x, z: entity.z },
+        entityRadius,
+      )) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private handlePlaceBeaconCommand(command: PlaceBeaconCommand): void {

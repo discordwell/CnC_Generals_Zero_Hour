@@ -9134,6 +9134,78 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.spawnedEntities.get(1)?.ignoredMovementObstacleId).toBeNull();
   });
 
+  it('offsets position-target combatDrop away from obstructed center points', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SupplyChinook', 'America', ['AIRCRAFT', 'TRANSPORT'], [
+          makeBlock('Behavior', 'ChinookAIUpdate ModuleTag_ChinookAI', {
+            NumRopes: 1,
+            PerRopeDelayMin: 0,
+            PerRopeDelayMax: 0,
+            WaitForRopesToDrop: false,
+            MinDropHeight: 0,
+          }),
+          makeBlock('Behavior', 'TransportContain ModuleTag_Contain', {
+            Slots: 5,
+            InitialPayload: 0,
+          }),
+          makeBlock('LocomotorSet', 'SET_NORMAL ChinookLocomotor', {}),
+        ]),
+        makeObjectDef('DropBlocker', 'China', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ], {
+          GeometryMajorRadius: 20,
+          GeometryMinorRadius: 20,
+        }),
+        makeObjectDef('Rappeller', 'America', ['INFANTRY', 'CAN_RAPPEL'], [], {
+          TransportSlotCount: 1,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('ChinookLocomotor', 120),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyChinook', 8, 8), // id 1
+        makeMapObject('DropBlocker', 40, 40), // id 2
+        makeMapObject('Rappeller', 8, 8),     // id 3
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { transportContainerId: number | null }>;
+      pendingCombatDropActions: Map<number, { targetX: number; targetZ: number }>;
+    };
+
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let frame = 0; frame < 12; frame += 1) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(3)?.transportContainerId === 1) {
+        break;
+      }
+    }
+    expect(priv.spawnedEntities.get(3)?.transportContainerId).toBe(1);
+
+    logic.submitCommand({
+      type: 'combatDrop',
+      entityId: 1,
+      targetObjectId: null,
+      targetPosition: [40, 0, 40],
+    });
+    logic.update(1 / 30);
+
+    const pending = priv.pendingCombatDropActions.get(1);
+    expect(pending).toBeDefined();
+    const offsetDistance = Math.hypot((pending?.targetX ?? 40) - 40, (pending?.targetZ ?? 40) - 40);
+    expect(offsetDistance).toBeGreaterThan(0.5);
+  });
+
   it('records no-target special power dispatch on source entity module', () => {
     const bundle = makeBundle({
       objects: [
