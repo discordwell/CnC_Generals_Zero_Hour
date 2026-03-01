@@ -41580,10 +41580,21 @@ export class GameLogicSubsystem implements Subsystem {
       if (state.currentBoxes <= 0) {
         return false;
       }
-      const truckSide = this.normalizeSide(source.side);
-      const dockSide = this.normalizeSide(dock.side);
-      if (!truckSide || !dockSide || dockSide !== truckSide) {
-        return false;
+      // Source parity: SupplyCenterDockUpdate accepts deposits only from the same
+      // controlling player (not just allied same-side trucks).
+      const truckOwnerToken = this.normalizeControllingPlayerToken(source.controllingPlayerToken ?? undefined);
+      const dockOwnerToken = this.normalizeControllingPlayerToken(dock.controllingPlayerToken ?? undefined);
+      if (truckOwnerToken !== null && dockOwnerToken !== null) {
+        if (truckOwnerToken !== dockOwnerToken) {
+          return false;
+        }
+      } else {
+        // Fallback when controlling-player metadata is unavailable.
+        const truckSide = this.normalizeSide(source.side);
+        const dockSide = this.normalizeSide(dock.side);
+        if (!truckSide || !dockSide || dockSide !== truckSide) {
+          return false;
+        }
       }
     }
 

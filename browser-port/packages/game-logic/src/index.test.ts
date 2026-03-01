@@ -10382,6 +10382,120 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(creditsAfter).toBeGreaterThanOrEqual(300);
   });
 
+  it('rejects supply-center docking for same-side trucks with different controlling players', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const supplyTruckDef = makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+      makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyCenter', 10, 10, { OriginalOwner: 'Player_A' }), // id 1
+        makeMapObject('SupplyTruck', 10, 10, { OriginalOwner: 'Player_B' }), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [supplyCenterDef, supplyTruckDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, unknown>;
+      supplyTruckStates: Map<number, {
+        aiState: number;
+        currentBoxes: number;
+        targetWarehouseId: number | null;
+        targetDepotId: number | null;
+        actionDelayFinishFrame: number;
+        preferredDockId: number | null;
+        forceBusy: boolean;
+      }>;
+      canSupplyTruckDockAt: (source: unknown, dock: unknown) => boolean;
+    };
+
+    privateApi.supplyTruckStates.set(2, {
+      aiState: 0,
+      currentBoxes: 1,
+      targetWarehouseId: null,
+      targetDepotId: null,
+      actionDelayFinishFrame: 0,
+      preferredDockId: null,
+      forceBusy: false,
+    });
+
+    const center = privateApi.spawnedEntities.get(1)!;
+    const truck = privateApi.spawnedEntities.get(2)!;
+    expect(privateApi.canSupplyTruckDockAt(truck, center)).toBe(false);
+  });
+
+  it('allows supply-center docking when controlling players match', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const supplyCenterDef = makeObjectDef('SupplyCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Behavior', 'SupplyCenterDockUpdate ModuleTag_CenterDock', {}),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ]);
+    const supplyTruckDef = makeObjectDef('SupplyTruck', 'America', ['VEHICLE', 'HARVESTER'], [
+      makeBlock('Behavior', 'SupplyTruckAIUpdate ModuleTag_SupplyTruckAI', {
+        MaxBoxes: 3,
+        SupplyCenterActionDelay: 0,
+        SupplyWarehouseActionDelay: 0,
+        SupplyWarehouseScanDistance: 500,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SupplyCenter', 10, 10, { OriginalOwner: 'Player_A' }), // id 1
+        makeMapObject('SupplyTruck', 10, 10, { OriginalOwner: 'Player_A' }), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [supplyCenterDef, supplyTruckDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, unknown>;
+      supplyTruckStates: Map<number, {
+        aiState: number;
+        currentBoxes: number;
+        targetWarehouseId: number | null;
+        targetDepotId: number | null;
+        actionDelayFinishFrame: number;
+        preferredDockId: number | null;
+        forceBusy: boolean;
+      }>;
+      canSupplyTruckDockAt: (source: unknown, dock: unknown) => boolean;
+    };
+
+    privateApi.supplyTruckStates.set(2, {
+      aiState: 0,
+      currentBoxes: 1,
+      targetWarehouseId: null,
+      targetDepotId: null,
+      actionDelayFinishFrame: 0,
+      preferredDockId: null,
+      forceBusy: false,
+    });
+
+    const center = privateApi.spawnedEntities.get(1)!;
+    const truck = privateApi.spawnedEntities.get(2)!;
+    expect(privateApi.canSupplyTruckDockAt(truck, center)).toBe(true);
+  });
+
   it('doubles supply warehouse scan distance for AI-controlled supply trucks', () => {
     const runScenario = (playerType: 'HUMAN' | 'COMPUTER'): number | null => {
       const logic = new GameLogicSubsystem(new THREE.Scene());
