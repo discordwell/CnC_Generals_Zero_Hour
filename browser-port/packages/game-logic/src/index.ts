@@ -41550,6 +41550,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (source.destroyed || dock.destroyed) {
       return false;
     }
+    if (this.isEntityEffectivelyDeadForEnter(dock)) {
+      return false;
+    }
     if (this.entityHasObjectStatus(source, 'UNDER_CONSTRUCTION')
       || this.entityHasObjectStatus(dock, 'UNDER_CONSTRUCTION')) {
       return false;
