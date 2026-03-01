@@ -44481,8 +44481,6 @@ export class GameLogicSubsystem implements Subsystem {
         // Must be a heal pad (KINDOF HEAL_PAD).
         const kindOf = this.resolveEntityKindOfSet(candidate);
         if (!kindOf.has('HEAL_PAD')) continue;
-        // Source parity: ActionManager::canGetHealedAt requires allied relationship.
-        if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ALLIES) continue;
         // Must have a HEAL contain profile with capacity.
         const containProfile = candidate.containProfile;
         if (!containProfile || containProfile.moduleType !== 'HEAL') continue;
