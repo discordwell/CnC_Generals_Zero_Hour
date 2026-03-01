@@ -44445,7 +44445,12 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: only AI-controlled players auto-seek healing.
       const normalizedSide = this.normalizeSide(entity.side);
       if (!normalizedSide) continue;
-      const playerType = this.sidePlayerTypes.get(normalizedSide);
+      const controllingPlayerToken = this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined);
+      const playerType = (
+        controllingPlayerToken != null
+          ? this.sidePlayerTypes.get(controllingPlayerToken)
+          : undefined
+      ) ?? this.sidePlayerTypes.get(normalizedSide);
       if (!playerType || playerType === 'HUMAN') continue;
 
       // Scan rate throttle.

@@ -24607,6 +24607,34 @@ describe('AutoFindHealingUpdate', () => {
     expect(infantry.health).toBe(50);
   });
 
+  it('uses controlling player type for auto-heal AI gating', () => {
+    const { logic, infantry } = makeAutoHealSetup({ healthPercent: 50, isHuman: true });
+    infantry.controllingPlayerToken = 'AIPlayer';
+    logic.setSidePlayerType('AIPlayer', 'COMPUTER');
+
+    let enteredHealPad = false;
+    for (let i = 0; i < 40; i++) {
+      logic.update(1 / 30);
+      if (infantry.transportContainerId !== null) {
+        enteredHealPad = true;
+      }
+    }
+
+    expect(enteredHealPad).toBe(true);
+  });
+
+  it('blocks auto-heal when controlling player type is human even if side is AI', () => {
+    const { logic, infantry } = makeAutoHealSetup({ healthPercent: 50, isHuman: false });
+    infantry.controllingPlayerToken = 'HumanPlayer';
+    logic.setSidePlayerType('HumanPlayer', 'HUMAN');
+
+    for (let i = 0; i < 40; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(infantry.transportContainerId).toBeNull();
+  });
+
   it('seeks healing when health equals NeverHeal threshold', () => {
     const { logic, infantry } = makeAutoHealSetup({ healthPercent: 95, neverHeal: 0.95 });
 
