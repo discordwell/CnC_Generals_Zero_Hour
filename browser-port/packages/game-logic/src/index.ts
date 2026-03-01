@@ -39432,6 +39432,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!this.isEntityDozerCapable(dozer)) {
       return false;
     }
+    if (this.isEntityEffectivelyDeadForEnter(dozer)) {
+      return false;
+    }
     if (this.isEntityContained(dozer)) {
       return false;
     }
@@ -39770,12 +39773,16 @@ export class GameLogicSubsystem implements Subsystem {
     commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
   ): boolean {
     if (!this.isEntityDozerCapable(dozer)) return false;
+    if (this.entityHasObjectStatus(dozer, 'UNDER_CONSTRUCTION')) return false;
     if (this.isEntityContained(dozer)) return false;
-    const isBridgeTarget = building.kindOf.has('BRIDGE') || building.kindOf.has('BRIDGE_TOWER');
-    if (!building.kindOf.has('STRUCTURE') && !isBridgeTarget) return false;
+    if (this.isEntityEffectivelyDeadForEnter(building)) return false;
+    const targetKindOf = this.resolveEntityKindOfSet(building);
+    const isBridgeTarget = targetKindOf.has('BRIDGE') || targetKindOf.has('BRIDGE_TOWER');
+    if (!targetKindOf.has('STRUCTURE') && !isBridgeTarget) return false;
     // Source parity: player-issued repair command gating (ActionManager::canRepairObject)
     // disallows bridge and bridge-tower targets, but AIPlayer::repairStructure may still queue them.
     if (commandSource === 'PLAYER' && isBridgeTarget) return false;
+    if (targetKindOf.has('REBUILD_HOLE')) return false;
     if (building.objectStatusFlags.has('SOLD')) return false;
     if (building.objectStatusFlags.has('UNDER_CONSTRUCTION')) return false;
     if (building.health >= building.maxHealth) return false;

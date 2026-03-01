@@ -11810,6 +11810,142 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(priv.pendingRepairActions.has(1)).toBe(false);
   });
 
+  it('does not allow repair commands while dozer is under construction', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),    // id 1
+        makeMapObject('USABarracks', 20, 20), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+      pendingRepairActions: Map<number, number>;
+    };
+
+    priv.spawnedEntities.get(1)?.objectStatusFlags.add('UNDER_CONSTRUCTION');
+    const before = logic.getEntityState(2)!.health;
+
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(2)!.health).toBe(before);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+  });
+
+  it('does not allow repair commands on rebuild holes', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const rebuildHoleDef = makeObjectDef('USARebuildHole', 'America', ['STRUCTURE', 'REBUILD_HOLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 250 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),      // id 1
+        makeMapObject('USARebuildHole', 20, 20), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, rebuildHoleDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      pendingRepairActions: Map<number, number>;
+    };
+
+    const before = logic.getEntityState(2)!.health;
+    logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2, commandSource: 'AI' });
+    logic.update(1 / 30);
+
+    expect(logic.getEntityState(2)!.health).toBe(before);
+    expect(priv.pendingRepairActions.has(1)).toBe(false);
+  });
+
+  it('rejects resume-construction eligibility for effectively-dead dozers', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const buildingDef = makeObjectDef('USABarracks', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20),    // id 1
+        makeMapObject('USABarracks', 24, 20), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, buildingDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        health: number;
+        objectStatusFlags: Set<string>;
+        constructionPercent: number;
+        builderId: number;
+      }>;
+      canDozerResumeConstructionTarget: (
+        dozer: unknown,
+        building: unknown,
+        commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+      ) => boolean;
+    };
+
+    const dozer = priv.spawnedEntities.get(1);
+    const building = priv.spawnedEntities.get(2);
+    expect(dozer).toBeDefined();
+    expect(building).toBeDefined();
+    if (!dozer || !building) return;
+
+    dozer.health = 0;
+    building.objectStatusFlags.add('UNDER_CONSTRUCTION');
+    building.constructionPercent = 50;
+    building.builderId = 0;
+
+    expect(priv.canDozerResumeConstructionTarget(dozer, building, 'PLAYER')).toBe(false);
+  });
+
   it('blocks player repair commands on shrouded targets', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
