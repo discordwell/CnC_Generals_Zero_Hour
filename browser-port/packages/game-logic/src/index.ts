@@ -12961,19 +12961,19 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'SKIRMISH_PLAYER_FACTION':
         return this.evaluateScriptSkirmishPlayerIsFaction({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           factionName: readString(1, ['factionName', 'faction']),
         });
       case 'SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE':
         return this.evaluateScriptSkirmishSuppliesWithinDistancePerimeter({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           distance: readNumber(1, ['distance']),
           triggerName: readString(2, ['triggerName', 'trigger']),
           value: readInteger(3, ['value']),
         });
       case 'SKIRMISH_TECH_BUILDING_WITHIN_DISTANCE':
         return this.evaluateScriptSkirmishPlayerTechBuildingWithinDistancePerimeter({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           distance: readNumber(1, ['distance']),
           triggerName: readString(2, ['triggerName', 'trigger']),
           conditionCacheId,
@@ -23596,7 +23596,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     factionName: string;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     const normalizedFaction = this.normalizeSide(filter.factionName);
     if (!normalizedSide || !normalizedFaction) {
       return false;
@@ -23785,7 +23785,7 @@ export class GameLogicSubsystem implements Subsystem {
     triggerName: string;
     value: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -23836,7 +23836,7 @@ export class GameLogicSubsystem implements Subsystem {
     triggerName: string;
     conditionCacheId?: string;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }

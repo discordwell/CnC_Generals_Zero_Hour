@@ -58363,6 +58363,84 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('accepts player-name inputs for skirmish faction, supply-distance, and tech-distance conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('FriendlyWarehouse', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 5,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+        ]),
+        makeObjectDef('AlliedTechBuilding', 'China', ['STRUCTURE', 'TECH_BUILDING'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1200, InitialHealth: 1200 }),
+        ]),
+      ],
+      factions: [
+        {
+          name: 'FactionAmerica',
+          side: 'America',
+          fields: {},
+        },
+        {
+          name: 'FactionChina',
+          side: 'China',
+          fields: {},
+        },
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('FriendlyWarehouse', 10, 10, { originalOwner: 'Player_1' }),
+      makeMapObject('AlliedTechBuilding', 40, 40),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'StagingArea',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setTeamRelationship('America', 'China', 2);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_FACTION',
+      params: ['Player_1', 'America'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE',
+      params: ['Player_1', 10, 'StagingArea', 400],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_TECH_BUILDING_WITHIN_DISTANCE',
+      params: ['Player_1', 60, 'StagingArea'],
+    })).toBe(true);
+  });
+
   it('matches skirmish value-in-area ownership by controlling player identity when players share a side', () => {
     const bundle = makeBundle({
       objects: [
