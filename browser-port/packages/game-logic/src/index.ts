@@ -12630,11 +12630,11 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_HAS_POWER':
         return this.evaluateScriptPlayerHasPower({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
         });
       case 'PLAYER_HAS_NO_POWER':
         return !this.evaluateScriptPlayerHasPower({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
         });
       case 'NAMED_REACHED_WAYPOINTS_END': {
         const entityId = readEntityId(0, ['entityId']);
@@ -12834,17 +12834,17 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_ACQUIRED_SCIENCE':
         return this.evaluateScriptScienceAcquired({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           scienceName: readString(1, ['scienceName']),
         });
       case 'PLAYER_CAN_PURCHASE_SCIENCE':
         return this.evaluateScriptCanPurchaseScience({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           scienceName: readString(1, ['scienceName']),
         });
       case 'PLAYER_HAS_SCIENCEPURCHASEPOINTS':
         return this.evaluateScriptSciencePurchasePoints({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           pointsNeeded: readNumber(1, ['pointsNeeded', 'sciencePurchasePoints']),
         });
       case 'NAMED_HAS_FREE_CONTAINER_SLOTS': {
@@ -12935,13 +12935,13 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_POWER_COMPARE_PERCENT':
         return this.evaluateScriptPlayerHasComparisonPercentPower({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           comparison: readComparison(1, ['comparison']),
           percent: readNumber(2, ['percent']),
         });
       case 'PLAYER_EXCESS_POWER_COMPARE_VALUE':
         return this.evaluateScriptPlayerHasComparisonValueExcessPower({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           comparison: readComparison(1, ['comparison']),
           kilowatts: readNumber(2, ['kilowatts']),
         });
@@ -24354,7 +24354,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     scienceName: string;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     const normalizedScience = this.resolveScienceInternalName(filter.scienceName);
     if (!normalizedSide || !normalizedScience) {
       return false;
@@ -24376,7 +24376,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     scienceName: string;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     const normalizedScience = this.resolveScienceInternalName(filter.scienceName);
     if (!normalizedSide || !normalizedScience) {
       return false;
@@ -24392,7 +24392,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     pointsNeeded: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -25104,7 +25104,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptConditions::evaluatePlayerHasPower.
    */
   evaluateScriptPlayerHasPower(filter: { side: string }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -25119,7 +25119,7 @@ export class GameLogicSubsystem implements Subsystem {
     comparison: ScriptComparisonInput;
     percent: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -25141,7 +25141,7 @@ export class GameLogicSubsystem implements Subsystem {
     comparison: ScriptComparisonInput;
     kilowatts: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }

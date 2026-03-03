@@ -57954,6 +57954,99 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('accepts player-name inputs for player power and science conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'PowerPlantA',
+          'America',
+          ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 })],
+          { EnergyBonus: 100 },
+        ),
+        makeObjectDef(
+          'BarracksA',
+          'America',
+          ['STRUCTURE'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 })],
+          { EnergyBonus: -80 },
+        ),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+      sciences: [
+        makeScienceDef('SCIENCE_ALPHA', {
+          SciencePurchasePointCost: 1,
+          IsGrantable: 'Yes',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('PowerPlantA', 10, 10, { originalOwner: 'Player_1' }),
+      makeMapObject('BarracksA', 20, 10, { originalOwner: 'Player_1' }),
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privateApi = logic as unknown as {
+      getSideRankStateMap: (side: string) => { sciencePurchasePoints: number };
+    };
+    privateApi.getSideRankStateMap('america').sciencePurchasePoints = 2;
+
+    logic.submitCommand({
+      type: 'grantSideScience',
+      side: 'America',
+      scienceName: 'SCIENCE_ALPHA',
+    });
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_POWER',
+      params: ['Player_1'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_POWER_COMPARE_PERCENT',
+      params: ['Player_1', 'GREATER_EQUAL', 125],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_EXCESS_POWER_COMPARE_VALUE',
+      params: ['Player_1', 'EQUAL', 20],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_SCIENCEPURCHASEPOINTS',
+      params: ['Player_1', 1],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_ACQUIRED_SCIENCE',
+      params: ['Player_1', 'SCIENCE_ALPHA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_CAN_PURCHASE_SCIENCE',
+      params: ['Player_1', 'SCIENCE_ALPHA'],
+    })).toBe(false);
+  });
+
   it('evaluates skirmish garrisoned-building and captured-unit comparisons', () => {
     const bundle = makeBundle({
       objects: [
