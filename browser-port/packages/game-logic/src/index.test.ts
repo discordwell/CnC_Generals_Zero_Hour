@@ -34136,6 +34136,31 @@ describe('Script condition groundwork', () => {
       conditionType: 'PLAYER_HAS_OBJECT_COMPARISON',
       params: ['America', 'EQUAL', 2, 'UnitA'],
     })).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILT_BY_PLAYER',
+      params: ['UnitA', 'Player_1'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILT_BY_PLAYER',
+      params: ['UnitA', 'Player_2'],
+    })).toBe(true);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 9999, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILT_BY_PLAYER',
+      params: ['UnitA', 'Player_1'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILT_BY_PLAYER',
+      params: ['UnitA', 'Player_2'],
+    })).toBe(true);
   });
 
   it('evaluates player-unit-condition as object-comparison subset', () => {

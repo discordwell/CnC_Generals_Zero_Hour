@@ -12567,7 +12567,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'BUILT_BY_PLAYER':
         return this.evaluateScriptBuiltByPlayer({
           templateName: readString(0, ['templateName', 'objectType', 'unitType']),
-          side: readSide(1, ['side']),
+          side: readString(1, ['side', 'playerName', 'player']),
           conditionCacheId,
         });
       case 'NAMED_CREATED': {
@@ -25208,12 +25208,14 @@ export class GameLogicSubsystem implements Subsystem {
     templateName: string;
     conditionCacheId?: string;
   }): boolean {
-    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
+    const cache = targetToken ? null : this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     if (cache && cache.customData !== 0 && this.scriptObjectCountChangedFrame === cache.customFrame) {
       return cache.customData === 1;
     }
 
-    const normalizedSide = this.normalizeSide(filter.side);
     const normalizedTemplateName = filter.templateName.trim().toUpperCase();
     if (!normalizedSide || !normalizedTemplateName) {
       if (cache) {
@@ -25223,7 +25225,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const objectCount = this.countScriptObjectsByTemplateForSide(normalizedSide, normalizedTemplateName);
+    const objectCount = this.countScriptObjectsByTemplateForSide(
+      normalizedSide,
+      normalizedTemplateName,
+      targetToken,
+    );
     const built = objectCount !== 0;
     if (cache) {
       cache.customData = built ? 1 : -1;
@@ -34816,7 +34822,12 @@ export class GameLogicSubsystem implements Subsystem {
     return undefined;
   }
 
-  private countScriptObjectsByTemplateForSide(normalizedSide: string, normalizedTemplateName: string): number {
+  private countScriptObjectsByTemplateForSide(
+    normalizedSide: string,
+    normalizedTemplateName: string,
+    controllingPlayerToken?: string | null,
+  ): number {
+    const normalizedOwnerToken = this.normalizeControllingPlayerToken(controllingPlayerToken ?? undefined);
     let count = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) {
@@ -34827,6 +34838,12 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
         continue;
+      }
+      if (normalizedOwnerToken !== null) {
+        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+        if (!ownerToken || ownerToken !== normalizedOwnerToken) {
+          continue;
+        }
       }
       if (!this.areEquivalentTemplateNames(entity.templateName, normalizedTemplateName)) {
         continue;
