@@ -57849,6 +57849,84 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('matches skirmish value-in-area ownership by controlling player identity when players share a side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericanTank', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], { BuildCost: 700 }),
+        makeObjectDef('AmericanInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { BuildCost: 300 }),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('AmericanTank', 8, 8, { originalOwner: 'Player_1' }), // id 1
+      makeMapObject('AmericanInfantry', 10, 10, { originalOwner: 'Player_2' }), // id 2
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'StagingArea',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_VALUE_IN_AREA',
+      params: ['Player_1', 'EQUAL', 700, 'StagingArea'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_VALUE_IN_AREA',
+      params: ['Player_2', 'EQUAL', 300, 'StagingArea'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_VALUE_IN_AREA',
+      params: ['America', 'EQUAL', 1000, 'StagingArea'],
+    })).toBe(true);
+  });
+
   it('evaluates skirmish supplies-within-distance-perimeter against non-enemy warehouses', () => {
     const bundle = makeBundle({
       objects: [

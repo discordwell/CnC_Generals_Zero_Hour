@@ -12939,7 +12939,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'SKIRMISH_VALUE_IN_AREA':
         return this.evaluateScriptSkirmishValueInArea({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           comparison: readComparison(1, ['comparison']),
           money: readInteger(2, ['money', 'value']),
           triggerName: readString(3, ['triggerName', 'trigger']),
@@ -23712,13 +23712,18 @@ export class GameLogicSubsystem implements Subsystem {
     if (triggerRegions.length === 0) {
       return false;
     }
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
     if (!normalizedSide) {
       return false;
     }
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
 
     const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     let anyChanges = cache === null || cache.customData === 0;
+    if (targetToken) {
+      anyChanges = true;
+    }
     if (this.scriptObjectCountChangedFrame + 1 >= this.frameCounter) {
       anyChanges = true;
     }
@@ -23732,6 +23737,10 @@ export class GameLogicSubsystem implements Subsystem {
     let totalCost = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (targetToken) {
+        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+        if (!ownerToken || ownerToken !== targetToken) continue;
+      }
       if (entity.destroyed) continue;
       if (entity.kindOf.has('INERT')) continue;
       if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
