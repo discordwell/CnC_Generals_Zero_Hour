@@ -12727,7 +12727,7 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return this.evaluateScriptBuildingEntered({
           entityId,
-          side: readSide(1, ['side']),
+          side: readString(1, ['side', 'playerName', 'player']),
         });
       }
       case 'ENEMY_SIGHTED': {
@@ -12738,7 +12738,7 @@ export class GameLogicSubsystem implements Subsystem {
         return this.evaluateScriptEnemySighted({
           entityId,
           alliance: readRelationship(1, ['alliance']),
-          side: readSide(2, ['side']),
+          side: readString(2, ['side', 'playerName', 'player']),
         });
       }
       case 'TYPE_SIGHTED': {
@@ -12749,7 +12749,7 @@ export class GameLogicSubsystem implements Subsystem {
         return this.evaluateScriptTypeSighted({
           entityId,
           objectType: readString(1, ['objectType', 'templateName', 'unitType']),
-          side: readSide(2, ['side']),
+          side: readString(2, ['side', 'playerName', 'player']),
         });
       }
       case 'UNIT_HEALTH': {
@@ -24647,7 +24647,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!Number.isFinite(filter.entityId)) {
       return false;
     }
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -24687,7 +24687,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!Number.isFinite(filter.entityId)) {
       return false;
     }
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -24745,7 +24745,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!Number.isFinite(filter.entityId)) {
       return false;
     }
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }

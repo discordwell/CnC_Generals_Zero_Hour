@@ -34344,6 +34344,77 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('accepts player-name inputs for enemy-sighted and type-sighted conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScoutA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], { VisionRange: 60 }),
+        makeObjectDef('EnemyB', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [
+        {
+          name: 'FactionAmerica',
+          side: 'America',
+          fields: {},
+        },
+        {
+          name: 'FactionChina',
+          side: 'China',
+          fields: {},
+        },
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScoutA', 10, 10, { originalOwner: 'Player_1' }),
+      makeMapObject('EnemyB', 20, 10, { originalOwner: 'Player_3' }),
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_3',
+            playerFaction: 'FactionChina',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'ENEMY_SIGHTED',
+      params: [1, 'ENEMY', 'Player_3'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TYPE_SIGHTED',
+      params: [1, 'EnemyB', 'Player_3'],
+    })).toBe(true);
+  });
+
   it('evaluates bridge-broken and bridge-repaired only on bridge-change frames', () => {
     const bundle = makeBundle({
       objects: [
@@ -56092,6 +56163,65 @@ describe('Script condition groundwork', () => {
     privateApi.spawnedEntities.get(2)!.garrisonContainerId = null;
     expect(logic.evaluateScriptIsBuildingEmpty({
       entityId: 1,
+    })).toBe(true);
+  });
+
+  it('accepts player-name inputs for building-entered conditions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GarrisonHub', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 900,
+            InitialHealth: 900,
+          }),
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_Contain', {
+            ContainMax: 2,
+          }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('GarrisonHub', 12, 12, { originalOwner: 'Player_1' }),
+      makeMapObject('Ranger', 14, 12, { originalOwner: 'Player_1' }),
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 2, targetBuildingId: 1 });
+    logic.update(0);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILDING_ENTERED_BY_PLAYER',
+      params: [1, 'Player_1'],
     })).toBe(true);
   });
 
