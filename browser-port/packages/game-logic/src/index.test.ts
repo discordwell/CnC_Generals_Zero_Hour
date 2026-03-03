@@ -56788,12 +56788,24 @@ describe('Script condition groundwork', () => {
     const map = makeMap([
       makeMapObject('GarrisonHub', 12, 12, { originalOwner: 'Player_1' }),
       makeMapObject('Ranger', 14, 12, { originalOwner: 'Player_1' }),
+      makeMapObject('Ranger', 16, 12, { originalOwner: 'Player_2' }),
     ], 128, 128);
     map.sidesList = {
       sides: [
         {
           dict: {
             playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
             playerFaction: 'FactionAmerica',
           },
           buildList: [],
@@ -56815,6 +56827,23 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptCondition({
       conditionType: 'BUILDING_ENTERED_BY_PLAYER',
       params: [1, 'Player_1'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILDING_ENTERED_BY_PLAYER',
+      params: [1, 'Player_2'],
+    })).toBe(false);
+
+    logic.update(0);
+    logic.submitCommand({ type: 'garrisonBuilding', entityId: 3, targetBuildingId: 1 });
+    logic.update(0);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILDING_ENTERED_BY_PLAYER',
+      params: [1, 'Player_1'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'BUILDING_ENTERED_BY_PLAYER',
+      params: [1, 'Player_2'],
     })).toBe(true);
   });
 

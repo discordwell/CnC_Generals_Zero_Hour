@@ -1812,6 +1812,8 @@ interface MapEntity {
   garrisonContainerId: number | null;
   /** Source parity: OpenContain::m_playerEnteredMask (cleared every frame, set on enter). */
   containPlayerEnteredSide: string | null;
+  /** Source parity bridge: explicit entering controlling-player token for named-player script checks. */
+  containPlayerEnteredToken: string | null;
   /** Source parity: m_containedBy for TransportContain/OverlordContain (Humvee, Chinook, etc.). */
   transportContainerId: number | null;
   /** Source parity: TunnelContain — references the tunnel this entity currently resides in. */
@@ -7130,6 +7132,7 @@ export class GameLogicSubsystem implements Subsystem {
     for (const entity of this.spawnedEntities.values()) {
       if (!entity.containProfile) continue;
       entity.containPlayerEnteredSide = null;
+      entity.containPlayerEnteredToken = null;
     }
   }
 
@@ -24935,7 +24938,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (!Number.isFinite(filter.entityId)) {
       return false;
     }
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
     if (!normalizedSide) {
       return false;
     }
@@ -24943,6 +24947,9 @@ export class GameLogicSubsystem implements Subsystem {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || !entity.containProfile) {
       return false;
+    }
+    if (selector.explicitNamedPlayer && selector.controllingPlayerToken) {
+      return entity.containPlayerEnteredToken === selector.controllingPlayerToken;
     }
     return entity.containPlayerEnteredSide === normalizedSide;
   }
@@ -27110,6 +27117,7 @@ export class GameLogicSubsystem implements Subsystem {
       helixCarrierId: null,
       garrisonContainerId: null,
       containPlayerEnteredSide: null,
+      containPlayerEnteredToken: null,
       transportContainerId: null,
       tunnelContainerId: null,
       tunnelEnteredFrame: 0,
@@ -39734,6 +39742,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     container.containPlayerEnteredSide = this.normalizeSide(rider.side);
+    container.containPlayerEnteredToken = this.resolveEntityControllingPlayerTokenForAffiliation(rider);
   }
 
   /**
