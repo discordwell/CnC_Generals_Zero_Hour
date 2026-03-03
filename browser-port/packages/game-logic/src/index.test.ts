@@ -7283,6 +7283,71 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(computerTimeline.producedCounts).toEqual([0, 0, 1, 1]);
   });
 
+  it('uses controlling player type for Buildable=Only_By_AI queue gating', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 2,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [8, 0, 0],
+            ExitDelay: 0,
+          }),
+        ]),
+        makeObjectDef('AiDrone', 'America', ['VEHICLE'], [], {
+          Buildable: 'Only_By_AI',
+          BuildTime: 0.1,
+          BuildCost: 100,
+        }),
+      ],
+    });
+
+    const runQueueAttempt = (opts: {
+      americaPlayerType: 'HUMAN' | 'COMPUTER';
+      ownerToken: string;
+      ownerPlayerType: 'HUMAN' | 'COMPUTER';
+    }): { credits: number; queueCount: number } => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        makeMap([makeMapObject('WarFactory', 10, 10, { OriginalOwner: opts.ownerToken })], 64, 64),
+        makeRegistry(bundle),
+        makeHeightmap(64, 64),
+      );
+
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+      logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: opts.americaPlayerType });
+      logic.submitCommand({ type: 'setSidePlayerType', side: opts.ownerToken, playerType: opts.ownerPlayerType });
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'AiDrone' });
+      logic.update(1 / 30);
+
+      return {
+        credits: logic.getSideCredits('America'),
+        queueCount: logic.getProductionState(1)?.queueEntryCount ?? 0,
+      };
+    };
+
+    // Side says HUMAN, controlling owner says AI -> queue should be allowed.
+    expect(runQueueAttempt({
+      americaPlayerType: 'HUMAN',
+      ownerToken: 'AIPlayer',
+      ownerPlayerType: 'COMPUTER',
+    })).toEqual({
+      credits: 400,
+      queueCount: 1,
+    });
+
+    // Side says COMPUTER, controlling owner says HUMAN -> queue should be blocked.
+    expect(runQueueAttempt({
+      americaPlayerType: 'COMPUTER',
+      ownerToken: 'HumanPlayer',
+      ownerPlayerType: 'HUMAN',
+    })).toEqual({
+      credits: 500,
+      queueCount: 0,
+    });
+  });
+
   it('keeps Buildable=Only_By_AI queue gating deterministic across repeated runs', () => {
     const first = runOnlyByAiBuildableTimeline('COMPUTER');
     const second = runOnlyByAiBuildableTimeline('COMPUTER');
@@ -7492,6 +7557,68 @@ describe('GameLogicSubsystem combat + upgrades', () => {
 
     expect(logic.getSideCredits('America')).toBe(300);
     expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America')).toEqual([2]);
+  });
+
+  it('uses controlling player type for Buildable=Only_By_AI construct-building gating', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], []),
+        makeObjectDef('AiPowerPlant', 'America', ['STRUCTURE'], [], {
+          Buildable: 'Only_By_AI',
+          BuildCost: 200,
+        }),
+      ],
+    });
+
+    const runConstructAttempt = (opts: {
+      americaPlayerType: 'HUMAN' | 'COMPUTER';
+      ownerToken: string;
+      ownerPlayerType: 'HUMAN' | 'COMPUTER';
+    }): { credits: number; builtEntityIds: number[] } => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        makeMap([makeMapObject('Dozer', 8, 8, { OriginalOwner: opts.ownerToken })], 64, 64),
+        makeRegistry(bundle),
+        makeHeightmap(64, 64),
+      );
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
+      logic.submitCommand({ type: 'setSidePlayerType', side: 'America', playerType: opts.americaPlayerType });
+      logic.submitCommand({ type: 'setSidePlayerType', side: opts.ownerToken, playerType: opts.ownerPlayerType });
+      logic.submitCommand({
+        type: 'constructBuilding',
+        entityId: 1,
+        templateName: 'AiPowerPlant',
+        targetPosition: [20, 0, 20],
+        angle: 0,
+        lineEndPosition: null,
+      });
+      logic.update(1 / 30);
+
+      return {
+        credits: logic.getSideCredits('America'),
+        builtEntityIds: logic.getEntityIdsByTemplateAndSide('AiPowerPlant', 'America'),
+      };
+    };
+
+    // Side says HUMAN, controlling owner says AI -> construct should be allowed.
+    expect(runConstructAttempt({
+      americaPlayerType: 'HUMAN',
+      ownerToken: 'AIPlayer',
+      ownerPlayerType: 'COMPUTER',
+    })).toEqual({
+      credits: 300,
+      builtEntityIds: [2],
+    });
+
+    // Side says COMPUTER, controlling owner says HUMAN -> construct should be blocked.
+    expect(runConstructAttempt({
+      americaPlayerType: 'COMPUTER',
+      ownerToken: 'HumanPlayer',
+      ownerPlayerType: 'HUMAN',
+    })).toEqual({
+      credits: 500,
+      builtEntityIds: [],
+    });
   });
 
   it('keeps dozer construction task on AI move commands and cancels it on player move commands', () => {

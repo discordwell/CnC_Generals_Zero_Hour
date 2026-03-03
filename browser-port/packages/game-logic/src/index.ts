@@ -38307,7 +38307,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!side) {
       return;
     }
-    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
+    if (!this.canSideBuildUnitTemplate(side, objectDef, this.getControllingPlayerTypeForEntity(constructor))) {
       return;
     }
     if (!this.canEntityIssueBuildCommandForTemplate(constructor, objectDef.name, ['DOZER_CONSTRUCT', 'UNIT_BUILD'])) {
@@ -45880,7 +45880,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    if (!this.canSideBuildUnitTemplate(producerSide, unitDef)) {
+    if (!this.canSideBuildUnitTemplate(producerSide, unitDef, this.getControllingPlayerTypeForEntity(producer))) {
       return false;
     }
     if (!this.canEntityIssueBuildCommandForTemplate(producer, unitDef.name, ['UNIT_BUILD', 'DOZER_CONSTRUCT'])) {
@@ -46115,7 +46115,11 @@ export class GameLogicSubsystem implements Subsystem {
     releaseParkingDoorReservationForProductionImpl(producer.parkingPlaceProfile, productionId);
   }
 
-  private canSideBuildUnitTemplate(side: string, unitDef: ObjectDef): boolean {
+  private canSideBuildUnitTemplate(
+    side: string,
+    unitDef: ObjectDef,
+    controllingPlayerTypeOverride?: SidePlayerType,
+  ): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
       return false;
@@ -46140,7 +46144,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (buildableStatus === 'NO') {
       return false;
     }
-    if (buildableStatus === 'ONLY_BY_AI' && this.getSidePlayerType(normalizedSide) !== 'COMPUTER') {
+    const controllingPlayerType = controllingPlayerTypeOverride ?? this.getSidePlayerType(normalizedSide);
+    if (buildableStatus === 'ONLY_BY_AI' && controllingPlayerType !== 'COMPUTER') {
       return false;
     }
     if (buildableStatus === 'IGNORE_PREREQUISITES') {
