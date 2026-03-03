@@ -12856,12 +12856,12 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'PLAYER_BUILT_UPGRADE':
         return this.evaluateScriptUpgradeFromUnitComplete({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           upgradeName: readString(1, ['upgradeName', 'upgrade']),
         });
       case 'PLAYER_BUILT_UPGRADE_FROM_NAMED':
         return this.evaluateScriptUpgradeFromUnitComplete({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           upgradeName: readString(1, ['upgradeName', 'upgrade']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
@@ -24410,7 +24410,9 @@ export class GameLogicSubsystem implements Subsystem {
     upgradeName: string;
     sourceEntityId?: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
     if (!normalizedSide) {
       return false;
     }
@@ -24430,6 +24432,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (!sourceEntity || sourceEntity.destroyed) {
         return false;
       }
+      if (targetToken) {
+        const sourceToken = this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity);
+        if (!sourceToken || sourceToken !== targetToken) {
+          return false;
+        }
+      }
     }
 
     const events = this.sideScriptCompletedUpgradeEvents.get(normalizedSide);
@@ -24444,6 +24452,15 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
         continue;
+      }
+      if (targetToken) {
+        const eventSource = this.spawnedEntities.get(event.sourceEntityId);
+        const eventSourceToken = eventSource
+          ? this.resolveEntityControllingPlayerTokenForAffiliation(eventSource)
+          : null;
+        if (!eventSourceToken || eventSourceToken !== targetToken) {
+          continue;
+        }
       }
 
       events.splice(index, 1);
