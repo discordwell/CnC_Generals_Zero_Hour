@@ -46382,6 +46382,90 @@ describe('Script condition groundwork', () => {
     });
   });
 
+  it('uses exact waypoint link ordering for source waypoint-path command-button actions', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptPathCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_PathAllowed', {
+            SpecialPowerTemplate: 'ScriptPathPowerAllowed',
+          }),
+        ], {
+          CommandSet: 'ScriptPathCasterCommandSet',
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_PathPowerAllowed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPathPowerAllowed',
+          Options: 'NEED_TARGET_POS CAN_USE_WAYPOINTS',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptPathCasterCommandSet', {
+          1: 'Command_PathPowerAllowed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPathPowerAllowed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const map = makeMap([makeMapObject('ScriptPathCaster', 10, 10)], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'PathNodeStart',
+          position: { x: 10, y: 10, z: 0 },
+          pathLabel1: 'PathFork',
+        },
+        {
+          id: 2,
+          name: 'PathNodeFirstBranch',
+          position: { x: 80, y: 10, z: 0 },
+          pathLabel1: 'PathFork',
+        },
+        {
+          id: 3,
+          name: 'PathNodeSecondBranch',
+          position: { x: 10, y: 80, z: 0 },
+          pathLabel1: 'PathFork',
+        },
+      ],
+      links: [
+        { waypoint1: 1, waypoint2: 2 },
+        { waypoint1: 1, waypoint2: 3 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const privateApi = logic as unknown as {
+      gameRandom: {
+        nextRange(min: number, max: number): number;
+      };
+    };
+    // If route resolution used random path traversal, this would force the second branch.
+    privateApi.gameRandom.nextRange = () => 1;
+
+    expect(logic.executeScriptAction({
+      actionType: 542, // NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH
+      params: [1, 'Command_PathPowerAllowed', 'PathFork'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
+      commandButtonId: 'Command_PathPowerAllowed',
+      dispatchType: 'POSITION',
+      targetX: 80,
+      targetZ: 10,
+    });
+  });
+
   it('executes script flash-white actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [

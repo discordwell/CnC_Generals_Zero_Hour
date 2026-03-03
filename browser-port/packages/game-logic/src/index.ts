@@ -14079,7 +14079,14 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const route = this.resolveScriptWaypointRouteByPathLabel(waypointPathName, sourceEntity.x, sourceEntity.z);
+    // Source parity: doCommandButtonUsingWaypoints delegates waypoint traversal to
+    // setPathFromWaypoint-style link(0) progression; use exact route resolution here.
+    const route = this.resolveScriptWaypointRouteByPathLabel(
+      waypointPathName,
+      sourceEntity.x,
+      sourceEntity.z,
+      true,
+    );
     if (!route || route.length === 0) {
       return false;
     }
