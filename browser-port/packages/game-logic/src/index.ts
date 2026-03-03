@@ -8098,6 +8098,17 @@ export class GameLogicSubsystem implements Subsystem {
     return this.sidePlayerTypes.get(normalizedSide) ?? 'HUMAN';
   }
 
+  private getControllingPlayerTypeForEntity(entity: MapEntity): SidePlayerType {
+    const controllingPlayerToken = this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined);
+    if (controllingPlayerToken) {
+      const controllingPlayerType = this.sidePlayerTypes.get(controllingPlayerToken);
+      if (controllingPlayerType) {
+        return controllingPlayerType;
+      }
+    }
+    return this.getSidePlayerType(entity.side);
+  }
+
   setSidePlayerType(side: string, playerType: string): boolean {
     const normalizedSide = this.normalizeSide(side);
     const normalizedType = playerType.trim().toUpperCase();
@@ -48700,7 +48711,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity subset: passive AI units only retaliate to last attacker and
       // otherwise skip proactive idle-acquire scans.
       if (
-        this.getSidePlayerType(entity.side) !== 'HUMAN'
+        this.getControllingPlayerTypeForEntity(entity) !== 'HUMAN'
         && entity.scriptAttitude === SCRIPT_AI_ATTITUDE_PASSIVE
       ) {
         continue;
@@ -48726,7 +48737,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: findClosestEnemy — C++ uses vision range for AI-controlled
       // units and weapon range for human-controlled units.
       const weapon = entity.attackWeapon;
-      const entitySidePlayerType = this.getSidePlayerType(entity.side);
+      const entitySidePlayerType = this.getControllingPlayerTypeForEntity(entity);
       const scanRange = entitySidePlayerType === 'HUMAN'
         ? weapon.attackRange
         : Math.max(weapon.attackRange, entity.visionRange);
@@ -48786,7 +48797,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const isHuman = this.getSidePlayerType(entity.side) === 'HUMAN';
+    const isHuman = this.getControllingPlayerTypeForEntity(entity) === 'HUMAN';
     const innerMod = isHuman ? GUARD_INNER_MODIFIER_HUMAN : GUARD_INNER_MODIFIER_AI;
     const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
 
@@ -48819,7 +48830,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const isHuman = this.getSidePlayerType(entity.side) === 'HUMAN';
+    const isHuman = this.getControllingPlayerTypeForEntity(entity) === 'HUMAN';
     const innerMod = isHuman ? GUARD_INNER_MODIFIER_HUMAN : GUARD_INNER_MODIFIER_AI;
     const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
 
@@ -48855,7 +48866,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const isHuman = this.getSidePlayerType(entity.side) === 'HUMAN';
+    const isHuman = this.getControllingPlayerTypeForEntity(entity) === 'HUMAN';
     const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
 
     entity.guardState = 'RETURNING';

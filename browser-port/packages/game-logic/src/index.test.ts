@@ -51261,6 +51261,143 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('uses controlling player type for passive auto-target gating', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('AmericaInfantry', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('WeaponSet', '', {
+            Conditions: 'None',
+            Weapon: 'PRIMARY TestRifle',
+          }),
+        ], {
+          VisionRange: 80,
+        }),
+        makeObjectDef('ChinaInfantry', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'AIUpdateInterface ModuleTag_AI', {}),
+          makeBlock('WeaponSet', '', {
+            Conditions: 'None',
+            Weapon: 'PRIMARY TestRifle',
+          }),
+        ], {
+          VisionRange: 80,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfLoco', 80),
+      ],
+      weapons: [
+        makeWeaponDef('TestRifle', {
+          PrimaryDamage: 5,
+          PrimaryDamageRadius: 0,
+          AttackRange: 200,
+          DelayBetweenShots: 1000,
+          WeaponSpeed: 9999,
+        }),
+      ],
+    });
+
+    const resolveAttackTarget = (opts: {
+      americaPlayerType: 'HUMAN' | 'COMPUTER';
+      ownerToken: string;
+      ownerPlayerType: 'HUMAN' | 'COMPUTER';
+    }): number | null => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        makeMap([
+          makeMapObject('AmericaInfantry', 10, 10, { OriginalOwner: opts.ownerToken }),
+          makeMapObject('ChinaInfantry', 20, 10),
+        ], 64, 64),
+        makeRegistry(bundle),
+        makeHeightmap(64, 64),
+      );
+      logic.setTeamRelationship('America', 'China', 0);
+      logic.setTeamRelationship('China', 'America', 0);
+      logic.setSidePlayerType('America', opts.americaPlayerType);
+      logic.setSidePlayerType(opts.ownerToken, opts.ownerPlayerType);
+      expect(logic.executeScriptAction({
+        actionType: 45, // NAMED_SET_ATTITUDE
+        params: [1, 1], // PASSIVE
+      })).toBe(true);
+
+      const privateApi = logic as unknown as {
+        spawnedEntities: Map<number, {
+          autoTargetScanNextFrame: number;
+          attackTargetEntityId: number | null;
+        }>;
+      };
+      privateApi.spawnedEntities.get(1)!.autoTargetScanNextFrame = 0;
+      logic.update(1 / 30);
+      return privateApi.spawnedEntities.get(1)?.attackTargetEntityId ?? null;
+    };
+
+    // Side says human, but controlling owner is AI: passive AI should not auto-acquire.
+    expect(resolveAttackTarget({
+      americaPlayerType: 'HUMAN',
+      ownerToken: 'AIPlayer',
+      ownerPlayerType: 'COMPUTER',
+    })).toBeNull();
+
+    // Side says AI, but controlling owner is human: passive should behave as human and auto-acquire.
+    expect(resolveAttackTarget({
+      americaPlayerType: 'COMPUTER',
+      ownerToken: 'HumanPlayer',
+      ownerPlayerType: 'HUMAN',
+    })).toBe(2);
+  });
+
+  it('uses controlling player type for guard-range human/AI modifiers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          VisionRange: 100,
+        }),
+      ],
+    });
+
+    const resolveGuardOuterRange = (opts: {
+      americaPlayerType: 'HUMAN' | 'COMPUTER';
+      ownerToken: string;
+      ownerPlayerType: 'HUMAN' | 'COMPUTER';
+    }): number => {
+      const logic = new GameLogicSubsystem(new THREE.Scene());
+      logic.loadMapObjects(
+        makeMap([
+          makeMapObject('Ranger', 10, 10, { OriginalOwner: opts.ownerToken }),
+        ], 64, 64),
+        makeRegistry(bundle),
+        makeHeightmap(64, 64),
+      );
+      logic.setSidePlayerType('America', opts.americaPlayerType);
+      logic.setSidePlayerType(opts.ownerToken, opts.ownerPlayerType);
+      logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 30, targetZ: 30, guardMode: 0 });
+      logic.update(0);
+
+      const privateApi = logic as unknown as {
+        spawnedEntities: Map<number, { guardOuterRange: number }>;
+      };
+      return privateApi.spawnedEntities.get(1)?.guardOuterRange ?? 0;
+    };
+
+    // Side says human, but owner is AI => use AI outer modifier (2.0x).
+    expect(resolveGuardOuterRange({
+      americaPlayerType: 'HUMAN',
+      ownerToken: 'AIPlayer',
+      ownerPlayerType: 'COMPUTER',
+    })).toBeCloseTo(200, 5);
+
+    // Side says AI, but owner is human => use human outer modifier (1.5x).
+    expect(resolveGuardOuterRange({
+      americaPlayerType: 'COMPUTER',
+      ownerToken: 'HumanPlayer',
+      ownerPlayerType: 'HUMAN',
+    })).toBeCloseTo(150, 5);
+  });
+
   it('executes script damage/delete/kill actions using source action ids', () => {
     const bundle = makeBundle({
       objects: [
