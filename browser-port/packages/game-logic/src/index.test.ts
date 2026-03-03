@@ -54655,6 +54655,81 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('tracks player-lost-object-type by controlling player identity when players share a side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('UnitA', 10, 10, { originalOwner: 'Player_1' }), // id 1
+      makeMapObject('UnitA', 12, 10, { originalOwner: 'Player_2' }), // id 2
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_LOST_OBJECT_TYPE',
+      params: ['Player_1', 'UnitA'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_LOST_OBJECT_TYPE',
+      params: ['Player_2', 'UnitA'],
+    })).toBe(false);
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(null, privateApi.spawnedEntities.get(1), 500, 'UNRESISTABLE');
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_LOST_OBJECT_TYPE',
+      params: ['Player_1', 'UnitA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_LOST_OBJECT_TYPE',
+      params: ['Player_2', 'UnitA'],
+    })).toBe(false);
+  });
+
   it('evaluates skirmish player area-presence and outside-area conditions', () => {
     const bundle = makeBundle({
       objects: [

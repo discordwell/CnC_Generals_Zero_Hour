@@ -13047,7 +13047,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_LOST_OBJECT_TYPE':
         return this.evaluateScriptPlayerLostObjectType({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           templateName: readString(1, ['templateName', 'objectType', 'unitType']),
         });
       case 'SUPPLY_SOURCE_SAFE':
@@ -25348,15 +25348,23 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptConditions::evaluatePlayerLostObjectType.
    */
   evaluateScriptPlayerLostObjectType(filter: { side: string; templateName: string }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
     const normalizedTemplateName = this.normalizeScriptObjectTypeName(filter.templateName);
     const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.templateName);
     if (!normalizedSide || !normalizedTemplateName || objectTypes.length === 0) {
       return false;
     }
 
-    const objectCount = this.countScriptObjectsByTemplateListForSide(normalizedSide, objectTypes);
-    const key = `${normalizedSide}:${normalizedTemplateName}`;
+    const objectCount = this.countScriptObjectsByTemplateListForSide(
+      normalizedSide,
+      objectTypes,
+      targetToken,
+    );
+    const key = targetToken
+      ? `${normalizedSide}:${targetToken}:${normalizedTemplateName}`
+      : `${normalizedSide}:${normalizedTemplateName}`;
     const previousCount = this.scriptObjectCountBySideAndType.get(key);
     if (previousCount === undefined) {
       this.scriptObjectCountBySideAndType.set(key, objectCount);
