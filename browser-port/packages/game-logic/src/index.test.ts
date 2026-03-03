@@ -58797,6 +58797,103 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('scopes science acquisition and purchase-point checks to named controlling players', () => {
+    const bundle = makeBundle({
+      objects: [],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+      sciences: [
+        makeScienceDef('SCIENCE_ALPHA', {
+          SciencePurchasePointCost: 1,
+          IsGrantable: 'Yes',
+        }),
+        makeScienceDef('SCIENCE_BETA', {
+          SciencePurchasePointCost: 1,
+          PrerequisiteSciences: 'SCIENCE_ALPHA',
+          IsGrantable: 'Yes',
+        }),
+      ],
+    });
+
+    const map = makeMap([], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privateApi = logic as unknown as {
+      getSideRankStateMap: (side: string) => { sciencePurchasePoints: number };
+    };
+    privateApi.getSideRankStateMap('america').sciencePurchasePoints = 2;
+
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_GRANT_SCIENCE',
+      params: ['Player_1', 'SCIENCE_ALPHA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_ACQUIRED_SCIENCE',
+      params: ['Player_1', 'SCIENCE_ALPHA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_ACQUIRED_SCIENCE',
+      params: ['Player_2', 'SCIENCE_ALPHA'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_ACQUIRED_SCIENCE',
+      params: ['America', 'SCIENCE_ALPHA'],
+    })).toBe(false);
+
+    expect(logic.executeScriptAction({
+      actionType: 'PLAYER_PURCHASE_SCIENCE',
+      params: ['Player_1', 'SCIENCE_BETA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_SCIENCEPURCHASEPOINTS',
+      params: ['Player_1', 1],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_SCIENCEPURCHASEPOINTS',
+      params: ['Player_2', 2],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_CAN_PURCHASE_SCIENCE',
+      params: ['Player_2', 'SCIENCE_BETA'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_CAN_PURCHASE_SCIENCE',
+      params: ['Player_1', 'SCIENCE_BETA'],
+    })).toBe(false);
+  });
+
   it('scopes player power comparisons to named controlling players sharing a side', () => {
     const bundle = makeBundle({
       objects: [

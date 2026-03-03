@@ -5346,6 +5346,12 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSciences = new Map<string, Set<string>>();
   /** Source parity: ScriptEngine::m_acquiredSciences (consumed by evaluateScienceAcquired). */
   private readonly sideScriptAcquiredSciences = new Map<string, Set<string>>();
+  /** Source parity bridge: explicit named-player science ownership overrides. */
+  private readonly controllingPlayerScriptSciences = new Map<string, Set<string>>();
+  /** Source parity bridge: explicit named-player science-acquired event overrides. */
+  private readonly controllingPlayerScriptAcquiredSciences = new Map<string, Set<string>>();
+  /** Source parity bridge: explicit named-player science purchase point overrides. */
+  private readonly controllingPlayerScriptSciencePurchasePoints = new Map<string, number>();
   /** Source parity: ScriptEngine::m_triggeredSpecialPowers script event list. */
   private readonly sideScriptTriggeredSpecialPowerEvents = new Map<string, ScriptNamedEvent[]>();
   /** Source parity: ScriptEngine::m_midwaySpecialPowers script event list. */
@@ -12372,46 +12378,15 @@ export class GameLogicSubsystem implements Subsystem {
         );
         return true;
       case 'PLAYER_GRANT_SCIENCE':
-        return this.grantSideScience(
-          readSide(0, ['side', 'playerName', 'player']),
+        return this.grantScriptScienceForPlayerInput(
+          readString(0, ['side', 'playerName', 'player']),
           readString(1, ['scienceName', 'science']),
         );
       case 'PLAYER_PURCHASE_SCIENCE': {
-        const side = readSide(0, ['side', 'playerName', 'player']);
-        const normalizedSide = this.normalizeSide(side);
-        if (!normalizedSide) {
-          return false;
-        }
-
-        const science = this.resolveScienceInternalName(readString(1, ['scienceName', 'science']));
-        if (!science) {
-          return false;
-        }
-
-        if (!this.canSidePurchaseScience(normalizedSide, science)) {
-          return false;
-        }
-
-        const registry = this.iniDataRegistry;
-        if (!registry) {
-          return false;
-        }
-        const scienceDef = findScienceDefByName(registry, science);
-        if (!scienceDef) {
-          return false;
-        }
-        const scienceCost = this.getSciencePurchaseCost(scienceDef);
-        if (scienceCost <= 0) {
-          return false;
-        }
-
-        if (!this.addScienceToSide(normalizedSide, science)) {
-          return false;
-        }
-
-        const rankState = this.getSideRankStateMap(normalizedSide);
-        rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
-        return true;
+        return this.purchaseScriptScienceForPlayerInput(
+          readString(0, ['side', 'playerName', 'player']),
+          readString(1, ['scienceName', 'science']),
+        );
       }
       case 'TEAM_HUNT_WITH_COMMAND_BUTTON':
         return this.executeScriptTeamHuntWithCommandButton(
@@ -24716,10 +24691,21 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     scienceName: string;
   }): boolean {
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
     const normalizedScience = this.resolveScienceInternalName(filter.scienceName);
     if (!normalizedSide || !normalizedScience) {
       return false;
+    }
+    if (selector.explicitNamedPlayer && selector.controllingPlayerToken) {
+      const acquiredByPlayer = this.controllingPlayerScriptAcquiredSciences.get(selector.controllingPlayerToken);
+      if (acquiredByPlayer?.has(normalizedScience)) {
+        acquiredByPlayer.delete(normalizedScience);
+        return true;
+      }
+      if (this.countScriptPlayersForSide(normalizedSide) > 1) {
+        return false;
+      }
     }
 
     const acquiredSciences = this.sideScriptAcquiredSciences.get(normalizedSide);
@@ -24738,13 +24724,11 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     scienceName: string;
   }): boolean {
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     const normalizedScience = this.resolveScienceInternalName(filter.scienceName);
-    if (!normalizedSide || !normalizedScience) {
+    if (!normalizedScience) {
       return false;
     }
-
-    return this.canSidePurchaseScience(normalizedSide, normalizedScience);
+    return this.canScriptPlayerPurchaseScience(filter.side, normalizedScience);
   }
 
   /**
@@ -24754,13 +24738,13 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     pointsNeeded: number;
   }): boolean {
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
+    const normalizedSide = this.resolveScriptPlayerConditionSelector(filter.side).normalizedSide;
     if (!normalizedSide) {
       return false;
     }
 
     const pointsNeeded = Number.isFinite(filter.pointsNeeded) ? Math.trunc(filter.pointsNeeded) : 0;
-    return this.getSideRankStateMap(normalizedSide).sciencePurchasePoints >= pointsNeeded;
+    return this.getScriptSciencePurchasePointsForPlayerInput(filter.side) >= pointsNeeded;
   }
 
   /**
@@ -26017,6 +26001,180 @@ export class GameLogicSubsystem implements Subsystem {
     return this.addScienceToSide(normalizedSide, normalizedScience);
   }
 
+  private getScriptScienceSetForPlayerToken(
+    controllingPlayerToken: string,
+    normalizedSide: string,
+  ): Set<string> {
+    const existing = this.controllingPlayerScriptSciences.get(controllingPlayerToken);
+    if (existing) {
+      return existing;
+    }
+    const created = new Set<string>(this.getSideScienceSet(normalizedSide));
+    this.controllingPlayerScriptSciences.set(controllingPlayerToken, created);
+    return created;
+  }
+
+  private getScriptScienceAcquiredEventSetForPlayerToken(controllingPlayerToken: string): Set<string> {
+    const existing = this.controllingPlayerScriptAcquiredSciences.get(controllingPlayerToken);
+    if (existing) {
+      return existing;
+    }
+    const created = new Set<string>();
+    this.controllingPlayerScriptAcquiredSciences.set(controllingPlayerToken, created);
+    return created;
+  }
+
+  private getScriptSciencePurchasePointsForPlayerInput(sideInput: string): number {
+    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
+    const normalizedSide = selector.normalizedSide;
+    if (!normalizedSide) {
+      return 0;
+    }
+    if (selector.explicitNamedPlayer && selector.controllingPlayerToken) {
+      const overridePoints = this.controllingPlayerScriptSciencePurchasePoints.get(selector.controllingPlayerToken);
+      if (overridePoints !== undefined) {
+        return overridePoints;
+      }
+    }
+    return this.getSideRankStateMap(normalizedSide).sciencePurchasePoints;
+  }
+
+  private grantScriptScienceForPlayerInput(sideInput: string, scienceName: string): boolean {
+    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
+    const normalizedSide = selector.normalizedSide;
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!selector.explicitNamedPlayer || !selector.controllingPlayerToken) {
+      return this.grantSideScience(normalizedSide, scienceName);
+    }
+    if (this.countScriptPlayersForSide(normalizedSide) <= 1) {
+      return this.grantSideScience(normalizedSide, scienceName);
+    }
+
+    const normalizedScience = this.resolveScienceInternalName(scienceName);
+    if (!normalizedScience) {
+      return false;
+    }
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const scienceDef = findScienceDefByName(registry, normalizedScience);
+    if (!scienceDef) {
+      return false;
+    }
+    if (readBooleanField(scienceDef.fields, ['IsGrantable']) === false) {
+      return false;
+    }
+
+    const scienceSet = this.getScriptScienceSetForPlayerToken(selector.controllingPlayerToken, normalizedSide);
+    if (scienceSet.has(normalizedScience)) {
+      return false;
+    }
+    scienceSet.add(normalizedScience);
+    this.getScriptScienceAcquiredEventSetForPlayerToken(selector.controllingPlayerToken).add(normalizedScience);
+    return true;
+  }
+
+  private canScriptPlayerPurchaseScience(sideInput: string, normalizedScience: string): boolean {
+    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
+    const normalizedSide = selector.normalizedSide;
+    if (!normalizedSide) {
+      return false;
+    }
+    if (!selector.explicitNamedPlayer || !selector.controllingPlayerToken) {
+      return this.canSidePurchaseScience(normalizedSide, normalizedScience);
+    }
+    if (this.countScriptPlayersForSide(normalizedSide) <= 1) {
+      return this.canSidePurchaseScience(normalizedSide, normalizedScience);
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const scienceDef = findScienceDefByName(registry, normalizedScience);
+    if (!scienceDef) {
+      return false;
+    }
+
+    const canonicalScience = scienceDef.name.trim().toUpperCase();
+    if (!canonicalScience || canonicalScience === 'NONE') {
+      return false;
+    }
+
+    const scienceSet = this.getScriptScienceSetForPlayerToken(selector.controllingPlayerToken, normalizedSide);
+    if (scienceSet.has(canonicalScience)) {
+      return false;
+    }
+
+    const sideAvailability = this.sideScienceAvailability.get(normalizedSide)?.get(canonicalScience);
+    if (sideAvailability === 'disabled' || sideAvailability === 'hidden') {
+      return false;
+    }
+
+    for (const prerequisite of this.getSciencePrerequisites(scienceDef)) {
+      if (!scienceSet.has(prerequisite)) {
+        return false;
+      }
+    }
+
+    const scienceCost = this.getSciencePurchaseCost(scienceDef);
+    const points = this.getScriptSciencePurchasePointsForPlayerInput(sideInput);
+    return scienceCost > 0 && scienceCost <= points;
+  }
+
+  private purchaseScriptScienceForPlayerInput(sideInput: string, scienceName: string): boolean {
+    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
+    const normalizedSide = selector.normalizedSide;
+    if (!normalizedSide) {
+      return false;
+    }
+    const normalizedScience = this.resolveScienceInternalName(scienceName);
+    if (!normalizedScience) {
+      return false;
+    }
+    if (!this.canScriptPlayerPurchaseScience(sideInput, normalizedScience)) {
+      return false;
+    }
+
+    const registry = this.iniDataRegistry;
+    if (!registry) {
+      return false;
+    }
+    const scienceDef = findScienceDefByName(registry, normalizedScience);
+    if (!scienceDef) {
+      return false;
+    }
+    const scienceCost = this.getSciencePurchaseCost(scienceDef);
+    if (scienceCost <= 0) {
+      return false;
+    }
+
+    if (!selector.explicitNamedPlayer || !selector.controllingPlayerToken || this.countScriptPlayersForSide(normalizedSide) <= 1) {
+      if (!this.addScienceToSide(normalizedSide, normalizedScience)) {
+        return false;
+      }
+      const rankState = this.getSideRankStateMap(normalizedSide);
+      rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
+      return true;
+    }
+
+    const scienceSet = this.getScriptScienceSetForPlayerToken(selector.controllingPlayerToken, normalizedSide);
+    if (scienceSet.has(normalizedScience)) {
+      return false;
+    }
+    scienceSet.add(normalizedScience);
+    this.getScriptScienceAcquiredEventSetForPlayerToken(selector.controllingPlayerToken).add(normalizedScience);
+    const currentPoints = this.getScriptSciencePurchasePointsForPlayerInput(sideInput);
+    this.controllingPlayerScriptSciencePurchasePoints.set(
+      selector.controllingPlayerToken,
+      Math.max(0, currentPoints - scienceCost),
+    );
+    return true;
+  }
+
   private resolveScienceInternalName(scienceName: string): string | null {
     const normalizedScienceName = scienceName.trim().toUpperCase();
     if (!normalizedScienceName || normalizedScienceName === 'NONE') {
@@ -26926,6 +27084,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideSciences.clear();
     this.sideScienceAvailability.clear();
     this.sideScriptAcquiredSciences.clear();
+    this.controllingPlayerScriptSciences.clear();
+    this.controllingPlayerScriptAcquiredSciences.clear();
+    this.controllingPlayerScriptSciencePurchasePoints.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptMidwaySpecialPowerEvents.clear();
     this.sideScriptCompletedSpecialPowerEvents.clear();
@@ -60084,6 +60245,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideSkillPointsModifier.clear();
     this.sideScriptSkillset.clear();
     this.sideScriptAcquiredSciences.clear();
+    this.controllingPlayerScriptSciences.clear();
+    this.controllingPlayerScriptAcquiredSciences.clear();
+    this.controllingPlayerScriptSciencePurchasePoints.clear();
     this.sideScriptTriggeredSpecialPowerEvents.clear();
     this.sideScriptMidwaySpecialPowerEvents.clear();
     this.sideScriptCompletedSpecialPowerEvents.clear();
