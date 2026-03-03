@@ -13006,7 +13006,7 @@ export class GameLogicSubsystem implements Subsystem {
         );
       case 'SKIRMISH_PLAYER_HAS_UNITS_IN_AREA':
         return this.evaluateScriptSkirmishPlayerHasUnitsInArea({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           triggerName: readString(1, ['triggerName', 'trigger']),
           conditionCacheId,
         });
@@ -13017,7 +13017,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'SKIRMISH_PLAYER_IS_OUTSIDE_AREA':
         return this.evaluateScriptSkirmishPlayerIsOutsideArea({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           triggerName: readString(1, ['triggerName', 'trigger']),
           conditionCacheId,
         });
@@ -23470,10 +23470,12 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
     if (!normalizedSide) {
       return false;
     }
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
 
     const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     let anyChanges = cache === null || cache.customData === 0;
@@ -23490,6 +23492,10 @@ export class GameLogicSubsystem implements Subsystem {
     let objectCount = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (targetToken) {
+        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+        if (!ownerToken || ownerToken !== targetToken) continue;
+      }
       if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
       if (entity.destroyed || entity.kindOf.has('INERT') || entity.kindOf.has('PROJECTILE')) continue;
       objectCount += 1;

@@ -54703,6 +54703,93 @@ describe('Script condition groundwork', () => {
     expect(evaluateValueInArea()).toBe(false);
   });
 
+  it('matches skirmish area-unit ownership by controlling player identity when players share a side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InfantryA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('InfantryB', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('InfantryA', 30, 30, { originalOwner: 'Player_1' }), // id 1 (outside area)
+      makeMapObject('InfantryB', 10, 10, { originalOwner: 'Player_2' }), // id 2 (inside area)
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'SharedZone',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_HAS_UNITS_IN_AREA',
+      params: ['Player_1', 'SharedZone'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_HAS_UNITS_IN_AREA',
+      params: ['Player_2', 'SharedZone'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_HAS_UNITS_IN_AREA',
+      params: ['America', 'SharedZone'],
+    })).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_IS_OUTSIDE_AREA',
+      params: ['Player_1', 'SharedZone'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_IS_OUTSIDE_AREA',
+      params: ['Player_2', 'SharedZone'],
+    })).toBe(false);
+  });
+
   it('evaluates skirmish player attacked-by-player condition', () => {
     const bundle = makeBundle({
       objects: [
