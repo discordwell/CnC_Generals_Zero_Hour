@@ -35874,6 +35874,7 @@ describe('Script condition groundwork', () => {
           DamageType: 'EXPLOSION',
           DelayBetweenShots: 1,
           WeaponSpeed: 999999,
+          CapableOfFollowingWaypoints: true,
           ProjectileObject: 'WaypointProjectile',
         }),
         makeWeaponDef('WaypointMissileWeaponSecondary', {
@@ -35883,6 +35884,7 @@ describe('Script condition groundwork', () => {
           DamageType: 'EXPLOSION',
           DelayBetweenShots: 1,
           WeaponSpeed: 999999,
+          CapableOfFollowingWaypoints: true,
           ProjectileObject: 'WaypointProjectile',
         }),
       ],
@@ -35949,6 +35951,123 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('requires CapableOfFollowingWaypoints for NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH weapon selection', () => {
+    const mixedBundle = makeBundle({
+      objects: [
+        makeObjectDef('WaypointLauncher', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [
+              'PRIMARY WaypointMissileWeaponPrimary',
+              'SECONDARY WaypointMissileWeaponSecondary',
+            ],
+          }),
+        ]),
+        makeObjectDef('WaypointProjectile', 'America', ['SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('WaypointMissileWeaponPrimary', {
+          AttackRange: 500,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 999999,
+          CapableOfFollowingWaypoints: true,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+        makeWeaponDef('WaypointMissileWeaponSecondary', {
+          AttackRange: 500,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 999999,
+          CapableOfFollowingWaypoints: false,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('WaypointLauncher', 10, 10),
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'WP_START',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'WeaponPath',
+        },
+        {
+          id: 2,
+          name: 'WP_END',
+          position: { x: 40, y: 20, z: 0 },
+          pathLabel1: 'WeaponPath',
+        },
+      ],
+      links: [
+        { waypoint1: 1, waypoint2: 2 },
+      ],
+    };
+
+    const mixedLogic = new GameLogicSubsystem(new THREE.Scene());
+    mixedLogic.loadMapObjects(map, makeRegistry(mixedBundle), makeHeightmap(128, 128));
+    const mixedPrivateApi = mixedLogic as unknown as {
+      pendingWeaponDamageEvents: Array<{ weapon: { name: string } }>;
+    };
+
+    expect(mixedLogic.executeScriptAction({
+      actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
+      params: [1, 'WeaponPath'],
+    })).toBe(true);
+    expect(mixedPrivateApi.pendingWeaponDamageEvents).toHaveLength(1);
+    expect(mixedPrivateApi.pendingWeaponDamageEvents[0]?.weapon.name).toBe('WaypointMissileWeaponPrimary');
+
+    const nonCapableBundle = makeBundle({
+      objects: [
+        makeObjectDef('WaypointLauncher', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [
+              'PRIMARY NonCapableMissileWeapon',
+            ],
+          }),
+        ]),
+        makeObjectDef('WaypointProjectile', 'America', ['SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('NonCapableMissileWeapon', {
+          AttackRange: 500,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 999999,
+          CapableOfFollowingWaypoints: false,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+      ],
+    });
+
+    const nonCapableLogic = new GameLogicSubsystem(new THREE.Scene());
+    nonCapableLogic.loadMapObjects(map, makeRegistry(nonCapableBundle), makeHeightmap(128, 128));
+    const nonCapablePrivateApi = nonCapableLogic as unknown as {
+      pendingWeaponDamageEvents: unknown[];
+    };
+
+    expect(nonCapableLogic.executeScriptAction({
+      actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
+      params: [1, 'WeaponPath'],
+    })).toBe(false);
+    expect(nonCapablePrivateApi.pendingWeaponDamageEvents).toHaveLength(0);
+  });
+
   it('uses waypoint route length for NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH travel timing', () => {
     const bundle = makeBundle({
       objects: [
@@ -35972,6 +36091,7 @@ describe('Script condition groundwork', () => {
           DamageType: 'EXPLOSION',
           DelayBetweenShots: 1,
           WeaponSpeed: 1,
+          CapableOfFollowingWaypoints: true,
           ProjectileObject: 'WaypointProjectile',
         }),
       ],
@@ -36070,6 +36190,7 @@ describe('Script condition groundwork', () => {
           DamageType: 'EXPLOSION',
           DelayBetweenShots: 1,
           WeaponSpeed: 2,
+          CapableOfFollowingWaypoints: true,
           ProjectileObject: 'WaypointProjectile',
         }),
       ],

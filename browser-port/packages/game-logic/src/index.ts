@@ -853,6 +853,8 @@ interface AttackWeaponProfile {
   weaponSpeed: number;
   minWeaponSpeed: number;
   scaleWeaponSpeed: boolean;
+  /** Source parity: WeaponTemplate::m_capableOfFollowingWaypoint. */
+  capableOfFollowingWaypoints: boolean;
   projectileObjectName: string | null;
   attackRange: number;
   unmodifiedAttackRange: number;
@@ -16900,7 +16902,7 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       const profile = this.resolveWeaponProfileFromDef(weaponDef);
-      if (profile?.projectileObjectName) {
+      if (profile?.projectileObjectName && profile.capableOfFollowingWaypoints) {
         return slot;
       }
     }
@@ -27574,6 +27576,10 @@ export class GameLogicSubsystem implements Subsystem {
     const minWeaponSpeedRaw = readNumericField(weaponDef.fields, ['MinWeaponSpeed']) ?? 999999;
     const minWeaponSpeed = Number.isFinite(minWeaponSpeedRaw) && minWeaponSpeedRaw > 0 ? minWeaponSpeedRaw : 999999;
     const scaleWeaponSpeed = readBooleanField(weaponDef.fields, ['ScaleWeaponSpeed']) ?? false;
+    const capableOfFollowingWaypoints = readBooleanField(
+      weaponDef.fields,
+      ['CapableOfFollowingWaypoints'],
+    ) ?? false;
     const leechRangeWeapon = readBooleanField(weaponDef.fields, ['LeechRangeWeapon']) ?? false;
     const clipSizeRaw = readNumericField(weaponDef.fields, ['ClipSize']) ?? 0;
     const clipSize = Math.max(0, Math.trunc(clipSizeRaw));
@@ -27655,6 +27661,7 @@ export class GameLogicSubsystem implements Subsystem {
       weaponSpeed,
       minWeaponSpeed,
       scaleWeaponSpeed,
+      capableOfFollowingWaypoints,
       projectileObjectName,
       attackRange,
       unmodifiedAttackRange,
