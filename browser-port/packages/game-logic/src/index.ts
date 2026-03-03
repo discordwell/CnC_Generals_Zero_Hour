@@ -16901,8 +16901,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (!weaponDef) {
         continue;
       }
-      const profile = this.resolveWeaponProfileFromDef(weaponDef);
-      if (profile?.projectileObjectName && profile.capableOfFollowingWaypoints) {
+      if (readBooleanField(weaponDef.fields, ['CapableOfFollowingWaypoints']) === true) {
         return slot;
       }
     }

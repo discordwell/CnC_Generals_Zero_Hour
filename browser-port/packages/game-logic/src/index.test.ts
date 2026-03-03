@@ -36066,6 +36066,56 @@ describe('Script condition groundwork', () => {
       params: [1, 'WeaponPath'],
     })).toBe(false);
     expect(nonCapablePrivateApi.pendingWeaponDamageEvents).toHaveLength(0);
+
+    const noFallbackBundle = makeBundle({
+      objects: [
+        makeObjectDef('WaypointLauncher', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [
+              'PRIMARY FallbackCapableWeapon',
+              'SECONDARY BrokenCapableWeapon',
+            ],
+          }),
+        ]),
+        makeObjectDef('WaypointProjectile', 'America', ['SMALL_MISSILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1, InitialHealth: 1 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('FallbackCapableWeapon', {
+          AttackRange: 500,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 999999,
+          CapableOfFollowingWaypoints: true,
+          ProjectileObject: 'WaypointProjectile',
+        }),
+        makeWeaponDef('BrokenCapableWeapon', {
+          AttackRange: 500,
+          PrimaryDamage: 80,
+          PrimaryDamageRadius: 0,
+          DamageType: 'EXPLOSION',
+          DelayBetweenShots: 1,
+          WeaponSpeed: 999999,
+          CapableOfFollowingWaypoints: true,
+        }),
+      ],
+    });
+
+    const noFallbackLogic = new GameLogicSubsystem(new THREE.Scene());
+    noFallbackLogic.loadMapObjects(map, makeRegistry(noFallbackBundle), makeHeightmap(128, 128));
+    const noFallbackPrivateApi = noFallbackLogic as unknown as {
+      pendingWeaponDamageEvents: unknown[];
+    };
+
+    expect(noFallbackLogic.executeScriptAction({
+      actionType: 387, // NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH
+      params: [1, 'WeaponPath'],
+    })).toBe(false);
+    expect(noFallbackPrivateApi.pendingWeaponDamageEvents).toHaveLength(0);
   });
 
   it('uses waypoint route length for NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH travel timing', () => {
