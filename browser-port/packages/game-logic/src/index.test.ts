@@ -58797,6 +58797,100 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('scopes player power comparisons to named controlling players sharing a side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef(
+          'PowerPlantA',
+          'America',
+          ['STRUCTURE', 'MP_COUNT_FOR_VICTORY'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 })],
+          { EnergyBonus: 100 },
+        ),
+        makeObjectDef(
+          'BarracksA',
+          'America',
+          ['STRUCTURE'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 })],
+          { EnergyBonus: -80 },
+        ),
+        makeObjectDef(
+          'ConsumerB',
+          'America',
+          ['STRUCTURE'],
+          [makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 })],
+          { EnergyBonus: -120 },
+        ),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('PowerPlantA', 10, 10, { originalOwner: 'Player_1' }),
+      makeMapObject('BarracksA', 14, 10, { originalOwner: 'Player_1' }),
+      makeMapObject('ConsumerB', 20, 10, { originalOwner: 'Player_2' }),
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_POWER',
+      params: ['Player_1'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_POWER',
+      params: ['Player_2'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_POWER',
+      params: ['America'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_POWER_COMPARE_PERCENT',
+      params: ['Player_1', 'GREATER_EQUAL', 125],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_EXCESS_POWER_COMPARE_VALUE',
+      params: ['Player_1', 'EQUAL', 20],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_EXCESS_POWER_COMPARE_VALUE',
+      params: ['Player_2', 'LESS_THAN', 0],
+    })).toBe(true);
+  });
+
   it('evaluates skirmish garrisoned-building and captured-unit comparisons', () => {
     const bundle = makeBundle({
       objects: [

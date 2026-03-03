@@ -25490,11 +25490,12 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptConditions::evaluatePlayerHasPower.
    */
   evaluateScriptPlayerHasPower(filter: { side: string }): boolean {
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
-    if (!normalizedSide) {
+    const powerState = this.getScriptPlayerPowerState(filter.side);
+    if (!powerState) {
       return false;
     }
-    return this.hasSufficientPower(normalizedSide);
+    const totalProduction = powerState.energyProduction + powerState.powerBonus;
+    return totalProduction >= powerState.energyConsumption;
   }
 
   /**
@@ -25505,12 +25506,11 @@ export class GameLogicSubsystem implements Subsystem {
     comparison: ScriptComparisonInput;
     percent: number;
   }): boolean {
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
-    if (!normalizedSide) {
+    const powerState = this.getScriptPlayerPowerState(filter.side);
+    if (!powerState) {
       return false;
     }
 
-    const powerState = this.getSidePowerState(normalizedSide);
     const totalProduction = powerState.energyProduction + powerState.powerBonus;
     const supplyRatio = powerState.energyConsumption > 0
       ? totalProduction / powerState.energyConsumption
@@ -25527,16 +25527,58 @@ export class GameLogicSubsystem implements Subsystem {
     comparison: ScriptComparisonInput;
     kilowatts: number;
   }): boolean {
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
-    if (!normalizedSide) {
+    const powerState = this.getScriptPlayerPowerState(filter.side);
+    if (!powerState) {
       return false;
     }
 
-    const powerState = this.getSidePowerState(normalizedSide);
     const actualExcessKilowatts =
       powerState.energyProduction + powerState.powerBonus - powerState.energyConsumption;
     const desiredExcessKilowatts = Number.isFinite(filter.kilowatts) ? Math.trunc(filter.kilowatts) : 0;
     return this.compareScriptNumeric(filter.comparison, actualExcessKilowatts, desiredExcessKilowatts);
+  }
+
+  private getScriptPlayerPowerState(sideInput: string): SidePowerState | null {
+    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
+    const normalizedSide = selector.normalizedSide;
+    if (!normalizedSide) {
+      return null;
+    }
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
+    if (!targetToken) {
+      return this.getSidePowerState(normalizedSide);
+    }
+
+    let energyProduction = 0;
+    let energyConsumption = 0;
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) {
+        continue;
+      }
+      if (this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
+      }
+      const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+      if (!ownerToken || ownerToken !== targetToken) {
+        continue;
+      }
+      if (entity.energyBonus > 0) {
+        energyProduction += entity.energyBonus;
+      } else if (entity.energyBonus < 0) {
+        energyConsumption += -entity.energyBonus;
+      }
+    }
+
+    const sideState = this.getSidePowerState(normalizedSide);
+    const totalProduction = energyProduction;
+    const brownedOut = energyConsumption > 0 && totalProduction < energyConsumption;
+    return {
+      powerBonus: 0,
+      energyProduction,
+      energyConsumption,
+      brownedOut,
+      powerSabotagedUntilFrame: sideState.powerSabotagedUntilFrame,
+    };
   }
 
   /**
