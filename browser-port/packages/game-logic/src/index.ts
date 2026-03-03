@@ -17021,7 +17021,7 @@ export class GameLogicSubsystem implements Subsystem {
   private enqueueScriptWaypointRouteExact(
     entity: MapEntity,
     route: readonly ScriptWaypointRouteNode[],
-    completionPathName?: string,
+    _completionPathName?: string,
   ): boolean {
     if (route.length === 0) {
       return false;
@@ -17041,7 +17041,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.moveTarget = entity.movePath[0]!;
     this.updatePathfindGoalCellFromPath(entity);
 
-    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route, completionPathName);
+    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route);
     if (completionPathNames.length > 0) {
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
         pathNames: completionPathNames,
@@ -17607,7 +17607,7 @@ export class GameLogicSubsystem implements Subsystem {
   private enqueueScriptWaypointRoute(
     entity: MapEntity,
     route: readonly ScriptWaypointRouteNode[],
-    completionPathName?: string,
+    _completionPathName?: string,
   ): boolean {
     if (route.length === 0) {
       return false;
@@ -17633,7 +17633,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route, completionPathName);
+    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route);
     if (completionPathNames.length > 0) {
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
         pathNames: completionPathNames,
@@ -17646,15 +17646,8 @@ export class GameLogicSubsystem implements Subsystem {
 
   private resolveScriptWaypointCompletionPathNames(
     route: readonly ScriptWaypointRouteNode[],
-    completionPathName?: string,
   ): string[] {
     const completionNames = new Set<string>();
-    const normalizedRequestedName = completionPathName
-      ? this.normalizeScriptCompletionName(completionPathName)
-      : '';
-    if (normalizedRequestedName) {
-      completionNames.add(normalizedRequestedName);
-    }
 
     const finalWaypoint = route[route.length - 1];
     if (finalWaypoint) {
