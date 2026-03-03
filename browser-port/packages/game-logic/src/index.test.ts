@@ -54742,6 +54742,86 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('matches skirmish attacked-by-player by controlling player identity when players share a side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Victim', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AttackerA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('AttackerB', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('Victim', 10, 10, { originalOwner: 'Player_2' }), // id 1
+      makeMapObject('AttackerA', 20, 20, { originalOwner: 'Player_1' }), // id 2
+      makeMapObject('AttackerB', 30, 20, { originalOwner: 'Player_2' }), // id 3
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privateApi = logic as unknown as {
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+      spawnedEntities: Map<number, unknown>;
+    };
+    privateApi.applyWeaponDamageAmount(2, privateApi.spawnedEntities.get(1), 10, 'SMALL_ARMS');
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER',
+      params: ['Player_2', 'Player_1'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER',
+      params: ['Player_2', 'Player_2'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER',
+      params: ['Player_2', 'America'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER',
+      params: ['America', 'Player_1'],
+    })).toBe(true);
+  });
+
   it('evaluates player credits and building-count script conditions', () => {
     const bundle = makeBundle({
       objects: [

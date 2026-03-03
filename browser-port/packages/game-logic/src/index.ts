@@ -5415,6 +5415,9 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: Player::m_attackedBy + m_attackedFrame. */
   private readonly sideAttackedBy = new Map<string, Set<string>>();
   private readonly sideAttackedFrame = new Map<string, number>();
+  /** Source parity bridge: controlling-player attacked-by tracking for script player-name conditions. */
+  private readonly controllingPlayerAttackedByPlayer = new Map<string, Set<string>>();
+  private readonly controllingPlayerAttackedBySide = new Map<string, Set<string>>();
   /** Source parity: AIPlayer::m_supplySourceAttackCheckFrame (per-side scan gate). */
   private readonly sideSupplySourceAttackCheckFrame = new Map<string, number>();
   /** Source parity: AIPlayer::m_attackedSupplyCenter (last attacked economy object ID). */
@@ -13009,8 +13012,8 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER':
         return this.evaluateScriptSkirmishPlayerHasBeenAttackedByPlayer({
-          side: readSide(0, ['side']),
-          attackedBySide: readSide(1, ['attackedBySide', 'side']),
+          side: readString(0, ['side', 'playerName', 'player']),
+          attackedBySide: readString(1, ['attackedBySide', 'side', 'playerName', 'player']),
         });
       case 'SKIRMISH_PLAYER_IS_OUTSIDE_AREA':
         return this.evaluateScriptSkirmishPlayerIsOutsideArea({
@@ -23518,12 +23521,52 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     attackedBySide: string;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
-    const normalizedAttacker = this.normalizeSide(filter.attackedBySide);
-    if (!normalizedSide || !normalizedAttacker) {
+    const targetSelector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const attackerSelector = this.resolveScriptPlayerConditionSelector(filter.attackedBySide);
+    const targetSide = targetSelector.normalizedSide;
+    const attackerSide = attackerSelector.normalizedSide;
+    if ((!targetSide && !targetSelector.controllingPlayerToken)
+      || (!attackerSide && !attackerSelector.controllingPlayerToken)) {
       return false;
     }
-    return this.sideAttackedBy.get(normalizedSide)?.has(normalizedAttacker) ?? false;
+
+    if (targetSelector.explicitNamedPlayer && targetSelector.controllingPlayerToken) {
+      const attackedByPlayers = this.controllingPlayerAttackedByPlayer.get(targetSelector.controllingPlayerToken);
+      if (
+        attackerSelector.controllingPlayerToken
+        && attackedByPlayers?.has(attackerSelector.controllingPlayerToken)
+      ) {
+        return true;
+      }
+      if (attackerSelector.explicitNamedPlayer) {
+        return false;
+      }
+      if (!attackerSide) {
+        return false;
+      }
+      return this.controllingPlayerAttackedBySide.get(targetSelector.controllingPlayerToken)?.has(attackerSide) ?? false;
+    }
+
+    if (attackerSelector.explicitNamedPlayer && attackerSelector.controllingPlayerToken) {
+      if (!targetSide) {
+        return false;
+      }
+      for (const [targetToken, attackedByPlayers] of this.controllingPlayerAttackedByPlayer.entries()) {
+        const playerSide = this.resolveScriptPlayerSideFromInput(targetToken);
+        if (playerSide !== targetSide) {
+          continue;
+        }
+        if (attackedByPlayers.has(attackerSelector.controllingPlayerToken)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (!targetSide || !attackerSide) {
+      return false;
+    }
+    return this.sideAttackedBy.get(targetSide)?.has(attackerSide) ?? false;
   }
 
   /**
@@ -51790,6 +51833,28 @@ export class GameLogicSubsystem implements Subsystem {
     }
     attackedBy.add(sourceSide);
     this.sideAttackedFrame.set(targetSide, this.frameCounter);
+
+    const targetToken = this.resolveEntityControllingPlayerTokenForAffiliation(target);
+    const sourceToken = this.resolveEntityControllingPlayerTokenForAffiliation(source);
+    if (!targetToken) {
+      return;
+    }
+
+    let attackedByTokens = this.controllingPlayerAttackedByPlayer.get(targetToken);
+    if (!attackedByTokens) {
+      attackedByTokens = new Set<string>();
+      this.controllingPlayerAttackedByPlayer.set(targetToken, attackedByTokens);
+    }
+    if (sourceToken) {
+      attackedByTokens.add(sourceToken);
+    }
+
+    let attackedBySides = this.controllingPlayerAttackedBySide.get(targetToken);
+    if (!attackedBySides) {
+      attackedBySides = new Set<string>();
+      this.controllingPlayerAttackedBySide.set(targetToken, attackedBySides);
+    }
+    attackedBySides.add(sourceSide);
   }
 
   private isPreferredRetaliationSource(source: MapEntity): boolean {
@@ -59271,6 +59336,8 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptObjectsReceiveDifficultyBonus = true;
     this.sideAttackedBy.clear();
     this.sideAttackedFrame.clear();
+    this.controllingPlayerAttackedByPlayer.clear();
+    this.controllingPlayerAttackedBySide.clear();
     this.sideSupplySourceAttackCheckFrame.clear();
     this.sideAttackedSupplySource.clear();
     this.scriptCurrentSupplyWarehouseBySide.clear();
