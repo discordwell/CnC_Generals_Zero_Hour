@@ -15039,7 +15039,13 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.isEntityOffMap(candidate) !== sourceOffMap) {
         continue;
       }
-      if (this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
+      const relation = this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate);
+      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
+        team,
+        sourceEntity,
+        candidate,
+      );
+      if (relation !== RELATIONSHIP_ENEMIES && !sameControllingPlayer) {
         continue;
       }
 
@@ -15164,7 +15170,13 @@ export class GameLogicSubsystem implements Subsystem {
       if (this.isEntityOffMap(candidate) !== sourceOffMap) {
         continue;
       }
-      if (this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate) !== RELATIONSHIP_ENEMIES) {
+      const relation = this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate);
+      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
+        team,
+        sourceEntity,
+        candidate,
+      );
+      if (relation !== RELATIONSHIP_ENEMIES && !sameControllingPlayer) {
         continue;
       }
 

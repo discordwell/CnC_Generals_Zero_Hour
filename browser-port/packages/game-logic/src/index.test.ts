@@ -42396,6 +42396,63 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('includes same-player cells in skirmish nearest-group-with-value scans via affiliation self-check', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          BuildCost: 300,
+        }),
+        makeObjectDef('FriendlyClusterA', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 320, InitialHealth: 320 }),
+        ], {
+          BuildCost: 700,
+        }),
+        makeObjectDef('FriendlyClusterB', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ], {
+          BuildCost: 700,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 20, 20), // id 1
+        makeMapObject('FriendlyClusterA', 70, 80), // id 2
+        makeMapObject('FriendlyClusterB', 74, 84), // id 3
+      ], 256, 256),
+      makeRegistry(bundle),
+      makeHeightmap(256, 256),
+    );
+    expect(logic.setScriptTeamMembers('AttackValueTeam', [1])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 2); // allies
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        controllingPlayerToken: string | null;
+        movePath: Array<{ x: number; z: number }>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(2)!.controllingPlayerToken = 'america';
+    privateApi.spawnedEntities.get(3)!.controllingPlayerToken = 'america';
+
+    expect(logic.executeScriptAction({
+      actionType: 462, // SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE
+      params: ['AttackValueTeam', 3, 1200], // GREATER_EQUAL 1200
+    })).toBe(true);
+
+    const final = privateApi.spawnedEntities.get(1)?.movePath.at(-1);
+    expect(final).toBeDefined();
+    expect(Math.hypot(final!.x - 70, final!.z - 80)).toBeLessThanOrEqual(35);
+  });
+
   it('uses partition cell size instead of pathfind cell size for nearest-group value scans', () => {
     const bundle = makeBundle({
       objects: [
@@ -42578,6 +42635,65 @@ describe('Script condition groundwork', () => {
       actionType: 463,
       params: ['MissingTeam', 'Command_ScriptOnNamed', 200, 0],
     })).toBe(false);
+  });
+
+  it('includes same-player targets in command-button-on-most-valuable scans via affiliation self-check', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_OnNamed', {
+            SpecialPowerTemplate: 'ScriptPowerOnNamed',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+          BuildCost: 300,
+        }),
+        makeObjectDef('FriendlyExpensive', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 300, InitialHealth: 300 }),
+        ], {
+          BuildCost: 2000,
+        }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptOnNamed', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerOnNamed',
+          Options: 'NEED_TARGET_ALLY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptOnNamed',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerOnNamed', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('FriendlyExpensive', 70, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('AbilityValueTeam', [1])).toBe(true);
+    logic.setTeamRelationship('America', 'China', 2); // allies
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { controllingPlayerToken: string | null }>;
+    };
+    privateApi.spawnedEntities.get(2)!.controllingPlayerToken = 'america';
+
+    expect(logic.executeScriptAction({
+      actionType: 463, // SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT
+      params: ['AbilityValueTeam', 'Command_ScriptOnNamed', 200, 1],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
   });
 
   it('applies source range-boundary behavior for command-button-on-most-valuable scans', () => {
