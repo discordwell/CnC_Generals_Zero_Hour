@@ -52518,7 +52518,13 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) return;
     // Source parity: no hole if player is neutral or inactive.
     if (!entity.side) return;
-    const playerType = this.sidePlayerTypes.get(this.normalizeSide(entity.side) ?? '');
+    const side = this.normalizeSide(entity.side);
+    const controllingPlayerToken = this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined);
+    const playerType = (
+      controllingPlayerToken != null
+        ? this.sidePlayerTypes.get(controllingPlayerToken)
+        : undefined
+    ) ?? (side ? this.sidePlayerTypes.get(side) : undefined);
     if (!playerType) return;
 
     const registry = this.iniDataRegistry;

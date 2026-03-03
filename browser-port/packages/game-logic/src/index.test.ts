@@ -19011,6 +19011,31 @@ describe('RebuildHoleBehavior', () => {
     expect(holeState!.templateName).toBe('GLAHole');
   });
 
+  it('uses controlling player type when side player registration is missing for rebuild-hole creation', () => {
+    const { logic } = makeRebuildHoleSetup();
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      sidePlayerTypes: Map<string, string>;
+      spawnedEntities: Map<number, { controllingPlayerToken: string | null }>;
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+    };
+
+    // Simulate missing side player registration while preserving controlling owner registration.
+    privateApi.sidePlayerTypes.delete('gla');
+    privateApi.sidePlayerTypes.set('aiplayer', 'COMPUTER');
+    privateApi.spawnedEntities.get(1)!.controllingPlayerToken = 'aiplayer';
+
+    const building = privateApi.spawnedEntities.get(1)!;
+    privateApi.applyWeaponDamageAmount(2, building as unknown as never, 9999, 'EXPLOSION');
+    logic.update(1 / 30);
+
+    const holeState = logic.getEntityState(3);
+    expect(holeState).not.toBeNull();
+    expect(holeState!.alive).toBe(true);
+    expect(holeState!.templateName).toBe('GLAHole');
+  });
+
   it('spawns worker after respawn delay and begins reconstruction', () => {
     const { logic } = makeRebuildHoleSetup({ workerRespawnDelay: 100 }); // ~3 frames
     logic.update(0);
