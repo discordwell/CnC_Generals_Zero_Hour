@@ -40240,7 +40240,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity: AIDockProcessDockState + RepairDockUpdate::action.
-   * While docked, heal docker each frame by precomputed amount, and fully heal its drone.
+   * While docked, heal docker each frame by precomputed amount, and fully heal associated drones.
    */
   private updatePendingRepairDockActions(): void {
     for (const [dockerId, pending] of this.pendingRepairDockActions.entries()) {
@@ -40290,10 +40290,12 @@ export class GameLogicSubsystem implements Subsystem {
         this.clearPoisonFromEntity(docker);
       }
 
-      const drone = this.findProducedDroneForDocker(docker.id);
-      if (drone && drone.health < drone.maxHealth) {
-        drone.health = drone.maxHealth;
-        this.clearPoisonFromEntity(drone);
+      const drones = this.findProducedDronesForDocker(docker.id);
+      for (const drone of drones) {
+        if (drone.health < drone.maxHealth) {
+          drone.health = drone.maxHealth;
+          this.clearPoisonFromEntity(drone);
+        }
       }
 
       if (docker.health >= docker.maxHealth) {
@@ -40302,7 +40304,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private findProducedDroneForDocker(dockerId: number): MapEntity | null {
+  private findProducedDronesForDocker(dockerId: number): MapEntity[] {
+    const drones: MapEntity[] = [];
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed) {
         continue;
@@ -40311,10 +40314,10 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
       if (entity.producerEntityId === dockerId) {
-        return entity;
+        drones.push(entity);
       }
     }
-    return null;
+    return drones;
   }
 
   private resolvePendingEnterObjectAction(

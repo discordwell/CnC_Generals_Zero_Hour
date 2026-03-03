@@ -30217,7 +30217,7 @@ describe('RepairDockUpdate', () => {
     expect(priv.pendingRepairDockActions.has(2)).toBe(false);
   });
 
-  it('fully heals associated drone each dock action tick', () => {
+  it('fully heals all associated drones each dock action tick', () => {
     const bundle = makeRepairDockBundle(3000);
     const scene = new THREE.Scene();
     const logic = new GameLogicSubsystem(scene);
@@ -30226,6 +30226,7 @@ describe('RepairDockUpdate', () => {
         makeMapObject('RepairDock', 55, 55),     // id 1
         makeMapObject('DamagedVehicle', 55, 55), // id 2
         makeMapObject('SupportDrone', 65, 55),   // id 3
+        makeMapObject('SupportDrone', 67, 55),   // id 4
       ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
@@ -30238,9 +30239,12 @@ describe('RepairDockUpdate', () => {
         producerEntityId: number;
       }>;
     };
-    const drone = priv.spawnedEntities.get(3)!;
-    drone.producerEntityId = 2;
-    expect(drone.health).toBe(25);
+    const droneA = priv.spawnedEntities.get(3)!;
+    const droneB = priv.spawnedEntities.get(4)!;
+    droneA.producerEntityId = 2;
+    droneB.producerEntityId = 2;
+    expect(droneA.health).toBe(25);
+    expect(droneB.health).toBe(25);
 
     logic.submitCommand({
       type: 'enterObject',
@@ -30250,7 +30254,8 @@ describe('RepairDockUpdate', () => {
     });
 
     logic.update(1 / 30);
-    expect(drone.health).toBe(drone.maxHealth);
+    expect(droneA.health).toBe(droneA.maxHealth);
+    expect(droneB.health).toBe(droneB.maxHealth);
   });
 
   it('rejects repairVehicle enter actions from enemy units', () => {
