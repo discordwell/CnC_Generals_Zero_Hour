@@ -40269,7 +40269,8 @@ export class GameLogicSubsystem implements Subsystem {
         this.stopEntity(docker.id);
       }
 
-      if (docker.health >= docker.maxHealth) {
+      const hasDamagedDrone = this.hasDamagedProducedDroneForDocker(docker.id);
+      if (docker.health >= docker.maxHealth && !hasDamagedDrone) {
         this.pendingRepairDockActions.delete(dockerId);
         continue;
       }
@@ -40298,10 +40299,20 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
 
-      if (docker.health >= docker.maxHealth) {
+      if (docker.health >= docker.maxHealth && !this.hasDamagedProducedDroneForDocker(docker.id)) {
         this.pendingRepairDockActions.delete(dockerId);
       }
     }
+  }
+
+  private hasDamagedProducedDroneForDocker(dockerId: number): boolean {
+    const drones = this.findProducedDronesForDocker(dockerId);
+    for (const drone of drones) {
+      if (drone.health < drone.maxHealth) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private findProducedDronesForDocker(dockerId: number): MapEntity[] {
@@ -40392,7 +40403,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!sourceKindOf.has('VEHICLE')) {
       return false;
     }
-    if (source.health >= source.maxHealth) {
+    if (source.health >= source.maxHealth && !this.hasDamagedProducedDroneForDocker(source.id)) {
       return false;
     }
 
