@@ -34075,6 +34075,69 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('matches player object-comparison ownership by controlling player identity when players share a side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('UnitA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('UnitA', 10, 10, { originalOwner: 'Player_1' }), // id 1
+      makeMapObject('UnitA', 14, 10, { originalOwner: 'Player_2' }), // id 2
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_OBJECT_COMPARISON',
+      params: ['Player_1', 'EQUAL', 1, 'UnitA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_OBJECT_COMPARISON',
+      params: ['Player_2', 'EQUAL', 1, 'UnitA'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_OBJECT_COMPARISON',
+      params: ['America', 'EQUAL', 2, 'UnitA'],
+    })).toBe(true);
+  });
+
   it('evaluates player-unit-condition as object-comparison subset', () => {
     const bundle = makeBundle({
       objects: [

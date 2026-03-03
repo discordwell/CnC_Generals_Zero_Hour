@@ -12793,7 +12793,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'PLAYER_HAS_OBJECT_COMPARISON':
         return this.evaluateScriptPlayerUnitCondition({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
           unitType: readString(3, ['unitType', 'objectType', 'templateName']),
@@ -25151,12 +25151,14 @@ export class GameLogicSubsystem implements Subsystem {
     templateName: string;
     conditionCacheId?: string;
   }): boolean {
-    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
+    const cache = targetToken ? null : this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     if (cache && cache.customData !== 0 && this.scriptObjectCountChangedFrame === cache.customFrame) {
       return cache.customData === 1;
     }
 
-    const normalizedSide = this.normalizeSide(filter.side);
     const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.templateName);
     if (!normalizedSide || objectTypes.length === 0) {
       if (cache) {
@@ -25166,7 +25168,11 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const objectCount = this.countScriptObjectsByTemplateListForSide(normalizedSide, objectTypes);
+    const objectCount = this.countScriptObjectsByTemplateListForSide(
+      normalizedSide,
+      objectTypes,
+      targetToken,
+    );
     const comparison = this.compareScriptCount(filter.comparison, objectCount, filter.count);
     if (cache) {
       cache.customData = comparison ? 1 : -1;
@@ -34830,7 +34836,11 @@ export class GameLogicSubsystem implements Subsystem {
     return count;
   }
 
-  private countScriptObjectsByTemplateListForSide(normalizedSide: string, templateNames: string[]): number {
+  private countScriptObjectsByTemplateListForSide(
+    normalizedSide: string,
+    templateNames: string[],
+    controllingPlayerToken?: string | null,
+  ): number {
     const normalizedTemplates = Array.from(new Set(
       templateNames
         .map((name) => this.normalizeScriptObjectTypeName(name))
@@ -34839,6 +34849,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (normalizedTemplates.length === 0) {
       return 0;
     }
+    const normalizedOwnerToken = this.normalizeControllingPlayerToken(controllingPlayerToken ?? undefined);
 
     let count = 0;
     for (const entity of this.spawnedEntities.values()) {
@@ -34850,6 +34861,12 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
         continue;
+      }
+      if (normalizedOwnerToken !== null) {
+        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+        if (!ownerToken || ownerToken !== normalizedOwnerToken) {
+          continue;
+        }
       }
       if (!this.matchesScriptObjectTypeList(entity.templateName, normalizedTemplates)) {
         continue;
