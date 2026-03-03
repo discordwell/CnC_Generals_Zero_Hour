@@ -54515,6 +54515,94 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('scopes player unit-type and unit-kind in-area checks by controlling player identity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('InfantryA', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('InfantryA', 6, 6, { originalOwner: 'Player_1' }),
+      makeMapObject('InfantryA', 60, 60, { originalOwner: 'Player_2' }),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'SpawnZone',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_COMPARISON_UNIT_TYPE_IN_TRIGGER_AREA',
+      params: ['Player_1', 'GREATER_EQUAL', 1, 'InfantryA', 'SpawnZone'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_COMPARISON_UNIT_TYPE_IN_TRIGGER_AREA',
+      params: ['Player_2', 'GREATER_EQUAL', 1, 'InfantryA', 'SpawnZone'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_COMPARISON_UNIT_TYPE_IN_TRIGGER_AREA',
+      params: ['America', 'GREATER_EQUAL', 1, 'InfantryA', 'SpawnZone'],
+    })).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_COMPARISON_UNIT_KIND_IN_TRIGGER_AREA',
+      params: ['Player_1', 'GREATER_EQUAL', 1, 'INFANTRY', 'SpawnZone'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_COMPARISON_UNIT_KIND_IN_TRIGGER_AREA',
+      params: ['Player_2', 'GREATER_EQUAL', 1, 'INFANTRY', 'SpawnZone'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_HAS_COMPARISON_UNIT_KIND_IN_TRIGGER_AREA',
+      params: ['America', 'GREATER_EQUAL', 1, 'INFANTRY', 'SpawnZone'],
+    })).toBe(true);
+  });
+
   it('invalidates unit-type/kind area caches on trigger enter-exit transitions', () => {
     const bundle = makeBundle({
       objects: [

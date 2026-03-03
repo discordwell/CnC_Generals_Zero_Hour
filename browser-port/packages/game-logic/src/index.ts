@@ -12876,7 +12876,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_HAS_COMPARISON_UNIT_TYPE_IN_TRIGGER_AREA':
         return this.evaluateScriptPlayerHasUnitTypeInArea({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
           templateName: readString(3, ['templateName', 'objectType', 'unitType']),
@@ -12885,7 +12885,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_HAS_COMPARISON_UNIT_KIND_IN_TRIGGER_AREA':
         return this.evaluateScriptPlayerHasUnitKindInArea({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           comparison: readComparison(1, ['comparison']),
           count: readInteger(2, ['count']),
           kindOf: readString(3, ['kindOf']),
@@ -25254,13 +25254,15 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
     const objectTypes = this.resolveScriptObjectTypeEntriesForCondition(filter.templateName);
     if (!normalizedSide || objectTypes.length === 0) {
       return false;
     }
 
-    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    const cache = targetToken ? null : this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     let anyChanges = cache === null || cache.customData === 0;
     if (this.scriptObjectCountChangedFrame + 1 >= this.frameCounter) {
       anyChanges = true;
@@ -25275,6 +25277,10 @@ export class GameLogicSubsystem implements Subsystem {
     let objectCount = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (targetToken) {
+        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+        if (!ownerToken || ownerToken !== targetToken) continue;
+      }
       if (!this.matchesScriptObjectTypeList(entity.templateName, objectTypes)) continue;
       if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
 
@@ -25309,13 +25315,15 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
     const normalizedKindOf = filter.kindOf.trim().toUpperCase();
     if (!normalizedSide || !normalizedKindOf) {
       return false;
     }
 
-    const cache = this.getOrCreateScriptConditionCache(filter.conditionCacheId);
+    const cache = targetToken ? null : this.getOrCreateScriptConditionCache(filter.conditionCacheId);
     let anyChanges = cache === null || cache.customData === 0;
     if (this.scriptObjectCountChangedFrame + 1 >= this.frameCounter) {
       anyChanges = true;
@@ -25330,6 +25338,10 @@ export class GameLogicSubsystem implements Subsystem {
     let objectCount = 0;
     for (const entity of this.spawnedEntities.values()) {
       if (this.normalizeSide(entity.side) !== normalizedSide) continue;
+      if (targetToken) {
+        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+        if (!ownerToken || ownerToken !== targetToken) continue;
+      }
       if (!entity.kindOf.has(normalizedKindOf)) continue;
       if (!this.isInsideAnyTriggerRegion(entity, triggerRegions)) continue;
       if (entity.destroyed || entity.kindOf.has('INERT')) continue;
