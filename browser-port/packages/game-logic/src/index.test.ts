@@ -49885,10 +49885,17 @@ describe('Script condition groundwork', () => {
 
     {
       const logic = createLogic();
+      const privateApi = logic as unknown as {
+        spawnedEntities: Map<number, {
+          objectStatusFlags: Set<string>;
+        }>;
+      };
+
       expect(logic.executeScriptAction({
         actionType: 63, // PLAYER_DISABLE_FACTORIES
-        params: ['America', 'BuildableUnit'],
+        params: ['America', 'WarFactory'],
       })).toBe(true);
+      expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(true);
       logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
       logic.update(1 / 30);
       expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(0);
@@ -49896,6 +49903,19 @@ describe('Script condition groundwork', () => {
 
       expect(logic.executeScriptAction({
         actionType: 66, // PLAYER_ENABLE_FACTORIES
+        params: ['America', 'WarFactory'],
+      })).toBe(true);
+      expect(privateApi.spawnedEntities.get(1)?.objectStatusFlags.has('SCRIPT_DISABLED')).toBe(false);
+      logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });
+      logic.update(1 / 30);
+      expect(logic.getProductionState(1)?.queueEntryCount ?? 0).toBe(1);
+      expect(logic.getSideCredits('America')).toBe(1900);
+    }
+
+    {
+      const logic = createLogic();
+      expect(logic.executeScriptAction({
+        actionType: 63, // PLAYER_DISABLE_FACTORIES
         params: ['America', 'BuildableUnit'],
       })).toBe(true);
       logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'BuildableUnit' });

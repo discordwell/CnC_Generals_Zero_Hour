@@ -5328,8 +5328,6 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptTeamCreatedReadyFrameByName = new Map<string, number>();
   /** Source parity subset: Team::m_created one-frame pulse auto-clear frame. */
   private readonly scriptTeamCreatedAutoClearFrameByName = new Map<string, number>();
-  /** Source parity subset: Player::setObjectsEnabled per-side disabled template names. */
-  private readonly sideDisabledObjectTemplatesByScript = new Map<string, Set<string>>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
   private readonly sideCashBountyPercent = new Map<string, number>();
   /** Source parity: Player::m_skillPointsModifier (multiplies awarded rank points before apply). */
@@ -20616,19 +20614,18 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    let disabledTemplates = this.sideDisabledObjectTemplatesByScript.get(normalizedSide);
-    if (!disabledTemplates) {
-      disabledTemplates = new Set<string>();
-      this.sideDisabledObjectTemplatesByScript.set(normalizedSide, disabledTemplates);
-    }
-
-    if (enabled) {
-      disabledTemplates.delete(normalizedTemplateName);
-      if (disabledTemplates.size === 0) {
-        this.sideDisabledObjectTemplatesByScript.delete(normalizedSide);
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || this.normalizeSide(entity.side) !== normalizedSide) {
+        continue;
       }
-    } else {
-      disabledTemplates.add(normalizedTemplateName);
+      if (entity.templateName.trim().toUpperCase() !== normalizedTemplateName) {
+        continue;
+      }
+      if (enabled) {
+        entity.objectStatusFlags.delete('SCRIPT_DISABLED');
+      } else {
+        entity.objectStatusFlags.add('SCRIPT_DISABLED');
+      }
     }
 
     return true;
@@ -26089,7 +26086,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideTeamBuildDelaySecondsByScript.clear();
     this.scriptTeamCreatedReadyFrameByName.clear();
     this.scriptTeamCreatedAutoClearFrameByName.clear();
-    this.sideDisabledObjectTemplatesByScript.clear();
     this.scriptSideRepairQueue.clear();
     this.scriptCurrentPlayerSide = null;
     this.scriptSidesUnitsShouldHunt.clear();
@@ -46144,11 +46140,6 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const disabledTemplates = this.sideDisabledObjectTemplatesByScript.get(normalizedSide);
-    if (disabledTemplates?.has(unitDef.name.trim().toUpperCase())) {
-      return false;
-    }
-
     const buildableStatus = this.resolveBuildableStatus(unitDef);
     if (buildableStatus === 'NO') {
       return false;
@@ -59085,7 +59076,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.sideTeamBuildDelaySecondsByScript.clear();
     this.scriptTeamCreatedReadyFrameByName.clear();
     this.scriptTeamCreatedAutoClearFrameByName.clear();
-    this.sideDisabledObjectTemplatesByScript.clear();
     this.sideSkillPointsModifier.clear();
     this.sideScriptSkillset.clear();
     this.sideScriptAcquiredSciences.clear();
