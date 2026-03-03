@@ -12456,7 +12456,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       case 'PLAYER_ALL_DESTROYED':
         return this.evaluateScriptAllDestroyed({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
         });
       case 'PLAYER_ALL_BUILDFACILITIES_DESTROYED':
         return this.evaluateScriptAllBuildFacilitiesDestroyed({
@@ -12585,7 +12585,7 @@ export class GameLogicSubsystem implements Subsystem {
         return this.evaluateScriptPlayerHasCredits({
           credits: readNumber(0, ['credits']),
           comparison: readComparison(1, ['comparison']),
-          side: readSide(2, ['side']),
+          side: readString(2, ['side', 'playerName', 'player']),
         });
       case 'NAMED_DISCOVERED': {
         const entityId = readEntityId(0, ['entityId']);
@@ -12625,7 +12625,7 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_HAS_N_OR_FEWER_BUILDINGS':
         return this.evaluateScriptPlayerHasNOrFewerBuildings({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           buildingCount: readInteger(1, ['buildingCount', 'count']),
         });
       case 'PLAYER_HAS_POWER':
@@ -12908,7 +12908,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'PLAYER_HAS_N_OR_FEWER_FACTION_BUILDINGS':
         return this.evaluateScriptPlayerHasNOrFewerFactionBuildings({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           buildingCount: readInteger(1, ['buildingCount', 'count']),
         });
       case 'UNIT_HAS_OBJECT_STATUS': {
@@ -22504,7 +22504,7 @@ export class GameLogicSubsystem implements Subsystem {
   evaluateScriptAllDestroyed(filter: {
     side: string;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return true;
     }
@@ -24117,7 +24117,7 @@ export class GameLogicSubsystem implements Subsystem {
     comparison: ScriptComparisonInput;
     credits: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -25076,7 +25076,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     buildingCount: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
@@ -25092,7 +25092,7 @@ export class GameLogicSubsystem implements Subsystem {
     side: string;
     buildingCount: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
     if (!normalizedSide) {
       return false;
     }
