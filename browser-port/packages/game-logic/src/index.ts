@@ -15366,29 +15366,6 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private executeScriptTeamGuardForFramecount(teamName: string, frameCount: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.applyCommand({
-        type: 'guardPosition',
-        entityId: entity.id,
-        targetX: entity.x,
-        targetZ: entity.z,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
-    }
-    this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
-    return true;
-  }
-
   private executeScriptTeamIdleForFramecount(teamName: string, frameCount: number): boolean {
     const team = this.getScriptTeamRecord(teamName);
     if (!team) {
