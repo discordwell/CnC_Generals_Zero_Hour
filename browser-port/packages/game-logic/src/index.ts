@@ -12598,7 +12598,7 @@ export class GameLogicSubsystem implements Subsystem {
         }
         return this.evaluateScriptNamedOwnedByPlayer({
           entityId,
-          side: readSide(1, ['side']),
+          side: readString(1, ['side', 'playerName', 'player']),
         });
       }
       case 'TEAM_OWNED_BY_PLAYER':
@@ -23248,8 +23248,13 @@ export class GameLogicSubsystem implements Subsystem {
     if (!Number.isFinite(filter.entityId)) {
       return false;
     }
-    const normalizedSide = this.normalizeSide(filter.side);
-    if (!normalizedSide) {
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const {
+      normalizedSide,
+      controllingPlayerToken,
+      explicitNamedPlayer,
+    } = selector;
+    if (!normalizedSide && !controllingPlayerToken) {
       return false;
     }
 
@@ -23259,7 +23264,18 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    return this.normalizeSide(entity.side) === normalizedSide;
+    const entityOwnerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+    if (
+      controllingPlayerToken
+      && entityOwnerToken
+      && entityOwnerToken === controllingPlayerToken
+    ) {
+      return true;
+    }
+    if (explicitNamedPlayer) {
+      return false;
+    }
+    return normalizedSide !== null && this.normalizeSide(entity.side) === normalizedSide;
   }
 
   /**
