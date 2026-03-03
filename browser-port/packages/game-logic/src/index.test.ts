@@ -43894,6 +43894,116 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('includes same-player targets in nearest-enemy-building command-button scans via affiliation self-check', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_TargetAlly', {
+            SpecialPowerTemplate: 'ScriptPowerTargetAlly',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('FriendlyTarget', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptTargetAlly', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerTargetAlly',
+          Options: 'NEED_TARGET_ALLY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptTargetAlly',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerTargetAlly', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('FriendlyTarget', 24, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('AllUseTeam', [1])).toBe(true);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { controllingPlayerToken: string | null }>;
+    };
+    privateApi.spawnedEntities.get(2)!.controllingPlayerToken = 'america';
+
+    expect(logic.executeScriptAction({
+      actionType: 471, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING
+      params: ['AllUseTeam', 'Command_ScriptTargetAlly'],
+    })).toBe(true);
+    expect(logic.getEntityState(1)?.lastSpecialPowerDispatch?.targetEntityId).toBe(2);
+  });
+
+  it('does not treat same-side different-player targets as same-player for nearest-enemy-building command-button scans', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptCaster', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SpecialPowerModule ModuleTag_TargetAlly', {
+            SpecialPowerTemplate: 'ScriptPowerTargetAlly',
+          }),
+        ], {
+          CommandSet: 'ScriptCasterCommandSet',
+        }),
+        makeObjectDef('FriendlyTarget', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_ScriptTargetAlly', {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'ScriptPowerTargetAlly',
+          Options: 'NEED_TARGET_ALLY_OBJECT',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptCasterCommandSet', {
+          1: 'Command_ScriptTargetAlly',
+        }),
+      ],
+      specialPowers: [
+        makeSpecialPowerDef('ScriptPowerTargetAlly', { ReloadTime: 0 }),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ScriptCaster', 20, 20), // id 1
+        makeMapObject('FriendlyTarget', 24, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.setScriptTeamMembers('AllUseTeam', [1])).toBe(true);
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { controllingPlayerToken: string | null }>;
+    };
+    privateApi.spawnedEntities.get(1)!.controllingPlayerToken = 'player_a';
+    privateApi.spawnedEntities.get(2)!.controllingPlayerToken = 'player_b';
+
+    expect(logic.executeScriptAction({
+      actionType: 471, // TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING
+      params: ['AllUseTeam', 'Command_ScriptTargetAlly'],
+    })).toBe(false);
+  });
+
   it('executes script team-partial-use-command-button action using source action id', () => {
     const bundle = makeBundle({
       objects: [

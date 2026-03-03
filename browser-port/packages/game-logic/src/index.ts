@@ -15554,6 +15554,36 @@ export class GameLogicSubsystem implements Subsystem {
     return this.getTeamRelationship(sourceEntity, candidate);
   }
 
+  private resolveEntityControllingPlayerTokenForAffiliation(entity: MapEntity): string | null {
+    return (
+      this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined)
+      ?? this.normalizeControllingPlayerToken(this.normalizeSide(entity.side ?? '') ?? undefined)
+    );
+  }
+
+  private resolveScriptTeamControllingPlayerTokenForAffiliation(
+    team: ScriptTeamRecord,
+    sourceEntity: MapEntity,
+  ): string | null {
+    return (
+      this.normalizeControllingPlayerToken(team.controllingSide)
+      ?? this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity)
+    );
+  }
+
+  private isScriptTeamCandidateSameControllingPlayer(
+    team: ScriptTeamRecord,
+    sourceEntity: MapEntity,
+    candidate: MapEntity,
+  ): boolean {
+    const teamOwnerToken = this.resolveScriptTeamControllingPlayerTokenForAffiliation(team, sourceEntity);
+    if (!teamOwnerToken) {
+      return false;
+    }
+    const candidateOwnerToken = this.resolveEntityControllingPlayerTokenForAffiliation(candidate);
+    return candidateOwnerToken !== null && candidateOwnerToken === teamOwnerToken;
+  }
+
   private executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(
     teamName: string,
     commandButtonName: string,
@@ -15796,11 +15826,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!controllingSide) {
       return false;
     }
-    const controllingPlayerToken = (
-      this.normalizeControllingPlayerToken(team.controllingSide)
-      ?? this.normalizeControllingPlayerToken(allTeamMembers[0]?.controllingPlayerToken ?? undefined)
-      ?? this.normalizeControllingPlayerToken(controllingSide)
-    );
+    const controllingSourceEntity = allTeamMembers[0]!;
 
     const center = this.resolveScriptAIGroupCenter(allTeamMembers);
     if (!center) {
@@ -15821,13 +15847,11 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Source parity: PartitionFilterPlayerAffiliation(ALLOW_ENEMIES | ALLOW_NEUTRAL)
       // also admits objects controlled by the same player via its explicit self-player check.
-      const candidateOwnerToken = (
-        this.normalizeControllingPlayerToken(candidate.controllingPlayerToken ?? undefined)
-        ?? this.normalizeControllingPlayerToken(this.normalizeSide(candidate.side ?? '') ?? undefined)
+      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
+        team,
+        controllingSourceEntity,
+        candidate,
       );
-      const sameControllingPlayer = controllingPlayerToken !== null
-        && candidateOwnerToken !== null
-        && controllingPlayerToken === candidateOwnerToken;
       if (!sameControllingPlayer) {
         const relation = this.getTeamRelationshipBySides(controllingSide, candidate.side ?? '');
         if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
@@ -15988,7 +16012,13 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       const relation = this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate);
-      const relationAllowed = (filter.allowEnemies && relation === RELATIONSHIP_ENEMIES)
+      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
+        team,
+        sourceEntity,
+        candidate,
+      );
+      const relationAllowed = sameControllingPlayer
+        || (filter.allowEnemies && relation === RELATIONSHIP_ENEMIES)
         || (filter.allowNeutral && relation === RELATIONSHIP_NEUTRAL);
       if (!relationAllowed) {
         continue;
