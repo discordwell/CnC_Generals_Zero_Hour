@@ -55913,6 +55913,73 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('matches TEAM_OWNED_BY_PLAYER by controlling player identity when players share a side', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TeamUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([makeMapObject('TeamUnit', 10, 10)], 128, 128); // id 1
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [{
+        dict: {
+          teamName: 'OwnerTeam',
+          teamOwner: 'Player_1',
+          teamIsSingleton: true,
+        },
+      }],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    expect(logic.setScriptTeamMembers('OwnerTeam', [1])).toBe(true);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['OwnerTeam', 'Player_1'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['OwnerTeam', 'Player_2'],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_OWNED_BY_PLAYER',
+      params: ['OwnerTeam', 'America'],
+    })).toBe(true);
+  });
+
   it('evaluates TEAM_STATE_IS and TEAM_STATE_IS_NOT across TeamPrototype instances with THIS_TEAM precedence', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
     logic.loadMapObjects(

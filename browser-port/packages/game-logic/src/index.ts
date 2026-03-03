@@ -4204,6 +4204,8 @@ interface ScriptTeamRecord {
   /** Source parity: TeamTemplateInfo::m_homeLocation resolved via teamHome waypoint token. */
   homeWaypointName: string;
   controllingSide: string | null;
+  /** Source parity: Team::getControllingPlayer identity (player-name token when available). */
+  controllingPlayerToken: string | null;
   isSingleton: boolean;
   maxInstances: number;
   /** Source parity: TeamTemplateInfo::m_productionPriority. */
@@ -5962,6 +5964,7 @@ export class GameLogicSubsystem implements Subsystem {
       const teamOwner = this.readScriptDictString(dict, 'teamOwner');
       const ownerKey = teamOwner.trim().toUpperCase();
       if (ownerKey) {
+        teamRecord.controllingPlayerToken = this.normalizeControllingPlayerToken(teamOwner);
         const ownerSide = this.scriptPlayerSideByName.get(ownerKey);
         if (ownerSide) {
           teamRecord.controllingSide = ownerSide;
@@ -12601,7 +12604,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'TEAM_OWNED_BY_PLAYER':
         return this.evaluateScriptTeamOwnedByPlayer({
           teamName: readString(0, ['teamName', 'team']),
-          side: readSide(1, ['side']),
+          side: readString(1, ['side', 'playerName', 'player']),
         });
       case 'PLAYER_HAS_N_OR_FEWER_BUILDINGS':
         return this.evaluateScriptPlayerHasNOrFewerBuildings({
@@ -13143,6 +13146,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (side === null) {
       team.controllingSide = null;
+      team.controllingPlayerToken = null;
       return true;
     }
 
@@ -13152,6 +13156,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     team.controllingSide = normalizedSide;
+    team.controllingPlayerToken = this.resolveScriptControllingPlayerTokenFromInput(side, normalizedSide);
     return true;
   }
 
@@ -13169,6 +13174,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     team.controllingSide = normalizedSide;
+    team.controllingPlayerToken = this.resolveScriptControllingPlayerTokenFromInput(side, normalizedSide);
     return true;
   }
 
@@ -15578,7 +15584,8 @@ export class GameLogicSubsystem implements Subsystem {
     sourceEntity: MapEntity,
   ): string | null {
     return (
-      this.normalizeControllingPlayerToken(team.controllingSide)
+      this.normalizeControllingPlayerToken(team.controllingPlayerToken ?? undefined)
+      ?? this.normalizeControllingPlayerToken(team.controllingSide)
       ?? this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity)
     );
   }
@@ -21013,6 +21020,9 @@ export class GameLogicSubsystem implements Subsystem {
       const createdSide = this.normalizeSide(created.side);
       if (createdSide) {
         team.controllingSide = createdSide;
+        if (!team.controllingPlayerToken) {
+          team.controllingPlayerToken = this.normalizeControllingPlayerToken(createdSide);
+        }
       }
     }
     return true;
@@ -21427,6 +21437,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (!team.controllingSide && controllingSide) {
       team.controllingSide = controllingSide;
+      if (!team.controllingPlayerToken) {
+        team.controllingPlayerToken = this.normalizeControllingPlayerToken(controllingSide);
+      }
     }
 
     if (primaryTransport && prototype.reinforcementTeamStartsFull) {
@@ -21912,6 +21925,7 @@ export class GameLogicSubsystem implements Subsystem {
       isAIRecruitable: prototype.isAIRecruitable,
       homeWaypointName: prototype.homeWaypointName,
       controllingSide: prototype.controllingSide,
+      controllingPlayerToken: prototype.controllingPlayerToken,
       isSingleton: false,
       maxInstances: prototype.maxInstances,
       productionPriority: prototype.productionPriority,
@@ -22674,8 +22688,12 @@ export class GameLogicSubsystem implements Subsystem {
     teamName: string;
     side: string;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
-    if (!normalizedSide) {
+    const trimmedPlayerInput = filter.side.trim();
+    const hasExplicitPlayerToken = trimmedPlayerInput.length > 0
+      && this.scriptPlayerSideByName.has(trimmedPlayerInput.toUpperCase());
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
+    const controllingPlayerToken = this.resolveScriptControllingPlayerTokenFromInput(filter.side, normalizedSide);
+    if (!normalizedSide && !controllingPlayerToken) {
       return false;
     }
 
@@ -22685,8 +22703,19 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     for (const team of teams) {
-      const controllingSide = team.controllingSide ? this.normalizeSide(team.controllingSide) : '';
-      if (controllingSide === normalizedSide) {
+      const teamControllingToken = this.normalizeControllingPlayerToken(team.controllingPlayerToken ?? undefined);
+      if (
+        controllingPlayerToken
+        && teamControllingToken
+        && teamControllingToken === controllingPlayerToken
+      ) {
+        return true;
+      }
+      if (hasExplicitPlayerToken) {
+        continue;
+      }
+      const teamControllingSide = team.controllingSide ? this.normalizeSide(team.controllingSide) : '';
+      if (normalizedSide && teamControllingSide === normalizedSide) {
         return true;
       }
     }
@@ -34968,6 +34997,20 @@ export class GameLogicSubsystem implements Subsystem {
     return normalized || null;
   }
 
+  private resolveScriptControllingPlayerTokenFromInput(
+    playerInput: string,
+    resolvedSide: string | null,
+  ): string | null {
+    const trimmed = playerInput.trim();
+    if (trimmed && this.scriptPlayerSideByName.has(trimmed.toUpperCase())) {
+      return this.normalizeControllingPlayerToken(trimmed);
+    }
+    if (resolvedSide) {
+      return this.normalizeControllingPlayerToken(resolvedSide);
+    }
+    return this.normalizeControllingPlayerToken(trimmed);
+  }
+
   private resolveScriptWaypointPosition(waypointName: string): { x: number; z: number } | null {
     const normalizedWaypointName = waypointName.trim().toUpperCase();
     if (!normalizedWaypointName) {
@@ -35118,6 +35161,7 @@ export class GameLogicSubsystem implements Subsystem {
       isAIRecruitable: false,
       homeWaypointName: '',
       controllingSide: null,
+      controllingPlayerToken: null,
       isSingleton: true,
       maxInstances: 0,
       productionPriority: 0,
