@@ -55582,6 +55582,116 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
+  it('scopes player special-power script events by controlling player identity', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('SpecialPowerSource', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', {
+            MaxHealth: 100,
+            InitialHealth: 100,
+          }),
+        ]),
+      ],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([
+      makeMapObject('SpecialPowerSource', 10, 10, { originalOwner: 'Player_1' }),
+      makeMapObject('SpecialPowerSource', 12, 10, { originalOwner: 'Player_2' }),
+    ], 128, 128);
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    const privateApi = logic as unknown as {
+      sideScriptTriggeredSpecialPowerEvents: Map<string, Array<{ name: string; sourceEntityId: number }>>;
+      sideScriptMidwaySpecialPowerEvents: Map<string, Array<{ name: string; sourceEntityId: number }>>;
+      sideScriptCompletedSpecialPowerEvents: Map<string, Array<{ name: string; sourceEntityId: number }>>;
+    };
+
+    privateApi.sideScriptTriggeredSpecialPowerEvents.set('america', [
+      { name: 'SPECIALPOWERTRIGGER', sourceEntityId: 1 },
+      { name: 'SPECIALPOWERTRIGGER', sourceEntityId: 2 },
+    ]);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_TRIGGERED_SPECIAL_POWER_FROM_NAMED',
+      params: ['Player_1', 'SpecialPowerTrigger', 1],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_TRIGGERED_SPECIAL_POWER_FROM_NAMED',
+      params: ['Player_1', 'SpecialPowerTrigger', 1],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_TRIGGERED_SPECIAL_POWER',
+      params: ['Player_2', 'SpecialPowerTrigger'],
+    })).toBe(true);
+
+    privateApi.sideScriptMidwaySpecialPowerEvents.set('america', [
+      { name: 'SPECIALPOWERTRIGGER', sourceEntityId: 1 },
+      { name: 'SPECIALPOWERTRIGGER', sourceEntityId: 2 },
+    ]);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_MIDWAY_SPECIAL_POWER',
+      params: ['Player_1', 'SpecialPowerTrigger'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_MIDWAY_SPECIAL_POWER_FROM_NAMED',
+      params: ['Player_2', 'SpecialPowerTrigger', 2],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_MIDWAY_SPECIAL_POWER',
+      params: ['Player_1', 'SpecialPowerTrigger'],
+    })).toBe(false);
+
+    privateApi.sideScriptCompletedSpecialPowerEvents.set('america', [
+      { name: 'SPECIALPOWERTRIGGER', sourceEntityId: 1 },
+      { name: 'SPECIALPOWERTRIGGER', sourceEntityId: 2 },
+    ]);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_COMPLETED_SPECIAL_POWER_FROM_NAMED',
+      params: ['Player_2', 'SpecialPowerTrigger', 2],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_COMPLETED_SPECIAL_POWER',
+      params: ['Player_1', 'SpecialPowerTrigger'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'PLAYER_COMPLETED_SPECIAL_POWER',
+      params: ['Player_2', 'SpecialPowerTrigger'],
+    })).toBe(false);
+  });
+
   it('evaluates named-unit lifecycle conditions with did-exist parity', () => {
     const bundle = makeBundle({
       objects: [

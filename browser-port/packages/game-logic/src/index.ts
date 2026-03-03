@@ -12801,34 +12801,34 @@ export class GameLogicSubsystem implements Subsystem {
         });
       case 'PLAYER_TRIGGERED_SPECIAL_POWER':
         return this.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
         });
       case 'PLAYER_TRIGGERED_SPECIAL_POWER_FROM_NAMED':
         return this.evaluateScriptPlayerSpecialPowerFromUnitTriggered({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
       case 'PLAYER_MIDWAY_SPECIAL_POWER':
         return this.evaluateScriptPlayerSpecialPowerFromUnitMidway({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
         });
       case 'PLAYER_MIDWAY_SPECIAL_POWER_FROM_NAMED':
         return this.evaluateScriptPlayerSpecialPowerFromUnitMidway({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
       case 'PLAYER_COMPLETED_SPECIAL_POWER':
         return this.evaluateScriptPlayerSpecialPowerFromUnitComplete({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
         });
       case 'PLAYER_COMPLETED_SPECIAL_POWER_FROM_NAMED':
         return this.evaluateScriptPlayerSpecialPowerFromUnitComplete({
-          side: readSide(0, ['side']),
+          side: readString(0, ['side', 'playerName', 'player']),
           specialPowerName: readString(1, ['specialPowerName', 'specialPower']),
           sourceEntityId: readOptionalEntityId(2, ['sourceEntityId', 'entityId']),
         });
@@ -24160,7 +24160,9 @@ export class GameLogicSubsystem implements Subsystem {
     specialPowerName: string;
     sourceEntityId?: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
     const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(filter.specialPowerName);
     if (!normalizedSide || !normalizedSpecialPowerName) {
       return false;
@@ -24176,6 +24178,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (!sourceEntity || sourceEntity.destroyed) {
         return false;
       }
+      if (targetToken) {
+        const sourceToken = this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity);
+        if (!sourceToken || sourceToken !== targetToken) {
+          return false;
+        }
+      }
     }
 
     const events = this.sideScriptTriggeredSpecialPowerEvents.get(normalizedSide);
@@ -24190,6 +24198,15 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
         continue;
+      }
+      if (targetToken) {
+        const eventSource = this.spawnedEntities.get(event.sourceEntityId);
+        const eventSourceToken = eventSource
+          ? this.resolveEntityControllingPlayerTokenForAffiliation(eventSource)
+          : null;
+        if (!eventSourceToken || eventSourceToken !== targetToken) {
+          continue;
+        }
       }
 
       events.splice(index, 1);
@@ -24208,7 +24225,9 @@ export class GameLogicSubsystem implements Subsystem {
     specialPowerName: string;
     sourceEntityId?: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
     const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(filter.specialPowerName);
     if (!normalizedSide || !normalizedSpecialPowerName) {
       return false;
@@ -24224,6 +24243,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (!sourceEntity || sourceEntity.destroyed) {
         return false;
       }
+      if (targetToken) {
+        const sourceToken = this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity);
+        if (!sourceToken || sourceToken !== targetToken) {
+          return false;
+        }
+      }
     }
 
     const events = this.sideScriptMidwaySpecialPowerEvents.get(normalizedSide);
@@ -24238,6 +24263,15 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
         continue;
+      }
+      if (targetToken) {
+        const eventSource = this.spawnedEntities.get(event.sourceEntityId);
+        const eventSourceToken = eventSource
+          ? this.resolveEntityControllingPlayerTokenForAffiliation(eventSource)
+          : null;
+        if (!eventSourceToken || eventSourceToken !== targetToken) {
+          continue;
+        }
       }
 
       events.splice(index, 1);
@@ -24256,7 +24290,9 @@ export class GameLogicSubsystem implements Subsystem {
     specialPowerName: string;
     sourceEntityId?: number;
   }): boolean {
-    const normalizedSide = this.normalizeSide(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
     const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(filter.specialPowerName);
     if (!normalizedSide || !normalizedSpecialPowerName) {
       return false;
@@ -24272,6 +24308,12 @@ export class GameLogicSubsystem implements Subsystem {
       if (!sourceEntity || sourceEntity.destroyed) {
         return false;
       }
+      if (targetToken) {
+        const sourceToken = this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity);
+        if (!sourceToken || sourceToken !== targetToken) {
+          return false;
+        }
+      }
     }
 
     const events = this.sideScriptCompletedSpecialPowerEvents.get(normalizedSide);
@@ -24286,6 +24328,15 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (sourceEntityId !== null && event.sourceEntityId !== sourceEntityId) {
         continue;
+      }
+      if (targetToken) {
+        const eventSource = this.spawnedEntities.get(event.sourceEntityId);
+        const eventSourceToken = eventSource
+          ? this.resolveEntityControllingPlayerTokenForAffiliation(eventSource)
+          : null;
+        if (!eventSourceToken || eventSourceToken !== targetToken) {
+          continue;
+        }
       }
 
       events.splice(index, 1);
