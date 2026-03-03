@@ -24010,10 +24010,12 @@ export class GameLogicSubsystem implements Subsystem {
     triggerName: string;
     value: number;
   }): boolean {
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(filter.side);
+    const selector = this.resolveScriptPlayerConditionSelector(filter.side);
+    const normalizedSide = selector.normalizedSide;
     if (!normalizedSide) {
       return false;
     }
+    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
 
     const triggerRegion = this.findMapTriggerRegionsByName(filter.triggerName)[0];
     if (!triggerRegion) {
@@ -24034,6 +24036,12 @@ export class GameLogicSubsystem implements Subsystem {
       const entitySide = this.normalizeSide(entity.side);
       if (entitySide && this.getTeamRelationshipBySides(normalizedSide, entitySide) === RELATIONSHIP_ENEMIES) {
         continue;
+      }
+      if (targetToken && entitySide === normalizedSide) {
+        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
+        if (!ownerToken || ownerToken !== targetToken) {
+          continue;
+        }
       }
 
       const dx = entity.x - centerX;

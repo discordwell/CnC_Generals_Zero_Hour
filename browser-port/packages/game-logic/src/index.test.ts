@@ -59471,6 +59471,92 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
   });
 
+  it('scopes skirmish supplies-within-distance to named controlling players for same-side warehouses', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('FriendlyWarehouseSmall', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 5,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+        ]),
+        makeObjectDef('FriendlyWarehouseLarge', 'America', ['STRUCTURE', 'SUPPLY_SOURCE'], [
+          makeBlock('Behavior', 'SupplyWarehouseDockUpdate ModuleTag_Dock', {
+            StartingBoxes: 9,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 900, InitialHealth: 900 }),
+        ]),
+      ],
+      factions: [
+        {
+          name: 'FactionAmerica',
+          side: 'America',
+          fields: {},
+        },
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('FriendlyWarehouseSmall', 10, 10, { originalOwner: 'Player_1' }),
+      makeMapObject('FriendlyWarehouseLarge', 14, 10, { originalOwner: 'Player_2' }),
+    ], 128, 128);
+    map.triggers = [{
+      id: 1,
+      name: 'SupplyProbe',
+      isWaterArea: false,
+      isRiver: false,
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 20, y: 0, z: 0 },
+        { x: 20, y: 20, z: 0 },
+        { x: 0, y: 20, z: 0 },
+      ],
+    }];
+    map.sidesList = {
+      sides: [
+        {
+          dict: {
+            playerName: 'Player_1',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+        {
+          dict: {
+            playerName: 'Player_2',
+            playerFaction: 'FactionAmerica',
+          },
+          buildList: [],
+          scripts: {
+            scripts: [],
+            groups: [],
+          },
+        },
+      ],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE',
+      params: ['America', 10, 'SupplyProbe', 800],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE',
+      params: ['Player_1', 10, 'SupplyProbe', 800],
+    })).toBe(false);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE',
+      params: ['Player_2', 10, 'SupplyProbe', 800],
+    })).toBe(true);
+  });
+
   it('matches skirmish value-in-area ownership by controlling player identity when players share a side', () => {
     const bundle = makeBundle({
       objects: [
