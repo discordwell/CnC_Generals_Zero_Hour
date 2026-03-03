@@ -43057,6 +43057,8 @@ describe('Script condition groundwork', () => {
       params: ['FrameTeam', 20],
     })).toBe(true);
     expect(teamSeq.framesToWait).toBe(20);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
 
     expect(logic.executeScriptAction({
       actionType: 401, // TEAM_IDLE_FOR_FRAMECOUNT
@@ -43070,6 +43072,8 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(teamSeqA.framesToWait).toBe(14);
     expect(teamSeqB.framesToWait).toBe(-1);
+    expect(privateApi.spawnedEntities.get(1)?.guardState).toBe('NONE');
+    expect(privateApi.spawnedEntities.get(2)?.guardState).toBe('NONE');
 
     expect(logic.setScriptConditionTeamContext('FrameInstanceA')).toBe(true);
     expect(logic.executeScriptAction({

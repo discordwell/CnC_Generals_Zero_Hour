@@ -11933,7 +11933,9 @@ export class GameLogicSubsystem implements Subsystem {
           readInteger(1, ['frameCount', 'frames', 'waitFrames']),
         );
       case 'TEAM_GUARD_FOR_FRAMECOUNT':
-        return this.executeScriptTeamGuardForFramecount(
+        // Source parity: ScriptActions::doAction switch routes TEAM_GUARD_FOR_FRAMECOUNT
+        // to doTeamIdleForFramecount (legacy engine behavior).
+        return this.executeScriptTeamIdleForFramecount(
           readString(0, ['teamName', 'team']),
           readInteger(1, ['frameCount', 'frames', 'waitFrames']),
         );
