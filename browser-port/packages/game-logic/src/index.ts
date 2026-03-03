@@ -11813,7 +11813,7 @@ export class GameLogicSubsystem implements Subsystem {
       case 'TEAM_TRANSFER_TO_PLAYER':
         return this.transferScriptTeamToSide(
           readString(0, ['teamName', 'team']),
-          readSide(1, ['side', 'playerName', 'player']),
+          readString(1, ['side', 'playerName', 'player']),
         );
       case 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM':
         return this.setScriptTeamOverrideRelationToTeam(
@@ -13169,7 +13169,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (!team) {
       return false;
     }
-    const normalizedSide = this.normalizeSide(side);
+    const normalizedSide = this.resolveScriptPlayerSideFromInput(side);
     if (!normalizedSide) {
       return false;
     }
