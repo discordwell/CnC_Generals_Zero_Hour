@@ -698,7 +698,7 @@ describe('AudioManager', () => {
         eventName: 'EnemyCallout',
         playerIndex: 2,
       }),
-    ).toBe(AudioHandleSpecialValues.AHSV_NotForLocal);
+    ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
 
     manager.setPlayerRelationshipResolver(() => 'enemies');
     expect(
@@ -714,7 +714,7 @@ describe('AudioManager', () => {
         eventName: 'EnemyCallout',
         playerIndex: 2,
       }),
-    ).toBe(AudioHandleSpecialValues.AHSV_NotForLocal);
+    ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
   });
 
   it('culls positional world sounds beyond MaxRange unless global or critical', () => {
@@ -899,6 +899,48 @@ describe('AudioManager', () => {
       manager.addAudioEvent({
         eventName: 'WorldByOwner',
         drawableId: 13,
+      }),
+    ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+  });
+
+  it('falls back to player-position resolver when object/drawable positions are unresolved', () => {
+    const manager = new AudioManager({
+      resolveObjectPosition: () => null,
+      resolveDrawablePosition: () => null,
+      resolvePlayerPosition: (playerIndex) => {
+        if (playerIndex === 1) {
+          return [20, 0, 0];
+        }
+        if (playerIndex === 2) {
+          return [90, 0, 0];
+        }
+        return null;
+      },
+      eventInfos: [
+        {
+          audioName: 'WorldByOwner',
+          soundType: AudioType.AT_SoundEffect,
+          type: SoundType.ST_WORLD,
+          maxRange: 50,
+        },
+      ],
+    });
+    manager.init();
+    manager.setListenerPosition([0, 0, 0]);
+
+    expect(
+      manager.addAudioEvent({
+        eventName: 'WorldByOwner',
+        objectId: 10,
+        playerIndex: 2,
+      }),
+    ).toBe(AudioHandleSpecialValues.AHSV_NoSound);
+
+    expect(
+      manager.addAudioEvent({
+        eventName: 'WorldByOwner',
+        drawableId: 12,
+        playerIndex: 1,
       }),
     ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
   });
@@ -1097,6 +1139,38 @@ describe('AudioManager', () => {
 
     expect(manager.isCurrentlyPlaying(interruptFirst)).toBe(false);
     expect(manager.isCurrentlyPlaying(interruptSecond)).toBe(true);
+  });
+
+  it('stops replaced playback nodes when AC_INTERRUPT replaces the oldest active sample', () => {
+    const { fakeContext, createdSources } = createRecordingAudioContext();
+    const manager = new AudioManager({
+      context: fakeContext,
+      sampleCount2D: 1,
+      eventInfos: [
+        {
+          audioName: 'InterruptPool',
+          soundType: AudioType.AT_SoundEffect,
+          type: SoundType.ST_UI,
+          control: AudioControl.AC_INTERRUPT,
+        },
+      ],
+    });
+    manager.init();
+    manager.preloadAudioBuffer('InterruptPool', { duration: 1 } as AudioBuffer);
+
+    const firstHandle = manager.addAudioEvent('InterruptPool');
+    expect(firstHandle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.update();
+    expect(createdSources).toHaveLength(1);
+
+    const secondHandle = manager.addAudioEvent('InterruptPool');
+    expect(secondHandle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.update();
+
+    expect(createdSources).toHaveLength(2);
+    expect(createdSources[0]!.stopCalls.length).toBeGreaterThan(0);
+    expect(manager.isCurrentlyPlaying(firstHandle)).toBe(false);
+    expect(manager.isCurrentlyPlaying(secondHandle)).toBe(true);
   });
 
   it('caps AC_INTERRUPT events by queued requests in the same frame', () => {

@@ -200,7 +200,7 @@ describe('buildControlBarButtonsForSelection', () => {
     expect(buttons).toEqual([]);
   });
 
-  it('uses minimal fallback controls for movable units without source command cards', () => {
+  it('returns no controls for movable units without source command cards', () => {
     const registry = new IniDataRegistry();
 
     const buttons = buildControlBarButtonsForSelection(registry, {
@@ -211,10 +211,7 @@ describe('buildControlBarButtonsForSelection', () => {
       isMoving: false,
     });
 
-    expect(buttons.map((button) => button.id)).toEqual([
-      'Command_AttackMove',
-      'Command_Stop',
-    ]);
+    expect(buttons).toEqual([]);
   });
 
   it('returns no controls for non-movable selections without source cards', () => {
@@ -498,6 +495,63 @@ describe('buildControlBarButtonsForSelection', () => {
       playerUpgradeNames: ['UPGRADE_PLAYERRADAR'],
     });
     expect(withPlayerUpgrade[0]?.enabled).toBe(true);
+  });
+
+  it('uses shared player context for NEED_UPGRADE player commands', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Upgrade',
+        name: 'Upgrade_PlayerRadar',
+        fields: {
+          Type: 'PLAYER',
+        },
+        blocks: [],
+      },
+      {
+        type: 'Object',
+        name: 'SupportVehicle',
+        fields: {
+          CommandSet: 'SupportSet',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'SupportSet',
+        fields: {
+          1: 'Command_PlayerUpgradeAction',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_PlayerUpgradeAction',
+        fields: {
+          Command: 'SPECIAL_POWER',
+          Options: 'NEED_UPGRADE',
+          Upgrade: 'Upgrade_PlayerRadar',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelection(
+      registry,
+      {
+        templateName: 'SupportVehicle',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+        playerUpgradeNames: [],
+      },
+      {
+        playerUpgradeNames: ['UPGRADE_PLAYERRADAR'],
+      },
+    );
+
+    expect(buttons[0]?.enabled).toBe(true);
   });
 
   it('keeps NEED_UPGRADE commands enabled when no Upgrade template is bound', () => {

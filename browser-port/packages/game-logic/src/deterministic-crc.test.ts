@@ -6,6 +6,7 @@ import { IniDataRegistry } from '@generals/ini-data';
 import { HeightmapGrid, type MapDataJSON } from '@generals/terrain';
 
 import { GameLogicSubsystem } from './index.js';
+import type { GameLogicCommand } from './types.js';
 
 const EMPTY_HEIGHTMAP_BASE64 = 'AAAAAA==';
 
@@ -53,6 +54,42 @@ function computeGameLogicCrc(subsystem: GameLogicSubsystem, frame = 0): number {
     throw new Error('expected deterministic GameLogic CRC');
   }
   return crc;
+}
+
+function applyDeterministicStressInputs(subsystem: GameLogicSubsystem, frame: number): void {
+  if (frame % 2 === 0) {
+    subsystem.submitCommand({ type: 'clearSelection' });
+  }
+  if (frame % 3 === 0) {
+    subsystem.submitCommand({ type: 'select', entityId: 1 });
+  }
+  if (frame % 5 === 0) {
+    subsystem.executeScriptAction({ actionType: 170 }); // REFRESH_RADAR
+  }
+  if (frame % 7 === 0) {
+    subsystem.notifyScriptSpeechCompleted(`StressSpeech_${frame}`);
+  }
+  if (frame % 11 === 0) {
+    subsystem.setScriptFlag('StressFlag', (frame % 22) === 0);
+  }
+  if (frame % 13 === 0) {
+    subsystem.setScriptCounter('StressCounter', frame);
+  }
+}
+
+function runDeterministicStressReplay(totalFrames: number): number[] {
+  const subsystem = createSubsystem();
+  try {
+    const crcTimeline: number[] = [];
+    for (let frame = 0; frame < totalFrames; frame += 1) {
+      applyDeterministicStressInputs(subsystem, frame);
+      subsystem.update(1 / 30);
+      crcTimeline.push(computeGameLogicCrc(subsystem, frame));
+    }
+    return crcTimeline;
+  } finally {
+    subsystem.dispose();
+  }
 }
 
 describe('GameLogic deterministic CRC ownership', () => {
@@ -178,5 +215,80 @@ describe('GameLogic deterministic CRC ownership', () => {
     } finally {
       subsystem.dispose();
     }
+  });
+
+  it('serializes all active command variants used by runtime command queue', () => {
+    const subsystem = createSubsystem();
+    try {
+      const privateApi = subsystem as unknown as {
+        commandQueue: GameLogicCommand[];
+      };
+
+      const commandSamples: GameLogicCommand[] = [
+        { type: 'purchaseScience', scienceName: 'SCIENCE_A', scienceCost: 3, side: 'America' },
+        {
+          type: 'issueSpecialPower',
+          commandSource: 'SCRIPT',
+          commandButtonId: 'Command_TestPower',
+          specialPowerName: 'SuperweaponA',
+          commandOption: 1,
+          issuingEntityIds: [1],
+          sourceEntityId: 1,
+          targetEntityId: null,
+          targetX: 10,
+          targetZ: 20,
+        },
+        {
+          type: 'combatDrop',
+          entityId: 1,
+          targetObjectId: null,
+          targetPosition: [10, 0, 20],
+          commandSource: 'AI',
+        },
+        {
+          type: 'enterObject',
+          entityId: 1,
+          targetObjectId: 1,
+          commandSource: 'SCRIPT',
+          action: 'captureUnmannedFactionUnit',
+        },
+        { type: 'garrisonBuilding', entityId: 1, targetBuildingId: 1 },
+        { type: 'repairBuilding', entityId: 1, targetBuildingId: 1, commandSource: 'AI' },
+        { type: 'enterTransport', entityId: 1, targetTransportId: 1, commandSource: 'SCRIPT' },
+        { type: 'detonateDemoTrap', entityId: 1 },
+        { type: 'toggleDemoTrapMode', entityId: 1 },
+      ];
+
+      for (const command of commandSamples) {
+        privateApi.commandQueue.length = 0;
+        privateApi.commandQueue.push(command);
+        expect(() => computeGameLogicCrc(subsystem, 0)).not.toThrow();
+      }
+    } finally {
+      subsystem.dispose();
+    }
+  });
+
+  it('stays CRC-identical across two long-running parallel simulations', () => {
+    const left = createSubsystem();
+    const right = createSubsystem();
+    try {
+      for (let frame = 0; frame < 240; frame += 1) {
+        applyDeterministicStressInputs(left, frame);
+        applyDeterministicStressInputs(right, frame);
+        left.update(1 / 30);
+        right.update(1 / 30);
+        expect(computeGameLogicCrc(left, frame)).toBe(computeGameLogicCrc(right, frame));
+      }
+    } finally {
+      left.dispose();
+      right.dispose();
+    }
+  });
+
+  it('replays deterministic stress timeline with invariant CRC sequence', () => {
+    const firstRun = runDeterministicStressReplay(240);
+    const replayRun = runDeterministicStressReplay(240);
+    expect(replayRun).toEqual(firstRun);
   });
 });

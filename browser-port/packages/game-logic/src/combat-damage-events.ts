@@ -168,9 +168,8 @@ export function applyWeaponDamageEvent<
 ): void {
   const weapon = event.weapon;
   if (event.delivery === 'PROJECTILE') {
-    // Source parity subset: damage arrives via projectile detonation/collision timing.
-    // TODO(C&C source parity): replace with spawned projectile entities and
-    // shouldProjectileCollideWith()/ProjectileUpdateInterface behavior.
+    // Source parity: projectile damage reaches this path only after projectile-flight
+    // update/collision resolution has finalized the detonation point for the frame.
   }
 
   const source = context.entitiesById.get(event.sourceEntityId) ?? null;

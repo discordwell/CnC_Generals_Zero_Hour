@@ -191,11 +191,17 @@ interface GameLogicConfigLike {
   sellPercentage: number;
 }
 
-export interface DeterministicGameLogicCrcContext {
-  spawnedEntities: ReadonlyMap<number, DeterministicMapEntityLike>;
+interface DeterministicObjectsOwnerSnapshot {
+  entitiesInRuntimeOrder: readonly DeterministicMapEntityLike[];
+}
+
+interface DeterministicPartitionManagerOwnerSnapshot {
   navigationGrid: NavigationGridLike | null;
   bridgeSegments: ReadonlyMap<number, BridgeSegmentStateLike>;
   bridgeSegmentByControlEntity: ReadonlyMap<number, number>;
+}
+
+interface DeterministicPlayerListOwnerSnapshot {
   selectedEntityId: number | null;
   teamRelationshipOverrides: ReadonlyMap<string, number>;
   playerRelationshipOverrides: ReadonlyMap<string, number>;
@@ -203,6 +209,9 @@ export interface DeterministicGameLogicCrcContext {
   sideKindOfProductionCostModifiers: ReadonlyMap<string, KindOfProductionCostModifierLike[]>;
   sidePowerBonus: ReadonlyMap<string, SidePowerStateLike>;
   sideRadarState: ReadonlyMap<string, SideRadarStateLike>;
+}
+
+interface DeterministicAiOwnerSnapshot {
   scriptCompletedVideos: readonly string[];
   scriptCompletedSpeech: readonly string[];
   scriptCompletedAudio: readonly string[];
@@ -231,6 +240,13 @@ export interface DeterministicGameLogicCrcContext {
   scriptInputDisabled: boolean;
   config: GameLogicConfigLike;
   commandQueue: readonly GameLogicCommand[];
+}
+
+export interface DeterministicGameLogicCrcContext {
+  getObjectsOwnerSnapshot(): DeterministicObjectsOwnerSnapshot;
+  getPartitionManagerOwnerSnapshot(): DeterministicPartitionManagerOwnerSnapshot;
+  getPlayerListOwnerSnapshot(): DeterministicPlayerListOwnerSnapshot;
+  getAiOwnerSnapshot(): DeterministicAiOwnerSnapshot;
 }
 
 interface DeterministicWriterContext {
@@ -262,10 +278,9 @@ function writeDeterministicObjectsCrc(
   // Source parity:
   // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
   //   iterates m_objList order via getNextObject().
-  // We mirror runtime-owned insertion order instead of sorting by ID.
-  // TODO(source parity): replace this with the true object-list owner order
-  // once object lifecycle ownership is promoted from scaffolding.
-  const entities = Array.from(context.gameLogic.spawnedEntities.values());
+  // The game-logic owner exposes entity snapshots in runtime traversal order.
+  const objectsSnapshot = context.gameLogic.getObjectsOwnerSnapshot();
+  const entities = objectsSnapshot.entitiesInRuntimeOrder;
   crc.addUnsignedInt(entities.length >>> 0);
 
   for (const entity of entities) {
@@ -368,9 +383,8 @@ function writeDeterministicPartitionManagerCrc(
   // Source parity:
   // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
   //   xfers ThePartitionManager snapshot directly.
-  // TODO(source parity): swap these runtime-owned bridge/nav fields for
-  // serialized partition-manager snapshot data from the ported owner.
-  const grid = context.gameLogic.navigationGrid;
+  const partitionSnapshot = context.gameLogic.getPartitionManagerOwnerSnapshot();
+  const grid = partitionSnapshot.navigationGrid;
   crc.addUnsignedByte(grid ? 1 : 0);
   if (!grid) {
     return;
@@ -394,7 +408,7 @@ function writeDeterministicPartitionManagerCrc(
   writeInt32ArrayCrc(context, crc, grid.bridgeSegmentByCell);
   writeUint8ArrayCrc(crc, grid.zonePassable);
 
-  const segmentEntries = Array.from(context.gameLogic.bridgeSegments.entries()).sort(([leftId], [rightId]) => leftId - rightId);
+  const segmentEntries = Array.from(partitionSnapshot.bridgeSegments.entries()).sort(([leftId], [rightId]) => leftId - rightId);
   crc.addUnsignedInt(segmentEntries.length >>> 0);
   for (const [segmentId, segment] of segmentEntries) {
     addSignedIntCrc(context, crc, segmentId);
@@ -403,7 +417,7 @@ function writeDeterministicPartitionManagerCrc(
     writeSignedNumberArrayCrc(context, crc, segment.transitionIndices, true);
   }
 
-  const controlEntries = Array.from(context.gameLogic.bridgeSegmentByControlEntity.entries())
+  const controlEntries = Array.from(partitionSnapshot.bridgeSegmentByControlEntity.entries())
     .sort(([leftId], [rightId]) => leftId - rightId);
   crc.addUnsignedInt(controlEntries.length >>> 0);
   for (const [entityId, segmentId] of controlEntries) {
@@ -420,19 +434,18 @@ function writeDeterministicPlayerListCrc(
   // Source parity:
   // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
   //   xfers ThePlayerList snapshot directly.
-  // TODO(source parity): switch to ThePlayerList-equivalent snapshot data
-  // once player-list ownership is promoted from scaffolding.
-  addSignedIntCrc(context, crc, context.gameLogic.selectedEntityId ?? -1);
-  writeRelationshipOverridesCrc(context, crc, context.gameLogic.teamRelationshipOverrides);
-  writeRelationshipOverridesCrc(context, crc, context.gameLogic.playerRelationshipOverrides);
-  crc.addUnsignedInt(context.gameLogic.placementSummary.totalObjects >>> 0);
-  crc.addUnsignedInt(context.gameLogic.placementSummary.spawnedObjects >>> 0);
-  crc.addUnsignedInt(context.gameLogic.placementSummary.skippedObjects >>> 0);
-  crc.addUnsignedInt(context.gameLogic.placementSummary.resolvedObjects >>> 0);
-  crc.addUnsignedInt(context.gameLogic.placementSummary.unresolvedObjects >>> 0);
-  writeCostModifierUpgradeStatesCrc(context, crc, context.gameLogic.sideKindOfProductionCostModifiers);
-  writeSidePowerStateCrc(context, crc, context.gameLogic.sidePowerBonus);
-  writeSideRadarStateCrc(crc, context.gameLogic.sideRadarState);
+  const playerListSnapshot = context.gameLogic.getPlayerListOwnerSnapshot();
+  addSignedIntCrc(context, crc, playerListSnapshot.selectedEntityId ?? -1);
+  writeRelationshipOverridesCrc(context, crc, playerListSnapshot.teamRelationshipOverrides);
+  writeRelationshipOverridesCrc(context, crc, playerListSnapshot.playerRelationshipOverrides);
+  crc.addUnsignedInt(playerListSnapshot.placementSummary.totalObjects >>> 0);
+  crc.addUnsignedInt(playerListSnapshot.placementSummary.spawnedObjects >>> 0);
+  crc.addUnsignedInt(playerListSnapshot.placementSummary.skippedObjects >>> 0);
+  crc.addUnsignedInt(playerListSnapshot.placementSummary.resolvedObjects >>> 0);
+  crc.addUnsignedInt(playerListSnapshot.placementSummary.unresolvedObjects >>> 0);
+  writeCostModifierUpgradeStatesCrc(context, crc, playerListSnapshot.sideKindOfProductionCostModifiers);
+  writeSidePowerStateCrc(context, crc, playerListSnapshot.sidePowerBonus);
+  writeSideRadarStateCrc(crc, playerListSnapshot.sideRadarState);
 }
 
 function writeDeterministicAiCrc(
@@ -443,49 +456,48 @@ function writeDeterministicAiCrc(
   // Source parity:
   // - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
   //   xfers TheAI snapshot directly.
-  // TODO(source parity): replace this transitional AI/runtime summary with
-  // serialized AI owner snapshot fields once AI system ownership is ported.
-  crc.addUnsignedInt(context.gameLogic.frameCounter >>> 0);
-  crc.addUnsignedInt(context.gameLogic.nextId >>> 0);
-  addFloat32Crc(context, crc, context.gameLogic.animationTime);
-  crc.addUnsignedByte(context.gameLogic.isAttackMoveToMode ? 1 : 0);
-  crc.addUnsignedByte(context.gameLogic.previousAttackMoveToggleDown ? 1 : 0);
-  crc.addUnsignedByte(context.gameLogic.scriptInputDisabled ? 1 : 0);
+  const aiSnapshot = context.gameLogic.getAiOwnerSnapshot();
+  crc.addUnsignedInt(aiSnapshot.frameCounter >>> 0);
+  crc.addUnsignedInt(aiSnapshot.nextId >>> 0);
+  addFloat32Crc(context, crc, aiSnapshot.animationTime);
+  crc.addUnsignedByte(aiSnapshot.isAttackMoveToMode ? 1 : 0);
+  crc.addUnsignedByte(aiSnapshot.previousAttackMoveToggleDown ? 1 : 0);
+  crc.addUnsignedByte(aiSnapshot.scriptInputDisabled ? 1 : 0);
 
   // Source parity bridge: ScriptEngine completion lists / lazy audio test state.
   // These values alter script-condition outcomes and must participate in CRC.
-  writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedVideos);
-  writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedSpeech);
-  writeOrderedStringListCrc(crc, context.gameLogic.scriptCompletedAudio);
-  writeNamedRealMapCrc(context, crc, context.gameLogic.scriptAudioLengthMsByName);
-  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingSpeechCompletionFrameByName);
-  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTestingAudioCompletionFrameByName);
-  writeScriptCompletedMusicCrc(context, crc, context.gameLogic.scriptCompletedMusic);
-  writeScriptCounterStateCrc(context, crc, context.gameLogic.scriptCountersByName);
-  writeNamedBooleanMapCrc(crc, context.gameLogic.scriptFlagsByName);
-  writeNamedBooleanSetCrc(crc, context.gameLogic.scriptUIInteractions);
-  writeNamedBooleanMapCrc(crc, context.gameLogic.scriptActiveByName);
-  writeOrderedStringListCrc(crc, context.gameLogic.scriptSubroutineCalls);
-  crc.addUnsignedByte(context.gameLogic.scriptCameraMovementFinished ? 1 : 0);
-  crc.addUnsignedByte(context.gameLogic.scriptRadarForced ? 1 : 0);
-  addSignedIntCrc(context, crc, context.gameLogic.scriptRadarRefreshFrame);
-  writeScriptTeamStateCrc(context, crc, context.gameLogic.scriptTeamsByName);
-  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTeamCreatedReadyFrameByName);
-  writeNamedFrameMapCrc(context, crc, context.gameLogic.scriptTeamCreatedAutoClearFrameByName);
+  writeOrderedStringListCrc(crc, aiSnapshot.scriptCompletedVideos);
+  writeOrderedStringListCrc(crc, aiSnapshot.scriptCompletedSpeech);
+  writeOrderedStringListCrc(crc, aiSnapshot.scriptCompletedAudio);
+  writeNamedRealMapCrc(context, crc, aiSnapshot.scriptAudioLengthMsByName);
+  writeNamedFrameMapCrc(context, crc, aiSnapshot.scriptTestingSpeechCompletionFrameByName);
+  writeNamedFrameMapCrc(context, crc, aiSnapshot.scriptTestingAudioCompletionFrameByName);
+  writeScriptCompletedMusicCrc(context, crc, aiSnapshot.scriptCompletedMusic);
+  writeScriptCounterStateCrc(context, crc, aiSnapshot.scriptCountersByName);
+  writeNamedBooleanMapCrc(crc, aiSnapshot.scriptFlagsByName);
+  writeNamedBooleanSetCrc(crc, aiSnapshot.scriptUIInteractions);
+  writeNamedBooleanMapCrc(crc, aiSnapshot.scriptActiveByName);
+  writeOrderedStringListCrc(crc, aiSnapshot.scriptSubroutineCalls);
+  crc.addUnsignedByte(aiSnapshot.scriptCameraMovementFinished ? 1 : 0);
+  crc.addUnsignedByte(aiSnapshot.scriptRadarForced ? 1 : 0);
+  addSignedIntCrc(context, crc, aiSnapshot.scriptRadarRefreshFrame);
+  writeScriptTeamStateCrc(context, crc, aiSnapshot.scriptTeamsByName);
+  writeNamedFrameMapCrc(context, crc, aiSnapshot.scriptTeamCreatedReadyFrameByName);
+  writeNamedFrameMapCrc(context, crc, aiSnapshot.scriptTeamCreatedAutoClearFrameByName);
   writePendingScriptReinforcementTransportArrivalCrc(
     context,
     crc,
-    context.gameLogic.pendingScriptReinforcementTransportArrivalByEntityId,
+    aiSnapshot.pendingScriptReinforcementTransportArrivalByEntityId,
   );
 
-  crc.addUnsignedByte(context.gameLogic.config.renderUnknownObjects ? 1 : 0);
-  crc.addUnsignedByte(context.gameLogic.config.attackUsesLineOfSight ? 1 : 0);
-  addFloat32Crc(context, crc, context.gameLogic.config.defaultMoveSpeed);
-  addFloat32Crc(context, crc, context.gameLogic.config.terrainSnapSpeed);
-  addFloat32Crc(context, crc, context.gameLogic.config.sellPercentage);
+  crc.addUnsignedByte(aiSnapshot.config.renderUnknownObjects ? 1 : 0);
+  crc.addUnsignedByte(aiSnapshot.config.attackUsesLineOfSight ? 1 : 0);
+  addFloat32Crc(context, crc, aiSnapshot.config.defaultMoveSpeed);
+  addFloat32Crc(context, crc, aiSnapshot.config.terrainSnapSpeed);
+  addFloat32Crc(context, crc, aiSnapshot.config.sellPercentage);
 
-  crc.addUnsignedInt(context.gameLogic.commandQueue.length >>> 0);
-  for (const command of context.gameLogic.commandQueue) {
+  crc.addUnsignedInt(aiSnapshot.commandQueue.length >>> 0);
+  for (const command of aiSnapshot.commandQueue) {
     writeGameLogicCommandCrc(context, crc, command);
   }
 }
@@ -603,8 +615,11 @@ function writeGameLogicCommandCrc(
       return;
     case 'purchaseScience':
       crc.addAsciiString(command.scienceName);
+      addSignedIntCrc(context, crc, command.scienceCost);
+      crc.addAsciiString(command.side ?? '');
       return;
     case 'issueSpecialPower':
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
       crc.addAsciiString(command.commandButtonId);
       crc.addAsciiString(command.specialPowerName);
       addSignedIntCrc(context, crc, command.commandOption);
@@ -628,6 +643,7 @@ function writeGameLogicCommandCrc(
       addFloat32Crc(context, crc, command.targetPosition?.[0] ?? 0);
       addFloat32Crc(context, crc, command.targetPosition?.[1] ?? 0);
       addFloat32Crc(context, crc, command.targetPosition?.[2] ?? 0);
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
       return;
     case 'placeBeacon':
       addFloat32Crc(context, crc, command.targetPosition[0]);
@@ -637,6 +653,7 @@ function writeGameLogicCommandCrc(
     case 'enterObject':
       addSignedIntCrc(context, crc, command.entityId);
       addSignedIntCrc(context, crc, command.targetObjectId);
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
       crc.addAsciiString(command.action);
       return;
     case 'constructBuilding':
@@ -658,6 +675,20 @@ function writeGameLogicCommandCrc(
     case 'cancelDozerConstruction':
       addSignedIntCrc(context, crc, command.entityId);
       return;
+    case 'garrisonBuilding':
+      addSignedIntCrc(context, crc, command.entityId);
+      addSignedIntCrc(context, crc, command.targetBuildingId);
+      return;
+    case 'repairBuilding':
+      addSignedIntCrc(context, crc, command.entityId);
+      addSignedIntCrc(context, crc, command.targetBuildingId);
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
+      return;
+    case 'enterTransport':
+      addSignedIntCrc(context, crc, command.entityId);
+      addSignedIntCrc(context, crc, command.targetTransportId);
+      crc.addAsciiString(command.commandSource ?? 'PLAYER');
+      return;
     case 'sell':
       addSignedIntCrc(context, crc, command.entityId);
       return;
@@ -665,8 +696,13 @@ function writeGameLogicCommandCrc(
       addSignedIntCrc(context, crc, command.entityId);
       addSignedIntCrc(context, crc, command.weaponSlot);
       return;
+    case 'detonateDemoTrap':
+    case 'toggleDemoTrapMode':
+      addSignedIntCrc(context, crc, command.entityId);
+      return;
     default: {
-      const unsupportedType = (command as { type?: string }).type ?? 'unknown';
+      const unreachable: never = command;
+      const unsupportedType = (unreachable as { type?: string }).type ?? 'unknown';
       throw new Error(`Unsupported deterministic command type: ${unsupportedType}`);
     }
   }

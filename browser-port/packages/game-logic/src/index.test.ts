@@ -6113,6 +6113,135 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(targetHealth[targetHealth.length - 1]).toBe(200);
   });
 
+  it('tracks runtime projectile lifecycle for weapon-delivered projectiles until detonation', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SlowMissile'] }),
+    ]);
+    const targetDef = makeObjectDef('Target', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+    const projectileDef = makeObjectDef('SlowMissileProjectile', 'Neutral', ['PROJECTILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+    ]);
+
+    const weaponDef = makeWeaponDef('SlowMissile', {
+      PrimaryDamage: 50,
+      PrimaryDamageRadius: 0,
+      AttackRange: 200,
+      WeaponSpeed: 5,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'SlowMissileProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, targetDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('Attacker', 0, 0),
+      makeMapObject('Target', 50, 0),
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const priv = logic as unknown as {
+      activeWeaponProjectileStateByVisualId: Map<number, { templateName: string; x: number }>;
+      spawnedEntities: Map<number, { templateName: string; health: number }>;
+    };
+
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    let warmupFrames = 0;
+    while (priv.activeWeaponProjectileStateByVisualId.size === 0 && warmupFrames < 10) {
+      logic.update(1 / 30);
+      warmupFrames += 1;
+    }
+
+    expect(priv.activeWeaponProjectileStateByVisualId.size).toBe(1);
+    const firstState = [...priv.activeWeaponProjectileStateByVisualId.values()][0]!;
+    expect(firstState.templateName).toBe('SlowMissileProjectile');
+    const launchX = firstState.x;
+
+    for (let i = 0; i < 3; i += 1) {
+      logic.update(1 / 30);
+    }
+    const midState = [...priv.activeWeaponProjectileStateByVisualId.values()][0]!;
+    expect(midState.x).toBeGreaterThan(launchX);
+
+    for (let i = 0; i < 20; i += 1) {
+      logic.update(1 / 30);
+    }
+    expect(priv.activeWeaponProjectileStateByVisualId.size).toBe(0);
+
+    const target = [...priv.spawnedEntities.values()].find((entity) => entity.templateName === 'Target')!;
+    expect(target.health).toBeLessThan(200);
+  });
+
+  it('applies projectile primary/secondary AoE damage by detonation radius bands', () => {
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+
+    const attackerDef = makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SplashMissile'] }),
+    ]);
+    const primaryTargetDef = makeObjectDef('PrimaryTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const secondaryTargetDef = makeObjectDef('SecondaryTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const outOfRangeDef = makeObjectDef('OutOfRangeTarget', 'China', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ]);
+    const projectileDef = makeObjectDef('SplashProjectile', 'Neutral', ['PROJECTILE'], [
+      makeBlock('Body', 'InactiveBody ModuleTag_Body', {}),
+    ]);
+
+    const weaponDef = makeWeaponDef('SplashMissile', {
+      PrimaryDamage: 60,
+      PrimaryDamageRadius: 20,
+      SecondaryDamage: 20,
+      SecondaryDamageRadius: 40,
+      AttackRange: 300,
+      WeaponSpeed: 10,
+      DelayBetweenShots: 9999,
+      ProjectileObject: 'SplashProjectile',
+      ProjectileCollidesWith: 'ENEMIES',
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [attackerDef, primaryTargetDef, secondaryTargetDef, outOfRangeDef, projectileDef],
+      weapons: [weaponDef],
+    }));
+    const map = makeMap([
+      makeMapObject('Attacker', 0, 0),          // id 1
+      makeMapObject('PrimaryTarget', 50, 0),    // id 2
+      makeMapObject('SecondaryTarget', 80, 0),  // id 3 (30 units from impact)
+      makeMapObject('OutOfRangeTarget', 110, 0),// id 4 (60 units from impact)
+    ]);
+
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    for (let i = 0; i < 20; i += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(2)?.health).toBeCloseTo(140, 5);
+    expect(logic.getEntityState(3)?.health).toBeCloseTo(180, 5);
+    expect(logic.getEntityState(4)?.health).toBeCloseTo(200, 5);
+  });
+
   it('projectile passes through allies without collision when ProjectileCollidesWith excludes ALLIES', () => {
     const scene = new THREE.Scene();
     const logic = new GameLogicSubsystem(scene);
@@ -37119,7 +37248,11 @@ describe('Script condition groundwork', () => {
 
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, { attackTargetEntityId: number | null }>;
-      pendingWeaponDamageEvents: Array<{ executeFrame: number; primaryVictimEntityId: number | null }>;
+      pendingWeaponDamageEvents: Array<{
+        executeFrame: number;
+        projectilePlannedImpactFrame: number | null;
+        primaryVictimEntityId: number | null;
+      }>;
     };
 
     expect(logic.executeScriptAction({
@@ -37135,8 +37268,12 @@ describe('Script condition groundwork', () => {
     expect(privateApi.pendingWeaponDamageEvents).toHaveLength(2);
     expect(privateApi.pendingWeaponDamageEvents[0]?.primaryVictimEntityId).toBeNull();
     expect(privateApi.pendingWeaponDamageEvents[1]?.primaryVictimEntityId).toBeNull();
-    expect(privateApi.pendingWeaponDamageEvents[1]!.executeFrame)
-      .toBeGreaterThan(privateApi.pendingWeaponDamageEvents[0]!.executeFrame);
+    expect(privateApi.pendingWeaponDamageEvents[0]!.executeFrame).toBe(Number.MAX_SAFE_INTEGER);
+    expect(privateApi.pendingWeaponDamageEvents[1]!.executeFrame).toBe(Number.MAX_SAFE_INTEGER);
+    expect(privateApi.pendingWeaponDamageEvents[0]!.projectilePlannedImpactFrame).not.toBeNull();
+    expect(privateApi.pendingWeaponDamageEvents[1]!.projectilePlannedImpactFrame).not.toBeNull();
+    expect(privateApi.pendingWeaponDamageEvents[1]!.projectilePlannedImpactFrame!)
+      .toBeGreaterThan(privateApi.pendingWeaponDamageEvents[0]!.projectilePlannedImpactFrame!);
   });
 
   it('interpolates NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH projectile position along waypoint segments', () => {
@@ -37319,7 +37456,9 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(victoryLogic.getGameEndState()).toMatchObject({
       status: 'VICTORY',
+      endFrame: 120,
     });
+    expect(victoryLogic.isScriptInputDisabled()).toBe(true);
 
     const defeatLogic = createLogic();
     expect(defeatLogic.executeScriptAction({
@@ -37327,7 +37466,9 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(defeatLogic.getGameEndState()).toMatchObject({
       status: 'DEFEAT',
+      endFrame: 120,
     });
+    expect(defeatLogic.isScriptInputDisabled()).toBe(true);
 
     const quickVictoryLogic = createLogic();
     expect(quickVictoryLogic.executeScriptAction({
@@ -37335,15 +37476,16 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(quickVictoryLogic.getGameEndState()).toMatchObject({
       status: 'VICTORY',
+      endFrame: 1,
     });
+    expect(quickVictoryLogic.isScriptInputDisabled()).toBe(true);
 
     const localDefeatLogic = createLogic();
     expect(localDefeatLogic.executeScriptAction({
       actionType: 296, // LOCALDEFEAT
     })).toBe(true);
-    expect(localDefeatLogic.getGameEndState()).toMatchObject({
-      status: 'DEFEAT',
-    });
+    expect(localDefeatLogic.getGameEndState()).toBeNull();
+    expect(localDefeatLogic.isScriptInputDisabled()).toBe(false);
   });
 
   it('executes script input disable/enable actions using source action ids', () => {
@@ -40028,6 +40170,94 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(3)?.transportContainerId).toBe(1);
   });
 
+  it('applies generic enter-object validation to script enter actions targeting garrison containers', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('LockedGarrison', 'America', ['STRUCTURE'], [
+          makeBlock('Behavior', 'GarrisonContain ModuleTag_Garrison', {
+            ContainMax: 2,
+            AllowAlliesInside: true,
+            AllowEnemiesInside: false,
+            AllowNeutralInside: false,
+          }),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('NoGarrisonRanger', 'America', ['INFANTRY', 'NO_GARRISON'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('ImmobileRanger', 'America', ['INFANTRY', 'IMMOBILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('EnemyRanger', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('LockedGarrison', 20, 20), // id 1
+        makeMapObject('Ranger', 20, 20), // id 2 (valid ally source)
+        makeMapObject('NoGarrisonRanger', 20, 20), // id 3
+        makeMapObject('ImmobileRanger', 20, 20), // id 4
+        makeMapObject('EnemyRanger', 20, 20), // id 5
+        makeMapObject('LockedGarrison', 40, 20), // id 6 (subdued target)
+        makeMapObject('Ranger', 40, 20), // id 7
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        garrisonContainerId: number | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(6)!.objectStatusFlags.add('DISABLED_SUBDUED');
+
+    expect(logic.executeScriptAction({
+      actionType: 52, // NAMED_ENTER_NAMED
+      params: [5, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(5)?.garrisonContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [3, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(3)?.garrisonContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [4, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(4)?.garrisonContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [7, 6],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(7)?.garrisonContainerId).toBeNull();
+
+    expect(logic.executeScriptAction({
+      actionType: 52,
+      params: [2, 1],
+    })).toBe(true);
+    logic.update(1 / 30);
+    expect(privateApi.spawnedEntities.get(2)?.garrisonContainerId).toBe(1);
+  });
+
   it('allows script enter actions to route cross-side units into tunnel networks', () => {
     const bundle = makeBundle({
       objects: [
@@ -42681,6 +42911,258 @@ describe('Script condition groundwork', () => {
     expect(logic.evaluateScriptNamedReachedWaypointsEnd({
       entityId: 1,
       waypointPathName: 'RouteOmega',
+    })).toBe(false);
+  });
+
+  it('uses starting-waypoint labels for NAMED_FOLLOW_WAYPOINTS_EXACT completion', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 18, 20), // id 1
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 51,
+          name: 'Exact_Start',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'ExactRoute',
+          pathLabel2: 'ExactStartMarker',
+          biDirectional: false,
+        },
+        {
+          id: 52,
+          name: 'Exact_End',
+          position: { x: 60, y: 20, z: 0 },
+          pathLabel1: 'ExactRoute',
+          pathLabel2: 'ExactEndMarker',
+          biDirectional: false,
+        },
+      ],
+      links: [
+        { waypoint1: 51, waypoint2: 52 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 282, // NAMED_FOLLOW_WAYPOINTS_EXACT (raw id)
+      params: [1, 'ExactRoute'],
+    })).toBe(true);
+
+    let completionObserved = false;
+    for (let frame = 0; frame < 120; frame += 1) {
+      logic.update(1 / 30);
+      if (!logic.evaluateScriptNamedReachedWaypointsEnd({
+        entityId: 1,
+        waypointPathName: 'ExactRoute',
+      })) {
+        continue;
+      }
+
+      completionObserved = true;
+      expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+        entityId: 1,
+        waypointPathName: 'ExactStartMarker',
+      })).toBe(true);
+      expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+        entityId: 1,
+        waypointPathName: 'ExactEndMarker',
+      })).toBe(false);
+      break;
+    }
+
+    expect(completionObserved).toBe(true);
+
+    // Source parity: completed waypoint is a one-frame pulse.
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'ExactRoute',
+    })).toBe(false);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'ExactStartMarker',
+    })).toBe(false);
+  });
+
+  it('pulses exact follow-waypoint completion on state exit when interrupted', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 20, 20), // id 1
+    ], 256, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 71,
+          name: 'Exact_Stop_Start',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'ExactStopPath',
+          pathLabel2: 'ExactStopStart',
+          biDirectional: false,
+        },
+        {
+          id: 72,
+          name: 'Exact_Stop_End',
+          position: { x: 220, y: 20, z: 0 },
+          pathLabel1: 'ExactStopPath',
+          pathLabel2: 'ExactStopEnd',
+          biDirectional: false,
+        },
+      ],
+      links: [
+        { waypoint1: 71, waypoint2: 72 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(256, 128),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 282, // NAMED_FOLLOW_WAYPOINTS_EXACT (raw id)
+      params: [1, 'ExactStopPath'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 15; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'ExactStopPath',
+    })).toBe(true);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'ExactStopStart',
+    })).toBe(true);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'ExactStopEnd',
+    })).toBe(false);
+
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'ExactStopPath',
+    })).toBe(false);
+    expect(logic.evaluateScriptNamedReachedWaypointsEnd({
+      entityId: 1,
+      waypointPathName: 'ExactStopStart',
+    })).toBe(false);
+  });
+
+  it('evaluates TEAM_REACHED_WAYPOINTS_END from exact follow-waypoint start labels', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('Ranger', 20, 20), // id 1
+      makeMapObject('Ranger', 24, 20), // id 2
+    ], 256, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 81,
+          name: 'Team_Exact_Start',
+          position: { x: 20, y: 20, z: 0 },
+          pathLabel1: 'TeamExactPath',
+          pathLabel2: 'TeamExactStart',
+          biDirectional: false,
+        },
+        {
+          id: 82,
+          name: 'Team_Exact_End',
+          position: { x: 220, y: 20, z: 0 },
+          pathLabel1: 'TeamExactPath',
+          pathLabel2: 'TeamExactEnd',
+          biDirectional: false,
+        },
+      ],
+      links: [
+        { waypoint1: 81, waypoint2: 82 },
+      ],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(256, 128),
+    );
+    expect(logic.setScriptTeamMembers('ExactTeam', [1, 2])).toBe(true);
+
+    expect(logic.executeScriptAction({
+      actionType: 281, // TEAM_FOLLOW_WAYPOINTS_EXACT
+      params: ['ExactTeam', 'TeamExactPath', 1],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 15; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    logic.submitCommand({ type: 'stop', entityId: 1 });
+    logic.update(1 / 30);
+
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_REACHED_WAYPOINTS_END',
+      params: ['ExactTeam', 'TeamExactPath'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_REACHED_WAYPOINTS_END',
+      params: ['ExactTeam', 'TeamExactStart'],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_REACHED_WAYPOINTS_END',
+      params: ['ExactTeam', 'TeamExactEnd'],
+    })).toBe(false);
+
+    logic.update(1 / 30);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'TEAM_REACHED_WAYPOINTS_END',
+      params: ['ExactTeam', 'TeamExactPath'],
     })).toBe(false);
   });
 
@@ -45607,6 +46089,57 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(3)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
   });
 
+  it('inherits controlling player ownership when capturing unmanned units via script enter flow', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('CaptureInfantry', 'America', ['INFANTRY'], [
+          makeBlock('LocomotorSet', 'SET_NORMAL TestInfantryLoco', {}),
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('NeutralAbandonedVehicle', 'Civilian', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 400, InitialHealth: 400 }),
+        ]),
+      ],
+      locomotors: [
+        makeLocomotorDef('TestInfantryLoco', 60),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('CaptureInfantry', 20, 20), // id 1
+        makeMapObject('NeutralAbandonedVehicle', 24, 20), // id 2
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    expect(logic.setScriptTeamMembers('CaptureTeam', [1])).toBe(true);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        side: string | null;
+        controllingPlayerToken: string | null;
+        objectStatusFlags: Set<string>;
+      }>;
+    };
+    privateApi.spawnedEntities.get(1)!.controllingPlayerToken = 'player_a';
+    privateApi.spawnedEntities.get(2)!.objectStatusFlags.add('DISABLED_UNMANNED');
+
+    expect(logic.executeScriptAction({
+      actionType: 475,
+      params: ['CaptureTeam'],
+    })).toBe(true);
+
+    for (let frame = 0; frame < 60; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    expect((privateApi.spawnedEntities.get(2)?.side ?? '').toLowerCase()).toBe('america');
+    expect(privateApi.spawnedEntities.get(2)?.controllingPlayerToken).toBe('player_a');
+    expect(privateApi.spawnedEntities.get(2)?.objectStatusFlags.has('DISABLED_UNMANNED')).toBe(false);
+  });
+
   it('resolves team-capture-nearest-unowned-faction-unit through getTeamNamed with THIS_TEAM precedence', () => {
     const bundle = makeBundle({
       objects: [
@@ -47892,7 +48425,7 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
   });
 
-  it('executes source waypoint-path command-button action for CAN_USE_WAYPOINTS special powers', () => {
+  it('executes source waypoint-path command-button action from the closest matching waypoint', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('ScriptPathCaster', 'America', ['INFANTRY'], [
@@ -47995,8 +48528,8 @@ describe('Script condition groundwork', () => {
       dispatchType: 'POSITION',
       commandButtonId: 'Command_PathPowerAllowed',
       targetEntityId: null,
-      targetX: 90,
-      targetZ: 90,
+      targetX: 30,
+      targetZ: 35,
     });
     expect(logic.executeScriptAction({
       actionType: 337, // NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH (raw id)
@@ -48007,8 +48540,8 @@ describe('Script condition groundwork', () => {
       dispatchType: 'POSITION',
       commandButtonId: 'Command_PathPowerAllowed',
       targetEntityId: null,
-      targetX: 90,
-      targetZ: 90,
+      targetX: 30,
+      targetZ: 35,
     });
 
     expect(logic.executeScriptAction({
@@ -48017,8 +48550,8 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
       commandButtonId: 'Command_PathPowerAllowed',
-      targetX: 90,
-      targetZ: 90,
+      targetX: 30,
+      targetZ: 35,
     });
 
     expect(logic.executeScriptAction({
@@ -48050,7 +48583,7 @@ describe('Script condition groundwork', () => {
     });
   });
 
-  it('uses exact waypoint link ordering for source waypoint-path command-button actions', () => {
+  it('anchors source waypoint-path command-button actions to the closest path node', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('ScriptPathCaster', 'America', ['INFANTRY'], [
@@ -48114,14 +48647,6 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
 
-    const privateApi = logic as unknown as {
-      gameRandom: {
-        nextRange(min: number, max: number): number;
-      };
-    };
-    // If route resolution used random path traversal, this would force the second branch.
-    privateApi.gameRandom.nextRange = () => 1;
-
     expect(logic.executeScriptAction({
       actionType: 542, // NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH
       params: [1, 'Command_PathPowerAllowed', 'PathFork'],
@@ -48129,7 +48654,7 @@ describe('Script condition groundwork', () => {
     expect(logic.getEntityState(1)?.lastSpecialPowerDispatch).toMatchObject({
       commandButtonId: 'Command_PathPowerAllowed',
       dispatchType: 'POSITION',
-      targetX: 80,
+      targetX: 10,
       targetZ: 10,
     });
   });

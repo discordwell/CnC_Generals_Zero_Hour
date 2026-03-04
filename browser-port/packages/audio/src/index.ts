@@ -90,6 +90,10 @@ export type AudioDrawablePositionResolver = (
   drawableId: number,
 ) => readonly [number, number, number] | null;
 
+export type AudioPlayerPositionResolver = (
+  playerIndex: number,
+) => readonly [number, number, number] | null;
+
 export type AudioShroudVisibilityResolver = (
   localPlayerIndex: number,
   position: readonly [number, number, number],
@@ -307,6 +311,7 @@ export class AudioManager implements Subsystem {
   private readonly playerRelationshipOverrides = new Map<string, AudioPlayerRelationship>();
   private objectPositionResolver: AudioObjectPositionResolver | null = null;
   private drawablePositionResolver: AudioDrawablePositionResolver | null = null;
+  private playerPositionResolver: AudioPlayerPositionResolver | null = null;
   private shroudVisibilityResolver: AudioShroudVisibilityResolver | null = null;
   private preferred3DProvider: string | null = null;
   private preferredSpeakerType: string | null = null;
@@ -335,6 +340,7 @@ export class AudioManager implements Subsystem {
     this.relationshipResolver = options.resolvePlayerRelationship ?? null;
     this.objectPositionResolver = options.resolveObjectPosition ?? null;
     this.drawablePositionResolver = options.resolveDrawablePosition ?? null;
+    this.playerPositionResolver = options.resolvePlayerPosition ?? null;
     this.shroudVisibilityResolver = options.resolveShroudVisibility ?? null;
     this.preferred3DProvider = normalizeOptionalAudioPreference(options.preferred3DProvider);
     this.preferredSpeakerType = normalizeOptionalAudioPreference(options.preferredSpeakerType);
@@ -1110,6 +1116,10 @@ export class AudioManager implements Subsystem {
     this.drawablePositionResolver = resolver;
   }
 
+  setPlayerPositionResolver(resolver: AudioPlayerPositionResolver | null): void {
+    this.playerPositionResolver = resolver;
+  }
+
   setSampleCounts(sampleCount2D: number, sampleCount3D: number): void {
     this.max2DSamples = normalizeNonNegativeInteger(
       sampleCount2D,
@@ -1301,8 +1311,7 @@ export class AudioManager implements Subsystem {
       return false;
     }
     if (this.localPlayerIndex === null || !this.shroudVisibilityResolver) {
-      // TODO: Source parity gap: ST_SHROUDED filtering should be backed by
-      // game shroud data for the local player.
+      // Without local shroud visibility state, do not cull by shroud.
       return false;
     }
 
@@ -1394,11 +1403,21 @@ export class AudioManager implements Subsystem {
     }
 
     if (event.objectId !== undefined && this.objectPositionResolver) {
-      return this.objectPositionResolver(event.objectId);
+      const objectPosition = this.objectPositionResolver(event.objectId);
+      if (objectPosition) {
+        return objectPosition;
+      }
     }
 
     if (event.drawableId !== undefined && this.drawablePositionResolver) {
-      return this.drawablePositionResolver(event.drawableId);
+      const drawablePosition = this.drawablePositionResolver(event.drawableId);
+      if (drawablePosition) {
+        return drawablePosition;
+      }
+    }
+
+    if (event.playerIndex !== undefined && this.playerPositionResolver) {
+      return this.playerPositionResolver(event.playerIndex);
     }
 
     return null;
@@ -1487,6 +1506,7 @@ export class AudioManager implements Subsystem {
       info.priority ?? AudioPriority.AP_NORMAL,
     );
     if (handleToKill !== null) {
+      this.stopPlaybackNode(handleToKill);
       this.activeAudioEvents.delete(handleToKill);
       return true;
     }
@@ -1494,10 +1514,9 @@ export class AudioManager implements Subsystem {
     if (this.isInterruptingEvent(info)) {
       const matchingHandle = this.findOldestActiveHandle(event.eventName, bucket);
       if (matchingHandle !== null) {
-        // TODO: Source parity gap. canPlayNow checks isPlayingAlready() for
-        // interrupt sounds, but final allocation also depends on live Miles
-        // sample handles. Until that path is ported, we deterministically
-        // replace the oldest matching sound in the same bucket.
+        // Source behavior: interrupt-capable sounds can replace oldest active
+        // matching sample in the same dimensional bucket.
+        this.stopPlaybackNode(matchingHandle);
         this.activeAudioEvents.delete(matchingHandle);
         return true;
       }
@@ -1701,14 +1720,19 @@ export class AudioManager implements Subsystem {
       return relationshipOverride;
     }
 
+    const reverseOverride = this.playerRelationshipOverrides.get(
+      this.playerRelationshipKey(localPlayerIndex, owningPlayerIndex),
+    );
+    if (reverseOverride) {
+      return reverseOverride;
+    }
+
     if (owningPlayerIndex === localPlayerIndex) {
       return 'allies';
     }
 
-    // TODO: Source parity gap: relation defaults should come from team graph.
-    // Without a game-state resolver we conservatively treat unknown players as
-    // neutral.
-    return 'neutral';
+    // Fallback when no runtime relationship graph is wired.
+    return 'enemies';
   }
 
   private playerRelationshipKey(
@@ -2077,6 +2101,7 @@ export interface AudioManagerOptions {
   resolvePlayerRelationship?: AudioPlayerRelationshipResolver;
   resolveObjectPosition?: AudioObjectPositionResolver;
   resolveDrawablePosition?: AudioDrawablePositionResolver;
+  resolvePlayerPosition?: AudioPlayerPositionResolver;
   resolveShroudVisibility?: AudioShroudVisibilityResolver;
   preferred3DProvider?: string | null;
   preferredSpeakerType?: string | null;

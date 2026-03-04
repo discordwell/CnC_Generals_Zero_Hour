@@ -749,6 +749,10 @@ const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ANGLE = Math.PI / 3;
 const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ATTEMPTS = 64;
 // Source parity: AIData::m_skirmishBaseDefenseExtraDistance (defaults to 0 in TAiData ctor).
 const SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE = 0;
+// Source parity: ScriptEngine.cpp FRAMES_TO_SHOW_WIN_LOSE_MESSAGE.
+const SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES = 120;
+// Source parity: ScriptEngine::startQuickEndGameTimer.
+const SCRIPT_ENDGAME_QUICK_DURATION_FRAMES = 1;
 
 /**
  * Source parity: AIGuardMachine state IDs.
@@ -1395,6 +1399,8 @@ interface PendingWeaponDamageEvent {
   impactX: number;
   impactZ: number;
   executeFrame: number;
+  /** Planned impact frame for non-missile projectile flight interpolation. */
+  projectilePlannedImpactFrame: number | null;
   delivery: 'DIRECT' | 'PROJECTILE' | 'LASER';
   weapon: AttackWeaponProfile;
   /** Frame when the projectile was launched. */
@@ -1437,6 +1443,18 @@ interface PendingWeaponDamageEvent {
    * pre-impact collision checks traverse this polyline instead of direct source→impact.
    */
   scriptWaypointPath?: readonly VectorXZ[] | null;
+}
+
+interface ActiveWeaponProjectileState {
+  id: number;
+  visualId: number;
+  templateName: string;
+  sourceEntityId: number;
+  side: string;
+  x: number;
+  y: number;
+  z: number;
+  launchFrame: number;
 }
 
 type MissileAIState = 'PRELAUNCH' | 'LAUNCH' | 'IGNITION' | 'ATTACK_NOTURN' | 'ATTACK' | 'KILL' | 'KILL_SELF';
@@ -5609,6 +5627,7 @@ export class GameLogicSubsystem implements Subsystem {
   /** Tracks script-issued waypoint-path goals until completion/abort. */
   private readonly scriptPendingWaypointPathByEntityId = new Map<number, {
     pathNames: readonly string[];
+    completionMode: 'ON_REACH_END' | 'ON_STATE_EXIT';
   }>();
   /** Source parity subset: ScriptEngine named map reveals keyed by look-name token. */
   private readonly scriptNamedMapRevealByName = new Map<string, {
@@ -5623,6 +5642,8 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: ScriptEngine::m_namedObjects (name → last-known entity id). */
   private readonly scriptNamedEntitiesByName = new Map<string, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
+  /** Source parity bridge: lightweight runtime projectile objects for weapon-delivered projectiles. */
+  private readonly activeWeaponProjectileStateByVisualId = new Map<number, ActiveWeaponProjectileState>();
   private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
   private readonly visualEventBuffer: import('./types.js').VisualEvent[] = [];
   private readonly evaEventBuffer: import('./types.js').EvaEvent[] = [];
@@ -5757,6 +5778,8 @@ export class GameLogicSubsystem implements Subsystem {
 
   private readonly defeatedSides = new Set<string>();
   private gameEndFrame: number | null = null;
+  /** Source parity: ScriptEngine::m_endGameTimer >= 0 blocks script updates after victory/defeat actions. */
+  private scriptEndGameTimerActive = false;
 
   constructor(_scene: THREE.Scene, config?: Partial<GameLogicConfig>) {
     void _scene;
@@ -6665,53 +6688,57 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity references:
    * - Generals/Code/GameEngine/Source/GameLogic/System/GameLogic.cpp (GameLogic::getCRC)
-   *
-   * TODO(source parity): replace the section serializers below with direct
-   * ownership from object/partition/player/AI runtime ports as those systems
-   * are promoted from scaffolding to source-complete subsystems.
    */
   createDeterministicGameLogicCrcSectionWriters():
     DeterministicGameLogicCrcSectionWriters<unknown> {
     return createDeterministicGameLogicCrcSectionWritersImpl({
-      spawnedEntities: this.spawnedEntities,
-      navigationGrid: this.navigationGrid,
-      bridgeSegments: this.bridgeSegments,
-      bridgeSegmentByControlEntity: this.bridgeSegmentByControlEntity,
-      selectedEntityId: this.selectedEntityId,
-      teamRelationshipOverrides: this.teamRelationshipOverrides,
-      playerRelationshipOverrides: this.playerRelationshipOverrides,
-      placementSummary: this.placementSummary,
-      sideKindOfProductionCostModifiers: this.sideKindOfProductionCostModifiers,
-      sidePowerBonus: this.sidePowerBonus,
-      sideRadarState: this.sideRadarState,
-      scriptCompletedVideos: this.scriptCompletedVideos,
-      scriptCompletedSpeech: this.scriptCompletedSpeech,
-      scriptCompletedAudio: this.scriptCompletedAudio,
-      scriptAudioLengthMsByName: this.scriptAudioLengthMsByName,
-      scriptTestingSpeechCompletionFrameByName: this.scriptTestingSpeechCompletionFrameByName,
-      scriptTestingAudioCompletionFrameByName: this.scriptTestingAudioCompletionFrameByName,
-      scriptCompletedMusic: this.scriptCompletedMusic,
-      scriptCountersByName: this.scriptCountersByName,
-      scriptFlagsByName: this.scriptFlagsByName,
-      scriptUIInteractions: this.scriptUIInteractions,
-      scriptActiveByName: this.scriptActiveByName,
-      scriptSubroutineCalls: this.scriptSubroutineCalls,
-      scriptCameraMovementFinished: this.scriptCameraMovementFinished,
-      scriptRadarForced: this.scriptRadarForced,
-      scriptRadarRefreshFrame: this.scriptRadarRefreshFrame,
-      scriptTeamsByName: this.scriptTeamsByName,
-      scriptTeamCreatedReadyFrameByName: this.scriptTeamCreatedReadyFrameByName,
-      scriptTeamCreatedAutoClearFrameByName: this.scriptTeamCreatedAutoClearFrameByName,
-      pendingScriptReinforcementTransportArrivalByEntityId:
-        this.pendingScriptReinforcementTransportArrivalByEntityId,
-      frameCounter: this.frameCounter,
-      nextId: this.nextId,
-      animationTime: this.animationTime,
-      isAttackMoveToMode: this.isAttackMoveToMode,
-      previousAttackMoveToggleDown: this.previousAttackMoveToggleDown,
-      scriptInputDisabled: this.scriptInputDisabled,
-      config: this.config,
-      commandQueue: this.commandQueue,
+      getObjectsOwnerSnapshot: () => ({
+        entitiesInRuntimeOrder: Array.from(this.spawnedEntities.values()),
+      }),
+      getPartitionManagerOwnerSnapshot: () => ({
+        navigationGrid: this.navigationGrid,
+        bridgeSegments: this.bridgeSegments,
+        bridgeSegmentByControlEntity: this.bridgeSegmentByControlEntity,
+      }),
+      getPlayerListOwnerSnapshot: () => ({
+        selectedEntityId: this.selectedEntityId,
+        teamRelationshipOverrides: this.teamRelationshipOverrides,
+        playerRelationshipOverrides: this.playerRelationshipOverrides,
+        placementSummary: this.placementSummary,
+        sideKindOfProductionCostModifiers: this.sideKindOfProductionCostModifiers,
+        sidePowerBonus: this.sidePowerBonus,
+        sideRadarState: this.sideRadarState,
+      }),
+      getAiOwnerSnapshot: () => ({
+        scriptCompletedVideos: this.scriptCompletedVideos,
+        scriptCompletedSpeech: this.scriptCompletedSpeech,
+        scriptCompletedAudio: this.scriptCompletedAudio,
+        scriptAudioLengthMsByName: this.scriptAudioLengthMsByName,
+        scriptTestingSpeechCompletionFrameByName: this.scriptTestingSpeechCompletionFrameByName,
+        scriptTestingAudioCompletionFrameByName: this.scriptTestingAudioCompletionFrameByName,
+        scriptCompletedMusic: this.scriptCompletedMusic,
+        scriptCountersByName: this.scriptCountersByName,
+        scriptFlagsByName: this.scriptFlagsByName,
+        scriptUIInteractions: this.scriptUIInteractions,
+        scriptActiveByName: this.scriptActiveByName,
+        scriptSubroutineCalls: this.scriptSubroutineCalls,
+        scriptCameraMovementFinished: this.scriptCameraMovementFinished,
+        scriptRadarForced: this.scriptRadarForced,
+        scriptRadarRefreshFrame: this.scriptRadarRefreshFrame,
+        scriptTeamsByName: this.scriptTeamsByName,
+        scriptTeamCreatedReadyFrameByName: this.scriptTeamCreatedReadyFrameByName,
+        scriptTeamCreatedAutoClearFrameByName: this.scriptTeamCreatedAutoClearFrameByName,
+        pendingScriptReinforcementTransportArrivalByEntityId:
+          this.pendingScriptReinforcementTransportArrivalByEntityId,
+        frameCounter: this.frameCounter,
+        nextId: this.nextId,
+        animationTime: this.animationTime,
+        isAttackMoveToMode: this.isAttackMoveToMode,
+        previousAttackMoveToggleDown: this.previousAttackMoveToggleDown,
+        scriptInputDisabled: this.scriptInputDisabled,
+        config: this.config,
+        commandQueue: this.commandQueue,
+      }),
     });
   }
 
@@ -6909,16 +6936,22 @@ export class GameLogicSubsystem implements Subsystem {
     this.animationTime += effectiveDt;
     this.frameCounter++;
     this.resetScriptWaypointPathCompletions();
-    this.updateScriptCountdownTimers();
+    if (!this.scriptEndGameTimerActive) {
+      this.updateScriptCountdownTimers();
+    }
     this.updateScriptEntityFlashes();
     this.resetBridgeDamageStateChanges();
     this.resetContainPlayerEnteredSides();
     if (this.isSimulationTimeFrozen()) {
       this.updatePendingScriptTeamCreated();
       this.updateScriptTeamCreatedPulses();
-      this.executeMapScripts();
+      if (!this.scriptEndGameTimerActive) {
+        this.executeMapScripts();
+      }
       this.clearScriptUIInteractions();
-      this.updateScriptSequentialScripts();
+      if (!this.scriptEndGameTimerActive) {
+        this.updateScriptSequentialScripts();
+      }
       return;
     }
     this.flushCommands();
@@ -7028,15 +7061,20 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateCountermeasures();
     this.updateMissileAIEvents();
     this.updateProjectileFlightCollisions();
+    this.updateActiveWeaponProjectileInstances();
     this.processCountermeasureDiversions();
     this.updatePendingWeaponDamage();
     this.updateScriptWaypointPathCompletions();
     this.updateScriptTriggerTransitions();
     this.updatePendingScriptTeamCreated();
     this.updateScriptTeamCreatedPulses();
-    this.executeMapScripts();
+    if (!this.scriptEndGameTimerActive) {
+      this.executeMapScripts();
+    }
     this.clearScriptUIInteractions();
-    this.updateScriptSequentialScripts();
+    if (!this.scriptEndGameTimerActive) {
+      this.updateScriptSequentialScripts();
+    }
     this.finalizeDestroyedEntities();
     this.cleanupDyingRenderableStates();
     this.checkVictoryConditions();
@@ -7996,7 +8034,8 @@ export class GameLogicSubsystem implements Subsystem {
         progress = Math.min(1, Math.max(0, missileState.travelDistance / Math.max(1, missileState.totalDistanceEstimate)));
         heading = Math.atan2(missileState.velocityX, missileState.velocityZ);
       } else {
-        const totalFrames = event.executeFrame - event.launchFrame;
+        const flightEndFrame = event.projectilePlannedImpactFrame ?? event.executeFrame;
+        const totalFrames = flightEndFrame - event.launchFrame;
         if (totalFrames <= 0) continue;
 
         const elapsed = this.frameCounter - event.launchFrame;
@@ -8595,7 +8634,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity bridge: mirrors ScriptActions::doCameraTetherNamed.
-   * TODO(source-parity): wire this state to renderer TacticalView camera lock behavior.
+   * Consumed by script-camera runtime bridge after each simulation step.
    */
   setScriptCameraTether(entityId: number, immediate: boolean, play: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -8655,7 +8694,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity bridge: ScriptActions::doC3CameraEnableSlaveMode.
-   * TODO(source-parity): forward this state to TacticalView::cameraEnableSlaveMode.
+   * Consumed by script-camera runtime bridge after each simulation step.
    */
   setScriptCameraSlaveMode(thingTemplateName: string, boneName: string): boolean {
     const normalizedThingTemplateName = thingTemplateName.trim();
@@ -8686,7 +8725,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity bridge: mirrors ScriptActions::doCameraSetDefault.
-   * TODO(source-parity): apply defaults through TacticalView when renderer bridge is available.
+   * Consumed by script-camera runtime bridge after each simulation step.
    */
   setScriptCameraDefaultView(pitch: number, angle: number, maxHeight: number): boolean {
     if (!Number.isFinite(pitch) || !Number.isFinite(angle) || !Number.isFinite(maxHeight)) {
@@ -8709,7 +8748,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity bridge: mirrors ScriptActions::doRotateCameraTowardObject.
-   * TODO(source-parity): forward this to TacticalView::rotateCameraTowardObject.
+   * Consumed by script-camera runtime bridge after each simulation step.
    */
   setScriptCameraLookTowardObject(
     entityId: number,
@@ -8749,7 +8788,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity bridge: mirrors ScriptActions::doRotateCameraTowardWaypoint.
-   * TODO(source-parity): forward this to TacticalView::rotateCameraTowardPosition.
+   * Consumed by script-camera runtime bridge after each simulation step.
    */
   setScriptCameraLookTowardWaypoint(
     waypointName: string,
@@ -9441,7 +9480,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity bridge: ScriptActions::doC3CameraShake.
-   * TODO(source-parity): forward this request to TacticalView::Add_Camera_Shake.
+   * Consumed by script-camera-effects runtime bridge.
    */
   private requestScriptCameraAddShaker(
     waypointName: string,
@@ -9482,10 +9521,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doVictory/doDefeat and timer start.
-   * This port applies the local outcome immediately (without UI/end-game timer windows).
+   * Source parity: ScriptActions::doVictory/doDefeat/doQuickVictory.
+   * Starts an end-game timer while immediately disabling local input.
    */
-  private setScriptLocalGameEndState(localDefeated: boolean): boolean {
+  private setScriptLocalGameEndState(localDefeated: boolean, durationFrames: number): boolean {
+    const boundedDuration = Math.max(1, Math.trunc(durationFrames));
     const localSide = this.resolveLocalPlayerSide();
     if (localSide) {
       if (localDefeated) {
@@ -9494,7 +9534,21 @@ export class GameLogicSubsystem implements Subsystem {
         this.defeatedSides.delete(localSide);
       }
     }
-    this.gameEndFrame = this.frameCounter;
+    this.scriptEndGameTimerActive = true;
+    this.setScriptInputDisabled(true);
+    this.gameEndFrame = this.frameCounter + boundedDuration;
+    return true;
+  }
+
+  /**
+   * Source parity: ScriptActions::doLocalDefeat.
+   * This is a local presentation flow and does not start the global end-game timer.
+   */
+  private setScriptLocalDefeatState(): boolean {
+    const localSide = this.resolveLocalPlayerSide();
+    if (localSide) {
+      this.defeatedSides.add(localSide);
+    }
     return true;
   }
 
@@ -9641,7 +9695,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity bridge: ScriptActions::doScreenShake.
-   * TODO(source-parity): forward to TacticalView::shake.
+   * Consumed by script-camera-effects runtime bridge.
    */
   setScriptScreenShake(intensity: number): boolean {
     if (!Number.isFinite(intensity)) {
@@ -10102,7 +10156,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doDebugString / doDebugCrashBox.
-   * TODO(source-parity): route to runtime debug UI and internal crash-box handling.
+   * Consumed by script-message runtime bridge.
    */
   private executeScriptDebugMessage(
     message: string,
@@ -10138,7 +10192,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doNamedEmoticon.
-   * TODO(source-parity): wire requests to Drawable::setEmoticon in renderer bridge.
+   * Consumed by script-emoticon runtime bridge.
    */
   private executeScriptNamedSetEmoticon(
     entityId: number,
@@ -10162,7 +10216,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doTeamEmoticon (via AIGroup::groupSetEmoticon).
-   * TODO(source-parity): wire requests to Drawable::setEmoticon in renderer bridge.
+   * Consumed by script-emoticon runtime bridge.
    */
   private executeScriptTeamSetEmoticon(
     teamName: string,
@@ -10898,11 +10952,13 @@ export class GameLogicSubsystem implements Subsystem {
           readInteger(1, ['attitude', 'mood', 'value']),
         );
       case 'VICTORY':
+        return this.setScriptLocalGameEndState(false, SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES);
       case 'QUICKVICTORY':
-        return this.setScriptLocalGameEndState(false);
+        return this.setScriptLocalGameEndState(false, SCRIPT_ENDGAME_QUICK_DURATION_FRAMES);
       case 'DEFEAT':
+        return this.setScriptLocalGameEndState(true, SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES);
       case 'LOCALDEFEAT':
-        return this.setScriptLocalGameEndState(true);
+        return this.setScriptLocalDefeatState();
       case 'NAMED_DAMAGE':
         return this.executeScriptNamedDamage(
           readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
@@ -14332,9 +14388,8 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath.
-   * C++ routes through Object::doCommandButtonUsingWaypoints, which currently supports
-   * special powers with CAN_USE_WAYPOINTS. Full waypoint-following special-power locomotion
-   * is pending; this subset targets the terminal waypoint on the resolved path.
+   * C++ resolves the closest waypoint on the named path and routes through
+   * Object::doCommandButtonUsingWaypoints.
    */
   private executeScriptNamedUseCommandButtonAbilityUsingWaypointPath(
     entityId: number,
@@ -14349,8 +14404,9 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity: doCommandButtonUsingWaypoints delegates waypoint traversal to
-    // setPathFromWaypoint-style link(0) progression; use exact route resolution here.
+    // Source parity: ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath
+    // uses TerrainLogic::getClosestWaypointOnPath. Our route resolver returns the
+    // closest matching waypoint as the first node.
     const route = this.resolveScriptWaypointRouteByPathLabel(
       waypointPathName,
       sourceEntity.x,
@@ -14366,7 +14422,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    const destinationWaypoint = route[route.length - 1]!;
+    const closestWaypoint = route[0]!;
     let executed = false;
     for (const commandButtonDef of commandButtons) {
       const commandTypeName = this.normalizeScriptCommandTypeName(
@@ -14407,8 +14463,8 @@ export class GameLogicSubsystem implements Subsystem {
         issuingEntityIds: [sourceEntity.id],
         sourceEntityId: sourceEntity.id,
         targetEntityId: null,
-        targetX: usesPositionTarget ? destinationWaypoint.x : null,
-        targetZ: usesPositionTarget ? destinationWaypoint.z : null,
+        targetX: usesPositionTarget ? closestWaypoint.x : null,
+        targetZ: usesPositionTarget ? closestWaypoint.z : null,
       });
       executed = true;
     }
@@ -16088,7 +16144,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamCaptureNearestUnownedFactionUnit.
+   * Source parity: ScriptActions::doTeamCaptureNearestUnownedFactionUnit.
    */
   private executeScriptTeamCaptureNearestUnownedFactionUnit(teamName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -16099,14 +16155,6 @@ export class GameLogicSubsystem implements Subsystem {
     const allTeamMembers = this.getScriptTeamMemberEntities(team)
       .filter((entity) => !entity.destroyed);
     if (allTeamMembers.length === 0) {
-      return false;
-    }
-    // Source parity: ScriptActions::doTeamCaptureNearestUnownedFactionUnit uses
-    // PartitionFilterPlayerAffiliation(team->getControllingPlayer(), ...), so
-    // affiliation checks are based on controlling side, not the first member.
-    const controllingSide = this.resolveScriptTeamControllingSide(team)
-      ?? this.normalizeSide(allTeamMembers[0]!.side);
-    if (!controllingSide) {
       return false;
     }
     const controllingSourceEntity = allTeamMembers[0]!;
@@ -16135,8 +16183,8 @@ export class GameLogicSubsystem implements Subsystem {
         controllingSourceEntity,
         candidate,
       );
+      const relation = this.getScriptTeamCandidateRelationship(team, controllingSourceEntity, candidate);
       if (!sameControllingPlayer) {
-        const relation = this.getTeamRelationshipBySides(controllingSide, candidate.side ?? '');
         if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
           continue;
         }
@@ -16145,7 +16193,7 @@ export class GameLogicSubsystem implements Subsystem {
       const dx = candidate.x - center.x;
       const dz = candidate.z - center.z;
       const distSqr = (dx * dx) + (dz * dz);
-      if (distSqr < closestDistSqr) {
+      if (distSqr < closestDistSqr || (distSqr === closestDistSqr && (closestTarget === null || candidate.id < closestTarget.id))) {
         closestTarget = candidate;
         closestDistSqr = distSqr;
       }
@@ -17041,20 +17089,22 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: projectile fire path may notify SpecialPowerCompletionDie immediately.
     this.notifyScriptCompletedSpecialPowerOnProjectileFired(attacker);
+    const projectileVisualId = this.nextProjectileVisualId++;
 
     const event: PendingWeaponDamageEvent = {
       sourceEntityId: attacker.id,
       primaryVictimEntityId: primaryVictim?.id ?? null,
       impactX,
       impactZ,
-      executeFrame: this.frameCounter + delayFrames,
+      executeFrame: Number.MAX_SAFE_INTEGER,
+      projectilePlannedImpactFrame: this.frameCounter + delayFrames,
       delivery: 'PROJECTILE',
       weapon,
       launchFrame: this.frameCounter,
       sourceX,
       sourceY,
       sourceZ,
-      projectileVisualId: this.nextProjectileVisualId++,
+      projectileVisualId,
       cachedVisualType: this.classifyWeaponVisualType(weapon),
       impactY,
       bezierP1Y: 0,
@@ -17071,6 +17121,7 @@ export class GameLogicSubsystem implements Subsystem {
     };
 
     this.emitWeaponFiredVisualEvent(attacker, weapon);
+    this.registerActiveWeaponProjectileState(projectileVisualId, attacker, weapon, sourceX, sourceY, sourceZ);
     this.pendingWeaponDamageEvents.push(event);
   }
 
@@ -17364,10 +17415,11 @@ export class GameLogicSubsystem implements Subsystem {
     entity.moveTarget = entity.movePath[0]!;
     this.updatePathfindGoalCellFromPath(entity);
 
-    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route);
+    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route, 'START');
     if (completionPathNames.length > 0) {
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
         pathNames: completionPathNames,
+        completionMode: 'ON_STATE_EXIT',
       });
     } else {
       this.scriptPendingWaypointPathByEntityId.delete(entity.id);
@@ -17960,6 +18012,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (completionPathNames.length > 0) {
       this.scriptPendingWaypointPathByEntityId.set(entity.id, {
         pathNames: completionPathNames,
+        completionMode: 'ON_REACH_END',
       });
     } else {
       this.scriptPendingWaypointPathByEntityId.delete(entity.id);
@@ -17969,12 +18022,15 @@ export class GameLogicSubsystem implements Subsystem {
 
   private resolveScriptWaypointCompletionPathNames(
     route: readonly ScriptWaypointRouteNode[],
+    completionNode: 'START' | 'END' = 'END',
   ): string[] {
     const completionNames = new Set<string>();
 
-    const finalWaypoint = route[route.length - 1];
-    if (finalWaypoint) {
-      for (const pathLabel of finalWaypoint.pathLabels) {
+    const waypoint = completionNode === 'START'
+      ? route[0]
+      : route[route.length - 1];
+    if (waypoint) {
+      for (const pathLabel of waypoint.pathLabels) {
         const normalizedLabel = this.normalizeScriptCompletionName(pathLabel);
         if (normalizedLabel) {
           completionNames.add(normalizedLabel);
@@ -17992,6 +18048,22 @@ export class GameLogicSubsystem implements Subsystem {
     }
     for (const pathName of pendingPath.pathNames) {
       this.notifyScriptWaypointPathCompleted(entityId, pathName);
+    }
+    this.scriptPendingWaypointPathByEntityId.delete(entityId);
+  }
+
+  private cancelScriptWaypointPathCompletionTracking(entityId: number): void {
+    const pendingPath = this.scriptPendingWaypointPathByEntityId.get(entityId);
+    if (!pendingPath) {
+      return;
+    }
+
+    // Source parity: AIFollowWaypointPathExactState::onExit always sets
+    // completed waypoint when the state exits, even when interrupted.
+    if (pendingPath.completionMode === 'ON_STATE_EXIT') {
+      for (const pathName of pendingPath.pathNames) {
+        this.notifyScriptWaypointPathCompleted(entityId, pathName);
+      }
     }
     this.scriptPendingWaypointPathByEntityId.delete(entityId);
   }
@@ -26925,7 +26997,7 @@ export class GameLogicSubsystem implements Subsystem {
     return this.executePendingUpgradeModules(entityId, entity);
   }
 
-  private captureEntity(entityId: number, newSide: string): void {
+  private captureEntity(entityId: number, newSide: string, newControllingPlayerToken: string | null = null): void {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || entity.destroyed) {
       return;
@@ -26942,7 +27014,10 @@ export class GameLogicSubsystem implements Subsystem {
     entity.side = normalizedNewSide;
     entity.capturedFromOriginalOwner =
       entity.originalOwningSide.length > 0 && normalizedNewSide !== entity.originalOwningSide;
-    entity.controllingPlayerToken = this.normalizeControllingPlayerToken(normalizedNewSide);
+    entity.controllingPlayerToken = (
+      this.normalizeControllingPlayerToken(newControllingPlayerToken ?? undefined)
+      ?? this.normalizeControllingPlayerToken(normalizedNewSide)
+    );
     this.registerEntityEnergy(entity);
     this.transferCostModifierUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
     this.transferPowerPlantUpgradesBetweenSides(entity, normalizedOldSide, normalizedNewSide);
@@ -38566,6 +38641,7 @@ export class GameLogicSubsystem implements Subsystem {
     entityId: number,
     cancelDozerTaskMode: 'all' | 'current' | 'none' = 'all',
   ): void {
+    this.cancelScriptWaypointPathCompletionTracking(entityId);
     this.cancelRailedTransportTransit(entityId);
     this.hackInternetStateByEntityId.delete(entityId);
     this.hackInternetPendingCommandByEntityId.delete(entityId);
@@ -40196,43 +40272,87 @@ export class GameLogicSubsystem implements Subsystem {
     return stealthContainCount > 0;
   }
 
+  private canExecuteGarrisonBuildingEnterAction(
+    source: MapEntity,
+    building: MapEntity,
+    commandSource: 'PLAYER' | 'AI' | 'SCRIPT',
+  ): boolean {
+    if (source.id === building.id) {
+      return false;
+    }
+    if (this.isEntityEffectivelyDeadForEnter(source)) {
+      return false;
+    }
+    if (this.isEntityContained(source)) {
+      return false;
+    }
+    if (this.isContainerEnterTargetShrouded(source, building, commandSource)) {
+      return false;
+    }
+    if (!this.canSourceAttemptContainerEnter(source)) {
+      return false;
+    }
+    if (!this.canTargetAcceptContainerEnter(building)) {
+      return false;
+    }
+
+    const sourceKindOf = this.resolveEntityKindOfSet(source);
+    if (!sourceKindOf.has('INFANTRY') || sourceKindOf.has('NO_GARRISON')) {
+      return false;
+    }
+
+    const containProfile = building.containProfile;
+    if (!containProfile || containProfile.moduleType !== 'GARRISON' || containProfile.garrisonCapacity <= 0) {
+      return false;
+    }
+    if (!this.isScriptContainRelationshipAllowed(building, source)) {
+      return false;
+    }
+    if (!this.isScriptContainKindAllowed(building, source)) {
+      return false;
+    }
+    const currentOccupants = this.collectContainedEntityIds(building.id).length;
+    if (currentOccupants >= containProfile.garrisonCapacity) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private enterGarrisonBuilding(source: MapEntity, building: MapEntity): void {
+    this.cancelEntityCommandPathActions(source.id);
+    this.clearAttackTarget(source.id);
+    source.garrisonContainerId = building.id;
+    this.noteContainerEnteredBy(building, source);
+    source.x = building.x;
+    source.z = building.z;
+    source.y = building.y;
+    source.canMove = false;
+    source.moving = false;
+    this.pendingGarrisonActions.delete(source.id);
+  }
+
   private handleGarrisonBuildingCommand(command: GarrisonBuildingCommand): void {
     const infantry = this.spawnedEntities.get(command.entityId);
     const building = this.spawnedEntities.get(command.targetBuildingId);
     if (!infantry || !building || infantry.destroyed || building.destroyed) {
       return;
     }
-
-    // Validate: source must be infantry, target must be garrisonable.
-    if (infantry.category !== 'infantry') return;
-    const containProfile = building.containProfile;
-    if (!containProfile || containProfile.moduleType !== 'GARRISON') return;
-    if (containProfile.garrisonCapacity <= 0) return;
-
-    // Check capacity.
-    const currentOccupants = this.collectContainedEntityIds(building.id).length;
-    if (currentOccupants >= containProfile.garrisonCapacity) return;
+    if (!this.canExecuteGarrisonBuildingEnterAction(infantry, building, 'SCRIPT')) {
+      return;
+    }
 
     // Move infantry to building if not close enough.
+    const interactionDistance = this.resolveEntityInteractionDistance(infantry, building);
     const distance = Math.hypot(building.x - infantry.x, building.z - infantry.z);
-    if (distance > 15) {
+    if (distance > interactionDistance) {
       this.issueMoveTo(infantry.id, building.x, building.z);
       // Re-issue garrison when close enough via pending action.
       this.pendingGarrisonActions.set(infantry.id, building.id);
       return;
     }
 
-    // Enter garrison.
-    this.cancelEntityCommandPathActions(infantry.id);
-    this.clearAttackTarget(infantry.id);
-    infantry.garrisonContainerId = building.id;
-    this.noteContainerEnteredBy(building, infantry);
-    infantry.x = building.x;
-    infantry.z = building.z;
-    infantry.y = building.y;
-    infantry.canMove = false;
-    infantry.moving = false;
-    this.pendingGarrisonActions.delete(infantry.id);
+    this.enterGarrisonBuilding(infantry, building);
   }
 
   private updatePendingGarrisonActions(): void {
@@ -40243,33 +40363,18 @@ export class GameLogicSubsystem implements Subsystem {
         this.pendingGarrisonActions.delete(infantryId);
         continue;
       }
+      if (!this.canExecuteGarrisonBuildingEnterAction(infantry, building, 'SCRIPT')) {
+        this.pendingGarrisonActions.delete(infantryId);
+        continue;
+      }
 
+      const interactionDistance = this.resolveEntityInteractionDistance(infantry, building);
       const distance = Math.hypot(building.x - infantry.x, building.z - infantry.z);
-      if (distance > 15) continue;
-
-      // Close enough — enter garrison.
-      const containProfile = building.containProfile;
-      if (!containProfile || containProfile.moduleType !== 'GARRISON') {
-        this.pendingGarrisonActions.delete(infantryId);
+      if (distance > interactionDistance) {
         continue;
       }
 
-      const currentOccupants = this.collectContainedEntityIds(building.id).length;
-      if (currentOccupants >= containProfile.garrisonCapacity) {
-        this.pendingGarrisonActions.delete(infantryId);
-        continue;
-      }
-
-      this.cancelEntityCommandPathActions(infantry.id);
-      this.clearAttackTarget(infantry.id);
-      infantry.garrisonContainerId = building.id;
-      this.noteContainerEnteredBy(building, infantry);
-      infantry.x = building.x;
-      infantry.z = building.z;
-      infantry.y = building.y;
-      infantry.canMove = false;
-      infantry.moving = false;
-      this.pendingGarrisonActions.delete(infantryId);
+      this.enterGarrisonBuilding(infantry, building);
     }
   }
 
@@ -41618,8 +41723,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!sourceSide) {
       return;
     }
+    const sourceOwnerToken = this.resolveEntityControllingPlayerTokenForAffiliation(source);
 
-    this.captureEntity(target.id, sourceSide);
+    this.captureEntity(target.id, sourceSide, sourceOwnerToken);
     target.objectStatusFlags.delete('DISABLED_UNMANNED');
     this.refreshEntityCombatProfiles(target);
     this.markEntityDestroyed(source.id, target.id);
@@ -41634,8 +41740,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!sourceSide) {
       return;
     }
+    const sourceOwnerToken = this.resolveEntityControllingPlayerTokenForAffiliation(source);
 
-    this.captureEntity(target.id, sourceSide);
+    this.captureEntity(target.id, sourceSide, sourceOwnerToken);
     target.objectStatusFlags.add('HIJACKED');
     target.weaponSetFlagsMask |= WEAPON_SET_FLAG_VEHICLE_HIJACK;
     this.refreshEntityCombatProfiles(target);
@@ -41707,8 +41814,9 @@ export class GameLogicSubsystem implements Subsystem {
     if (!sourceSide) {
       return;
     }
+    const sourceOwnerToken = this.resolveEntityControllingPlayerTokenForAffiliation(source);
 
-    this.captureEntity(target.id, sourceSide);
+    this.captureEntity(target.id, sourceSide, sourceOwnerToken);
     target.objectStatusFlags.add('CARBOMB');
     target.weaponSetFlagsMask |= WEAPON_SET_FLAG_CARBOMB;
     this.refreshEntityCombatProfiles(target);
@@ -50788,6 +50896,7 @@ export class GameLogicSubsystem implements Subsystem {
     let missileAIProfile: MissileAIProfile | null = null;
     let missileAIState: MissileAIRuntimeState | null = null;
     let executeFrame = this.frameCounter + delayFrames;
+    let projectilePlannedImpactFrame: number | null = null;
 
     if (delivery === 'PROJECTILE' && weapon.projectileObjectName) {
       missileAIProfile = this.extractMissileAIProfile(weapon.projectileObjectName);
@@ -50871,8 +50980,13 @@ export class GameLogicSubsystem implements Subsystem {
           travelDistance: 0,
           totalDistanceEstimate: Math.max(1, Math.hypot(impactX - sourceX, impactZ - sourceZ)),
         };
+      } else {
+        // Source parity: non-missile projectiles detonate from projectile-flight update path.
+        projectilePlannedImpactFrame = this.frameCounter + delayFrames;
+        executeFrame = Number.MAX_SAFE_INTEGER;
       }
     }
+    const projectileVisualId = this.nextProjectileVisualId++;
 
     const event: PendingWeaponDamageEvent = {
       sourceEntityId: attacker.id,
@@ -50880,13 +50994,14 @@ export class GameLogicSubsystem implements Subsystem {
       impactX,
       impactZ,
       executeFrame,
+      projectilePlannedImpactFrame,
       delivery,
       weapon: bonusedWeapon,
       launchFrame: this.frameCounter,
       sourceX,
       sourceY: attacker.y,
       sourceZ,
-      projectileVisualId: this.nextProjectileVisualId++,
+      projectileVisualId,
       cachedVisualType: this.classifyWeaponVisualType(weapon),
       impactY,
       bezierP1Y,
@@ -50904,6 +51019,16 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Emit muzzle flash visual event.
     this.emitWeaponFiredVisualEvent(attacker, weapon);
+    if (delivery === 'PROJECTILE') {
+      this.registerActiveWeaponProjectileState(
+        projectileVisualId,
+        attacker,
+        weapon,
+        sourceX,
+        attacker.y,
+        sourceZ,
+      );
+    }
 
     if (delivery === 'LASER') {
       // Source parity: laser weapons always deal damage synchronously (instant hit).
@@ -50997,6 +51122,31 @@ export class GameLogicSubsystem implements Subsystem {
       radius: Math.max(event.weapon.primaryDamageRadius, 1),
       sourceEntityId: event.sourceEntityId,
       projectileType: this.classifyWeaponVisualType(event.weapon),
+    });
+  }
+
+  private registerActiveWeaponProjectileState(
+    projectileVisualId: number,
+    attacker: MapEntity,
+    weapon: AttackWeaponProfile,
+    sourceX: number,
+    sourceY: number,
+    sourceZ: number,
+  ): void {
+    const templateName = weapon.projectileObjectName?.trim();
+    if (!templateName) {
+      return;
+    }
+    this.activeWeaponProjectileStateByVisualId.set(projectileVisualId, {
+      id: projectileVisualId,
+      visualId: projectileVisualId,
+      templateName,
+      sourceEntityId: attacker.id,
+      side: this.normalizeSide(attacker.side) ?? '',
+      x: sourceX,
+      y: sourceY,
+      z: sourceZ,
+      launchFrame: this.frameCounter,
     });
   }
 
@@ -51487,42 +51637,14 @@ export class GameLogicSubsystem implements Subsystem {
       const missileState = event.missileAIState;
       if (missileState && !missileState.armed) continue;
 
-      // Interpolate current projectile position (or use MissileAI runtime position).
-      let projX: number, projZ: number;
-      if (missileState) {
-        projX = missileState.currentX;
-        projZ = missileState.currentZ;
-      } else {
-        const totalFrames = event.executeFrame - event.launchFrame;
-        if (totalFrames <= 0) continue;
-
-        const elapsed = this.frameCounter - event.launchFrame;
-        const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
-        if (event.scriptWaypointPath && event.scriptWaypointPath.length > 1) {
-          const pathPosition = this.interpolateProjectileWaypointPath(event.scriptWaypointPath, progress);
-          projX = pathPosition.x;
-          projZ = pathPosition.z;
-        } else if (event.hasBezierArc) {
-          const p0x = event.sourceX, p0z = event.sourceZ;
-          const p3x = event.impactX, p3z = event.impactZ;
-          const dx = p3x - p0x, dz = p3z - p0z;
-          const dist = Math.hypot(dx, dz);
-          const nx = dist > 0 ? dx / dist : 0;
-          const nz = dist > 0 ? dz / dist : 0;
-          const p1x = p0x + nx * dist * event.bezierFirstPercentIndent;
-          const p1z = p0z + nz * dist * event.bezierFirstPercentIndent;
-          const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
-          const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
-          projX = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
-          projZ = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
-        } else {
-          projX = event.sourceX + (event.impactX - event.sourceX) * progress;
-          projZ = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
-        }
-      }
+      const projectileWorld = this.interpolateProjectileWorldPosition(event);
+      if (!projectileWorld) continue;
+      const projX = projectileWorld.x;
+      const projZ = projectileWorld.z;
 
       const launcher = this.spawnedEntities.get(event.sourceEntityId);
       const weapon = event.weapon;
+      let collided = false;
 
       // Check each entity for collision with the projectile's current position.
       for (const candidate of this.spawnedEntities.values()) {
@@ -51570,6 +51692,7 @@ export class GameLogicSubsystem implements Subsystem {
           // Source parity: MissileAIUpdate garrison-hit-kill shortcut can consume
           // the projectile without a normal detonation.
           if (this.tryHandleMissileGarrisonHitKill(event, candidate, launcher ?? null)) {
+            collided = true;
             break;
           }
           // Early-detonate: redirect impact to the collision point and resolve this frame.
@@ -51579,8 +51702,26 @@ export class GameLogicSubsystem implements Subsystem {
           event.executeFrame = this.frameCounter;
           // Redirect damage to the collided entity instead of the original victim.
           event.primaryVictimEntityId = candidate.id;
+          collided = true;
           break;
         }
+      }
+
+      if (collided || event.executeFrame <= this.frameCounter) {
+        continue;
+      }
+
+      // Source parity bridge: non-missile projectile events resolve from the projectile
+      // flight/collision update path when their planned impact frame is reached.
+      if (
+        !missileState
+        && event.projectilePlannedImpactFrame !== null
+        && this.frameCounter >= event.projectilePlannedImpactFrame
+      ) {
+        event.impactX = projectileWorld.x;
+        event.impactY = projectileWorld.y;
+        event.impactZ = projectileWorld.z;
+        event.executeFrame = this.frameCounter;
       }
     }
   }
@@ -51648,6 +51789,9 @@ export class GameLogicSubsystem implements Subsystem {
     // Emit impact visual events for projectiles resolving this frame.
     for (const event of this.pendingWeaponDamageEvents) {
       if (event.executeFrame <= this.frameCounter) {
+        if (event.delivery === 'PROJECTILE') {
+          this.activeWeaponProjectileStateByVisualId.delete(event.projectileVisualId);
+        }
         // Source parity: MissileAIUpdate::doKillState — diverted missiles still detonate
         // visually but deal no damage. KILL_SELF teardown suppresses visuals.
         if (!event.suppressImpactVisual) {
@@ -53143,22 +53287,45 @@ export class GameLogicSubsystem implements Subsystem {
    * Interpolate the current position of an in-flight projectile event.
    */
   private interpolateProjectilePosition(event: PendingWeaponDamageEvent): { x: number; z: number } | null {
-    if (event.missileAIState) {
-      return { x: event.missileAIState.currentX, z: event.missileAIState.currentZ };
+    const world = this.interpolateProjectileWorldPosition(event);
+    if (!world) {
+      return null;
     }
-    const totalFrames = event.executeFrame - event.launchFrame;
+    return { x: world.x, z: world.z };
+  }
+
+  /**
+   * Interpolate the current world position of an in-flight projectile event.
+   */
+  private interpolateProjectileWorldPosition(
+    event: PendingWeaponDamageEvent,
+  ): { x: number; y: number; z: number } | null {
+    if (event.missileAIState) {
+      return {
+        x: event.missileAIState.currentX,
+        y: event.missileAIState.currentY,
+        z: event.missileAIState.currentZ,
+      };
+    }
+    const flightEndFrame = event.projectilePlannedImpactFrame ?? event.executeFrame;
+    const totalFrames = flightEndFrame - event.launchFrame;
     if (totalFrames <= 0) return null;
     const elapsed = this.frameCounter - event.launchFrame;
     const progress = Math.min(1, Math.max(0, elapsed / totalFrames));
 
-    let projX: number, projZ: number;
+    let projX: number;
+    let projY: number;
+    let projZ: number;
     if (event.scriptWaypointPath && event.scriptWaypointPath.length > 1) {
       const pathPosition = this.interpolateProjectileWaypointPath(event.scriptWaypointPath, progress);
       projX = pathPosition.x;
+      projY = this.resolveGroundHeight(pathPosition.x, pathPosition.z);
       projZ = pathPosition.z;
     } else if (event.hasBezierArc) {
       const p0x = event.sourceX, p0z = event.sourceZ;
+      const p0y = event.sourceY;
       const p3x = event.impactX, p3z = event.impactZ;
+      const p3y = event.impactY;
       const dx = p3x - p0x, dz = p3z - p0z;
       const dist = Math.hypot(dx, dz);
       const nx = dist > 0 ? dx / dist : 0;
@@ -53168,12 +53335,66 @@ export class GameLogicSubsystem implements Subsystem {
       const p2x = p0x + nx * dist * event.bezierSecondPercentIndent;
       const p2z = p0z + nz * dist * event.bezierSecondPercentIndent;
       projX = evaluateCubicBezier(progress, p0x, p1x, p2x, p3x);
+      projY = evaluateCubicBezier(progress, p0y, event.bezierP1Y, event.bezierP2Y, p3y);
       projZ = evaluateCubicBezier(progress, p0z, p1z, p2z, p3z);
     } else {
       projX = event.sourceX + (event.impactX - event.sourceX) * progress;
+      projY = event.sourceY + (event.impactY - event.sourceY) * progress;
       projZ = event.sourceZ + (event.impactZ - event.sourceZ) * progress;
     }
-    return { x: projX, z: projZ };
+    return { x: projX, y: projY, z: projZ };
+  }
+
+  private updateActiveWeaponProjectileInstances(): void {
+    if (
+      this.pendingWeaponDamageEvents.length === 0
+      && this.activeWeaponProjectileStateByVisualId.size === 0
+    ) {
+      return;
+    }
+
+    const liveVisualIds = new Set<number>();
+    for (const event of this.pendingWeaponDamageEvents) {
+      if (event.delivery !== 'PROJECTILE') {
+        continue;
+      }
+
+      const visualId = event.projectileVisualId;
+      const world = this.interpolateProjectileWorldPosition(event);
+      if (!world) {
+        continue;
+      }
+
+      let state = this.activeWeaponProjectileStateByVisualId.get(visualId);
+      if (!state) {
+        const sourceEntity = this.spawnedEntities.get(event.sourceEntityId);
+        const side = sourceEntity ? (this.normalizeSide(sourceEntity.side) ?? '') : '';
+        const templateName = event.weapon.projectileObjectName?.trim() || 'UNKNOWN_PROJECTILE';
+        state = {
+          id: visualId,
+          visualId,
+          templateName,
+          sourceEntityId: event.sourceEntityId,
+          side,
+          x: world.x,
+          y: world.y,
+          z: world.z,
+          launchFrame: event.launchFrame,
+        };
+        this.activeWeaponProjectileStateByVisualId.set(visualId, state);
+      } else {
+        state.x = world.x;
+        state.y = world.y;
+        state.z = world.z;
+      }
+      liveVisualIds.add(visualId);
+    }
+
+    for (const visualId of this.activeWeaponProjectileStateByVisualId.keys()) {
+      if (!liveVisualIds.has(visualId)) {
+        this.activeWeaponProjectileStateByVisualId.delete(visualId);
+      }
+    }
   }
 
   /**
@@ -53213,6 +53434,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (idx >= 0) {
       this.pendingWeaponDamageEvents.splice(idx, 1);
     }
+    this.activeWeaponProjectileStateByVisualId.delete(event.projectileVisualId);
 
     // Emit visual event for the interception (laser beam from defender to projectile).
     const projPos = this.interpolateProjectilePosition(event);
@@ -60171,6 +60393,7 @@ export class GameLogicSubsystem implements Subsystem {
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
     this.pendingWeaponDamageEvents.length = 0;
+    this.activeWeaponProjectileStateByVisualId.clear();
     this.missileAIProfileByProjectileTemplate.clear();
     this.visualEventBuffer.length = 0;
     this.nextProjectileVisualId = 1;
@@ -60382,5 +60605,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptSelectionChangedFrame = -1;
     this.defeatedSides.clear();
     this.gameEndFrame = null;
+    this.scriptEndGameTimerActive = false;
   }
 }

@@ -74,6 +74,21 @@ class FakeGameLogic {
     return this.entityPositionById.get(entityId) ?? null;
   }
 
+  getEntityRelationship(
+    sourceEntityId: number,
+    targetEntityId: number,
+  ): 'allies' | 'enemies' | 'neutral' | null {
+    if (sourceEntityId === targetEntityId) {
+      return 'allies';
+    }
+    const sourceSide = this.entitySideById.get(sourceEntityId)?.trim().toUpperCase();
+    const targetSide = this.entitySideById.get(targetEntityId)?.trim().toUpperCase();
+    if (sourceSide && targetSide) {
+      return sourceSide === targetSide ? 'allies' : 'enemies';
+    }
+    return 'enemies';
+  }
+
   getLocalPlayerScienceNames(): string[] {
     return [...this.localPlayerScienceNames];
   }
@@ -513,7 +528,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_BadUnitBuild unit build template is not mapped yet.',
+      'Command_BadUnitBuild is missing unit/build template mapping.',
     ]);
   });
 
@@ -1094,7 +1109,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_MissingSpecialPower special power template is not mapped yet.',
+      'Command_MissingSpecialPower is missing a SpecialPower mapping.',
     ]);
   });
 
@@ -1126,7 +1141,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: shortcut special power source lookup has no tracked ready-frame source.',
+      'Special power shortcut source is not currently available.',
     ]);
   });
 
@@ -1171,6 +1186,43 @@ describe('dispatchIssuedControlBarCommands', () => {
       },
     ]);
     expect(uiRuntime.messages).toEqual([]);
+  });
+
+  it('rejects GUI_COMMAND_SPECIAL_POWER object targets that fail relationship checks', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_TargetedSpecialPower', {
+        Command: 'SPECIAL_POWER',
+        SpecialPower: 'SpecialPowerTargetedStrike',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.registerEntity(71, 'SpecialPowerUnit', 'GDI');
+    gameLogic.registerEntity(99, 'AllyTarget', 'GDI');
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_TargetedSpecialPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER,
+          {
+            selectedObjectIds: [71],
+            commandOption: CommandOption.NEED_TARGET_ENEMY_OBJECT,
+            targetObjectId: 99,
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual(['Target is not valid for this command.']);
   });
 
   it('routes GUI_COMMAND_SPECIAL_POWER_CONSTRUCT with source + position payload', () => {
@@ -1288,7 +1340,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_ConstructSpecialPowerMissingObject construct object template is not mapped yet.',
+      'Command_ConstructSpecialPowerMissingObject is missing an Object mapping for construct special power.',
     ]);
   });
 
@@ -1324,8 +1376,45 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: shortcut special power source lookup has no tracked ready-frame source.',
+      'Special power shortcut source is not currently available.',
     ]);
+  });
+
+  it('rejects GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER object targets that fail relationship checks', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeCommandButtonBlock('Command_CommandCenterTargetPower', {
+        Command: 'SPECIAL_POWER_FROM_COMMAND_CENTER',
+        SpecialPower: 'SpecialPowerEMPPulse',
+      }),
+    ]);
+
+    const gameLogic = new FakeGameLogic();
+    gameLogic.commandCenterEntityId = 500;
+    gameLogic.registerEntity(500, 'AmericaCommandCenter', 'GDI');
+    gameLogic.registerEntity(501, 'FriendlyTarget', 'GDI');
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand(
+          'Command_CommandCenterTargetPower',
+          GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER,
+          {
+            commandOption: CommandOption.NEED_TARGET_ENEMY_OBJECT,
+            targetObjectId: 501,
+          },
+        ),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+    );
+
+    expect(gameLogic.submittedCommands).toEqual([]);
+    expect(uiRuntime.messages).toEqual(['Target is not valid for this command.']);
   });
 
   it('routes GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT with resolved source + position', () => {
@@ -1531,7 +1620,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_PurchaseScience has no purchasable science yet.',
+      'Command_PurchaseScience has no currently purchasable science.',
     ]);
   });
 
@@ -1569,8 +1658,8 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_PlayerUpgradeMissingField player upgrade is not mapped yet.',
-      'TODO: Command_ScienceMissingField has no purchasable science yet.',
+      'Command_PlayerUpgradeMissingField is missing player Upgrade mapping.',
+      'Command_ScienceMissingField has no currently purchasable science.',
     ]);
   });
 
@@ -1673,7 +1762,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_PurchaseScience has no purchasable science yet.',
+      'Command_PurchaseScience has no currently purchasable science.',
     ]);
   });
 
@@ -2123,7 +2212,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_BadSelectAll select-all-units button missing Object/ThingTemplate mapping.',
+      'Command_BadSelectAll is missing Object/ThingTemplate mapping.',
     ]);
   });
 
@@ -2160,7 +2249,7 @@ describe('dispatchIssuedControlBarCommands', () => {
 
     expect(gameLogic.submittedCommands).toEqual([]);
     expect(uiRuntime.messages).toEqual([
-      'TODO: Command_SelectAllWithoutSide select-all-units requires local player side resolution parity.',
+      'Command_SelectAllWithoutSide requires local player side resolution.',
     ]);
   });
 

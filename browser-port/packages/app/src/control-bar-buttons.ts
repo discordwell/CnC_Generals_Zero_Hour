@@ -7,25 +7,6 @@ import {
   type ControlBarButton,
 } from '@generals/ui';
 
-const FALLBACK_MOVABLE_CONTROL_BAR_BUTTONS: readonly ControlBarButton[] = [
-  {
-    // Source command button ID from CommandButton.ini.
-    id: 'Command_AttackMove',
-    slot: 1,
-    label: 'ATTACK_MOVE',
-    commandType: GUICommandType.GUI_COMMAND_ATTACK_MOVE,
-    commandOption: CommandOption.NEED_TARGET_POS,
-  },
-  {
-    // Source command button ID from CommandButton.ini.
-    id: 'Command_Stop',
-    slot: 2,
-    label: 'STOP',
-    commandType: GUICommandType.GUI_COMMAND_STOP,
-    commandOption: CommandOption.COMMAND_OPTION_NONE,
-  },
-];
-
 export interface ControlBarSelectionContext {
   templateName: string | null;
   canMove: boolean;
@@ -37,11 +18,32 @@ export interface ControlBarSelectionContext {
   productionQueueEntryCount?: number;
   productionQueueMaxEntries?: number;
   appliedUpgradeNames?: readonly string[];
+  // Compatibility fallback for older call sites. Prefer ControlBarPlayerContext.
+  playerUpgradeNames?: readonly string[];
+  // Compatibility fallback for older call sites. Prefer ControlBarPlayerContext.
+  playerScienceNames?: readonly string[];
+  // Compatibility fallback for older call sites. Prefer ControlBarPlayerContext.
+  playerSciencePurchasePoints?: number;
+  // Compatibility fallback for older call sites. Prefer ControlBarPlayerContext.
+  disabledScienceNames?: readonly string[];
+  // Compatibility fallback for older call sites. Prefer ControlBarPlayerContext.
+  hiddenScienceNames?: readonly string[];
+}
+
+export interface ControlBarPlayerContext {
   playerUpgradeNames?: readonly string[];
   playerScienceNames?: readonly string[];
   playerSciencePurchasePoints?: number;
   disabledScienceNames?: readonly string[];
   hiddenScienceNames?: readonly string[];
+}
+
+interface ResolvedControlBarPlayerContext {
+  playerUpgradeNames: readonly string[];
+  playerScienceNames: readonly string[];
+  playerSciencePurchasePoints: number;
+  disabledScienceNames: readonly string[];
+  hiddenScienceNames: readonly string[];
 }
 
 function isMultiSelectButton(button: ControlBarButton): boolean {
@@ -89,6 +91,7 @@ function buildControlBarButtonsFromCommandSet(
   iniDataRegistry: IniDataRegistry,
   commandSetName: string,
   selection: ControlBarSelectionContext,
+  playerContext: ResolvedControlBarPlayerContext,
 ): ControlBarButton[] {
   const commandSet = iniDataRegistry.getCommandSet(commandSetName);
   if (!commandSet) {
@@ -132,6 +135,7 @@ function buildControlBarButtonsFromCommandSet(
       commandType,
       commandOption,
       selection,
+      playerContext,
     );
 
     buttons.push({
@@ -198,10 +202,27 @@ function parseUpgradeType(upgradeTypeName: string | null): 'player' | 'object' {
   return upgradeTypeName?.toUpperCase() === 'OBJECT' ? 'object' : 'player';
 }
 
+function resolvePlayerContext(
+  selection: ControlBarSelectionContext,
+  playerContext: ControlBarPlayerContext | undefined,
+): ResolvedControlBarPlayerContext {
+  return {
+    playerUpgradeNames: playerContext?.playerUpgradeNames ?? selection.playerUpgradeNames ?? [],
+    playerScienceNames: playerContext?.playerScienceNames ?? selection.playerScienceNames ?? [],
+    // Source parity: unknown purchase-point state should behave as not purchasable.
+    playerSciencePurchasePoints: playerContext?.playerSciencePurchasePoints
+      ?? selection.playerSciencePurchasePoints
+      ?? 0,
+    disabledScienceNames: playerContext?.disabledScienceNames ?? selection.disabledScienceNames ?? [],
+    hiddenScienceNames: playerContext?.hiddenScienceNames ?? selection.hiddenScienceNames ?? [],
+  };
+}
+
 function hasRequiredUpgrade(
   iniDataRegistry: IniDataRegistry,
   commandButton: CommandButtonDef,
   selection: ControlBarSelectionContext,
+  playerContext: ResolvedControlBarPlayerContext,
 ): boolean {
   const upgradeName = firstIniToken(commandButton.fields['Upgrade']);
   if (!upgradeName) {
@@ -223,15 +244,13 @@ function hasRequiredUpgrade(
     return objectUpgrades.has(normalizedUpgradeName);
   }
 
-  // TODO: Source parity gap: player upgrade state should come from a dedicated
-  // Player subsystem instead of per-selection context plumbing.
-  const playerUpgrades = normalizeUpgradeNameSet(selection.playerUpgradeNames);
+  const playerUpgrades = normalizeUpgradeNameSet(playerContext.playerUpgradeNames);
   return playerUpgrades.has(normalizedUpgradeName);
 }
 
 function hasRequiredSciences(
   commandButton: CommandButtonDef,
-  selection: ControlBarSelectionContext,
+  playerContext: ResolvedControlBarPlayerContext,
 ): boolean {
   const scienceNames = normalizeUpgradeNameSet(
     flattenIniValueTokens(commandButton.fields['Science']),
@@ -240,7 +259,7 @@ function hasRequiredSciences(
     return true;
   }
 
-  const ownedSciences = normalizeUpgradeNameSet(selection.playerScienceNames);
+  const ownedSciences = normalizeUpgradeNameSet(playerContext.playerScienceNames);
   for (const scienceName of scienceNames) {
     if (!ownedSciences.has(scienceName)) {
       return false;
@@ -252,7 +271,7 @@ function hasRequiredSciences(
 function canPurchaseScienceFromButton(
   iniDataRegistry: IniDataRegistry,
   commandButton: CommandButtonDef,
-  selection: ControlBarSelectionContext,
+  playerContext: ResolvedControlBarPlayerContext,
 ): boolean {
   const scienceNames = flattenIniValueTokens(commandButton.fields['Science'])
     .map((scienceName) => scienceName.trim().toUpperCase())
@@ -261,13 +280,10 @@ function canPurchaseScienceFromButton(
     return false;
   }
 
-  const ownedSciences = normalizeUpgradeNameSet(selection.playerScienceNames);
-  const disabledSciences = normalizeUpgradeNameSet(selection.disabledScienceNames);
-  const hiddenSciences = normalizeUpgradeNameSet(selection.hiddenScienceNames);
-  const availablePurchasePoints = selection.playerSciencePurchasePoints ?? Number.POSITIVE_INFINITY;
-  // TODO: Source parity gap: purchase points should always come from the player
-  // subsystem; fallback to Infinity only preserves behavior when state wiring is
-  // incomplete.
+  const ownedSciences = normalizeUpgradeNameSet(playerContext.playerScienceNames);
+  const disabledSciences = normalizeUpgradeNameSet(playerContext.disabledScienceNames);
+  const hiddenSciences = normalizeUpgradeNameSet(playerContext.hiddenScienceNames);
+  const availablePurchasePoints = playerContext.playerSciencePurchasePoints;
   for (const scienceName of scienceNames) {
     if (ownedSciences.has(scienceName)) {
       continue;
@@ -327,6 +343,7 @@ function evaluateCommandAvailability(
   commandType: GUICommandType,
   commandOption: number,
   selection: ControlBarSelectionContext,
+  playerContext: ResolvedControlBarPlayerContext,
 ): boolean {
   if ((commandOption & CommandOption.MUST_BE_STOPPED) !== 0 && selection.isMoving) {
     return false;
@@ -351,6 +368,7 @@ function evaluateCommandAvailability(
     iniDataRegistry,
     commandButton,
     selection,
+    playerContext,
   )) {
     return false;
   }
@@ -361,7 +379,7 @@ function evaluateCommandAvailability(
   if (
     (commandType === GUICommandType.GUI_COMMAND_PLAYER_UPGRADE ||
       commandType === GUICommandType.GUI_COMMAND_OBJECT_UPGRADE) &&
-    !hasRequiredSciences(commandButton, selection)
+    !hasRequiredSciences(commandButton, playerContext)
   ) {
     return false;
   }
@@ -378,7 +396,7 @@ function evaluateCommandAvailability(
 
   if (
     commandType === GUICommandType.GUI_COMMAND_PURCHASE_SCIENCE &&
-    !canPurchaseScienceFromButton(iniDataRegistry, commandButton, selection)
+    !canPurchaseScienceFromButton(iniDataRegistry, commandButton, playerContext)
   ) {
     return false;
   }
@@ -392,6 +410,7 @@ function evaluateCommandAvailability(
 export function buildControlBarButtonsForSelection(
   iniDataRegistry: IniDataRegistry,
   selection: ControlBarSelectionContext,
+  playerContext?: ControlBarPlayerContext,
 ): ControlBarButton[] {
   if (!selection.templateName) {
     return [];
@@ -402,23 +421,23 @@ export function buildControlBarButtonsForSelection(
   }
 
   const objectDef = iniDataRegistry.getObject(selection.templateName);
+  const resolvedPlayerContext = resolvePlayerContext(selection, playerContext);
   const commandSetName = objectDef
     ? firstIniToken(objectDef.fields['CommandSet'] ?? objectDef.fields['CommandSetName'])
     : null;
   if (commandSetName) {
-    const sourceButtons = buildControlBarButtonsFromCommandSet(iniDataRegistry, commandSetName, selection);
+    const sourceButtons = buildControlBarButtonsFromCommandSet(
+      iniDataRegistry,
+      commandSetName,
+      selection,
+      resolvedPlayerContext,
+    );
     if (sourceButtons.length > 0) {
       return sourceButtons;
     }
   }
 
-  if (!selection.canMove) {
-    return [];
-  }
-
-  // TODO: Source parity gap: full per-object command card should be generated
-  // from CommandSet + CommandButton + object state checks.
-  return [...FALLBACK_MOVABLE_CONTROL_BAR_BUTTONS];
+  return [];
 }
 
 function intersectControlBarButtonLists(
@@ -511,13 +530,14 @@ function intersectControlBarButtonLists(
 export function buildControlBarButtonsForSelections(
   iniDataRegistry: IniDataRegistry,
   selections: readonly ControlBarSelectionContext[],
+  playerContext?: ControlBarPlayerContext,
 ): ControlBarButton[] {
   if (selections.length === 0) {
     return [];
   }
 
   const controlBarButtonSets = selections.map((selection) =>
-    buildControlBarButtonsForSelection(iniDataRegistry, selection),
+    buildControlBarButtonsForSelection(iniDataRegistry, selection, playerContext),
   );
 
   return intersectControlBarButtonLists(controlBarButtonSets);

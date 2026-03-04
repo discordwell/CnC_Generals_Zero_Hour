@@ -543,6 +543,7 @@ async function startGame(
     terrainVisual, waterVisual, audioManager, networkManager, uiRuntime,
     iniDataRegistry, iniDataInfo,
   } = ctx;
+  const canvas = renderer.domElement as HTMLCanvasElement;
 
   showLoadingScreen();
   setLoadingProgress(50, 'Loading terrain...');
@@ -586,9 +587,23 @@ async function startGame(
   subsystems.register(gameLogic);
   await gameLogic.init();
   audioManager.setObjectPositionResolver((objectId) => gameLogic.getEntityWorldPosition(objectId));
+  audioManager.setPlayerPositionResolver((playerIndex) => {
+    const anchorEntityId = gameLogic.resolveCommandCenterEntityId(playerIndex);
+    if (anchorEntityId === null) {
+      return null;
+    }
+    return gameLogic.getEntityWorldPosition(anchorEntityId);
+  });
   audioManager.setPlayerRelationshipResolver((owningPlayerIndex, localPlayerIndex) =>
     gameLogic.getPlayerRelationshipByIndex(owningPlayerIndex, localPlayerIndex),
   );
+  audioManager.setShroudVisibilityResolver((localPlayerIndex, position) => {
+    const localSide = gameLogic.getPlayerSide(localPlayerIndex);
+    if (!localSide) {
+      return true;
+    }
+    return gameLogic.isPositionVisible(localSide, position[0], position[2]);
+  });
 
   // Register synthesized combat audio events (placeholder until real audio assets).
   const registerCombatAudio = (): void => {
@@ -2590,13 +2605,15 @@ async function startGame(
             productionQueueEntryCount: productionState?.queueEntryCount,
             productionQueueMaxEntries: productionState?.maxQueueEntries,
             appliedUpgradeNames: selection.appliedUpgradeNames,
-            playerUpgradeNames,
-            playerScienceNames,
-            playerSciencePurchasePoints,
-            disabledScienceNames,
-            hiddenScienceNames,
           };
         }),
+        {
+          playerUpgradeNames,
+          playerScienceNames,
+          playerSciencePurchasePoints,
+          disabledScienceNames,
+          hiddenScienceNames,
+        },
       );
 
       const currentShortcutSpecialPowerReadyFrames = collectShortcutSpecialPowerReadyFrames(
@@ -2741,10 +2758,30 @@ async function startGame(
     gameLoop.stop();
     subsystems.disposeAll();
     objectVisualManager.dispose();
+    delete (globalThis as Record<string, unknown>)['__GENERALS_E2E__'];
   };
 
   window.addEventListener('pagehide', disposeGame);
   window.addEventListener('beforeunload', disposeGame);
+
+  // Browser e2e hook: exposed for Playwright gameplay scenario tests.
+  (globalThis as Record<string, unknown>)['__GENERALS_E2E__'] = {
+    gameLogic,
+    executeScriptAction: (action: unknown): boolean =>
+      gameLogic.executeScriptAction(action as Parameters<GameLogicSubsystem['executeScriptAction']>[0]),
+    submitCommand: (command: unknown): void =>
+      gameLogic.submitCommand(command as Parameters<GameLogicSubsystem['submitCommand']>[0]),
+    getRenderableEntityStates: (): ReturnType<GameLogicSubsystem['getRenderableEntityStates']> =>
+      gameLogic.getRenderableEntityStates(),
+    getGameEndState: (): ReturnType<GameLogicSubsystem['getGameEndState']> =>
+      gameLogic.getGameEndState(),
+    setScriptTeamMembers: (teamName: string, entityIds: readonly number[]): boolean =>
+      gameLogic.setScriptTeamMembers(teamName, entityIds),
+    setScriptTeamControllingSide: (teamName: string, side: string): boolean =>
+      gameLogic.setScriptTeamControllingSide(teamName, side),
+    getSidePowerState: (side: string): ReturnType<GameLogicSubsystem['getSidePowerState']> =>
+      gameLogic.getSidePowerState(side),
+  };
 
   // Hide loading screen
   await hideLoadingScreen();

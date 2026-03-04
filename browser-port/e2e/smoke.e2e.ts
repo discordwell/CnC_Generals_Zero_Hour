@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
 
+const TEST_MAP_URL = '/?map=assets/maps/SmokeTest.json';
+
 test('app loads and renders terrain', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (err) => errors.push(err.message));
 
-  await page.goto('/');
+  await page.goto(TEST_MAP_URL);
 
   // Loading screen should appear then fade
   const loadingScreen = page.locator('#loading-screen');

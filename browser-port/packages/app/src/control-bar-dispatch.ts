@@ -14,6 +14,10 @@ import {
 } from '@generals/ui';
 
 import { playIssuedCommandAudio } from './control-bar-audio.js';
+import {
+  isObjectTargetAllowedForSelection,
+  isObjectTargetRelationshipAllowed,
+} from './control-bar-targeting.js';
 
 const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
 
@@ -24,6 +28,7 @@ type ControlBarDispatchGameLogic = Pick<
   | 'getAttackMoveDistanceForEntity'
   | 'getEntityIdsByTemplateAndSide'
   | 'getPlayerSide'
+  | 'getEntityRelationship'
   | 'getProductionState'
   | 'getLocalPlayerSciencePurchasePoints'
   | 'getLocalPlayerDisabledScienceNames'
@@ -325,6 +330,29 @@ function resolveContextCommandPayload(payload: unknown): ContextCommandPayload {
   };
 }
 
+function isObjectTargetValidForSources(
+  commandOption: number,
+  sourceEntityIds: readonly number[],
+  targetEntityId: number,
+  gameLogic: ControlBarDispatchGameLogic,
+): boolean {
+  if (sourceEntityIds.length === 0) {
+    return false;
+  }
+  if (sourceEntityIds.length === 1) {
+    return isObjectTargetRelationshipAllowed(
+      commandOption,
+      gameLogic.getEntityRelationship(sourceEntityIds[0]!, targetEntityId),
+    );
+  }
+  return isObjectTargetAllowedForSelection(
+    commandOption,
+    sourceEntityIds,
+    targetEntityId,
+    (sourceObjectId, objectTargetId) => gameLogic.getEntityRelationship(sourceObjectId, objectTargetId),
+  );
+}
+
 export function dispatchIssuedControlBarCommands(
   commands: readonly IssuedControlBarCommand[],
   iniDataRegistry: IniDataRegistry,
@@ -502,7 +530,7 @@ export function dispatchIssuedControlBarCommands(
       case GUICommandType.GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT: {
         const specialPowerName = resolveRequiredCommandButtonToken(commandButton, 'SpecialPower');
         if (!specialPowerName) {
-          uiRuntime.showMessage(`TODO: ${command.sourceButtonId} special power template is not mapped yet.`);
+          uiRuntime.showMessage(`${command.sourceButtonId} is missing a SpecialPower mapping.`);
           break;
         }
 
@@ -530,7 +558,7 @@ export function dispatchIssuedControlBarCommands(
         if (isConstructSpecialPower) {
           const constructObjectName = resolveRequiredCommandButtonToken(commandButton, 'Object');
           if (!constructObjectName) {
-            uiRuntime.showMessage(`TODO: ${command.sourceButtonId} construct object template is not mapped yet.`);
+            uiRuntime.showMessage(`${command.sourceButtonId} is missing an Object mapping for construct special power.`);
             break;
           }
 
@@ -546,7 +574,6 @@ export function dispatchIssuedControlBarCommands(
             uiRuntime.showMessage('Special Power requires an object target.');
             break;
           }
-          targetPosition = null;
         } else if ((command.commandOption & CommandOption.NEED_TARGET_POS) !== 0) {
           if (!targetPosition) {
             uiRuntime.showMessage('Special Power requires a world target.');
@@ -563,13 +590,28 @@ export function dispatchIssuedControlBarCommands(
             // Source behavior from ControlBar::processCommandUI:
             // shortcut special powers resolve source via local-player readiness.
             uiRuntime.showMessage(
-              'TODO: shortcut special power source lookup has no tracked ready-frame source.',
+              'Special power shortcut source is not currently available.',
             );
             break;
           }
         }
         if (isConstructSpecialPower && !isShortcutSpecialPower) {
           sourceEntityId = selectedEntityIds[0] ?? null;
+        }
+        if ((command.commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0 && targetEntityId !== null) {
+          const sourceIdsForValidation = isShortcutSpecialPower
+            ? (sourceEntityId === null ? [] : [sourceEntityId])
+            : selectedEntityIds;
+          if (!isObjectTargetValidForSources(
+            command.commandOption,
+            sourceIdsForValidation,
+            targetEntityId,
+            gameLogic,
+          )) {
+            uiRuntime.showMessage('Target is not valid for this command.');
+            break;
+          }
+          targetPosition = null;
         }
 
         gameLogic.submitCommand({
@@ -596,7 +638,7 @@ export function dispatchIssuedControlBarCommands(
         const specialPowerName = resolveRequiredCommandButtonToken(commandButton, 'SpecialPower');
         if (!specialPowerName) {
           uiRuntime.showMessage(
-            `TODO: ${command.sourceButtonId} special power template is not mapped yet.`,
+            `${command.sourceButtonId} is missing a SpecialPower mapping.`,
           );
           break;
         }
@@ -614,6 +656,13 @@ export function dispatchIssuedControlBarCommands(
         if ((command.commandOption & COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0) {
           if (targetEntityId === null) {
             uiRuntime.showMessage('Special Power from command center requires an object target.');
+            break;
+          }
+          if (!isObjectTargetRelationshipAllowed(
+            command.commandOption,
+            gameLogic.getEntityRelationship(commandCenterEntityId, targetEntityId),
+          )) {
+            uiRuntime.showMessage('Target is not valid for this command.');
             break;
           }
           targetPosition = null;
@@ -655,7 +704,7 @@ export function dispatchIssuedControlBarCommands(
           || resolveRequiredCommandButtonToken(commandButton, 'ThingTemplate');
         if (!objectName) {
           uiRuntime.showMessage(
-            `TODO: ${command.sourceButtonId} select-all-units button missing Object/ThingTemplate mapping.`,
+            `${command.sourceButtonId} is missing Object/ThingTemplate mapping.`,
           );
           break;
         }
@@ -663,7 +712,7 @@ export function dispatchIssuedControlBarCommands(
         const localSide = gameLogic.getPlayerSide(localPlayerIndex ?? 0);
         if (!localSide) {
           uiRuntime.showMessage(
-            `TODO: ${command.sourceButtonId} select-all-units requires local player side resolution parity.`,
+            `${command.sourceButtonId} requires local player side resolution.`,
           );
           break;
         }
@@ -989,7 +1038,7 @@ export function dispatchIssuedControlBarCommands(
           || resolveRequiredCommandButtonToken(commandButton, 'ThingTemplate');
         if (!templateName) {
           uiRuntime.showMessage(
-            `TODO: ${command.sourceButtonId} unit build template is not mapped yet.`,
+            `${command.sourceButtonId} is missing unit/build template mapping.`,
           );
           break;
         }
@@ -1015,7 +1064,7 @@ export function dispatchIssuedControlBarCommands(
         }
         const unitTemplateName = resolveRequiredCommandButtonToken(commandButton, 'Object');
         if (!unitTemplateName) {
-          uiRuntime.showMessage(`TODO: ${command.sourceButtonId} unit build template is not mapped yet.`);
+          uiRuntime.showMessage(`${command.sourceButtonId} is missing unit/build template mapping.`);
           break;
         }
         submitCommandForSelectedEntities(
@@ -1116,7 +1165,7 @@ export function dispatchIssuedControlBarCommands(
         }
         const upgradeName = resolveRequiredCommandButtonToken(commandButton, 'Upgrade');
         if (!upgradeName) {
-          uiRuntime.showMessage(`TODO: ${command.sourceButtonId} object upgrade is not mapped yet.`);
+          uiRuntime.showMessage(`${command.sourceButtonId} is missing object Upgrade mapping.`);
           break;
         }
         submitCommandForSelectedEntities(
@@ -1135,7 +1184,7 @@ export function dispatchIssuedControlBarCommands(
       case GUICommandType.GUI_COMMAND_PLAYER_UPGRADE: {
         const upgradeName = resolveRequiredCommandButtonToken(commandButton, 'Upgrade');
         if (!upgradeName) {
-          uiRuntime.showMessage(`TODO: ${command.sourceButtonId} player upgrade is not mapped yet.`);
+          uiRuntime.showMessage(`${command.sourceButtonId} is missing player Upgrade mapping.`);
           break;
         }
         gameLogic.submitCommand({
@@ -1157,7 +1206,7 @@ export function dispatchIssuedControlBarCommands(
           gameLogic.getLocalPlayerHiddenScienceNames(),
         );
         if (!scienceName) {
-          uiRuntime.showMessage(`TODO: ${command.sourceButtonId} has no purchasable science yet.`);
+          uiRuntime.showMessage(`${command.sourceButtonId} has no currently purchasable science.`);
           break;
         }
         const sciencePurchasePointCost = Number.parseInt(
@@ -1165,7 +1214,7 @@ export function dispatchIssuedControlBarCommands(
           10,
         );
         if (!Number.isFinite(sciencePurchasePointCost) || sciencePurchasePointCost <= 0) {
-          uiRuntime.showMessage(`TODO: ${scienceName} has invalid purchase cost.`);
+          uiRuntime.showMessage(`${scienceName} has invalid purchase cost.`);
           break;
         }
         gameLogic.submitCommand({
@@ -1179,9 +1228,9 @@ export function dispatchIssuedControlBarCommands(
 
       default: {
         const commandName = GUICommandType[command.commandType] ?? `#${command.commandType}`;
-        uiRuntime.showMessage(`TODO: ${commandName} is not mapped to game logic yet.`);
-        // TODO: Source parity gap: map remaining GUICommandType routes to
-        // ActionManager / MessageStream equivalents.
+        uiRuntime.showMessage(`${commandName} is not mapped to game logic.`);
+        // Source parity gap: map remaining GUICommandType routes to ActionManager /
+        // MessageStream equivalents.
         break;
       }
     }
