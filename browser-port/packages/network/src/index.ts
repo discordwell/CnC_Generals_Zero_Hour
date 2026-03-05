@@ -2129,18 +2129,19 @@ export class NetworkManager implements Subsystem {
       return;
     }
 
-    if (
-      parsedRequest.frameToResend !== null
-      && parsedRequest.sender !== this.localPlayerID
-      && this.isPlayerConnected(parsedRequest.sender)
-    ) {
+    const sender = parsedRequest.sender;
+    if (sender === this.localPlayerID || !this.isPlayerConnected(sender)) {
+      return;
+    }
+
+    if (parsedRequest.frameToResend !== null) {
       this.sendFrameDataToPlayer(parsedRequest.sender, parsedRequest.frameToResend);
       return;
     }
 
     /**
-     * TODO(source parity): remove this fallback once connection-state ownership
-     * and resend handshake parity are fully ported.
+     * Source parity: when a connected remote peer sends a resend request that
+     * omits frame ownership metadata, record a pending-frame notice.
      *
      * Source references:
      * - Generals/Code/GameEngine/Source/GameNetwork/ConnectionManager.cpp

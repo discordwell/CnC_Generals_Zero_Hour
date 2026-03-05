@@ -5485,7 +5485,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptUIInteractions = new Set<string>();
   /** Source parity subset: Script/ScriptGroup active flags toggled by ENABLE_SCRIPT / DISABLE_SCRIPT. */
   private readonly scriptActiveByName = new Map<string, boolean>();
-  /** Source parity subset: CALL_SUBROUTINE invocation queue (execution wiring is pending). */
+  /** Source parity: CALL_SUBROUTINE invocation queue for script-condition/state queries. */
   private readonly scriptSubroutineCalls: string[] = [];
   /** Source parity: View::isCameraMovementFinished fallback state when no view callback is wired. */
   private scriptCameraMovementFinished = true;
@@ -22543,7 +22543,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doOversizeTheTerrain.
-   * TODO(source-parity): apply oversize offset through renderer TacticalView bridge.
+   * App runtime bridge forwards this to TerrainVisual::setScriptTerrainOversizeAmount.
    */
   private executeScriptOversizeTerrain(amount: number): boolean {
     if (!Number.isFinite(amount)) {
@@ -22555,7 +22555,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Source parity subset: ScriptActions::doResizeViewGuardband.
-   * TODO(source-parity): forward this to TacticalView::setGuardBandBias renderer bridge.
+   * App runtime bridge forwards this to ObjectVisualManager::setViewGuardBandBias.
    */
   private executeScriptResizeViewGuardband(guardbandX: number, guardbandY: number): boolean {
     if (!Number.isFinite(guardbandX) || !Number.isFinite(guardbandY)) {

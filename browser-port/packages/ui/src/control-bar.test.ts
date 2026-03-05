@@ -126,6 +126,36 @@ describe('ControlBarModel', () => {
     });
   });
 
+  it('rejects object targets when validator marks them invalid and keeps pending command active', () => {
+    const model = new ControlBarModel();
+    model.setSelectionState({
+      selectedObjectIds: [3],
+      selectedObjectName: 'Tank Hunter',
+    });
+    model.setButtons([
+      {
+        id: 'guard',
+        label: 'Guard',
+        commandType: GUICommandType.GUI_COMMAND_GUARD,
+        commandOption: CommandOption.NEED_TARGET_ENEMY_OBJECT,
+      },
+    ]);
+    model.setObjectTargetValidator((validation) => {
+      expect(validation.sourceButtonId).toBe('guard');
+      expect(validation.selectedObjectIds).toEqual([3]);
+      expect(validation.targetObjectId).toBe(22);
+      return false;
+    });
+
+    model.activateButton('guard');
+    expect(model.commitPendingCommandTarget({
+      kind: 'object',
+      objectId: 22,
+    })).toBeNull();
+    expect(model.getPendingCommand()?.sourceButtonId).toBe('guard');
+    expect(model.consumeIssuedCommands()).toEqual([]);
+  });
+
   it('prioritizes object targets when options include both object and position bits', () => {
     const model = new ControlBarModel();
     model.setSelectionState({

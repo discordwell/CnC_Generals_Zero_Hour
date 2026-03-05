@@ -377,6 +377,108 @@ describe('buildControlBarButtonsForSelection', () => {
     expect(stoppedButtons[0]?.enabled).toBe(true);
   });
 
+  it('disables special-power commands when source entity ready frame is in cooldown', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'Unit_SpecialPower',
+        fields: {
+          CommandSet: 'Set_SpecialPower',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'Set_SpecialPower',
+        fields: {
+          1: 'Command_SpecialPower',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_SpecialPower',
+        fields: {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'SpecialPower_MyPower',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelection(
+      registry,
+      {
+        entityId: 42,
+        templateName: 'Unit_SpecialPower',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+      {
+        logicFrame: 200,
+        resolveSpecialPowerReadyFrame: (specialPowerName, sourceEntityId) => {
+          expect(specialPowerName).toBe('SPECIALPOWER_MYPOWER');
+          expect(sourceEntityId).toBe(42);
+          return 250;
+        },
+      },
+    );
+
+    expect(buttons[0]?.enabled).toBe(false);
+  });
+
+  it('keeps special-power commands enabled when source entity ready frame has elapsed', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      {
+        type: 'Object',
+        name: 'Unit_SpecialPower',
+        fields: {
+          CommandSet: 'Set_SpecialPower',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandSet',
+        name: 'Set_SpecialPower',
+        fields: {
+          1: 'Command_SpecialPower',
+        },
+        blocks: [],
+      },
+      {
+        type: 'CommandButton',
+        name: 'Command_SpecialPower',
+        fields: {
+          Command: 'SPECIAL_POWER',
+          SpecialPower: 'SpecialPower_MyPower',
+        },
+        blocks: [],
+      },
+    ]);
+
+    const buttons = buildControlBarButtonsForSelection(
+      registry,
+      {
+        entityId: 42,
+        templateName: 'Unit_SpecialPower',
+        canMove: true,
+        isUnmanned: false,
+        isDozer: false,
+        isMoving: false,
+      },
+      {
+        logicFrame: 250,
+        resolveSpecialPowerReadyFrame: () => 250,
+      },
+    );
+
+    expect(buttons[0]?.enabled).toBe(true);
+  });
+
   it('disables NEED_UPGRADE object commands until the selected object has the upgrade', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([

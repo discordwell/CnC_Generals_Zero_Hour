@@ -16,6 +16,7 @@ import {
   type ControlBarSelectionState,
   type IssuedControlBarCommand,
   type PendingControlBarCommand,
+  type ControlBarObjectTargetValidator,
 } from './control-bar.js';
 
 const MESSAGE_VISIBLE_MS = 4000;
@@ -339,6 +340,12 @@ export class UiRuntime implements Subsystem {
     return this.controlBarModel.getPendingCommand();
   }
 
+  setControlBarObjectTargetValidator(
+    validator: ControlBarObjectTargetValidator | null,
+  ): void {
+    this.controlBarModel.setObjectTargetValidator(validator);
+  }
+
   consumeIssuedCommands(): IssuedControlBarCommand[] {
     return this.controlBarModel.consumeIssuedCommands();
   }
@@ -413,6 +420,7 @@ export type {
   ControlBarButton,
   ControlBarHudSlot,
   ControlBarCommandTarget,
+  ControlBarObjectTargetValidator,
   ControlBarSelectionState,
   IssuedControlBarCommand,
   PendingControlBarCommand,

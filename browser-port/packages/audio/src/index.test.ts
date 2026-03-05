@@ -945,6 +945,36 @@ describe('AudioManager', () => {
     ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
   });
 
+  it('does not distance-cull unresolved object/drawable events when no owner position can be resolved', () => {
+    const manager = new AudioManager({
+      resolveObjectPosition: () => null,
+      resolveDrawablePosition: () => null,
+      eventInfos: [
+        {
+          audioName: 'WorldByOwner',
+          soundType: AudioType.AT_SoundEffect,
+          type: SoundType.ST_WORLD,
+          maxRange: 1,
+        },
+      ],
+    });
+    manager.init();
+    manager.setListenerPosition([0, 0, 0]);
+
+    expect(
+      manager.addAudioEvent({
+        eventName: 'WorldByOwner',
+        objectId: 77,
+      }),
+    ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    expect(
+      manager.addAudioEvent({
+        eventName: 'WorldByOwner',
+        drawableId: 78,
+      }),
+    ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+  });
+
   it('culls ST_SHROUDED positional sounds when local shroud is not clear', () => {
     const manager = new AudioManager({
       localPlayerIndex: 1,

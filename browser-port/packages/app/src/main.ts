@@ -63,6 +63,7 @@ import { createScriptEmoticonRuntimeBridge } from './script-emoticon-runtime.js'
 import { createScriptMessageRuntimeBridge } from './script-message-runtime.js';
 import { createScriptObjectAmbientAudioRuntimeBridge } from './script-object-ambient-audio-runtime.js';
 import { createScriptUiEffectsRuntimeBridge } from './script-ui-effects-runtime.js';
+import { syncScriptViewRuntimeBridge } from './script-view-runtime.js';
 import { GameShell, type SkirmishSettings } from './game-shell.js';
 
 // ============================================================================
@@ -587,6 +588,7 @@ async function startGame(
   subsystems.register(gameLogic);
   await gameLogic.init();
   audioManager.setObjectPositionResolver((objectId) => gameLogic.getEntityWorldPosition(objectId));
+  audioManager.setDrawablePositionResolver((drawableId) => gameLogic.getEntityWorldPosition(drawableId));
   audioManager.setPlayerPositionResolver((playerIndex) => {
     const anchorEntityId = gameLogic.resolveCommandCenterEntityId(playerIndex);
     if (anchorEntityId === null) {
@@ -603,6 +605,43 @@ async function startGame(
       return true;
     }
     return gameLogic.isPositionVisible(localSide, position[0], position[2]);
+  });
+  uiRuntime.setControlBarObjectTargetValidator((validation) => {
+    if (
+      validation.commandType
+      === GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER
+    ) {
+      const commandCenterEntityId = gameLogic.resolveCommandCenterEntityId(networkManager.getLocalPlayerID());
+      if (commandCenterEntityId === null) {
+        return false;
+      }
+      return isObjectTargetRelationshipAllowed(
+        validation.commandOption,
+        gameLogic.getEntityRelationship(commandCenterEntityId, validation.targetObjectId),
+      );
+    }
+
+    const sourceObjectIds = validation.selectedObjectIds.length > 0
+      ? validation.selectedObjectIds
+      : (() => {
+          const selectedEntityId = gameLogic.getSelectedEntityId();
+          return selectedEntityId === null ? [] : [selectedEntityId];
+        })();
+    if (sourceObjectIds.length === 0) {
+      return false;
+    }
+    if (sourceObjectIds.length === 1) {
+      return isObjectTargetRelationshipAllowed(
+        validation.commandOption,
+        gameLogic.getEntityRelationship(sourceObjectIds[0]!, validation.targetObjectId),
+      );
+    }
+    return isObjectTargetAllowedForSelection(
+      validation.commandOption,
+      sourceObjectIds,
+      validation.targetObjectId,
+      (sourceObjectId, targetObjectId) => gameLogic.getEntityRelationship(sourceObjectId, targetObjectId),
+    );
   });
 
   // Register synthesized combat audio events (placeholder until real audio assets).
@@ -2469,12 +2508,7 @@ async function startGame(
       sunLight.target.position.set(camState.targetX, 0, camState.targetZ);
       sunLight.target.updateMatrixWorld();
 
-      const scriptViewGuardBandBias = gameLogic.getScriptViewGuardbandBias();
-      objectVisualManager.setViewGuardBandBias(
-        scriptViewGuardBandBias?.x ?? 0,
-        scriptViewGuardBandBias?.y ?? 0,
-      );
-      terrainVisual.setScriptTerrainOversizeAmount(gameLogic.getScriptTerrainOversizeAmount());
+      syncScriptViewRuntimeBridge(gameLogic, objectVisualManager, terrainVisual);
       objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
 
       // Process visual events (explosions, muzzle flashes, etc.) and update particles.
@@ -2595,6 +2629,7 @@ async function startGame(
         selectedEntities.map((selection) => {
           const productionState = gameLogic.getProductionState(selection.id);
           return {
+            entityId: selection.id,
             templateName: selection.templateName,
             canMove: selection.canMove,
             hasAutoRallyPoint: selection.hasAutoRallyPoint,
@@ -2613,6 +2648,13 @@ async function startGame(
           playerSciencePurchasePoints,
           disabledScienceNames,
           hiddenScienceNames,
+          logicFrame: currentLogicFrame,
+          resolveSpecialPowerReadyFrame: (specialPowerName, sourceEntityId) => (
+            gameLogic.resolveShortcutSpecialPowerReadyFrameForSourceEntity(
+              specialPowerName,
+              sourceEntityId,
+            )
+          ),
         },
       );
 
@@ -2767,6 +2809,7 @@ async function startGame(
   // Browser e2e hook: exposed for Playwright gameplay scenario tests.
   (globalThis as Record<string, unknown>)['__GENERALS_E2E__'] = {
     gameLogic,
+    uiRuntime,
     executeScriptAction: (action: unknown): boolean =>
       gameLogic.executeScriptAction(action as Parameters<GameLogicSubsystem['executeScriptAction']>[0]),
     submitCommand: (command: unknown): void =>
@@ -2781,6 +2824,49 @@ async function startGame(
       gameLogic.setScriptTeamControllingSide(teamName, side),
     getSidePowerState: (side: string): ReturnType<GameLogicSubsystem['getSidePowerState']> =>
       gameLogic.getSidePowerState(side),
+    buildControlBarButtonsForEntity: (entityId: number) => {
+      if (!Number.isFinite(entityId)) {
+        return [];
+      }
+      const normalizedEntityId = Math.trunc(entityId);
+      const selection = gameLogic.getSelectedEntityInfoById(normalizedEntityId);
+      if (!selection) {
+        return [];
+      }
+      const productionState = gameLogic.getProductionState(normalizedEntityId);
+      return buildControlBarButtonsForSelections(
+        iniDataRegistry,
+        [
+          {
+            entityId: selection.id,
+            templateName: selection.templateName,
+            canMove: selection.canMove,
+            hasAutoRallyPoint: selection.hasAutoRallyPoint,
+            isUnmanned: selection.isUnmanned,
+            isDozer: selection.isDozer,
+            isMoving: selection.isMoving,
+            objectStatusFlags: selection.objectStatusFlags,
+            productionQueueEntryCount: productionState?.queueEntryCount,
+            productionQueueMaxEntries: productionState?.maxQueueEntries,
+            appliedUpgradeNames: selection.appliedUpgradeNames,
+          },
+        ],
+        {
+          playerUpgradeNames: gameLogic.getLocalPlayerUpgradeNames(),
+          playerScienceNames: gameLogic.getLocalPlayerScienceNames(),
+          playerSciencePurchasePoints: gameLogic.getLocalPlayerSciencePurchasePoints(),
+          disabledScienceNames: gameLogic.getLocalPlayerDisabledScienceNames(),
+          hiddenScienceNames: gameLogic.getLocalPlayerHiddenScienceNames(),
+          logicFrame: gameLoop.getFrameNumber(),
+          resolveSpecialPowerReadyFrame: (specialPowerName, sourceEntityId) => (
+            gameLogic.resolveShortcutSpecialPowerReadyFrameForSourceEntity(
+              specialPowerName,
+              sourceEntityId,
+            )
+          ),
+        },
+      );
+    },
   };
 
   // Hide loading screen

@@ -220,6 +220,17 @@ export interface IssuedControlBarCommand {
   contextPayload?: unknown;
 }
 
+export interface ControlBarObjectTargetValidation {
+  sourceButtonId: string;
+  commandType: GUICommandType;
+  commandOption: number;
+  selectedObjectIds: readonly number[];
+  targetObjectId: number;
+}
+
+export type ControlBarObjectTargetValidator =
+  (validation: ControlBarObjectTargetValidation) => boolean;
+
 export interface ControlBarHudSlot {
   slot: number;
   state: 'empty' | 'ready' | 'disabled' | 'pending';
@@ -388,6 +399,7 @@ export class ControlBarModel {
   private buttonsBySlot = new Map<number, NormalizedControlBarButton>();
   private pendingCommand: PendingControlBarCommand | null = null;
   private issuedCommands: IssuedControlBarCommand[] = [];
+  private objectTargetValidator: ControlBarObjectTargetValidator | null = null;
 
   setSelectionState(selectionState: ControlBarSelectionState): void {
     this.selectionState = {
@@ -454,6 +466,12 @@ export class ControlBarModel {
       commandOption: this.pendingCommand.commandOption,
       targetKind: this.pendingCommand.targetKind,
     };
+  }
+
+  setObjectTargetValidator(
+    validator: ControlBarObjectTargetValidator | null,
+  ): void {
+    this.objectTargetValidator = validator;
   }
 
   activateButton(buttonId: string): ControlBarActivationResult {
@@ -594,6 +612,19 @@ export class ControlBarModel {
       return null;
     }
 
+    if (target.kind === 'object' && this.objectTargetValidator) {
+      const isValidTarget = this.objectTargetValidator({
+        sourceButtonId: button.id,
+        commandType: button.commandType,
+        commandOption: button.commandOption,
+        selectedObjectIds: this.selectionState.selectedObjectIds,
+        targetObjectId: target.objectId,
+      });
+      if (!isValidTarget) {
+        return null;
+      }
+    }
+
     const command = this.issueCommand(button, target);
     this.pendingCommand = null;
     return command;
@@ -609,9 +640,6 @@ export class ControlBarModel {
     return issued;
   }
 
-  // TODO: Source parity gap: object target validity checks currently belong to
-  // ActionManager + object relationship queries (`CommandButton::isValidToUseOn`).
-  // This model only tracks command mode + target requirements.
   private issueCommand(
     button: NormalizedControlBarButton,
     target: ControlBarCommandTarget | null,

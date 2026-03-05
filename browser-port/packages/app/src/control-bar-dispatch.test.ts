@@ -2098,6 +2098,51 @@ describe('dispatchIssuedControlBarCommands', () => {
     expect(uiRuntime.messages).toEqual([]);
   });
 
+  it('reports unsupported command routes with structured diagnostics', () => {
+    const registry = new IniDataRegistry();
+    const gameLogic = new FakeGameLogic();
+    const uiRuntime = new FakeUiRuntime();
+    const audioManager = new FakeAudioManager();
+    const unsupportedRoutes: Array<{
+      sourceButtonId: string;
+      commandType: GUICommandType;
+      commandName: string;
+      selectedEntityCount: number;
+      hasObjectTarget: boolean;
+      hasPositionTarget: boolean;
+    }> = [];
+
+    dispatchIssuedControlBarCommands(
+      [
+        makeCommand('Command_Unknown', 999 as GUICommandType, {
+          selectedObjectIds: [1, 2],
+          targetObjectId: 42,
+        }),
+      ],
+      registry,
+      gameLogic,
+      uiRuntime,
+      audioManager as unknown as AudioManager,
+      undefined,
+      (route) => unsupportedRoutes.push(route),
+    );
+
+    expect(unsupportedRoutes).toEqual([
+      {
+        sourceButtonId: 'Command_Unknown',
+        commandType: 999,
+        commandName: '#999',
+        selectedEntityCount: 2,
+        hasObjectTarget: true,
+        hasPositionTarget: false,
+      },
+    ]);
+    expect(uiRuntime.messages).toEqual([
+      '#999 is not mapped to game logic.',
+    ]);
+    expect(gameLogic.submittedCommands).toEqual([]);
+  });
+
   it('dispatches GUICOMMANDMODE_SABOTAGE_BUILDING as enter-object action', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([

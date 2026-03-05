@@ -8,6 +8,7 @@ import {
 } from '@generals/ui';
 
 export interface ControlBarSelectionContext {
+  entityId?: number;
   templateName: string | null;
   canMove: boolean;
   hasAutoRallyPoint?: boolean;
@@ -36,6 +37,11 @@ export interface ControlBarPlayerContext {
   playerSciencePurchasePoints?: number;
   disabledScienceNames?: readonly string[];
   hiddenScienceNames?: readonly string[];
+  logicFrame?: number;
+  resolveSpecialPowerReadyFrame?: (
+    specialPowerName: string,
+    sourceEntityId: number,
+  ) => number | null;
 }
 
 interface ResolvedControlBarPlayerContext {
@@ -44,6 +50,11 @@ interface ResolvedControlBarPlayerContext {
   playerSciencePurchasePoints: number;
   disabledScienceNames: readonly string[];
   hiddenScienceNames: readonly string[];
+  logicFrame: number | null;
+  resolveSpecialPowerReadyFrame: (
+    specialPowerName: string,
+    sourceEntityId: number,
+  ) => number | null;
 }
 
 function isMultiSelectButton(button: ControlBarButton): boolean {
@@ -206,6 +217,8 @@ function resolvePlayerContext(
   selection: ControlBarSelectionContext,
   playerContext: ControlBarPlayerContext | undefined,
 ): ResolvedControlBarPlayerContext {
+  const logicFrame = playerContext?.logicFrame;
+  const resolveSpecialPowerReadyFrame = playerContext?.resolveSpecialPowerReadyFrame;
   return {
     playerUpgradeNames: playerContext?.playerUpgradeNames ?? selection.playerUpgradeNames ?? [],
     playerScienceNames: playerContext?.playerScienceNames ?? selection.playerScienceNames ?? [],
@@ -215,6 +228,12 @@ function resolvePlayerContext(
       ?? 0,
     disabledScienceNames: playerContext?.disabledScienceNames ?? selection.disabledScienceNames ?? [],
     hiddenScienceNames: playerContext?.hiddenScienceNames ?? selection.hiddenScienceNames ?? [],
+    logicFrame: typeof logicFrame === 'number' && Number.isFinite(logicFrame)
+      ? Math.trunc(logicFrame)
+      : null,
+    resolveSpecialPowerReadyFrame: typeof resolveSpecialPowerReadyFrame === 'function'
+      ? resolveSpecialPowerReadyFrame
+      : () => null,
   };
 }
 
@@ -337,6 +356,52 @@ function isProductionQueueFull(selection: ControlBarSelectionContext): boolean {
   return selection.productionQueueMaxEntries <= selection.productionQueueEntryCount;
 }
 
+function isSpecialPowerCommandType(commandType: GUICommandType): boolean {
+  switch (commandType) {
+    case GUICommandType.GUI_COMMAND_SPECIAL_POWER:
+    case GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER:
+    case GUICommandType.GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT:
+    case GUICommandType.GUI_COMMAND_SPECIAL_POWER_CONSTRUCT:
+    case GUICommandType.GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isSpecialPowerReadyForSelection(
+  commandButton: CommandButtonDef,
+  commandType: GUICommandType,
+  selection: ControlBarSelectionContext,
+  playerContext: ResolvedControlBarPlayerContext,
+): boolean {
+  if (!isSpecialPowerCommandType(commandType)) {
+    return true;
+  }
+  if (selection.entityId === undefined || !Number.isFinite(selection.entityId)) {
+    return true;
+  }
+  if (playerContext.logicFrame === null) {
+    return true;
+  }
+
+  const specialPowerNameToken = firstIniToken(commandButton.fields['SpecialPower']);
+  const specialPowerName = specialPowerNameToken?.trim().toUpperCase() ?? '';
+  if (!specialPowerName) {
+    // Missing SpecialPower metadata is validated in dispatch path; do not disable
+    // here to preserve source command-card visibility for malformed data.
+    return true;
+  }
+
+  const sourceEntityId = Math.trunc(selection.entityId);
+  const readyFrame = playerContext.resolveSpecialPowerReadyFrame(specialPowerName, sourceEntityId);
+  if (readyFrame === null || !Number.isFinite(readyFrame)) {
+    return false;
+  }
+
+  return Math.trunc(readyFrame) <= playerContext.logicFrame;
+}
+
 function evaluateCommandAvailability(
   iniDataRegistry: IniDataRegistry,
   commandButton: CommandButtonDef,
@@ -401,9 +466,12 @@ function evaluateCommandAvailability(
     return false;
   }
 
-  // TODO: Source parity gap: special power readiness checks are not yet fully
-  // mirrored from GameLogic command modules, so command-type-specific blocking
-  // beyond status flags may still differ from source in edge cases.
+  // Source parity bridge: special power command buttons are disabled while the
+  // bound source entity's module ready-frame is still in cooldown.
+  if (!isSpecialPowerReadyForSelection(commandButton, commandType, selection, playerContext)) {
+    return false;
+  }
+
   return true;
 }
 

@@ -257,8 +257,8 @@ export function hashDeterministicFrameMetadata<TPayload>(
 ): number {
   // Source parity:
   // - GameLogic::getCRC uses XferCRC with marker strings + snapshot fields.
-  // TODO(source parity): extend beyond frame metadata into full owned snapshot
-  // sections (objects, partition manager, player list, AI).
+  // This engine-level helper intentionally hashes frame metadata only; full
+  // game-logic CRC section parity is implemented in hashDeterministicGameLogicCrc.
   const crc = new XferCrcAccumulator();
   crc.addAsciiString('MARKER:DeterministicFrameMetadata');
   crc.addUnsignedInt(snapshot.frame >>> 0);

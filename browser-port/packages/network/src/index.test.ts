@@ -2170,6 +2170,21 @@ describe('Network per-slot FPS metrics', () => {
       localPlayerName: 'Host',
       localPlayerID: 0,
     });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
     const internals = manager as unknown as {
       pendingFrameNotices: number;
     };
@@ -2182,7 +2197,7 @@ describe('Network per-slot FPS metrics', () => {
 
     expect(handled).toBe(true);
     expect(internals.pendingFrameNotices).toBe(beforeNotices + 1);
-    expect(manager.isFrameDataReady()).toBe(true);
+    expect(manager.isFrameDataReady()).toBe(false);
   });
 
   it('accepts command type aliases from kind field', () => {
@@ -2313,6 +2328,21 @@ describe('Network per-slot FPS metrics', () => {
       localPlayerName: 'Host',
       localPlayerID: 0,
     });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
     const internals = manager as unknown as {
       chatHistory: Array<{ sender: number; text: string; mask: number }>;
       pendingFrameNotices: number;
@@ -2345,6 +2375,21 @@ describe('Network per-slot FPS metrics', () => {
     const manager = new NetworkManager({
       localPlayerName: 'Host',
       localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
     });
     const internals = manager as unknown as {
       chatHistory: Array<{ sender: number; text: string; mask: number }>;
@@ -2668,6 +2713,21 @@ describe('Network incoming command handlers', () => {
       localPlayerName: 'Host',
       localPlayerID: 0,
     });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 2,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 1) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: slotNum === 0 ? 'Host' : 'Peer',
+          isHuman: true,
+        };
+      },
+    });
     const internals = manager as unknown as {
       pendingFrameNotices: number;
     };
@@ -2675,12 +2735,11 @@ describe('Network incoming command handlers', () => {
     const beforeNotices = internals.pendingFrameNotices;
     const handled = manager.processIncomingCommand({
       commandType: 21,
-      frame: 99,
-      sender: 3,
+      sender: 1,
     });
 
     expect(handled).toBe(true);
-    expect(manager.isFrameDataReady()).toBe(true);
+    expect(manager.isFrameDataReady()).toBe(false);
     expect(internals.pendingFrameNotices).toBe(beforeNotices + 1);
   });
 
@@ -2723,6 +2782,32 @@ describe('Network incoming command handlers', () => {
 
     expect(handled).toBe(true);
     expect(resendCalls).toEqual([{ playerId: 1, frame: 13 }]);
+    expect(internals.pendingFrameNotices).toBe(beforeNotices);
+  });
+
+  it('does not serve frame resend request for local sender and ignores pending notice', () => {
+    const manager = new NetworkManager({
+      localPlayerName: 'Host',
+      localPlayerID: 0,
+    });
+    const internals = manager as unknown as {
+      pendingFrameNotices: number;
+      sendFrameDataToPlayer: (playerId: number, frame: number) => void;
+    };
+    const resendCalls: Array<{ playerId: number; frame: number }> = [];
+    internals.sendFrameDataToPlayer = (playerId: number, frame: number) => {
+      resendCalls.push({ playerId, frame });
+    };
+
+    const beforeNotices = internals.pendingFrameNotices;
+    const handled = manager.processIncomingCommand({
+      commandType: 21,
+      sender: 0,
+      frameToResend: 13,
+    });
+
+    expect(handled).toBe(true);
+    expect(resendCalls).toEqual([]);
     expect(internals.pendingFrameNotices).toBe(beforeNotices);
   });
 
@@ -3426,6 +3511,21 @@ describe('Network incoming command handlers', () => {
     const manager = new NetworkManager({
       localPlayerName: 'Host',
       localPlayerID: 0,
+    });
+    manager.parseUserList({
+      localPlayerName: 'Host',
+      getLocalSlotNum: () => 0,
+      getNumPlayers: () => 5,
+      getSlot: (slotNum: number) => {
+        if (slotNum > 4) {
+          return undefined;
+        }
+        return {
+          id: slotNum,
+          name: `Player ${slotNum + 1}`,
+          isHuman: true,
+        };
+      },
     });
     const internals = manager as unknown as {
       chatHistory: Array<{ sender: number; text: string; mask: number }>;

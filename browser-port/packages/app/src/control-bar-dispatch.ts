@@ -41,6 +41,15 @@ type ControlBarDispatchGameLogic = Pick<
 
 type ControlBarDispatchUiRuntime = Pick<UiRuntime, 'showMessage'>;
 
+export interface UnsupportedControlBarCommandRoute {
+  sourceButtonId: string;
+  commandType: GUICommandType;
+  commandName: string;
+  selectedEntityCount: number;
+  hasObjectTarget: boolean;
+  hasPositionTarget: boolean;
+}
+
 function flattenIniValueTokens(value: unknown): string[] {
   if (typeof value === 'string') {
     return value
@@ -360,6 +369,7 @@ export function dispatchIssuedControlBarCommands(
   uiRuntime: ControlBarDispatchUiRuntime,
   audioManager: AudioManager,
   localPlayerIndex?: number | null,
+  onUnsupportedCommand?: (route: UnsupportedControlBarCommandRoute) => void,
 ): void {
   for (const command of commands) {
     const commandButton = resolveSourceCommandButton(iniDataRegistry, command);
@@ -1228,9 +1238,19 @@ export function dispatchIssuedControlBarCommands(
 
       default: {
         const commandName = GUICommandType[command.commandType] ?? `#${command.commandType}`;
+        const unsupportedRoute: UnsupportedControlBarCommandRoute = {
+          sourceButtonId: command.sourceButtonId,
+          commandType: command.commandType,
+          commandName,
+          selectedEntityCount: selectedEntityIds.length,
+          hasObjectTarget: command.targetObjectId !== undefined,
+          hasPositionTarget: Array.isArray(command.targetPosition),
+        };
+        onUnsupportedCommand?.(unsupportedRoute);
+        if (!onUnsupportedCommand) {
+          console.warn('[control-bar-dispatch] unsupported command route', unsupportedRoute);
+        }
         uiRuntime.showMessage(`${commandName} is not mapped to game logic.`);
-        // Source parity gap: map remaining GUICommandType routes to ActionManager /
-        // MessageStream equivalents.
         break;
       }
     }

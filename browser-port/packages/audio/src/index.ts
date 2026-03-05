@@ -1291,8 +1291,8 @@ export class AudioManager implements Subsystem {
 
     const distanceContext = this.resolveDistanceCullContext(event, info);
     if (!distanceContext) {
-      // TODO: Source parity gap: unresolved object/drawable audio IDs should use
-      // source ownership state to derive current world position.
+      // Source behavior from SoundManager::canPlayNow:
+      // if no world position can be resolved, skip distance/shroud culling.
       return false;
     }
 

@@ -47718,6 +47718,73 @@ describe('Script condition groundwork', () => {
     }
   });
 
+  it('keeps ALLOW_SURRENDER-only script command-buttons unsupported', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('ScriptPrisonUnit', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 120, InitialHealth: 120 }),
+        ], {
+          CommandSet: 'ScriptSurrenderCommandSet',
+        }),
+        makeObjectDef('ScriptTarget', 'China', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_PowReturn', {
+          Command: 'POW_RETURN_TO_PRISON',
+        }),
+        makeCommandButtonDef('Command_PickupPrisoner', {
+          Command: 'PICK_UP_PRISONER',
+        }),
+      ],
+      commandSets: [
+        makeCommandSetDef('ScriptSurrenderCommandSet', {
+          1: 'Command_PowReturn',
+          2: 'Command_PickupPrisoner',
+        }),
+      ],
+    });
+
+    const map = makeMap([
+      makeMapObject('ScriptPrisonUnit', 10, 10), // id 1
+      makeMapObject('ScriptTarget', 30, 10), // id 2
+    ], 128, 128);
+    map.waypoints = {
+      nodes: [
+        {
+          id: 1,
+          name: 'SurrenderWaypoint',
+          position: { x: 48, y: 48, z: 0 },
+        },
+      ],
+      links: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      map,
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const commandNames = ['Command_PowReturn', 'Command_PickupPrisoner'];
+    for (const commandName of commandNames) {
+      expect(logic.executeScriptAction({
+        actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+        params: [1, commandName],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+        params: [1, commandName, 2],
+      })).toBe(false);
+      expect(logic.executeScriptAction({
+        actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+        params: [1, commandName, 'SurrenderWaypoint'],
+      })).toBe(false);
+    }
+  });
+
   it('executes CANCEL script command-buttons for no-target invocation and keeps WAYPOINTS unsupported', () => {
     const bundle = makeBundle({
       objects: [
