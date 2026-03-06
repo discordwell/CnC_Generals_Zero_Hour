@@ -457,6 +457,72 @@ End
       expect(draw.blocks[0]!.name).toBe('NONE');
       expect(draw.fields['AliasConditionState']).toEqual(['SNOW', 'NIGHT']);
     });
+
+    it('parses empty sub-block bodies that only contain comments', () => {
+      const source = `
+Object TestBuilding
+  ClientUpdate = LaserUpdate ModuleTag_01
+    ; intentionally empty body
+  End
+  Behavior = DeletionUpdate ModuleTag_02
+    MinLifetime = 600
+  End
+End
+`;
+
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      const object = result.blocks[0]!;
+      expect(object.blocks).toHaveLength(2);
+      expect(object.blocks[0]!.type).toBe('ClientUpdate');
+      expect(object.blocks[0]!.name).toBe('LaserUpdate ModuleTag_01');
+      expect(object.blocks[1]!.type).toBe('Behavior');
+      expect(object.blocks[1]!.name).toBe('DeletionUpdate ModuleTag_02');
+    });
+
+    it('skips End tokens significantly deeper than block indent', () => {
+      // End tokens at indent > blockIndent+1 are treated as belonging to
+      // unrecognized nested structures and are skipped.
+      const source = `
+Object TestBuilding
+  Draw = W3DModelDraw ModuleTag_Draw
+    UnknownState = NIGHT
+      Model = TBld_A_N
+    End
+    ConditionState = NONE
+      Model = TBld_A
+    End
+  End
+  CommandSet = TestBuildingCommandSet
+End
+`;
+
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks).toHaveLength(1);
+      const object = result.blocks[0]!;
+      expect(object.fields['CommandSet']).toBe('TestBuildingCommandSet');
+      expect(object.blocks[0]!.type).toBe('Draw');
+    });
+
+    it('handles inconsistent indentation in sub-blocks', () => {
+      // Real INI files (e.g. ChemicalGeneral.ini) have indent inconsistencies
+      const source = `
+Object TestUnit
+ WeaponSet
+    Conditions = None
+    Weapon = PRIMARY TestGun
+  End
+  Geometry = BOX
+End
+`;
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks).toHaveLength(1);
+      const object = result.blocks[0]!;
+      expect(object.blocks[0]!.type).toBe('WeaponSet');
+      expect(object.fields['Geometry']).toBe('BOX');
+    });
   });
 
   describe('file context in errors', () => {
@@ -467,6 +533,37 @@ UnknownDirective Foo
       const result = parseIni(source, { filePath: 'test.ini' });
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]!.file).toBe('test.ini');
+    });
+  });
+
+  describe('sub-block indentation handling', () => {
+    it('does not swallow next object when sub-block-type keyword is used as inline field', () => {
+      // VeterancyLevels is a SUB_BLOCK_TYPE but here used as an inline field.
+      // The End at indent 2 belongs to the parent Behavior, not to VeterancyLevels.
+      const source = `
+Object TankA
+  Behavior = EjectPilotDie ModuleTag_17
+    GroundCreationList = OCL_EjectPilotOnGround
+    VeterancyLevels = ALL -REGULAR
+  End
+  Geometry = BOX
+End
+
+Object TankB
+  Side = America
+End
+`;
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      expect(result.blocks).toHaveLength(2);
+      expect(result.blocks[0]!.name).toBe('TankA');
+      expect(result.blocks[1]!.name).toBe('TankB');
+      // VeterancyLevels should be a field of EjectPilotDie, not a sub-block
+      const ejectDie = result.blocks[0]!.blocks.find(b => b.name.includes('EjectPilotDie'));
+      expect(ejectDie).toBeDefined();
+      expect(ejectDie!.fields['VeterancyLevels']).toEqual(['ALL', '-REGULAR']);
+      // Geometry should be a field of TankA, not consumed by the behavior
+      expect(result.blocks[0]!.fields['Geometry']).toBe('BOX');
     });
   });
 });

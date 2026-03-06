@@ -264,6 +264,7 @@ function parseBlock(
     fields: {},
     blocks: [],
   };
+  const blockIndent = lineIndentWidth(headerLine.raw);
 
   let cursor = startCursor + 1;
 
@@ -278,10 +279,18 @@ function parseBlock(
 
     const firstToken = lineTokens[0]!;
 
-    // End of block
-    if (firstToken === 'End') {
+    // End of block (case-insensitive — C++ parser accepts END, End, end).
+    // Use indent-based matching with tolerance for retail INI files that
+    // have inconsistent indentation (e.g. WeaponSet at indent 1, End at indent 2).
+    if (firstToken.toUpperCase() === 'END') {
+      const endIndent = lineIndentWidth(line.raw);
+      if (endIndent <= blockIndent + 1) {
+        cursor++;
+        break;
+      }
+      // End is significantly deeper — belongs to an unrecognized nested structure.
       cursor++;
-      break;
+      continue;
     }
 
     // AddModule / ReplaceModule — treated as sub-blocks with special type prefix
@@ -394,15 +403,36 @@ function lineIndentWidth(rawLine: string): number {
   return width;
 }
 
+const AMBIGUOUS_INLINE_SUB_BLOCK_TYPES = new Set([
+  'ConditionState',
+  'AliasConditionState',
+  'DefaultConditionState',
+  'ModelConditionState',
+  'DefaultModelConditionState',
+  'AnimationState',
+  'IdleAnimationState',
+]);
+
 function hasNestedSubBlockBody(lines: TokenizedLine[], startCursor: number): boolean {
   const startLine = lines[startCursor];
   if (!startLine) return false;
+  const startToken = startLine.tokens[0] ?? '';
+  const ambiguousInline = AMBIGUOUS_INLINE_SUB_BLOCK_TYPES.has(startToken);
   const startIndent = lineIndentWidth(startLine.raw);
 
   for (let cursor = startCursor + 1; cursor < lines.length; cursor += 1) {
     const nextLine = lines[cursor];
     if (!nextLine || nextLine.tokens.length === 0) continue;
-    return lineIndentWidth(nextLine.raw) > startIndent;
+    const nextIndent = lineIndentWidth(nextLine.raw);
+    if (nextIndent > startIndent) {
+      return true;
+    }
+    if (!ambiguousInline && SUB_BLOCK_TYPES.has(startToken) && nextLine.tokens[0] === 'End') {
+      // Empty sub-block body — but only if End is at the same or deeper indent.
+      // An End at shallower indent belongs to a parent block, not this prospective sub-block.
+      return nextIndent >= startIndent;
+    }
+    return false;
   }
   return false;
 }

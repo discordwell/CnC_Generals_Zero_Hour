@@ -1,271 +1,33 @@
 {
-  "generatedAt": "2026-03-06T20:56:44.028Z",
+  "generatedAt": "2026-03-06T23:39:53.638Z",
   "bundlePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/app/public/assets/data/ini-bundle.json",
   "summary": {
-    "objects": 2154,
+    "objects": 2106,
     "commandButtons": 816,
-    "commandSets": 737,
+    "commandSets": 471,
     "upgrades": 80,
     "specialPowers": 79,
     "sciences": 105,
     "unsupportedBlockTypes": 0,
-    "unresolvedRegistryErrors": 8,
-    "missingReferences": 29
+    "unresolvedRegistryErrors": 0,
+    "missingReferences": 2
   },
-  "unresolvedRegistryErrors": [
-    {
-      "blockType": "Object",
-      "detail": "Parent \"Chem_GLAVehicleTechnicalChassisOne\" not found",
-      "name": "Chem_GLAVehicleTechnicalChassisTwo",
-      "type": "unresolved_parent"
-    },
-    {
-      "blockType": "Object",
-      "detail": "Parent \"Chem_GLAVehicleTechnicalChassisOne\" not found",
-      "name": "Chem_GLAVehicleTechnicalChassisThree",
-      "type": "unresolved_parent"
-    },
-    {
-      "blockType": "Object",
-      "detail": "Parent \"Demo_GLAVehicleTechnicalChassisOne\" not found",
-      "name": "Demo_GLAVehicleTechnicalChassisTwo",
-      "type": "unresolved_parent"
-    },
-    {
-      "blockType": "Object",
-      "detail": "Parent \"Demo_GLAVehicleTechnicalChassisOne\" not found",
-      "name": "Demo_GLAVehicleTechnicalChassisThree",
-      "type": "unresolved_parent"
-    },
-    {
-      "blockType": "Object",
-      "detail": "Parent \"GLAVehicleTechnicalChassisOne\" not found",
-      "name": "GLAVehicleTechnicalChassisTwo",
-      "type": "unresolved_parent"
-    },
-    {
-      "blockType": "Object",
-      "detail": "Parent \"GLAVehicleTechnicalChassisOne\" not found",
-      "name": "GLAVehicleTechnicalChassisThree",
-      "type": "unresolved_parent"
-    },
-    {
-      "blockType": "Object",
-      "detail": "Parent \"Slth_GLAVehicleTechnicalChassisOne\" not found",
-      "name": "Slth_GLAVehicleTechnicalChassisTwo",
-      "type": "unresolved_parent"
-    },
-    {
-      "blockType": "Object",
-      "detail": "Parent \"Slth_GLAVehicleTechnicalChassisOne\" not found",
-      "name": "Slth_GLAVehicleTechnicalChassisThree",
-      "type": "unresolved_parent"
-    }
-  ],
+  "unresolvedRegistryErrors": [],
   "unsupportedBlockTypes": [],
   "missingReferences": [
     {
       "ownerType": "Object",
-      "ownerName": "AirF_AmericaVehicleDozer",
+      "ownerName": "GC_Chem_GLADemoTrap",
       "referenceType": "CommandSet",
-      "referenceName": "AIRF_AMERICADOZERCOMMANDSET",
+      "referenceName": "=",
       "detail": "Object field CommandSet points to a missing CommandSet."
     },
     {
       "ownerType": "Object",
-      "ownerName": "Chem_GLAInfantryWorker",
+      "ownerName": "GLADemoTrap",
       "referenceType": "CommandSet",
-      "referenceName": "CHEM_GLAWORKERCOMMANDSET",
+      "referenceName": "=",
       "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "Demo_GLAInfantryWorker",
-      "referenceType": "CommandSet",
-      "referenceName": "DEMO_GLAWORKERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "GC_Chem_GLAInfantryWorker",
-      "referenceType": "CommandSet",
-      "referenceName": "GC_CHEM_GLAWORKERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "GC_Slth_GLAInfantryWorker",
-      "referenceType": "CommandSet",
-      "referenceName": "GC_SLTH_GLAWORKERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "Infa_ChinaVehicleDozer",
-      "referenceType": "CommandSet",
-      "referenceName": "INFA_CHINADOZERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "Lazr_AmericaVehicleDozer",
-      "referenceType": "CommandSet",
-      "referenceName": "LAZR_AMERICADOZERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "Nuke_ChinaVehicleDozer",
-      "referenceType": "CommandSet",
-      "referenceName": "NUKE_CHINADOZERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "Slth_GLAInfantryWorker",
-      "referenceType": "CommandSet",
-      "referenceName": "SLTH_GLAWORKERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "SupW_AmericaVehicleDozer",
-      "referenceType": "CommandSet",
-      "referenceName": "SUPW_AMERICADOZERCOMMANDSET",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Boss_Command_ConstructChinaSpeakerTower",
-      "referenceType": "Object",
-      "referenceName": "BOSS_SPEAKERTOWER",
-      "detail": "Command \"DOZER_CONSTRUCT\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Chem_Command_ConstructGLAVehicleBombTruck",
-      "referenceType": "Object",
-      "referenceName": "CHEM_GLAVEHICLEBOMBTRUCK",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Chem_Command_ConstructGLAVehicleScudLauncher",
-      "referenceType": "Object",
-      "referenceName": "CHEM_GLAVEHICLESCUDLAUNCHER",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Chem_Command_ConstructGLAVehicleTechnical",
-      "referenceType": "Object",
-      "referenceName": "CHEM_GLAVEHICLETECHNICAL",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Command_ConstructChinaSpeakerTower",
-      "referenceType": "Object",
-      "referenceName": "CHINASPEAKERTOWER",
-      "detail": "Command \"DOZER_CONSTRUCT\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Command_ConstructGLAVehicleBombTruck",
-      "referenceType": "Object",
-      "referenceName": "GLAVEHICLEBOMBTRUCK",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Command_ConstructGLAVehicleScudLauncher",
-      "referenceType": "Object",
-      "referenceName": "GLAVEHICLESCUDLAUNCHER",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Command_ConstructGLAVehicleTechnical",
-      "referenceType": "Object",
-      "referenceName": "GLAVEHICLETECHNICAL",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Demo_Command_ConstructGLAVehicleBombTruck",
-      "referenceType": "Object",
-      "referenceName": "DEMO_GLAVEHICLEBOMBTRUCK",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Demo_Command_ConstructGLAVehicleScudLauncher",
-      "referenceType": "Object",
-      "referenceName": "DEMO_GLAVEHICLESCUDLAUNCHER",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Demo_Command_ConstructGLAVehicleTechnical",
-      "referenceType": "Object",
-      "referenceName": "DEMO_GLAVEHICLETECHNICAL",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "GC_Chem_Command_ConstructGLATankScorpion",
-      "referenceType": "Object",
-      "referenceName": "GC_CHEM_GLATANKSCORPION",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Infa_Command_ConstructChinaSpeakerTower",
-      "referenceType": "Object",
-      "referenceName": "INFA_CHINASPEAKERTOWER",
-      "detail": "Command \"DOZER_CONSTRUCT\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Nuke_Command_ConstructChinaSpeakerTower",
-      "referenceType": "Object",
-      "referenceName": "NUKE_CHINASPEAKERTOWER",
-      "detail": "Command \"DOZER_CONSTRUCT\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Slth_Command_ConstructGLAVehicleBombTruck",
-      "referenceType": "Object",
-      "referenceName": "SLTH_GLAVEHICLEBOMBTRUCK",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Slth_Command_ConstructGLAVehicleScudLauncher",
-      "referenceType": "Object",
-      "referenceName": "SLTH_GLAVEHICLESCUDLAUNCHER",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Slth_Command_ConstructGLAVehicleTechnical",
-      "referenceType": "Object",
-      "referenceName": "SLTH_GLAVEHICLETECHNICAL",
-      "detail": "Command \"UNIT_BUILD\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "SupW_Command_ConstructAmericaCruiseMissileLauncher",
-      "referenceType": "Object",
-      "referenceName": "SUPW_AMERICACRUISEMISSILELAUNCHER",
-      "detail": "Command \"DOZER_CONSTRUCT\" references a missing Object."
-    },
-    {
-      "ownerType": "CommandButton",
-      "ownerName": "Tank_Command_ConstructChinaSpeakerTower",
-      "referenceType": "Object",
-      "referenceName": "TANK_CHINASPEAKERTOWER",
-      "detail": "Command \"DOZER_CONSTRUCT\" references a missing Object."
     }
   ]
 }
