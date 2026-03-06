@@ -68,6 +68,10 @@ export function parseMeshChunk(reader: W3dChunkReader, meshChunkDataOffset: numb
   for (const sub of reader.iterateChunks(meshChunkDataOffset, endOffset)) {
     switch (sub.type) {
       case W3dChunkType.MESH_HEADER3: {
+        // Guard malformed headers in retail content variants.
+        if (sub.size < 80) {
+          break;
+        }
         // Skip Version (4) and read Attributes.
         attributes = reader.readUint32(sub.dataOffset + 4);
         name = reader.readString(sub.dataOffset + 8, 32);
@@ -78,43 +82,75 @@ export function parseMeshChunk(reader: W3dChunkReader, meshChunkDataOffset: numb
       }
 
       case W3dChunkType.VERTICES: {
-        vertices = reader.readFloat32Array(sub.dataOffset, numVertices * 3);
+        const availableVertices = Math.floor(sub.size / 12);
+        const inferredVertices = numVertices > 0 ? numVertices : availableVertices;
+        const vertexCount = Math.min(inferredVertices, availableVertices);
+        vertices = reader.readFloat32Array(sub.dataOffset, vertexCount * 3);
+        numVertices = vertexCount;
         break;
       }
 
       case W3dChunkType.VERTEX_NORMALS: {
-        normals = reader.readFloat32Array(sub.dataOffset, numVertices * 3);
+        const availableNormals = Math.floor(sub.size / 12);
+        const inferredVertices = numVertices > 0 ? numVertices : availableNormals;
+        const normalCount = Math.min(inferredVertices, availableNormals);
+        normals = reader.readFloat32Array(sub.dataOffset, normalCount * 3);
+        if (numVertices === 0) {
+          numVertices = normalCount;
+        }
         break;
       }
 
       case W3dChunkType.TEXCOORDS: {
-        uvs = reader.readFloat32Array(sub.dataOffset, numVertices * 2);
+        const availableUvs = Math.floor(sub.size / 8);
+        const inferredVertices = numVertices > 0 ? numVertices : availableUvs;
+        const uvCount = Math.min(inferredVertices, availableUvs);
+        uvs = reader.readFloat32Array(sub.dataOffset, uvCount * 2);
+        if (numVertices === 0) {
+          numVertices = uvCount;
+        }
         break;
       }
 
       case W3dChunkType.TRIANGLES: {
-        indices = new Uint32Array(numTris * 3);
-        for (let i = 0; i < numTris; i++) {
+        const availableTris = Math.floor(sub.size / TRIANGLE_RECORD_SIZE);
+        const inferredTris = numTris > 0 ? numTris : availableTris;
+        const triCount = Math.min(inferredTris, availableTris);
+        indices = new Uint32Array(triCount * 3);
+        for (let i = 0; i < triCount; i++) {
           const base = sub.dataOffset + i * TRIANGLE_RECORD_SIZE;
           indices[i * 3] = reader.readUint32(base);
           indices[i * 3 + 1] = reader.readUint32(base + 4);
           indices[i * 3 + 2] = reader.readUint32(base + 8);
         }
+        numTris = triCount;
         break;
       }
 
       case W3dChunkType.VERTEX_COLORS: {
-        vertexColors = new Uint8Array(numVertices * 4);
-        const raw = reader.readUint8Array(sub.dataOffset, numVertices * 4);
+        const availableColors = Math.floor(sub.size / 4);
+        const inferredVertices = numVertices > 0 ? numVertices : availableColors;
+        const colorCount = Math.min(inferredVertices, availableColors);
+        vertexColors = new Uint8Array(colorCount * 4);
+        const raw = reader.readUint8Array(sub.dataOffset, colorCount * 4);
         vertexColors.set(raw);
+        if (numVertices === 0) {
+          numVertices = colorCount;
+        }
         break;
       }
 
       case W3dChunkType.VERTEX_INFLUENCES: {
         // Each influence record = uint16 boneIdx + 6 bytes padding = 8 bytes.
-        boneIndices = new Uint16Array(numVertices);
-        for (let i = 0; i < numVertices; i++) {
+        const availableInfluences = Math.floor(sub.size / 8);
+        const inferredVertices = numVertices > 0 ? numVertices : availableInfluences;
+        const influenceCount = Math.min(inferredVertices, availableInfluences);
+        boneIndices = new Uint16Array(influenceCount);
+        for (let i = 0; i < influenceCount; i++) {
           boneIndices[i] = reader.readUint16(sub.dataOffset + i * 8);
+        }
+        if (numVertices === 0) {
+          numVertices = influenceCount;
         }
         break;
       }
@@ -203,8 +239,14 @@ function parseMaterialPass(
 ): void {
   for (const sub of reader.iterateChunks(offset, endOffset)) {
     if (sub.type === W3dChunkType.DCG) {
-      const colors = new Uint8Array(numVertices * 4);
-      const raw = reader.readUint8Array(sub.dataOffset, numVertices * 4);
+      const availableColors = Math.floor(sub.size / 4);
+      const inferredVertices = numVertices > 0 ? numVertices : availableColors;
+      const colorCount = Math.min(inferredVertices, availableColors);
+      if (colorCount <= 0) {
+        continue;
+      }
+      const colors = new Uint8Array(colorCount * 4);
+      const raw = reader.readUint8Array(sub.dataOffset, colorCount * 4);
       colors.set(raw);
       onDCG(colors);
     }

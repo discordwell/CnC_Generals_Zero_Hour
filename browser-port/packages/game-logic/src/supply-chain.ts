@@ -231,7 +231,8 @@ function computeRelativeCost<TEntity extends SupplyChainEntity>(
   if (!canTransferSuppliesAt(truck, dock, state, context)) {
     return null;
   }
-  // TODO: DockUpdate::isClearToApproach uses approach slots; not modeled yet.
+  // Source parity gap: ResourceGatheringManager::computeRelativeCost also checks
+  // DockUpdate::isClearToApproach approach slots, which are not represented in this module yet.
   const distanceSq = distSquared(truck.x, truck.z, dock.x, dock.z);
   return { cost: distanceSq, distanceSq };
 }

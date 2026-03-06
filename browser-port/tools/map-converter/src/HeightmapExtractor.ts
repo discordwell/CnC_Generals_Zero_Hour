@@ -5,7 +5,11 @@
  *   int32   width
  *   int32   height
  *   int32   borderSize      (v3+)
- *   // v4+ has additional boundary data (skipped)
+ *   // v4+ has additional boundary size pairs
+ *   int32   numBoundaries   (v4+)
+ *   repeat numBoundaries:
+ *     int32 boundaryWidth
+ *     int32 boundaryHeight
  *   int32   dataSize        (should equal width * height)
  *   uint8[] heightData      (width * height values, 0-255)
  *
@@ -49,14 +53,12 @@ export class HeightmapExtractor {
     }
 
     if (version >= 4) {
-      // v4 has per-boundary area data that we skip.
-      // There are 4 boundaries, each with numBoundaryPoints int32 entries.
       const numBoundaries = reader.readInt32();
-      for (let b = 0; b < numBoundaries; b++) {
-        const numPoints = reader.readInt32();
-        // Each point is 3 int32 values (x, y, z)
-        reader.skip(numPoints * 3 * 4);
+      if (numBoundaries < 0) {
+        throw new Error(`HeightMapData has invalid boundary count: ${numBoundaries}`);
       }
+      // Source parity: WorldHeightMap::ParseHeightMapData reads boundary (x,y) pairs.
+      reader.skip(numBoundaries * 2 * 4);
     }
 
     const dataSize = reader.readInt32();

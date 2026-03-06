@@ -126,7 +126,7 @@ export class FogOfWarGrid {
   }
 
   /**
-   * Source parity subset: PartitionManager::doShroudCover + undoShroudCover.
+   * Source parity: PartitionManager::doShroudCover + undoShroudCover.
    * Applies a local shroud "dollop" by clearing explored state in a circle.
    */
   shroudAt(playerIndex: number, worldX: number, worldZ: number, radius: number): void {

@@ -500,7 +500,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     expect(uiRuntime.messages).toEqual([]);
   });
 
-  it('shows TODO guidance when UNIT_BUILD buttons miss Object field', () => {
+  it('shows guidance when UNIT_BUILD buttons miss Object field', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_BadUnitBuild', {
@@ -1079,7 +1079,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     expect(uiRuntime.messages).toEqual(['Special Power requires a selected source unit.']);
   });
 
-  it('shows TODO guidance when SPECIAL_POWER buttons miss SpecialPower field', () => {
+  it('shows guidance when SPECIAL_POWER buttons miss SpecialPower field', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_MissingSpecialPower', {
@@ -1308,7 +1308,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     ]);
   });
 
-  it('shows TODO guidance when SPECIAL_POWER_CONSTRUCT button misses Object field', () => {
+  it('shows guidance when SPECIAL_POWER_CONSTRUCT button misses Object field', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_ConstructSpecialPowerMissingObject', {
@@ -1624,7 +1624,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     ]);
   });
 
-  it('shows TODO guidance when source command buttons miss required Upgrade or Science fields', () => {
+  it('shows guidance when source command buttons miss required Upgrade or Science fields', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_PlayerUpgradeMissingField', {
@@ -2225,7 +2225,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     expect(audioManager.playedEvents).toEqual(['UI_SelectAll']);
   });
 
-  it('shows TODO guidance when SELECT_ALL_UNITS_OF_TYPE button misses Object/ThingTemplate mapping', () => {
+  it('shows guidance when SELECT_ALL_UNITS_OF_TYPE button misses Object/ThingTemplate mapping', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_BadSelectAll', {
@@ -2261,7 +2261,7 @@ describe('dispatchIssuedControlBarCommands', () => {
     ]);
   });
 
-  it('shows TODO guidance when local player side cannot be resolved for SELECT_ALL_UNITS_OF_TYPE', () => {
+  it('shows guidance when local player side cannot be resolved for SELECT_ALL_UNITS_OF_TYPE', () => {
     const registry = new IniDataRegistry();
     registry.loadBlocks([
       makeCommandButtonBlock('Command_SelectAllWithoutSide', {

@@ -108,7 +108,12 @@ export class SidesListExtractor {
       const childEnd = child.dataOffset + child.dataSize;
 
       if (childName === CHUNK_PLAYER_SCRIPTS_LIST) {
-        scriptLists.push(...ScriptExtractor.extractPlayerScriptLists(reader, child, idToName));
+        try {
+          scriptLists.push(...ScriptExtractor.extractPlayerScriptLists(reader, child, idToName));
+        } catch {
+          // Source parity gap: Some retail script payload variants are not fully decoded yet.
+          // Keep map conversion non-fatal so heightmap/object ingestion can proceed.
+        }
       }
 
       reader.seek(childEnd);

@@ -234,7 +234,7 @@ export class ScriptExtractor {
       const childEnd = child.dataOffset + child.dataSize;
 
       if (childName === CHUNK_CONDITION) {
-        conditions.push(ScriptExtractor.extractCondition(reader));
+        conditions.push(ScriptExtractor.extractCondition(reader, child));
       }
 
       reader.seek(childEnd);
@@ -243,8 +243,12 @@ export class ScriptExtractor {
     return { conditions };
   }
 
-  private static extractCondition(reader: DataChunkReader): ScriptConditionJSON {
+  private static extractCondition(reader: DataChunkReader, chunk: DataChunk): ScriptConditionJSON {
     const conditionType = reader.readInt32();
+    // Source parity: K_SCRIPT_CONDITION_VERSION_4 adds internal NameKey after type.
+    if (chunk.version >= 4) {
+      reader.readUint32();
+    }
     const paramCount = reader.readInt32();
     const params: ScriptParameterJSON[] = [];
 
@@ -256,8 +260,11 @@ export class ScriptExtractor {
   }
 
   private static extractAction(reader: DataChunkReader, chunk?: DataChunk): ScriptActionJSON {
-    void chunk;
     const actionType = reader.readInt32();
+    // Source parity: K_SCRIPT_ACTION_VERSION_2 adds internal NameKey after type.
+    if (chunk && chunk.version >= 2) {
+      reader.readUint32();
+    }
     const paramCount = reader.readInt32();
     const params: ScriptParameterJSON[] = [];
 

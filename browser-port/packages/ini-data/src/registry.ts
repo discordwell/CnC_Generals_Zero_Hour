@@ -586,6 +586,7 @@ export class IniDataRegistry {
     switch (block.type) {
       case 'Object':
       case 'ChildObject':
+      case 'ObjectReskin':
         addDefinition(this.objects, block.type, {
           name: block.name,
           parent: block.parent,

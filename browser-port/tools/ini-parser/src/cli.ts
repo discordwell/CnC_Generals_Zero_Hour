@@ -14,6 +14,7 @@
  *   --base-dir Base directory for resolving #include paths (defaults to input dir)
  *   --stats    Print summary statistics
  *   --strict   Treat unsupported/registry issues as fatal
+ *   --allow-parse-errors Do not fail when parser reports unsupported tokens
  *   --bundle   Write resolved registry bundle JSON
  *   --manifest Write a conversion manifest JSON file
  *   --report   Write a compatibility report JSON file
@@ -88,6 +89,7 @@ interface CliArgs {
   baseDir: string | undefined;
   stats: boolean;
   strict: boolean;
+  allowParseErrors: boolean;
   report: string | undefined;
   manifest: string | undefined;
   bundle: string | undefined;
@@ -112,6 +114,7 @@ function parseArgs(argv: string[]): CliArgs {
     baseDir: undefined,
     stats: false,
     strict: false,
+    allowParseErrors: false,
     report: undefined,
     manifest: undefined,
     bundle: undefined,
@@ -140,6 +143,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--strict':
         args.strict = true;
+        break;
+      case '--allow-parse-errors':
+        args.allowParseErrors = true;
         break;
       case '--report':
         args.report = readArgValue(argv, ++i, '--report');
@@ -191,6 +197,8 @@ Options:
   --base-dir       Base directory for resolving #include paths
   --stats          Print summary statistics
   --strict         Treat unsupported/compatibility issues as fatal
+  --allow-parse-errors
+                   Do not fail when parser reports unsupported tokens
   --report         Write a compatibility report JSON file
   --manifest       Write a conversion manifest JSON file
   --bundle         Write resolved registry bundle JSON
@@ -490,7 +498,7 @@ function main(): void {
   }
 
   const failOnRegistryIssues = args.strict && registry.errors.length > 0;
-  const shouldFail = runtimeError || (stats.errors > 0) || failOnRegistryIssues;
+  const shouldFail = runtimeError || (!args.allowParseErrors && stats.errors > 0) || failOnRegistryIssues;
 
   if (shouldFail) {
     process.exit(1);

@@ -116,7 +116,7 @@ export function reserveParkingDoorForQueuedUnit(
     return false;
   }
 
-  // Source parity subset: ProductionUpdate::queueCreateUnit() reserves an exit door up front
+  // Source parity: ProductionUpdate::queueCreateUnit() reserves an exit door up front
   // via ParkingPlaceBehavior::reserveDoorForExit() for units that require hangar parking.
   parkingProfile.reservedProductionIds.add(productionId);
   return true;

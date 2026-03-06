@@ -62,6 +62,10 @@ export class WaypointExtractor {
 
     for (let i = 0; i < triggerCount; i++) {
       const name = reader.readAsciiString();
+      // Source parity: K_TRIGGERS_VERSION_4 adds layerName before trigger ID.
+      if (version >= 4) {
+        reader.readAsciiString();
+      }
       const id = reader.readInt32();
 
       let isWaterArea = false;

@@ -94,6 +94,7 @@ const USHORT = 5123;  // GL_UNSIGNED_SHORT
 const UINT = 5125;    // GL_UNSIGNED_INT
 const ARRAY_BUFFER = 34962;
 const ELEMENT_ARRAY_BUFFER = 34963;
+const MAX_SAFE_ANIMATION_FRAMES = 20000;
 
 /* ------------------------------------------------------------------ */
 /*  Binary data accumulator                                            */
@@ -445,7 +446,11 @@ function buildGltfAnimation(
     }
   }
 
-  const frameRate = anim.frameRate || 30;
+  // Some retail files carry invalid animation-header frame rates; keep output bounded/stable.
+  const frameRate =
+    Number.isFinite(anim.frameRate) && anim.frameRate > 0 && anim.frameRate <= 1000
+      ? anim.frameRate
+      : 30;
 
   function addAcc(
     data: ArrayBufferView,
@@ -472,15 +477,25 @@ function buildGltfAnimation(
 
   // Translation channels.
   for (const [pivot, group] of translationGroups) {
-    const numFrames = anim.numFrames || 1;
+    const channelFirstFrames = [group.x?.firstFrame, group.y?.firstFrame, group.z?.firstFrame]
+      .filter((v): v is number => typeof v === 'number');
+    const channelLastFrames = [group.x?.lastFrame, group.y?.lastFrame, group.z?.lastFrame]
+      .filter((v): v is number => typeof v === 'number');
+
+    const firstFrame = channelFirstFrames.length > 0 ? Math.min(...channelFirstFrames) : 0;
+    const lastFrame = channelLastFrames.length > 0 ? Math.max(...channelLastFrames) : firstFrame;
+    const rawNumFrames = Math.max(1, lastFrame - firstFrame + 1);
+    const numFrames = Math.min(rawNumFrames, MAX_SAFE_ANIMATION_FRAMES);
+
     const times = new Float32Array(numFrames);
     const values = new Float32Array(numFrames * 3);
 
     for (let f = 0; f < numFrames; f++) {
-      times[f] = f / frameRate;
-      values[f * 3] = getChannelValue(group.x, f);
-      values[f * 3 + 1] = getChannelValue(group.y, f);
-      values[f * 3 + 2] = getChannelValue(group.z, f);
+      const frame = firstFrame + f;
+      times[f] = frame / frameRate;
+      values[f * 3] = getChannelValue(group.x, frame);
+      values[f * 3 + 1] = getChannelValue(group.y, frame);
+      values[f * 3 + 2] = getChannelValue(group.z, frame);
     }
 
     const inputAcc = addAcc(times, FLOAT, numFrames, 'SCALAR', [times[0] ?? 0], [times[numFrames - 1] ?? 0]);
@@ -497,7 +512,9 @@ function buildGltfAnimation(
 
   // Rotation channels.
   for (const ch of rotationChannels) {
-    const numFrames = ch.lastFrame - ch.firstFrame + 1;
+    const rawNumFrames = Math.max(1, ch.lastFrame - ch.firstFrame + 1);
+    const channelFrameCapacity = Math.max(1, Math.floor(ch.data.length / 4));
+    const numFrames = Math.min(rawNumFrames, channelFrameCapacity, MAX_SAFE_ANIMATION_FRAMES);
     const times = new Float32Array(numFrames);
     const values = new Float32Array(numFrames * 4);
 

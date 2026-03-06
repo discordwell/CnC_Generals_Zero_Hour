@@ -71,6 +71,21 @@ End
     expect(obj.fields['MaxHealth']).toBe(500.0);
   });
 
+  it('parses ObjectReskin headers as parent-linked object definitions', () => {
+    const source = `
+ObjectReskin Chem_GLAVehicleTechnical GLAVehicleTechnical
+  BuildCost = 550
+End
+`;
+    const result = parseIni(source);
+    expect(result.errors).toHaveLength(0);
+    const obj = result.blocks[0]!;
+    expect(obj.type).toBe('ObjectReskin');
+    expect(obj.name).toBe('Chem_GLAVehicleTechnical');
+    expect(obj.parent).toBe('GLAVehicleTechnical');
+    expect(obj.fields['BuildCost']).toBe(550);
+  });
+
   it('strips comments', () => {
     const source = `
 Object TestUnit ; this is a comment
@@ -366,6 +381,81 @@ End
       expect(child.blocks[0]!.type).toBe('ReplaceModule');
       expect(child.blocks[0]!.name).toBe('ModuleTag_02');
       expect(child.blocks[0]!.fields['MaxHealth']).toBe(500);
+    });
+  });
+
+  describe('ConditionState-style sub-blocks', () => {
+    it('parses DefaultConditionState and ConditionState blocks nested in Draw', () => {
+      const source = `
+Object TestBuilding
+  Draw = W3DModelDraw ModuleTag_Draw
+    DefaultConditionState
+      Model = TBld_A
+    End
+    ConditionState = NIGHT
+      Model = TBld_A_N
+    End
+    ConditionState = SNOW NIGHT
+      Model = TBld_A_SN
+    End
+  End
+End
+`;
+
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      const object = result.blocks[0]!;
+      const draw = object.blocks[0]!;
+      expect(draw.type).toBe('Draw');
+      expect(draw.name).toBe('W3DModelDraw ModuleTag_Draw');
+      expect(draw.blocks).toHaveLength(3);
+      expect(draw.blocks[0]!.type).toBe('DefaultConditionState');
+      expect(draw.blocks[0]!.name).toBe('');
+      expect(draw.blocks[1]!.type).toBe('ConditionState');
+      expect(draw.blocks[1]!.name).toBe('NIGHT');
+      expect(draw.blocks[2]!.type).toBe('ConditionState');
+      expect(draw.blocks[2]!.name).toBe('SNOW NIGHT');
+    });
+
+    it('parses AliasConditionState blocks with equals syntax', () => {
+      const source = `
+Object TestBuilding
+  Draw = W3DModelDraw ModuleTag_Draw
+    AliasConditionState = REALLYDAMAGED NIGHT
+      Model = TBld_A_DN
+    End
+  End
+End
+`;
+
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      const alias = result.blocks[0]!.blocks[0]!.blocks[0]!;
+      expect(alias.type).toBe('AliasConditionState');
+      expect(alias.name).toBe('REALLYDAMAGED NIGHT');
+      expect(alias.fields['Model']).toBe('TBld_A_DN');
+    });
+
+    it('treats inline AliasConditionState directives as fields (not nested blocks)', () => {
+      const source = `
+Object TestBuilding
+  Draw = W3DModelDraw ModuleTag_Draw
+    ConditionState = NONE
+      Model = TBld_A
+    End
+    AliasConditionState = NIGHT
+    AliasConditionState = SNOW NIGHT
+  End
+End
+`;
+
+      const result = parseIni(source);
+      expect(result.errors).toHaveLength(0);
+      const draw = result.blocks[0]!.blocks[0]!;
+      expect(draw.blocks).toHaveLength(1);
+      expect(draw.blocks[0]!.type).toBe('ConditionState');
+      expect(draw.blocks[0]!.name).toBe('NONE');
+      expect(draw.fields['AliasConditionState']).toEqual(['SNOW', 'NIGHT']);
     });
   });
 

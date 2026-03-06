@@ -1696,7 +1696,7 @@ interface DozerAIProfile {
 }
 
 /**
- * Source parity subset: ChinookAIUpdate module data used by gameplay systems
+ * Source parity: ChinookAIUpdate module data used by gameplay systems
  * currently implemented in this port (supply availability + combat-drop timing).
  */
 interface ChinookAIProfile {
@@ -1717,7 +1717,7 @@ interface ChinookAIProfile {
 }
 
 /**
- * Source parity subset: ThingTemplate ambient sound fields consumed by Drawable.
+ * Source parity: ThingTemplate ambient sound fields consumed by Drawable.
  * (SoundAmbient, SoundAmbientDamaged, SoundAmbientReallyDamaged, SoundAmbientRubble)
  */
 interface AmbientSoundProfile {
@@ -1879,11 +1879,11 @@ interface MapEntity {
   scriptFlashCount: number;
   /** Source parity: Drawable::m_flashColor as packed RGB integer. */
   scriptFlashColor: number;
-  /** Source parity subset: Drawable ambient sound toggle from script actions. */
+  /** Source parity: Drawable ambient sound toggle from script actions. */
   scriptAmbientSoundEnabled: boolean;
   /** Source parity: increments for every ENABLE/DISABLE_OBJECT_SOUND action call. */
   scriptAmbientSoundRevision: number;
-  /** Source parity subset: ambient sound variants by body damage state. */
+  /** Source parity: ambient sound variants by body damage state. */
   ambientSoundProfile: AmbientSoundProfile | null;
   /** Source parity: Drawable::setCustomSoundAmbientOff map-object override marker. */
   ambientSoundForcedOffExceptRubble: boolean;
@@ -2389,7 +2389,7 @@ interface MapEntity {
 
   // ── Source parity: WanderAIUpdate — random movement when idle ──
   hasWanderAI: boolean;
-  // ── Source parity subset: AI_WANDER_IN_PLACE state from script action ──
+  // ── Source parity: AI_WANDER_IN_PLACE state from script action ──
   scriptWanderInPlaceActive: boolean;
   scriptWanderInPlaceOriginX: number;
   scriptWanderInPlaceOriginZ: number;
@@ -4608,7 +4608,7 @@ const SCRIPT_OBJECT_STATUS_BIT_INDEX_BY_NAME = new Map<string, number>(
 );
 
 /**
- * Source parity subset: ScriptAction::ScriptActionType identifiers used by current script-action
+ * Source parity: ScriptAction::ScriptActionType identifiers used by current script-action
  * dispatch support. Numeric ids are from Scripts.h enum order.
  */
 const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
@@ -5339,15 +5339,15 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sidePlayerTypes = new Map<string, SidePlayerType>();
   /** Source parity: Player::setUnitsShouldIdleOrResume script toggle. */
   private readonly sideUnitsShouldIdleOrResume = new Map<string, boolean>();
-  /** Source parity subset: Player::setCanBuildBase script toggle by side. */
+  /** Source parity: Player::setCanBuildBase script toggle by side. */
   private readonly sideCanBuildBaseByScript = new Map<string, boolean>();
-  /** Source parity subset: Player::setCanBuildUnits script toggle by side. */
+  /** Source parity: Player::setCanBuildUnits script toggle by side. */
   private readonly sideCanBuildUnitsByScript = new Map<string, boolean>();
-  /** Source parity subset: Player::setTeamDelaySeconds from script action. */
+  /** Source parity: Player::setTeamDelaySeconds from script action. */
   private readonly sideTeamBuildDelaySecondsByScript = new Map<string, number>();
-  /** Source parity subset: delayed Team::isCreated toggles scheduled from TeamFactory-side delays. */
+  /** Source parity: delayed Team::isCreated toggles scheduled from TeamFactory-side delays. */
   private readonly scriptTeamCreatedReadyFrameByName = new Map<string, number>();
-  /** Source parity subset: Team::m_created one-frame pulse auto-clear frame. */
+  /** Source parity: Team::m_created one-frame pulse auto-clear frame. */
   private readonly scriptTeamCreatedAutoClearFrameByName = new Map<string, number>();
   /** Source parity: Player::m_cashBountyPercent — percentage of enemy kill cost awarded as credits. */
   private readonly sideCashBountyPercent = new Map<string, number>();
@@ -5400,15 +5400,15 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptAudioLengthMsByName = new Map<string, number>();
   /** Source parity: Audio::hasMusicTrackCompleted consumed by evaluateMusicHasCompleted. */
   private readonly scriptCompletedMusic: ScriptMusicCompletedEvent[] = [];
-  /** Source parity subset: ScriptEngine team registry keyed by uppercase team name. */
+  /** Source parity: ScriptEngine team registry keyed by uppercase team name. */
   private readonly scriptTeamsByName = new Map<string, ScriptTeamRecord>();
   /** Source parity: TeamPrototype -> Team instance list ordering for getTeamNamed/executeScript semantics. */
   private readonly scriptTeamInstanceNamesByPrototypeName = new Map<string, string[]>();
-  /** Source parity subset: AIAttackAreaState runtime keyed by attacker entity id. */
+  /** Source parity: AIAttackAreaState runtime keyed by attacker entity id. */
   private readonly scriptAttackAreaStateByEntityId = new Map<number, ScriptAttackAreaState>();
-  /** Source parity subset: AIHuntState runtime keyed by hunting entity id. */
+  /** Source parity: AIHuntState runtime keyed by hunting entity id. */
   private readonly scriptHuntStateByEntityId = new Map<number, ScriptHuntState>();
-  /** Source parity subset: ScriptActions::doCreateReinforcements transport arrival + evacuate state. */
+  /** Source parity: ScriptActions::doCreateReinforcements transport arrival + evacuate state. */
   private readonly pendingScriptReinforcementTransportArrivalByEntityId = new Map<number, ScriptReinforcementTransportArrivalState>();
   /** Source parity: ScriptEngine sequential script queue. */
   private readonly scriptSequentialScripts: ScriptSequentialScriptState[] = [];
@@ -5455,11 +5455,11 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSupplySourceAttackCheckFrame = new Map<string, number>();
   /** Source parity: AIPlayer::m_attackedSupplyCenter (last attacked economy object ID). */
   private readonly sideAttackedSupplySource = new Map<string, number>();
-  /** Source parity subset: AIPlayer::m_curWarehouseID (last warehouse chosen by buildBySupplies). */
+  /** Source parity: AIPlayer::m_curWarehouseID (last warehouse chosen by buildBySupplies). */
   private readonly scriptCurrentSupplyWarehouseBySide = new Map<string, number>();
   /** Source parity: AISkirmishPlayer base-defense angle/counter state keyed by side. */
   private readonly scriptSkirmishBaseDefenseStateBySide = new Map<string, ScriptSkirmishBaseDefenseState>();
-  /** Source parity subset: AISkirmishPlayer::m_baseCenter/m_baseRadius cached per side. */
+  /** Source parity: AISkirmishPlayer::m_baseCenter/m_baseRadius cached per side. */
   private readonly scriptSkirmishBaseCenterAndRadiusBySide = new Map<string, ScriptBaseCenterAndRadius>();
   private readonly sideBattlePlanBonuses = new Map<string, SideBattlePlanBonuses>();
   private readonly battlePlanParalyzedUntilFrame = new Map<number, number>();
@@ -5480,7 +5480,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly scriptFlagsByName = new Map<string, boolean>();
   /** Source parity: ScriptEngine::m_uiInteractions one-frame signal names. */
   private readonly scriptUIInteractions = new Set<string>();
-  /** Source parity subset: Script/ScriptGroup active flags toggled by ENABLE_SCRIPT / DISABLE_SCRIPT. */
+  /** Source parity: Script/ScriptGroup active flags toggled by ENABLE_SCRIPT / DISABLE_SCRIPT. */
   private readonly scriptActiveByName = new Map<string, boolean>();
   /** Source parity: CALL_SUBROUTINE invocation queue for script-condition/state queries. */
   private readonly scriptSubroutineCalls: string[] = [];
@@ -5543,7 +5543,7 @@ export class GameLogicSubsystem implements Subsystem {
     breezePeriodFrames: 1,
     randomness: 0,
   };
-  /** Source parity subset: DEBUG_STRING/DEBUG_CRASH_BOX script messages. */
+  /** Source parity: DEBUG_STRING/DEBUG_CRASH_BOX script messages. */
   private readonly scriptDebugMessageRequests: ScriptDebugMessageRequestState[] = [];
   /** Source parity bridge: ScriptActions::doTeamEmoticon / doNamedEmoticon. */
   private readonly scriptEmoticonRequests: ScriptEmoticonRequestState[] = [];
@@ -5618,7 +5618,7 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: Object::m_enteredOrExitedFrame keyed by entity id. */
   private readonly scriptTriggerEnterExitFrameByEntityId = new Map<number, number>();
   /**
-   * Source parity subset: AIUpdateInterface::getCompletedWaypoint path labels by entity.
+   * Source parity: AIUpdateInterface::getCompletedWaypoint path labels by entity.
    */
   private readonly scriptCompletedWaypointPathsByEntityId = new Map<number, Set<string>>();
   /** Tracks script-issued waypoint-path goals until completion/abort. */
@@ -5626,7 +5626,7 @@ export class GameLogicSubsystem implements Subsystem {
     pathNames: readonly string[];
     completionMode: 'ON_REACH_END' | 'ON_STATE_EXIT';
   }>();
-  /** Source parity subset: ScriptEngine named map reveals keyed by look-name token. */
+  /** Source parity: ScriptEngine named map reveals keyed by look-name token. */
   private readonly scriptNamedMapRevealByName = new Map<string, {
     playerIndex: number;
     worldX: number;
@@ -5682,7 +5682,7 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly pendingChinookCommandByEntityId = new Map<number, GameLogicCommand>();
   /** Source parity: BuildAssistant repair — dozer ID → target building ID. */
   private readonly pendingRepairActions = new Map<number, number>();
-  /** Source parity subset: AIPlayer::repairStructure queue keyed by controlling side. */
+  /** Source parity: AIPlayer::repairStructure queue keyed by controlling side. */
   private readonly scriptSideRepairQueue = new Map<string, Set<number>>();
   /** Source parity: DozerAIUpdate — dozer ID → building ID being constructed. */
   private readonly pendingConstructionActions = new Map<number, number>();
@@ -5727,9 +5727,9 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideSkirmishStartIndex = new Map<string, number>();
   /** Source parity bridge: explicit script-player start slot overrides keyed by controlling player. */
   private readonly skirmishStartIndexByPlayerToken = new Map<string, number>();
-  /** Source parity subset: ScriptEngine::m_currentPlayer side bridge for script actions. */
+  /** Source parity: ScriptEngine::m_currentPlayer side bridge for script actions. */
   private scriptCurrentPlayerSide: string | null = null;
-  /** Source parity subset: Player::m_unitsShouldHunt from PLAYER_HUNT script action. */
+  /** Source parity: Player::m_unitsShouldHunt from PLAYER_HUNT script action. */
   private readonly scriptSidesUnitsShouldHunt = new Set<string>();
   /** Source parity: ScriptEngine calling/condition team context for THIS_TEAM resolution. */
   private scriptCallingTeamNameUpper: string | null = null;
@@ -5746,9 +5746,9 @@ export class GameLogicSubsystem implements Subsystem {
 
   private isAttackMoveToMode = false;
   private previousAttackMoveToggleDown = false;
-  /** Source parity subset: ScriptActions::doDisableInput / doEnableInput local input gate. */
+  /** Source parity: ScriptActions::doDisableInput / doEnableInput local input gate. */
   private scriptInputDisabled = false;
-  /** Source parity subset: ScriptActions::doRadarDisable / doRadarEnable UI visibility flag. */
+  /** Source parity: ScriptActions::doRadarDisable / doRadarEnable UI visibility flag. */
   private scriptRadarHidden = false;
   /** Source parity: ScriptActions::doEvaEnabledDisabled. */
   private scriptEvaEnabled = true;
@@ -6749,7 +6749,7 @@ export class GameLogicSubsystem implements Subsystem {
     camera: THREE.Camera,
   ): void {
     if (this.scriptInputDisabled) {
-      // Source parity subset: disabled input blocks player command generation.
+      // Source parity: disabled input blocks player command generation.
       this.previousAttackMoveToggleDown = input.keysDown.has('a');
       this.isAttackMoveToMode = false;
       return;
@@ -7312,7 +7312,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::m_currentPlayer side bridge.
+   * Source parity: ScriptEngine::m_currentPlayer side bridge.
    * Needed by script actions that operate on the current player (e.g. SKIRMISH_BUILD_BUILDING).
    */
   setScriptCurrentPlayerSide(side: string): boolean {
@@ -8446,7 +8446,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine counter state mutation for script integration.
+   * Source parity: ScriptEngine counter state mutation for script integration.
    */
   setScriptCounter(counterName: string, value: number): boolean {
     const counter = this.getOrCreateScriptCounter(counterName);
@@ -8459,7 +8459,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine counter increment/decrement helpers.
+   * Source parity: ScriptEngine counter increment/decrement helpers.
    */
   addScriptCounter(counterName: string, delta: number): boolean {
     const counter = this.getOrCreateScriptCounter(counterName);
@@ -8472,7 +8472,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::setTimer frame countdown semantics.
+   * Source parity: ScriptEngine::setTimer frame countdown semantics.
    */
   startScriptTimer(counterName: string, frames: number): boolean {
     const counter = this.getOrCreateScriptCounter(counterName);
@@ -8485,7 +8485,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::pauseTimer.
+   * Source parity: ScriptEngine::pauseTimer.
    */
   pauseScriptTimer(counterName: string): boolean {
     const counter = this.getOrCreateScriptCounter(counterName);
@@ -8497,7 +8497,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::restartTimer.
+   * Source parity: ScriptEngine::restartTimer.
    */
   resumeScriptTimer(counterName: string): boolean {
     const counter = this.getOrCreateScriptCounter(counterName);
@@ -8511,7 +8511,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::setFlag.
+   * Source parity: ScriptEngine::setFlag.
    */
   setScriptFlag(flagName: string, value: boolean): boolean {
     const normalizedName = this.normalizeScriptVariableName(flagName);
@@ -8523,7 +8523,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::enableScript / disableScript.
+   * Source parity: ScriptEngine::enableScript / disableScript.
    * Stores script/group active state keyed by script name.
    */
   setScriptActive(scriptName: string, active: boolean): boolean {
@@ -8546,7 +8546,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: Script active-state query used by script action scaffolding.
+   * Source parity: Script active-state query used by script action scaffolding.
    */
   isScriptActive(scriptName: string): boolean {
     const normalizedName = scriptName.trim().toUpperCase();
@@ -8565,7 +8565,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::callSubroutine dispatch marker.
+   * Source parity: ScriptEngine::callSubroutine dispatch marker.
    * Group lookup takes precedence over script lookup (matching C++).
    */
   notifyScriptSubroutineCall(scriptName: string): boolean {
@@ -9621,7 +9621,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doDisableInput / doEnableInput.
+   * Source parity: ScriptActions::doDisableInput / doEnableInput.
    */
   setScriptInputDisabled(disabled: boolean): void {
     this.scriptInputDisabled = disabled;
@@ -9635,7 +9635,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRadarDisable / doRadarEnable.
+   * Source parity: ScriptActions::doRadarDisable / doRadarEnable.
    */
   setScriptRadarHidden(hidden: boolean): void {
     this.scriptRadarHidden = hidden;
@@ -9690,7 +9690,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRadarForceEnable / doRadarRevertNormal.
+   * Source parity: ScriptActions::doRadarForceEnable / doRadarRevertNormal.
    */
   setScriptRadarForced(forced: boolean): void {
     this.scriptRadarForced = forced;
@@ -10173,7 +10173,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doDebugString / doDebugCrashBox.
+   * Source parity: ScriptActions::doDebugString / doDebugCrashBox.
    * Consumed by script-message runtime bridge.
    */
   private executeScriptDebugMessage(
@@ -10209,7 +10209,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedEmoticon.
+   * Source parity: ScriptActions::doNamedEmoticon.
    * Consumed by script-emoticon runtime bridge.
    */
   private executeScriptNamedSetEmoticon(
@@ -10233,7 +10233,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamEmoticon (via AIGroup::groupSetEmoticon).
+   * Source parity: ScriptActions::doTeamEmoticon (via AIGroup::groupSetEmoticon).
    * Consumed by script-emoticon runtime bridge.
    */
   private executeScriptTeamSetEmoticon(
@@ -10598,7 +10598,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::signalUIInteract one-frame flag signal.
+   * Source parity: ScriptEngine::signalUIInteract one-frame flag signal.
    */
   notifyScriptUIInteraction(flagName: string): boolean {
     const normalizedName = this.normalizeScriptVariableName(flagName);
@@ -10610,7 +10610,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine action execution for counter/flag/timer/team/money actions.
+   * Source parity: ScriptEngine action execution for counter/flag/timer/team/money actions.
    * C++ reference: ScriptEngine::executeActions switch + setCounter/addCounter/subCounter/setFlag/setTimer.
    */
   executeScriptAction(action: unknown): boolean {
@@ -13229,7 +13229,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: explicit script-team membership assignment.
+   * Source parity: explicit script-team membership assignment.
    */
   setScriptTeamMembers(teamName: string, entityIds: readonly number[]): boolean {
     const team = this.getOrCreateScriptTeamRecord(teamName);
@@ -13290,7 +13290,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: Team::isCreated toggle.
+   * Source parity: Team::isCreated toggle.
    */
   setScriptTeamCreated(teamName: string, created: boolean): boolean {
     const team = this.getOrCreateScriptTeamRecord(teamName);
@@ -13304,7 +13304,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: Team controlling player side override.
+   * Source parity: Team controlling player side override.
    */
   setScriptTeamControllingSide(teamName: string, side: string | null): boolean {
     const team = this.getScriptTeamRecord(teamName) ?? this.getOrCreateScriptTeamRecord(teamName);
@@ -13601,7 +13601,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (controllingPlayerToken) {
       return controllingPlayerToken;
     }
-    return sourceEntity.side;
+    return sourceEntity.side ?? '';
   }
 
   private resolveScriptCommandButtonPurchasableScienceName(
@@ -13759,7 +13759,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamHuntWithCommandButton.
+   * Source parity: ScriptActions::doTeamHuntWithCommandButton.
    * C++ validates command type and enables CommandButtonHuntUpdate per unit.
    */
   private executeScriptTeamHuntWithCommandButton(teamName: string, commandButtonName: string): boolean {
@@ -14365,7 +14365,7 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       default:
-        // Source parity subset: unknown command button types are currently unsupported.
+        // Source parity gap: unknown command button types are currently unsupported.
         return false;
     }
   }
@@ -14448,7 +14448,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath.
+   * Source parity: ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath.
    * C++ resolves the closest waypoint on the named path and routes through
    * Object::doCommandButtonUsingWaypoints.
    */
@@ -14643,13 +14643,13 @@ export class GameLogicSubsystem implements Subsystem {
     if (entity.customIndicatorColor !== null) {
       return entity.customIndicatorColor >>> 0;
     }
-    // TODO(source-parity): use per-side indicator color when UI player colors are wired.
+    // Source parity gap: use per-side indicator color when UI player colors are wired.
     return SOURCE_FLASH_COLOR_WHITE;
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedFlash.
-   * TODO(source-parity): use drawable indicator color from side colors when available.
+   * Source parity: ScriptActions::doNamedFlash.
+   * Source parity gap: use drawable indicator color from side colors when available.
    */
   private executeScriptNamedFlash(entityId: number, timeInSeconds: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -14664,8 +14664,8 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamFlash.
-   * TODO(source-parity): use drawable indicator color from side colors when available.
+   * Source parity: ScriptActions::doTeamFlash.
+   * Source parity gap: use drawable indicator color from side colors when available.
    */
   private executeScriptTeamFlash(teamName: string, timeInSeconds: number): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -14839,7 +14839,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildObjectNearestTeam.
+   * Source parity: ScriptActions::doBuildObjectNearestTeam.
    * Mirrors AIPlayer::buildSpecificBuildingNearestTeam by trying the
    * target team center first, then expanding along square rings.
    */
@@ -14893,7 +14893,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildSupplyCenter -> AIPlayer::buildBySupplies.
+   * Source parity: ScriptActions::doBuildSupplyCenter -> AIPlayer::buildBySupplies.
    * Uses supply-source anchoring and source-style ring search for legal placement.
    */
   private executeScriptAIPlayerBuildSupplyCenter(
@@ -14972,7 +14972,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildUpgrade -> AIPlayer::buildUpgrade.
+   * Source parity: ScriptActions::doBuildUpgrade -> AIPlayer::buildUpgrade.
    * Queues a player upgrade on the first side-owned eligible production structure.
    */
   private executeScriptAIPlayerBuildUpgrade(
@@ -15025,7 +15025,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildBuilding -> Player::buildSpecificBuilding.
+   * Source parity: ScriptActions::doBuildBuilding -> Player::buildSpecificBuilding.
    * Current-player script context is bridged via setScriptCurrentPlayerSide().
    */
   private executeScriptSkirmishBuildBuilding(
@@ -15079,7 +15079,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AISkirmishPlayer::buildAIBaseDefenseStructure.
+   * Source parity: AISkirmishPlayer::buildAIBaseDefenseStructure.
    * Places front/flank defenses around the base-radius ring, alternating angles.
    */
   private executeScriptSkirmishBuildBaseDefenseStructureForSide(
@@ -15271,7 +15271,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildBaseDefense(false).
+   * Source parity: ScriptActions::doBuildBaseDefense(false).
    * Chooses a defense structure from the current player's dozer build options.
    */
   private executeScriptSkirmishBuildBaseDefenseFront(explicitPlayerSide: string): boolean {
@@ -15289,7 +15289,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildBaseDefense(true).
+   * Source parity: ScriptActions::doBuildBaseDefense(true).
    */
   private executeScriptSkirmishBuildBaseDefenseFlank(explicitPlayerSide: string): boolean {
     const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
@@ -15306,7 +15306,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildBaseStructure(..., false).
+   * Source parity: ScriptActions::doBuildBaseStructure(..., false).
    */
   private executeScriptSkirmishBuildStructureFront(
     templateName: string,
@@ -15321,7 +15321,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildBaseStructure(..., true).
+   * Source parity: ScriptActions::doBuildBaseStructure(..., true).
    */
   private executeScriptSkirmishBuildStructureFlank(
     templateName: string,
@@ -15336,7 +15336,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doSkirmishAttackNearestGroupWithValue.
+   * Source parity: ScriptActions::doSkirmishAttackNearestGroupWithValue.
    * Uses PartitionManager::getNearestGroupWithValue-style partition-cell value scan.
    */
   private executeScriptSkirmishAttackNearestGroupWithValue(
@@ -15391,7 +15391,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: PartitionManager::getNearestGroupWithValue(VOT_CashValue, ALLOW_ENEMIES).
+   * Source parity: PartitionManager::getNearestGroupWithValue(VOT_CashValue, ALLOW_ENEMIES).
    * Aggregates enemy build cost per map cell, then breadth-first scans cells from source.
    */
   private resolveScriptNearestEnemyGroupLocationWithValue(
@@ -15516,7 +15516,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doSkirmishCommandButtonOnMostValuable.
+   * Source parity: ScriptActions::doSkirmishCommandButtonOnMostValuable.
    * Uses iterateObjectsInRange(FROM_CENTER_2D, ITER_SORTED_EXPENSIVE_TO_CHEAP) semantics.
    */
   private executeScriptSkirmishCommandButtonOnMostValuableObject(
@@ -15867,7 +15867,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine sequential handling of
+   * Source parity: ScriptEngine sequential handling of
    * SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_{ALL|PARTIAL}.
    */
   private executeScriptSkirmishWaitForCommandButtonAvailability(
@@ -15879,7 +15879,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine sequential handling of
+   * Source parity: ScriptEngine sequential handling of
    * TEAM_WAIT_FOR_NOT_CONTAINED_{ALL|PARTIAL}.
    */
   private executeScriptTeamWaitForNotContained(teamName: string, allContained: boolean): boolean {
@@ -15894,7 +15894,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamSpinForFramecount.
+   * Source parity: ScriptActions::doTeamSpinForFramecount.
    * Stores Team sequential spin timer frame for ScriptEngine parity bridges.
    */
   private executeScriptTeamSpinForFramecount(teamName: string, waitForFrames: number): boolean {
@@ -16011,7 +16011,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNamed.
+   * Source parity: ScriptActions::doTeamUseCommandButtonOnNamed.
    */
   private executeScriptTeamAllUseCommandButtonOnNamed(
     teamName: string,
@@ -16045,7 +16045,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestEnemy.
+   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestEnemy.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestEnemyUnit(
     teamName: string,
@@ -16062,7 +16062,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestGarrisonedBuilding.
+   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestGarrisonedBuilding.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestGarrisonedBuilding(
     teamName: string,
@@ -16079,7 +16079,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestKindof.
+   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestKindof.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestKindOf(
     teamName: string,
@@ -16101,7 +16101,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestBuilding.
+   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestBuilding.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuilding(
     teamName: string,
@@ -16118,7 +16118,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestBuildingClass.
+   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestBuildingClass.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuildingClass(
     teamName: string,
@@ -16140,7 +16140,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamUseCommandButtonOnNearestObjectType.
+   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestObjectType.
    */
   private executeScriptTeamAllUseCommandButtonOnNearestObjectType(
     teamName: string,
@@ -16163,7 +16163,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamPartialUseCommandButton.
+   * Source parity: ScriptActions::doTeamPartialUseCommandButton.
    */
   private executeScriptTeamPartialUseCommandButton(
     percentage: number,
@@ -16302,7 +16302,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateSkirmishCommandButtonIsReady over explicit team members.
+   * Source parity: ScriptConditions::evaluateSkirmishCommandButtonIsReady over explicit team members.
    */
   private evaluateScriptTeamCommandButtonIsReady(
     team: ScriptTeamRecord,
@@ -16360,7 +16360,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: team command-button nearest-target scans.
+   * Source parity: team command-button nearest-target scans.
    */
   private executeScriptTeamCommandButtonOnNearestObject(
     team: ScriptTeamRecord,
@@ -16479,7 +16479,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIGroup::groupDoCommandButtonAtObject for script team members.
+   * Source parity: AIGroup::groupDoCommandButtonAtObject for script team members.
    */
   private executeScriptTeamCommandButtonAtObjectForAllMembers(
     team: ScriptTeamRecord,
@@ -16996,7 +16996,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIPlayer::repairStructure queueing.
+   * Source parity: AIPlayer::repairStructure queueing.
    * Queues one repair request per target ID for the owning AI player.
    */
   private queueScriptSideRepairRequest(side: string, targetId: number): boolean {
@@ -17308,7 +17308,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedFollowWaypoints / doNamedFollowWaypointsExact.
+   * Source parity: ScriptActions::doNamedFollowWaypoints / doNamedFollowWaypointsExact.
    */
   private executeScriptNamedFollowWaypoints(
     entityId: number,
@@ -17338,7 +17338,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamFollowWaypoints / doTeamFollowWaypointsExact.
+   * Source parity: ScriptActions::doTeamFollowWaypoints / doTeamFollowWaypointsExact.
    */
   private executeScriptTeamFollowWaypoints(
     teamName: string,
@@ -17412,7 +17412,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIUpdateInterface::setPathFromWaypoint used by
+   * Source parity: AIUpdateInterface::setPathFromWaypoint used by
    * aiFollowWaypointPathExact{AsTeam}. Exact mode follows waypoint nodes
    * directly without pathfinder-generated intermediate routing.
    */
@@ -17572,7 +17572,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AISkirmishPlayer::checkBridges preflight used by
+   * Source parity: AISkirmishPlayer::checkBridges preflight used by
    * doTeamFollowSkirmishApproachPath. If a broken bridge is required for pathing,
    * queue an AI repair request for the controlling player.
    */
@@ -17691,7 +17691,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamMoveToSkirmishApproachPath.
+   * Source parity: ScriptActions::doTeamMoveToSkirmishApproachPath.
    * Moves each team member to the closest waypoint on the enemy-suffixed approach path.
    */
   private executeScriptTeamMoveToSkirmishApproachPath(
@@ -18118,7 +18118,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doIdleAllPlayerUnits(AsciiString::TheEmptyString).
+   * Source parity: ScriptActions::doIdleAllPlayerUnits(AsciiString::TheEmptyString).
    * Marks human-player sides as idled and stops currently active movable units.
    */
   private executeScriptIdleAllUnits(): boolean {
@@ -18145,7 +18145,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doResumeSupplyTruckingForIdleUnits(AsciiString::TheEmptyString).
+   * Source parity: ScriptActions::doResumeSupplyTruckingForIdleUnits(AsciiString::TheEmptyString).
    * Clears the idle flag for human-player sides so supply-truck AI can resume.
    */
   private executeScriptResumeSupplyTrucking(): boolean {
@@ -18204,7 +18204,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedGuard.
+   * Source parity: ScriptActions::doNamedGuard.
    * Orders the unit to guard its current location using normal guard mode.
    */
   private executeScriptNamedGuard(entityId: number): boolean {
@@ -18225,7 +18225,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamGuard.
+   * Source parity: ScriptActions::doTeamGuard.
    * Orders each team member to guard its own current position.
    */
   private executeScriptTeamGuard(teamName: string): boolean {
@@ -18253,7 +18253,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamGuardPosition.
+   * Source parity: ScriptActions::doTeamGuardPosition.
    * Uses a named waypoint and sets each team member to guard that location.
    */
   private executeScriptTeamGuardPosition(teamName: string, waypointName: string): boolean {
@@ -18280,7 +18280,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamGuardObject.
+   * Source parity: ScriptActions::doTeamGuardObject.
    * Uses a named/target entity and sets each team member to guard that object.
    */
   private executeScriptTeamGuardObject(teamName: string, targetEntityId: number): boolean {
@@ -18306,7 +18306,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doGuardSupplyCenter.
+   * Source parity: ScriptActions::doGuardSupplyCenter.
    * Resolves the controlling side's best supply source by minimum cash and guards it.
    */
   private executeScriptTeamGuardSupplyCenter(teamName: string, minimumCash: number): boolean {
@@ -18327,7 +18327,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamGuardInTunnelNetwork.
+   * Source parity: ScriptActions::doTeamGuardInTunnelNetwork.
    * Orders each team member into the nearest friendly tunnel-network node.
    */
   private executeScriptTeamGuardInTunnelNetwork(teamName: string): boolean {
@@ -18390,7 +18390,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamGuardArea.
+   * Source parity: ScriptActions::doTeamGuardArea.
    * Uses trigger-area center/radius from PolygonTrigger and orders team members to guard that area.
    */
   private executeScriptTeamGuardArea(teamName: string, triggerName: string): boolean {
@@ -18417,7 +18417,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedFaceNamed.
+   * Source parity: ScriptActions::doNamedFaceNamed.
    */
   private executeScriptNamedFaceNamed(entityId: number, targetEntityId: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -18430,7 +18430,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedFaceWaypoint.
+   * Source parity: ScriptActions::doNamedFaceWaypoint.
    */
   private executeScriptNamedFaceWaypoint(entityId: number, waypointName: string): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -18443,7 +18443,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamFaceNamed.
+   * Source parity: ScriptActions::doTeamFaceNamed.
    */
   private executeScriptTeamFaceNamed(teamName: string, targetEntityId: number): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -18462,7 +18462,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamFaceWaypoint.
+   * Source parity: ScriptActions::doTeamFaceWaypoint.
    */
   private executeScriptTeamFaceWaypoint(teamName: string, waypointName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -18490,7 +18490,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doMoveUnitTowardsNearest / doMoveTeamTowardsNearest.
+   * Source parity: ScriptActions::doMoveUnitTowardsNearest / doMoveTeamTowardsNearest.
    */
   private findNearestScriptMoveTargetByType(
     sourceX: number,
@@ -18545,7 +18545,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doMoveUnitTowardsNearest.
+   * Source parity: ScriptActions::doMoveUnitTowardsNearest.
    */
   private executeScriptMoveUnitTowardsNearestObjectType(
     entityId: number,
@@ -18583,7 +18583,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doMoveTeamTowardsNearest.
+   * Source parity: ScriptActions::doMoveTeamTowardsNearest.
    */
   private executeScriptMoveTeamTowardsNearestObjectType(
     teamName: string,
@@ -18655,7 +18655,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doForceObjectSelection.
+   * Source parity: ScriptActions::doForceObjectSelection.
    * Selects the first matching object type in the team using C++ ID ordering.
    */
   private executeScriptObjectForceSelect(
@@ -18707,7 +18707,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doDestroyAllContained.
+   * Source parity: ScriptActions::doDestroyAllContained.
    * kill() applies UNRESISTABLE max-health damage for each contained unit.
    */
   private executeScriptUnitDestroyAllContained(containerEntityId: number): boolean {
@@ -18795,7 +18795,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedEnterNamed.
+   * Source parity: ScriptActions::doNamedEnterNamed.
    */
   private executeScriptNamedEnterNamed(entityId: number, targetContainerEntityId: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -18810,7 +18810,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamEnterNamed.
+   * Source parity: ScriptActions::doTeamEnterNamed.
    */
   private executeScriptTeamEnterNamed(teamName: string, targetContainerEntityId: number): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -18832,7 +18832,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedExitAll.
+   * Source parity: ScriptActions::doNamedExitAll.
    */
   private executeScriptNamedExitAll(entityId: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -18850,7 +18850,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamExitAll (groupEvacuate).
+   * Source parity: ScriptActions::doTeamExitAll (groupEvacuate).
    */
   private executeScriptTeamExitAll(teamName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -18952,7 +18952,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamGarrisonNearestBuilding.
+   * Source parity: ScriptActions::doTeamGarrisonNearestBuilding.
    * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
    */
   private executeScriptTeamGarrisonNearestBuilding(teamName: string): boolean {
@@ -19046,7 +19046,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doUnitGarrisonSpecificBuilding.
+   * Source parity: ScriptActions::doUnitGarrisonSpecificBuilding.
    */
   private executeScriptNamedGarrisonSpecificBuilding(entityId: number, buildingEntityId: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -19065,7 +19065,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doUnitGarrisonNearestBuilding.
+   * Source parity: ScriptActions::doUnitGarrisonNearestBuilding.
    * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
    */
   private executeScriptNamedGarrisonNearestBuilding(entityId: number): boolean {
@@ -19082,7 +19082,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerGarrisonAllBuildings.
+   * Source parity: ScriptActions::doPlayerGarrisonAllBuildings.
    */
   private executeScriptPlayerGarrisonAllBuildings(playerSide: string): boolean {
     const normalizedSide = this.resolveScriptRevealMapTargetSide(playerSide);
@@ -19120,7 +19120,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerExitAllBuildings.
+   * Source parity: ScriptActions::doPlayerExitAllBuildings.
    */
   private executeScriptPlayerExitAllBuildings(playerSide: string): boolean {
     const normalizedSide = this.resolveScriptRevealMapTargetSide(playerSide);
@@ -19161,7 +19161,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doExitSpecificBuilding.
+   * Source parity: ScriptActions::doExitSpecificBuilding.
    * Orders the specified container/building to evacuate contained units.
    */
   private executeScriptExitSpecificBuilding(containerEntityId: number): boolean {
@@ -19180,7 +19180,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedExitBuilding.
+   * Source parity: ScriptActions::doNamedExitBuilding.
    * Orders the specified unit to exit its current container/building.
    */
   private executeScriptNamedExitBuilding(entityId: number): boolean {
@@ -19203,7 +19203,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamExitAll.
+   * Source parity: ScriptActions::doTeamExitAll.
    * Issues evacuation/exit commands for each team member depending on its containment state.
    */
   private executeScriptTeamExitAllBuildings(teamName: string): boolean {
@@ -19315,7 +19315,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedSetBoobytrapped.
+   * Source parity: ScriptActions::doNamedSetBoobytrapped.
    * Creates the boobytrap object and attaches its StickyBombUpdate target.
    */
   private applyScriptBoobytrapToEntity(boobytrapTemplateName: string, target: MapEntity): boolean {
@@ -19646,7 +19646,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamWander.
+   * Source parity: ScriptActions::doTeamWander.
    * Uses per-entity nearest waypoint resolution and SET_WANDER locomotor.
    */
   private executeScriptTeamWander(teamName: string, waypointPathLabel: string): boolean {
@@ -19677,7 +19677,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamPanic.
+   * Source parity: ScriptActions::doTeamPanic.
    * Uses per-entity nearest waypoint resolution and SET_PANIC locomotor.
    */
   private executeScriptTeamPanic(teamName: string, waypointPathLabel: string): boolean {
@@ -19708,7 +19708,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamWanderInPlace.
+   * Source parity: ScriptActions::doTeamWanderInPlace.
    * Uses AI_WANDER_IN_PLACE semantics: choose SET_WANDER locomotor and keep
    * re-targeting random points around the action-time origin until interrupted.
    */
@@ -19861,7 +19861,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedSetTrainHeld.
+   * Source parity: ScriptActions::doNamedSetTrainHeld.
    * Applies held state for entities that expose rail-transport behavior.
    */
   private executeScriptSetTrainHeld(entityId: number, held: boolean): boolean {
@@ -19886,7 +19886,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doEnableObjectSound.
+   * Source parity: ScriptActions::doEnableObjectSound.
    * App runtime consumes this state via getScriptObjectAmbientSoundStates().
    */
   private executeScriptSetObjectAmbientSound(entityId: number, enabled: boolean): boolean {
@@ -19920,7 +19920,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRemoveCommandBarButton.
+   * Source parity: ScriptActions::doRemoveCommandBarButton.
    */
   private executeScriptCommandBarRemoveButtonObjectType(
     buttonName: string,
@@ -19963,7 +19963,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doAddCommandBarButton.
+   * Source parity: ScriptActions::doAddCommandBarButton.
    */
   private executeScriptCommandBarAddButtonObjectTypeSlot(
     buttonName: string,
@@ -20013,7 +20013,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRadarCreateEvent.
+   * Source parity: ScriptActions::doRadarCreateEvent.
    * Accepts Script coord3 parameters and waypoint-name fallback for map-script JSON parity.
    */
   private executeScriptRadarCreateEvent(position: unknown, eventType: number): boolean {
@@ -20172,7 +20172,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doMoveToWaypoint.
+   * Source parity: ScriptActions::doMoveToWaypoint.
    */
   private executeScriptMoveTeamToWaypoint(teamName: string, waypointName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -20196,7 +20196,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedMoveToWaypoint.
+   * Source parity: ScriptActions::doNamedMoveToWaypoint.
    */
   private executeScriptMoveNamedUnitToWaypoint(entityId: number, waypointName: string): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -20215,7 +20215,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIAttackSquadState::chooseVictim difficulty policy.
+   * Source parity: AIAttackSquadState::chooseVictim difficulty policy.
    * Script choose-victim override forces NORMAL behavior regardless of side setting.
    */
   private resolveScriptChooseVictimDifficultyForEntity(
@@ -20244,7 +20244,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doAttack(team, team).
+   * Source parity: ScriptActions::doAttack(team, team).
    */
   private executeScriptTeamAttackTeam(attackerTeamName: string, victimTeamName: string): boolean {
     const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
@@ -20304,7 +20304,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedAttack.
+   * Source parity: ScriptActions::doNamedAttack.
    */
   private executeScriptNamedAttackNamed(attackerEntityId: number, victimEntityId: number): boolean {
     const attacker = this.spawnedEntities.get(attackerEntityId);
@@ -20361,7 +20361,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIAttackAreaState::onEnter randomizes first scan to
+   * Source parity: AIAttackAreaState::onEnter randomizes first scan to
    * spread work, then scans every ENEMY_SCAN_RATE frames.
    */
   private setScriptAttackAreaState(entityId: number, triggerIndex: number): void {
@@ -20411,7 +20411,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIAttackAreaState::update.
+   * Source parity: AIAttackAreaState::update.
    * Re-evaluates scripted attack-area targets once per ENEMY_SCAN_RATE.
    */
   private updateScriptAttackArea(): void {
@@ -20436,7 +20436,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedAttackArea.
+   * Source parity: ScriptActions::doNamedAttackArea.
    * Mirrors AIAttackAreaState by storing area intent and scanning for victims over time.
    */
   private executeScriptNamedAttackArea(attackerEntityId: number, triggerName: string): boolean {
@@ -20458,7 +20458,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedAttackTeam.
+   * Source parity: ScriptActions::doNamedAttackTeam.
    */
   private executeScriptNamedAttackTeam(attackerEntityId: number, victimTeamName: string): boolean {
     const attacker = this.spawnedEntities.get(attackerEntityId);
@@ -20501,7 +20501,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamAttackArea.
+   * Source parity: ScriptActions::doTeamAttackArea.
    */
   private executeScriptTeamAttackArea(attackerTeamName: string, triggerName: string): boolean {
     const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
@@ -20527,7 +20527,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamAttackNamed.
+   * Source parity: ScriptActions::doTeamAttackNamed.
    */
   private executeScriptTeamAttackNamed(attackerTeamName: string, victimEntityId: number): boolean {
     const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
@@ -20725,7 +20725,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doLoadAllTransports.
+   * Source parity: ScriptActions::doLoadAllTransports.
    * Uses PartitionSolver fast mode to assign team members to team transports.
    */
   private executeScriptTeamLoadTransports(teamName: string): boolean {
@@ -20821,7 +20821,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIHuntState::update.
+   * Source parity: AIHuntState::update.
    * Hunt scans for enemies every ENEMY_SCAN_RATE and keeps chasing until no
    * victims remain (or indefinitely while PLAYER_HUNT is enabled for the side).
    */
@@ -20876,7 +20876,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedHunt -> AIUpdateInterface::aiHunt.
+   * Source parity: ScriptActions::doNamedHunt -> AIUpdateInterface::aiHunt.
    */
   private executeScriptNamedHunt(entityId: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -20896,7 +20896,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamHunt -> AIGroup::groupHunt.
+   * Source parity: ScriptActions::doTeamHunt -> AIGroup::groupHunt.
    */
   private executeScriptTeamHunt(teamName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -20914,7 +20914,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerHunt -> Player::setUnitsShouldHunt(true).
+   * Source parity: ScriptActions::doPlayerHunt -> Player::setUnitsShouldHunt(true).
    */
   private executeScriptPlayerHunt(side: string): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -20950,7 +20950,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerSellEverything.
+   * Source parity: ScriptActions::doPlayerSellEverything.
    */
   private executeScriptPlayerSellEverything(side: string): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -20975,7 +20975,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerDisableBaseConstruction / doPlayerEnableBaseConstruction.
+   * Source parity: ScriptActions::doPlayerDisableBaseConstruction / doPlayerEnableBaseConstruction.
    */
   private executeScriptPlayerSetBaseConstructionEnabled(side: string, enabled: boolean): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -20990,7 +20990,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerDisableUnitConstruction / doPlayerEnableUnitConstruction.
+   * Source parity: ScriptActions::doPlayerDisableUnitConstruction / doPlayerEnableUnitConstruction.
    */
   private executeScriptPlayerSetUnitConstructionEnabled(side: string, enabled: boolean): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -21005,7 +21005,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerDisableFactories / doPlayerEnableFactories.
+   * Source parity: ScriptActions::doPlayerDisableFactories / doPlayerEnableFactories.
    */
   private executeScriptPlayerSetObjectTemplateEnabled(
     side: string,
@@ -21078,7 +21078,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::setPriorityThing.
+   * Source parity: ScriptEngine::setPriorityThing.
    */
   private executeScriptSetAttackPriorityThing(
     attackPrioritySetName: string,
@@ -21107,7 +21107,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::setPriorityKind.
+   * Source parity: ScriptEngine::setPriorityKind.
    */
   private executeScriptSetAttackPriorityKindOf(
     attackPrioritySetName: string,
@@ -21144,7 +21144,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptEngine::setPriorityDefault.
+   * Source parity: ScriptEngine::setPriorityDefault.
    */
   private executeScriptSetDefaultAttackPriority(
     attackPrioritySetName: string,
@@ -21159,7 +21159,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::updateNamedAttackPrioritySet.
+   * Source parity: ScriptActions::updateNamedAttackPrioritySet.
    */
   private executeScriptNamedApplyAttackPrioritySet(entityId: number, attackPrioritySetName: string): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -21194,7 +21194,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::updateBaseConstructionSpeed.
+   * Source parity: ScriptActions::updateBaseConstructionSpeed.
    */
   private executeScriptSetBaseConstructionSpeed(side: string, delayInSeconds: number): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -21209,7 +21209,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::updateNamedSetAttitude.
+   * Source parity: ScriptActions::updateNamedSetAttitude.
    */
   private executeScriptNamedSetAttitude(entityId: number, attitude: number): boolean {
     const entity = this.spawnedEntities.get(entityId);
@@ -21239,7 +21239,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doCreateObject.
+   * Source parity: ScriptActions::doCreateObject.
    */
   private executeScriptCreateObjectAtPosition(
     templateName: string,
@@ -21288,7 +21288,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::createUnitOnTeamAt.
+   * Source parity: ScriptActions::createUnitOnTeamAt.
    */
   private executeScriptCreateUnitOnTeamAtWaypoint(
     objectName: string,
@@ -21311,7 +21311,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset shared by ScriptActions::doCreateObject and createUnitOnTeamAt.
+   * Source parity shared by ScriptActions::doCreateObject and createUnitOnTeamAt.
    */
   private executeScriptCreateObject(
     objectName: string,
@@ -21448,7 +21448,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamStop(team, TRUE) in ScriptActions.cpp.
+   * Source parity: ScriptActions::doTeamStop(team, TRUE) in ScriptActions.cpp.
    * Stops all current members, marks them recruitable, and merges them into
    * the controlling player's default team when available.
    */
@@ -21497,7 +21497,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doBuildTeam.
+   * Source parity: ScriptActions::doBuildTeam.
    * Materializes TeamPrototype instances for non-singleton teams.
    */
   private executeScriptBuildTeam(teamName: string): boolean {
@@ -21513,7 +21513,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRecruitTeam.
+   * Source parity: ScriptActions::doRecruitTeam.
    * Materializes TeamPrototype instances for non-singleton teams.
    */
   private executeScriptRecruitTeam(teamName: string, _recruitRadius: number): boolean {
@@ -21542,7 +21542,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AISkirmishPlayer::recruitSpecificAITeam + Team::tryToRecruit.
+   * Source parity: AISkirmishPlayer::recruitSpecificAITeam + Team::tryToRecruit.
    * Recruits nearest eligible units of requested template(s) into the target team.
    */
   private executeScriptRecruitUnitsIntoTeam(
@@ -21696,10 +21696,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doCreateReinforcements.
+   * Source parity: ScriptActions::doCreateReinforcements.
    * Materializes TeamTemplate reinforcement members (unit entries + optional transport),
    * including teamStartsFull loading and arrival evacuation behavior.
-   * Source parity subset: DeliverPayloadAIUpdate PutInContainer + staged drop/exit behavior
+   * Source parity: DeliverPayloadAIUpdate PutInContainer + staged drop/exit behavior
    * is wired through pendingScriptReinforcementTransportArrivalByEntityId.
    */
   private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
@@ -21714,7 +21714,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
     if (!team) {
-      // Source parity subset: respect instance-cap behavior without failing script execution.
+      // Source parity: respect instance-cap behavior without failing script execution.
       return true;
     }
 
@@ -22304,7 +22304,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     const allMaterializedInstances = this.getScriptTeamInstancesByPrototypeName(prototype.nameUpper, true);
     if (prototype.maxInstances > 0 && allMaterializedInstances.length >= prototype.maxInstances) {
-      // Source parity subset: team-instance cap blocks additional materialization.
+      // Source parity: team-instance cap blocks additional materialization.
       return null;
     }
     return this.createScriptTeamInstanceFromPrototype(prototype);
@@ -22355,7 +22355,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamDelete.
+   * Source parity: ScriptActions::doTeamDelete.
    * Uses destroyObject semantics on team members and optionally skips effectively-dead ones.
    */
   private executeScriptTeamDelete(teamName: string, ignoreDead: boolean): boolean {
@@ -22390,7 +22390,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamKill.
+   * Source parity: ScriptActions::doTeamKill.
    */
   private executeScriptTeamKill(teamName: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
@@ -22418,7 +22418,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerKill.
+   * Source parity: ScriptActions::doPlayerKill.
    */
   private executeScriptPlayerKill(side: string): boolean {
     const normalizedSide = this.normalizeSide(side);
@@ -22433,7 +22433,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doPlayerTransferAssetsToPlayer.
+   * Source parity: ScriptActions::doPlayerTransferAssetsToPlayer.
    * Transfers all non-beacon objects and all credits from source side to target side.
    */
   private executeScriptPlayerTransferOwnershipPlayer(sourceSide: string, targetSide: string): boolean {
@@ -22489,7 +22489,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doNamedTransferAssetsToPlayer.
+   * Source parity: ScriptActions::doNamedTransferAssetsToPlayer.
    * Transfers one named object to the target side.
    */
   private executeScriptNamedTransferOwnershipPlayer(entityId: number, targetSide: string): boolean {
@@ -22511,7 +22511,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ownership transfer used by ScriptActions asset-transfer actions.
+   * Source parity: ownership transfer used by ScriptActions asset-transfer actions.
    * Mirrors setTeam + updateTeamAndPlayerStuff without capture-bonus side effects.
    */
   private transferScriptEntityToSide(
@@ -22553,7 +22553,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doTeamDelete(ignoreDead=true).
+   * Source parity: ScriptActions::doTeamDelete(ignoreDead=true).
    * TEAM_DELETE_LIVING destroys current non-destroyed team members.
    */
   private executeScriptTeamDeleteLiving(teamName: string): boolean {
@@ -22561,7 +22561,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doOversizeTheTerrain.
+   * Source parity: ScriptActions::doOversizeTheTerrain.
    * App runtime bridge forwards this to TerrainVisual::setScriptTerrainOversizeAmount.
    */
   private executeScriptOversizeTerrain(amount: number): boolean {
@@ -22573,7 +22573,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doResizeViewGuardband.
+   * Source parity: ScriptActions::doResizeViewGuardband.
    * App runtime bridge forwards this to ObjectVisualManager::setViewGuardBandBias.
    */
   private executeScriptResizeViewGuardband(guardbandX: number, guardbandY: number): boolean {
@@ -22714,7 +22714,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIUpdateInterface::getCompletedWaypoint() notification.
+   * Source parity: AIUpdateInterface::getCompletedWaypoint() notification.
    */
   notifyScriptWaypointPathCompleted(entityId: number, waypointPathName: string): void {
     if (!Number.isFinite(entityId)) {
@@ -22737,7 +22737,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateNamedReachedWaypointsEnd.
+   * Source parity: ScriptConditions::evaluateNamedReachedWaypointsEnd.
    */
   evaluateScriptNamedReachedWaypointsEnd(filter: {
     entityId: number;
@@ -22902,7 +22902,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateIsDestroyed.
+   * Source parity: ScriptConditions::evaluateIsDestroyed.
    */
   evaluateScriptIsDestroyed(filter: {
     teamName: string;
@@ -22925,7 +22925,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateHasUnits.
+   * Source parity: ScriptConditions::evaluateHasUnits.
    */
   evaluateScriptHasUnits(filter: {
     teamName: string;
@@ -22943,7 +22943,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamStateIs.
+   * Source parity: ScriptConditions::evaluateTeamStateIs.
    */
   evaluateScriptTeamStateIs(filter: {
     teamName: string;
@@ -22963,7 +22963,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamStateIsNot.
+   * Source parity: ScriptConditions::evaluateTeamStateIsNot.
    */
   evaluateScriptTeamStateIsNot(filter: {
     teamName: string;
@@ -22983,7 +22983,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamAttackedByType.
+   * Source parity: ScriptConditions::evaluateTeamAttackedByType.
    */
   evaluateScriptTeamAttackedByType(filter: {
     teamName: string;
@@ -23008,7 +23008,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamAttackedByPlayer.
+   * Source parity: ScriptConditions::evaluateTeamAttackedByPlayer.
    */
   evaluateScriptTeamAttackedByPlayer(filter: {
     teamName: string;
@@ -23060,7 +23060,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamCreated.
+   * Source parity: ScriptConditions::evaluateTeamCreated.
    */
   evaluateScriptTeamCreated(filter: {
     teamName: string;
@@ -23078,7 +23078,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamDiscovered.
+   * Source parity: ScriptConditions::evaluateTeamDiscovered.
    */
   evaluateScriptTeamDiscovered(filter: {
     teamName: string;
@@ -23100,7 +23100,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamOwnedByPlayer.
+   * Source parity: ScriptConditions::evaluateTeamOwnedByPlayer.
    * Uses Team controlling-player ownership only (no member-side inference).
    */
   evaluateScriptTeamOwnedByPlayer(filter: {
@@ -23139,7 +23139,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamReachedWaypointsEnd.
+   * Source parity: ScriptConditions::evaluateTeamReachedWaypointsEnd.
    */
   evaluateScriptTeamReachedWaypointsEnd(filter: {
     teamName: string;
@@ -23164,7 +23164,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamIsContained.
+   * Source parity: ScriptConditions::evaluateTeamIsContained.
    * Source parity quirk: C++ AI_EXIT branch currently evaluates
    * `isContained && (state == AI_EXIT)`, so transitional AI_EXIT does not alter
    * results when getContainedBy() is null.
@@ -23215,7 +23215,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamHasObjectStatus.
+   * Source parity: ScriptConditions::evaluateTeamHasObjectStatus.
    */
   evaluateScriptTeamHasObjectStatus(filter: {
     teamName: string;
@@ -23272,7 +23272,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamInsideAreaEntirely.
+   * Source parity: ScriptConditions::evaluateTeamInsideAreaEntirely.
    */
   evaluateScriptTeamInsideAreaEntirely(filter: {
     teamName: string;
@@ -23298,7 +23298,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamInsideAreaPartially.
+   * Source parity: ScriptConditions::evaluateTeamInsideAreaPartially.
    */
   evaluateScriptTeamInsideAreaPartially(filter: {
     teamName: string;
@@ -23324,7 +23324,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamOutsideAreaEntirely.
+   * Source parity: ScriptConditions::evaluateTeamOutsideAreaEntirely.
    */
   evaluateScriptTeamOutsideAreaEntirely(filter: {
     teamName: string;
@@ -23353,7 +23353,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaEntirely.
+   * Source parity: ScriptConditions::evaluateTeamEnteredAreaEntirely.
    */
   evaluateScriptTeamEnteredAreaEntirely(filter: {
     teamName: string;
@@ -23379,7 +23379,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamEnteredAreaPartially.
+   * Source parity: ScriptConditions::evaluateTeamEnteredAreaPartially.
    */
   evaluateScriptTeamEnteredAreaPartially(filter: {
     teamName: string;
@@ -23405,7 +23405,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaEntirely.
+   * Source parity: ScriptConditions::evaluateTeamExitedAreaEntirely.
    */
   evaluateScriptTeamExitedAreaEntirely(filter: {
     teamName: string;
@@ -23431,7 +23431,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTeamExitedAreaPartially.
+   * Source parity: ScriptConditions::evaluateTeamExitedAreaPartially.
    */
   evaluateScriptTeamExitedAreaPartially(filter: {
     teamName: string;
@@ -23717,7 +23717,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateNamedSelected.
+   * Source parity: ScriptConditions::evaluateNamedSelected.
    */
   evaluateScriptNamedSelected(filter: {
     entityId: number;
@@ -25047,7 +25047,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateNamedAttackedByType.
+   * Source parity: ScriptConditions::evaluateNamedAttackedByType.
    * Current subset matches direct template names from last damage source template.
    */
   evaluateScriptNamedAttackedByType(filter: {
@@ -25184,7 +25184,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluateTypeSighted.
+   * Source parity: ScriptConditions::evaluateTypeSighted.
    */
   evaluateScriptTypeSighted(filter: {
     entityId: number;
@@ -25759,7 +25759,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptConditions::evaluatePlayerUnitCondition.
+   * Source parity: ScriptConditions::evaluatePlayerUnitCondition.
    */
   evaluateScriptPlayerUnitCondition(filter: {
     side: string;
@@ -26647,7 +26647,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: Player::setRankLevel — rank clamp + reset-on-downgrade behavior.
+   * Source parity: Player::setRankLevel — rank clamp + reset-on-downgrade behavior.
    */
   private setSideRankLevelByNormalizedSide(normalizedSide: string, newLevel: number): boolean {
     const rankState = this.getSideRankStateMap(normalizedSide);
@@ -26682,7 +26682,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: Player::addSkillPoints (used by script action and kill XP).
+   * Source parity: Player::addSkillPoints (used by script action and kill XP).
    * Returns true if rank increased.
    */
   private adjustSideSkillPoints(side: string, delta: number): boolean {
@@ -30313,7 +30313,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ChinookAIUpdate module data used by current systems.
+   * Source parity: ChinookAIUpdate module data used by current systems.
    * C++ defaults from ChinookAIUpdateModuleData constructor.
    */
   private extractChinookAIProfile(objectDef: ObjectDef | undefined): ChinookAIProfile | null {
@@ -32629,7 +32629,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       // C++ parseReal: RollRate and PitchRate are raw floats (not degrees).
-      // C++ TODO comment confirms they should use parseAngularVelocityReal but don't.
+      // C++ source comment confirms they should use parseAngularVelocityReal but don't.
       // C++ parsePercentToReal: RollRateDelta, FallHowFast → 0-1.
       const rollRate = readNumericField(block.fields, ['RollRate']) ?? 0;
       const rollRateDelta = (readNumericField(block.fields, ['RollRateDelta']) ?? 100) / 100;
@@ -34744,7 +34744,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity subset: PartitionFilterSameMapStatus compares Object::isOffMap() between
+    // Source parity: PartitionFilterSameMapStatus compares Object::isOffMap() between
     // attacker and candidate. This port infers off-map status from current world position.
     return (
       entity.x < 0
@@ -38919,7 +38919,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: GarrisonContain evacuation side override (left/right).
+   * Source parity: GarrisonContain evacuation side override (left/right).
    * Mirrors the local door/walk target generation used by m_evacDisposition.
    */
   private resolveContainerEvacuationPositions(
@@ -39127,7 +39127,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    // Source parity subset: MSG_INTERNET_HACK clears active AI state and enters
+    // Source parity: MSG_INTERNET_HACK clears active AI state and enters
     // HackInternetAIUpdate (UNPACKING -> HACK_INTERNET persistent loop).
     this.cancelEntityCommandPathActions(entity.id);
     this.clearAttackTarget(entity.id);
@@ -39239,7 +39239,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    // Source parity subset: MSG_COMBATDROP routes through AIGroup::groupCombatDrop,
+    // Source parity: MSG_COMBATDROP routes through AIGroup::groupCombatDrop,
     // which delegates per-unit AI combat-drop behavior.
     this.cancelEntityCommandPathActions(source.id);
     this.clearAttackTarget(source.id);
@@ -39477,7 +39477,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    // Source parity subset: MSG_ENTER routes through AIGroup::groupEnter into
+    // Source parity: MSG_ENTER routes through AIGroup::groupEnter into
     // aiEnter target-action state. We track pending enter intent and resolve a
     // minimal action subset on contact.
     this.cancelEntityCommandPathActions(source.id);
@@ -40258,7 +40258,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    // Source parity subset: BuildAssistant::sellObject starts a timed teardown
+    // Source parity: BuildAssistant::sellObject starts a timed teardown
     // (construction-percent countdown) and refunds queue production immediately.
     this.cancelEntityCommandPathActions(entity.id);
     this.clearAttackTarget(entity.id);
@@ -40268,7 +40268,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.objectStatusFlags.add('UNSELECTABLE');
     this.removeEntityFromSelection(entity.id);
 
-    // Source parity subset: BuildAssistant::sellObject invokes contain->onSelling().
+    // Source parity: BuildAssistant::sellObject invokes contain->onSelling().
     // Open/Garrison contain variants map to passenger evacuation on sell start.
     // Source parity: TunnelContain::onSelling — eject all if this is the last tunnel.
     if (entity.containProfile?.moduleType === 'TUNNEL') {
@@ -40849,7 +40849,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ActionManager::canResumeConstructionOf.
+   * Source parity: ActionManager::canResumeConstructionOf.
    */
   private canDozerResumeConstructionTarget(
     dozer: MapEntity,
@@ -41017,7 +41017,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIPlayer::repairStructure queue dispatch.
+   * Source parity: AIPlayer::repairStructure queue dispatch.
    * Attempts to assign queued structure repairs to available dozers on each side.
    */
   private updateScriptSideRepairQueues(): void {
@@ -41746,7 +41746,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity subset: repair docks service ground vehicles.
+    // Source parity: repair docks service ground vehicles.
     const sourceKindOf = this.resolveEntityKindOfSet(source);
     if (!sourceKindOf.has('VEHICLE')) {
       return false;
@@ -41882,7 +41882,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ActionManager::canEnterObject special-case for unmanned vehicles.
+   * Source parity: ActionManager::canEnterObject special-case for unmanned vehicles.
    */
   private canExecuteCaptureUnmannedFactionUnitEnterAction(
     source: MapEntity,
@@ -41909,7 +41909,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: capture nearest unowned faction unit enter resolution.
+   * Source parity: capture nearest unowned faction unit enter resolution.
    */
   private resolveCaptureUnmannedFactionUnitEnterAction(
     source: MapEntity,
@@ -43283,7 +43283,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
 
       if (source.chinookAIProfile) {
-        // Source parity subset: ChinookCombatDropState rappels CAN_RAPPEL passengers over time.
+        // Source parity: ChinookCombatDropState rappels CAN_RAPPEL passengers over time.
         const profile = source.chinookAIProfile;
         if (pending.nextDropFrame === 0) {
           // Source parity: combat drop holds the transport in place while rappelling.
@@ -43291,7 +43291,7 @@ export class GameLogicSubsystem implements Subsystem {
           this.setChinookFlightStatus(source, 'DOING_COMBAT_DROP');
           // Source parity: ChinookCombatDropState::onEnter — lose all gathered supply boxes.
           this.clearChinookSupplyBoxes(source.id);
-          // Source parity subset: keep chinook at min drop height while deploying ropes.
+          // Source parity: keep chinook at min drop height while deploying ropes.
           const hoverGround = this.resolveGroundHeight(source.x, source.z);
           const hoverY = hoverGround + source.baseHeight + Math.max(0, profile.minDropHeight);
           if (source.y < hoverY) {
@@ -44945,7 +44945,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRevealMapEntire.
+   * Source parity: ScriptActions::doRevealMapEntire.
    * - If playerName resolves to a known player side and is not empty: apply to that player.
    * - Otherwise: apply to all human players.
    */
@@ -44996,7 +44996,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRevealMapEntire.
+   * Source parity: ScriptActions::doRevealMapEntire.
    * - If playerName resolves to a known player side and is not empty: apply to that player.
    * - Otherwise: apply to all human players.
    */
@@ -45014,7 +45014,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRevealMapEntirePermanently.
+   * Source parity: ScriptActions::doRevealMapEntirePermanently.
    * - If playerName resolves to a known player side and is not empty: apply to that player.
    * - Otherwise: apply to all human players.
    */
@@ -45032,7 +45032,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doShroudMapEntire.
+   * Source parity: ScriptActions::doShroudMapEntire.
    */
   private executeScriptShroudMapEntire(playerName: string): boolean {
     const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
@@ -45048,7 +45048,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doRevealMapAtWaypointPermanent.
+   * Source parity: ScriptActions::doRevealMapAtWaypointPermanent.
    * Creates/replaces a named reveal and applies it immediately.
    */
   private executeScriptRevealMapAtWaypointPermanently(
@@ -45092,7 +45092,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: ScriptActions::doUndoRevealMapAtWaypointPermanent.
+   * Source parity: ScriptActions::doUndoRevealMapAtWaypointPermanent.
    * Removes active reveal and deletes the named reveal definition.
    */
   private executeScriptUndoRevealMapAtWaypointPermanently(lookName: string): boolean {
@@ -46649,7 +46649,7 @@ export class GameLogicSubsystem implements Subsystem {
       return Math.max(0, Math.trunc(refundValue));
     }
 
-    // Source parity subset: BuildAssistant::update() uses GlobalData::m_sellPercentage.
+    // Source parity: BuildAssistant::update() uses GlobalData::m_sellPercentage.
     const cost = this.resolveObjectBuildCost(objectDef, entity.side ?? '');
     const sellPercentage = this.config.sellPercentage;
     return Math.max(0, Math.trunc(cost * (sellPercentage >= 0 ? sellPercentage : SOURCE_DEFAULT_SELL_PERCENTAGE)));
@@ -46861,7 +46861,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: TerrainLogic::getHighestLayerForDestination +
+   * Source parity: TerrainLogic::getHighestLayerForDestination +
    * TerrainLogic::getLayerHeight for bridge layers used by HeightDieUpdate.
    * Returns null when destination resolves to ground.
    */
@@ -46871,7 +46871,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: TerrainLogic::getHighestLayerForDestination bridge-layer
+   * Source parity: TerrainLogic::getHighestLayerForDestination bridge-layer
    * selection (layer id + height), choosing the closest layer at-or-below destination Y.
    */
   private resolveHighestBridgeLayerForDestination(
@@ -47296,7 +47296,7 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
 
-    // Source parity subset: build-cost modifiers from COSTMODIFIERUPGRADE are applied,
+    // Source parity: build-cost modifiers from COSTMODIFIERUPGRADE are applied,
     // while full player handicap/faction cost tables are still pending ownership porting.
     const buildCost = this.resolveObjectBuildCost(unitDef, producerSide);
     if (buildCost > this.getSideCredits(producerSide)) {
@@ -47420,7 +47420,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   /**
    * Extract all template names producible via command set buttons of the given command types.
-   * Source parity subset: scans the entity's command set for UNIT_BUILD / DOZER_CONSTRUCT /
+   * Source parity: scans the entity's command set for UNIT_BUILD / DOZER_CONSTRUCT /
    * PLAYER_UPGRADE buttons and returns the associated Object / Upgrade names.
    */
   private collectCommandSetTemplates(
@@ -49876,7 +49876,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: CommandButtonHuntUpdate::update.
+   * Source parity: CommandButtonHuntUpdate::update.
    */
   private updateCommandButtonHunt(): void {
     for (const entity of this.spawnedEntities.values()) {
@@ -49958,7 +49958,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.weaponLockStatus = 'LOCKED_TEMPORARILY';
     this.refreshEntityCombatProfiles(entity);
 
-    // Source parity subset: aiHunt(CMD_FROM_AI) nudges idle units into enemy scans.
+    // Source parity: aiHunt(CMD_FROM_AI) nudges idle units into enemy scans.
     if (this.isEntityIdleForCommandButtonHunt(entity)) {
       entity.autoTargetScanNextFrame = this.frameCounter;
     }
@@ -50133,7 +50133,7 @@ export class GameLogicSubsystem implements Subsystem {
         }
       }
 
-      // Source parity subset: passive AI units only retaliate to last attacker and
+      // Source parity: passive AI units only retaliate to last attacker and
       // otherwise skip proactive idle-acquire scans.
       if (
         this.getControllingPlayerTypeForEntity(entity) !== 'HUMAN'
@@ -50968,7 +50968,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (sneakyOffset && primaryVictimEntityId !== null) {
       aimX += sneakyOffset.x;
       aimZ += sneakyOffset.z;
-      // Source parity subset: WeaponTemplate::fireWeaponTemplate() converts sneaky-targeted
+      // Source parity: WeaponTemplate::fireWeaponTemplate() converts sneaky-targeted
       // victim shots into position-shots using AIUpdateInterface::getSneakyTargetingOffset().
       primaryVictimEntityId = null;
     }
@@ -50985,7 +50985,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       attacker.attackScatterTargetsUnused[randomPick] = attacker.attackScatterTargetsUnused[attacker.attackScatterTargetsUnused.length - 1]!;
       attacker.attackScatterTargetsUnused.pop();
-      // Source parity subset: Weapon::privateFireWeapon() consumes one ScatterTarget
+      // Source parity: Weapon::privateFireWeapon() consumes one ScatterTarget
       // offset per shot from a randomized "unused" list until reload rebuilds it.
       // Scatter terrain projection handled at impactY resolution (line uses heightmap).
     }
@@ -50997,7 +50997,7 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: Weapon.cpp projectile branch notifies completion immediately when the
       // source object itself has SpecialPowerCompletionDie with a valid creator id.
       this.notifyScriptCompletedSpecialPowerOnProjectileFired(attacker);
-      // Source parity subset: projectile weapons in WeaponTemplate::fireWeaponTemplate()
+      // Source parity: projectile weapons in WeaponTemplate::fireWeaponTemplate()
       // spawn ProjectileObject and defer damage to projectile update/collision.
       // We represent this as a deterministic delayed impact without spawning a full
       // projectile object graph yet.
@@ -51009,7 +51009,7 @@ export class GameLogicSubsystem implements Subsystem {
         aimX += randomizedScatterRadius * Math.cos(scatterAngleRadians);
         aimZ += randomizedScatterRadius * Math.sin(scatterAngleRadians);
         primaryVictimEntityId = null;
-        // Source parity subset: projectile scatter path launches at a position (not victim object),
+        // Source parity: projectile scatter path launches at a position (not victim object),
         // so impact no longer homes to the moving target.
         // Scatter terrain projection handled at impactY resolution below.
       }
@@ -51265,7 +51265,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     if (delivery === 'DIRECT' && delayFrames <= 0) {
-      // Source parity subset: WeaponTemplate::fireWeaponTemplate() applies non-projectile
+      // Source parity: WeaponTemplate::fireWeaponTemplate() applies non-projectile
       // damage immediately when delayInFrames < 1.0f instead of queuing delayed damage.
       this.emitWeaponImpactVisualEvent(event);
       applyWeaponDamageEventImpl(this.createCombatDamageEventContext(), event);
@@ -51450,7 +51450,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private refreshEntitySneakyMissWindow(entity: MapEntity): void {
-    // Source parity subset: JetAIUpdate::update() refreshes m_attackersMissExpireFrame while
+    // Source parity: JetAIUpdate::update() refreshes m_attackersMissExpireFrame while
     // OBJECT_STATUS_IS_ATTACKING is set on the object.
     refreshEntitySneakyMissWindowImpl(entity, this.frameCounter);
   }
@@ -51464,7 +51464,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private resolveScaledProjectileTravelSpeed(weapon: AttackWeaponProfile, sourceToAimDistance: number): number {
-    // Source parity subset: DumbProjectileBehavior::projectileFireAtObjectOrPosition()
+    // Source parity: DumbProjectileBehavior::projectileFireAtObjectOrPosition()
     // scales launch speed from minimum-range to unmodified-attack-range distance.
     // Bezier arc length is used for actual flight distance in queueWeaponDamageEvent.
     return resolveScaledProjectileTravelSpeedImpl(
@@ -52335,7 +52335,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   private updateWeaponIdleAutoReload(): void {
-    // Source parity subset: FiringTracker::update() calls Object::reloadAllAmmo(TRUE),
+    // Source parity: FiringTracker::update() calls Object::reloadAllAmmo(TRUE),
     // forcing an immediate reload after sustained idle time.
     updateWeaponIdleAutoReloadImpl(this.spawnedEntities.values(), this.frameCounter);
 
@@ -54341,7 +54341,7 @@ export class GameLogicSubsystem implements Subsystem {
       if (entity.attackTargetEntityId !== null || entity.guardState !== 'NONE') continue;
       if (entity.moving && entity.moveTarget !== null) continue;
 
-      // Source parity subset: AI_WANDER_IN_PLACE transitions to AI_MOVE_AWAY_FROM_REPULSORS
+      // Source parity: AI_WANDER_IN_PLACE transitions to AI_MOVE_AWAY_FROM_REPULSORS
       // for CAN_BE_REPULSED units when repulsors are nearby.
       if (entity.kindOf.has('CAN_BE_REPULSED')) {
         const repulsor = this.findClosestRepulsorEntity(entity, entity.visionRange);
@@ -55143,7 +55143,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity subset: AIPlayer::computeCenterAndRadiusOfBase.
+   * Source parity: AIPlayer::computeCenterAndRadiusOfBase.
    * Uses map SidesList build-list locations when available, with live-structure fallback.
    */
   private resolveAiBaseCenterAndRadius(

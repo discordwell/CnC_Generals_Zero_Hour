@@ -64,7 +64,7 @@ export interface ScriptObjectAmbientSoundState {
   audioName: string;
   enabled: boolean;
   toggleRevision: number;
-  /** Source parity subset: map-script customized ambient event definition for this object instance. */
+  /** Source parity: map-script customized ambient event definition for this object instance. */
   customAudioDefinition?: ScriptObjectAmbientCustomAudioDefinition;
 }
 

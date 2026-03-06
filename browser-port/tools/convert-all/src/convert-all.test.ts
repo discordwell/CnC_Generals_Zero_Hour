@@ -128,6 +128,17 @@ function buildMinimalMapBinary(heightBytes: readonly number[] = [0, 64, 128, 255
   return new Uint8Array(buffer, 0, offset);
 }
 
+function wrapMapInEarContainer(mapPayload: Uint8Array): Uint8Array {
+  const wrapperPrefix = Uint8Array.from([
+    0x45, 0x41, 0x52, 0x00, // "EAR\0"
+    0x1d, 0x3b, 0x10, 0x00, 0x10, 0xfb, 0x10, 0x3b, 0x1d, 0xe4,
+  ]);
+  const wrapped = new Uint8Array(wrapperPrefix.length + mapPayload.length);
+  wrapped.set(wrapperPrefix, 0);
+  wrapped.set(mapPayload, wrapperPrefix.length);
+  return wrapped;
+}
+
 class W3dBinaryWriter {
   private readonly bytes: number[] = [];
 
@@ -1239,6 +1250,50 @@ End
       expect(runtimeManifest.entries).toHaveLength(0);
       expect(existsSync(resolve(outputDir, 'data', 'ini-bundle.json'))).toBe(false);
       expect(existsSync(resolve(outputDir, 'RootOnly.json'))).toBe(false);
+    });
+  });
+
+  it('parses only extracted runtime INI roots and ignores non-runtime extracted INI files', () => {
+    return withTempDir((dir) => {
+      const gameDir = resolve(dir, 'game');
+      const outputDir = resolve(dir, 'out');
+      const extractedRuntimeIni = resolve(outputDir, '_extracted', 'INIZH', 'Data', 'INI', 'Object', 'RuntimeTank.ini');
+      const extractedLocalizedIni = resolve(outputDir, '_extracted', 'EnglishZH', 'Data', 'English', 'CommandMap.ini');
+
+      mkdirSync(gameDir, { recursive: true });
+      mkdirSync(dirname(extractedRuntimeIni), { recursive: true });
+      mkdirSync(dirname(extractedLocalizedIni), { recursive: true });
+
+      writeFileSync(extractedRuntimeIni, `Object RuntimeTank
+  Side = America
+End
+`);
+      writeFileSync(extractedLocalizedIni, `CommandMap MOVE
+  Key = M
+End
+`);
+
+      const result = runConvertAll([
+        '--game-dir',
+        gameDir,
+        '--output',
+        outputDir,
+        '--only',
+        'ini',
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('extracted runtime INI root(s)');
+      expect(result.stdout).toContain('INIZH/Data/INI');
+
+      const runtimeManifest = JSON.parse(
+        readFileSync(resolve(outputDir, RUNTIME_MANIFEST_FILE), 'utf8'),
+      ) as ConversionManifestSnapshot;
+
+      expect(runtimeManifest.entries.some((entry) => entry.sourcePath.includes('_extracted/INIZH/Data/INI/Object/RuntimeTank.ini'))).toBe(true);
+      expect(runtimeManifest.entries.some((entry) => entry.sourcePath.includes('_extracted/EnglishZH/Data/English/CommandMap.ini'))).toBe(false);
+      expect(existsSync(resolve(outputDir, 'data', '_extracted', 'INIZH', 'Data', 'INI', 'Object', 'RuntimeTank.json'))).toBe(true);
+      expect(existsSync(resolve(outputDir, 'data', '_extracted', 'EnglishZH', 'Data', 'English', 'CommandMap.json'))).toBe(false);
     });
   });
 
@@ -2850,6 +2905,30 @@ End
       expect(mapEntries).toHaveLength(1);
       expect(mapEntries[0]?.outputPath).toBe('maps/SmokeTest.json');
       expect(mapEntries[0]?.sourcePath.toLowerCase().includes('index.js.map')).toBe(false);
+    });
+  });
+
+  it('accepts EAR-wrapped retail map files during map conversion', () => {
+    return withTempDir((dir) => {
+      const gameDir = resolve(dir, 'game');
+      const outputDir = resolve(dir, 'out');
+      const mapDir = resolve(gameDir, 'maps');
+      mkdirSync(mapDir, { recursive: true });
+
+      const wrappedMap = wrapMapInEarContainer(buildMinimalMapBinary());
+      writeFileSync(resolve(mapDir, 'RetailWrapped.map'), wrappedMap);
+
+      const result = runConvertAll([
+        '--game-dir',
+        gameDir,
+        '--output',
+        outputDir,
+        '--only',
+        'map',
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(existsSync(resolve(outputDir, 'maps', 'RetailWrapped.json'))).toBe(true);
     });
   });
 });

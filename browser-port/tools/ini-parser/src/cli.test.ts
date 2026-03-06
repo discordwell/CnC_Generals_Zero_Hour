@@ -154,6 +154,43 @@ describe('ini-parser CLI', () => {
     });
   });
 
+  it('fails on parse errors by default', () => {
+    return withTempDir((dir) => {
+      const inputPath = resolve(dir, 'parse-error.ini');
+      const outputPath = resolve(dir, 'parse-error.json');
+      writeFileSync(inputPath, '[ToolOnly]\nFoo = Bar\n');
+
+      const result = runIniCli([
+        '--input',
+        inputPath,
+        '--output',
+        outputPath,
+      ]);
+
+      expect(result.status).toBe(1);
+    });
+  });
+
+  it('allows parse errors when --allow-parse-errors is set', () => {
+    return withTempDir((dir) => {
+      const inputPath = resolve(dir, 'parse-error.ini');
+      const outputPath = resolve(dir, 'parse-error.json');
+      writeFileSync(inputPath, '[ToolOnly]\nFoo = Bar\n');
+
+      const result = runIniCli([
+        '--input',
+        inputPath,
+        '--output',
+        outputPath,
+        '--allow-parse-errors',
+      ]);
+
+      expect(result.status).toBe(0);
+      const output = JSON.parse(readFileSync(outputPath, 'utf8')) as unknown[];
+      expect(output).toHaveLength(0);
+    });
+  });
+
   it('preserves directory structure in directory mode', () => {
     return withTempDir((dir) => {
       const inputDir = resolve(dir, 'in');

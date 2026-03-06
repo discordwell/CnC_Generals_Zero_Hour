@@ -16,6 +16,7 @@ import { chunkTypeName } from './W3dChunkTypes.js';
 import { parseMeshChunk } from './W3dMeshParser.js';
 import { parseHierarchyChunk } from './W3dHierarchyParser.js';
 import { W3dParser } from './W3dParser.js';
+import type { W3dFile } from './W3dParser.js';
 import { GltfBuilder } from './GltfBuilder.js';
 
 /* ------------------------------------------------------------------ */
@@ -128,7 +129,10 @@ class BinaryWriter {
  *     TEXCOORDS    – 3 UVs
  *     TRIANGLES    – 1 triangle
  */
-function buildMeshBuffer(): ArrayBuffer {
+function buildMeshBuffer(opts?: {
+  headerNumTris?: number;
+  headerNumVertices?: number;
+}): ArrayBuffer {
   const w = new BinaryWriter();
 
   // ---- MESH (container) ----
@@ -140,8 +144,8 @@ function buildMeshBuffer(): ArrayBuffer {
   w.writeUint32(0);          // Attributes
   w.writeString('TestMesh', 32);
   w.writeString('TestContainer', 32);
-  w.writeUint32(1);          // NumTris
-  w.writeUint32(3);          // NumVertices
+  w.writeUint32(opts?.headerNumTris ?? 1); // NumTris
+  w.writeUint32(opts?.headerNumVertices ?? 3); // NumVertices
   w.writeUint32(1);          // NumMaterials
   w.writeUint32(0);          // NumDamageStages
   w.writeInt32(0);           // SortLevel
@@ -361,6 +365,18 @@ describe('W3dMeshParser', () => {
     expect(mesh.indices[1]).toBe(1);
     expect(mesh.indices[2]).toBe(2);
   });
+
+  it('clamps oversized mesh header counts to available payload data', () => {
+    const buf = buildMeshBuffer({ headerNumTris: 999, headerNumVertices: 999 });
+    const reader = new W3dChunkReader(buf);
+    const meshChunk = reader.readChunkAt(0);
+    const mesh = parseMeshChunk(reader, meshChunk.dataOffset, meshChunk.size);
+
+    expect(mesh.vertices.length).toBe(9);
+    expect(mesh.normals.length).toBe(9);
+    expect(mesh.uvs.length).toBe(6);
+    expect(mesh.indices.length).toBe(3);
+  });
 });
 
 describe('W3dHierarchyParser', () => {
@@ -388,6 +404,20 @@ describe('W3dHierarchyParser', () => {
     expect(child2.name).toBe('ChildBone2');
     expect(child2.parentIndex).toBe(0);
     expect(child2.translation).toEqual([0, 1, 0]);
+  });
+
+  it('clamps oversized pivot counts to available pivot records', () => {
+    const buf = buildHierarchyBuffer();
+    const mutated = buf.slice(0);
+    const view = new DataView(mutated);
+    const numPivotsOffset = 8 + 8 + 4 + 32;
+    view.setUint32(numPivotsOffset, 999, true);
+
+    const reader = new W3dChunkReader(mutated);
+    const hierChunk = reader.readChunkAt(0);
+    const hierarchy = parseHierarchyChunk(reader, hierChunk.dataOffset, hierChunk.size);
+
+    expect(hierarchy.pivots).toHaveLength(3);
   });
 });
 
@@ -459,5 +489,41 @@ describe('GltfBuilder', () => {
     const w3d = W3dParser.parse(buildMeshBuffer());
     const glb = GltfBuilder.buildGlb(w3d);
     expect(glb.byteLength).toBeGreaterThan(0);
+  });
+
+  it('bounds animation sampling when animation header frame counts are invalid', () => {
+    const channelData = new Float32Array(281);
+    for (let i = 0; i < channelData.length; i++) {
+      channelData[i] = i;
+    }
+
+    const w3d: W3dFile = {
+      meshes: [],
+      hierarchies: [],
+      hlods: [],
+      boxes: [],
+      animations: [{
+        name: 'BadHeaderAnim',
+        hierarchyName: '',
+        numFrames: 1_055_483_809,
+        frameRate: 1_055_566_543,
+        channels: [
+          { pivot: 0, type: 'x', firstFrame: 0, lastFrame: 280, data: channelData },
+          { pivot: 0, type: 'y', firstFrame: 0, lastFrame: 280, data: channelData },
+          { pivot: 0, type: 'z', firstFrame: 0, lastFrame: 280, data: channelData },
+        ],
+      }],
+    };
+
+    const glb = GltfBuilder.buildGlb(w3d);
+    expect(glb.byteLength).toBeGreaterThan(0);
+
+    const view = new DataView(glb);
+    const jsonChunkLength = view.getUint32(12, true);
+    const jsonBytes = new Uint8Array(glb, 20, jsonChunkLength);
+    const json = JSON.parse(new TextDecoder().decode(jsonBytes).trim()) as Record<string, unknown>;
+    const animations = json['animations'] as Array<Record<string, unknown>>;
+    expect(animations).toHaveLength(1);
+    expect((animations[0]?.samplers as unknown[]).length).toBe(1);
   });
 });

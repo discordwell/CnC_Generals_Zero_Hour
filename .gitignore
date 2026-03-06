@@ -12,6 +12,9 @@ cursor.json
 # Temporary download directory
 /temp_downloads/
 
+# Retail game files (extracted from disc images, not for git)
+/retail/
+
 # Other common files to ignore
 .DS_Store
 Thumbs.db

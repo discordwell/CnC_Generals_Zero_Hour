@@ -91,6 +91,16 @@ describe('IniDataRegistry', () => {
       expect(registry.objects.get('AdvTank')!.parent).toBe('BaseTank');
     });
 
+    it('handles ObjectReskin type', () => {
+      registry.loadBlocks([
+        makeBlock('ObjectReskin', 'ChemTank', { BuildCost: 600 }, { parent: 'BaseTank' }),
+      ]);
+
+      expect(registry.objects.size).toBe(1);
+      expect(registry.objects.get('ChemTank')!.parent).toBe('BaseTank');
+      expect(registry.objects.get('ChemTank')!.fields['BuildCost']).toBe(600);
+    });
+
     it('indexes SpecialPower and ObjectCreationList definitions', () => {
       registry.loadBlocks([
         makeBlock('SpecialPower', 'SP_Tactical_Ability', {

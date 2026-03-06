@@ -244,9 +244,13 @@ function parseBlock(
   let name = tokens[1] ?? '';
   let parent: string | undefined;
 
-  // Handle inheritance: Object Foo : Bar
   const colonIndex = tokens.indexOf(':');
-  if (colonIndex !== -1 && colonIndex + 1 < tokens.length) {
+  // Handle ObjectReskin NewObject ParentObject (parent without colon syntax).
+  if (type === 'ObjectReskin' && tokens.length >= 3) {
+    name = tokens[1]!;
+    parent = tokens[2]!;
+  } else if (colonIndex !== -1 && colonIndex + 1 < tokens.length) {
+    // Handle inheritance: Object Foo : Bar
     name = tokens.slice(1, colonIndex).join(' ');
     parent = tokens[colonIndex + 1];
   } else {
@@ -303,10 +307,10 @@ function parseBlock(
     }
 
     // Sub-block (e.g., "Body = ActiveBody ModuleTag_02")
-    if (isSubBlockDeclaration(lineTokens)) {
+    if (isSubBlockDeclaration(lineTokens) && hasNestedSubBlockBody(lines, cursor)) {
       const result = parseBlock(lines, cursor, errors);
       // For sub-blocks declared as "Key = Type Tag", use composite naming
-      if (lineTokens.length >= 4 && lineTokens[1] === '=') {
+      if (lineTokens.length >= 3 && lineTokens[1] === '=') {
         result.block.type = lineTokens[0]!;
         result.block.name = lineTokens.slice(2).join(' ');
       }
@@ -357,6 +361,9 @@ const SUB_BLOCK_TYPES = new Set([
   'ArmorSet', 'WeaponSet', 'UnitSpecificSounds', 'ClientUpdate',
   'ClientBehavior', 'Flammability', 'ThreatBreakdown',
   'VeterancyLevels', 'TransitionState', 'CrowdResponse',
+  'ConditionState', 'AliasConditionState', 'DefaultConditionState',
+  'ModelConditionState', 'DefaultModelConditionState',
+  'AnimationState', 'IdleAnimationState', 'TrackMarks',
   'FireWeaponNugget', 'DamageNugget', 'MetaImpactNugget',
   'DOTNugget', 'WeaponOCLNugget', 'AttributeModifierNugget',
   'ParalyzeNugget', 'SpawnAndFadeNugget', 'FireLogicNugget',
@@ -365,21 +372,43 @@ const SUB_BLOCK_TYPES = new Set([
 ]);
 
 function isSubBlockDeclaration(tokens: string[]): boolean {
-  if (tokens.length < 2) return false;
   const firstToken = tokens[0]!;
-  // "Body = ActiveBody ModuleTag_XX"
-  if (tokens[1] === '=' && tokens.length >= 4 && SUB_BLOCK_TYPES.has(firstToken)) {
-    return true;
+  if (!SUB_BLOCK_TYPES.has(firstToken)) return false;
+  // Bare block opener lines are valid (e.g. DefaultConditionState).
+  if (tokens.length === 1) return true;
+  if (tokens[1] === '=') {
+    // Supports "ConditionState = NIGHT" and "Body = ActiveBody ModuleTag_02".
+    return tokens.length >= 3;
   }
-  // Direct block starters without = sign
-  if (SUB_BLOCK_TYPES.has(firstToken) && tokens.length >= 2 && tokens[1] !== '=') {
-    return true;
+  // Direct block starters without = sign (e.g. Behavior Foo ModuleTag_01).
+  return true;
+}
+
+function lineIndentWidth(rawLine: string): number {
+  let width = 0;
+  while (width < rawLine.length) {
+    const char = rawLine[width]!;
+    if (char !== ' ' && char !== '\t') break;
+    width += 1;
+  }
+  return width;
+}
+
+function hasNestedSubBlockBody(lines: TokenizedLine[], startCursor: number): boolean {
+  const startLine = lines[startCursor];
+  if (!startLine) return false;
+  const startIndent = lineIndentWidth(startLine.raw);
+
+  for (let cursor = startCursor + 1; cursor < lines.length; cursor += 1) {
+    const nextLine = lines[cursor];
+    if (!nextLine || nextLine.tokens.length === 0) continue;
+    return lineIndentWidth(nextLine.raw) > startIndent;
   }
   return false;
 }
 
 const TOP_LEVEL_BLOCK_TYPES = new Set([
-  'Object', 'ChildObject', 'Weapon', 'Armor', 'DamageFX', 'Science',
+  'Object', 'ChildObject', 'ObjectReskin', 'Weapon', 'Armor', 'DamageFX', 'Science',
   'Upgrade', 'SpecialPower', 'CommandButton', 'CommandSet',
   'PlayerTemplate', 'Multisound', 'AudioEvent', 'MusicTrack',
   'DialogEvent', 'Video', 'Campaign', 'Mission', 'Locomotor',

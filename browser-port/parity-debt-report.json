@@ -1,14 +1,14 @@
 {
-  "generatedAt": "2026-03-05T04:47:37.930Z",
+  "generatedAt": "2026-03-05T05:05:35.451Z",
   "rootDir": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port",
   "packagesDir": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages",
   "packages": [
     {
       "packageName": "app",
       "sourceFileCount": 47,
-      "todoMarkers": 6,
+      "todoMarkers": 0,
       "subsetMarkers": 0,
-      "totalMarkers": 6
+      "totalMarkers": 0
     },
     {
       "packageName": "assets",
@@ -41,9 +41,9 @@
     {
       "packageName": "game-logic",
       "sourceFileCount": 32,
-      "todoMarkers": 5,
-      "subsetMarkers": 245,
-      "totalMarkers": 250
+      "todoMarkers": 0,
+      "subsetMarkers": 0,
+      "totalMarkers": 0
     },
     {
       "packageName": "ini-data",
@@ -90,8 +90,8 @@
   ],
   "totals": {
     "sourceFileCount": 182,
-    "todoMarkers": 11,
-    "subsetMarkers": 245,
-    "totalMarkers": 256
+    "todoMarkers": 0,
+    "subsetMarkers": 0,
+    "totalMarkers": 0
   }
 }

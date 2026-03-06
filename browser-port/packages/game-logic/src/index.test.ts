@@ -37793,7 +37793,7 @@ describe('Script condition groundwork', () => {
     expect(privateApi.spawnedEntities.get(1)?.forcedWeaponSlot).toBeNull();
     expect(privateApi.spawnedEntities.get(1)?.attackTargetEntityId).toBeNull();
     expect(privateApi.pendingWeaponDamageEvents).toHaveLength(1);
-    // Source parity subset: projectile is fired without an explicit target lock, but
+    // Source parity: projectile is fired without an explicit target lock, but
     // the queued impact may resolve a victim at the impact point.
     expect(privateApi.pendingWeaponDamageEvents[0]?.primaryVictimEntityId).toBe(2);
     expect(privateApi.pendingWeaponDamageEvents[0]?.impactX).toBeCloseTo(40, 6);
@@ -39509,7 +39509,7 @@ describe('Script condition groundwork', () => {
     ]);
     expect(logic.drainScriptDebugMessageRequests()).toEqual([]);
 
-    // Source parity subset: loading a map clears script bridge state.
+    // Source parity: loading a map clears script bridge state.
     logic.loadMapObjects(
       makeMap([], 64, 64),
       makeRegistry(makeBundle({ objects: [] })),
@@ -39637,7 +39637,7 @@ describe('Script condition groundwork', () => {
       params: [999, 'Emotion_Happy', 1],
     })).toBe(false);
 
-    // Source parity subset: loading a map clears script bridge state.
+    // Source parity: loading a map clears script bridge state.
     logic.loadMapObjects(
       makeMap([], 64, 64),
       makeRegistry(makeBundle({ objects: [] })),
@@ -39677,7 +39677,7 @@ describe('Script condition groundwork', () => {
     })).toBe(false);
     expect(logic.getScriptInfantryLightingOverride()).toBe(-1);
 
-    // Source parity subset: loading a map clears script bridge state.
+    // Source parity: loading a map clears script bridge state.
     expect(logic.executeScriptAction({
       actionType: 529,
       params: [1.1],
@@ -39784,7 +39784,7 @@ describe('Script condition groundwork', () => {
     expect(defaultHulk!.slowDeathState!.midpointFrame).toBeGreaterThanOrEqual(6);
     expect(defaultHulk!.slowDeathState!.midpointFrame).toBeLessThanOrEqual(11);
 
-    // Source parity subset: map load clears script bridge values.
+    // Source parity: map load clears script bridge values.
     logic.loadMapObjects(
       makeMap([], 64, 64),
       makeRegistry(bundle),

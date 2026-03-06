@@ -41,6 +41,9 @@ const TOOL_VERSION = '1.0.0';
 const RUNTIME_MANIFEST_FILENAME = RUNTIME_MANIFEST_FILE;
 const VALID_STEPS = new Set(['big', 'texture', 'w3d', 'map', 'ini']);
 const DEFAULT_OUTPUT_DIR = APP_PUBLIC_ASSETS_DIR;
+const MAP_MAGIC = Buffer.from('CkMp', 'ascii');
+const EAR_WRAPPER_MAGIC = Buffer.from('EAR\0', 'ascii');
+const MAP_HEADER_SCAN_BYTES = 1024;
 
 // ---------------------------------------------------------------------------
 // Path/hash helpers
@@ -179,6 +182,17 @@ function assertManifestPathSafety(manifest: ConversionManifest, manifestPath: st
 function isPathInside(parentDir: string, childPath: string): boolean {
   const rel = path.relative(parentDir, childPath);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function removeFilesMatching(dir: string, pattern: RegExp): void {
+  if (!fs.existsSync(dir)) return;
+
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!pattern.test(entry.name)) continue;
+    fs.rmSync(path.join(dir, entry.name), { force: true });
+  }
 }
 
 function fileHashHex(filePath: string): string {
@@ -469,7 +483,23 @@ function hasMapMagic(filePath: string): boolean {
       if (bytesRead < 4) {
         return false;
       }
-      return header.toString('ascii') === 'CkMp';
+
+      if (header.equals(MAP_MAGIC)) {
+        return true;
+      }
+
+      if (!header.equals(EAR_WRAPPER_MAGIC)) {
+        return false;
+      }
+
+      // Retail map archives can contain EAR-wrapped map payloads where CkMp starts
+      // after a short wrapper header.
+      const probe = Buffer.allocUnsafe(MAP_HEADER_SCAN_BYTES);
+      const probeBytesRead = fs.readSync(fd, probe, 0, MAP_HEADER_SCAN_BYTES, 0);
+      if (probeBytesRead < MAP_MAGIC.length) {
+        return false;
+      }
+      return probe.subarray(0, probeBytesRead).indexOf(MAP_MAGIC, EAR_WRAPPER_MAGIC.length) !== -1;
     } finally {
       fs.closeSync(fd);
     }
@@ -505,12 +535,18 @@ function hasSourceTreeMarker(gameDir: string, variantDir: 'Generals' | 'Generals
   return fs.existsSync(path.join(gameDir, variantDir, 'Code', 'GameEngine', 'Source', 'Common', 'GameEngine.cpp'));
 }
 
-function listRuntimeIniRootCandidates(gameDir: string): GameIniParseConfig[] {
+function listRuntimeIniRootCandidates(
+  gameDir: string,
+  options?: {
+    includeLegacyDataRoot?: boolean;
+  },
+): GameIniParseConfig[] {
   const rootDataIni = path.join(gameDir, 'Data', 'INI');
   const runDataIni = path.join(gameDir, 'Run', 'Data', 'INI');
   const zhSourceRunDataIni = path.join(gameDir, 'GeneralsMD', 'Run', 'Data', 'INI');
   const generalsSourceRunDataIni = path.join(gameDir, 'Generals', 'Run', 'Data', 'INI');
   const legacyDataRoot = path.join(gameDir, 'data');
+  const includeLegacyDataRoot = options?.includeLegacyDataRoot ?? true;
 
   // Source-derived precedence from GameEngine.cpp:
   // - Runtime loads are rooted under Data\\INI\\... (Default + override + Object dir).
@@ -541,22 +577,58 @@ function listRuntimeIniRootCandidates(gameDir: string): GameIniParseConfig[] {
     });
   }
 
-  candidates.push({
-    parseDir: legacyDataRoot,
-    baseDir: gameDir,
-  });
+  if (includeLegacyDataRoot) {
+    candidates.push({
+      parseDir: legacyDataRoot,
+      baseDir: gameDir,
+    });
+  }
 
   return candidates;
 }
 
 function resolveGameIniParseConfig(gameDir: string): GameIniParseConfig | null {
-  const runtimeCandidates = listRuntimeIniRootCandidates(gameDir);
+  const runtimeCandidates = listRuntimeIniRootCandidates(gameDir, { includeLegacyDataRoot: true });
   for (const candidate of runtimeCandidates) {
     if (fs.existsSync(candidate.parseDir)) {
       return candidate;
     }
   }
   return null;
+}
+
+function listExtractedIniParseConfigs(extractedDir: string): GameIniParseConfig[] {
+  if (!fs.existsSync(extractedDir)) {
+    return [];
+  }
+
+  const roots = [extractedDir];
+  const extractedEntries = fs.readdirSync(extractedDir, { withFileTypes: true });
+  for (const entry of extractedEntries) {
+    if (entry.isDirectory()) {
+      roots.push(path.join(extractedDir, entry.name));
+    }
+  }
+
+  const configs: GameIniParseConfig[] = [];
+  const seenParseDirs = new Set<string>();
+  for (const root of roots) {
+    const candidates = listRuntimeIniRootCandidates(root, { includeLegacyDataRoot: false });
+    for (const candidate of candidates) {
+      if (!fs.existsSync(candidate.parseDir)) {
+        continue;
+      }
+      const parseDir = path.resolve(candidate.parseDir);
+      if (seenParseDirs.has(parseDir)) {
+        continue;
+      }
+      seenParseDirs.add(parseDir);
+      configs.push(candidate);
+      break;
+    }
+  }
+
+  return configs.sort((left, right) => left.parseDir.localeCompare(right.parseDir));
 }
 
 // ---------------------------------------------------------------------------
@@ -726,15 +798,24 @@ function stepConvertTextures(
 
   const tgaFiles = findFiles(extractedDir, '.tga');
   const ddsFiles = findFiles(extractedDir, '.dds');
+  const textureFiles = [...tgaFiles, ...ddsFiles].sort((left, right) => left.localeCompare(right));
   console.log(`Found ${tgaFiles.length} .tga + ${ddsFiles.length} .dds texture(s)`);
 
+  const batchConverted = runTool('texture-converter', ['--input', extractedDir, '--output', textureDir]);
+
   let failures = 0;
-  for (const file of [...tgaFiles, ...ddsFiles].sort((left, right) => left.localeCompare(right))) {
+  for (const file of textureFiles) {
     const relPath = path.relative(extractedDir, file);
+    const batchOutPath = path.join(textureDir, relPath.replace(/\.(tga|dds)$/i, '.rgba'));
     const normalizedRelPath = stripLeadingSegment(relPath, 'textures');
     const outPath = path.join(textureDir, normalizedRelPath.replace(/\.(tga|dds)$/i, '.rgba'));
-    const converted = runTool('texture-converter', ['--input', file, '--output', path.dirname(outPath)]);
-    if (!converted || !fs.existsSync(outPath)) {
+
+    if (!fs.existsSync(outPath) && fs.existsSync(batchOutPath) && batchOutPath !== outPath) {
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.renameSync(batchOutPath, outPath);
+    }
+
+    if (!fs.existsSync(outPath)) {
       failures += 1;
       continue;
     }
@@ -748,7 +829,11 @@ function stepConvertTextures(
     });
   }
 
-  if (failures > 0) {
+  if (!batchConverted && failures === 0) {
+    failures = 1;
+  }
+
+  if (failures > 0 || !batchConverted) {
     throw new Error(`Texture conversion failed for ${failures} file(s).`);
   }
 }
@@ -766,14 +851,21 @@ function stepConvertW3d(
   const w3dFiles = findFiles(extractedDir, '.w3d');
   console.log(`Found ${w3dFiles.length} .w3d model(s)`);
 
+  const batchConverted = runTool('w3d-converter', ['--input', extractedDir, '--output', modelDir, '--quiet']);
+
   let failures = 0;
   for (const file of w3dFiles) {
     const relPath = path.relative(extractedDir, file);
+    const batchOutPath = path.join(modelDir, relPath.replace(/\.w3d$/i, '.glb'));
     const normalizedRelPath = stripLeadingSegment(relPath, 'models');
     const outPath = path.join(modelDir, normalizedRelPath.replace(/\.w3d$/i, '.glb'));
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    const converted = runTool('w3d-converter', ['--input', file, '--output', outPath]);
-    if (!converted || !fs.existsSync(outPath)) {
+
+    if (!fs.existsSync(outPath) && fs.existsSync(batchOutPath) && batchOutPath !== outPath) {
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.renameSync(batchOutPath, outPath);
+    }
+
+    if (!fs.existsSync(outPath)) {
       failures += 1;
       continue;
     }
@@ -787,7 +879,11 @@ function stepConvertW3d(
     });
   }
 
-  if (failures > 0) {
+  if (!batchConverted && failures === 0) {
+    failures = 1;
+  }
+
+  if (failures > 0 || !batchConverted) {
     throw new Error(`W3D conversion failed for ${failures} file(s).`);
   }
 }
@@ -871,34 +967,41 @@ function stepParseIni(
   const manifestDir = path.join(outputDir, 'manifests');
   const iniManifestPath = path.join(manifestDir, 'ini.json');
   const gameManifestPath = path.join(manifestDir, 'ini-game.json');
-  const extractedManifestPath = path.join(manifestDir, 'ini-extracted.json');
   const gameBundlePath = path.join(iniDir, 'bundle-game.json');
-  const extractedBundlePath = path.join(iniDir, '_extracted', 'bundle.json');
   const mergedBundlePath = path.join(iniDir, 'ini-bundle.json');
+  const extractedBundleDir = path.join(iniDir, '_extracted');
   fs.mkdirSync(manifestDir, { recursive: true });
+  fs.mkdirSync(extractedBundleDir, { recursive: true });
   const iniOnlyManifest = createManifest();
-  const staleIniArtifacts = [
-    iniManifestPath,
-    gameManifestPath,
-    extractedManifestPath,
-    gameBundlePath,
-    extractedBundlePath,
-    mergedBundlePath,
-  ];
+  const staleIniArtifacts = [iniManifestPath, gameManifestPath, gameBundlePath, mergedBundlePath];
   for (const artifactPath of staleIniArtifacts) {
     fs.rmSync(artifactPath, { force: true });
   }
+  removeFilesMatching(manifestDir, /^ini-extracted.*\.json$/i);
+  removeFilesMatching(extractedBundleDir, /^bundle(?:-.+)?\.json$/i);
 
   // INI files from game dir and extracted .big
   const gameIniParseConfig = resolveGameIniParseConfig(gameDir);
+  const extractedIniParseConfigs = listExtractedIniParseConfigs(extractedDir);
   if (!gameIniParseConfig) {
     console.log('No runtime INI roots detected (Data/INI, Run/Data/INI, GeneralsMD/Run/Data/INI, Generals/Run/Data/INI, data); skipping game-dir INI parse.');
   } else if (gameIniParseConfig.parseDir !== gameDir) {
     console.log(`Using runtime INI root: ${path.relative(gameDir, gameIniParseConfig.parseDir)}`);
   }
+  if (extractedIniParseConfigs.length > 0) {
+    console.log(
+      `Using ${extractedIniParseConfigs.length} extracted runtime INI root(s): ${extractedIniParseConfigs
+        .map((config) => path.relative(extractedDir, config.parseDir))
+        .join(', ')}`,
+    );
+  }
 
   const gameInis = gameIniParseConfig ? findFiles(gameIniParseConfig.parseDir, '.ini') : [];
-  const extractedInis = findFiles(extractedDir, '.ini');
+  const extractedInis = [
+    ...new Set(
+      extractedIniParseConfigs.flatMap((config) => findFiles(config.parseDir, '.ini')),
+    ),
+  ];
   const allInis = [...new Set([...gameInis, ...extractedInis])];
   console.log(`Found ${allInis.length} .ini file(s)`);
 
@@ -910,6 +1013,7 @@ function stepParseIni(
       iniDir,
       '--base-dir',
       gameIniParseConfig.baseDir,
+      '--allow-parse-errors',
       '--manifest',
       gameManifestPath,
       '--bundle',
@@ -920,40 +1024,56 @@ function stepParseIni(
     }
   }
 
+  const extractedManifestPaths: string[] = [];
+  const extractedBundlePaths: string[] = [];
   if (extractedInis.length > 0) {
-    const extractedIniDir = path.join(iniDir, '_extracted');
-    const converted = runTool('ini-parser', [
-      '--dir',
-      extractedDir,
-      '--output',
-      extractedIniDir,
-      '--base-dir',
-      extractedDir,
-      '--manifest',
-      extractedManifestPath,
-      '--bundle',
-      extractedBundlePath,
-    ]);
-    if (!converted) {
-      throw new Error('INI parser failed for extracted asset input.');
+    for (const extractedConfig of extractedIniParseConfigs) {
+      const relativeParseDir = normalizeManifestPath(path.relative(extractedDir, extractedConfig.parseDir));
+      const parseSuffix = relativeParseDir.length > 0 ? relativeParseDir : 'root';
+      const parseSlug = parseSuffix.replace(/[^A-Za-z0-9/_-]/g, '_').replace(/[\\/]/g, '-');
+      const extractedManifestPath = path.join(manifestDir, `ini-extracted-${parseSlug}.json`);
+      const extractedBundlePath = path.join(extractedBundleDir, `bundle-${parseSlug}.json`);
+      const extractedOutputDir = path.join(iniDir, '_extracted', parseSuffix);
+      const converted = runTool('ini-parser', [
+        '--dir',
+        extractedConfig.parseDir,
+        '--output',
+        extractedOutputDir,
+        '--base-dir',
+        extractedConfig.baseDir,
+        '--allow-parse-errors',
+        '--manifest',
+        extractedManifestPath,
+        '--bundle',
+        extractedBundlePath,
+      ]);
+      if (!converted) {
+        throw new Error(`INI parser failed for extracted asset input: ${relativeParseDir}`);
+      }
+      extractedManifestPaths.push(extractedManifestPath);
+      extractedBundlePaths.push(extractedBundlePath);
     }
   }
 
   mergeIniManifest(runtimeManifest, gameManifestPath, gameDir, outputDir);
-  mergeIniManifest(runtimeManifest, extractedManifestPath, gameDir, outputDir);
   mergeIniManifest(iniOnlyManifest, gameManifestPath, gameDir, outputDir);
-  mergeIniManifest(iniOnlyManifest, extractedManifestPath, gameDir, outputDir);
+  for (const extractedManifestPath of extractedManifestPaths) {
+    mergeIniManifest(runtimeManifest, extractedManifestPath, gameDir, outputDir);
+    mergeIniManifest(iniOnlyManifest, extractedManifestPath, gameDir, outputDir);
+  }
 
   if (allInis.length > 0) {
     const gameBundle = gameInis.length > 0 ? readBundle(gameBundlePath) : null;
-    const extractedBundle = extractedInis.length > 0 ? readBundle(extractedBundlePath) : null;
+    const extractedBundles = extractedBundlePaths
+      .map((bundlePath) => readBundle(bundlePath))
+      .filter((bundle): bundle is IniDataBundle => bundle !== null);
     let mergedBundle: IniDataBundle | null = null;
 
     if (gameBundle) {
       mergedBundle = gameBundle;
     }
 
-    if (extractedBundle) {
+    for (const extractedBundle of extractedBundles) {
       if (mergedBundle) {
         mergedBundle = mergeBundles(mergedBundle, extractedBundle);
       } else {

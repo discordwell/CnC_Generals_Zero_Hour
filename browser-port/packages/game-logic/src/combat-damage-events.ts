@@ -145,7 +145,7 @@ function tryContinueAttackOnVictimDeath<
     return;
   }
 
-  // Source parity subset: AIAttackState::notifyNewVictimChosen() does not update
+  // Source parity: AIAttackState::notifyNewVictimChosen() does not update
   // m_originalVictimPos. Keep the initial victim position for chained reacquire.
   attacker.attackTargetEntityId = replacementVictim.id;
 }

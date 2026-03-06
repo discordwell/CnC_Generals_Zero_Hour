@@ -53,13 +53,22 @@ export function parseHierarchyChunk(
         // char Name[32]   (32)  offset +4
         // uint32 NumPivots(4)   offset +36
         // float32 Center[3](12) offset +40 (unused)
-        name = reader.readString(sub.dataOffset + 4, 32);
-        numPivots = reader.readUint32(sub.dataOffset + 36);
+        const availableNameBytes = Math.max(0, Math.min(32, sub.size - 4));
+        if (availableNameBytes > 0) {
+          name = reader.readString(sub.dataOffset + 4, availableNameBytes);
+        }
+        if (sub.size >= 40) {
+          numPivots = reader.readUint32(sub.dataOffset + 36);
+        }
         break;
       }
 
       case W3dChunkType.PIVOTS: {
-        for (let i = 0; i < numPivots; i++) {
+        const availablePivots = Math.floor(sub.size / PIVOT_RECORD_SIZE);
+        const expectedPivots = numPivots > 0 ? numPivots : availablePivots;
+        const pivotsToRead = Math.min(expectedPivots, availablePivots);
+
+        for (let i = 0; i < pivotsToRead; i++) {
           const base = sub.dataOffset + i * PIVOT_RECORD_SIZE;
           const pivotName = reader.readString(base, 32);
           const rawParent = reader.readUint32(base + 32);
