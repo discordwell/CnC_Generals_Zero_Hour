@@ -90,6 +90,8 @@ import {
 } from './options-screen.js';
 import { DiplomacyScreen, type DiplomacyPlayerInfo } from './diplomacy-screen.js';
 import { PostgameStatsScreen, type SideScoreDisplay } from './postgame-stats-screen.js';
+import { createAudioBufferLoader } from './audio-buffer-loader.js';
+import { CursorManager, resolveGameCursor, detectEdgeScrollDir } from './cursor-manager.js';
 
 // ============================================================================
 // Loading screen
@@ -348,6 +350,7 @@ interface PreInitContext {
   terrainVisual: TerrainVisual;
   waterVisual: WaterVisual;
   audioManager: AudioManager;
+  cursorManager: CursorManager;
   networkManager: ReturnType<typeof initializeNetworkClient>;
   uiRuntime: UiRuntime;
   iniDataRegistry: IniDataRegistry;
@@ -460,6 +463,17 @@ async function preInit(): Promise<PreInitContext> {
   // AssetManager has the manifest and cache ready.
   await subsystems.initAll();
   assertRequiredManifestEntries(assets.getManifest(), ['data/ini-bundle.json']);
+
+  // Wire audio buffer loader and cursor manager from manifest
+  const manifest = assets.getManifest();
+  if (manifest) {
+    audioManager.setAudioBufferLoader(createAudioBufferLoader(manifest));
+  }
+
+  const cursorManager = new CursorManager();
+  if (manifest) {
+    cursorManager.buildCursorIndex(manifest);
+  }
 
   // ========================================================================
   // Game data (INI bundle)
@@ -587,6 +601,7 @@ async function preInit(): Promise<PreInitContext> {
     terrainVisual,
     waterVisual,
     audioManager,
+    cursorManager,
     networkManager,
     uiRuntime,
     iniDataRegistry,
@@ -611,10 +626,29 @@ async function startGame(
 ): Promise<void> {
   const {
     renderer, scene, camera, sunLight, subsystems, assets, inputManager, rtsCamera,
-    terrainVisual, waterVisual, audioManager, networkManager, uiRuntime,
+    terrainVisual, waterVisual, audioManager, cursorManager, networkManager, uiRuntime,
     iniDataRegistry, iniDataInfo,
   } = ctx;
   const canvas = renderer.domElement as HTMLCanvasElement;
+
+  // Attach cursor overlay and preload essential cursors
+  cursorManager.attach(canvas);
+  void Promise.all([
+    cursorManager.preload('SCCPointer'),
+    cursorManager.preload('SCCSelect'),
+    cursorManager.preload('SCCMove'),
+    cursorManager.preload('SCCAttack'),
+    cursorManager.preload('SCCTarget'),
+    cursorManager.preload('SCCScroll0'),
+    cursorManager.preload('SCCScroll1'),
+    cursorManager.preload('SCCScroll2'),
+    cursorManager.preload('SCCScroll3'),
+    cursorManager.preload('SCCScroll4'),
+    cursorManager.preload('SCCScroll5'),
+    cursorManager.preload('SCCScroll6'),
+    cursorManager.preload('SCCScroll7'),
+  ]);
+  cursorManager.setCursor('SCCPointer');
 
   showLoadingScreen();
   setLoadingProgress(50, 'Loading terrain...');
@@ -2441,6 +2475,38 @@ async function startGame(
         fogUpdateCounter = 0;
         updateFogOverlay();
       }
+
+      // Update cursor state
+      if (cursorManager.isReady) {
+        const selIds = gameLogic.getLocalPlayerSelectionIds();
+        const hasSelection = selIds.length > 0;
+        const edgeScrollDir = inputState.pointerInCanvas
+          ? detectEdgeScrollDir(
+              inputState.mouseX, inputState.mouseY,
+              inputState.viewportWidth, inputState.viewportHeight,
+              20,
+            )
+          : null;
+        let hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' = 'none';
+        if (inputState.pointerInCanvas) {
+          const hoverObjectId = gameLogic.resolveObjectTargetFromInput(inputState, camera);
+          if (hoverObjectId !== null) {
+            const firstSelectedId = selIds[0] ?? null;
+            if (firstSelectedId !== null) {
+              const rel = gameLogic.getEntityRelationship(firstSelectedId, hoverObjectId);
+              hoverTarget = rel === 'enemies' ? 'enemy' : 'own-unit';
+            } else {
+              hoverTarget = 'own-unit';
+            }
+          } else {
+            hoverTarget = 'ground';
+          }
+        }
+        const pendingAbility = uiRuntime.getPendingControlBarCommand() !== null;
+        const cursorName = resolveGameCursor({ hasSelection, hoverTarget, edgeScrollDir, pendingAbility });
+        cursorManager.setCursor(cursorName);
+        cursorManager.update(dt);
+      }
     },
 
     onRender(_alpha: number) {
@@ -2756,6 +2822,12 @@ async function startGame(
         }
       }
 
+      // Draw cursor overlay
+      if (cursorManager.isReady) {
+        const cursorInputState = inputManager.getState();
+        cursorManager.draw(cursorInputState.mouseX, cursorInputState.mouseY);
+      }
+
       const unresolvedVisualIds = objectVisualManager.getUnresolvedEntityIds();
       const unresolvedVisualStatus = unresolvedVisualIds.length > 0
         ? ` | Unresolved visuals: ${unresolvedVisualIds.length} (${unresolvedVisualIds.join(', ')})`
@@ -2783,6 +2855,7 @@ async function startGame(
     gameLoop.stop();
     subsystems.disposeAll();
     objectVisualManager.dispose();
+    cursorManager.dispose();
     delete (globalThis as Record<string, unknown>)['__GENERALS_E2E__'];
   };
 

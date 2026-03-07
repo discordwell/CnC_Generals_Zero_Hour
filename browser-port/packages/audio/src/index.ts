@@ -1120,6 +1120,10 @@ export class AudioManager implements Subsystem {
     this.playerPositionResolver = resolver;
   }
 
+  setAudioBufferLoader(loader: AudioBufferLoader | null): void {
+    this.audioBufferLoader = loader;
+  }
+
   setSampleCounts(sampleCount2D: number, sampleCount3D: number): void {
     this.max2DSamples = normalizeNonNegativeInteger(
       sampleCount2D,

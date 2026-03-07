@@ -1,5 +1,25 @@
 # Session Summaries
 
+## 2026-03-08T02:20Z — Audio & Cursor Integration
+- **Audio buffer loader** (`audio-buffer-loader.ts`): Maps bare INI filenames (e.g., "vgenlo2a") to converted asset URLs via manifest index
+  - `buildAudioIndex()`: O(1) Map<lowercaseBasename, outputPath> from audio-converter manifest entries
+  - `createAudioBufferLoader()`: Returns `AudioBufferLoader` callback that fetches from `RUNTIME_ASSET_BASE_URL/outputPath`
+  - Added `setAudioBufferLoader()` setter to `AudioManager` (packages/audio/src/index.ts) for post-construction wiring
+- **Cursor manager** (`cursor-manager.ts`): Loads converted ANI cursor data, renders animated cursors on overlay canvas
+  - `CursorManager`: Preloads cursors by name, manages animation timing (jiffy-based rates), renders via putImageData on overlay `<canvas>`
+  - `parseSpriteSheet()`: Parses u32 LE width/height header + RGBA pixels into ImageData frames, with bounds validation
+  - `resolveGameCursor()`: State machine mapping selection/hover/edge-scroll to cursor names (SCCPointer/Select/Move/Attack/Scroll0-7/Target)
+  - `detectEdgeScrollDir()`: Returns 0-7 compass direction from mouse position relative to viewport edges
+  - Disposed flag prevents in-flight preloads from repopulating cache; double-attach guard removes old overlay
+- **main.ts integration**:
+  - PreInit: Creates audio loader and cursor manager from manifest after `subsystems.initAll()`
+  - startGame: Attaches cursor overlay to game canvas, preloads 13 essential cursors
+  - Game loop onSimulationStep: Resolves hover target (enemy/own-unit/ground) via `resolveObjectTargetFromInput` + `getEntityRelationship`, updates cursor state and animation
+  - Game loop onRender: Draws cursor at mouse position via overlay canvas
+  - disposeGame: Calls `cursorManager.dispose()` to clean up overlay DOM + cache
+- **Code review fixes**: Added dispose call in disposeGame, double-attach guard, disposed flag for in-flight preloads, bounds checking in parseSpriteSheet
+- **Tests**: 27 new tests (5 audio-buffer-loader, 22 cursor-manager), all 2347 tests pass
+
 ## 2026-03-08T01:15Z — Campaign Mode Code Review Fixes
 - **Bug 6 (High)**: Fixed keydown listener leak in `video-player.ts` — stored `activeKeyHandler` ref, removed in `cleanup()`
 - **Bugs 15/16 (High)**: Fixed event listener accumulation in `main.ts` — added `AbortController` (`gameAbort`) so `disposeGame()` removes all resize/pagehide/beforeunload listeners on mission transitions
