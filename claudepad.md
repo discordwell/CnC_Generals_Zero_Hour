@@ -13,7 +13,12 @@
   - Gravity applied to `accelY` not `accelZ` (Y is vertical in THREE.js)
   - `gameRandom.next()` → `gameRandom.nextRange()` (correct API)
   - `markEntityDestroyed(entity, null, null, 'NORMAL')` → `markEntityDestroyed(entity.id, -1)` (correct signature)
-- **Results**: 2,083 tests pass (11 new), 0 failures. Code review agent launched.
+- **Results**: 2,083 tests pass (11 new), 0 failures.
+- **Code review findings** (14 HIGH, 16 MEDIUM, 4 LOW): Fixed 6 issues:
+  - Gravity -0.4 → -1.0 (HIGH-1), bounce force via velocity not zeroed accel (HIGH-2)
+  - allowCollideForce default true (HIGH-4), CLOSING→CLOSED door chain (HIGH-7)
+  - structuralIntegrity default 0.1 (MEDIUM-9), ZFriction applied (MEDIUM-1)
+  - Noted for future: friction decomposition (HIGH-3), visual rotation (HIGH-5), swath path (HIGH-10), turn rate limiting (HIGH-11)
 
 ## 2026-03-06T20:10Z — INI Parser Hybrid End Matching (4 Missing Objects Recovered)
 - **Hybrid End matching**: Object/ChildObject/ObjectReskin use C++ nesting-based End (pure depth counting); all other block types retain indent-based matching
