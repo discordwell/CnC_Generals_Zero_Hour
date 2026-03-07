@@ -79,7 +79,9 @@ import { createScriptObjectAmbientAudioRuntimeBridge } from './script-object-amb
 import { createScriptUiEffectsRuntimeBridge } from './script-ui-effects-runtime.js';
 import { syncScriptViewRuntimeBridge } from './script-view-runtime.js';
 import { assertIniBundleConsistency, assertRequiredManifestEntries } from './runtime-guardrails.js';
-import { GameShell, type SkirmishSettings } from './game-shell.js';
+import { GameShell, type SkirmishSettings, type CampaignStartSettings } from './game-shell.js';
+import { CampaignManager } from '@generals/game-logic';
+import { VideoPlayer } from './video-player.js';
 import {
   OptionsScreen,
   saveOptionsToStorage,
@@ -600,6 +602,12 @@ async function startGame(
   ctx: PreInitContext,
   mapPath: string | null,
   skirmishSettings: SkirmishSettings | null,
+  campaignContext?: {
+    campaignManager: CampaignManager;
+    videoPlayer: VideoPlayer | null;
+    settings: CampaignStartSettings;
+    onReturnToShell: () => void;
+  },
 ): Promise<void> {
   const {
     renderer, scene, camera, sunLight, subsystems, assets, inputManager, rtsCamera,
@@ -1244,8 +1252,22 @@ async function startGame(
 
   // Post-game stats screen (replaces simple endgame overlay)
   const postgameScreen = new PostgameStatsScreen(gameContainer, {
-    onReturnToMenu: () => window.location.reload(),
-    onPlayAgain: () => window.location.reload(),
+    onReturnToMenu: () => {
+      if (campaignContext) {
+        campaignContext.onReturnToShell();
+      } else {
+        window.location.reload();
+      }
+    },
+    onPlayAgain: () => {
+      if (campaignContext) {
+        // Retry same mission — restart with the same campaign context
+        disposeGame();
+        void startGame(ctx, mapPath, null, campaignContext);
+      } else {
+        window.location.reload();
+      }
+    },
   });
 
   // Diplomacy screen (in-game overlay)
@@ -2090,6 +2112,10 @@ async function startGame(
   const scriptUiEffectsRuntimeBridge = createScriptUiEffectsRuntimeBridge({
     gameLogic,
     uiRuntime,
+    videoPlayer: campaignContext?.videoPlayer ?? null,
+    onScriptVideoCompleted: (movieName) => {
+      gameLogic.notifyScriptVideoCompleted(movieName);
+    },
   });
   const scriptEmoticonRuntimeBridge = createScriptEmoticonRuntimeBridge({
     gameLogic,
@@ -2665,6 +2691,51 @@ async function startGame(
         const endState = gameLogic.getGameEndState();
         if (endState) {
           gameEnded = true;
+
+          // Campaign mode: handle mission transitions
+          if (campaignContext && endState.status === 'VICTORY') {
+            const cm = campaignContext.campaignManager;
+            const vp = campaignContext.videoPlayer;
+            cm.victorious = true;
+
+            // Advance to next mission
+            const nextMission = cm.gotoNextMission();
+            if (nextMission) {
+              // Play transition movie if available, then load next mission
+              const movieName = nextMission.movieLabel;
+              const playMovie = movieName && vp
+                ? vp.playFullscreen(movieName)
+                : Promise.resolve();
+              playMovie.then(() => {
+                const nextMapPath = cm.resolveMapAssetPath(nextMission);
+                if (nextMapPath) {
+                  // Reload with the next mission map
+                  disposeGame();
+                  void startGame(ctx, nextMapPath, null, {
+                    ...campaignContext,
+                    settings: {
+                      ...campaignContext.settings,
+                      mapPath: nextMapPath,
+                      mission: nextMission,
+                    },
+                  });
+                } else {
+                  campaignContext.onReturnToShell();
+                }
+              });
+              return; // Skip postgame screen for mid-campaign victory
+            } else {
+              // Campaign complete — play final movie then show postgame
+              const finalMovie = cm.getCurrentCampaign()?.finalMovieName;
+              if (finalMovie && vp) {
+                vp.playFullscreen(finalMovie).then(() => {
+                  campaignContext.onReturnToShell();
+                });
+                return;
+              }
+            }
+          }
+
           const localSide = gameLogic.getPlayerSide(0);
           const allSides = gameLogic.getActiveSideNames();
           const sideScores: SideScoreDisplay[] = allSides.map(side => {
@@ -2696,23 +2767,27 @@ async function startGame(
     },
   });
 
+  // AbortController so all window listeners are cleaned up on dispose
+  const gameAbort = new AbortController();
+
   // Handle resize
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     uiRuntime.resize(window.innerWidth, window.innerHeight);
-  });
+  }, { signal: gameAbort.signal });
 
   const disposeGame = (): void => {
+    gameAbort.abort();
     gameLoop.stop();
     subsystems.disposeAll();
     objectVisualManager.dispose();
     delete (globalThis as Record<string, unknown>)['__GENERALS_E2E__'];
   };
 
-  window.addEventListener('pagehide', disposeGame);
-  window.addEventListener('beforeunload', disposeGame);
+  window.addEventListener('pagehide', disposeGame, { signal: gameAbort.signal });
+  window.addEventListener('beforeunload', disposeGame, { signal: gameAbort.signal });
 
   // Browser e2e hook: exposed for Playwright gameplay scenario tests.
   (globalThis as Record<string, unknown>)['__GENERALS_E2E__'] = {
@@ -2834,21 +2909,70 @@ async function init(): Promise<void> {
     onClose: () => { /* no-op, screen hides itself */ },
   }, optionsState);
 
+  // ── Campaign system initialization ──
+  const campaignManager = new CampaignManager();
+  let videoPlayer: VideoPlayer | null = null;
+
+  // Load Campaign.ini
+  try {
+    const campaignIniHandle = await ctx.assets.loadRaw(
+      '_extracted/INIZH/Data/INI/Campaign.ini',
+    );
+    const campaignIniText = new TextDecoder().decode(campaignIniHandle.data);
+    campaignManager.init(campaignIniText);
+    console.log(`Campaign data loaded: ${campaignManager.getCampaigns().length} campaigns`);
+  } catch (err) {
+    console.warn('Campaign.ini not available, campaign mode disabled:', err);
+  }
+
+  // Load Video.ini and create VideoPlayer
+  try {
+    const videoIniHandle = await ctx.assets.loadRaw(
+      '_extracted/INIZH/Data/INI/Video.ini',
+    );
+    const videoIniText = new TextDecoder().decode(videoIniHandle.data);
+    videoPlayer = new VideoPlayer({
+      root: gameContainer,
+      videoBaseUrl: 'assets/_extracted/video',
+      onVideoCompleted: (_movieName) => {
+        // Script video completion is handled in the bridge
+      },
+    });
+    videoPlayer.init(videoIniText);
+    console.log('Video.ini loaded for movie playback');
+  } catch (err) {
+    console.warn('Video.ini not available, movie playback disabled:', err);
+  }
+
   const shell = new GameShell(gameContainer, {
     onStartGame: async (settings: SkirmishSettings) => {
       shell.hide();
       await startGame(ctx, settings.mapPath, settings);
+    },
+    onStartCampaign: async (settings: CampaignStartSettings) => {
+      shell.hide();
+      campaignManager.setCampaign(settings.campaignName);
+      campaignManager.difficulty = settings.difficulty;
+      await startGame(ctx, settings.mapPath, null, {
+        campaignManager,
+        videoPlayer,
+        settings,
+        onReturnToShell: () => {
+          window.location.reload();
+        },
+      });
     },
     onOpenOptions: () => {
       optionsScreen.show();
     },
   });
 
-  // Populate available maps from manifest
+  // Populate available maps and campaigns
   const manifest = ctx.assets.getManifest();
   if (manifest) {
     shell.setAvailableMaps(manifest.getOutputPaths());
   }
+  shell.setCampaigns(campaignManager.getCampaigns());
 
   shell.show();
 }

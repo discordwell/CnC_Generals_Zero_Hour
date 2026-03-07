@@ -140,9 +140,11 @@ export function parseCampaignIni(text: string): Campaign[] {
       case 'ObjectiveLine1':
       case 'ObjectiveLine2':
       case 'ObjectiveLine3':
-      case 'ObjectiveLine4':
-        currentMission.objectiveLines.push(rest);
+      case 'ObjectiveLine4': {
+        const objIdx = parseInt(keyword.charAt(keyword.length - 1), 10);
+        currentMission.objectiveLines[objIdx] = rest;
         break;
+      }
       case 'BriefingVoice':
         currentMission.briefingVoice = rest;
         break;
@@ -151,9 +153,11 @@ export function parseCampaignIni(text: string): Campaign[] {
         break;
       case 'UnitNames0':
       case 'UnitNames1':
-      case 'UnitNames2':
-        currentMission.unitNames.push(rest);
+      case 'UnitNames2': {
+        const unitIdx = parseInt(keyword.charAt(keyword.length - 1), 10);
+        currentMission.unitNames[unitIdx] = rest;
         break;
+      }
       case 'VoiceLength':
         currentMission.voiceLength = parseInt(rest.replace('=', '').trim(), 10) || 0;
         break;

@@ -86,6 +86,7 @@ export class VideoPlayer {
   private currentMovieName: string | null = null;
   private _isPlaying = false;
   private resolvePlayback: (() => void) | null = null;
+  private activeKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(options: VideoPlayerOptions) {
     this.root = options.root;
@@ -198,10 +199,10 @@ export class VideoPlayer {
       const onKey = (e: KeyboardEvent) => {
         if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
           e.preventDefault();
-          document.removeEventListener('keydown', onKey);
           finish();
         }
       };
+      this.activeKeyHandler = onKey;
       document.addEventListener('keydown', onKey);
 
       video.src = url;
@@ -216,6 +217,10 @@ export class VideoPlayer {
   private cleanup(): void {
     const movieName = this.currentMovieName;
 
+    if (this.activeKeyHandler) {
+      document.removeEventListener('keydown', this.activeKeyHandler);
+      this.activeKeyHandler = null;
+    }
     if (this.videoEl) {
       this.videoEl.pause();
       this.videoEl.removeAttribute('src');

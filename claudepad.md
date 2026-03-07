@@ -1,5 +1,45 @@
 # Session Summaries
 
+## 2026-03-08T01:15Z — Campaign Mode Code Review Fixes
+- **Bug 6 (High)**: Fixed keydown listener leak in `video-player.ts` — stored `activeKeyHandler` ref, removed in `cleanup()`
+- **Bugs 15/16 (High)**: Fixed event listener accumulation in `main.ts` — added `AbortController` (`gameAbort`) so `disposeGame()` removes all resize/pagehide/beforeunload listeners on mission transitions
+- **Bug 11 (High)**: Fixed XSS in `game-shell.ts` — added `esc()` HTML escape helper, applied to all INI-sourced data in briefing screen (mission name, location, objectives, unit names)
+- **Bug 2 (Medium)**: Fixed ObjectiveLine/UnitNames parsing in `campaign-manager.ts` — changed from `.push(rest)` to index-based assignment (`[objIdx] = rest`) matching C++ fixed-slot parity
+- **Bug 14 (Medium)**: Added empty `mapDir` guard in `game-shell.ts` `handleStartCampaign()`
+- **Bug 17 (Medium)**: Campaign DEFEAT retry now calls `disposeGame()` + recursive `startGame()` instead of `window.location.reload()`
+- All 2320 tests pass
+
+## 2026-03-08T00:40Z — Campaign Mode Implementation (7-Phase)
+- **Phase 1 — Script Coverage Audit**: All 115 action types used by campaign maps already handled. 0 gaps.
+- **Phase 2 — CampaignManager** (`game-logic/src/campaign-manager.ts`):
+  - Parses Campaign.ini (17 campaigns: 3 story, 9 challenge, 1 training, 4 demo)
+  - Mission chaining: setCampaign → gotoNextMission, resolveMapAssetPath
+  - Difficulty tracking (EASY/NORMAL/HARD), getRankPoints() always 0 per source parity
+  - 28 tests covering parsing, mission chaining, map resolution
+- **Phase 3 — Video Playback** (`app/src/video-player.ts`):
+  - Parses Video.ini for name→filename mapping (e.g., "MD_USA01" → "MD_USA01_0.mp4")
+  - HTML5 `<video>` fullscreen overlay with click/keyboard skip
+  - Wired into script-ui-effects-runtime bridge → calls notifyScriptVideoCompleted()
+  - 4 tests for Video.ini parsing
+- **Phase 4 — Campaign UI** (`app/src/game-shell.ts` rewritten):
+  - New screens: Single Player menu, Campaign Faction Select, Difficulty Select, Briefing, Challenge Select
+  - ShellScreen expanded with 8 screen types, screen management via Map<ShellScreen, HTMLElement>
+  - CampaignStartSettings type with gameMode, campaignName, difficulty, mission data
+  - 3x3 Generals Challenge grid with difficulty selection
+- **Phase 5 — Mission Lifecycle** (`app/src/main.ts` modified):
+  - Campaign.ini + Video.ini loaded during init(), passed to GameShell
+  - startGame() accepts optional campaignContext (CampaignManager + VideoPlayer)
+  - Victory → gotoNextMission() → play transition movie → load next map (recursive startGame)
+  - Campaign complete → play final movie → return to shell
+  - Defeat → postgame screen with retry/menu options
+- **Phase 6 — Challenge Generals** (`app/src/challenge-generals.ts`):
+  - 9 general personas with campaign/template mappings
+  - Progress persistence via localStorage (defeated indices)
+  - 11 tests including storage persistence and corrupt data handling
+- **Phase 7 — Verification**: 2309 tests pass (43 new), real Campaign.ini parses all 17 campaigns correctly
+- **New files**: 6 source + 3 test files
+- **Modified files**: game-shell.ts (rewritten), main.ts (campaign lifecycle), script-ui-effects-runtime.ts (video bridge), game-logic/index.ts (export)
+
 ## 2026-03-07T22:00Z — Advanced Rendering: Particles, LOD, Shadows, Decals (Full 6-Phase)
 - **Phase 1 — INI Data Pipeline** (`ini-data/src/registry.ts` modified):
   - Added `RawBlockDef` interface, 4 new Map collections (particleSystems, fxLists, staticGameLODs, dynamicGameLODs)

@@ -107,6 +107,11 @@ const DIFFICULTIES: { value: GameDifficulty; label: string; description: string 
   { value: 'HARD', label: 'Hard', description: 'For veterans' },
 ];
 
+/** Escape HTML to prevent XSS from INI-sourced data. */
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 const STARTING_CREDITS_OPTIONS = [
   { value: 5000, label: '$5,000' },
   { value: 10000, label: '$10,000 (Default)' },
@@ -788,11 +793,11 @@ export class GameShell {
 
     let html = `
       <div class="briefing-info">
-        <strong>Campaign:</strong> ${factionLabel}<br>
-        <strong>Mission:</strong> ${mission.name}
+        <strong>Campaign:</strong> ${esc(factionLabel)}<br>
+        <strong>Mission:</strong> ${esc(mission.name)}
     `;
     if (mission.locationNameLabel) {
-      html += `<br><strong>Location:</strong> ${mission.locationNameLabel}`;
+      html += `<br><strong>Location:</strong> ${esc(mission.locationNameLabel)}`;
     }
     html += '</div>';
 
@@ -800,13 +805,13 @@ export class GameShell {
       html += '<div class="briefing-info"><strong>Objectives:</strong></div>';
       html += '<ul class="briefing-objectives">';
       for (const obj of mission.objectiveLines) {
-        html += `<li>${obj}</li>`;
+        html += `<li>${esc(obj)}</li>`;
       }
       html += '</ul>';
     }
 
     if (mission.unitNames.length > 0) {
-      html += `<div class="briefing-info"><strong>Key Units:</strong> ${mission.unitNames.join(', ')}</div>`;
+      html += `<div class="briefing-info"><strong>Key Units:</strong> ${mission.unitNames.map(esc).join(', ')}</div>`;
     }
 
     contentEl.innerHTML = html;
@@ -1076,11 +1081,15 @@ export class GameShell {
     }
 
     const firstMissionName = campaign.firstMission;
-    const mission = campaign.missions.find(m => m.name === firstMissionName) ?? campaign.missions[0]!;
+    const mission = campaign.missions.find((m: ShellMission) => m.name === firstMissionName) ?? campaign.missions[0]!;
 
     // Resolve map path
     const mapParts = mission.mapName.replace(/\\/g, '/').split('/');
     const mapDir = mapParts.length >= 2 ? mapParts[mapParts.length - 2] : mapParts[0];
+    if (!mapDir) {
+      console.warn(`[GameShell] Mission "${mission.name}" has no valid map path`);
+      return;
+    }
     const mapPath = `maps/_extracted/MapsZH/Maps/${mapDir}/${mapDir}.json`;
 
     const settings: CampaignStartSettings = {
