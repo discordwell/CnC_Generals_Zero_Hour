@@ -181,6 +181,28 @@ export abstract class Xfer {
     return new Set(arr);
   }
 
+  /**
+   * Serialize a long string (no 255-char limit).
+   * Uses u32 length prefix. NOT part of C++ Xfer — used for JSON blobs
+   * where the browser port serializes pre-parsed profile data.
+   */
+  xferLongString(value: string): string {
+    if (this.mode === XferMode.XFER_SAVE || this.mode === XferMode.XFER_CRC) {
+      const encoded = new TextEncoder().encode(value);
+      this.xferUnsignedInt(encoded.byteLength);
+      if (encoded.byteLength > 0) {
+        this.xferImplementation(encoded);
+      }
+      return value;
+    }
+    // XFER_LOAD
+    const byteLength = this.xferUnsignedInt(0);
+    if (byteLength === 0) return '';
+    const bytes = new Uint8Array(byteLength);
+    const read = this.xferImplementation(bytes);
+    return new TextDecoder().decode(read);
+  }
+
   abstract xferSnapshot(snapshot: Snapshot): void;
 
   abstract xferImplementation(data: Uint8Array): Uint8Array;

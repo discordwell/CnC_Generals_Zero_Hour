@@ -509,6 +509,144 @@ describe('Xfer framework', () => {
     });
   });
 
+  describe('xferAsciiString u8 length limit', () => {
+    it('truncates strings longer than 255 chars', () => {
+      const longString = 'A'.repeat(300);
+      const result = roundTrip(
+        (x) => x.xferAsciiString(longString),
+        (x) => x.xferAsciiString(''),
+      );
+      expect(result).toBe('A'.repeat(255));
+      expect(result.length).toBe(255);
+    });
+
+    it('handles exactly 255 char string', () => {
+      const maxString = 'B'.repeat(255);
+      const result = roundTrip(
+        (x) => x.xferAsciiString(maxString),
+        (x) => x.xferAsciiString(''),
+      );
+      expect(result).toBe(maxString);
+    });
+
+    it('string byte layout is u8 prefix + raw ASCII', () => {
+      const saver = new XferSave();
+      saver.open('test');
+      saver.xferAsciiString('Hi');
+      saver.close();
+
+      const buf = new Uint8Array(saver.getBuffer());
+      // u8 length (2) + 'H' (72) + 'i' (105)
+      expect(buf.length).toBe(3);
+      expect(buf[0]).toBe(2);   // length prefix
+      expect(buf[1]).toBe(72);  // 'H'
+      expect(buf[2]).toBe(105); // 'i'
+    });
+  });
+
+  describe('xferLongString', () => {
+    it('round-trips strings > 255 chars', () => {
+      const longString = 'X'.repeat(1000);
+      const result = roundTrip(
+        (x) => x.xferLongString(longString),
+        (x) => x.xferLongString(''),
+      );
+      expect(result).toBe(longString);
+    });
+
+    it('round-trips empty string', () => {
+      const result = roundTrip(
+        (x) => x.xferLongString(''),
+        (x) => x.xferLongString(''),
+      );
+      expect(result).toBe('');
+    });
+
+    it('round-trips UTF-8 correctly', () => {
+      // JSON can contain multi-byte chars
+      const jsonLike = '{"name":"テスト","values":[1,2,3]}';
+      const result = roundTrip(
+        (x) => x.xferLongString(jsonLike),
+        (x) => x.xferLongString(''),
+      );
+      expect(result).toBe(jsonLike);
+    });
+
+    it('round-trips large JSON blobs', () => {
+      const bigObj: Record<string, number> = {};
+      for (let i = 0; i < 100; i++) {
+        bigObj[`field_${i}`] = i * 1.5;
+      }
+      const json = JSON.stringify(bigObj);
+      expect(json.length).toBeGreaterThan(255);
+
+      const result = roundTrip(
+        (x) => x.xferLongString(json),
+        (x) => x.xferLongString(''),
+      );
+      expect(JSON.parse(result)).toEqual(bigObj);
+    });
+  });
+
+  describe('xferImplementation bounded read', () => {
+    it('XferLoad reads exactly the requested byte count', () => {
+      const saver = new XferSave();
+      saver.open('test');
+      saver.xferImplementation(new Uint8Array([1, 2, 3, 4, 5]));
+      saver.xferInt(999);
+      saver.close();
+
+      const loader = new XferLoad(saver.getBuffer());
+      loader.open('test');
+      const read = loader.xferImplementation(new Uint8Array(5));
+      expect(read).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
+      // The int after should still be readable
+      expect(loader.xferInt(0)).toBe(999);
+    });
+
+    it('XferLoad reads all remaining when given zero-length input', () => {
+      const saver = new XferSave();
+      saver.open('test');
+      saver.xferImplementation(new Uint8Array([10, 20, 30]));
+      saver.close();
+
+      const loader = new XferLoad(saver.getBuffer());
+      loader.open('test');
+      const read = loader.xferImplementation(new Uint8Array(0));
+      expect(read).toEqual(new Uint8Array([10, 20, 30]));
+    });
+  });
+
+  describe('block size signed int32 parity', () => {
+    it('block size is written as signed int32', () => {
+      const saver = new XferSave();
+      saver.open('test');
+      saver.beginBlock();
+      saver.xferByte(42);
+      saver.endBlock();
+      saver.close();
+
+      const buf = saver.getBuffer();
+      const view = new DataView(buf);
+      // First 4 bytes are the block size (signed int32, little-endian)
+      const blockSize = view.getInt32(0, true);
+      expect(blockSize).toBe(1); // 1 byte of data
+    });
+  });
+
+  describe('marker labels are no-op', () => {
+    it('markers produce no bytes in save stream', () => {
+      const saver = new XferSave();
+      saver.open('test');
+      const offsetBefore = saver.getOffset();
+      saver.xferMarkerLabel('MARKER:Test');
+      const offsetAfter = saver.getOffset();
+      saver.close();
+
+      expect(offsetAfter).toBe(offsetBefore);
+    });
+  });
+
   describe('CRC parity: save data produces same CRC as direct CRC computation', () => {
     it('identical data produces identical CRC', () => {
       // Compute CRC via XferCrc

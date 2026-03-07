@@ -94,12 +94,13 @@ export class XferLoad extends Xfer {
     snapshot.xfer(this);
   }
 
-  xferImplementation(_data: Uint8Array): Uint8Array {
-    // Load reads remaining data — caller should use beginBlock/skip for bounded reads.
-    // For raw data, read what's available up to end of buffer.
-    const remaining = this.byteLength - this.offset;
-    const result = new Uint8Array(this.view.buffer, this.offset, remaining);
-    this.offset += remaining;
+  xferImplementation(data: Uint8Array): Uint8Array {
+    // Source parity: XferLoad::xferImplementation reads exactly dataSize bytes.
+    // If data has a non-zero length, read that many bytes. Otherwise read all remaining.
+    const toRead = data.byteLength > 0 ? data.byteLength : (this.byteLength - this.offset);
+    this.assertRemaining(toRead);
+    const result = new Uint8Array(this.view.buffer, this.offset, toRead);
+    this.offset += toRead;
     return new Uint8Array(result);
   }
 

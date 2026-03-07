@@ -67,7 +67,7 @@ function xferStringNumberMap(xfer: Xfer, value: Map<string, number> | null): Map
   const hasValue = xfer.xferBool(value !== null);
   if (!hasValue) return null;
 
-  let size = xfer.xferUnsignedInt(value?.size ?? 0);
+  const size = xfer.xferUnsignedInt(value?.size ?? 0);
   if (xfer.getMode() === XferMode.XFER_LOAD) {
     const result = new Map<string, number>();
     for (let i = 0; i < size; i++) {
@@ -109,7 +109,7 @@ function xferVectorXZList(
   xfer: Xfer,
   values: Array<{ x: number; z: number }>,
 ): Array<{ x: number; z: number }> {
-  let length = xfer.xferUnsignedInt(values.length);
+  const length = xfer.xferUnsignedInt(values.length);
   if (xfer.getMode() === XferMode.XFER_LOAD) {
     const result: Array<{ x: number; z: number }> = [];
     for (let i = 0; i < length; i++) {
@@ -134,11 +134,11 @@ function xferVectorXZList(
  */
 function xferJsonObject<T>(xfer: Xfer, value: T): T {
   if (xfer.getMode() === XferMode.XFER_LOAD) {
-    const json = xfer.xferAsciiString('');
+    const json = xfer.xferLongString('');
     return JSON.parse(json) as T;
   }
   const json = JSON.stringify(value, jsonReplacer);
-  xfer.xferAsciiString(json);
+  xfer.xferLongString(json);
   return value;
 }
 
@@ -185,11 +185,11 @@ function jsonReviver(_key: string, value: unknown): unknown {
  */
 function xferJsonObjectWithCollections<T>(xfer: Xfer, value: T): T {
   if (xfer.getMode() === XferMode.XFER_LOAD) {
-    const json = xfer.xferAsciiString('');
+    const json = xfer.xferLongString('');
     return JSON.parse(json, jsonReviver) as T;
   }
   const json = JSON.stringify(value, jsonReplacer);
-  xfer.xferAsciiString(json);
+  xfer.xferLongString(json);
   return value;
 }
 
