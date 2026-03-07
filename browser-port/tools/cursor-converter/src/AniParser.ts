@@ -58,8 +58,8 @@ function parseIcoFrame(data: Uint8Array): AniFrame {
   }
 
   // Directory entry (16 bytes): width, height, colorCount, reserved, hotspotX, hotspotY, dataSize, dataOffset
-  const width = view.getUint8(6) || 32;
-  const height = view.getUint8(7) || 32;
+  const width = view.getUint8(6) || 256;
+  const height = view.getUint8(7) || 256;
   let hotspotX = view.getUint16(10, true);
   let hotspotY = view.getUint16(12, true);
   const dataSize = view.getUint32(14, true);

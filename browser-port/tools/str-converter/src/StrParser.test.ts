@@ -20,14 +20,15 @@ END
     expect(result.entries['MAP:Objective2']).toBe('Capture the flag');
   });
 
-  it('handles \\n escape sequences', () => {
+  it('preserves literal \\n sequences (C++ parity)', () => {
     const input = `MAP:Obj1
 "Line one\\nLine two"
 END
 `;
 
     const result = parseStr(input);
-    expect(result.entries['MAP:Obj1']).toBe('Line one\nLine two');
+    // C++ keeps literal \n as two characters (backslash + n)
+    expect(result.entries['MAP:Obj1']).toBe('Line one\\nLine two');
   });
 
   it('handles comments and empty lines', () => {

@@ -57,10 +57,11 @@ export function parseStr(content: string): StrData {
           foundString = true;
         } else {
           // Multi-line: read until we find a line ending with "
+          // C++ parity: newlines within quoted strings become spaces
           while (i < lines.length) {
             const nextLine = lines[i]!;
             i++;
-            fullText += '\n' + nextLine;
+            fullText += ' ' + nextLine;
             const nextTrimmed = nextLine.trim();
             if (nextTrimmed.endsWith('"')) {
               break;
@@ -78,8 +79,6 @@ export function parseStr(content: string): StrData {
     }
 
     if (foundString) {
-      // Normalize \n escape sequences (the game uses literal \n in strings)
-      text = text.replace(/\\n/g, '\n');
       entries[label] = text;
     }
   }
