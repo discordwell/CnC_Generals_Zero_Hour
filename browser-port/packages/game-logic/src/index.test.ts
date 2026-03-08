@@ -62806,3 +62806,180 @@ describe('NeutronMissileUpdate', () => {
     expect(missileEntity.destroyed).toBe(true);
   });
 });
+
+// ============================================================================
+// Model Condition Flags Sync
+// ============================================================================
+
+describe('ModelConditionFlags sync', () => {
+  it('sets DAMAGED / REALLYDAMAGED from body damage state', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('TestBuilding', 'America', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('TestBuilding', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const entity = logic.getRenderableEntityStates()[0]!;
+    expect(entity.modelConditionFlags).toBeDefined();
+    // Full health — no damage flags.
+    expect(entity.modelConditionFlags!.includes('DAMAGED')).toBe(false);
+    expect(entity.modelConditionFlags!.includes('REALLYDAMAGED')).toBe(false);
+
+    // Directly set health below 50% threshold to trigger DAMAGED.
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { health: number }>;
+    };
+    const internalEntity = [...privateApi.spawnedEntities.values()][0]!;
+    internalEntity.health = 45;
+    logic.update(0);
+
+    const updated = logic.getRenderableEntityStates()[0]!;
+    expect(updated.modelConditionFlags!.includes('DAMAGED')).toBe(true);
+    expect(updated.modelConditionFlags!.includes('REALLYDAMAGED')).toBe(false);
+  });
+
+  it('sets REALLYDAMAGED when health below 10%', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('TestBuilding', 'America', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('TestBuilding', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, { health: number }>;
+    };
+    const internalEntity = [...privateApi.spawnedEntities.values()][0]!;
+    internalEntity.health = 5; // 5/100 = 0.05 < 0.1 threshold
+    logic.update(0);
+
+    const updated = logic.getRenderableEntityStates()[0]!;
+    expect(updated.modelConditionFlags!.includes('DAMAGED')).toBe(true);
+    expect(updated.modelConditionFlags!.includes('REALLYDAMAGED')).toBe(true);
+  });
+
+  it('does not set FIRING_A for idle entities', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('Unit', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('Unit', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const state = logic.getRenderableEntityStates()[0]!;
+    expect(state.modelConditionFlags!.includes('FIRING_A')).toBe(false);
+  });
+
+  it('does not set construction flags for completed buildings', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('TestBuilding', 'America', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('TestBuilding', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const entity = logic.getRenderableEntityStates()[0]!;
+    expect(entity.modelConditionFlags!.includes('ACTIVELY_BEING_CONSTRUCTED')).toBe(false);
+    expect(entity.modelConditionFlags!.includes('PARTIALLY_CONSTRUCTED')).toBe(false);
+  });
+
+  it('exposes modelConditionFlags array in RenderableEntityState', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('TestUnit', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('TestUnit', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const states = logic.getRenderableEntityStates();
+    expect(states.length).toBeGreaterThan(0);
+    expect(Array.isArray(states[0]!.modelConditionFlags)).toBe(true);
+  });
+
+  it('exposes currentSpeed and maxSpeed in RenderableEntityState', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('TestUnit', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('TestUnit', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const state = logic.getRenderableEntityStates()[0]!;
+    expect(typeof state.currentSpeed).toBe('number');
+    expect(typeof state.maxSpeed).toBe('number');
+    expect(state.currentSpeed).toBe(0);
+  });
+
+  it('does not set SOLD for normal entities', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('Building', 'America', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('Building', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const state = logic.getRenderableEntityStates()[0]!;
+    expect(state.modelConditionFlags!.includes('SOLD')).toBe(false);
+  });
+
+  it('does not set MOVING for stationary entities', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('StillUnit', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('StillUnit', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const state = logic.getRenderableEntityStates()[0]!;
+    expect(state.modelConditionFlags!.includes('MOVING')).toBe(false);
+  });
+
+  it('does not set DYING for alive entities', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('AliveUnit', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const registry = makeRegistry(bundle);
+    const map = makeMap([makeMapObject('AliveUnit', 4, 4)]);
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, registry, makeHeightmap());
+    logic.update(0);
+
+    const state = logic.getRenderableEntityStates()[0]!;
+    expect(state.modelConditionFlags!.includes('DYING')).toBe(false);
+  });
+});

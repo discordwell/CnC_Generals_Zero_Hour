@@ -45,7 +45,7 @@ import {
 } from '@generals/audio';
 import { IniDataRegistry, type AudioEventDef, type IniDataBundle } from '@generals/ini-data';
 import { initializeNetworkClient } from '@generals/network';
-import { GameLogicSubsystem } from '@generals/game-logic';
+import { GameLogicSubsystem, resolveRenderAssetProfile } from '@generals/game-logic';
 import {
   UiRuntime,
   initializeUiOverlay,
@@ -1950,19 +1950,96 @@ async function startGame(
   // Building placement ghost
   // ========================================================================
 
-  const buildingGhostMaterial = new THREE.MeshBasicMaterial({
+  const ghostValidMaterial = new THREE.MeshBasicMaterial({
     color: 0x00ff00,
     transparent: true,
     opacity: 0.35,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
-  const buildingGhostGeometry = new THREE.BoxGeometry(4, 2, 4);
-  const buildingGhostMesh = new THREE.Mesh(buildingGhostGeometry, buildingGhostMaterial);
-  buildingGhostMesh.name = 'building-ghost';
-  buildingGhostMesh.visible = false;
-  buildingGhostMesh.renderOrder = 600;
-  scene.add(buildingGhostMesh);
+  // Red material for invalid placement positions (reserved for future
+  // buildability validation).
+  const _ghostInvalidMaterial = new THREE.MeshBasicMaterial({
+    color: 0xff0000,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  void _ghostInvalidMaterial;
+
+  function applyGhostMaterial(obj: THREE.Object3D, material: THREE.Material): void {
+    obj.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        (child as THREE.Mesh).material = material;
+      }
+    });
+  }
+
+  const buildingGhostGroup = new THREE.Group();
+  buildingGhostGroup.name = 'building-ghost';
+  buildingGhostGroup.visible = false;
+  buildingGhostGroup.renderOrder = 600;
+  scene.add(buildingGhostGroup);
+
+  let buildingGhostModel: THREE.Object3D | null = null;
+  let buildingGhostTemplateName: string | null = null;
+  let buildingGhostLoadingTemplate: string | null = null;
+
+  // Fallback box shown while the real model is loading.
+  const ghostFallbackGeometry = new THREE.BoxGeometry(4, 2, 4);
+  const ghostFallbackMesh = new THREE.Mesh(ghostFallbackGeometry, ghostValidMaterial);
+  ghostFallbackMesh.name = 'building-ghost-fallback';
+
+  function resolveGhostTemplateName(sourceButtonId: string): string | null {
+    const commandButton = iniDataRegistry.getCommandButton(sourceButtonId);
+    if (!commandButton) {
+      return null;
+    }
+    const objectToken = commandButton.fields['Object'];
+    if (typeof objectToken === 'string' && objectToken.trim()) {
+      return objectToken.trim().split(/[\s,;|]+/)[0] ?? null;
+    }
+    return null;
+  }
+
+  function loadGhostModelForTemplate(templateName: string): void {
+    if (buildingGhostLoadingTemplate === templateName) {
+      return;
+    }
+    buildingGhostLoadingTemplate = templateName;
+
+    const objectDef = iniDataRegistry.getObject(templateName);
+    const profile = resolveRenderAssetProfile(objectDef);
+    if (!profile.renderAssetPath) {
+      buildingGhostLoadingTemplate = null;
+      return;
+    }
+
+    void objectVisualManager.cloneModelForGhost(profile.renderAssetCandidates).then((clone) => {
+      // Stale load guard: template may have changed while loading.
+      if (buildingGhostLoadingTemplate !== templateName) {
+        return;
+      }
+      buildingGhostLoadingTemplate = null;
+
+      if (!clone) {
+        return;
+      }
+
+      // Swap old model for the new one.
+      if (buildingGhostModel) {
+        buildingGhostGroup.remove(buildingGhostModel);
+      }
+      buildingGhostGroup.remove(ghostFallbackMesh);
+
+      applyGhostMaterial(clone, ghostValidMaterial);
+      clone.renderOrder = 600;
+      buildingGhostGroup.add(clone);
+      buildingGhostModel = clone;
+      buildingGhostTemplateName = templateName;
+    });
+  }
 
   const updateBuildingGhost = (inputState: InputState): void => {
     const pending = uiRuntime.getPendingControlBarCommand();
@@ -1971,20 +2048,57 @@ async function startGame(
       && pending.targetKind === 'position';
 
     if (!isPlacementMode) {
-      buildingGhostMesh.visible = false;
+      if (buildingGhostGroup.visible) {
+        buildingGhostGroup.visible = false;
+      }
+      // Clean up when exiting placement mode.
+      if (buildingGhostTemplateName !== null) {
+        if (buildingGhostModel) {
+          buildingGhostGroup.remove(buildingGhostModel);
+          buildingGhostModel = null;
+        }
+        buildingGhostTemplateName = null;
+        buildingGhostLoadingTemplate = null;
+      }
       return;
+    }
+
+    // Determine which building template is being placed.
+    const templateName = resolveGhostTemplateName(pending.sourceButtonId);
+    if (!templateName) {
+      buildingGhostGroup.visible = false;
+      return;
+    }
+
+    // When the template changes, load the new model.
+    if (templateName !== buildingGhostTemplateName && templateName !== buildingGhostLoadingTemplate) {
+      // Remove old model and show fallback while loading.
+      if (buildingGhostModel) {
+        buildingGhostGroup.remove(buildingGhostModel);
+        buildingGhostModel = null;
+      }
+      buildingGhostTemplateName = null;
+      buildingGhostGroup.add(ghostFallbackMesh);
+      loadGhostModelForTemplate(templateName);
     }
 
     // Resolve cursor world position.
     const worldTarget = gameLogic.resolveMoveTargetFromInput(inputState, camera);
     if (!worldTarget) {
-      buildingGhostMesh.visible = false;
+      buildingGhostGroup.visible = false;
       return;
     }
 
     const y = heightmap.getInterpolatedHeight(worldTarget.x, worldTarget.z);
-    buildingGhostMesh.position.set(worldTarget.x, y + 1, worldTarget.z);
-    buildingGhostMesh.visible = true;
+    buildingGhostGroup.position.set(worldTarget.x, y + 1, worldTarget.z);
+
+    // Apply valid/invalid placement tint (green = valid placement).
+    const ghostMaterial = ghostValidMaterial;
+    if (buildingGhostModel) {
+      applyGhostMaterial(buildingGhostModel, ghostMaterial);
+    }
+
+    buildingGhostGroup.visible = true;
   };
 
   // ========================================================================
@@ -2347,7 +2461,7 @@ async function startGame(
       if (!missionInputLocked) {
         updateBuildingGhost(inputState);
       } else {
-        buildingGhostMesh.visible = false;
+        buildingGhostGroup.visible = false;
       }
 
       // Spawn move indicator and play voice on right-click command.

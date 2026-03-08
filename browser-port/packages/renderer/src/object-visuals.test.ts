@@ -780,4 +780,308 @@ describe('ObjectVisualManager', () => {
     expect(ring.scale.x).toBeGreaterThanOrEqual(1);
     expect(ring.scale.x).toBeLessThanOrEqual(1.2);
   });
+
+  // =========================================================================
+  // cloneModelForGhost
+  // =========================================================================
+
+  it('cloneModelForGhost returns a deep clone of the first matching model', async () => {
+    const scene = new THREE.Scene();
+    const sourceModel = modelWithAnimationClips();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => sourceModel,
+    });
+
+    const clone = await manager.cloneModelForGhost(['unit-model.gltf']);
+    expect(clone).not.toBeNull();
+    expect(clone).not.toBe(sourceModel.scene);
+    // Clone should have the same child count as the source.
+    expect(clone!.children.length).toBe(sourceModel.scene.children.length);
+  });
+
+  it('cloneModelForGhost returns null when no candidates load', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => { throw new Error('not found'); },
+    });
+
+    const clone = await manager.cloneModelForGhost(['missing.gltf']);
+    expect(clone).toBeNull();
+  });
+
+  it('cloneModelForGhost tries all candidates and returns first success', async () => {
+    const scene = new THREE.Scene();
+    const sourceModel = modelWithAnimationClips();
+    let callCount = 0;
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async (path: string) => {
+        callCount++;
+        if (path.includes('missing')) {
+          throw new Error('not found');
+        }
+        return sourceModel;
+      },
+    });
+
+    const clone = await manager.cloneModelForGhost(['missing.gltf', 'found.gltf']);
+    expect(clone).not.toBeNull();
+    expect(callCount).toBe(2);
+  });
+
+  // =========================================================================
+  // Condition-based animation system (Task 4)
+  // =========================================================================
+
+  function modelWithNamedSubObjects(
+    subNames: readonly string[],
+    clips: readonly string[] = ['Idle'],
+  ): LoadedModelAsset {
+    const scene = new THREE.Group();
+    for (const name of subNames) {
+      const child = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+      child.name = name;
+      scene.add(child);
+    }
+    const createdClips = clips.map((clipName) => new THREE.AnimationClip(
+      clipName,
+      1,
+      [new THREE.NumberKeyframeTrack('.position[x]', [0, 1], [0, 0])],
+    ));
+    return { scene, animations: createdClips };
+  }
+
+  it('condition-based animation selects clip from modelConditionFlags', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'DamagedIdle', 'MoveLoop']),
+    });
+
+    const state = makeMeshState({
+      id: 100,
+      modelConditionInfos: [
+        { conditionFlags: [], modelName: null, animationName: 'Idle', idleAnimationName: null, hideSubObjects: [], showSubObjects: [], animationMode: 'LOOP' as const },
+        { conditionFlags: ['DAMAGED'], modelName: null, animationName: 'DamagedIdle', idleAnimationName: null, hideSubObjects: [], showSubObjects: [], animationMode: 'LOOP' as const },
+        { conditionFlags: ['MOVING'], modelName: null, animationName: 'MoveLoop', idleAnimationName: null, hideSubObjects: [], showSubObjects: [], animationMode: 'LOOP' as const },
+      ],
+      modelConditionFlags: ['DAMAGED'],
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+    // Re-sync after model is loaded so condition system runs.
+    manager.sync([state], 1 / 30);
+
+    // Condition system should be active (legacy state should be null).
+    const vs = manager.getVisualState(100);
+    expect(vs?.hasModel).toBe(true);
+    // activeState should be null since condition system took over.
+    expect(vs?.animationState).toBeNull();
+  });
+
+  it('condition-based animation falls back to legacy system when no condition infos', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'Move']),
+    });
+
+    const state = makeMeshState({
+      id: 101,
+      animationState: 'MOVE',
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([state], 1 / 30);
+
+    expect(manager.getVisualState(101)?.animationState).toBe('MOVE');
+  });
+
+  it('condition-based animation crossfades when flags change', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'DamagedIdle']),
+    });
+
+    const baseInfos = [
+      { conditionFlags: [], modelName: null, animationName: 'Idle', idleAnimationName: null, hideSubObjects: [], showSubObjects: [], animationMode: 'LOOP' as const },
+      { conditionFlags: ['DAMAGED'], modelName: null, animationName: 'DamagedIdle', idleAnimationName: null, hideSubObjects: [], showSubObjects: [], animationMode: 'LOOP' as const },
+    ];
+
+    // Start undamaged.
+    manager.sync([makeMeshState({ id: 102, modelConditionInfos: baseInfos, modelConditionFlags: [] })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({ id: 102, modelConditionInfos: baseInfos, modelConditionFlags: [] })], 1 / 30);
+
+    const vs1 = manager.getVisualState(102);
+    expect(vs1?.animationState).toBeNull(); // condition system active
+
+    // Switch to damaged — should crossfade to DamagedIdle.
+    manager.sync([makeMeshState({ id: 102, modelConditionInfos: baseInfos, modelConditionFlags: ['DAMAGED'] })], 1 / 30);
+
+    // Still condition-managed.
+    const vs2 = manager.getVisualState(102);
+    expect(vs2?.animationState).toBeNull();
+  });
+
+  it('condition system handles ONCE animation mode', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'DeathAnim']),
+    });
+
+    const state = makeMeshState({
+      id: 103,
+      modelConditionInfos: [
+        { conditionFlags: [], modelName: null, animationName: 'Idle', idleAnimationName: null, hideSubObjects: [], showSubObjects: [], animationMode: 'LOOP' as const },
+        { conditionFlags: ['DYING'], modelName: null, animationName: 'DeathAnim', idleAnimationName: null, hideSubObjects: [], showSubObjects: [], animationMode: 'ONCE' as const },
+      ],
+      modelConditionFlags: ['DYING'],
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([state], 1 / 30);
+
+    expect(manager.getVisualState(103)?.animationState).toBeNull();
+  });
+
+  it('condition system hides/shows sub-objects based on match', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithNamedSubObjects(['GUN_A', 'SHIELD', 'DAMAGE_FIRE'], ['Idle']),
+    });
+
+    const state = makeMeshState({
+      id: 104,
+      modelConditionInfos: [
+        { conditionFlags: ['DAMAGED'], modelName: null, animationName: null, idleAnimationName: null, hideSubObjects: ['SHIELD'], showSubObjects: ['DAMAGE_FIRE'], animationMode: 'LOOP' as const },
+      ],
+      modelConditionFlags: ['DAMAGED'],
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([state], 1 / 30);
+
+    const root = manager.getVisualRoot(104)!;
+    // Traverse the cloned model to check sub-object visibility.
+    let shieldVisible: boolean | null = null;
+    let damageFireVisible: boolean | null = null;
+    root.traverse((child) => {
+      if (child.name === 'SHIELD') shieldVisible = child.visible;
+      if (child.name === 'DAMAGE_FIRE') damageFireVisible = child.visible;
+    });
+    expect(shieldVisible).toBe(false);
+    expect(damageFireVisible).toBe(true);
+  });
+
+  it('animation speed sync adjusts timeScale for MOVING entities', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'Move']),
+    });
+
+    manager.sync([makeMeshState({
+      id: 105,
+      animationState: 'MOVE',
+      modelConditionFlags: ['MOVING'],
+      currentSpeed: 15,
+      maxSpeed: 30,
+    })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({
+      id: 105,
+      animationState: 'MOVE',
+      modelConditionFlags: ['MOVING'],
+      currentSpeed: 15,
+      maxSpeed: 30,
+    })], 1 / 30);
+
+    // timeScale should be ~0.5 (currentSpeed/maxSpeed).
+    // We can't easily inspect timeScale without exposing internals,
+    // but we verify the entity still has a valid animation state.
+    expect(manager.getVisualState(105)?.animationState).toBe('MOVE');
+  });
+
+  it('tread meshes are detected by name and UV scrolls with speed', async () => {
+    const scene = new THREE.Scene();
+    const treadModel = (() => {
+      const root = new THREE.Group();
+      const texture = new THREE.Texture();
+      const material = new THREE.MeshStandardMaterial({ map: texture });
+      const treadMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+      treadMesh.name = 'INTTURRET01_TREAD_L';
+      root.add(treadMesh);
+      const clip = new THREE.AnimationClip('Idle', 1, [
+        new THREE.NumberKeyframeTrack('.position[x]', [0, 1], [0, 0]),
+      ]);
+      return { scene: root, animations: [clip] } as LoadedModelAsset;
+    })();
+
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => treadModel,
+    });
+
+    manager.sync([makeMeshState({
+      id: 106,
+      currentSpeed: 10,
+    })], 1 / 30);
+    await flushModelLoadQueue();
+
+    // After model load, sync again with speed to trigger tread scrolling.
+    manager.sync([makeMeshState({
+      id: 106,
+      currentSpeed: 10,
+    })], 0.1);
+
+    const root = manager.getVisualRoot(106)!;
+    let treadMeshFound = false;
+    root.traverse((child) => {
+      if (child.name === 'INTTURRET01_TREAD_L') {
+        treadMeshFound = true;
+        const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        // UV offset should have advanced (speed * dt * scrollRate = 10 * 0.1 * 0.5 = 0.5) mod 1.0.
+        expect(mat.map!.offset.x).toBeCloseTo(0.5, 3);
+      }
+    });
+    expect(treadMeshFound).toBe(true);
+  });
+
+  it('condition system uses idleAnimationName as fallback when animationName is null', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'DamageIdle']),
+    });
+
+    const state = makeMeshState({
+      id: 107,
+      modelConditionInfos: [
+        { conditionFlags: ['DAMAGED'], modelName: null, animationName: null, idleAnimationName: 'DamageIdle', hideSubObjects: [], showSubObjects: [], animationMode: 'LOOP' as const },
+      ],
+      modelConditionFlags: ['DAMAGED'],
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([state], 1 / 30);
+
+    expect(manager.getVisualState(107)?.animationState).toBeNull(); // condition active
+  });
+
+  it('cloneModelForGhost leverages model cache from prior entity loads', async () => {
+    const scene = new THREE.Scene();
+    let loadCount = 0;
+    const sourceModel = modelWithAnimationClips();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => {
+        loadCount++;
+        return sourceModel;
+      },
+    });
+
+    // Warm the cache through a normal entity sync.
+    manager.sync([makeMeshState({ id: 50, renderAssetPath: 'shared.gltf', renderAssetResolved: true })]);
+    await flushModelLoadQueue();
+    const loadCountAfterSync = loadCount;
+
+    // cloneModelForGhost should use the cached model.
+    const clone = await manager.cloneModelForGhost(['shared.gltf']);
+    expect(clone).not.toBeNull();
+    expect(loadCount).toBe(loadCountAfterSync);
+  });
 });

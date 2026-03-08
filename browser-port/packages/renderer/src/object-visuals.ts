@@ -17,12 +17,26 @@ import {
 
 export type RenderableAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE' | 'PRONE';
 
+export interface ModelConditionInfo {
+  conditionFlags: string[];
+  modelName: string | null;
+  animationName: string | null;
+  idleAnimationName: string | null;
+  hideSubObjects: string[];
+  showSubObjects: string[];
+  animationMode: 'LOOP' | 'ONCE' | 'MANUAL';
+}
+
 export interface RenderableEntityState {
   id: number;
   renderAssetPath: string | null;
   renderAssetResolved: boolean;
   renderAssetCandidates?: readonly string[];
   renderAnimationStateClips?: Partial<Record<RenderableAnimationState, string[]>>;
+  modelConditionInfos?: ModelConditionInfo[];
+  modelConditionFlags?: readonly string[];
+  currentSpeed?: number;
+  maxSpeed?: number;
   x: number;
   y: number;
   z: number;
@@ -99,6 +113,22 @@ interface VisualAssetState {
   statusEffectGroup: THREE.Group | null;
   /** Tracks which effects are currently shown (for diffing). */
   activeStatusEffects: readonly string[];
+  /** Active condition key (serialised flags of best-matching ModelConditionInfo). */
+  activeConditionKey: string | null;
+  /** Currently playing condition-based animation action. */
+  conditionAction: THREE.AnimationAction | null;
+  /** Cached condition-clip actions keyed by clip name. */
+  conditionClipActions: Map<string, THREE.AnimationAction>;
+  /** Source animation clips from the loaded GLB (for condition-based clip lookup). */
+  sourceAnimations: readonly THREE.AnimationClip[];
+  /** Cached tread sub-meshes for UV scrolling. */
+  treadMeshes: THREE.Mesh[];
+  /** Accumulated tread UV offset. */
+  treadUVOffset: number;
+  /** Cached active flags Set (avoids per-frame allocation). */
+  cachedActiveFlags: Set<string>;
+  /** Serialised key of cached flags (for change detection). */
+  cachedActiveFlagsKey: string;
 }
 
 export interface ObjectVisualManagerConfig {
@@ -120,6 +150,40 @@ const CLIP_HINTS_BY_STATE: Record<RenderableAnimationState, string[]> = {
   DIE: ['Die', 'Death', 'DeathLoop', 'Dead'],
   PRONE: ['Prone', 'ProneIdle', 'Crawl', 'CrawlLoop'],
 };
+
+/**
+ * Port of SparseMatchFinder::findBestInfoSlow() — finds the best-matching
+ * ModelConditionInfo for a set of active entity flags.
+ */
+function findBestConditionMatch(
+  infos: readonly ModelConditionInfo[],
+  activeFlags: ReadonlySet<string>,
+): ModelConditionInfo | null {
+  let result: ModelConditionInfo | null = null;
+  let bestYesMatch = 0;
+  let bestYesExtraneousBits = Infinity;
+
+  for (const info of infos) {
+    let yesMatch = 0;
+    let yesExtraneousBits = 0;
+    for (const flag of info.conditionFlags) {
+      if (activeFlags.has(flag)) {
+        yesMatch++;
+      } else {
+        yesExtraneousBits++;
+      }
+    }
+    if (
+      yesMatch > bestYesMatch ||
+      (yesMatch >= bestYesMatch && yesExtraneousBits < bestYesExtraneousBits)
+    ) {
+      result = info;
+      bestYesMatch = yesMatch;
+      bestYesExtraneousBits = yesExtraneousBits;
+    }
+  }
+  return result;
+}
 
 export class ObjectVisualManager {
   private readonly scene: THREE.Scene;
@@ -181,7 +245,13 @@ export class ObjectVisualManager {
       this.syncStatusEffects(visual, state);
       this.syncStealthOpacity(visual, state);
       this.syncTurretBones(visual, state);
-      this.applyAnimationState(visual, state.animationState);
+      this.syncConditionAnimation(visual, state);
+      // Only use legacy 5-state system if condition system isn't managing animation.
+      if (visual.conditionAction === null) {
+        this.applyAnimationState(visual, state.animationState);
+      }
+      this.syncAnimationSpeed(visual, state);
+      this.syncTreadScrolling(visual, state, dt);
       if (visual.mixer) {
         visual.mixer.update(dt);
       }
@@ -242,6 +312,26 @@ export class ObjectVisualManager {
     }
   }
 
+  /**
+   * Load and clone a model for the given render-asset candidates.
+   * Used for building placement ghost previews — returns a deep clone of
+   * the first successfully loaded model, or null if none could be loaded.
+   */
+  async cloneModelForGhost(assetCandidates: readonly string[]): Promise<THREE.Object3D | null> {
+    for (const rawCandidate of assetCandidates) {
+      const resolved = this.resolveCandidateAssetPaths(rawCandidate);
+      for (const candidate of resolved) {
+        try {
+          const source = await this.loadModelAsset(candidate);
+          return source.scene.clone(true);
+        } catch {
+          // Try next candidate.
+        }
+      }
+    }
+    return null;
+  }
+
   dispose(): void {
     for (const [entityId, visual] of this.visuals) {
       this.removeVisual(entityId, visual);
@@ -288,6 +378,14 @@ export class ObjectVisualManager {
       turretBones: [],
       statusEffectGroup: null,
       activeStatusEffects: [],
+      activeConditionKey: null,
+      conditionAction: null,
+      conditionClipActions: new Map(),
+      sourceAnimations: [],
+      treadMeshes: [],
+      treadUVOffset: 0,
+      cachedActiveFlags: new Set(),
+      cachedActiveFlagsKey: '',
     };
   }
 
@@ -439,6 +537,15 @@ export class ObjectVisualManager {
           currentVisual.mixer = mixer;
           currentVisual.actions = actions;
           currentVisual.turretBones = this.findTurretBones(clone);
+          currentVisual.sourceAnimations = source.animations;
+          // Detect tread sub-meshes for UV scrolling (C++ pattern: mesh name contains "TREAD").
+          const treadMeshes: THREE.Mesh[] = [];
+          clone.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh && child.name.toUpperCase().includes('TREAD')) {
+              treadMeshes.push(child as THREE.Mesh);
+            }
+          });
+          currentVisual.treadMeshes = treadMeshes;
           currentVisual.root.add(clone);
           this.applyAnimationState(currentVisual, currentVisual.requestedAnimationState);
           this.unresolvedEntityIds.delete(entityId);
@@ -585,6 +692,14 @@ export class ObjectVisualManager {
     visual.actions.clear();
     visual.activeState = null;
     visual.turretBones = [];
+    visual.conditionAction = null;
+    visual.conditionClipActions.clear();
+    visual.activeConditionKey = null;
+    visual.sourceAnimations = [];
+    visual.treadMeshes = [];
+    visual.treadUVOffset = 0;
+    visual.cachedActiveFlags.clear();
+    visual.cachedActiveFlagsKey = '';
 
     if (visual.currentModel !== null) {
       visual.root.remove(visual.currentModel);
@@ -1269,6 +1384,147 @@ export class ObjectVisualManager {
   }
 
   private static readonly Z_AXIS = new THREE.Vector3(0, 0, 1);
+
+  // ==========================================================================
+  // Condition-based animation & sub-object visibility (Task 4)
+  // ==========================================================================
+
+  /**
+   * Select animation and sub-object visibility based on ModelConditionFlags.
+   * Source parity: W3DModelDraw uses SparseMatchFinder to select the
+   * best-fitting ModelConditionState each frame.
+   */
+  private syncConditionAnimation(visual: VisualAssetState, state: RenderableEntityState): void {
+    const infos = state.modelConditionInfos;
+    const flags = state.modelConditionFlags;
+    if (!infos || infos.length === 0 || !flags) {
+      return;
+    }
+
+    // Rebuild the cached Set only when the serialised key changes.
+    const flagsKey = flags.slice().sort().join('|');
+    if (flagsKey !== visual.cachedActiveFlagsKey) {
+      visual.cachedActiveFlags.clear();
+      for (const f of flags) visual.cachedActiveFlags.add(f);
+      visual.cachedActiveFlagsKey = flagsKey;
+    }
+    const activeFlags = visual.cachedActiveFlags;
+    const match = findBestConditionMatch(infos, activeFlags);
+    if (!match) {
+      return;
+    }
+
+    const conditionKey = match.conditionFlags.slice().sort().join('|');
+    if (conditionKey === visual.activeConditionKey) {
+      return;
+    }
+    visual.activeConditionKey = conditionKey;
+
+    // --- Sub-object visibility ---
+    if (visual.currentModel && (match.hideSubObjects.length > 0 || match.showSubObjects.length > 0)) {
+      const hideSet = new Set(match.hideSubObjects.map(s => s.toUpperCase()));
+      const showSet = new Set(match.showSubObjects.map(s => s.toUpperCase()));
+      visual.currentModel.traverse((child) => {
+        const nameUpper = child.name.toUpperCase();
+        if (hideSet.has(nameUpper)) {
+          child.visible = false;
+        } else if (showSet.has(nameUpper)) {
+          child.visible = true;
+        }
+      });
+    }
+
+    // --- Animation clip selection ---
+    if (!visual.mixer) return;
+
+    const clipName = match.animationName ?? match.idleAnimationName;
+    if (!clipName) return;
+
+    let action = visual.conditionClipActions.get(clipName);
+    if (!action) {
+      const clip = visual.sourceAnimations.find(
+        c => c.name.toLowerCase() === clipName.toLowerCase(),
+      ) ?? visual.sourceAnimations.find(
+        c => c.name.toLowerCase().includes(clipName.toLowerCase()),
+      );
+      if (!clip) return;
+      action = visual.mixer.clipAction(clip);
+      action.enabled = false;
+      visual.conditionClipActions.set(clipName, action);
+    }
+
+    // Crossfade from previous condition action (let fadeOut handle the blend —
+    // do NOT set enabled=false here, as crossFadeFrom needs the source active).
+    const prev = visual.conditionAction;
+    if (prev && prev !== action) {
+      prev.fadeOut(0.15);
+    }
+
+    // Fade out any legacy 5-state action.
+    if (visual.activeState !== null) {
+      const legacyAction = visual.actions.get(visual.activeState);
+      if (legacyAction) {
+        legacyAction.fadeOut(0.15);
+      }
+      visual.activeState = null;
+    }
+
+    action.reset();
+    action.enabled = true;
+    const loop = match.animationMode === 'ONCE' ? THREE.LoopOnce : THREE.LoopRepeat;
+    action.setLoop(loop, loop === THREE.LoopOnce ? 1 : Infinity);
+    if (match.animationMode === 'ONCE') {
+      action.clampWhenFinished = true;
+    }
+    action.play();
+    if (prev && prev !== action) {
+      action.crossFadeFrom(prev, 0.15, true);
+    }
+    visual.conditionAction = action;
+  }
+
+  /**
+   * Adjust animation playback speed to match entity movement speed.
+   * Source parity: W3DModelDraw scales walk/move animation speed by
+   * currentSpeed / maxSpeed so units don't slide.
+   */
+  private syncAnimationSpeed(visual: VisualAssetState, state: RenderableEntityState): void {
+    const action = visual.conditionAction
+      ?? (visual.activeState ? visual.actions.get(visual.activeState) ?? null : null);
+    if (!action) return;
+
+    const currentSpeed = state.currentSpeed ?? 0;
+    const maxSpeed = state.maxSpeed ?? 0;
+    const isMoving = state.modelConditionFlags?.includes('MOVING') ?? false;
+
+    if (isMoving && maxSpeed > 0) {
+      action.timeScale = Math.max(0.3, Math.min(2.0, currentSpeed / maxSpeed));
+    } else {
+      action.timeScale = 1.0;
+    }
+  }
+
+  /** UV scroll rate for tank treads (world units per second). */
+  private static readonly TREAD_SCROLL_RATE = 0.5;
+
+  /**
+   * Scroll tread sub-mesh UV offsets proportional to movement speed.
+   * Source parity: W3DTankDraw scrolls tread textures based on locomotor speed.
+   */
+  private syncTreadScrolling(visual: VisualAssetState, state: RenderableEntityState, dt: number): void {
+    if (visual.treadMeshes.length === 0) return;
+    const currentSpeed = state.currentSpeed ?? 0;
+    if (Math.abs(currentSpeed) < 0.001) return;
+
+    visual.treadUVOffset = (visual.treadUVOffset + currentSpeed * dt * ObjectVisualManager.TREAD_SCROLL_RATE) % 1.0;
+
+    for (const mesh of visual.treadMeshes) {
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      if (material.map) {
+        material.map.offset.x = visual.treadUVOffset;
+      }
+    }
+  }
 
   private disposeObject3D(object3D: THREE.Object3D): void {
     object3D.traverse((child) => {

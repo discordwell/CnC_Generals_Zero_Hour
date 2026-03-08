@@ -1,5 +1,26 @@
 # Session Summaries
 
+## 2026-03-08T10:00Z — Phase 1B: ModelConditionFlags Animation System (5 Tasks)
+- **Task 1 — ModelConditionInfo Parsing** (`game-logic/src/render-profile-helpers.ts`): `ModelConditionInfo` interface (conditionFlags, modelName, animationName, idleAnimationName, hideSubObjects, showSubObjects, animationMode), `collectModelConditionInfos()` + `parseModelConditionStateBlock()` to extract structured data from INI ModelConditionState blocks. 22 new tests.
+- **Task 2 — SparseMatchFinder** (`game-logic/src/condition-state-matcher.ts`): Port of C++ `findBestInfoSlow()` — maximizes yesMatch, minimizes yesExtraneousBits as tiebreaker. `createConditionMatcher()` with Map cache. 12 new tests.
+- **Task 3 — Game-Logic Flag Expansion** (`game-logic/src/index.ts`): `syncModelConditionFlags()` method called from `updateRenderState()` — sets/clears ~20 flags: DAMAGED/REALLYDAMAGED/RUBBLE (from body damage state), MOVING (with topple/tensile guards), FIRING_A/RELOADING_A/PREATTACK_A/BETWEEN_FIRING_SHOTS_A/USING_WEAPON_A, ACTIVELY_BEING_CONSTRUCTED/PARTIALLY_CONSTRUCTED, GARRISONED, CARRYING, SOLD, DYING, DEPLOYED/PACKING/UNPACKING, RAPPELLING. Added modelConditionFlags/currentSpeed/maxSpeed to makeRenderableEntityState. 10 new tests.
+- **Task 4 — Renderer Condition System** (`renderer/src/object-visuals.ts`): `syncConditionAnimation()` — best-fit condition match → animation clip crossfade + sub-object hide/show. `syncAnimationSpeed()` — timeScale = currentSpeed/maxSpeed clamped [0.3, 2.0] for MOVING entities. `syncTreadScrolling()` — UV offset for meshes named "TREAD". Cached activeFlags Set to avoid per-frame allocation. 8 new tests.
+- **Task 5 — Building Placement Ghost** (`app/src/main.ts`): Replaced green box with actual building model via `cloneModelForGhost()`. Green semi-transparent material override, fallback box on load failure. 4 new tests.
+- **Code review fixes**: Removed `prev.enabled=false` before crossFadeFrom (was breaking smooth blend), cached activeFlags Set (eliminated per-frame allocation), treadUVOffset modulo wrapping (prevents float precision degradation), 999→Infinity for bestYesExtraneousBits.
+- **Known duplication**: ModelConditionInfo interface + findBestConditionMatch duplicated between game-logic and renderer (no cross-package import). Noted for future consolidation.
+- **Total**: 2,653 tests pass (51 new across 5 files), 3 new source files, 7 modified files.
+
+## 2026-03-08T07:55Z — Phase 1C/2C UI Subsystems (6 Parallel Agents)
+- **MinimapRenderer** (`ui/src/minimap-renderer.ts`): Heightmap terrain rendering (green→brown height coloring), unit dots (own=green, enemy=red), fog-of-war overlay (SHROUDED×0.15, FOGGED×0.5), camera viewport rectangle, click-to-world coordinate mapping. CanvasFactory injection for headless testing. 19 tests with MockCanvasContext (Bresenham line rasterizer, pixel buffer).
+- **CommandCardRenderer** (`ui/src/command-card-renderer.ts`): 4×3 CSS grid button panel, reads ControlBarModel slots, icon/label/hotkey/production-progress/cooldown overlays. Strip `&` from labels for display, extract hotkey letter. sync() + dispose() lifecycle. 16 tests (jsdom).
+- **ControlGroupManager** (`input/src/control-group-manager.ts`): Groups 0-9 with assign/recall/addToGroup. Dead entity filtering via isAlive callback on recall. 14 tests.
+- **DisplayStringRenderer** (`renderer/src/display-strings.ts`): Floating text numbers (damage=red, heal=green, cash=yellow) as THREE.Sprite + CanvasTexture. Rise at 1.5 u/s, fade over 1.5s, 64-sprite pool cap, dispose cleanup. 13 tests.
+- **Selection circle enhancements** (`renderer/src/object-visuals.ts`): Color-coding (green=own via SEL_COLOR_OWN, red=enemy via SEL_COLOR_ENEMY), radius scaling from INI MajorRadius (geometryMajorRadius), 0.25s pulse animation with 1.15× overshoot on fresh selection. 6 new tests.
+- **SkirmishSetupScreen** (`app/src/skirmish-setup-screen.ts`): 8-slot player config (faction/team/color/position dropdowns), 24 official maps, start-game callback. 30 tests (jsdom).
+- **Game-logic additions**: `statusEffects`, `selectionCircleRadius`, `isOwnedByLocalPlayer` added to RenderableEntityState in types.ts. makeRenderableEntityState populates from geometryMajorRadius + resolveLocalPlayerSide().
+- **jsdom**: Added as devDependency for DOM-based component testing.
+- **Total**: 2,596 tests pass (249 new), 10 new files, 7 modified files. Committed fdc55335, pushed.
+
 ## 2026-03-08T06:30Z — Audio Integration, Shroud Renderer, Status Overlays
 - **Voice audio bridge** (`app/src/voice-audio-bridge.ts`): Maps unit template→VoiceSelect/Move/Attack/etc INI fields, parent chain walking, 400ms cooldown, voice cache. `playGroupVoice()` plays for first entity only (InGameUI.cpp parity). 8 tests.
 - **Music manager** (`app/src/music-manager.ts`): State machine (idle/menu/ambient/battle/victory/defeat). Battle triggered by `notifyCombat()`, auto-returns to ambient after configurable cooldown (15s default + 5s min battle). Faction-specific victory/defeat stingers. 12 tests.

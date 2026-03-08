@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { InputState } from '@generals/input';
+import type { ModelConditionInfo } from './render-profile-helpers.js';
 
 export interface MapObjectPlacementSummary {
   totalObjects: number;
@@ -12,6 +13,8 @@ export interface MapObjectPlacementSummary {
 export type RenderAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE' | 'PRONE';
 export type RenderAnimationStateClipCandidates = Partial<Record<RenderAnimationState, string[]>>;
 
+export type { ModelConditionInfo } from './render-profile-helpers.js';
+
 export type RenderableObjectCategory = 'air' | 'building' | 'infantry' | 'vehicle' | 'unknown';
 
 export interface RenderableEntityState {
@@ -22,6 +25,10 @@ export interface RenderableEntityState {
   renderAssetPath: string | null;
   renderAssetResolved: boolean;
   renderAnimationStateClips?: RenderAnimationStateClipCandidates;
+  modelConditionInfos?: ModelConditionInfo[];
+  modelConditionFlags?: readonly string[];
+  currentSpeed?: number;
+  maxSpeed?: number;
   category: RenderableObjectCategory;
   x: number;
   y: number;

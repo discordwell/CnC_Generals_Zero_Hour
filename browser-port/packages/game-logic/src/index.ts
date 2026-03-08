@@ -81,6 +81,7 @@ import {
   resolveRenderAssetProfile as resolveRenderAssetProfileImpl,
   shouldPathfindObstacle as shouldPathfindObstacleImpl,
 } from './render-profile-helpers.js';
+import type { ModelConditionInfo } from './render-profile-helpers.js';
 import {
   createRailedTransportRuntimeState as createRailedTransportRuntimeStateImpl,
   createRailedTransportWaypointIndex as createRailedTransportWaypointIndexImpl,
@@ -259,6 +260,8 @@ import {
 
 export * from './types.js';
 export * from './campaign-manager.js';
+export { resolveRenderAssetProfile } from './render-profile-helpers.js';
+export type { ResolvedRenderAssetProfile } from './render-profile-helpers.js';
 
 const TEST_CRUSH_ONLY = 0;
 const TEST_SQUISH_ONLY = 1;
@@ -1756,6 +1759,7 @@ interface MapEntity {
   renderAssetPath: string | null;
   renderAssetResolved: boolean;
   renderAnimationStateClips?: RenderAnimationStateClipCandidates;
+  modelConditionInfos?: ModelConditionInfo[];
   x: number;
   y: number;
   z: number;
@@ -6783,6 +6787,10 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetPath: entity.renderAssetPath,
       renderAssetResolved: entity.renderAssetResolved,
       renderAnimationStateClips: entity.renderAnimationStateClips,
+      modelConditionInfos: entity.modelConditionInfos,
+      modelConditionFlags: [...entity.modelConditionFlags],
+      currentSpeed: entity.currentSpeed,
+      maxSpeed: entity.speed,
       category: entity.category,
       x: entity.x,
       y: entity.y,
@@ -27645,6 +27653,7 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetPath: renderAssetProfile.renderAssetPath,
       renderAssetResolved: renderAssetProfile.renderAssetResolved,
       renderAnimationStateClips: renderAssetProfile.renderAnimationStateClips,
+      modelConditionInfos: renderAssetProfile.modelConditionInfos,
       x,
       y,
       z,
@@ -28355,6 +28364,7 @@ export class GameLogicSubsystem implements Subsystem {
     renderAssetPath: string | null;
     renderAssetResolved: boolean;
     renderAnimationStateClips: RenderAnimationStateClipCandidates;
+    modelConditionInfos: ModelConditionInfo[];
   } {
     return resolveRenderAssetProfileImpl(objectDef);
   }
@@ -28395,6 +28405,137 @@ export class GameLogicSubsystem implements Subsystem {
 
   private updateRenderState(entity: MapEntity): void {
     entity.animationState = this.deriveRenderAnimationState(entity);
+    this.syncModelConditionFlags(entity);
+  }
+
+  /**
+   * Source parity: Object::updateConditionState / W3DModelDraw condition flags.
+   * Centralized sync of model condition flags from current entity state.
+   * Flags already managed elsewhere (PANICKING, NIGHT, SNOW, DOOR_*, SECOND_LIFE,
+   * POWER_PLANT_*, FREEFALL, POST_COLLAPSE, MOVING for topple, FRONTCRUSHED,
+   * BACKCRUSHED, ARMORSET_CRATEUPGRADE_*, CENTER_TO_*, LEFT_TO_*, RIGHT_TO_*)
+   * are NOT touched here to avoid conflicts.
+   */
+  private syncModelConditionFlags(entity: MapEntity): void {
+    const flags = entity.modelConditionFlags;
+
+    // ── DAMAGED / REALLY_DAMAGED / RUBBLE from body damage state ──
+    const bodyState = calcBodyDamageState(entity.health, entity.maxHealth);
+    if (bodyState >= 1) { flags.add('DAMAGED'); } else { flags.delete('DAMAGED'); }
+    if (bodyState >= 2) { flags.add('REALLYDAMAGED'); } else { flags.delete('REALLYDAMAGED'); }
+    if (bodyState >= 3) { flags.add('RUBBLE'); } else { flags.delete('RUBBLE'); }
+
+    // ── MOVING — normal locomotion ──
+    // Skip if topple or tensile collapse is managing MOVING/FREEFALL/POST_COLLAPSE.
+    const toppleActive = entity.toppleAngularAccumulation > 0.0001;
+    const tensileActive = entity.tensileFormationState?.enabled === true;
+    if (!toppleActive && !tensileActive) {
+      if (entity.canMove && entity.moving && entity.currentSpeed > 0) {
+        flags.add('MOVING');
+      } else {
+        flags.delete('MOVING');
+      }
+    }
+
+    // ── FIRING_A / RELOADING_A from attack sub-state ──
+    if (entity.attackSubState === 'FIRING') {
+      flags.add('FIRING_A');
+    } else {
+      flags.delete('FIRING_A');
+    }
+    if (entity.attackReloadFinishFrame > this.frameCounter) {
+      flags.add('RELOADING_A');
+    } else {
+      flags.delete('RELOADING_A');
+    }
+
+    // ── PREATTACK_A ──
+    if (entity.attackSubState === 'AIMING' && entity.preAttackFinishFrame > this.frameCounter) {
+      flags.add('PREATTACK_A');
+    } else {
+      flags.delete('PREATTACK_A');
+    }
+
+    // ── BETWEEN_FIRING_SHOTS_A ──
+    if (entity.attackSubState === 'AIMING' && entity.attackTargetEntityId !== null
+        && entity.preAttackFinishFrame <= this.frameCounter) {
+      flags.add('BETWEEN_FIRING_SHOTS_A');
+    } else {
+      flags.delete('BETWEEN_FIRING_SHOTS_A');
+    }
+
+    // ── ACTIVELY_BEING_CONSTRUCTED / PARTIALLY_CONSTRUCTED ──
+    if (entity.constructionPercent >= 0 && entity.constructionPercent < 100) {
+      flags.add('ACTIVELY_BEING_CONSTRUCTED');
+      flags.add('PARTIALLY_CONSTRUCTED');
+    } else {
+      flags.delete('ACTIVELY_BEING_CONSTRUCTED');
+      flags.delete('PARTIALLY_CONSTRUCTED');
+    }
+
+    // ── GARRISONED — entity is inside a garrison building ──
+    if (entity.garrisonContainerId !== null) {
+      flags.add('GARRISONED');
+    } else {
+      flags.delete('GARRISONED');
+    }
+
+    // ── CARRYING — supply trucks with cargo ──
+    if (entity.supplyTruckProfile) {
+      const truckState = this.supplyTruckStates.get(entity.id);
+      if (truckState && truckState.currentBoxes > 0) {
+        flags.add('CARRYING');
+      } else {
+        flags.delete('CARRYING');
+      }
+    }
+
+    // ── SOLD — entity is in sell animation ──
+    if (this.sellingEntities.has(entity.id)) {
+      flags.add('SOLD');
+    } else {
+      flags.delete('SOLD');
+    }
+
+    // ── DYING / DEATH — during slow death ──
+    if (entity.slowDeathState || entity.structureCollapseState) {
+      flags.add('DYING');
+    } else {
+      flags.delete('DYING');
+    }
+
+    // ── USING_WEAPON_A — actively attacking ──
+    if (entity.attackTargetEntityId !== null && entity.attackSubState !== 'IDLE') {
+      flags.add('USING_WEAPON_A');
+    } else {
+      flags.delete('USING_WEAPON_A');
+    }
+
+    // ── DEPLOYED / PACKING / UNPACKING — deploy state machine ──
+    if (entity.deployStyleProfile) {
+      if (entity.deployState === 'READY_TO_ATTACK') {
+        flags.add('DEPLOYED');
+      } else {
+        flags.delete('DEPLOYED');
+      }
+      if (entity.deployState === 'DEPLOY') {
+        flags.add('UNPACKING');
+      } else {
+        flags.delete('UNPACKING');
+      }
+      if (entity.deployState === 'UNDEPLOY') {
+        flags.add('PACKING');
+      } else {
+        flags.delete('PACKING');
+      }
+    }
+
+    // ── RAPPELLING — chinook combat drop visual ──
+    if (entity.chinookFlightStatus === 'DOING_COMBAT_DROP') {
+      flags.add('RAPPELLING');
+    } else {
+      flags.delete('RAPPELLING');
+    }
   }
 
   private updateRenderStates(): void {
