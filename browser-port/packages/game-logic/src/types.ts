@@ -57,6 +57,12 @@ export interface RenderableEntityState {
   toppleDirZ: number;
   /** Source parity: TurretAI — turret rotation angles in radians (relative to body), one per turret. */
   turretAngles: number[];
+  /** Active status effects for overlay icons (poisoned, burning, EMP'd, etc.). */
+  statusEffects?: readonly string[];
+  /** Source parity: Geometry MajorRadius — used for selection circle sizing. */
+  selectionCircleRadius?: number;
+  /** True when this entity belongs to the local player's side. */
+  isOwnedByLocalPlayer?: boolean;
 }
 
 export interface ScriptObjectAmbientSoundState {

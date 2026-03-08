@@ -68,3 +68,5 @@ export { TerrainRoadRenderer, extractRoadSegments, buildRoadPaths, buildRoadMesh
 export type { RoadPoint, RoadSegment, RoadRenderConfig, HeightmapQuery } from './terrain-roads.js';
 export { ShroudRenderer, CELL_SHROUDED, CELL_FOGGED, CELL_CLEAR } from './shroud-renderer.js';
 export type { ShroudRendererConfig, FogOfWarData } from './shroud-renderer.js';
+export { DisplayStringRenderer } from './display-strings.js';
+export type { DisplayStringType } from './display-strings.js';

@@ -6807,6 +6807,8 @@ export class GameLogicSubsystem implements Subsystem {
       /** Turret rotation angles (one per turret module), in radians relative to body. */
       turretAngles: entity.turretStates.map(ts => ts.currentAngle),
       statusEffects: this.resolveEntityStatusEffects(entity),
+      selectionCircleRadius: entity.geometryMajorRadius > 0 ? entity.geometryMajorRadius : undefined,
+      isOwnedByLocalPlayer: entity.side ? this.normalizeSide(entity.side) === this.resolveLocalPlayerSide() : undefined,
     };
   }
 

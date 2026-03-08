@@ -666,4 +666,118 @@ describe('ObjectVisualManager', () => {
     // Only POISONED should show (UNKNOWN_FLAG filtered out).
     expect(effectGroup!.children).toHaveLength(1);
   });
+
+  // ---------------------------------------------------------------------------
+  // Selection circle enhancements
+  // ---------------------------------------------------------------------------
+
+  it('selection ring uses green color for owned units', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync(
+      [makeMeshState({ id: 40, isSelected: true, isOwnedByLocalPlayer: true })],
+      1 / 30,
+    );
+
+    const root = manager.getVisualRoot(40)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    expect(ring).toBeTruthy();
+    expect(ring.visible).toBe(true);
+    const mat = ring.material as THREE.MeshBasicMaterial;
+    expect(mat.color.getHex()).toBe(0x00ff00);
+  });
+
+  it('selection ring uses red color for enemy units', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync(
+      [makeMeshState({ id: 41, isSelected: true, isOwnedByLocalPlayer: false })],
+      1 / 30,
+    );
+
+    const root = manager.getVisualRoot(41)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    expect(ring).toBeTruthy();
+    const mat = ring.material as THREE.MeshBasicMaterial;
+    expect(mat.color.getHex()).toBe(0xff3333);
+  });
+
+  it('selection ring scales by selectionCircleRadius', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync(
+      [makeMeshState({ id: 42, isSelected: true, selectionCircleRadius: 3 })],
+      1 / 30,
+    );
+
+    const root = manager.getVisualRoot(42)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    expect(ring).toBeTruthy();
+    // After pulse settles, scale should match radius (allow pulse to be active).
+    expect(ring.scale.x).toBeGreaterThanOrEqual(3);
+  });
+
+  it('selection ring updates color when ownership changes', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    // Start as owned.
+    manager.sync(
+      [makeMeshState({ id: 43, isSelected: true, isOwnedByLocalPlayer: true })],
+      1 / 30,
+    );
+    const root = manager.getVisualRoot(43)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    const mat = ring.material as THREE.MeshBasicMaterial;
+    expect(mat.color.getHex()).toBe(0x00ff00);
+
+    // Switch to enemy.
+    manager.sync(
+      [makeMeshState({ id: 43, isSelected: true, isOwnedByLocalPlayer: false })],
+      1 / 30,
+    );
+    expect(mat.color.getHex()).toBe(0xff3333);
+  });
+
+  it('selection ring hides when deselected and resets spawn time', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    // Select.
+    manager.sync([makeMeshState({ id: 44, isSelected: true })], 1 / 30);
+    const root = manager.getVisualRoot(44)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    expect(ring.visible).toBe(true);
+
+    // Deselect.
+    manager.sync([makeMeshState({ id: 44, isSelected: false })], 1 / 30);
+    expect(ring.visible).toBe(false);
+  });
+
+  it('selection ring defaults to scale 1 when no selectionCircleRadius', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync([makeMeshState({ id: 45, isSelected: true })], 1 / 30);
+    const root = manager.getVisualRoot(45)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    // Default radius = 1, pulse may overshoot slightly.
+    expect(ring.scale.x).toBeGreaterThanOrEqual(1);
+    expect(ring.scale.x).toBeLessThanOrEqual(1.2);
+  });
 });

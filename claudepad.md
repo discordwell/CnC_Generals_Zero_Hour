@@ -1,5 +1,16 @@
 # Session Summaries
 
+## 2026-03-08T06:30Z — Audio Integration, Shroud Renderer, Status Overlays
+- **Voice audio bridge** (`app/src/voice-audio-bridge.ts`): Maps unit template→VoiceSelect/Move/Attack/etc INI fields, parent chain walking, 400ms cooldown, voice cache. `playGroupVoice()` plays for first entity only (InGameUI.cpp parity). 8 tests.
+- **Music manager** (`app/src/music-manager.ts`): State machine (idle/menu/ambient/battle/victory/defeat). Battle triggered by `notifyCombat()`, auto-returns to ambient after configurable cooldown (15s default + 5s min battle). Faction-specific victory/defeat stingers. 12 tests.
+- **EVA faction-specific audio** (`script-eva-runtime.ts` modified): Changed from generic `EVA_${type}` to `EvaUSA_LowPower`, `EvaChina_UnitLost`, `EvaGLA_UpgradeComplete` matching retail INI AudioEvent definitions. Per-type cooldowns (BASE_UNDER_ATTACK: 10s, LOW_POWER: 15s). 5 tests (2 new).
+- **Weapon fire sounds** (`game-logic/src/types.ts`, `index.ts` modified): `fireSoundEvent` field on VisualEvent and AttackWeaponProfile, extracted from INI `FireSound` field. combat-visual-effects.ts uses specific fire sound or falls back to generic.
+- **Shroud renderer** (`renderer/src/shroud-renderer.ts`): Extracted from inline main.ts fog overlay. DataTexture-based terrain overlay plane (SHROUDED=α230, FOGGED=α140, CLEAR=α0), linear filtered, frame-throttled (every 5 frames), lazy mesh creation. 11 tests.
+- **Status effect overlays** (`renderer/src/object-visuals.ts` modified): Colored diamond icons for POISONED (green), BURNING (orange), DISABLED_EMP (blue), DISABLED_UNDERPOWERED (yellow), DISABLED_HELD (purple). Billboard rotation, automatic diff/rebuild on effect set changes. `statusEffects` field added to RenderableEntityState, resolved from objectStatusFlags + poisonDamageAmount in game-logic. 3 tests.
+- **main.ts wiring**: ShroudRenderer replaces 70 lines of inline fog code. voiceBridge + musicManager instantiated, battle music triggered on WEAPON_IMPACT/ENTITY_DESTROYED, selection voice on click, move/attack voice on right-click commands.
+- **Power system**: Fully implemented already (brownout, production slowdown, radar disable, special power pause, sabotage). Task #14 completed without changes.
+- **Total**: 2,497 tests pass (14 new), 6 new files, 10 modified files. Committed 79d79763, pushed.
+
 ## 2026-03-08T04:50Z — Rendering, Network & Replay Systems (9-Task Sprint)
 - **Turret bone rotation** (`renderer/src/object-visuals.ts`): Added `findTurretBones()` using regex pattern matching on model hierarchy, `syncTurretBones()` applying Z-axis quaternion rotation from game-logic `turretAngles[]`. 4 tests.
 - **Laser beam renderer** (`renderer/src/laser-beam-renderer.ts`): Dual cylinder meshes (inner core + outer glow) with additive blending, configurable colors/widths, auto-fade and cleanup. 8 tests.

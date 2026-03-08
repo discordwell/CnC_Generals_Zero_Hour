@@ -432,3 +432,17 @@ export type {
 
 export { SaveLoadMenu, installSaveLoadShortcuts } from './save-load-menu.js';
 export type { SaveLoadMenuCallbacks } from './save-load-menu.js';
+
+export { CommandCardRenderer } from './command-card-renderer.js';
+export type { CommandCardOverlayData } from './command-card-renderer.js';
+
+export { MinimapRenderer } from './minimap-renderer.js';
+export type {
+  MinimapHeightmap,
+  MinimapEntity,
+  MinimapFogData,
+  MinimapCameraBounds,
+  MinimapCanvasContext,
+  MinimapCanvas,
+  MinimapCanvasFactory,
+} from './minimap-renderer.js';

@@ -48,6 +48,10 @@ export interface RenderableEntityState {
   shadowSizeY?: number;
   /** Active status effects for overlay icons (poisoned, burning, EMP'd, etc.). */
   statusEffects?: readonly string[];
+  /** Source parity: Geometry MajorRadius — used for selection circle sizing. */
+  selectionCircleRadius?: number;
+  /** True when this entity belongs to the local player's side. */
+  isOwnedByLocalPlayer?: boolean;
 }
 
 export interface LoadedModelAsset {
@@ -68,6 +72,12 @@ interface VisualAssetState {
   healthBarGroup: THREE.Group | null;
   healthBarFill: THREE.Mesh | null;
   selectionRing: THREE.Mesh | null;
+  /** Timestamp (performance.now/1000) when selection ring was first shown, for pulse animation. */
+  selectionRingSpawnTime: number;
+  /** Last applied selection ring scale (to avoid redundant updates). */
+  selectionRingScale: number;
+  /** Last applied selection ring color hex (to avoid redundant material updates). */
+  selectionRingColorHex: number;
   scriptFlashRing: THREE.Mesh | null;
   veterancyBadge: THREE.Group | null;
   currentVeterancyLevel: number;
@@ -265,6 +275,9 @@ export class ObjectVisualManager {
       healthBarGroup: null,
       healthBarFill: null,
       selectionRing: null,
+      selectionRingSpawnTime: 0,
+      selectionRingScale: 0,
+      selectionRingColorHex: 0,
       scriptFlashRing: null,
       veterancyBadge: null,
       currentVeterancyLevel: 0,
@@ -859,19 +872,41 @@ export class ObjectVisualManager {
     }
   }
 
+  /** Selection circle color: own units. Source parity: green circle in retail. */
+  private static readonly SEL_COLOR_OWN = 0x00ff00;
+  /** Selection circle color: enemy/neutral units. Source parity: red circle. */
+  private static readonly SEL_COLOR_ENEMY = 0xff3333;
+  /** Default radius when INI MajorRadius is not available. */
+  private static readonly SEL_DEFAULT_RADIUS = 1;
+  /** Duration (seconds) of the initial pulse animation on selection. */
+  private static readonly SEL_PULSE_DURATION = 0.25;
+  /** Scale overshoot factor during pulse. */
+  private static readonly SEL_PULSE_OVERSHOOT = 1.15;
+
   private syncSelectionRing(visual: VisualAssetState, state: RenderableEntityState): void {
     const isSelected = state.isSelected ?? false;
 
     if (!isSelected) {
       if (visual.selectionRing) {
         visual.selectionRing.visible = false;
+        visual.selectionRingSpawnTime = 0;
       }
       return;
     }
 
+    // Determine desired color from ownership.
+    const isOwn = state.isOwnedByLocalPlayer ?? false;
+    const desiredColor = isOwn
+      ? ObjectVisualManager.SEL_COLOR_OWN
+      : ObjectVisualManager.SEL_COLOR_ENEMY;
+
+    // Determine desired scale from INI MajorRadius.
+    const radius = state.selectionCircleRadius ?? ObjectVisualManager.SEL_DEFAULT_RADIUS;
+    const desiredScale = radius;
+
     if (!visual.selectionRing) {
       const material = new THREE.MeshBasicMaterial({
-        color: 0x00ff00,
+        color: desiredColor,
         transparent: true,
         opacity: 0.6,
         depthTest: false,
@@ -879,12 +914,42 @@ export class ObjectVisualManager {
       });
       const ring = new THREE.Mesh(ObjectVisualManager.getSelectionRingGeometry(), material);
       ring.renderOrder = 998;
-      ring.rotation.x = -Math.PI / 2; // Lay flat on the ground plane.
-      ring.position.y = 0.05; // Slight offset above ground to avoid z-fighting.
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.05;
       ring.name = 'selection-ring';
       visual.selectionRing = ring;
+      visual.selectionRingColorHex = desiredColor;
+      visual.selectionRingScale = desiredScale;
+      visual.selectionRingSpawnTime = performance.now() / 1000;
+      ring.scale.setScalar(desiredScale);
       visual.root.add(ring);
       this.applyGuardBandFrustumPolicy(ring);
+    }
+
+    // Update color if ownership changed.
+    if (visual.selectionRingColorHex !== desiredColor) {
+      (visual.selectionRing.material as THREE.MeshBasicMaterial).color.setHex(desiredColor);
+      visual.selectionRingColorHex = desiredColor;
+    }
+
+    // Update scale if radius changed.
+    if (visual.selectionRingScale !== desiredScale) {
+      visual.selectionRing.scale.setScalar(desiredScale);
+      visual.selectionRingScale = desiredScale;
+    }
+
+    // Pulse animation on fresh selection.
+    if (visual.selectionRingSpawnTime > 0) {
+      const elapsed = performance.now() / 1000 - visual.selectionRingSpawnTime;
+      if (elapsed < ObjectVisualManager.SEL_PULSE_DURATION) {
+        const t = elapsed / ObjectVisualManager.SEL_PULSE_DURATION;
+        // Ease-out overshoot: peaks at SEL_PULSE_OVERSHOOT then settles to 1.0.
+        const overshoot = 1 + (ObjectVisualManager.SEL_PULSE_OVERSHOOT - 1) * Math.sin(t * Math.PI);
+        visual.selectionRing.scale.setScalar(desiredScale * overshoot);
+      } else {
+        visual.selectionRing.scale.setScalar(desiredScale);
+        visual.selectionRingSpawnTime = 0;
+      }
     }
 
     visual.selectionRing.visible = true;
