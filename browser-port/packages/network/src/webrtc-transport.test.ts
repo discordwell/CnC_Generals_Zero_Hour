@@ -51,8 +51,10 @@ describe('WebRTCTransport', () => {
 
   beforeEach(() => {
     mockWs = new MockWebSocket();
-    // Mock WebSocket constructor.
-    (globalThis as unknown as { WebSocket: unknown }).WebSocket = vi.fn(() => mockWs);
+    // Mock WebSocket constructor — must use function (not arrow) so `new` works.
+    (globalThis as unknown as { WebSocket: unknown }).WebSocket = vi.fn(
+      function () { return mockWs; } as unknown as () => MockWebSocket,
+    );
     // Also set WebSocket.OPEN constant.
     (globalThis.WebSocket as unknown as { OPEN: number }).OPEN = 1;
   });

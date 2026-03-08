@@ -2364,10 +2364,7 @@ async function startGame(
             targetEntityId !== null &&
             gameLogic.getEntityRelationship(selIds[0]!, targetEntityId) === 'enemies'
           );
-          voiceBridge.playGroupVoice(
-            selIds as unknown as number[],
-            isAttackCommand ? 'attack' : 'move',
-          );
+          voiceBridge.playGroupVoice(selIds, isAttackCommand ? 'attack' : 'move');
           // Notify music manager of combat.
           if (isAttackCommand) {
             musicManager.notifyCombat();
@@ -2379,11 +2376,11 @@ async function startGame(
 
       // Detect selection changes and play select voice.
       const currentSelectionIds = gameLogic.getLocalPlayerSelectionIds();
-      if (currentSelectionIds !== previousSelectionSnapshot && currentSelectionIds.length > 0) {
+      if (currentSelectionIds.length > 0) {
         const changed = currentSelectionIds.length !== previousSelectionSnapshot.length
           || currentSelectionIds.some((id, i) => previousSelectionSnapshot[i] !== id);
         if (changed) {
-          voiceBridge.playGroupVoice(currentSelectionIds as unknown as number[], 'select');
+          voiceBridge.playGroupVoice(currentSelectionIds, 'select');
         }
       }
       previousSelectionSnapshot = currentSelectionIds;

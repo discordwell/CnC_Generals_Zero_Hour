@@ -6820,19 +6820,21 @@ export class GameLogicSubsystem implements Subsystem {
     'DISABLED_HELD',
   ] as const;
 
-  private resolveEntityStatusEffects(entity: MapEntity): string[] {
-    const effects: string[] = [];
+  private static readonly EMPTY_STATUS_EFFECTS: readonly string[] = [];
+
+  private resolveEntityStatusEffects(entity: MapEntity): readonly string[] {
+    let effects: string[] | null = null;
     for (const flag of GameLogicSubsystem.VISUAL_STATUS_FLAGS) {
       if (entity.objectStatusFlags.has(flag)) {
-        effects.push(flag);
+        (effects ??= []).push(flag);
       }
     }
     if (entity.poisonDamageAmount > 0) {
-      if (!effects.includes('POISONED')) {
-        effects.push('POISONED');
+      if (!effects || !effects.includes('POISONED')) {
+        (effects ??= []).push('POISONED');
       }
     }
-    return effects;
+    return effects ?? GameLogicSubsystem.EMPTY_STATUS_EFFECTS;
   }
 
   private resolveEntityAmbientSoundEventName(entity: MapEntity): string | null {

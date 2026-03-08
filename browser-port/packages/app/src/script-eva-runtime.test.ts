@@ -265,4 +265,47 @@ describe('script EVA runtime bridge', () => {
 
     vi.restoreAllMocks();
   });
+
+  it('different event types have independent cooldowns', () => {
+    const gameLogic = new RecordingGameLogic();
+    const uiRuntime = new RecordingUiRuntime();
+    const audioManager = new RecordingAudioManager();
+
+    const bridge = createScriptEvaRuntimeBridge({
+      gameLogic,
+      uiRuntime,
+      audioManager,
+      resolveLocalPlayerSide: () => 'America',
+      logger: { debug: () => {} },
+    });
+
+    let mockTime = 100000;
+    vi.spyOn(performance, 'now').mockImplementation(() => mockTime);
+
+    // Play LOW_POWER.
+    gameLogic.queueEvent({
+      type: 'LOW_POWER',
+      side: 'America',
+      relationship: 'own',
+      entityId: null,
+      detail: null,
+    });
+    bridge.syncAfterSimulationStep();
+    expect(uiRuntime.shownMessages).toHaveLength(1);
+
+    // Immediately play UNIT_LOST — should NOT be blocked by LOW_POWER cooldown.
+    mockTime += 100;
+    gameLogic.queueEvent({
+      type: 'UNIT_LOST',
+      side: 'America',
+      relationship: 'own',
+      entityId: 5,
+      detail: null,
+    });
+    bridge.syncAfterSimulationStep();
+    expect(uiRuntime.shownMessages).toHaveLength(2);
+    expect(uiRuntime.shownMessages[1]!.message).toBe('Unit lost.');
+
+    vi.restoreAllMocks();
+  });
 });

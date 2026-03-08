@@ -23,8 +23,10 @@ export interface VoiceGameLogic {
 
 export type VoiceEventType =
   | 'select'
+  | 'selectElite'
   | 'move'
   | 'attack'
+  | 'attackSpecial'
   | 'attackAir'
   | 'guard'
   | 'fear'
@@ -37,8 +39,10 @@ export type VoiceEventType =
 /** Maps VoiceEventType to the INI field name on Object definitions. */
 const VOICE_FIELD_MAP: Record<VoiceEventType, string> = {
   select: 'VoiceSelect',
+  selectElite: 'VoiceSelectElite',
   move: 'VoiceMove',
   attack: 'VoiceAttack',
+  attackSpecial: 'VoiceAttackSpecial',
   attackAir: 'VoiceAttackAir',
   guard: 'VoiceGuard',
   fear: 'VoiceFear',
@@ -151,7 +155,10 @@ function resolveVoiceField(
   registry: IniDataRegistry,
 ): string | null {
   let current = objectDef;
+  const visited = new Set<string>();
   while (current) {
+    if (visited.has(current.name)) break; // Cycle guard.
+    visited.add(current.name);
     const value = current.fields[fieldName];
     if (typeof value === 'string' && value.length > 0) {
       return value;

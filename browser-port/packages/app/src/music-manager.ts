@@ -7,6 +7,8 @@
  * ambient music resumes after a cooldown once combat ends.
  */
 
+import { resolveEvaFactionPrefix } from './eva-faction-prefix.js';
+
 /** Minimal AudioManager interface for music playback. */
 export interface MusicAudioManager {
   addAudioEvent(eventName: string): number;
@@ -111,13 +113,13 @@ export class MusicManager {
   /** Play faction-specific victory/defeat. */
   playVictoryForFaction(faction: string): void {
     this.state = 'victory';
-    const prefix = resolveFactionEvaPrefix(faction);
+    const prefix = resolveEvaFactionPrefix(faction);
     this.playTrack(`${prefix}_Victory`);
   }
 
   playDefeatForFaction(faction: string): void {
     this.state = 'defeat';
-    const prefix = resolveFactionEvaPrefix(faction);
+    const prefix = resolveEvaFactionPrefix(faction);
     this.playTrack(`${prefix}_Defeat`);
   }
 
@@ -169,11 +171,4 @@ export class MusicManager {
     }
     this.currentTrackName = '';
   }
-}
-
-function resolveFactionEvaPrefix(faction: string): string {
-  const upper = faction.toUpperCase();
-  if (upper.includes('CHINA')) return 'EvaChina';
-  if (upper.includes('GLA')) return 'EvaGLA';
-  return 'EvaUSA';
 }

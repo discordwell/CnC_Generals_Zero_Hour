@@ -1,4 +1,5 @@
 import type { EvaEvent, EvaEventType } from '@generals/game-logic';
+import { resolveEvaFactionPrefix } from './eva-faction-prefix.js';
 
 const DEFAULT_EVA_MESSAGE_MS = 3500;
 
@@ -69,13 +70,6 @@ function resolveEvaAudioEventName(event: EvaEvent, side: string): string {
     return `${prefix}_${suffix}`;
   }
   return `${prefix}_${event.type}`;
-}
-
-function resolveEvaFactionPrefix(side: string): string {
-  const upper = side.toUpperCase();
-  if (upper.includes('CHINA')) return 'EvaChina';
-  if (upper.includes('GLA')) return 'EvaGLA';
-  return 'EvaUSA';
 }
 
 const EVA_AUDIO_SUFFIX_MAP: Record<EvaEventType, string> = {
