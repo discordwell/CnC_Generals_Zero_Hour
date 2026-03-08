@@ -24,32 +24,30 @@ export interface GeneralPersona {
   lossSound: string;
 }
 
+/** Single source of truth for general persona data. */
+export const DEFAULT_PERSONAS: readonly GeneralPersona[] = [
+  { index: 0, name: 'General Granger', faction: 'USA Air Force', campaignName: 'challenge_0', playerTemplateName: 'FactionAmericaAirForceGeneral', portraitMovieLeftName: 'PortraitAirGenLeft', portraitMovieRightName: 'PortraitAirGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 1, name: 'Dr. Thrax', faction: 'GLA Toxin', campaignName: 'challenge_1', playerTemplateName: 'FactionGLAToxinGeneral', portraitMovieLeftName: 'PortraitDrThraxLeft', portraitMovieRightName: 'PortraitDrThraxRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 2, name: 'General Tao', faction: 'China Nuclear', campaignName: 'challenge_2', playerTemplateName: 'FactionChinaNukeGeneral', portraitMovieLeftName: 'PortraitNukeGenLeft', portraitMovieRightName: 'PortraitNukeGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 3, name: 'General Alexander', faction: 'USA Super Weapons', campaignName: 'challenge_3', playerTemplateName: 'FactionAmericaSuperWeaponGeneral', portraitMovieLeftName: 'PortraitSuperGenLeft', portraitMovieRightName: 'PortraitSuperGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 4, name: 'General Kwai', faction: 'China Tank', campaignName: 'challenge_4', playerTemplateName: 'FactionChinaTankGeneral', portraitMovieLeftName: 'PortraitTankGenLeft', portraitMovieRightName: 'PortraitTankGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 5, name: 'General Townes', faction: 'USA Laser', campaignName: 'challenge_5', playerTemplateName: 'FactionAmericaLaserGeneral', portraitMovieLeftName: 'PortraitLaserGenLeft', portraitMovieRightName: 'PortraitLaserGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 6, name: 'Prince Kassad', faction: 'GLA Stealth', campaignName: 'challenge_6', playerTemplateName: 'FactionGLAStealthGeneral', portraitMovieLeftName: 'PortraitStealthGenLeft', portraitMovieRightName: 'PortraitStealthGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 7, name: 'General Fai', faction: 'China Infantry', campaignName: 'challenge_7', playerTemplateName: 'FactionChinaInfantryGeneral', portraitMovieLeftName: 'PortraitInfantryGenLeft', portraitMovieRightName: 'PortraitInfantryGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 8, name: 'General Leang', faction: 'Boss General', campaignName: 'challenge_8', playerTemplateName: 'FactionBossGeneral', portraitMovieLeftName: 'PortraitBossGenLeft', portraitMovieRightName: 'PortraitBossGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+];
+
 const STORAGE_KEY = 'generals_challenge_progress';
 
 export class ChallengeGenerals {
-  private personas: GeneralPersona[] = [];
+  private personas: GeneralPersona[] = [...DEFAULT_PERSONAS];
   private defeatedIndices = new Set<number>();
   private currentPlayerTemplateNum = 0;
   private storage: Storage | null = null;
 
   constructor(storage?: Storage | null) {
     this.storage = storage ?? null;
-    this.initDefaultPersonas();
     this.loadProgress();
-  }
-
-  private initDefaultPersonas(): void {
-    this.personas = [
-      { index: 0, name: 'General Granger', faction: 'USA Air Force', campaignName: 'challenge_0', playerTemplateName: 'FactionAmericaAirForceGeneral', portraitMovieLeftName: 'PortraitAirGenLeft', portraitMovieRightName: 'PortraitAirGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 1, name: 'Dr. Thrax', faction: 'GLA Toxin', campaignName: 'challenge_1', playerTemplateName: 'FactionGLAToxinGeneral', portraitMovieLeftName: 'PortraitDrThraxLeft', portraitMovieRightName: 'PortraitDrThraxRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 2, name: 'General Tao', faction: 'China Nuclear', campaignName: 'challenge_2', playerTemplateName: 'FactionChinaNukeGeneral', portraitMovieLeftName: 'PortraitNukeGenLeft', portraitMovieRightName: 'PortraitNukeGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 3, name: 'General Alexander', faction: 'USA Super Weapons', campaignName: 'challenge_3', playerTemplateName: 'FactionAmericaSuperWeaponGeneral', portraitMovieLeftName: 'PortraitSuperGenLeft', portraitMovieRightName: 'PortraitSuperGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 4, name: 'General Kwai', faction: 'China Tank', campaignName: 'challenge_4', playerTemplateName: 'FactionChinaTankGeneral', portraitMovieLeftName: 'PortraitTankGenLeft', portraitMovieRightName: 'PortraitTankGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 5, name: 'General Townes', faction: 'USA Laser', campaignName: 'challenge_5', playerTemplateName: 'FactionAmericaLaserGeneral', portraitMovieLeftName: 'PortraitLaserGenLeft', portraitMovieRightName: 'PortraitLaserGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 6, name: 'Prince Kassad', faction: 'GLA Stealth', campaignName: 'challenge_6', playerTemplateName: 'FactionGLAStealthGeneral', portraitMovieLeftName: 'PortraitStealthGenLeft', portraitMovieRightName: 'PortraitStealthGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 7, name: 'General Fai', faction: 'China Infantry', campaignName: 'challenge_7', playerTemplateName: 'FactionChinaInfantryGeneral', portraitMovieLeftName: 'PortraitInfantryGenLeft', portraitMovieRightName: 'PortraitInfantryGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-      { index: 8, name: 'General Leang', faction: 'Boss General', campaignName: 'challenge_8', playerTemplateName: 'FactionBossGeneral', portraitMovieLeftName: 'PortraitBossGenLeft', portraitMovieRightName: 'PortraitBossGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-    ];
   }
 
   getPersonas(): readonly GeneralPersona[] {

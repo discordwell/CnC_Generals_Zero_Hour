@@ -58,7 +58,8 @@ export function parseCampaignIni(text: string): Campaign[] {
 
     const tokens = line.split(/\s+/);
     const keyword = tokens[0]!;
-    const rest = tokens.slice(1).join(' ');
+    // Strip optional `= ` prefix — C++ INI parser uses both `Field Value` and `Field = Value`
+    const rest = tokens.slice(1).join(' ').replace(/^=\s*/, '');
 
     if (keyword === 'Campaign') {
       currentCampaign = {
@@ -159,7 +160,7 @@ export function parseCampaignIni(text: string): Campaign[] {
         break;
       }
       case 'VoiceLength':
-        currentMission.voiceLength = parseInt(rest.replace('=', '').trim(), 10) || 0;
+        currentMission.voiceLength = parseInt(rest, 10) || 0;
         break;
       case 'GeneralName':
         currentMission.generalName = rest;
@@ -192,10 +193,11 @@ export class CampaignManager {
     return this.campaigns;
   }
 
-  /** Get non-challenge, non-demo campaigns (USA, GLA, China). */
+  /** Get non-challenge, non-training, non-demo campaigns (USA, GLA, China). */
   getStoryCampaigns(): Campaign[] {
-    const storyNames = new Set(['usa', 'gla', 'china']);
-    return this.campaigns.filter(c => storyNames.has(c.name));
+    return this.campaigns.filter(
+      c => !c.isChallengeCampaign && !c.name.startsWith('training') && !c.name.startsWith('demo'),
+    );
   }
 
   /** Get challenge campaigns (CHALLENGE_0 through CHALLENGE_8). */
@@ -296,10 +298,13 @@ export class CampaignManager {
   /**
    * Source parity: CampaignManager::getCurrentMissionNumber.
    * Returns 0-based mission index within the current campaign.
+   * C++ increments before comparing, so if mission is not found it returns
+   * missions.length - 1 rather than -1.
    */
   getCurrentMissionNumber(): number {
     if (!this.currentCampaign || !this.currentMission) return -1;
-    return this.currentCampaign.missions.indexOf(this.currentMission);
+    const idx = this.currentCampaign.missions.indexOf(this.currentMission);
+    return idx >= 0 ? idx : this.currentCampaign.missions.length - 1;
   }
 
   /**

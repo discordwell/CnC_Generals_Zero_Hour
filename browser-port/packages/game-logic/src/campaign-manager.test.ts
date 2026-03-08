@@ -189,6 +189,14 @@ describe('CampaignManager', () => {
     expect(end).toBeNull();
   });
 
+  it('gotoNextMission returns null when already at end', () => {
+    const mgr = createManager();
+    mgr.setCampaign('USA');
+    mgr.gotoNextMission(); // -> mission02
+    mgr.gotoNextMission(); // -> null
+    expect(mgr.gotoNextMission()).toBeNull(); // still null
+  });
+
   it('getCurrentMap returns mission map path', () => {
     const mgr = createManager();
     mgr.setCampaign('USA');

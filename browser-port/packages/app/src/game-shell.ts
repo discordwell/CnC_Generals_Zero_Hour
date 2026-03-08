@@ -13,6 +13,8 @@
  *   MAIN_MENU → SINGLE_PLAYER → CHALLENGE_SELECT → (game loads)
  */
 
+import { DEFAULT_PERSONAS, type GeneralPersona } from './challenge-generals.js';
+
 // ──── Types ─────────────────────────────────────────────────────────────────
 
 export type GameDifficulty = 'EASY' | 'NORMAL' | 'HARD';
@@ -121,24 +123,10 @@ const STARTING_CREDITS_OPTIONS = [
 
 // ──── Challenge general data ────────────────────────────────────────────────
 
-export interface ChallengeGeneralInfo {
-  index: number;
-  name: string;
-  faction: string;
-  campaignName: string;
-  color: string;
-}
-
-const CHALLENGE_GENERALS: ChallengeGeneralInfo[] = [
-  { index: 0, name: 'General Granger', faction: 'USA Air Force', campaignName: 'challenge_0', color: '#4488cc' },
-  { index: 1, name: 'Dr. Thrax', faction: 'GLA Toxin', campaignName: 'challenge_1', color: '#66aa44' },
-  { index: 2, name: 'General Tao', faction: 'China Nuclear', campaignName: 'challenge_2', color: '#cc6622' },
-  { index: 3, name: 'General Alexander', faction: 'USA Super Weapons', campaignName: 'challenge_3', color: '#8866cc' },
-  { index: 4, name: 'General Kwai', faction: 'China Tank', campaignName: 'challenge_4', color: '#aa4444' },
-  { index: 5, name: 'General Townes', faction: 'USA Laser', campaignName: 'challenge_5', color: '#cc8844' },
-  { index: 6, name: 'Prince Kassad', faction: 'GLA Stealth', campaignName: 'challenge_6', color: '#668866' },
-  { index: 7, name: 'General Fai', faction: 'China Infantry', campaignName: 'challenge_7', color: '#886644' },
-  { index: 8, name: 'General Leang', faction: 'Boss General', campaignName: 'challenge_8', color: '#ccaa44' },
+// Display colors per general (indexed by GeneralPersona.index)
+const CHALLENGE_GENERAL_COLORS = [
+  '#4488cc', '#66aa44', '#cc6622', '#8866cc', '#aa4444',
+  '#cc8844', '#668866', '#886644', '#ccaa44',
 ];
 
 // ──── Styles ────────────────────────────────────────────────────────────────
@@ -832,12 +820,12 @@ export class GameShell {
         <div class="shell-section">
           <div class="shell-label">Select Your Opponent</div>
           <div class="challenge-grid" data-ref="challenge-grid">
-            ${CHALLENGE_GENERALS.map(g => `
+            ${DEFAULT_PERSONAS.map(g => `
               <button class="challenge-card${g.index === this.selectedChallengeIndex ? ' selected' : ''}"
                       data-challenge="${g.index}">
-                <span class="general-indicator" style="background:${g.color};"></span>
-                <span class="general-name">${g.name}</span>
-                <div class="general-faction">${g.faction}</div>
+                <span class="general-indicator" style="background:${CHALLENGE_GENERAL_COLORS[g.index] ?? '#888'};"></span>
+                <span class="general-name">${esc(g.name)}</span>
+                <div class="general-faction">${esc(g.faction)}</div>
               </button>
             `).join('')}
           </div>
@@ -881,7 +869,7 @@ export class GameShell {
       if (target.dataset.action === 'back') {
         this.showScreen('single-player');
       } else if (target.dataset.action === 'start') {
-        const general = CHALLENGE_GENERALS[this.selectedChallengeIndex];
+        const general = DEFAULT_PERSONAS[this.selectedChallengeIndex];
         if (general) {
           this.handleStartCampaign(general.campaignName, this.selectedDifficulty, 'CHALLENGE');
         }
