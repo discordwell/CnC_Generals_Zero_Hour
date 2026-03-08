@@ -107,7 +107,7 @@ describe('MusicManager', () => {
     vi.restoreAllMocks();
   });
 
-  it('playVictory switches to victory state', () => {
+  it('playVictory switches to victory state with default USA faction', () => {
     const audio = createMockAudioManager();
     const manager = new MusicManager(audio);
     manager.playVictory();
@@ -116,13 +116,31 @@ describe('MusicManager', () => {
     expect(audio.played).toContain('EvaUSA_Victory');
   });
 
-  it('playDefeat switches to defeat state', () => {
+  it('playVictory accepts a faction parameter', () => {
+    const audio = createMockAudioManager();
+    const manager = new MusicManager(audio);
+    manager.playVictory('China');
+
+    expect(manager.getState()).toBe('victory');
+    expect(audio.played).toContain('EvaChina_Victory');
+  });
+
+  it('playDefeat switches to defeat state with default USA faction', () => {
     const audio = createMockAudioManager();
     const manager = new MusicManager(audio);
     manager.playDefeat();
 
     expect(manager.getState()).toBe('defeat');
     expect(audio.played).toContain('EvaUSA_Defeat');
+  });
+
+  it('playDefeat accepts a faction parameter', () => {
+    const audio = createMockAudioManager();
+    const manager = new MusicManager(audio);
+    manager.playDefeat('GLA');
+
+    expect(manager.getState()).toBe('defeat');
+    expect(audio.played).toContain('EvaGLA_Defeat');
   });
 
   it('playVictoryForFaction uses correct faction prefix', () => {
@@ -217,5 +235,137 @@ describe('MusicManager', () => {
     expect(crossfadeCalls.length).toBe(0);
     // Should use addAudioEvent for hard-cut
     expect(audio.played.length).toBe(2);
+  });
+
+  describe('per-list track indices', () => {
+    it('menu, ambient, and battle indices are independent', () => {
+      const audio = createMockAudioManager();
+      const manager = new MusicManager(audio, {
+        menuTracks: ['M1', 'M2'],
+        ambientTracks: ['A1', 'A2', 'A3'],
+        battleTracks: ['B1', 'B2'],
+      });
+
+      // Play menu -> gets M1 (index 0), menu index advances to 1
+      manager.setMenuMusic();
+      expect(audio.played[audio.played.length - 1]).toBe('M1');
+
+      // Switch to ambient -> gets A1 (index 0), ambient index advances to 1
+      manager.setAmbientMusic();
+      expect(audio.played[audio.played.length - 1]).toBe('A1');
+
+      // Switch to battle -> gets B1 (index 0), battle index advances to 1
+      manager.notifyCombat();
+      expect(audio.played[audio.played.length - 1]).toBe('B1');
+
+      // Back to menu -> gets M2 (index 1, independent of other lists)
+      manager.stop();
+      manager.setMenuMusic();
+      expect(audio.played[audio.played.length - 1]).toBe('M2');
+
+      // Back to ambient -> gets A2 (index 1, independent of other lists)
+      manager.setAmbientMusic();
+      expect(audio.played[audio.played.length - 1]).toBe('A2');
+
+      // Back to battle -> gets B2 (index 1, independent of other lists)
+      manager.notifyCombat();
+      expect(audio.played[audio.played.length - 1]).toBe('B2');
+    });
+
+    it('track indices wrap around', () => {
+      const audio = createMockAudioManager();
+      const manager = new MusicManager(audio, {
+        menuTracks: ['M1', 'M2'],
+        ambientTracks: ['A1'],
+        battleTracks: ['B1', 'B2', 'B3'],
+      });
+
+      // Play menu 3 times (wraps: M1, M2, M1)
+      manager.setMenuMusic();
+      expect(audio.played[audio.played.length - 1]).toBe('M1');
+      manager.stop();
+      manager.setMenuMusic();
+      expect(audio.played[audio.played.length - 1]).toBe('M2');
+      manager.stop();
+      manager.setMenuMusic();
+      expect(audio.played[audio.played.length - 1]).toBe('M1');
+    });
+  });
+
+  describe('configurable track lists', () => {
+    it('uses custom track lists from config', () => {
+      const audio = createMockAudioManager();
+      const manager = new MusicManager(audio, {
+        menuTracks: ['CustomMenu1'],
+        ambientTracks: ['CustomAmbient1', 'CustomAmbient2'],
+        battleTracks: ['CustomBattle1'],
+      });
+
+      manager.setMenuMusic();
+      expect(audio.played).toContain('CustomMenu1');
+
+      manager.setAmbientMusic();
+      expect(audio.played).toContain('CustomAmbient1');
+
+      manager.notifyCombat();
+      expect(audio.played).toContain('CustomBattle1');
+    });
+
+    it('falls back to default tracks when config lists are not provided', () => {
+      const audio = createMockAudioManager();
+      const manager = new MusicManager(audio);
+
+      manager.setMenuMusic();
+      expect(audio.played[0]).toMatch(/MainMenuMusic|ShellMapMusic/);
+
+      manager.setAmbientMusic();
+      expect(audio.played[audio.played.length - 1]).toMatch(/MusicTrack_Ambient/);
+
+      manager.notifyCombat();
+      expect(audio.played[audio.played.length - 1]).toMatch(/MusicTrack_Battle/);
+    });
+
+    it('handles empty track lists gracefully', () => {
+      const audio = createMockAudioManager();
+      const manager = new MusicManager(audio, {
+        menuTracks: [],
+        ambientTracks: [],
+        battleTracks: [],
+      });
+
+      manager.setMenuMusic();
+      expect(audio.played.length).toBe(0);
+
+      manager.setAmbientMusic();
+      expect(audio.played.length).toBe(0);
+
+      manager.notifyCombat();
+      expect(audio.played.length).toBe(0);
+    });
+
+    it('supports registry-driven track loading', () => {
+      // Simulate what getMusicTracksByType() would return
+      const registryTracks = {
+        menu: ['MainMenuMusic', 'ShellMapMusic'],
+        ambient: ['MusicTrack_Ambient1', 'MusicTrack_Ambient2'],
+        battle: ['MusicTrack_Battle1', 'MusicTrack_Score1'],
+      };
+
+      const audio = createMockAudioManager();
+      const manager = new MusicManager(audio, {
+        menuTracks: registryTracks.menu,
+        ambientTracks: registryTracks.ambient,
+        battleTracks: registryTracks.battle,
+      });
+
+      manager.setMenuMusic();
+      expect(audio.played).toContain('MainMenuMusic');
+
+      manager.setAmbientMusic();
+      expect(audio.played).toContain('MusicTrack_Ambient1');
+
+      manager.notifyCombat();
+      expect(audio.played).toContain('MusicTrack_Battle1');
+    });
   });
 });

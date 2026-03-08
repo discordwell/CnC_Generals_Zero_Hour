@@ -10,6 +10,7 @@ export type {
   AudioEventDef,
   AudioEventSoundType,
   MiscAudioDef,
+  MusicTracksByType,
   ObjectCreationListDef,
   CommandButtonDef,
   CommandSetButtonSlot,

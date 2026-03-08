@@ -1,5 +1,14 @@
 # Session Summaries
 
+## 2026-03-08T15:30Z — P1/P2 Code Review Fixes (5 Tasks)
+Fixed remaining items from 8-agent sprint code review:
+1. **Pathfinding heuristic** — `/ 2` → `>> 1` for C++ integer division parity in both `heuristic()` and `pathHeuristic()`
+2. **Multiple ConditionsYes** — `conditionFlagSets` on ModelConditionInfo, inner loop in both `findBestConditionMatch()` copies, `mergeConditionInfosByVisualKey()` grouping in collectModelConditionInfos. Removed dead `conditionKeys` field after code review.
+3. **Pre-normalize damage types** — Removed `.trim().toUpperCase()` from `adjustDamageByArmor()` and `adjustDamageByArmorSet()` hot paths. All callers verified uppercase.
+4. **Data-driven MusicManager** — Per-list indices (menuIndex/ambientIndex/battleIndex), configurable track lists via constructor config, `getMusicTracksByType()` on registry, faction param on victory/defeat.
+5. **Game time for pulses** — `accumulatedTime` field replaces `performance.now()` for selection ring pulse and stealth opacity. Animations freeze when paused (dt=0). Fixed sentinel from 0 to -1 for accumulatedTime=0 edge case.
+Code review: Fixed P0 (missing Task 1 patch), P2 dead `conditionKeys` field, P2 selection ring sentinel. Noted but deferred: interface dedup across packages, findBestConditionMatch dedup. 2995 tests pass, no new TS errors.
+
 ## 2026-03-08T13:00Z — Code Review Fixes for 8-Agent Sprint
 Fixed P0 bugs: DozerAI construction progress never written back (buildings stuck at 0%); audio double-fetch + stale loadingBuffers guard (permanent load failure after error). Performance: pre-computed `conditionKey` on ModelConditionInfo (eliminates per-frame sort+join), snapshot-before-iterate in stopAllPlaybackNodes. TypeScript: fixed 14 compilation errors from sprint (rotationX, specialPowerStates, applyWeaponDamageAmount signatures, unused methods, private access). Documented diagonal corner-cutting divergence from C++. Added multi-frame construction progress test. 2,983 tests pass.
 

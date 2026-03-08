@@ -413,11 +413,12 @@ describe('Damage type vs armor type calculation', () => {
     expect(estimateWeaponDamage(weapon, null)).toBe(50);
   });
 
-  it('normalizes damage type to uppercase for comparison', () => {
+  it('matches pre-normalized uppercase damage type against armor map', () => {
     const armor = new Map<string, number>([
       ['EXPLOSION', 0.3],
     ]);
-    expect(adjustDamageByArmor(armor, 100, '  explosion  ')).toBeCloseTo(30);
+    // Callers must pass pre-normalized (uppercase, trimmed) damage types
+    expect(adjustDamageByArmor(armor, 100, 'EXPLOSION')).toBeCloseTo(30);
   });
 });
 

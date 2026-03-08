@@ -19,6 +19,14 @@ export interface ModelConditionInfo {
   conditionFlags: string[];
   /** Pre-computed sorted key for O(1) comparison in hot paths. */
   conditionKey?: string;
+  /**
+   * Source parity: m_conditionsYesVec — alternative condition flag arrays.
+   * In C++, a single ModelConditionState can match multiple different
+   * condition flag combinations (multiple ConditionsYes lines).
+   * When present, the match loop iterates all sets.
+   * Each inner array is one alternative set of condition flags.
+   */
+  conditionFlagSets?: string[][];
   modelName: string | null;
   animationName: string | null;
   idleAnimationName: string | null;
@@ -194,11 +202,11 @@ export function collectModelConditionInfos(objectDef: ObjectDef | undefined): Mo
     return [];
   }
 
-  const infos: ModelConditionInfo[] = [];
+  const rawInfos: ModelConditionInfo[] = [];
 
   const visitBlock = (block: IniBlock): void => {
     if (block.type.toUpperCase() === 'MODELCONDITIONSTATE') {
-      infos.push(parseModelConditionStateBlock(block));
+      rawInfos.push(parseModelConditionStateBlock(block));
     }
 
     for (const childBlock of block.blocks) {
@@ -210,7 +218,73 @@ export function collectModelConditionInfos(objectDef: ObjectDef | undefined): Mo
     visitBlock(block);
   }
 
-  return infos;
+  // Source parity: merge blocks that share the same visual output but differ
+  // in condition flags into a single info with conditionFlagSets (mirrors
+  // C++ m_conditionsYesVec.push_back()).
+  return mergeConditionInfosByVisualKey(rawInfos);
+}
+
+/**
+ * Build a string key that identifies the visual output of a ModelConditionInfo
+ * (everything except the condition flags).
+ */
+function buildVisualKey(info: ModelConditionInfo): string {
+  return [
+    info.modelName ?? '',
+    info.animationName ?? '',
+    info.idleAnimationName ?? '',
+    info.hideSubObjects.join(','),
+    info.showSubObjects.join(','),
+    info.animationMode,
+    info.transitionKey ?? '',
+    String(info.animSpeedFactorMin),
+    String(info.animSpeedFactorMax),
+    info.idleAnimations.map(v => `${v.animationName}:${v.randomWeight}`).join(','),
+  ].join('\0');
+}
+
+/**
+ * Merge infos that share the same visual output into a single info with
+ * conditionFlagSets containing all the alternative flag arrays.
+ */
+function mergeConditionInfosByVisualKey(infos: ModelConditionInfo[]): ModelConditionInfo[] {
+  if (infos.length <= 1) {
+    return infos;
+  }
+
+  const keyToGroup = new Map<string, ModelConditionInfo[]>();
+  const orderKeys: string[] = [];
+
+  for (const info of infos) {
+    const key = buildVisualKey(info);
+    const group = keyToGroup.get(key);
+    if (group) {
+      group.push(info);
+    } else {
+      keyToGroup.set(key, [info]);
+      orderKeys.push(key);
+    }
+  }
+
+  const merged: ModelConditionInfo[] = [];
+  for (const key of orderKeys) {
+    const group = keyToGroup.get(key)!;
+    if (group.length === 1) {
+      merged.push(group[0]!);
+    } else {
+      // Merge: use the first info as the base, add all flag sets.
+      const base = group[0]!;
+      const flagSets = group.map(g => g.conditionFlags);
+      merged.push({
+        ...base,
+        // Primary conditionFlags stays as the first set for backward compat.
+        conditionFlags: base.conditionFlags,
+        conditionKey: base.conditionFlags.slice().sort().join('|'),
+        conditionFlagSets: flagSets,
+      });
+    }
+  }
+  return merged;
 }
 
 function parseModelConditionStateBlock(block: IniBlock): ModelConditionInfo {

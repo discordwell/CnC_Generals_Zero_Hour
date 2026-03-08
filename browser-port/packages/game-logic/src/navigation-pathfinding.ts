@@ -1067,9 +1067,9 @@ function pathHeuristic(cellX: number, cellZ: number, targetX: number, targetZ: n
   const dx = Math.abs(cellX - targetX);
   const dz = Math.abs(cellZ - targetZ);
   if (dx > dz) {
-    return COST_ORTHOGONAL * dx + (COST_ORTHOGONAL * dz) / 2;
+    return COST_ORTHOGONAL * dx + ((COST_ORTHOGONAL * dz) >> 1);
   }
-  return COST_ORTHOGONAL * dz + (COST_ORTHOGONAL * dx) / 2;
+  return COST_ORTHOGONAL * dz + ((COST_ORTHOGONAL * dx) >> 1);
 }
 
 function reconstructPath(

@@ -126,6 +126,12 @@ export interface MiscAudioDef {
   noCanDoSoundName?: string;
 }
 
+export interface MusicTracksByType {
+  menu: string[];
+  ambient: string[];
+  battle: string[];
+}
+
 export interface RawBlockDef {
   name: string;
   fields: Record<string, IniValue>;
@@ -557,6 +563,35 @@ export class IniDataRegistry {
 
   getDynamicGameLOD(name: string): RawBlockDef | undefined {
     return this.dynamicGameLODs.get(name);
+  }
+
+  /**
+   * Categorize music tracks (soundType === 'music') by name pattern.
+   * Names containing Menu/Shell -> menu, Ambient -> ambient, Battle/Score -> battle.
+   */
+  getMusicTracksByType(): MusicTracksByType {
+    const menu: string[] = [];
+    const ambient: string[] = [];
+    const battle: string[] = [];
+
+    for (const [name, def] of this.audioEvents) {
+      if (def.soundType !== 'music') continue;
+      const upper = name.toUpperCase();
+      if (upper.includes('MENU') || upper.includes('SHELL')) {
+        menu.push(name);
+      } else if (upper.includes('AMBIENT')) {
+        ambient.push(name);
+      } else if (upper.includes('BATTLE') || upper.includes('SCORE')) {
+        battle.push(name);
+      }
+    }
+
+    // Sort for deterministic ordering
+    menu.sort();
+    ambient.sort();
+    battle.sort();
+
+    return { menu, ambient, battle };
   }
 
   getMiscAudio(): MiscAudioDef | undefined {

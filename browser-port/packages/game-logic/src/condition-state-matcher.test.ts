@@ -105,6 +105,40 @@ describe('findBestConditionMatch', () => {
     );
     expect(result).toBe(upper);
   });
+
+  it('matches via conditionFlagSets when multiple flag sets share one info', () => {
+    // Simulates C++ SparseMatchFinder with multiple ConditionsYes per ModelConditionState.
+    // One info represents an animation shared by two different flag combinations.
+    const merged: ConditionMatchable = {
+      conditionFlags: ['MOVING', 'DAMAGED'],
+      conditionFlagSets: [
+        ['MOVING', 'DAMAGED'],
+        ['MOVING', 'RUBBLE'],
+      ],
+    };
+    const other = info(['FIRING_A']);
+
+    // First flag set matches
+    expect(findBestConditionMatch([merged, other], new Set(['MOVING', 'DAMAGED']))).toBe(merged);
+    // Second flag set matches
+    expect(findBestConditionMatch([merged, other], new Set(['MOVING', 'RUBBLE']))).toBe(merged);
+    // Neither flag set matches well; FIRING_A matches exactly
+    expect(findBestConditionMatch([merged, other], new Set(['FIRING_A']))).toBe(other);
+  });
+
+  it('picks best score across all flag sets in a merged info', () => {
+    const merged: ConditionMatchable = {
+      conditionFlags: ['MOVING'],
+      conditionFlagSets: [
+        ['MOVING'],              // yesMatch=1, extraneous=0
+        ['MOVING', 'DAMAGED'],   // yesMatch=1, extraneous=1
+      ],
+    };
+    // With activeFlags = {MOVING}, the first flag set scores better (0 extraneous).
+    // The info should still be selected (best across all its flag sets).
+    const result = findBestConditionMatch([merged], new Set(['MOVING']));
+    expect(result).toBe(merged);
+  });
 });
 
 describe('createConditionMatcher', () => {

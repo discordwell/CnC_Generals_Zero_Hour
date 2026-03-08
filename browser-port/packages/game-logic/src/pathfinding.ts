@@ -235,9 +235,9 @@ export function heuristic(ax: number, az: number, bx: number, bz: number): numbe
   if (dx < 0) dx = -dx;
   if (dz < 0) dz = -dz;
   if (dx > dz) {
-    return COST_ORTHOGONAL * dx + (COST_ORTHOGONAL * dz) / 2;
+    return COST_ORTHOGONAL * dx + ((COST_ORTHOGONAL * dz) >> 1);
   }
-  return COST_ORTHOGONAL * dz + (COST_ORTHOGONAL * dx) / 2;
+  return COST_ORTHOGONAL * dz + ((COST_ORTHOGONAL * dx) >> 1);
 }
 
 // ---------------------------------------------------------------------------

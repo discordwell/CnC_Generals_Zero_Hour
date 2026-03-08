@@ -29,6 +29,12 @@ export interface MusicManagerConfig {
   minBattleDurationMs?: number;
   /** Whether to use crossfade transitions between tracks. Default true. */
   useCrossfade?: boolean;
+  /** Override menu track list. Falls back to DEFAULT_MENU_TRACKS if not provided. */
+  menuTracks?: string[];
+  /** Override ambient track list. Falls back to DEFAULT_AMBIENT_TRACKS if not provided. */
+  ambientTracks?: string[];
+  /** Override battle track list. Falls back to DEFAULT_BATTLE_TRACKS if not provided. */
+  battleTracks?: string[];
 }
 
 /**
@@ -36,14 +42,14 @@ export interface MusicManagerConfig {
  * music track list. Track names map to AudioEvent definitions which point
  * to actual music files.
  */
-const MENU_TRACKS = ['MainMenuMusic', 'ShellMapMusic'];
-const AMBIENT_TRACKS = [
+const DEFAULT_MENU_TRACKS = ['MainMenuMusic', 'ShellMapMusic'];
+const DEFAULT_AMBIENT_TRACKS = [
   'MusicTrack_Ambient1',
   'MusicTrack_Ambient2',
   'MusicTrack_Ambient3',
   'MusicTrack_Ambient4',
 ];
-const BATTLE_TRACKS = [
+const DEFAULT_BATTLE_TRACKS = [
   'MusicTrack_Battle1',
   'MusicTrack_Battle2',
   'MusicTrack_Battle3',
@@ -58,19 +64,27 @@ export class MusicManager {
   private readonly battleCooldownMs: number;
   private readonly minBattleDurationMs: number;
   private readonly useCrossfade: boolean;
+  private readonly menuTracks: readonly string[];
+  private readonly ambientTracks: readonly string[];
+  private readonly battleTracks: readonly string[];
 
   private state: MusicState = 'idle';
   private currentHandle = 0;
   private currentTrackName = '';
   private lastCombatTime = 0;
   private battleStartTime = 0;
-  private trackIndex = 0;
+  private menuIndex = 0;
+  private ambientIndex = 0;
+  private battleIndex = 0;
 
   constructor(audioManager: MusicAudioManager, config: MusicManagerConfig = {}) {
     this.audioManager = audioManager;
     this.battleCooldownMs = config.battleCooldownMs ?? DEFAULT_BATTLE_COOLDOWN_MS;
     this.minBattleDurationMs = config.minBattleDurationMs ?? DEFAULT_MIN_BATTLE_DURATION_MS;
     this.useCrossfade = config.useCrossfade ?? true;
+    this.menuTracks = config.menuTracks ?? DEFAULT_MENU_TRACKS;
+    this.ambientTracks = config.ambientTracks ?? DEFAULT_AMBIENT_TRACKS;
+    this.battleTracks = config.battleTracks ?? DEFAULT_BATTLE_TRACKS;
   }
 
   getState(): MusicState {
@@ -85,14 +99,14 @@ export class MusicManager {
   setMenuMusic(): void {
     if (this.state === 'menu') return;
     this.state = 'menu';
-    this.playTrackFromList(MENU_TRACKS);
+    this.playTrackFromMenu();
   }
 
   /** Start ambient in-game music. */
   setAmbientMusic(): void {
     if (this.state === 'ambient') return;
     this.state = 'ambient';
-    this.playTrackFromList(AMBIENT_TRACKS);
+    this.playTrackFromAmbient();
   }
 
   /** Notify that combat is happening — switches to battle music. */
@@ -103,29 +117,28 @@ export class MusicManager {
     if (this.state !== 'battle') {
       this.state = 'battle';
       this.battleStartTime = now;
-      this.playTrackFromList(BATTLE_TRACKS);
+      this.playTrackFromBattle();
     }
   }
 
-  /** Play victory stinger. */
-  playVictory(): void {
-    this.state = 'victory';
-    this.playTrack('EvaUSA_Victory');
+  /** Play victory stinger. Defaults to USA faction. */
+  playVictory(faction = 'USA'): void {
+    this.playVictoryForFaction(faction);
   }
 
-  /** Play defeat stinger. */
-  playDefeat(): void {
-    this.state = 'defeat';
-    this.playTrack('EvaUSA_Defeat');
+  /** Play defeat stinger. Defaults to USA faction. */
+  playDefeat(faction = 'USA'): void {
+    this.playDefeatForFaction(faction);
   }
 
-  /** Play faction-specific victory/defeat. */
+  /** Play faction-specific victory. */
   playVictoryForFaction(faction: string): void {
     this.state = 'victory';
     const prefix = resolveEvaFactionPrefix(faction);
     this.playTrack(`${prefix}_Victory`);
   }
 
+  /** Play faction-specific defeat. */
   playDefeatForFaction(faction: string): void {
     this.state = 'defeat';
     const prefix = resolveEvaFactionPrefix(faction);
@@ -160,10 +173,24 @@ export class MusicManager {
     this.stop();
   }
 
-  private playTrackFromList(tracks: readonly string[]): void {
-    if (tracks.length === 0) return;
-    const track = tracks[this.trackIndex % tracks.length]!;
-    this.trackIndex = (this.trackIndex + 1) % tracks.length;
+  private playTrackFromMenu(): void {
+    if (this.menuTracks.length === 0) return;
+    const track = this.menuTracks[this.menuIndex % this.menuTracks.length]!;
+    this.menuIndex = (this.menuIndex + 1) % this.menuTracks.length;
+    this.playTrack(track);
+  }
+
+  private playTrackFromAmbient(): void {
+    if (this.ambientTracks.length === 0) return;
+    const track = this.ambientTracks[this.ambientIndex % this.ambientTracks.length]!;
+    this.ambientIndex = (this.ambientIndex + 1) % this.ambientTracks.length;
+    this.playTrack(track);
+  }
+
+  private playTrackFromBattle(): void {
+    if (this.battleTracks.length === 0) return;
+    const track = this.battleTracks[this.battleIndex % this.battleTracks.length]!;
+    this.battleIndex = (this.battleIndex + 1) % this.battleTracks.length;
     this.playTrack(track);
   }
 

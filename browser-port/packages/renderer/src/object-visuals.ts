@@ -36,6 +36,11 @@ export interface ModelConditionInfo {
   conditionFlags: string[];
   /** Pre-computed sorted key for O(1) comparison. Set at creation time by INI parser. */
   conditionKey?: string;
+  /**
+   * Source parity: m_conditionsYesVec — alternative condition flag arrays.
+   * When present, the match loop iterates all sets.
+   */
+  conditionFlagSets?: string[][];
   modelName: string | null;
   animationName: string | null;
   idleAnimationName: string | null;
@@ -113,7 +118,7 @@ interface VisualAssetState {
   healthBarGroup: THREE.Group | null;
   healthBarFill: THREE.Mesh | null;
   selectionRing: THREE.Mesh | null;
-  /** Timestamp (performance.now/1000) when selection ring was first shown, for pulse animation. */
+  /** Accumulated game time (seconds) when selection ring was first shown, for pulse animation. */
   selectionRingSpawnTime: number;
   /** Last applied selection ring scale (to avoid redundant updates). */
   selectionRingScale: number;
@@ -205,6 +210,10 @@ const CLIP_HINTS_BY_STATE: Record<RenderableAnimationState, string[]> = {
 /**
  * Port of SparseMatchFinder::findBestInfoSlow() — finds the best-matching
  * ModelConditionInfo for a set of active entity flags.
+ *
+ * Source parity: inner loop over m_conditionsYesVec (multiple ConditionsYes
+ * per ModelConditionState). Each flag set is scored independently and the
+ * best score across all sets of all infos wins.
  */
 function findBestConditionMatch(
   infos: readonly ModelConditionInfo[],
@@ -215,22 +224,29 @@ function findBestConditionMatch(
   let bestYesExtraneousBits = Infinity;
 
   for (const info of infos) {
-    let yesMatch = 0;
-    let yesExtraneousBits = 0;
-    for (const flag of info.conditionFlags) {
-      if (activeFlags.has(flag)) {
-        yesMatch++;
-      } else {
-        yesExtraneousBits++;
+    // Iterate all alternative flag sets (conditionFlagSets), falling back to
+    // the single conditionFlags array for backward compatibility.
+    const flagSets: readonly (readonly string[])[] =
+      info.conditionFlagSets ?? [info.conditionFlags];
+
+    for (const flags of flagSets) {
+      let yesMatch = 0;
+      let yesExtraneousBits = 0;
+      for (const flag of flags) {
+        if (activeFlags.has(flag)) {
+          yesMatch++;
+        } else {
+          yesExtraneousBits++;
+        }
       }
-    }
-    if (
-      yesMatch > bestYesMatch ||
-      (yesMatch >= bestYesMatch && yesExtraneousBits < bestYesExtraneousBits)
-    ) {
-      result = info;
-      bestYesMatch = yesMatch;
-      bestYesExtraneousBits = yesExtraneousBits;
+      if (
+        yesMatch > bestYesMatch ||
+        (yesMatch >= bestYesMatch && yesExtraneousBits < bestYesExtraneousBits)
+      ) {
+        result = info;
+        bestYesMatch = yesMatch;
+        bestYesExtraneousBits = yesExtraneousBits;
+      }
     }
   }
   return result;
@@ -262,6 +278,8 @@ export class ObjectVisualManager {
   private readonly tempToppleAxis = new THREE.Vector3();
   private viewGuardBandBiasX = 0;
   private viewGuardBandBiasY = 0;
+  /** Accumulated game time in seconds — advances by dt each sync(), freezes when paused (dt=0). */
+  private accumulatedTime = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -285,6 +303,7 @@ export class ObjectVisualManager {
    * Sync rendered object visuals with latest render-state snapshots.
    */
   sync(states: readonly RenderableEntityState[], dt = 0): void {
+    this.accumulatedTime += dt;
     const activeIds = new Set<number>();
     for (const state of states) {
       activeIds.add(state.id);
@@ -435,7 +454,7 @@ export class ObjectVisualManager {
       healthBarGroup: null,
       healthBarFill: null,
       selectionRing: null,
-      selectionRingSpawnTime: 0,
+      selectionRingSpawnTime: -1,
       selectionRingScale: 0,
       selectionRingColorHex: 0,
       scriptFlashRing: null,
@@ -1094,7 +1113,7 @@ export class ObjectVisualManager {
     if (!isSelected) {
       if (visual.selectionRing) {
         visual.selectionRing.visible = false;
-        visual.selectionRingSpawnTime = 0;
+        visual.selectionRingSpawnTime = -1;
       }
       return;
     }
@@ -1125,7 +1144,7 @@ export class ObjectVisualManager {
       visual.selectionRing = ring;
       visual.selectionRingColorHex = desiredColor;
       visual.selectionRingScale = desiredScale;
-      visual.selectionRingSpawnTime = performance.now() / 1000;
+      visual.selectionRingSpawnTime = this.accumulatedTime;
       ring.scale.setScalar(desiredScale);
       visual.root.add(ring);
       this.applyGuardBandFrustumPolicy(ring);
@@ -1144,8 +1163,8 @@ export class ObjectVisualManager {
     }
 
     // Pulse animation on fresh selection.
-    if (visual.selectionRingSpawnTime > 0) {
-      const elapsed = performance.now() / 1000 - visual.selectionRingSpawnTime;
+    if (visual.selectionRingSpawnTime >= 0) {
+      const elapsed = this.accumulatedTime - visual.selectionRingSpawnTime;
       if (elapsed < ObjectVisualManager.SEL_PULSE_DURATION) {
         const t = elapsed / ObjectVisualManager.SEL_PULSE_DURATION;
         // Ease-out overshoot: peaks at SEL_PULSE_OVERSHOOT then settles to 1.0.
@@ -1153,7 +1172,7 @@ export class ObjectVisualManager {
         visual.selectionRing.scale.setScalar(desiredScale * overshoot);
       } else {
         visual.selectionRing.scale.setScalar(desiredScale);
-        visual.selectionRingSpawnTime = 0;
+        visual.selectionRingSpawnTime = -1;
       }
     }
 
@@ -1375,7 +1394,7 @@ export class ObjectVisualManager {
       targetOpacity = 0.35;
     } else if (isStealthed && isDetected) {
       // Pulse between 0.4 and 0.8.
-      targetOpacity = 0.6 + 0.2 * Math.sin(performance.now() * 0.006);
+      targetOpacity = 0.6 + 0.2 * Math.sin(this.accumulatedTime * 6.0);
     }
 
     // Skip traversal when opacity hasn't changed (within tolerance for pulsing).

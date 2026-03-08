@@ -781,6 +781,67 @@ describe('ObjectVisualManager', () => {
     expect(ring.scale.x).toBeLessThanOrEqual(1.2);
   });
 
+  it('selection ring pulse freezes when dt=0 (game paused)', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    // Advance time so the pulse is mid-animation.
+    const state = makeMeshState({ id: 46, isSelected: true, selectionCircleRadius: 2 });
+    manager.sync([state], 0.1); // accumulatedTime = 0.1, spawnTime = 0.1
+
+    // Advance a bit so the pulse is partway through.
+    manager.sync([state], 0.05); // accumulatedTime = 0.15, elapsed = 0.05
+
+    const root = manager.getVisualRoot(46)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    const scaleAfterAdvance = ring.scale.x;
+
+    // Now sync with dt=0 (paused) — scale should not change.
+    manager.sync([state], 0);
+    expect(ring.scale.x).toBe(scaleAfterAdvance);
+
+    // Another dt=0 tick — still frozen.
+    manager.sync([state], 0);
+    expect(ring.scale.x).toBe(scaleAfterAdvance);
+  });
+
+  it('stealth detected pulse freezes when dt=0 (game paused)', async () => {
+    const scene = new THREE.Scene();
+    const model = modelWithAnimationClips();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => model,
+    });
+
+    const state = makeMeshState({ id: 47, isStealthed: true, isDetected: true });
+
+    // Load the model first.
+    manager.sync([state], 0.01);
+    await flushModelLoadQueue();
+
+    // Advance time so the stealth pulse has a non-trivial value.
+    manager.sync([state], 0.5);
+
+    const root = manager.getVisualRoot(47)!;
+    const mesh = root.children.find(c => (c as THREE.Mesh).isMesh) as THREE.Mesh | undefined
+      ?? (() => { let found: THREE.Mesh | null = null; root.traverse(c => { if (!found && (c as THREE.Mesh).isMesh) found = c as THREE.Mesh; }); return found; })();
+    expect(mesh).toBeTruthy();
+
+    // Read opacity after advancing.
+    const mat = (Array.isArray(mesh!.material) ? mesh!.material[0] : mesh!.material) as THREE.MeshBasicMaterial;
+    const opacityAfterAdvance = mat.opacity;
+
+    // Sync with dt=0 (paused) — opacity should not change.
+    manager.sync([state], 0);
+    const opacityAfterPause = mat.opacity;
+    expect(opacityAfterPause).toBe(opacityAfterAdvance);
+
+    // Another dt=0 tick — still frozen.
+    manager.sync([state], 0);
+    expect(mat.opacity).toBe(opacityAfterAdvance);
+  });
+
   // =========================================================================
   // cloneModelForGhost
   // =========================================================================

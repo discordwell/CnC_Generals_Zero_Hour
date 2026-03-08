@@ -14,11 +14,20 @@
  */
 export interface ConditionMatchable {
   conditionFlags: readonly string[];
+  /**
+   * Source parity: m_conditionsYesVec — alternative condition flag arrays.
+   * When present, the match loop iterates all sets.
+   */
+  conditionFlagSets?: readonly (readonly string[])[];
 }
 
 /**
  * Port of C++ SparseMatchFinder::findBestInfoSlow().
  * Finds the best-matching condition info for a given set of active entity flags.
+ *
+ * Source parity: inner loop over m_conditionsYesVec (multiple ConditionsYes
+ * per ModelConditionState). Each flag set is scored independently and the
+ * best score across all sets of all infos wins.
  *
  * @param infos      Array of condition infos to search
  * @param activeFlags Set of currently active flags on the entity
@@ -33,28 +42,33 @@ export function findBestConditionMatch<T extends ConditionMatchable>(
   let bestYesExtraneousBits = Infinity;
 
   for (const info of infos) {
-    const flags = info.conditionFlags;
+    // Iterate all alternative flag sets (conditionFlagSets), falling back to
+    // the single conditionFlags array for backward compatibility.
+    const flagSets: readonly (readonly string[])[] =
+      info.conditionFlagSets ?? [info.conditionFlags];
 
-    // countConditionIntersection: flags in info that ARE in activeFlags
-    let yesMatch = 0;
-    // countConditionInverseIntersection: flags in info that are NOT in activeFlags
-    let yesExtraneousBits = 0;
+    for (const flags of flagSets) {
+      // countConditionIntersection: flags in info that ARE in activeFlags
+      let yesMatch = 0;
+      // countConditionInverseIntersection: flags in info that are NOT in activeFlags
+      let yesExtraneousBits = 0;
 
-    for (const flag of flags) {
-      if (activeFlags.has(flag)) {
-        yesMatch++;
-      } else {
-        yesExtraneousBits++;
+      for (const flag of flags) {
+        if (activeFlags.has(flag)) {
+          yesMatch++;
+        } else {
+          yesExtraneousBits++;
+        }
       }
-    }
 
-    if (
-      yesMatch > bestYesMatch ||
-      (yesMatch >= bestYesMatch && yesExtraneousBits < bestYesExtraneousBits)
-    ) {
-      result = info;
-      bestYesMatch = yesMatch;
-      bestYesExtraneousBits = yesExtraneousBits;
+      if (
+        yesMatch > bestYesMatch ||
+        (yesMatch >= bestYesMatch && yesExtraneousBits < bestYesExtraneousBits)
+      ) {
+        result = info;
+        bestYesMatch = yesMatch;
+        bestYesExtraneousBits = yesExtraneousBits;
+      }
     }
   }
 

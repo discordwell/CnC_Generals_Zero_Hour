@@ -209,13 +209,16 @@ export function resolveWeaponDelayFrames(
   return randomRange(minDelay, maxDelay);
 }
 
+/**
+ * Callers must pass pre-normalized (uppercase, trimmed) damage type strings.
+ * Armor coefficient map keys are uppercase (built from SOURCE_DAMAGE_TYPE_NAMES).
+ */
 export function adjustDamageByArmorSet(
   target: CombatDamageTargetLike,
   amount: number,
   damageType: string,
 ): number {
-  const normalizedType = damageType.trim().toUpperCase();
-  if (normalizedType === 'UNRESISTABLE') {
+  if (damageType === 'UNRESISTABLE') {
     return amount;
   }
 
@@ -224,7 +227,7 @@ export function adjustDamageByArmorSet(
     return amount;
   }
 
-  const coefficient = coefficients.get(normalizedType);
+  const coefficient = coefficients.get(damageType);
   if (coefficient === undefined) {
     return amount;
   }

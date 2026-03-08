@@ -280,20 +280,22 @@ export function getWeaponSlotStatus(
  * Source parity: ArmorTemplate::adjustDamage.
  * Applies the armor damage coefficient to the raw damage amount.
  * UNRESISTABLE damage bypasses armor entirely.
+ *
+ * Callers must pass pre-normalized (uppercase, trimmed) damage type strings.
+ * Armor coefficient map keys are uppercase (built from SOURCE_DAMAGE_TYPE_NAMES).
  */
 export function adjustDamageByArmor(
   armorCoefficients: ReadonlyMap<string, number> | null,
   rawDamage: number,
   damageType: string,
 ): number {
-  const normalizedType = damageType.trim().toUpperCase();
-  if (normalizedType === 'UNRESISTABLE') {
+  if (damageType === 'UNRESISTABLE') {
     return rawDamage;
   }
   if (!armorCoefficients) {
     return rawDamage;
   }
-  const coefficient = armorCoefficients.get(normalizedType);
+  const coefficient = armorCoefficients.get(damageType);
   if (coefficient === undefined) {
     return rawDamage;
   }
