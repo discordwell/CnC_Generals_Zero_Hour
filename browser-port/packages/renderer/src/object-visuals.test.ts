@@ -1063,6 +1063,411 @@ describe('ObjectVisualManager', () => {
     expect(manager.getVisualState(107)?.animationState).toBeNull(); // condition active
   });
 
+  // =========================================================================
+  // Transition animation system
+  // =========================================================================
+
+  it('plays a transition animation when switching between states with transition keys', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'DoorOpen', 'DoorOpening']),
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'Idle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: 'trans_closed',
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+      {
+        conditionFlags: ['DOOR_OPEN'],
+        modelName: null,
+        animationName: 'DoorOpen',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: 'trans_open',
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+    ];
+
+    const transitionInfos = [
+      {
+        fromKey: 'trans_closed',
+        toKey: 'trans_open',
+        modelName: null,
+        animationName: 'DoorOpening',
+        animationMode: 'ONCE' as const,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+      },
+    ];
+
+    // Start in default (closed) state.
+    manager.sync([makeMeshState({
+      id: 200,
+      modelConditionInfos: conditionInfos,
+      transitionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({
+      id: 200,
+      modelConditionInfos: conditionInfos,
+      transitionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    // Verify initial state.
+    let vs = manager.getVisualState(200);
+    expect(vs?.isInTransition).toBe(false);
+
+    // Switch to DOOR_OPEN — should trigger transition.
+    manager.sync([makeMeshState({
+      id: 200,
+      modelConditionInfos: conditionInfos,
+      transitionInfos,
+      modelConditionFlags: ['DOOR_OPEN'],
+    })], 1 / 30);
+
+    vs = manager.getVisualState(200);
+    expect(vs?.isInTransition).toBe(true);
+    // The active condition key should be a transition key, not the target.
+    expect(vs?.activeConditionKey).toContain('__transition__');
+  });
+
+  it('skips transition when no matching TransitionState exists', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'DoorOpen']),
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'Idle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: 'trans_closed',
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+      {
+        conditionFlags: ['DOOR_OPEN'],
+        modelName: null,
+        animationName: 'DoorOpen',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: 'trans_open',
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+    ];
+
+    // No transitionInfos — should go directly to target state.
+    manager.sync([makeMeshState({
+      id: 201,
+      modelConditionInfos: conditionInfos,
+      transitionInfos: [],
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({
+      id: 201,
+      modelConditionInfos: conditionInfos,
+      transitionInfos: [],
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    // Switch to DOOR_OPEN — should go directly (no transition).
+    manager.sync([makeMeshState({
+      id: 201,
+      modelConditionInfos: conditionInfos,
+      transitionInfos: [],
+      modelConditionFlags: ['DOOR_OPEN'],
+    })], 1 / 30);
+
+    const vs = manager.getVisualState(201);
+    expect(vs?.isInTransition).toBe(false);
+    expect(vs?.activeConditionKey).toBe('DOOR_OPEN');
+  });
+
+  // =========================================================================
+  // Idle animation randomization
+  // =========================================================================
+
+  it('picks idle animation variants from idleAnimations array', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['IdleA', 'IdleB', 'IdleC']),
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: null,
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'ONCE' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [
+          { animationName: 'IdleA', randomWeight: 1 },
+          { animationName: 'IdleB', randomWeight: 2 },
+          { animationName: 'IdleC', randomWeight: 1 },
+        ],
+      },
+    ];
+
+    manager.sync([makeMeshState({
+      id: 210,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({
+      id: 210,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    const vs = manager.getVisualState(210);
+    expect(vs?.hasModel).toBe(true);
+    // An idle variant should have been picked.
+    expect(vs?.idleVariantIndex).toBeGreaterThanOrEqual(0);
+    expect(vs?.idleVariantIndex).toBeLessThan(3);
+  });
+
+  // =========================================================================
+  // AnimationSpeedFactorRange
+  // =========================================================================
+
+  it('applies randomized animation speed factor from condition state', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle', 'Walk']),
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'Idle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 0.8,
+        animSpeedFactorMax: 1.2,
+        idleAnimations: [],
+      },
+    ];
+
+    manager.sync([makeMeshState({
+      id: 220,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({
+      id: 220,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    const vs = manager.getVisualState(220);
+    expect(vs?.conditionAnimSpeedFactor).toBeGreaterThanOrEqual(0.8);
+    expect(vs?.conditionAnimSpeedFactor).toBeLessThanOrEqual(1.2);
+  });
+
+  it('defaults animation speed factor to 1.0 when range is absent', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['Idle']),
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'Idle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        // No speed factor fields — should default to 1.0
+      },
+    ];
+
+    manager.sync([makeMeshState({
+      id: 221,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({
+      id: 221,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    const vs = manager.getVisualState(221);
+    expect(vs?.conditionAnimSpeedFactor).toBe(1.0);
+  });
+
+  // =========================================================================
+  // Per-condition model swapping
+  // =========================================================================
+
+  it('initiates model swap when condition state has a different model name', async () => {
+    const scene = new THREE.Scene();
+    const modelsRequested: string[] = [];
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async (path: string) => {
+        modelsRequested.push(path);
+        return modelWithAnimationClips(['Idle', 'DamagedIdle']);
+      },
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'Idle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+      {
+        conditionFlags: ['RUBBLE'],
+        modelName: 'RubbleModel',
+        animationName: 'DamagedIdle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+    ];
+
+    // Start in default state.
+    manager.sync([makeMeshState({
+      id: 230,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({
+      id: 230,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    // Switch to RUBBLE — should trigger model swap.
+    modelsRequested.length = 0;
+    manager.sync([makeMeshState({
+      id: 230,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: ['RUBBLE'],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+
+    // The swap model should have been requested.
+    const rubbleRequested = modelsRequested.some(p => p.toLowerCase().includes('rubblemodel'));
+    expect(rubbleRequested).toBe(true);
+
+    const vs = manager.getVisualState(230);
+    expect(vs?.currentModelName).toBe('rubblemodel');
+  });
+
+  it('caches alternate models to avoid redundant loads', async () => {
+    const scene = new THREE.Scene();
+    let loadCount = 0;
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => {
+        loadCount++;
+        return modelWithAnimationClips(['Idle', 'DamagedIdle']);
+      },
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'Idle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+      {
+        conditionFlags: ['RUBBLE'],
+        modelName: 'AltModel',
+        animationName: 'DamagedIdle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+    ];
+
+    // Load default.
+    manager.sync([makeMeshState({ id: 231, modelConditionInfos: conditionInfos, modelConditionFlags: [] })], 1 / 30);
+    await flushModelLoadQueue();
+    manager.sync([makeMeshState({ id: 231, modelConditionInfos: conditionInfos, modelConditionFlags: [] })], 1 / 30);
+
+    // Switch to RUBBLE — first load.
+    manager.sync([makeMeshState({ id: 231, modelConditionInfos: conditionInfos, modelConditionFlags: ['RUBBLE'] })], 1 / 30);
+    await flushModelLoadQueue();
+    const loadCountAfterFirst = loadCount;
+
+    // Switch back to default then to RUBBLE again — should use cache.
+    manager.sync([makeMeshState({ id: 231, modelConditionInfos: conditionInfos, modelConditionFlags: [] })], 1 / 30);
+    manager.sync([makeMeshState({ id: 231, modelConditionInfos: conditionInfos, modelConditionFlags: ['RUBBLE'] })], 1 / 30);
+    await flushModelLoadQueue();
+
+    // No additional loads should happen because the alternate model is cached.
+    expect(loadCount).toBe(loadCountAfterFirst);
+  });
+
   it('cloneModelForGhost leverages model cache from prior entity loads', async () => {
     const scene = new THREE.Scene();
     let loadCount = 0;

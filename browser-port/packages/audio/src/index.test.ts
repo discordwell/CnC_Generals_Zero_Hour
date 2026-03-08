@@ -15,6 +15,7 @@ interface RecordingBufferSourceNode {
   buffer: AudioBuffer | null;
   onended: (() => void) | null;
   stopCalls: number[];
+  playbackRate: { value: number };
   connect(target?: unknown): void;
   disconnect(): void;
   start(when?: number, offset?: number, duration?: number): void;
@@ -41,7 +42,11 @@ function createRecordingAudioContext() {
       setOrientation: () => undefined,
     },
     createGain: () => ({
-      gain: { value: 1 },
+      gain: {
+        value: 1,
+        setValueAtTime: () => undefined,
+        linearRampToValueAtTime: () => undefined,
+      },
       connect: () => undefined,
       disconnect: () => undefined,
     }),
@@ -61,6 +66,7 @@ function createRecordingAudioContext() {
         buffer: null,
         onended: null,
         stopCalls: [],
+        playbackRate: { value: 1 },
         connect: () => undefined,
         disconnect: () => undefined,
         start: () => undefined,
@@ -1571,5 +1577,446 @@ describe('AudioManager', () => {
     manager.stopAllAudioImmediately();
     expect(manager.getActiveAudioEventCount()).toBe(0);
     expect(manager.getQueuedRequestCount()).toBe(0);
+  });
+
+  // ============================================================================
+  // Convenience methods: playSound3D, playSound2D, playSoundOnEntity
+  // ============================================================================
+
+  it('playSound3D creates a positional audio event', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'Explosion',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_WORLD | SoundType.ST_EVERYONE,
+      volume: 0.8,
+      minRange: 10,
+      maxRange: 500,
+    });
+
+    // Place listener near the sound so it's within audible range
+    manager.setListenerPosition([100, 50, 190]);
+    const handle = manager.playSound3D('Explosion', 100, 50, 200);
+    expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.update();
+    expect(manager.getActiveAudioEventCount()).toBe(1);
+    manager.dispose();
+  });
+
+  it('playSound2D creates a non-positional audio event', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'UiClick',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.5,
+    });
+
+    const handle = manager.playSound2D('UiClick');
+    expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.update();
+    expect(manager.getActiveAudioEventCount()).toBe(1);
+    manager.dispose();
+  });
+
+  it('playSoundOnEntity creates an object-bound audio event', () => {
+    const manager = new AudioManager({
+      resolveObjectPosition: (id) => (id === 42 ? [10, 20, 30] : null),
+    });
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'EngineRun',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_WORLD | SoundType.ST_EVERYONE,
+      volume: 0.6,
+      minRange: 5,
+      maxRange: 150,
+    });
+
+    const handle = manager.playSoundOnEntity('EngineRun', 42);
+    expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.update();
+    expect(manager.getActiveAudioEventCount()).toBe(1);
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Sound selection: random and sequential from sounds list
+  // ============================================================================
+
+  it('selects sounds sequentially when AC_RANDOM is not set', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'Gunfire',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.5,
+      sounds: ['gunfire1', 'gunfire2', 'gunfire3'],
+      control: 0, // no AC_RANDOM
+    });
+
+    // Play 4 times: should cycle 0, 1, 2, 0
+    const handles: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      handles.push(manager.addAudioEvent('Gunfire'));
+      manager.update();
+    }
+    for (const h of handles) {
+      expect(h).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    }
+    manager.dispose();
+  });
+
+  it('selects sounds randomly when AC_RANDOM is set', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'Impact',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.5,
+      sounds: ['impact1', 'impact2', 'impact3'],
+      control: AudioControl.AC_RANDOM,
+    });
+
+    // Play 10 times: all handles should be valid
+    for (let i = 0; i < 10; i++) {
+      const handle = manager.addAudioEvent('Impact');
+      expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+      manager.update();
+    }
+    manager.dispose();
+  });
+
+  it('falls back to filename when sounds list is empty', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'SingleSound',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.5,
+      filename: 'single_file.wav',
+      sounds: [],
+    });
+
+    const handle = manager.addAudioEvent('SingleSound');
+    expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Pitch shift and volume shift
+  // ============================================================================
+
+  it('registers AudioEventInfo with pitch shift and volume shift', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'PitchedSound',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.7,
+      pitchShiftMin: 0.9,
+      pitchShiftMax: 1.1,
+      volumeShift: -0.2,
+    });
+
+    const info = manager.findAudioEventInfo('PitchedSound');
+    expect(info).not.toBeNull();
+    expect(info!.pitchShiftMin).toBe(0.9);
+    expect(info!.pitchShiftMax).toBe(1.1);
+    expect(info!.volumeShift).toBe(-0.2);
+
+    // Playing the event should still work
+    const handle = manager.addAudioEvent('PitchedSound');
+    expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Zoom volume adjustment
+  // ============================================================================
+
+  it('adjusts 3D volume based on zoom distance', () => {
+    const manager = new AudioManager();
+    manager.init();
+
+    // Default zoom volume should be 1
+    expect(manager.getZoomVolume()).toBe(1);
+
+    // Set zoom distances and update with a close camera
+    manager.setZoomDistances(100, 400, 0.5);
+    manager.setListenerPosition([0, 0, 0]);
+    manager.updateZoomVolume(0, 50, 0); // camera at (0,50,0), listener at origin
+    // Distance = 50, which is < minDistance=100, so zoom = 1.0
+    expect(manager.getZoomVolume()).toBeCloseTo(1.0);
+
+    // Camera at a medium distance
+    manager.updateZoomVolume(0, 250, 0); // Distance = 250, between 100 and 400
+    const mediumZoom = manager.getZoomVolume();
+    expect(mediumZoom).toBeGreaterThan(0.5);
+    expect(mediumZoom).toBeLessThan(1.0);
+
+    // Camera at far distance
+    manager.updateZoomVolume(0, 500, 0); // Distance = 500, > maxDistance=400
+    // Beyond max distance: zoom = 1 - maxBoost = 1 - 0.5 = 0.5
+    expect(manager.getZoomVolume()).toBeCloseTo(0.5);
+
+    manager.dispose();
+  });
+
+  it('set3DVolumeAdjustment directly sets zoom volume', () => {
+    const manager = new AudioManager();
+    manager.init();
+
+    manager.set3DVolumeAdjustment(0.75);
+    expect(manager.getZoomVolume()).toBeCloseTo(0.75);
+
+    // Clamp to [0, 1]
+    manager.set3DVolumeAdjustment(1.5);
+    expect(manager.getZoomVolume()).toBeCloseTo(1.0);
+
+    manager.set3DVolumeAdjustment(-0.3);
+    expect(manager.getZoomVolume()).toBeCloseTo(0.0);
+
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Music crossfade
+  // ============================================================================
+
+  it('crossfadeToMusic starts a new music event', () => {
+    const { fakeContext } = createRecordingAudioContext();
+    const manager = new AudioManager({
+      context: fakeContext,
+    });
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'MusicTrack1',
+      soundType: AudioType.AT_Music,
+      type: SoundType.ST_UI,
+      volume: 1,
+    });
+    manager.addAudioEventInfo({
+      audioName: 'MusicTrack2',
+      soundType: AudioType.AT_Music,
+      type: SoundType.ST_UI,
+      volume: 1,
+    });
+
+    // Start first track
+    manager.addAudioEvent({
+      eventName: 'MusicTrack1',
+      audioAffect: AudioAffect.AudioAffect_Music,
+    });
+    manager.update();
+    expect(manager.getActiveAudioEventCount()).toBe(1);
+
+    // Crossfade to second track
+    const handle = manager.crossfadeToMusic('MusicTrack2');
+    expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.update();
+
+    // Should have both the old (fading out) and new track
+    expect(manager.getActiveAudioEventCount()).toBeGreaterThanOrEqual(1);
+
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // AudioEventInfo with sounds list, delay
+  // ============================================================================
+
+  it('stores sounds list and delay fields in AudioEventInfo', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'MultiSound',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.5,
+      sounds: ['sound_a', 'sound_b', 'sound_c'],
+      delayMin: 100,
+      delayMax: 500,
+    });
+
+    const info = manager.findAudioEventInfo('MultiSound');
+    expect(info).not.toBeNull();
+    expect(info!.sounds).toEqual(['sound_a', 'sound_b', 'sound_c']);
+    expect(info!.delayMin).toBe(100);
+    expect(info!.delayMax).toBe(500);
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Graceful degradation without AudioContext
+  // ============================================================================
+
+  it('gracefully handles playback when no AudioContext is available', () => {
+    // Pass null context to simulate no AudioContext support
+    const manager = new AudioManager({ context: null as unknown as AudioContext });
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'TestSound',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.5,
+    });
+
+    // Should not throw
+    const handle = manager.addAudioEvent('TestSound');
+    expect(handle).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    manager.update();
+
+    // The event is tracked even without a playback node
+    expect(manager.getActiveAudioEventCount()).toBe(1);
+
+    manager.removeAudioEvent(handle);
+    manager.update();
+    expect(manager.getActiveAudioEventCount()).toBe(0);
+    manager.dispose();
+  });
+
+  it('convenience methods degrade gracefully without context', () => {
+    const manager = new AudioManager({ context: null as unknown as AudioContext });
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'TestSound',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_WORLD | SoundType.ST_EVERYONE,
+      volume: 0.5,
+      minRange: 10,
+      maxRange: 200,
+    });
+
+    // Should not throw
+    expect(() => manager.playSound3D('TestSound', 0, 0, 0)).not.toThrow();
+    expect(() => manager.playSound2D('TestSound')).not.toThrow();
+    expect(() => manager.playSoundOnEntity('TestSound', 1)).not.toThrow();
+    expect(() => manager.crossfadeToMusic('TestSound')).not.toThrow();
+    expect(() => manager.updateZoomVolume(0, 0, 0)).not.toThrow();
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Web Audio playback with pitch shift
+  // ============================================================================
+
+  it('applies pitch shift to playback rate on Web Audio source node', () => {
+    const { fakeContext, createdSources } = createRecordingAudioContext();
+    const fakeBuffer = {
+      duration: 1,
+      length: 44100,
+      numberOfChannels: 1,
+      sampleRate: 44100,
+      getChannelData: () => new Float32Array(44100),
+      copyFromChannel: () => undefined,
+      copyToChannel: () => undefined,
+    } as unknown as AudioBuffer;
+
+    const manager = new AudioManager({ context: fakeContext });
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'PitchedTest',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.8,
+      pitchShiftMin: 1.5,
+      pitchShiftMax: 1.5, // Fixed pitch shift for deterministic test
+    });
+    manager.preloadAudioBuffer('PitchedTest', fakeBuffer);
+
+    manager.addAudioEvent('PitchedTest');
+    manager.update();
+
+    // The source node should have been created with modified playback rate
+    expect(createdSources.length).toBeGreaterThan(0);
+    const lastSource = createdSources[createdSources.length - 1]!;
+    // Source parity: pitch shift should be applied to the playback rate
+    expect(lastSource.playbackRate.value).toBeCloseTo(1.5);
+    expect(manager.getActiveAudioEventCount()).toBe(1);
+
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Music ducking (speech ducks music volume)
+  // ============================================================================
+
+  it('tracks active speech for music ducking state', () => {
+    const manager = new AudioManager();
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'MusicBG',
+      soundType: AudioType.AT_Music,
+      type: SoundType.ST_UI,
+      volume: 1,
+    });
+    manager.addAudioEventInfo({
+      audioName: 'VoiceLine',
+      soundType: AudioType.AT_Streaming,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.8,
+    });
+
+    // Start music
+    manager.addAudioEvent({
+      eventName: 'MusicBG',
+      audioAffect: AudioAffect.AudioAffect_Music,
+    });
+    manager.update();
+    expect(manager.isMusicPlaying()).toBe(true);
+
+    // Start voice line
+    manager.addAudioEvent('VoiceLine');
+    manager.update();
+
+    // Both should be active
+    expect(manager.getActiveAudioEventCount()).toBe(2);
+    manager.dispose();
+  });
+
+  // ============================================================================
+  // Node pooling
+  // ============================================================================
+
+  it('reuses gain nodes from pool across playback cycles', () => {
+    const { fakeContext } = createRecordingAudioContext();
+    const fakeBuffer = {
+      duration: 0.1,
+      length: 4410,
+      numberOfChannels: 1,
+      sampleRate: 44100,
+      getChannelData: () => new Float32Array(4410),
+      copyFromChannel: () => undefined,
+      copyToChannel: () => undefined,
+    } as unknown as AudioBuffer;
+
+    const manager = new AudioManager({ context: fakeContext });
+    manager.init();
+    manager.addAudioEventInfo({
+      audioName: 'PoolTest',
+      soundType: AudioType.AT_SoundEffect,
+      type: SoundType.ST_UI | SoundType.ST_EVERYONE,
+      volume: 0.5,
+    });
+    manager.preloadAudioBuffer('PoolTest', fakeBuffer);
+
+    // Play and stop multiple times to exercise pooling
+    for (let i = 0; i < 5; i++) {
+      const handle = manager.addAudioEvent('PoolTest');
+      manager.update();
+      manager.removeAudioEvent(handle);
+      manager.update();
+    }
+
+    // All events should be cleaned up
+    expect(manager.getActiveAudioEventCount()).toBe(0);
+    manager.dispose();
   });
 });

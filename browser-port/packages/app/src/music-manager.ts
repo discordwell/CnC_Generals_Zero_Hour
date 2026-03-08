@@ -13,6 +13,11 @@ import { resolveEvaFactionPrefix } from './eva-faction-prefix.js';
 export interface MusicAudioManager {
   addAudioEvent(eventName: string): number;
   removeAudioEvent(handle: number): void;
+  /**
+   * Optional crossfade method. If available, the MusicManager uses it for
+   * smooth transitions between tracks (0.5s fade). Falls back to hard-cut.
+   */
+  crossfadeToMusic?(trackName: string): number;
 }
 
 export type MusicState = 'idle' | 'menu' | 'ambient' | 'battle' | 'victory' | 'defeat';
@@ -22,6 +27,8 @@ export interface MusicManagerConfig {
   battleCooldownMs?: number;
   /** Minimum time (ms) battle music must play before allowing switch. Default 5000. */
   minBattleDurationMs?: number;
+  /** Whether to use crossfade transitions between tracks. Default true. */
+  useCrossfade?: boolean;
 }
 
 /**
@@ -50,6 +57,7 @@ export class MusicManager {
   private readonly audioManager: MusicAudioManager;
   private readonly battleCooldownMs: number;
   private readonly minBattleDurationMs: number;
+  private readonly useCrossfade: boolean;
 
   private state: MusicState = 'idle';
   private currentHandle = 0;
@@ -62,6 +70,7 @@ export class MusicManager {
     this.audioManager = audioManager;
     this.battleCooldownMs = config.battleCooldownMs ?? DEFAULT_BATTLE_COOLDOWN_MS;
     this.minBattleDurationMs = config.minBattleDurationMs ?? DEFAULT_MIN_BATTLE_DURATION_MS;
+    this.useCrossfade = config.useCrossfade ?? true;
   }
 
   getState(): MusicState {
@@ -124,7 +133,7 @@ export class MusicManager {
   }
 
   /**
-   * Per-frame update. Handles battle → ambient transition after cooldown.
+   * Per-frame update. Handles battle -> ambient transition after cooldown.
    */
   update(): void {
     if (this.state !== 'battle') return;
@@ -158,10 +167,21 @@ export class MusicManager {
     this.playTrack(track);
   }
 
+  /**
+   * Play a music track, using crossfade when available and enabled.
+   * Source parity: MusicManager transitions between tracks with a fade.
+   */
   private playTrack(trackName: string): void {
-    this.stopCurrent();
-    this.currentTrackName = trackName;
-    this.currentHandle = this.audioManager.addAudioEvent(trackName);
+    if (this.useCrossfade && this.currentHandle > 0 && this.audioManager.crossfadeToMusic) {
+      // Crossfade: let the AudioManager handle the old-to-new fade transition.
+      this.currentTrackName = trackName;
+      this.currentHandle = this.audioManager.crossfadeToMusic(trackName);
+    } else {
+      // Hard-cut fallback.
+      this.stopCurrent();
+      this.currentTrackName = trackName;
+      this.currentHandle = this.audioManager.addAudioEvent(trackName);
+    }
   }
 
   private stopCurrent(): void {

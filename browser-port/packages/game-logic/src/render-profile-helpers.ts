@@ -4,6 +4,17 @@ import type { ObjectDef } from '@generals/ini-data';
 import { readNumericField } from './ini-readers.js';
 import type { RenderAnimationState, RenderAnimationStateClipCandidates } from './types.js';
 
+/**
+ * Idle animation variant — one of potentially many idle clips that are
+ * randomly selected when the current idle finishes (source parity:
+ * W3DAnimationInfo with m_isIdleAnim=true).
+ */
+export interface IdleAnimationVariant {
+  animationName: string;
+  /** Weight for weighted random selection (default 1). Higher = more likely. */
+  randomWeight: number;
+}
+
 export interface ModelConditionInfo {
   conditionFlags: string[];
   modelName: string | null;
@@ -12,6 +23,43 @@ export interface ModelConditionInfo {
   hideSubObjects: string[];
   showSubObjects: string[];
   animationMode: 'LOOP' | 'ONCE' | 'MANUAL';
+  /**
+   * Source parity: TransitionKey — lowercase key used to look up transition
+   * animations between states (e.g. "trans_open", "trans_close").
+   */
+  transitionKey: string | null;
+  /**
+   * Source parity: AnimationSpeedFactorRange min/max.
+   * A random speed factor in [min, max] is applied each time the animation starts.
+   */
+  animSpeedFactorMin: number;
+  animSpeedFactorMax: number;
+  /**
+   * Source parity: IdleAnimation entries — multiple idle clips that cycle
+   * randomly when the previous one completes (ONCE mode).
+   */
+  idleAnimations: IdleAnimationVariant[];
+}
+
+/**
+ * Source parity: TransitionState — an animation played during a transition
+ * between two named condition states.
+ * The C++ engine maps `buildTransitionSig(srcKey, dstKey)` to a
+ * ModelConditionInfo-like entry with ONCE mode animation.
+ */
+export interface TransitionInfo {
+  /** Source TransitionKey name (lowercase). */
+  fromKey: string;
+  /** Destination TransitionKey name (lowercase). */
+  toKey: string;
+  /** Optional model name override during transition. */
+  modelName: string | null;
+  /** Animation clip name to play during the transition. */
+  animationName: string | null;
+  /** Transition animations always use ONCE mode in source. */
+  animationMode: 'ONCE';
+  hideSubObjects: string[];
+  showSubObjects: string[];
 }
 
 export interface ResolvedRenderAssetProfile {
@@ -20,6 +68,11 @@ export interface ResolvedRenderAssetProfile {
   renderAssetResolved: boolean;
   renderAnimationStateClips: RenderAnimationStateClipCandidates;
   modelConditionInfos: ModelConditionInfo[];
+  /**
+   * Source parity: TransitionMap — transition animations keyed by
+   * "fromKey→toKey" signature string.
+   */
+  transitionInfos: TransitionInfo[];
 }
 
 export function resolveRenderAssetProfile(
@@ -33,6 +86,7 @@ export function resolveRenderAssetProfile(
     renderAssetResolved: renderAssetPath !== null,
     renderAnimationStateClips: collectRenderAnimationStateClips(objectDef),
     modelConditionInfos: collectModelConditionInfos(objectDef),
+    transitionInfos: collectTransitionInfos(objectDef),
   };
 }
 
@@ -181,6 +235,20 @@ function parseModelConditionStateBlock(block: IniBlock): ModelConditionInfo {
     }
   }
 
+  // Source parity: TransitionKey — lowercase name key for transition lookups.
+  const transitionKeyRaw = readFirstStringToken(block.fields, 'TransitionKey');
+  const transitionKey = transitionKeyRaw ? transitionKeyRaw.toLowerCase() : null;
+
+  // Source parity: AnimationSpeedFactorRange min max
+  const speedFactorRange = readNumericRangeFromField(block.fields, 'AnimationSpeedFactorRange');
+  const animSpeedFactorMin = speedFactorRange ? speedFactorRange[0] : 1.0;
+  const animSpeedFactorMax = speedFactorRange ? speedFactorRange[1] : 1.0;
+
+  // Source parity: IdleAnimation entries — multiple idle clips with optional weight.
+  // INI format: IdleAnimation = AnimName [DistanceCovered] [TimesToRepeat]
+  // We collect all IdleAnimation values as idle animation variants.
+  const idleAnimations = collectIdleAnimationVariants(block.fields);
+
   return {
     conditionFlags,
     modelName: modelName ?? null,
@@ -189,6 +257,10 @@ function parseModelConditionStateBlock(block: IniBlock): ModelConditionInfo {
     hideSubObjects,
     showSubObjects,
     animationMode,
+    transitionKey,
+    animSpeedFactorMin,
+    animSpeedFactorMax,
+    idleAnimations,
   };
 }
 
@@ -219,6 +291,143 @@ function collectAllStringTokens(fields: Record<string, IniValue>, fieldName: str
     }
   }
   return tokens;
+}
+
+/**
+ * Read a two-element numeric range from a field (e.g., "AnimationSpeedFactorRange = 0.8 1.2").
+ */
+function readNumericRangeFromField(fields: Record<string, IniValue>, fieldName: string): [number, number] | null {
+  const value = readIniFieldValue(fields, fieldName);
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const tokens: number[] = [];
+  for (const group of extractIniValueTokens(value)) {
+    for (const token of group) {
+      if (typeof token === 'string') {
+        const num = parseFloat(token);
+        if (Number.isFinite(num)) {
+          tokens.push(num);
+        }
+      }
+    }
+  }
+  if (tokens.length >= 2) {
+    return [tokens[0]!, tokens[1]!];
+  }
+  if (tokens.length === 1) {
+    return [tokens[0]!, tokens[0]!];
+  }
+  return null;
+}
+
+/**
+ * Collect IdleAnimation variants from INI fields.
+ * Source parity: each `IdleAnimation` line produces a W3DAnimationInfo with
+ * m_isIdleAnim=true. The optional second token is DistanceCovered (ignored here)
+ * and third token is TimesToRepeat (used as weight hint).
+ */
+function collectIdleAnimationVariants(fields: Record<string, IniValue>): IdleAnimationVariant[] {
+  const value = readIniFieldValue(fields, 'IdleAnimation');
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  const variants: IdleAnimationVariant[] = [];
+
+  // If it's an array, each entry is a separate IdleAnimation line
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const variant = parseIdleAnimationEntry(entry as IniValue);
+      if (variant) {
+        variants.push(variant);
+      }
+    }
+  } else {
+    const variant = parseIdleAnimationEntry(value);
+    if (variant) {
+      variants.push(variant);
+    }
+  }
+
+  return variants;
+}
+
+function parseIdleAnimationEntry(value: IniValue): IdleAnimationVariant | null {
+  if (typeof value === 'string') {
+    const parts = value.trim().split(/\s+/);
+    const animName = parts[0]?.trim();
+    if (!animName || animName.length === 0) {
+      return null;
+    }
+    // Third token is the repeat/weight value (source: timesToRepeat parameter)
+    const weight = parts.length >= 3 ? parseInt(parts[2]!, 10) : 1;
+    return {
+      animationName: animName,
+      randomWeight: Number.isFinite(weight) && weight > 0 ? weight : 1,
+    };
+  }
+  return null;
+}
+
+/**
+ * Collect TransitionState blocks from the INI object definition.
+ * Source parity: W3DModelDrawModuleData::parseConditionState with PARSE_TRANSITION.
+ * TransitionState blocks have two name tokens: "fromKey toKey".
+ */
+export function collectTransitionInfos(objectDef: ObjectDef | undefined): TransitionInfo[] {
+  if (!objectDef) {
+    return [];
+  }
+
+  const infos: TransitionInfo[] = [];
+
+  const visitBlock = (block: IniBlock): void => {
+    if (block.type.toUpperCase() === 'TRANSITIONSTATE') {
+      const parsed = parseTransitionStateBlock(block);
+      if (parsed) {
+        infos.push(parsed);
+      }
+    }
+
+    for (const childBlock of block.blocks) {
+      visitBlock(childBlock);
+    }
+  };
+
+  for (const block of objectDef.blocks) {
+    visitBlock(block);
+  }
+
+  return infos;
+}
+
+function parseTransitionStateBlock(block: IniBlock): TransitionInfo | null {
+  const tokens = block.name.trim().split(/\s+/);
+  if (tokens.length < 2) {
+    return null;
+  }
+  const fromKey = tokens[0]!.toLowerCase();
+  const toKey = tokens[1]!.toLowerCase();
+  if (fromKey === toKey) {
+    return null;
+  }
+
+  const modelName = readFirstStringToken(block.fields, 'Model')
+    ?? readFirstStringToken(block.fields, 'ModelName');
+  const animationName = readFirstStringToken(block.fields, 'Animation');
+  const hideSubObjects = collectAllStringTokens(block.fields, 'HideSubObject');
+  const showSubObjects = collectAllStringTokens(block.fields, 'ShowSubObject');
+
+  return {
+    fromKey,
+    toKey,
+    modelName: modelName ?? null,
+    animationName: animationName ?? null,
+    animationMode: 'ONCE',
+    hideSubObjects,
+    showSubObjects,
+  };
 }
 
 function collectRenderAnimationStateClips(objectDef: ObjectDef | undefined): RenderAnimationStateClipCandidates {

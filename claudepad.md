@@ -1,5 +1,17 @@
 # Session Summaries
 
+## 2026-03-08T12:00Z — 8-Agent Feature Parity Sprint (329 new tests)
+Eight parallel agents targeting top feature parity gaps from code review:
+1. **Pathfinding** — A* with binary heap (O(n log n)), path smoothing via Bresenham LOS, locomotor terrain costs, turn penalties. New: `pathfinding.ts` (53 tests). Upgraded `navigation-pathfinding.ts` to use new BinaryHeap.
+2. **Unit AI** — DozerAI (build/repair/idle-seek), HackInternetAI (4-state income), TransportAI (load/unload/flight), WorkerAI (dual role). New: `ai-updates.ts` (72 tests).
+3. **Combat** — Multi-weapon slots A/B/C with independent cooldowns, WeaponSet condition matching, armor/damage type table, scatter radius, projectile flight models. New: `combat-weapon-set.ts` (86 tests).
+4. **Containment** — TransportContain (capacity/death), TunnelContain (shared network), OverlordContain (sub-unit slots), HealContain (gradual heal), OpenContain (passengers fire). New: `containment.test.ts` (21 tests). Code in `index.ts`.
+5. **Audio** — 3D positional (playSound3D/2D/OnEntity), node pooling, random sound selection, pitch/volume shift, zoom volume, music crossfade/ducking, gesture unlock, AudioEvent INI parsing. (18 tests).
+6. **Animations** — TransitionState parsing+playback, idle randomization with weighted selection, per-condition model swapping with cache, AnimationSpeedFactorRange. (21 tests).
+7. **Condition Flags** — Expanded syncModelConditionFlags from ~20→60 flags (76 total). Added FIRING_B/C, TURRET_ROTATE, WEAPONSET_VETERAN/ELITE/HERO, PRONE, ATTACKING, etc. (24 tests).
+8. **Script Engine** — Coverage audit: 112/112 conditions, 333/333 actions dispatched. Added ~500 lines of tests for 26 previously untested types. (34 tests).
+- **Total**: 2,982 tests pass (329 new), 129 test files. 5 new source files, 12 modified.
+
 ## 2026-03-08T10:00Z — Phase 1B: ModelConditionFlags Animation System (5 Tasks)
 - **Task 1 — ModelConditionInfo Parsing** (`game-logic/src/render-profile-helpers.ts`): `ModelConditionInfo` interface (conditionFlags, modelName, animationName, idleAnimationName, hideSubObjects, showSubObjects, animationMode), `collectModelConditionInfos()` + `parseModelConditionStateBlock()` to extract structured data from INI ModelConditionState blocks. 22 new tests.
 - **Task 2 — SparseMatchFinder** (`game-logic/src/condition-state-matcher.ts`): Port of C++ `findBestInfoSlow()` — maximizes yesMatch, minimizes yesExtraneousBits as tiebreaker. `createConditionMatcher()` with Map cache. 12 new tests.

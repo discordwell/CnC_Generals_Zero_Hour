@@ -236,6 +236,127 @@ function resolveAudioEventLoopCount(audioEvent: AudioEventDef): number | undefin
   return undefined;
 }
 
+/**
+ * Extract the Sounds list from an AudioEventDef's fields.
+ * Source parity: AudioEventInfo::m_sounds — parsed via INI::parseSoundsList.
+ * In the INI bundle, the Sounds field is stored as a space-separated string
+ * or an array of strings.
+ */
+function resolveAudioEventSounds(audioEvent: AudioEventDef): string[] | undefined {
+  for (const [rawKey, rawValue] of Object.entries(audioEvent.fields)) {
+    if (rawKey.trim().toLowerCase() !== 'sounds') {
+      continue;
+    }
+    if (Array.isArray(rawValue)) {
+      const sounds: string[] = [];
+      for (const item of rawValue) {
+        if (typeof item === 'string' && item.trim().length > 0) {
+          // Each item may itself be space-separated.
+          for (const part of item.trim().split(/\s+/)) {
+            if (part.length > 0) sounds.push(part);
+          }
+        }
+      }
+      return sounds.length > 0 ? sounds : undefined;
+    }
+    if (typeof rawValue === 'string') {
+      const sounds = rawValue.trim().split(/\s+/).filter(s => s.length > 0);
+      return sounds.length > 0 ? sounds : undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract PitchShift min/max from an AudioEventDef's fields.
+ * Source parity: parsePitchShift — "PitchShift = min max" where min/max are
+ * percentages. Stored as 1.0 + (percentage / 100).
+ */
+function resolveAudioEventPitchShift(audioEvent: AudioEventDef): {
+  pitchShiftMin?: number;
+  pitchShiftMax?: number;
+} {
+  for (const [rawKey, rawValue] of Object.entries(audioEvent.fields)) {
+    if (rawKey.trim().toLowerCase() !== 'pitchshift') {
+      continue;
+    }
+    let values: string[];
+    if (Array.isArray(rawValue)) {
+      values = rawValue.map(v => String(v).trim()).filter(s => s.length > 0);
+    } else if (typeof rawValue === 'string') {
+      values = rawValue.trim().split(/\s+/).filter(s => s.length > 0);
+    } else {
+      continue;
+    }
+    if (values.length >= 2) {
+      const minPct = Number(values[0]);
+      const maxPct = Number(values[1]);
+      if (Number.isFinite(minPct) && Number.isFinite(maxPct)) {
+        return {
+          pitchShiftMin: 1 + minPct / 100,
+          pitchShiftMax: 1 + maxPct / 100,
+        };
+      }
+    }
+  }
+  return {};
+}
+
+/**
+ * Extract VolumeShift from an AudioEventDef's fields.
+ * Source parity: AudioEventInfo::m_volumeShift — a percentage that represents
+ * the random volume reduction range.
+ */
+function resolveAudioEventVolumeShift(audioEvent: AudioEventDef): number | undefined {
+  for (const [rawKey, rawValue] of Object.entries(audioEvent.fields)) {
+    if (rawKey.trim().toLowerCase() !== 'volumeshift') {
+      continue;
+    }
+    const candidate = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    const parsed = typeof candidate === 'number'
+      ? candidate
+      : (typeof candidate === 'string' ? Number(candidate.trim()) : Number.NaN);
+    if (!Number.isFinite(parsed)) {
+      return undefined;
+    }
+    // VolumeShift is stored as a percentage (e.g., 10% means volume varies 0.9..1.0).
+    // Convert to a negative fraction for the audio engine (-0.1).
+    return -(Math.abs(parsed) / 100);
+  }
+  return undefined;
+}
+
+/**
+ * Extract Delay min/max from an AudioEventDef's fields.
+ * Source parity: parseDelay — "Delay = min max" in milliseconds.
+ */
+function resolveAudioEventDelay(audioEvent: AudioEventDef): {
+  delayMin?: number;
+  delayMax?: number;
+} {
+  for (const [rawKey, rawValue] of Object.entries(audioEvent.fields)) {
+    if (rawKey.trim().toLowerCase() !== 'delay') {
+      continue;
+    }
+    let values: string[];
+    if (Array.isArray(rawValue)) {
+      values = rawValue.map(v => String(v).trim()).filter(s => s.length > 0);
+    } else if (typeof rawValue === 'string') {
+      values = rawValue.trim().split(/\s+/).filter(s => s.length > 0);
+    } else {
+      continue;
+    }
+    if (values.length >= 2) {
+      const min = Number(values[0]);
+      const max = Number(values[1]);
+      if (Number.isFinite(min) && Number.isFinite(max)) {
+        return { delayMin: Math.max(0, min), delayMax: Math.max(0, max) };
+      }
+    }
+  }
+  return {};
+}
+
 function resolveAudioEventDefaults(
   iniDataRegistry: IniDataRegistry,
   audioEvent: AudioEventDef,
@@ -279,6 +400,10 @@ function registerIniAudioEvents(
     const typeMask = applyBitMaskNames(resolved.typeNames, SOUND_TYPE_MASK_BY_NAME);
     const controlMask = applyBitMaskNames(resolved.controlNames, AUDIO_CONTROL_MASK_BY_NAME);
     const loopCount = resolveAudioEventLoopCount(resolved);
+    const sounds = resolveAudioEventSounds(resolved);
+    const { pitchShiftMin, pitchShiftMax } = resolveAudioEventPitchShift(resolved);
+    const volumeShift = resolveAudioEventVolumeShift(resolved);
+    const { delayMin, delayMax } = resolveAudioEventDelay(resolved);
 
     audioManager.addAudioEventInfo({
       audioName: resolved.name,
@@ -289,10 +414,16 @@ function registerIniAudioEvents(
       control: controlMask,
       loopCount,
       volume: resolved.volume,
+      volumeShift,
       minVolume: resolved.minVolume,
       limit: resolved.limit,
       minRange: resolved.minRange,
       maxRange: resolved.maxRange,
+      sounds,
+      pitchShiftMin,
+      pitchShiftMax,
+      delayMin,
+      delayMax,
     });
 
     if (soundType === AudioType.AT_Music && resolved.name !== 'DefaultMusicTrack') {
@@ -590,6 +721,19 @@ async function preInit(): Promise<PreInitContext> {
 
     if (resolvedSfxVolumes.usedRelative2DVolume && audioSettings.relative2DVolume !== undefined) {
       iniDataInfo += ` | Audio Relative2DVolume=${audioSettings.relative2DVolume}`;
+    }
+
+    // Source parity: AudioSettings zoom volume parameters.
+    if (
+      audioSettings.zoomMinDistance !== undefined
+      || audioSettings.zoomMaxDistance !== undefined
+      || audioSettings.zoomSoundVolumePercent !== undefined
+    ) {
+      audioManager.setZoomDistances(
+        audioSettings.zoomMinDistance ?? 100,
+        audioSettings.zoomMaxDistance ?? 400,
+        audioSettings.zoomSoundVolumePercent ?? 0.5,
+      );
     }
   }
   const registeredAudioEvents = registerIniAudioEvents(iniDataRegistry, audioManager);
@@ -2314,6 +2458,13 @@ async function startGame(
       audioManager.setListenerOrientation(
         [cameraForward.x, cameraForward.y, cameraForward.z],
         [cameraUp.x, cameraUp.y, cameraUp.z],
+      );
+      // Source parity: GameAudio::update — compute zoom-based 3D volume from
+      // camera-to-listener distance for a more immersive 3D audio experience.
+      audioManager.updateZoomVolume(
+        camera.position.x,
+        camera.position.y,
+        camera.position.z,
       );
       scriptAudioRuntimeBridge.syncBeforeSimulationStep();
 

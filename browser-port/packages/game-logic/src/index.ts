@@ -81,7 +81,7 @@ import {
   resolveRenderAssetProfile as resolveRenderAssetProfileImpl,
   shouldPathfindObstacle as shouldPathfindObstacleImpl,
 } from './render-profile-helpers.js';
-import type { ModelConditionInfo } from './render-profile-helpers.js';
+import type { ModelConditionInfo, TransitionInfo } from './render-profile-helpers.js';
 import {
   createRailedTransportRuntimeState as createRailedTransportRuntimeStateImpl,
   createRailedTransportWaypointIndex as createRailedTransportWaypointIndexImpl,
@@ -262,6 +262,89 @@ export * from './types.js';
 export * from './campaign-manager.js';
 export { resolveRenderAssetProfile } from './render-profile-helpers.js';
 export type { ResolvedRenderAssetProfile } from './render-profile-helpers.js';
+export {
+  adjustDamageByArmor,
+  applyScatterOffset,
+  chooseBestWeaponForTarget,
+  classifyProjectileFlightModel,
+  clearLeechRangeAllSlots,
+  createMultiWeaponEntityState,
+  createWeaponSlotState,
+  estimateWeaponDamage,
+  fireWeaponSlot,
+  getReadyToFireSlots,
+  getVictimAntiMask,
+  getWeaponSlotStatus,
+  isWeaponSetOutOfAmmo,
+  rebuildSlotScatterTargets,
+  recordSlotConsecutiveShot,
+  releaseWeaponLock,
+  reloadAllWeaponSlots,
+  resolveScatterRadius,
+  resolveWeaponSlotDelayFrames,
+  resolveWeaponSlotPreAttackDelay,
+  resetWeaponSlotState,
+  selectBestWeaponTemplateSet,
+  setWeaponLock,
+  updateWeaponSetFromProfiles,
+  updateWeaponSlotIdleAutoReload,
+  WEAPON_SLOT_COUNT,
+  WEAPON_SLOT_PRIMARY,
+  WEAPON_SLOT_SECONDARY,
+  WEAPON_SLOT_TERTIARY,
+} from './combat-weapon-set.js';
+export type {
+  ChooseBestWeaponContext,
+  MultiWeaponEntityState,
+  ProjectileFlightModel,
+  WeaponChoiceCriteria,
+  WeaponLockType as WeaponLockTypeEnum,
+  WeaponSlotProfile,
+  WeaponSlotState,
+  WeaponStatus,
+  WeaponTemplateSetDef,
+} from './combat-weapon-set.js';
+export {
+  // Dozer AI
+  type DozerAIProfile as DozerAIUpdateProfile,
+  type DozerAIState as DozerAIUpdateState,
+  type DozerAIContext as DozerAIUpdateContext,
+  type DozerBuildingInfo,
+  DozerTask,
+  DozerBuildSubTask,
+  CONSTRUCTION_COMPLETE as DOZER_CONSTRUCTION_COMPLETE,
+  createDozerAIState,
+  updateDozerConstruction,
+  updateDozerRepair,
+  updateDozerIdleBehavior as updateDozerIdleBehaviorModule,
+  // HackInternet AI
+  type HackInternetProfile as HackInternetAIProfile,
+  type HackInternetRuntimeState as HackInternetAIState,
+  type HackInternetContext as HackInternetAIContext,
+  HackInternetState as HackInternetAIStateEnum,
+  VeterancyLevel,
+  createHackInternetState,
+  resolveHackInternetCashAmount,
+  beginHackInternet,
+  interruptHackInternet,
+  updateHackInternet as updateHackInternetModule,
+  // Transport AI
+  type TransportAIProfile,
+  type TransportAIState,
+  type TransportAIContext,
+  TransportFlightStatus,
+  createTransportAIState,
+  loadPassenger,
+  beginUnload,
+  updateTransportUnload,
+  updateTransportFlightTransition,
+  beginTakeoff,
+  beginLanding,
+  // Worker AI
+  WorkerRole,
+  resolveWorkerRole,
+  createWorkerAIState,
+} from './ai-updates.js';
 
 const TEST_CRUSH_ONLY = 0;
 const TEST_SQUISH_ONLY = 1;
@@ -1211,6 +1294,12 @@ interface ContainProfile {
   burnedDeathToUnits: boolean;
   /** Source parity: CaveContainModuleData::m_caveIndexData. */
   caveIndex?: number;
+  /** Source parity: TransportContainModuleData::m_healthRegen — %/sec of maxHealth healed per frame for
+   *  passengers while inside. 0 = no regen. INI field: HealthRegen%PerSec. */
+  healthRegenPercentPerSec: number;
+  /** Source parity: TransportContainModuleData::m_initialPayload — spawn initial units inside on creation. */
+  initialPayloadTemplateName: string | null;
+  initialPayloadCount: number;
 }
 
 /**
@@ -1760,6 +1849,7 @@ interface MapEntity {
   renderAssetResolved: boolean;
   renderAnimationStateClips?: RenderAnimationStateClipCandidates;
   modelConditionInfos?: ModelConditionInfo[];
+  transitionInfos?: TransitionInfo[];
   x: number;
   y: number;
   z: number;
@@ -1867,6 +1957,8 @@ interface MapEntity {
   tunnelEnteredFrame: number;
   /** Source parity: HealContain — frame at which this entity entered the heal container. */
   healContainEnteredFrame: number;
+  /** Source parity: TransportContain::m_payloadCreated — tracks whether initial payload has been spawned. */
+  initialPayloadCreated: boolean;
   helixPortableRiderId: number | null;
   /** Source parity: SlavedUpdate — ID of the spawner/slaver that owns this slave. */
   slaverEntityId: number | null;
@@ -6788,6 +6880,7 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetResolved: entity.renderAssetResolved,
       renderAnimationStateClips: entity.renderAnimationStateClips,
       modelConditionInfos: entity.modelConditionInfos,
+      transitionInfos: entity.transitionInfos,
       modelConditionFlags: [...entity.modelConditionFlags],
       currentSpeed: entity.currentSpeed,
       maxSpeed: entity.speed,
@@ -7222,8 +7315,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateMineCollisions();
     this.updateDemoTraps();
     this.updateCrateCollisions();
+    this.updateInitialPayloads();
     this.updateTunnelHealing();
     this.updateHealContainHealing();
+    this.updateTransportContainHealing();
+    this.updateContainModelConditions();
+    this.updateOverlordRiderPositions();
     this.updateAutoFindHealing();
     this.updateFogOfWar();
     this.updateSupplyChain();
@@ -8089,6 +8186,7 @@ export class GameLogicSubsystem implements Subsystem {
     visionRange: number;
     shroudClearingRange: number;
     shroudRange: number;
+    modelConditionFlags: string[];
     battlePlanDamageScalar: number;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
@@ -8134,6 +8232,7 @@ export class GameLogicSubsystem implements Subsystem {
       weaponBonusConditionFlags: entity.weaponBonusConditionFlags,
       visionRange: entity.visionRange,
       shroudClearingRange: entity.shroudClearingRange,
+      modelConditionFlags: Array.from(entity.modelConditionFlags),
       shroudRange: entity.shroudRange,
       battlePlanDamageScalar: entity.battlePlanDamageScalar,
     };
@@ -27654,6 +27753,7 @@ export class GameLogicSubsystem implements Subsystem {
       renderAssetResolved: renderAssetProfile.renderAssetResolved,
       renderAnimationStateClips: renderAssetProfile.renderAnimationStateClips,
       modelConditionInfos: renderAssetProfile.modelConditionInfos,
+      transitionInfos: renderAssetProfile.transitionInfos,
       x,
       y,
       z,
@@ -27759,6 +27859,7 @@ export class GameLogicSubsystem implements Subsystem {
       tunnelContainerId: null,
       tunnelEnteredFrame: 0,
       healContainEnteredFrame: 0,
+      initialPayloadCreated: false,
       helixPortableRiderId: null,
       slaverEntityId: null,
       spawnBehaviorState: this.extractSpawnBehaviorState(objectDef),
@@ -28365,6 +28466,7 @@ export class GameLogicSubsystem implements Subsystem {
     renderAssetResolved: boolean;
     renderAnimationStateClips: RenderAnimationStateClipCandidates;
     modelConditionInfos: ModelConditionInfo[];
+    transitionInfos: TransitionInfo[];
   } {
     return resolveRenderAssetProfileImpl(objectDef);
   }
@@ -28411,19 +28513,33 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: Object::updateConditionState / W3DModelDraw condition flags.
    * Centralized sync of model condition flags from current entity state.
-   * Flags already managed elsewhere (PANICKING, NIGHT, SNOW, DOOR_*, SECOND_LIFE,
-   * POWER_PLANT_*, FREEFALL, POST_COLLAPSE, MOVING for topple, FRONTCRUSHED,
-   * BACKCRUSHED, ARMORSET_CRATEUPGRADE_*, CENTER_TO_*, LEFT_TO_*, RIGHT_TO_*)
-   * are NOT touched here to avoid conflicts.
+   *
+   * ~80 flags from ModelState.h (MODELCONDITION_*) mapped to browser-port entity state.
+   *
+   * Flags already managed elsewhere (PANICKING, NIGHT, SNOW, DOOR_1-4_*, SECOND_LIFE,
+   * POWER_PLANT_UPGRADING, POWER_PLANT_UPGRADED, FREEFALL, POST_COLLAPSE,
+   * MOVING for topple/tensile, FRONTCRUSHED, BACKCRUSHED, ARMORSET_CRATEUPGRADE_*,
+   * CENTER_TO_*, LEFT_TO_*, RIGHT_TO_*) are NOT touched here to avoid conflicts.
    */
   private syncModelConditionFlags(entity: MapEntity): void {
     const flags = entity.modelConditionFlags;
 
-    // ── DAMAGED / REALLY_DAMAGED / RUBBLE from body damage state ──
+    // ════════════════════════════════════════════════════════════════════════
+    // DAMAGE STATE (body module)
+    // ════════════════════════════════════════════════════════════════════════
     const bodyState = calcBodyDamageState(entity.health, entity.maxHealth);
     if (bodyState >= 1) { flags.add('DAMAGED'); } else { flags.delete('DAMAGED'); }
     if (bodyState >= 2) { flags.add('REALLYDAMAGED'); } else { flags.delete('REALLYDAMAGED'); }
     if (bodyState >= 3) { flags.add('RUBBLE'); } else { flags.delete('RUBBLE'); }
+
+    // ── SPECIAL_DAMAGED — severe damage visual variant ──
+    // Source parity: set when health drops below REALLY_DAMAGED threshold and
+    // an object has special damage art. We gate on bodyState >= 2 (same as REALLYDAMAGED).
+    if (bodyState >= 2) { flags.add('SPECIAL_DAMAGED'); } else { flags.delete('SPECIAL_DAMAGED'); }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // MOVEMENT / POSITION
+    // ════════════════════════════════════════════════════════════════════════
 
     // ── MOVING — normal locomotion ──
     // Skip if topple or tensile collapse is managing MOVING/FREEFALL/POST_COLLAPSE.
@@ -28437,32 +28553,117 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // ── FIRING_A / RELOADING_A from attack sub-state ──
-    if (entity.attackSubState === 'FIRING') {
-      flags.add('FIRING_A');
+    // ── TOPPLED — tree/pole has completed topple animation ──
+    if (entity.toppleState === 'DONE' || entity.toppleState === 'BOUNCING') {
+      flags.add('TOPPLED');
     } else {
-      flags.delete('FIRING_A');
-    }
-    if (entity.attackReloadFinishFrame > this.frameCounter) {
-      flags.add('RELOADING_A');
-    } else {
-      flags.delete('RELOADING_A');
+      flags.delete('TOPPLED');
     }
 
-    // ── PREATTACK_A ──
-    if (entity.attackSubState === 'AIMING' && entity.preAttackFinishFrame > this.frameCounter) {
-      flags.add('PREATTACK_A');
+    // ── PRONE — infantry lying flat when taking damage ──
+    if (entity.proneFramesRemaining > 0) {
+      flags.add('PRONE');
     } else {
-      flags.delete('PREATTACK_A');
+      flags.delete('PRONE');
     }
 
-    // ── BETWEEN_FIRING_SHOTS_A ──
-    if (entity.attackSubState === 'AIMING' && entity.attackTargetEntityId !== null
-        && entity.preAttackFinishFrame <= this.frameCounter) {
-      flags.add('BETWEEN_FIRING_SHOTS_A');
+    // ── CLIMBING — entity is climbing a cliff ──
+    // TODO: No explicit climbing state exists yet. Safe default: never set.
+
+    // ── OVER_WATER — entity is floating on water ──
+    if (entity.floatUpdateProfile?.enabled) {
+      flags.add('OVER_WATER');
     } else {
-      flags.delete('BETWEEN_FIRING_SHOTS_A');
+      flags.delete('OVER_WATER');
     }
+
+    // ── PARACHUTING — entity is parachuting down ──
+    if (entity.kindOf.has('PARACHUTE')) {
+      flags.add('PARACHUTING');
+    } else {
+      flags.delete('PARACHUTING');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // COMBAT — weapon slot flags
+    // ════════════════════════════════════════════════════════════════════════
+
+    // ── ATTACKING — entity has an attack target (any slot) ──
+    if (entity.attackTargetEntityId !== null) {
+      flags.add('ATTACKING');
+    } else {
+      flags.delete('ATTACKING');
+    }
+
+    // Determine which weapon slot is active for FIRING/RELOADING/PREATTACK/BETWEEN/USING.
+    const activeSlot = entity.forcedWeaponSlot ?? 0;
+    const isFiring = entity.attackSubState === 'FIRING';
+    const isReloading = entity.attackReloadFinishFrame > this.frameCounter;
+    const isPreattack = entity.attackSubState === 'AIMING' && entity.preAttackFinishFrame > this.frameCounter;
+    const isBetweenShots = entity.attackSubState === 'AIMING'
+      && entity.attackTargetEntityId !== null
+      && entity.preAttackFinishFrame <= this.frameCounter;
+    const isUsingWeapon = entity.attackTargetEntityId !== null && entity.attackSubState !== 'IDLE';
+
+    // ── FIRING_A / FIRING_B / FIRING_C ──
+    if (isFiring && activeSlot === 0) { flags.add('FIRING_A'); } else { flags.delete('FIRING_A'); }
+    if (isFiring && activeSlot === 1) { flags.add('FIRING_B'); } else { flags.delete('FIRING_B'); }
+    if (isFiring && activeSlot === 2) { flags.add('FIRING_C'); } else { flags.delete('FIRING_C'); }
+
+    // ── RELOADING_A / RELOADING_B / RELOADING_C ──
+    if (isReloading && activeSlot === 0) { flags.add('RELOADING_A'); } else { flags.delete('RELOADING_A'); }
+    if (isReloading && activeSlot === 1) { flags.add('RELOADING_B'); } else { flags.delete('RELOADING_B'); }
+    if (isReloading && activeSlot === 2) { flags.add('RELOADING_C'); } else { flags.delete('RELOADING_C'); }
+
+    // ── PREATTACK_A / PREATTACK_B / PREATTACK_C ──
+    if (isPreattack && activeSlot === 0) { flags.add('PREATTACK_A'); } else { flags.delete('PREATTACK_A'); }
+    if (isPreattack && activeSlot === 1) { flags.add('PREATTACK_B'); } else { flags.delete('PREATTACK_B'); }
+    if (isPreattack && activeSlot === 2) { flags.add('PREATTACK_C'); } else { flags.delete('PREATTACK_C'); }
+
+    // ── BETWEEN_FIRING_SHOTS_A / _B / _C ──
+    if (isBetweenShots && activeSlot === 0) { flags.add('BETWEEN_FIRING_SHOTS_A'); } else { flags.delete('BETWEEN_FIRING_SHOTS_A'); }
+    if (isBetweenShots && activeSlot === 1) { flags.add('BETWEEN_FIRING_SHOTS_B'); } else { flags.delete('BETWEEN_FIRING_SHOTS_B'); }
+    if (isBetweenShots && activeSlot === 2) { flags.add('BETWEEN_FIRING_SHOTS_C'); } else { flags.delete('BETWEEN_FIRING_SHOTS_C'); }
+
+    // ── USING_WEAPON_A / _B / _C ──
+    if (isUsingWeapon && activeSlot === 0) { flags.add('USING_WEAPON_A'); } else { flags.delete('USING_WEAPON_A'); }
+    if (isUsingWeapon && activeSlot === 1) { flags.add('USING_WEAPON_B'); } else { flags.delete('USING_WEAPON_B'); }
+    if (isUsingWeapon && activeSlot === 2) { flags.add('USING_WEAPON_C'); } else { flags.delete('USING_WEAPON_C'); }
+
+    // ── TURRET_ROTATE — turret is rotating toward a target ──
+    let turretRotating = false;
+    for (const ts of entity.turretStates) {
+      if (ts.state === 'AIM') { turretRotating = true; break; }
+    }
+    if (turretRotating) { flags.add('TURRET_ROTATE'); } else { flags.delete('TURRET_ROTATE'); }
+
+    // ── CONTINUOUS_FIRE_SLOW / CONTINUOUS_FIRE_MEAN / CONTINUOUS_FIRE_FAST ──
+    if (entity.objectStatusFlags.has('CONTINUOUS_FIRE_SLOW')) {
+      flags.add('CONTINUOUS_FIRE_SLOW');
+    } else {
+      flags.delete('CONTINUOUS_FIRE_SLOW');
+    }
+    if (entity.continuousFireState === 'MEAN' || entity.continuousFireState === 'FAST') {
+      flags.add('CONTINUOUS_FIRE_MEAN');
+    } else {
+      flags.delete('CONTINUOUS_FIRE_MEAN');
+    }
+    if (entity.continuousFireState === 'FAST') {
+      flags.add('CONTINUOUS_FIRE_FAST');
+    } else {
+      flags.delete('CONTINUOUS_FIRE_FAST');
+    }
+
+    // ── ENEMYNEAR — an enemy unit is within detection radius ──
+    if (entity.enemyNearDetected) {
+      flags.add('ENEMYNEAR');
+    } else {
+      flags.delete('ENEMYNEAR');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CONSTRUCTION
+    // ════════════════════════════════════════════════════════════════════════
 
     // ── ACTIVELY_BEING_CONSTRUCTED / PARTIALLY_CONSTRUCTED ──
     if (entity.constructionPercent >= 0 && entity.constructionPercent < 100) {
@@ -28472,6 +28673,40 @@ export class GameLogicSubsystem implements Subsystem {
       flags.delete('ACTIVELY_BEING_CONSTRUCTED');
       flags.delete('PARTIALLY_CONSTRUCTED');
     }
+
+    // ── AWAITING_CONSTRUCTION — queued/placed but builder hasn't started ──
+    if (entity.constructionPercent === 0 && entity.builderId === 0) {
+      flags.add('AWAITING_CONSTRUCTION');
+    } else {
+      flags.delete('AWAITING_CONSTRUCTION');
+    }
+
+    // ── CONSTRUCTION_COMPLETE — build is fully done ──
+    if (entity.constructionPercent === CONSTRUCTION_COMPLETE) {
+      flags.add('CONSTRUCTION_COMPLETE');
+    } else {
+      flags.delete('CONSTRUCTION_COMPLETE');
+    }
+
+    // ── ACTIVELY_CONSTRUCTING — this entity (dozer/worker) is building something ──
+    let isActivelyConstructing = false;
+    if (entity.dozerAIProfile) {
+      for (const other of this.spawnedEntities.values()) {
+        if (other.builderId === entity.id && other.constructionPercent >= 0 && other.constructionPercent < 100) {
+          isActivelyConstructing = true;
+          break;
+        }
+      }
+    }
+    if (isActivelyConstructing) {
+      flags.add('ACTIVELY_CONSTRUCTING');
+    } else {
+      flags.delete('ACTIVELY_CONSTRUCTING');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CONTAIN / TRANSPORT STATE
+    // ════════════════════════════════════════════════════════════════════════
 
     // ── GARRISONED — entity is inside a garrison building ──
     if (entity.garrisonContainerId !== null) {
@@ -28490,6 +28725,44 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
+    // ── LOADED — transport/container has passengers inside ──
+    if (entity.containProfile) {
+      const occupantCount = this.collectContainedEntityIds(entity.id).length;
+      if (occupantCount > 0) {
+        flags.add('LOADED');
+      } else {
+        flags.delete('LOADED');
+      }
+    } else {
+      flags.delete('LOADED');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // DOCKING — supply truck dock animation phases
+    // ════════════════════════════════════════════════════════════════════════
+    if (entity.supplyTruckProfile) {
+      const truckState = this.supplyTruckStates.get(entity.id);
+      const aiState = truckState?.aiState ?? SupplyTruckAIState.IDLE;
+      const isDockingOverall = aiState === SupplyTruckAIState.APPROACHING_WAREHOUSE
+        || aiState === SupplyTruckAIState.GATHERING
+        || aiState === SupplyTruckAIState.APPROACHING_DEPOT
+        || aiState === SupplyTruckAIState.DEPOSITING;
+      const isDockBeginning = aiState === SupplyTruckAIState.APPROACHING_WAREHOUSE
+        || aiState === SupplyTruckAIState.APPROACHING_DEPOT;
+      const isDockActive = aiState === SupplyTruckAIState.GATHERING
+        || aiState === SupplyTruckAIState.DEPOSITING;
+
+      if (isDockingOverall) { flags.add('DOCKING'); } else { flags.delete('DOCKING'); }
+      if (isDockBeginning) { flags.add('DOCKING_BEGINNING'); } else { flags.delete('DOCKING_BEGINNING'); }
+      if (isDockActive) { flags.add('DOCKING_ACTIVE'); } else { flags.delete('DOCKING_ACTIVE'); }
+      // DOCKING_ENDING: approximate as not-docking (C++ tracks a separate exit phase).
+      flags.delete('DOCKING_ENDING');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // SELL / DEATH
+    // ════════════════════════════════════════════════════════════════════════
+
     // ── SOLD — entity is in sell animation ──
     if (this.sellingEntities.has(entity.id)) {
       flags.add('SOLD');
@@ -28497,21 +28770,16 @@ export class GameLogicSubsystem implements Subsystem {
       flags.delete('SOLD');
     }
 
-    // ── DYING / DEATH — during slow death ──
+    // ── DYING — during slow death / structure collapse ──
     if (entity.slowDeathState || entity.structureCollapseState) {
       flags.add('DYING');
     } else {
       flags.delete('DYING');
     }
 
-    // ── USING_WEAPON_A — actively attacking ──
-    if (entity.attackTargetEntityId !== null && entity.attackSubState !== 'IDLE') {
-      flags.add('USING_WEAPON_A');
-    } else {
-      flags.delete('USING_WEAPON_A');
-    }
-
-    // ── DEPLOYED / PACKING / UNPACKING — deploy state machine ──
+    // ════════════════════════════════════════════════════════════════════════
+    // DEPLOY / PACK / UNPACK
+    // ════════════════════════════════════════════════════════════════════════
     if (entity.deployStyleProfile) {
       if (entity.deployState === 'READY_TO_ATTACK') {
         flags.add('DEPLOYED');
@@ -28530,12 +28798,142 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // ── RAPPELLING — chinook combat drop visual ──
+    // ════════════════════════════════════════════════════════════════════════
+    // RAPPELLING
+    // ════════════════════════════════════════════════════════════════════════
     if (entity.chinookFlightStatus === 'DOING_COMBAT_DROP') {
       flags.add('RAPPELLING');
     } else {
       flags.delete('RAPPELLING');
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // VETERANCY — weapon set condition model flags
+    // ════════════════════════════════════════════════════════════════════════
+    if (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_VETERAN) {
+      flags.add('WEAPONSET_VETERAN');
+    } else {
+      flags.delete('WEAPONSET_VETERAN');
+    }
+    if (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_ELITE) {
+      flags.add('WEAPONSET_ELITE');
+    } else {
+      flags.delete('WEAPONSET_ELITE');
+    }
+    if (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_HERO) {
+      flags.add('WEAPONSET_HERO');
+    } else {
+      flags.delete('WEAPONSET_HERO');
+    }
+    if (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_PLAYER_UPGRADE) {
+      flags.add('WEAPONSET_PLAYER_UPGRADE');
+    } else {
+      flags.delete('WEAPONSET_PLAYER_UPGRADE');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // FIRE / FLAME STATE
+    // ════════════════════════════════════════════════════════════════════════
+
+    // ── AFLAME — entity is on fire ──
+    if (entity.flameStatus === 'AFLAME') {
+      flags.add('AFLAME');
+    } else {
+      flags.delete('AFLAME');
+    }
+
+    // ── BURNED — entity finished burning, charred husk ──
+    if (entity.flameStatus === 'BURNED') {
+      flags.add('BURNED');
+    } else {
+      flags.delete('BURNED');
+    }
+
+    // ── SMOLDERING — transitional/charred state ──
+    if (entity.flameStatus === 'BURNED') {
+      flags.add('SMOLDERING');
+    } else {
+      flags.delete('SMOLDERING');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // JET AIRCRAFT STATE
+    // ════════════════════════════════════════════════════════════════════════
+    if (entity.jetAIState) {
+      const js = entity.jetAIState.state;
+      const isAirborne = js === 'AIRBORNE' || js === 'TAKING_OFF'
+        || js === 'RETURNING_FOR_LANDING' || js === 'CIRCLING_DEAD_AIRFIELD';
+      if (isAirborne) {
+        flags.add('JETEXHAUST');
+      } else {
+        flags.delete('JETEXHAUST');
+      }
+      // ── JETAFTERBURNER — extra thrust during takeoff ──
+      if (js === 'TAKING_OFF') {
+        flags.add('JETAFTERBURNER');
+      } else {
+        flags.delete('JETAFTERBURNER');
+      }
+    } else {
+      flags.delete('JETEXHAUST');
+      flags.delete('JETAFTERBURNER');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // RADAR STATE
+    // ════════════════════════════════════════════════════════════════════════
+    if (entity.radarUpdateProfile && !entity.radarExtendComplete) {
+      flags.add('RADAR_EXTENDING');
+    } else {
+      flags.delete('RADAR_EXTENDING');
+    }
+    if (entity.radarExtendComplete && entity.radarActive) {
+      flags.add('RADAR_UPGRADED');
+    } else {
+      flags.delete('RADAR_UPGRADED');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // MINE / BOMB STATE
+    // ════════════════════════════════════════════════════════════════════════
+    if (entity.demoTrapProfile && !entity.demoTrapDetonated) {
+      flags.add('ARMED');
+    } else if (entity.minefieldProfile && entity.mineVirtualMinesRemaining > 0) {
+      flags.add('ARMED');
+    } else {
+      flags.delete('ARMED');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CAPTURE STATE
+    // ════════════════════════════════════════════════════════════════════════
+    if (entity.capturedFromOriginalOwner) {
+      flags.add('CAPTURED');
+    } else {
+      flags.delete('CAPTURED');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // FLAGS WITH TODO (entity state not yet available)
+    // ════════════════════════════════════════════════════════════════════════
+    // FLOODED — TODO: No explicit flood-zone tracking exists yet.
+    // SPECIAL_CHEERING — TODO: No cheer timer/trigger exists yet.
+    // RAISING_FLAG — TODO: No flag-raising state exists yet.
+    // EXPLODED_FLAILING / EXPLODED_BOUNCING / SPLATTED — TODO: physics ragdoll integration.
+    // SURRENDER — gated behind ALLOW_SURRENDER #ifdef, not in retail.
+    // PREORDER — promotional flag, not gameplay relevant.
+    // CLIMBING — TODO: locomotor cliff-transition state needs to be surfaced.
+    //
+    // Flags managed elsewhere (NOT touched here):
+    // POST_COLLAPSE, FREEFALL — tensile/topple system
+    // PANICKING — updatePanicSystems()
+    // NIGHT / SNOW — day/night cycle
+    // DOOR_1-4_* — door state machine
+    // FRONTCRUSHED / BACKCRUSHED — crush die
+    // POWER_PLANT_UPGRADING / POWER_PLANT_UPGRADED — power plant upgrade system
+    // ARMORSET_CRATEUPGRADE_ONE / TWO — crate system
+    // CENTER_TO_* / LEFT_TO_* / RIGHT_TO_* — steering animation
+    // SECOND_LIFE — undead body
   }
 
   private updateRenderStates(): void {
@@ -30084,6 +30482,8 @@ export class GameLogicSubsystem implements Subsystem {
       const allowEnemiesInside = allowEnemiesInsideRaw !== false;
       const allowNeutralInside = allowNeutralInsideRaw !== false;
       const containMax = readNumericField(block.fields, ['ContainMax']) ?? 0;
+      // Source parity: TransportContainModuleData::m_slotCapacity — overrides ContainMax for transports.
+      const slotsRaw = readNumericField(block.fields, ['Slots']);
       const payloadTemplateNames = readStringList(block.fields, ['PayloadTemplateName']).map((templateName) =>
         templateName.toUpperCase(),
       );
@@ -30093,6 +30493,20 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: OpenContainModuleData::m_isBurnedDeathToUnits — default TRUE.
       const burnedDeathRaw = readBooleanField(block.fields, ['BurnedDeathToUnits']);
       const burnedDeathToUnits = burnedDeathRaw !== false;
+      // Source parity: TransportContainModuleData::m_healthRegen (HealthRegen%PerSec).
+      const healthRegenRaw = readNumericField(block.fields, ['HealthRegen%PerSec']);
+      const healthRegenPercentPerSec = healthRegenRaw != null ? healthRegenRaw / 100 : 0;
+      // Source parity: TransportContainModuleData::m_initialPayload.
+      const initialPayloadRaw = readStringField(block.fields, ['InitialPayload']);
+      let initialPayloadTemplateName: string | null = null;
+      let initialPayloadCount = 0;
+      if (initialPayloadRaw) {
+        const payloadTokens = initialPayloadRaw.trim().split(/\s+/);
+        if (payloadTokens.length >= 1) {
+          initialPayloadTemplateName = payloadTokens[0]!;
+          initialPayloadCount = payloadTokens.length >= 2 ? (parseInt(payloadTokens[1]!, 10) || 1) : 1;
+        }
+      }
 
       if (moduleType === 'OPENCONTAIN') {
         profile = {
@@ -30109,6 +30523,9 @@ export class GameLogicSubsystem implements Subsystem {
           timeForFullHealFrames: 0,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec: 0,
+          initialPayloadTemplateName: null,
+          initialPayloadCount: 0,
         };
       } else if (moduleType === 'TRANSPORTCONTAIN') {
         profile = {
@@ -30121,10 +30538,13 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
-          transportCapacity: containMax,
+          transportCapacity: slotsRaw != null ? slotsRaw : containMax,
           timeForFullHealFrames: 0,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec,
+          initialPayloadTemplateName,
+          initialPayloadCount,
         };
       } else if (moduleType === 'OVERLORDCONTAIN') {
         profile = {
@@ -30137,10 +30557,13 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire,
           passengersAllowedToFireDefault: passengersAllowedToFire,
           garrisonCapacity: 0,
-          transportCapacity: containMax,
+          transportCapacity: slotsRaw != null ? slotsRaw : containMax,
           timeForFullHealFrames: 0,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec,
+          initialPayloadTemplateName,
+          initialPayloadCount,
         };
       } else if (moduleType === 'HELIXCONTAIN') {
         // HELIXCONTAIN is a Zero Hour-specific container module name used by data INIs;
@@ -30156,10 +30579,13 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFireDefault: passengersAllowedToFire,
           portableStructureTemplateNames: payloadTemplateNames,
           garrisonCapacity: 0,
-          transportCapacity: containMax,
+          transportCapacity: slotsRaw != null ? slotsRaw : containMax,
           timeForFullHealFrames: 0,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec,
+          initialPayloadTemplateName,
+          initialPayloadCount,
         };
       } else if (moduleType === 'PARACHUTECONTAIN') {
         // Source parity: ParachuteContain overrides isSpecialZeroSlotContainer() == true.
@@ -30179,6 +30605,9 @@ export class GameLogicSubsystem implements Subsystem {
           timeForFullHealFrames: 0,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec: 0,
+          initialPayloadTemplateName: null,
+          initialPayloadCount: 0,
         };
       } else if (moduleType === 'GARRISONCONTAIN') {
         // GarrisonContain is OpenContain-derived in source but always returns TRUE from
@@ -30197,6 +30626,9 @@ export class GameLogicSubsystem implements Subsystem {
           timeForFullHealFrames: 0,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec: 0,
+          initialPayloadTemplateName: null,
+          initialPayloadCount: 0,
         };
       } else if (moduleType === 'TUNNELCONTAIN') {
         // Source parity: TunnelContain — per-player shared tunnel network.
@@ -30216,6 +30648,9 @@ export class GameLogicSubsystem implements Subsystem {
           timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec: 0,
+          initialPayloadTemplateName: null,
+          initialPayloadCount: 0,
         };
       } else if (moduleType === 'CAVECONTAIN') {
         // Source parity: CaveContain — shared tunnel tracker keyed by CaveIndex.
@@ -30238,6 +30673,9 @@ export class GameLogicSubsystem implements Subsystem {
           damagePercentToUnits,
           burnedDeathToUnits,
           caveIndex,
+          healthRegenPercentPerSec: 0,
+          initialPayloadTemplateName: null,
+          initialPayloadCount: 0,
         };
       } else if (moduleType === 'HEALCONTAIN') {
         // Source parity: HealContain — passengers healed inside, auto-ejected when full health.
@@ -30257,6 +30695,9 @@ export class GameLogicSubsystem implements Subsystem {
           timeForFullHealFrames: timeForFullHealMs > 0 ? this.msToLogicFrames(timeForFullHealMs) : 1,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec: 0,
+          initialPayloadTemplateName: null,
+          initialPayloadCount: 0,
         };
       } else if (moduleType === 'INTERNETHACKCONTAIN') {
         // Source parity: InternetHackContain — extends TransportContain, auto-issues
@@ -30271,10 +30712,13 @@ export class GameLogicSubsystem implements Subsystem {
           passengersAllowedToFire: false,
           passengersAllowedToFireDefault: false,
           garrisonCapacity: 0,
-          transportCapacity: containMax,
+          transportCapacity: slotsRaw != null ? slotsRaw : containMax,
           timeForFullHealFrames: 0,
           damagePercentToUnits,
           burnedDeathToUnits,
+          healthRegenPercentPerSec,
+          initialPayloadTemplateName,
+          initialPayloadCount,
         };
       }
 
@@ -46531,6 +46975,151 @@ export class GameLogicSubsystem implements Subsystem {
         if (passenger.canMove) {
           this.issueMoveTo(passenger.id, container.x + MAP_XY_FACTOR, container.z);
         }
+      }
+    }
+  }
+
+  /**
+   * Source parity: TransportContain::createPayload — spawn initial payload units inside transport.
+   * C++ file: TransportContain.cpp lines 332-362.
+   * Called once on first update (m_payloadCreated check).
+   */
+  private updateInitialPayloads(): void {
+    const registry = this.iniDataRegistry;
+    if (!registry) return;
+
+    for (const container of this.spawnedEntities.values()) {
+      if (container.destroyed || container.initialPayloadCreated) continue;
+      const profile = container.containProfile;
+      if (!profile || !profile.initialPayloadTemplateName || profile.initialPayloadCount <= 0) {
+        container.initialPayloadCreated = true;
+        continue;
+      }
+
+      container.initialPayloadCreated = true;
+
+      const payloadDef = findObjectDefByName(registry, profile.initialPayloadTemplateName);
+      if (!payloadDef) continue;
+
+      for (let i = 0; i < profile.initialPayloadCount; i++) {
+        // Source parity: TransportContain::createPayload — check isValidContainerFor(payload, true).
+        // Simple capacity check: current occupied slots vs max capacity.
+        if (profile.transportCapacity > 0) {
+          const usedSlots = this.resolveScriptContainerUsedTransportSlots(container);
+          if (usedSlots >= profile.transportCapacity) break;
+        }
+
+        const mapObject: MapObjectJSON = {
+          templateName: payloadDef.name,
+          angle: 0,
+          flags: 0,
+          position: { x: container.x, y: container.z, z: 0 },
+          properties: {},
+        };
+        const payload = this.createMapEntity(mapObject, payloadDef, registry, this.mapHeightmap);
+        if (container.side !== undefined) {
+          payload.side = container.side;
+        }
+        payload.controllingPlayerToken = container.controllingPlayerToken;
+        this.addEntityToWorld(payload);
+
+        // Source parity: contain->addToContain(payload) — enter as transport passenger.
+        this.enterTransport(payload, container);
+      }
+    }
+  }
+
+  /**
+   * Source parity: TransportContain::update — HealthRegen%PerSec per-frame heal for passengers.
+   * C++ file: TransportContain.cpp lines 366-414.
+   */
+  private updateTransportContainHealing(): void {
+    for (const container of this.spawnedEntities.values()) {
+      if (container.destroyed) continue;
+      const profile = container.containProfile;
+      if (!profile) continue;
+      if (profile.healthRegenPercentPerSec <= 0) continue;
+      // Source parity: only transport-derived containers have HealthRegen%PerSec.
+      const isTransportDerived = profile.moduleType === 'TRANSPORT'
+        || profile.moduleType === 'OVERLORD'
+        || profile.moduleType === 'HELIX'
+        || profile.moduleType === 'INTERNET_HACK';
+      if (!isTransportDerived) continue;
+
+      for (const entity of this.spawnedEntities.values()) {
+        if (entity.destroyed) continue;
+        if (entity.transportContainerId !== container.id) continue;
+        if (entity.health >= entity.maxHealth) continue;
+
+        // Source parity: regen = maxHealth * (healthRegen / 100) * SECONDS_PER_LOGICFRAME_REAL.
+        // healthRegenPercentPerSec is already fraction (0-1), multiply by maxHealth / framesPerSecond.
+        const healPerFrame = entity.maxHealth * profile.healthRegenPercentPerSec / LOGIC_FRAME_RATE;
+        entity.health = Math.min(entity.maxHealth, entity.health + healPerFrame);
+      }
+    }
+  }
+
+  /**
+   * Source parity: TransportContain — MODELCONDITION_LOADED set when transport has any passengers.
+   * Also sets RIDER1/RIDER2/etc model conditions for Overlord sub-units.
+   */
+  private updateContainModelConditions(): void {
+    for (const container of this.spawnedEntities.values()) {
+      if (container.destroyed) continue;
+      const profile = container.containProfile;
+      if (!profile) continue;
+
+      const isTransportStyle = profile.moduleType === 'TRANSPORT'
+        || profile.moduleType === 'OVERLORD'
+        || profile.moduleType === 'HELIX'
+        || profile.moduleType === 'OPEN'
+        || profile.moduleType === 'INTERNET_HACK';
+      if (!isTransportStyle) continue;
+
+      const passengerIds = this.collectContainedEntityIds(container.id);
+      const hasPassengers = passengerIds.length > 0;
+
+      // Source parity: TransportContain::onContaining / onRemoving — MODELCONDITION_LOADED.
+      if (hasPassengers) {
+        container.modelConditionFlags.add('LOADED');
+      } else {
+        container.modelConditionFlags.delete('LOADED');
+      }
+
+      // Source parity: OverlordContain — set RIDER model conditions per sub-unit slot.
+      if (profile.moduleType === 'OVERLORD' || profile.moduleType === 'HELIX') {
+        // Clear all rider conditions first.
+        for (let i = 1; i <= 4; i++) {
+          container.modelConditionFlags.delete(`RIDER${i}`);
+        }
+        // Set rider conditions for each occupied slot.
+        for (let i = 0; i < passengerIds.length && i < 4; i++) {
+          container.modelConditionFlags.add(`RIDER${i + 1}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: OverlordContain — sub-units inherit parent position each frame.
+   * C++ OpenContain.cpp handles position synchronization for riders.
+   */
+  private updateOverlordRiderPositions(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      if (entity.transportContainerId === null) continue;
+
+      const container = this.spawnedEntities.get(entity.transportContainerId);
+      if (!container || container.destroyed) continue;
+
+      const profile = container.containProfile;
+      if (!profile) continue;
+
+      // Source parity: riders inside enclosed containers track parent position.
+      if (profile.moduleType === 'OVERLORD' || profile.moduleType === 'HELIX') {
+        entity.x = container.x;
+        entity.z = container.z;
+        entity.y = container.y;
       }
     }
   }

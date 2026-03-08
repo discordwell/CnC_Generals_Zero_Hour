@@ -160,4 +160,62 @@ describe('MusicManager', () => {
     manager.setAmbientMusic(); // Should not re-trigger.
     expect(audio.played.length).toBe(playCount);
   });
+
+  it('uses crossfade when crossfadeToMusic is available and enabled', () => {
+    const crossfadeCalls: string[] = [];
+    let nextHandle = 1;
+    const audio: MusicAudioManager & { played: string[]; removed: number[] } = {
+      played: [],
+      removed: [],
+      addAudioEvent(eventName: string) {
+        this.played.push(eventName);
+        return nextHandle++;
+      },
+      removeAudioEvent(handle: number) {
+        this.removed.push(handle);
+      },
+      crossfadeToMusic(trackName: string) {
+        crossfadeCalls.push(trackName);
+        return nextHandle++;
+      },
+    };
+
+    const manager = new MusicManager(audio, { useCrossfade: true });
+    manager.setAmbientMusic();
+    expect(audio.played.length).toBe(1); // First track uses addAudioEvent (no previous)
+
+    // Transition to battle triggers crossfade (because there's a current track)
+    manager.notifyCombat();
+    expect(crossfadeCalls.length).toBe(1);
+    expect(crossfadeCalls[0]).toMatch(/MusicTrack_Battle/);
+  });
+
+  it('falls back to hard-cut when crossfade is disabled', () => {
+    const crossfadeCalls: string[] = [];
+    let nextHandle = 1;
+    const audio: MusicAudioManager & { played: string[]; removed: number[] } = {
+      played: [],
+      removed: [],
+      addAudioEvent(eventName: string) {
+        this.played.push(eventName);
+        return nextHandle++;
+      },
+      removeAudioEvent(handle: number) {
+        this.removed.push(handle);
+      },
+      crossfadeToMusic(trackName: string) {
+        crossfadeCalls.push(trackName);
+        return nextHandle++;
+      },
+    };
+
+    const manager = new MusicManager(audio, { useCrossfade: false });
+    manager.setAmbientMusic();
+    manager.notifyCombat();
+
+    // Crossfade should NOT be used
+    expect(crossfadeCalls.length).toBe(0);
+    // Should use addAudioEvent for hard-cut
+    expect(audio.played.length).toBe(2);
+  });
 });

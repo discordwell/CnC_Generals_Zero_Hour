@@ -17,6 +17,21 @@ import {
 
 export type RenderableAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE' | 'PRONE';
 
+export interface IdleAnimationVariant {
+  animationName: string;
+  randomWeight: number;
+}
+
+export interface TransitionInfo {
+  fromKey: string;
+  toKey: string;
+  modelName: string | null;
+  animationName: string | null;
+  animationMode: 'ONCE';
+  hideSubObjects: string[];
+  showSubObjects: string[];
+}
+
 export interface ModelConditionInfo {
   conditionFlags: string[];
   modelName: string | null;
@@ -25,6 +40,10 @@ export interface ModelConditionInfo {
   hideSubObjects: string[];
   showSubObjects: string[];
   animationMode: 'LOOP' | 'ONCE' | 'MANUAL';
+  transitionKey: string | null;
+  animSpeedFactorMin: number;
+  animSpeedFactorMax: number;
+  idleAnimations: IdleAnimationVariant[];
 }
 
 export interface RenderableEntityState {
@@ -34,6 +53,7 @@ export interface RenderableEntityState {
   renderAssetCandidates?: readonly string[];
   renderAnimationStateClips?: Partial<Record<RenderableAnimationState, string[]>>;
   modelConditionInfos?: ModelConditionInfo[];
+  transitionInfos?: TransitionInfo[];
   modelConditionFlags?: readonly string[];
   currentSpeed?: number;
   maxSpeed?: number;
@@ -129,6 +149,30 @@ interface VisualAssetState {
   cachedActiveFlags: Set<string>;
   /** Serialised key of cached flags (for change detection). */
   cachedActiveFlagsKey: string;
+  // --- Transition state system (source parity: W3DModelDraw::setModelState) ---
+  /** True when a transition animation is currently playing. */
+  isInTransition: boolean;
+  /** The condition key we are transitioning *to* (applied after transition completes). */
+  transitionTargetConditionKey: string | null;
+  /** The TransitionKey of the condition state we are transitioning *from*. */
+  transitionFromKey: string | null;
+  /** Matched ModelConditionInfo pending application after transition finishes. */
+  transitionTargetMatch: ModelConditionInfo | null;
+  // --- Idle animation randomization ---
+  /** Index of the currently playing idle variant (-1 = none). */
+  idleVariantIndex: number;
+  /** Accumulated time in seconds since the current idle variant started. */
+  idleVariantElapsed: number;
+  // --- Per-condition model swapping ---
+  /** Cache of alternate condition-triggered models (keyed by model name). */
+  alternateModelCache: Map<string, { scene: THREE.Object3D; animations: readonly THREE.AnimationClip[] }>;
+  /** Model name currently loaded (to detect when a swap is needed). */
+  currentModelName: string | null;
+  /** Token for pending model swap loads (to discard stale loads). */
+  modelSwapLoadToken: number;
+  // --- Animation speed factor ---
+  /** Per-entity randomised speed factor applied on condition change. */
+  conditionAnimSpeedFactor: number;
 }
 
 export interface ObjectVisualManagerConfig {
@@ -183,6 +227,15 @@ function findBestConditionMatch(
     }
   }
   return result;
+}
+
+/**
+ * Random float in [min, max].
+ * Source parity: GameClientRandomValueReal.
+ */
+function randomInRange(min: number, max: number): number {
+  if (min >= max) return min;
+  return min + Math.random() * (max - min);
 }
 
 export class ObjectVisualManager {
@@ -245,7 +298,7 @@ export class ObjectVisualManager {
       this.syncStatusEffects(visual, state);
       this.syncStealthOpacity(visual, state);
       this.syncTurretBones(visual, state);
-      this.syncConditionAnimation(visual, state);
+      this.syncConditionAnimation(visual, state, dt);
       // Only use legacy 5-state system if condition system isn't managing animation.
       if (visual.conditionAction === null) {
         this.applyAnimationState(visual, state.animationState);
@@ -275,6 +328,11 @@ export class ObjectVisualManager {
     animationState: RenderableAnimationState | null;
     hasModel: boolean;
     assetPath: string | null;
+    isInTransition: boolean;
+    activeConditionKey: string | null;
+    conditionAnimSpeedFactor: number;
+    idleVariantIndex: number;
+    currentModelName: string | null;
   } | null {
     const visual = this.visuals.get(entityId);
     if (!visual) {
@@ -284,6 +342,11 @@ export class ObjectVisualManager {
       animationState: visual.activeState,
       hasModel: visual.currentModel !== null,
       assetPath: visual.assetPath,
+      isInTransition: visual.isInTransition,
+      activeConditionKey: visual.activeConditionKey,
+      conditionAnimSpeedFactor: visual.conditionAnimSpeedFactor,
+      idleVariantIndex: visual.idleVariantIndex,
+      currentModelName: visual.currentModelName,
     };
   }
 
@@ -386,6 +449,16 @@ export class ObjectVisualManager {
       treadUVOffset: 0,
       cachedActiveFlags: new Set(),
       cachedActiveFlagsKey: '',
+      isInTransition: false,
+      transitionTargetConditionKey: null,
+      transitionFromKey: null,
+      transitionTargetMatch: null,
+      idleVariantIndex: -1,
+      idleVariantElapsed: 0,
+      alternateModelCache: new Map(),
+      currentModelName: null,
+      modelSwapLoadToken: 0,
+      conditionAnimSpeedFactor: 1.0,
     };
   }
 
@@ -700,6 +773,16 @@ export class ObjectVisualManager {
     visual.treadUVOffset = 0;
     visual.cachedActiveFlags.clear();
     visual.cachedActiveFlagsKey = '';
+    visual.isInTransition = false;
+    visual.transitionTargetConditionKey = null;
+    visual.transitionFromKey = null;
+    visual.transitionTargetMatch = null;
+    visual.idleVariantIndex = -1;
+    visual.idleVariantElapsed = 0;
+    visual.alternateModelCache.clear();
+    visual.currentModelName = null;
+    visual.modelSwapLoadToken = 0;
+    visual.conditionAnimSpeedFactor = 1.0;
 
     if (visual.currentModel !== null) {
       visual.root.remove(visual.currentModel);
@@ -1393,8 +1476,14 @@ export class ObjectVisualManager {
    * Select animation and sub-object visibility based on ModelConditionFlags.
    * Source parity: W3DModelDraw uses SparseMatchFinder to select the
    * best-fitting ModelConditionState each frame.
+   *
+   * Extended with:
+   * - Transition animations between named states (TransitionState system)
+   * - Idle animation randomization (IdleAnimation variants)
+   * - Per-condition model swapping (ModelConditionInfo.modelName)
+   * - AnimationSpeedFactorRange
    */
-  private syncConditionAnimation(visual: VisualAssetState, state: RenderableEntityState): void {
+  private syncConditionAnimation(visual: VisualAssetState, state: RenderableEntityState, dt: number): void {
     const infos = state.modelConditionInfos;
     const flags = state.modelConditionFlags;
     if (!infos || infos.length === 0 || !flags) {
@@ -1415,15 +1504,136 @@ export class ObjectVisualManager {
     }
 
     const conditionKey = match.conditionFlags.slice().sort().join('|');
+
+    // --- Check if a transition animation is currently playing ---
+    if (visual.isInTransition) {
+      // Check if the transition animation has finished
+      if (visual.conditionAction && this.isActionFinished(visual.conditionAction)) {
+        // Transition complete — apply the target state
+        visual.isInTransition = false;
+        const targetMatch = visual.transitionTargetMatch;
+        visual.transitionTargetMatch = null;
+        visual.transitionFromKey = null;
+        visual.transitionTargetConditionKey = null;
+        if (targetMatch) {
+          this.applyConditionState(visual, state, targetMatch, targetMatch.conditionFlags.slice().sort().join('|'));
+        }
+      }
+      // While in transition, don't process further condition changes
+      return;
+    }
+
+    // --- Idle animation randomization: cycle idle variants on completion ---
+    const matchIdleAnims = match.idleAnimations ?? [];
+    if (conditionKey === visual.activeConditionKey && matchIdleAnims.length > 1) {
+      visual.idleVariantElapsed += dt;
+      if (visual.conditionAction && this.isActionFinished(visual.conditionAction)) {
+        // Pick a new idle variant (different from current if possible)
+        const newIndex = this.pickIdleVariant(matchIdleAnims, visual.idleVariantIndex);
+        if (newIndex !== visual.idleVariantIndex) {
+          visual.idleVariantIndex = newIndex;
+          visual.idleVariantElapsed = 0;
+          const variant = matchIdleAnims[newIndex]!;
+          this.playConditionClip(visual, variant.animationName, 'ONCE');
+        }
+      }
+    }
+
     if (conditionKey === visual.activeConditionKey) {
       return;
     }
+
+    // --- Transition check ---
+    const prevMatch = visual.activeConditionKey !== null
+      ? this.findMatchByKey(infos, visual.activeConditionKey)
+      : null;
+    const transitions = state.transitionInfos;
+
+    if (prevMatch && transitions && transitions.length > 0) {
+      const prevTransKey = prevMatch.transitionKey ?? null;
+      const newTransKey = match.transitionKey ?? null;
+      if (prevTransKey && newTransKey && prevTransKey !== newTransKey) {
+        const transInfo = transitions.find(
+          t => t.fromKey === prevTransKey && t.toKey === newTransKey,
+        );
+        if (transInfo && transInfo.animationName) {
+          // Play transition animation, then apply target state
+          visual.isInTransition = true;
+          visual.transitionTargetConditionKey = conditionKey;
+          visual.transitionFromKey = prevTransKey;
+          visual.transitionTargetMatch = match;
+          visual.activeConditionKey = `__transition__${prevTransKey}__${newTransKey}`;
+
+          // Apply transition sub-object visibility if specified
+          this.applySubObjectVisibility(visual, transInfo);
+
+          this.playConditionClip(visual, transInfo.animationName, 'ONCE');
+          return;
+        }
+      }
+    }
+
+    // --- Direct state application (no transition) ---
+    this.applyConditionState(visual, state, match, conditionKey);
+  }
+
+  /**
+   * Apply a matched condition state: sub-object visibility, animation clip,
+   * model swap, and speed factor.
+   */
+  private applyConditionState(
+    visual: VisualAssetState,
+    state: RenderableEntityState,
+    match: ModelConditionInfo,
+    conditionKey: string,
+  ): void {
     visual.activeConditionKey = conditionKey;
+    visual.idleVariantIndex = -1;
+    visual.idleVariantElapsed = 0;
 
     // --- Sub-object visibility ---
-    if (visual.currentModel && (match.hideSubObjects.length > 0 || match.showSubObjects.length > 0)) {
-      const hideSet = new Set(match.hideSubObjects.map(s => s.toUpperCase()));
-      const showSet = new Set(match.showSubObjects.map(s => s.toUpperCase()));
+    this.applySubObjectVisibility(visual, match);
+
+    // --- Per-condition model swapping ---
+    if (match.modelName) {
+      this.syncConditionModelSwap(visual, state, match.modelName);
+    }
+
+    // --- Animation speed factor (randomised per state change) ---
+    const speedMin = match.animSpeedFactorMin ?? 1.0;
+    const speedMax = match.animSpeedFactorMax ?? 1.0;
+    visual.conditionAnimSpeedFactor = randomInRange(speedMin, speedMax);
+
+    // --- Animation clip selection ---
+    if (!visual.mixer) return;
+
+    // If there are idle animations, pick one randomly and use ONCE mode.
+    const idleAnims = match.idleAnimations ?? [];
+    if (idleAnims.length > 0) {
+      const index = this.pickIdleVariant(idleAnims, -1);
+      visual.idleVariantIndex = index;
+      visual.idleVariantElapsed = 0;
+      const variant = idleAnims[index]!;
+      this.playConditionClip(visual, variant.animationName, 'ONCE');
+      return;
+    }
+
+    const clipName = match.animationName ?? match.idleAnimationName;
+    if (!clipName) return;
+
+    this.playConditionClip(visual, clipName, match.animationMode);
+  }
+
+  /**
+   * Apply sub-object hide/show lists from a condition-like info.
+   */
+  private applySubObjectVisibility(
+    visual: VisualAssetState,
+    info: { hideSubObjects: string[]; showSubObjects: string[] },
+  ): void {
+    if (visual.currentModel && (info.hideSubObjects.length > 0 || info.showSubObjects.length > 0)) {
+      const hideSet = new Set(info.hideSubObjects.map(s => s.toUpperCase()));
+      const showSet = new Set(info.showSubObjects.map(s => s.toUpperCase()));
       visual.currentModel.traverse((child) => {
         const nameUpper = child.name.toUpperCase();
         if (hideSet.has(nameUpper)) {
@@ -1433,12 +1643,17 @@ export class ObjectVisualManager {
         }
       });
     }
+  }
 
-    // --- Animation clip selection ---
+  /**
+   * Play a condition-based animation clip by name, replacing the current one.
+   */
+  private playConditionClip(
+    visual: VisualAssetState,
+    clipName: string,
+    mode: 'LOOP' | 'ONCE' | 'MANUAL',
+  ): void {
     if (!visual.mixer) return;
-
-    const clipName = match.animationName ?? match.idleAnimationName;
-    if (!clipName) return;
 
     let action = visual.conditionClipActions.get(clipName);
     if (!action) {
@@ -1453,8 +1668,7 @@ export class ObjectVisualManager {
       visual.conditionClipActions.set(clipName, action);
     }
 
-    // Crossfade from previous condition action (let fadeOut handle the blend —
-    // do NOT set enabled=false here, as crossFadeFrom needs the source active).
+    // Crossfade from previous condition action.
     const prev = visual.conditionAction;
     if (prev && prev !== action) {
       prev.fadeOut(0.15);
@@ -1471,16 +1685,193 @@ export class ObjectVisualManager {
 
     action.reset();
     action.enabled = true;
-    const loop = match.animationMode === 'ONCE' ? THREE.LoopOnce : THREE.LoopRepeat;
+    const loop = mode === 'ONCE' ? THREE.LoopOnce : THREE.LoopRepeat;
     action.setLoop(loop, loop === THREE.LoopOnce ? 1 : Infinity);
-    if (match.animationMode === 'ONCE') {
+    if (mode === 'ONCE') {
       action.clampWhenFinished = true;
     }
+    // Apply per-entity randomised speed factor.
+    action.timeScale = visual.conditionAnimSpeedFactor;
     action.play();
     if (prev && prev !== action) {
       action.crossFadeFrom(prev, 0.15, true);
     }
     visual.conditionAction = action;
+  }
+
+  /**
+   * Check if an animation action has finished playing (for ONCE mode).
+   * Source parity: isAnimationComplete() — checks if the animation reached
+   * its final frame and is not looping.
+   */
+  private isActionFinished(action: THREE.AnimationAction): boolean {
+    if (!action.enabled) return true;
+    const clip = action.getClip();
+    if (!clip || clip.duration <= 0) return true;
+    // For LoopOnce actions, THREE.js sets paused=true when clampWhenFinished and done.
+    if (action.loop === THREE.LoopOnce && action.clampWhenFinished && action.paused) {
+      return true;
+    }
+    // Fallback: check if time has passed the clip duration.
+    if (action.loop === THREE.LoopOnce && action.time >= clip.duration - 0.001) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Pick an idle animation variant using weighted random selection.
+   * Avoids picking the same variant as `currentIndex` when multiple exist.
+   */
+  private pickIdleVariant(variants: readonly IdleAnimationVariant[], currentIndex: number): number {
+    if (variants.length === 0) return -1;
+    if (variants.length === 1) return 0;
+
+    const totalWeight = variants.reduce((sum, v) => sum + v.randomWeight, 0);
+    if (totalWeight <= 0) return 0;
+
+    // Try up to 10 times to pick a different variant.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      let roll = Math.random() * totalWeight;
+      for (let i = 0; i < variants.length; i++) {
+        roll -= variants[i]!.randomWeight;
+        if (roll <= 0) {
+          if (i !== currentIndex || variants.length === 1) {
+            return i;
+          }
+          break; // Try again
+        }
+      }
+    }
+
+    // Fallback: just pick the next one cyclically.
+    return (currentIndex + 1) % variants.length;
+  }
+
+  /**
+   * Find the ModelConditionInfo that was previously matched by its serialised key.
+   */
+  private findMatchByKey(infos: readonly ModelConditionInfo[], key: string): ModelConditionInfo | null {
+    for (const info of infos) {
+      const infoKey = info.conditionFlags.slice().sort().join('|');
+      if (infoKey === key) {
+        return info;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Per-condition model swapping.
+   * Source parity: W3DModelDraw::setModelState — when the new state's model
+   * name differs from the current one, replace the render object.
+   * Uses a per-entity cache to avoid re-loading on frequent condition changes.
+   */
+  private syncConditionModelSwap(
+    visual: VisualAssetState,
+    _state: RenderableEntityState,
+    targetModelName: string,
+  ): void {
+    const normalizedTarget = targetModelName.trim().toLowerCase();
+    if (!normalizedTarget || normalizedTarget === 'none') {
+      return;
+    }
+
+    // Already on the correct model?
+    if (visual.currentModelName && visual.currentModelName.toLowerCase() === normalizedTarget) {
+      return;
+    }
+
+    // If the base asset path already matches the target model name, no swap needed.
+    // This avoids re-loading the same model that was loaded as the primary asset.
+    if (visual.assetPath) {
+      const baseName = visual.assetPath.replace(/\.[^.]+$/, '').split('/').pop()?.toLowerCase() ?? '';
+      if (baseName === normalizedTarget) {
+        visual.currentModelName = normalizedTarget;
+        return;
+      }
+    }
+
+    // Check the alternate model cache.
+    const cached = visual.alternateModelCache.get(normalizedTarget);
+    if (cached) {
+      this.swapModel(visual, cached.scene, cached.animations);
+      visual.currentModelName = normalizedTarget;
+      return;
+    }
+
+    // Initiate async load.
+    visual.modelSwapLoadToken += 1;
+    const swapToken = visual.modelSwapLoadToken;
+
+    const candidates = this.resolveCandidateAssetPaths(targetModelName);
+    void (async () => {
+      for (const candidate of candidates) {
+        try {
+          const source = await this.loadModelAsset(candidate);
+          // Check stale load.
+          if (visual.modelSwapLoadToken !== swapToken) {
+            return;
+          }
+          // Cache and swap.
+          visual.alternateModelCache.set(normalizedTarget, {
+            scene: source.scene,
+            animations: source.animations,
+          });
+          this.swapModel(visual, source.scene, source.animations);
+          visual.currentModelName = normalizedTarget;
+          return;
+        } catch {
+          // Try next candidate.
+        }
+      }
+    })();
+  }
+
+  /**
+   * Swap the current model scene graph with a new one, preserving the mixer/actions.
+   */
+  private swapModel(
+    visual: VisualAssetState,
+    sourceScene: THREE.Object3D,
+    sourceAnimations: readonly THREE.AnimationClip[],
+  ): void {
+    // Remove old model.
+    if (visual.currentModel) {
+      if (visual.mixer) {
+        visual.mixer.stopAllAction();
+        visual.mixer.uncacheRoot(visual.currentModel);
+      }
+      visual.root.remove(visual.currentModel);
+      this.disposeObject3D(visual.currentModel);
+    }
+
+    // Clone and install new model.
+    const clone = sourceScene.clone(true);
+    const mixer = sourceAnimations.length > 0
+      ? new THREE.AnimationMixer(clone)
+      : null;
+
+    visual.currentModel = clone;
+    visual.mixer = mixer;
+    visual.actions.clear();
+    visual.conditionClipActions.clear();
+    visual.conditionAction = null;
+    visual.activeState = null;
+    visual.sourceAnimations = sourceAnimations;
+    visual.turretBones = this.findTurretBones(clone);
+
+    // Detect tread sub-meshes.
+    const treadMeshes: THREE.Mesh[] = [];
+    clone.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh && child.name.toUpperCase().includes('TREAD')) {
+        treadMeshes.push(child as THREE.Mesh);
+      }
+    });
+    visual.treadMeshes = treadMeshes;
+
+    this.applyGuardBandFrustumPolicy(clone);
+    visual.root.add(clone);
   }
 
   /**
@@ -1497,10 +1888,13 @@ export class ObjectVisualManager {
     const maxSpeed = state.maxSpeed ?? 0;
     const isMoving = state.modelConditionFlags?.includes('MOVING') ?? false;
 
+    // Base speed factor from AnimationSpeedFactorRange (set per condition change).
+    const baseFactor = visual.conditionAnimSpeedFactor;
+
     if (isMoving && maxSpeed > 0) {
-      action.timeScale = Math.max(0.3, Math.min(2.0, currentSpeed / maxSpeed));
+      action.timeScale = Math.max(0.3, Math.min(2.0, currentSpeed / maxSpeed)) * baseFactor;
     } else {
-      action.timeScale = 1.0;
+      action.timeScale = baseFactor;
     }
   }
 

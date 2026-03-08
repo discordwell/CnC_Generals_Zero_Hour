@@ -4,6 +4,7 @@ import {
   type HeightmapGrid,
 } from '@generals/terrain';
 import { clamp } from './ini-readers.js';
+import { BinaryHeap } from './pathfinding.js';
 
 export interface NavigationVectorXZ {
   x: number;
@@ -215,11 +216,9 @@ export function findPath<TEntity extends NavigationEntityLike>(
   const total = grid.width * grid.height;
   const isHuman = true;
 
-  const open: number[] = [];
   const parent = new Int32Array(total);
   const gCost = new Float64Array(total);
   const fCost = new Float64Array(total);
-  const inOpen = new Uint8Array(total);
   const inClosed = new Uint8Array(total);
   parent.fill(-1);
 
@@ -532,8 +531,9 @@ export function findPath<TEntity extends NavigationEntityLike>(
 
   gCost[startIndex] = 0;
   fCost[startIndex] = estimateToGoal(effectiveStart.x, effectiveStart.z);
-  open.push(startIndex);
-  inOpen[startIndex] = 1;
+  // Binary min-heap open set: O(log n) insert/extract-min instead of O(n) linear scan.
+  const openHeap = new BinaryHeap(total, fCost);
+  openHeap.push(startIndex);
 
   const deltaX = [1, 0, -1, 0, 1, -1, -1, 1];
   const deltaZ = [0, 1, 0, -1, 1, 1, -1, -1];
@@ -541,35 +541,16 @@ export function findPath<TEntity extends NavigationEntityLike>(
   const neighborFlags = [false, false, false, false, false, false, false, false];
   let searched = 0;
 
-  while (open.length > 0) {
+  while (openHeap.length > 0) {
     searched += 1;
     if (searched > MAX_SEARCH_NODES) {
       break;
     }
 
-    let bestOpenIndex = 0;
-    const startOpenIndex = open[0];
-    if (startOpenIndex === undefined) {
+    const currentIndex = openHeap.pop();
+    if (currentIndex < 0) {
       break;
     }
-    let bestF = fCost[startOpenIndex] ?? MAX_PATH_COST;
-    for (let i = 1; i < open.length; i++) {
-      const candidateIndex = open[i];
-      if (candidateIndex === undefined) continue;
-      const candidateF = fCost[candidateIndex];
-      if (candidateF === undefined) continue;
-      if (candidateF < bestF) {
-        bestF = candidateF;
-        bestOpenIndex = i;
-      }
-    }
-
-    const currentIndex = open[bestOpenIndex];
-    if (currentIndex === undefined) {
-      break;
-    }
-    open.splice(bestOpenIndex, 1);
-    inOpen[currentIndex] = 0;
     inClosed[currentIndex] = 1;
 
     const [currentCellX, currentCellZ] = context.gridFromIndex(currentIndex);
@@ -612,7 +593,7 @@ export function findPath<TEntity extends NavigationEntityLike>(
         continue;
       }
       const neighborIndex = neighborZ * grid.width + neighborX;
-      const alreadyOnList = inOpen[neighborIndex] === 1 || inClosed[neighborIndex] === 1;
+      const alreadyOnList = openHeap.contains(neighborIndex) || inClosed[neighborIndex] === 1;
       const notZonePassable = ((movementProfile.acceptableSurfaces & LOCOMOTORSURFACE_GROUND) !== 0)
         && !isZonePassable(neighborX, neighborZ, grid);
 
@@ -724,15 +705,14 @@ export function findPath<TEntity extends NavigationEntityLike>(
       parent[neighborIndex] = currentIndex;
       gCost[neighborIndex] = tentativeG;
       fCost[neighborIndex] = tentativeG + costRemaining;
-      if (alreadyOnList) {
+      if (openHeap.contains(neighborIndex)) {
+        // Already in open set — decrease-key to re-sort in O(log n).
+        openHeap.decreaseKey(neighborIndex);
+      } else {
         if (inClosed[neighborIndex] === 1) {
           inClosed[neighborIndex] = 0;
-          open.push(neighborIndex);
-          inOpen[neighborIndex] = 1;
         }
-      } else {
-        open.push(neighborIndex);
-        inOpen[neighborIndex] = 1;
+        openHeap.push(neighborIndex);
       }
     }
   }

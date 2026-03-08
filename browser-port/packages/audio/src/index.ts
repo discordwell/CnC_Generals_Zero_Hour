@@ -153,6 +153,17 @@ const DEFAULT_STREAM_COUNT = Number.POSITIVE_INFINITY;
 const DEFAULT_MIN_SAMPLE_VOLUME = 0;
 const DEFAULT_GLOBAL_MIN_RANGE: number | undefined = undefined;
 const DEFAULT_GLOBAL_MAX_RANGE: number | undefined = undefined;
+/** Source parity: MusicManager crossfade duration (500ms). */
+const MUSIC_CROSSFADE_MS = 500;
+/** Source parity: speech ducking — reduce music volume while voice plays. */
+const MUSIC_DUCK_VOLUME = 0.3;
+const MUSIC_DUCK_RESTORE_MS = 300;
+/** Source parity: zoom-based 3D volume adjustment defaults from AudioSettings. */
+const DEFAULT_ZOOM_MIN_DISTANCE = 100;
+const DEFAULT_ZOOM_MAX_DISTANCE = 400;
+const DEFAULT_ZOOM_VOLUME_PERCENT = 0.5;
+/** Maximum reusable playback nodes kept in the pool. */
+const PLAYBACK_NODE_POOL_MAX = 16;
 const PLAYER_RESTRICTED_SOUND_MASK =
   SoundType.ST_PLAYER |
   SoundType.ST_ALLIES |
@@ -316,6 +327,45 @@ export class AudioManager implements Subsystem {
   private preferred3DProvider: string | null = null;
   private preferredSpeakerType: string | null = null;
 
+  /**
+   * Source parity: AudioEventRTS::m_playingAudioIndex — tracks the last
+   * selected sound index per event name for sequential and de-duplicate-random.
+   */
+  private readonly soundSelectionIndex = new Map<string, number>();
+
+  /**
+   * Source parity: GameAudio::m_zoomVolume — multiplier applied to 3D sound
+   * volume based on camera-to-microphone distance.
+   */
+  private zoomVolume = 1;
+  private zoomMinDistance = DEFAULT_ZOOM_MIN_DISTANCE;
+  private zoomMaxDistance = DEFAULT_ZOOM_MAX_DISTANCE;
+  private zoomVolumePercent = DEFAULT_ZOOM_VOLUME_PERCENT;
+
+  /**
+   * Music ducking: when voice/streaming audio is active, music gain is reduced.
+   * Source parity: Miles implementation ducks music for uninterruptable speech.
+   */
+  private musicDucked = false;
+  private musicDuckTargetGain = 1;
+
+  /**
+   * User-gesture unlock state. On mobile/Chrome, AudioContext starts suspended
+   * until a user gesture resumes it. We track whether we've set up the unlock.
+   */
+  private gestureUnlockBound = false;
+
+  /** Pool of disconnected GainNode instances for reuse. */
+  private readonly gainNodePool: GainNode[] = [];
+  /** Pool of disconnected PannerNode instances for reuse. */
+  private readonly pannerNodePool: PannerNode[] = [];
+
+  /**
+   * Pending music crossfade: tracks the old music handle being faded out
+   * so we can clean it up after the fade completes.
+   */
+  private crossfadingMusicHandles: AudioHandle[] = [];
+
   constructor(options: AudioManagerOptions = {}) {
     this.context = options.context ?? null;
     this.audioBufferLoader = options.audioBufferLoader ?? null;
@@ -344,6 +394,15 @@ export class AudioManager implements Subsystem {
     this.shroudVisibilityResolver = options.resolveShroudVisibility ?? null;
     this.preferred3DProvider = normalizeOptionalAudioPreference(options.preferred3DProvider);
     this.preferredSpeakerType = normalizeOptionalAudioPreference(options.preferredSpeakerType);
+    if (options.zoomMinDistance !== undefined) {
+      this.zoomMinDistance = Math.max(0, options.zoomMinDistance);
+    }
+    if (options.zoomMaxDistance !== undefined) {
+      this.zoomMaxDistance = Math.max(this.zoomMinDistance, options.zoomMaxDistance);
+    }
+    if (options.zoomVolumePercent !== undefined) {
+      this.zoomVolumePercent = clamp01(options.zoomVolumePercent);
+    }
 
     if (options.eventInfos?.length) {
       for (const eventInfo of options.eventInfos) {
@@ -372,6 +431,10 @@ export class AudioManager implements Subsystem {
     if (this.context?.state === 'suspended') {
       void this.context.resume();
     }
+
+    // Set up user-gesture unlock for browsers that require interaction
+    // before AudioContext can transition to 'running'.
+    this.bindGestureUnlock();
 
     // Set up master gain node chain.
     if (this.context) {
@@ -407,6 +470,8 @@ export class AudioManager implements Subsystem {
     this.syncAffectGainNodes();
     this.processRequestList();
     this.refreshActivePositionalAudio();
+    this.updateMusicDucking();
+    this.cleanupCompletedCrossfades();
   }
 
   dispose(): void {
@@ -417,6 +482,11 @@ export class AudioManager implements Subsystem {
 
     this.masterGainNode = null;
     this.affectGainNodes.clear();
+    this.soundSelectionIndex.clear();
+    this.gainNodePool.length = 0;
+    this.pannerNodePool.length = 0;
+    this.crossfadingMusicHandles.length = 0;
+    this.musicDucked = false;
 
     if (this.context && this.context.state !== 'closed') {
       void this.context.close();
@@ -575,6 +645,7 @@ export class AudioManager implements Subsystem {
     this.allAudioEventInfo.set(newEventInfo.audioName, {
       ...newEventInfo,
       volume: newEventInfo.volume ?? 1,
+      volumeShift: newEventInfo.volumeShift ?? 0,
       minVolume: newEventInfo.minVolume ?? 0,
       limit: this.normalizePositiveInteger(newEventInfo.limit),
       minRange: this.normalizeNonNegativeReal(newEventInfo.minRange),
@@ -584,6 +655,11 @@ export class AudioManager implements Subsystem {
       loopCount: normalizeNonNegativeInteger(newEventInfo.loopCount, 1),
       priority: newEventInfo.priority ?? AudioPriority.AP_NORMAL,
       soundType: newEventInfo.soundType ?? AudioType.AT_SoundEffect,
+      sounds: newEventInfo.sounds?.length ? [...newEventInfo.sounds] : undefined,
+      pitchShiftMin: newEventInfo.pitchShiftMin,
+      pitchShiftMax: newEventInfo.pitchShiftMax,
+      delayMin: newEventInfo.delayMin,
+      delayMax: newEventInfo.delayMax,
     });
   }
 
@@ -1162,6 +1238,144 @@ export class AudioManager implements Subsystem {
 
   getPreferredSpeaker(): string | null {
     return this.preferredSpeakerType;
+  }
+
+  // ──── Convenience playback methods ────────────────────────────────────────
+
+  /**
+   * Play a 3D-positioned sound at world coordinates.
+   * Source parity: AudioEventRTS constructed with Coord3D position (OT_Positional).
+   */
+  playSound3D(
+    eventName: string,
+    worldX: number,
+    worldY: number,
+    worldZ: number,
+  ): AudioHandle {
+    return this.addAudioEvent({
+      eventName,
+      position: [worldX, worldY, worldZ],
+    });
+  }
+
+  /**
+   * Play a 2D (UI/interface) sound with no spatial positioning.
+   * Source parity: AudioEventRTS with no position/object — routes to 2D sample pool.
+   */
+  playSound2D(eventName: string): AudioHandle {
+    return this.addAudioEvent({ eventName });
+  }
+
+  /**
+   * Play a sound attached to an entity. The sound position will be updated
+   * each frame by the objectPositionResolver.
+   * Source parity: AudioEventRTS constructed with ObjectID (OT_Object).
+   */
+  playSoundOnEntity(eventName: string, entityId: number): AudioHandle {
+    return this.addAudioEvent({
+      eventName,
+      objectId: entityId,
+    });
+  }
+
+  // ──── Zoom volume adjustment ──────────────────────────────────────────────
+
+  /**
+   * Source parity: GameAudio::set3DVolumeAdjustment / update zoom volume.
+   * The zoom volume is a multiplier on the Sound3D channel based on how
+   * close the camera is to the microphone (listener) position.
+   */
+  set3DVolumeAdjustment(volumeAdjustment: number): void {
+    this.zoomVolume = clamp01(volumeAdjustment);
+  }
+
+  getZoomVolume(): number {
+    return this.zoomVolume;
+  }
+
+  setZoomDistances(minDistance: number, maxDistance: number, volumePercent: number): void {
+    this.zoomMinDistance = Math.max(0, minDistance);
+    this.zoomMaxDistance = Math.max(this.zoomMinDistance, maxDistance);
+    this.zoomVolumePercent = clamp01(volumePercent);
+  }
+
+  /**
+   * Source parity: GameAudio::update — compute zoom volume from camera-to-listener distance.
+   * Call this each frame after setting listener position, passing the camera world position.
+   */
+  updateZoomVolume(
+    cameraX: number,
+    cameraY: number,
+    cameraZ: number,
+  ): void {
+    const [lx, ly, lz] = this.listenerPosition;
+    const dx = cameraX - lx;
+    const dy = cameraY - ly;
+    const dz = cameraZ - lz;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const maxBoost = this.zoomVolumePercent;
+    let zoom = 1 - maxBoost;
+    if (maxBoost > 0) {
+      if (dist < this.zoomMinDistance) {
+        zoom = 1;
+      } else if (dist < this.zoomMaxDistance) {
+        const scalar =
+          (dist - this.zoomMinDistance) / (this.zoomMaxDistance - this.zoomMinDistance);
+        zoom = 1 - scalar * maxBoost;
+      }
+    }
+    this.set3DVolumeAdjustment(zoom);
+  }
+
+  // ──── Music crossfade ─────────────────────────────────────────────────────
+
+  /**
+   * Crossfade to a new music track over MUSIC_CROSSFADE_MS.
+   * Source parity: MusicManager transitions between tracks with a fade.
+   */
+  crossfadeToMusic(trackName: string): AudioHandle {
+    const ctx = this.context;
+    if (!ctx) {
+      // Fallback: hard switch
+      this.stopMusicTrack();
+      return this.addAudioEvent({
+        eventName: trackName,
+        audioAffect: AudioAffect.AudioAffect_Music,
+      });
+    }
+
+    // Fade out all currently playing music tracks.
+    for (const active of [...this.activeAudioEvents.values()]) {
+      if ((active.affectMask & AudioAffect.AudioAffect_Music) === 0) {
+        continue;
+      }
+      const node = this.playbackNodes.get(active.handle);
+      if (node) {
+        const fadeDuration = MUSIC_CROSSFADE_MS / 1000;
+        node.gainNode.gain.setValueAtTime(node.gainNode.gain.value, ctx.currentTime);
+        node.gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + fadeDuration);
+        this.crossfadingMusicHandles.push(active.handle);
+      }
+    }
+
+    // Start new track (it will fade in via ramp).
+    const handle = this.addAudioEvent({
+      eventName: trackName,
+      audioAffect: AudioAffect.AudioAffect_Music,
+    });
+
+    // Fade in the new track if we got a valid playback node.
+    const newNode = this.playbackNodes.get(handle);
+    if (newNode && ctx) {
+      const fadeDuration = MUSIC_CROSSFADE_MS / 1000;
+      newNode.gainNode.gain.setValueAtTime(0, ctx.currentTime);
+      newNode.gainNode.gain.linearRampToValueAtTime(
+        clamp01(this.resolveEventVolumeForHandle(handle)),
+        ctx.currentTime + fadeDuration,
+      );
+    }
+
+    return handle;
   }
 
   setShroudVisibilityResolver(resolver: AudioShroudVisibilityResolver | null): void {
@@ -1834,6 +2048,8 @@ export class AudioManager implements Subsystem {
 
   /**
    * Synchronize per-affect GainNode values with current volume settings.
+   * Source parity: applies zoom volume multiplier to Sound3D channel
+   * and music ducking to Music channel.
    */
   private syncAffectGainNodes(): void {
     for (const affect of AUDIO_AFFECT_CHANNELS) {
@@ -1845,7 +2061,21 @@ export class AudioManager implements Subsystem {
       const enabled = this.audioEnabled[affect];
       const systemVol = this.systemVolumes[affect];
       const scriptVol = this.scriptVolumes[affect];
-      gainNode.gain.value = enabled ? clamp01(systemVol * scriptVol) : 0;
+      let volume = enabled ? clamp01(systemVol * scriptVol) : 0;
+
+      // Source parity: GameAudio::set3DVolumeAdjustment — zoom-based 3D volume.
+      if (affect === AudioAffect.AudioAffect_Sound3D) {
+        volume = clamp01(volume * this.zoomVolume);
+      }
+
+      // Music ducking is handled via AudioParam ramps in updateMusicDucking,
+      // so we only set the base gain here when not actively ramping.
+      if (affect === AudioAffect.AudioAffect_Music && this.musicDucked) {
+        // Let the ramp control the value during ducking.
+        continue;
+      }
+
+      gainNode.gain.value = volume;
     }
   }
 
@@ -1871,7 +2101,8 @@ export class AudioManager implements Subsystem {
 
   /**
    * Start Web Audio playback for an audio event.
-   * Source parity: MilesAudioManager::playAudioEvent
+   * Source parity: MilesAudioManager::playAudioEvent — selects a sound file
+   * from the event's sounds list (random or sequential), then plays it.
    */
   private startPlayback(handle: AudioHandle, resolved: ResolvedAudioEvent): void {
     const ctx = this.context;
@@ -1879,15 +2110,25 @@ export class AudioManager implements Subsystem {
       return;
     }
 
+    // Source parity: AudioEventRTS::generateFilename — select which sound to play.
+    const selectedFilename = this.selectSoundFilename(resolved.info);
     const eventName = resolved.event.eventName;
-    const buffer = this.audioBufferCache.get(eventName);
+
+    // Try to find a cached buffer by the selected filename first, then event name.
+    const buffer =
+      (selectedFilename ? this.audioBufferCache.get(selectedFilename) : null)
+      ?? this.audioBufferCache.get(eventName);
 
     if (!buffer) {
       // Trigger async load if a loader is available.
-      if (this.audioBufferLoader && !this.loadingBuffers.has(eventName)) {
-        this.loadingBuffers.add(eventName);
-        const filename = resolved.info.filename ?? eventName;
-        void this.loadAndCacheBuffer(ctx, eventName, filename);
+      const filenameToLoad = selectedFilename ?? resolved.info.filename ?? eventName;
+      if (this.audioBufferLoader && !this.loadingBuffers.has(filenameToLoad)) {
+        this.loadingBuffers.add(filenameToLoad);
+        void this.loadAndCacheBuffer(ctx, filenameToLoad, filenameToLoad);
+        // Also cache under event name if different, so future lookups succeed.
+        if (filenameToLoad !== eventName) {
+          void this.loadAndCacheBuffer(ctx, eventName, filenameToLoad);
+        }
       }
       return;
     }
@@ -1925,6 +2166,8 @@ export class AudioManager implements Subsystem {
 
   /**
    * Create the Web Audio node chain and start playback.
+   * Source parity: MilesAudioManager::playAudioEvent — creates source, gain,
+   * panner nodes with pitch variation, volume shift, and positional setup.
    */
   private createAndStartPlaybackNode(
     ctx: BrowserAudioContext,
@@ -1934,6 +2177,12 @@ export class AudioManager implements Subsystem {
   ): void {
     const sourceNode = ctx.createBufferSource();
     sourceNode.buffer = buffer;
+
+    // Source parity: AudioEventRTS::generatePlayInfo — apply pitch shift.
+    const pitchShift = this.generatePitchShift(resolved.info);
+    if (pitchShift !== 1) {
+      sourceNode.playbackRate.value = pitchShift;
+    }
 
     // Loop control.
     const hasLoopControl = ((resolved.info.control ?? 0) & AudioControl.AC_LOOP) !== 0;
@@ -1945,9 +2194,13 @@ export class AudioManager implements Subsystem {
       sourceNode.stop(ctx.currentTime + (buffer.duration * loopCount));
     }
 
-    // Per-event gain node.
-    const gainNode = ctx.createGain();
-    gainNode.gain.value = clamp01(resolved.resolvedVolume);
+    // Source parity: AudioEventRTS::generatePlayInfo — apply volume shift.
+    const volumeShift = this.generateVolumeShift(resolved.info);
+    const effectiveVolume = clamp01(resolved.resolvedVolume * volumeShift);
+
+    // Per-event gain node (pooled).
+    const gainNode = this.acquireGainNode() ?? ctx.createGain();
+    gainNode.gain.value = effectiveVolume;
 
     // 3D positional audio setup.
     let pannerNode: PannerNode | null = null;
@@ -1955,7 +2208,7 @@ export class AudioManager implements Subsystem {
     const pos = this.resolveEventPosition(resolved.event);
 
     if (is3D && pos) {
-      pannerNode = ctx.createPanner();
+      pannerNode = this.acquirePannerNode() ?? ctx.createPanner();
       pannerNode.panningModel = 'HRTF';
       pannerNode.distanceModel = 'inverse';
       pannerNode.refDistance = resolved.info.minRange ?? 10;
@@ -1981,6 +2234,13 @@ export class AudioManager implements Subsystem {
 
     // Auto-remove when playback ends.
     sourceNode.onended = () => {
+      const existing = this.playbackNodes.get(handle);
+      if (existing) {
+        this.releaseGainNode(existing.gainNode);
+        if (existing.pannerNode) {
+          this.releasePannerNode(existing.pannerNode);
+        }
+      }
       this.playbackNodes.delete(handle);
       this.activeAudioEvents.delete(handle);
       this.refreshDisallowSpeechFromActiveStreams();
@@ -2004,7 +2264,7 @@ export class AudioManager implements Subsystem {
   }
 
   /**
-   * Stop a specific playback node.
+   * Stop a specific playback node and return gain/panner to pool.
    */
   private stopPlaybackNode(handle: AudioHandle): void {
     const node = this.playbackNodes.get(handle);
@@ -2015,9 +2275,9 @@ export class AudioManager implements Subsystem {
         // Already stopped.
       }
       node.sourceNode.disconnect();
-      node.gainNode.disconnect();
+      this.releaseGainNode(node.gainNode);
       if (node.pannerNode) {
-        node.pannerNode.disconnect();
+        this.releasePannerNode(node.pannerNode);
       }
     }
     this.playbackNodes.delete(handle);
@@ -2059,6 +2319,231 @@ export class AudioManager implements Subsystem {
       node.gainNode.gain.value = clamp01(active.resolvedVolume);
     }
   }
+
+  // ──── User-gesture AudioContext unlock ─────────────────────────────────────
+
+  /**
+   * Bind user-gesture listeners (click, touchstart, keydown) to resume
+   * a suspended AudioContext. Browsers require user interaction before
+   * audio can play. Once resumed, listeners are removed.
+   */
+  private bindGestureUnlock(): void {
+    if (this.gestureUnlockBound) {
+      return;
+    }
+    if (!this.context || this.context.state === 'running') {
+      return;
+    }
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    this.gestureUnlockBound = true;
+    const ctx = this.context;
+
+    const unlock = (): void => {
+      if (ctx.state === 'suspended') {
+        void ctx.resume().then(() => {
+          removeListeners();
+        });
+      } else {
+        removeListeners();
+      }
+    };
+
+    const removeListeners = (): void => {
+      document.removeEventListener('click', unlock, true);
+      document.removeEventListener('touchstart', unlock, true);
+      document.removeEventListener('keydown', unlock, true);
+    };
+
+    document.addEventListener('click', unlock, true);
+    document.addEventListener('touchstart', unlock, true);
+    document.addEventListener('keydown', unlock, true);
+  }
+
+  // ──── Sound selection (random / sequential) ───────────────────────────────
+
+  /**
+   * Source parity: AudioEventRTS::generateFilename — select which sound file
+   * to play from the AudioEventInfo's sounds list.
+   *
+   * AC_RANDOM: pick a random entry, avoiding the same entry as last time
+   * (when there are 3+ entries). Sequential otherwise.
+   */
+  private selectSoundFilename(info: AudioEventInfo): string | null {
+    const sounds = info.sounds;
+    if (!sounds || sounds.length === 0) {
+      return info.filename ?? null;
+    }
+
+    if (sounds.length === 1) {
+      return sounds[0]!;
+    }
+
+    const isRandom = ((info.control ?? 0) & AudioControl.AC_RANDOM) !== 0;
+    const prevIndex = this.soundSelectionIndex.get(info.audioName) ?? -1;
+
+    let which: number;
+    if (isRandom) {
+      which = Math.floor(Math.random() * sounds.length);
+      // Source parity: avoid repeating the same sound when there are 3+ entries.
+      if (which === prevIndex && sounds.length > 2) {
+        which = (which + 1) % sounds.length;
+      }
+    } else {
+      which = (prevIndex + 1) % sounds.length;
+    }
+
+    this.soundSelectionIndex.set(info.audioName, which);
+    return sounds[which]!;
+  }
+
+  /**
+   * Source parity: AudioEventRTS::generatePlayInfo — generate pitch shift.
+   * Returns a playbackRate multiplier.
+   */
+  private generatePitchShift(info: AudioEventInfo): number {
+    const min = info.pitchShiftMin ?? 1;
+    const max = info.pitchShiftMax ?? 1;
+    if (min === max) {
+      return min;
+    }
+    return min + Math.random() * (max - min);
+  }
+
+  /**
+   * Source parity: AudioEventRTS::generatePlayInfo — generate volume shift.
+   * Returns a volume multiplier in [1 + volumeShift, 1].
+   */
+  private generateVolumeShift(info: AudioEventInfo): number {
+    const shift = info.volumeShift ?? 0;
+    if (shift === 0) {
+      return 1;
+    }
+    // volumeShift is negative (e.g., -0.2 means volume varies from 0.8 to 1.0).
+    return 1 + Math.random() * shift;
+  }
+
+  // ──── Music ducking ───────────────────────────────────────────────────────
+
+  /**
+   * Source parity: Miles implementation ducks music when speech/voice plays.
+   * When any streaming (speech) audio is active, the music gain node is
+   * reduced to MUSIC_DUCK_VOLUME; when all speech stops, it restores.
+   */
+  private updateMusicDucking(): void {
+    const hasActiveSpeech = this.hasActiveSpeechAudio();
+    const musicGainNode = this.affectGainNodes.get(AudioAffect.AudioAffect_Music);
+    if (!musicGainNode || !this.context) {
+      return;
+    }
+
+    if (hasActiveSpeech && !this.musicDucked) {
+      this.musicDucked = true;
+      this.musicDuckTargetGain = MUSIC_DUCK_VOLUME;
+      const fadeDuration = MUSIC_DUCK_RESTORE_MS / 1000;
+      musicGainNode.gain.setValueAtTime(musicGainNode.gain.value, this.context.currentTime);
+      musicGainNode.gain.linearRampToValueAtTime(
+        this.computeMusicGainWithDuck(),
+        this.context.currentTime + fadeDuration,
+      );
+    } else if (!hasActiveSpeech && this.musicDucked) {
+      this.musicDucked = false;
+      this.musicDuckTargetGain = 1;
+      const fadeDuration = MUSIC_DUCK_RESTORE_MS / 1000;
+      musicGainNode.gain.setValueAtTime(musicGainNode.gain.value, this.context.currentTime);
+      musicGainNode.gain.linearRampToValueAtTime(
+        this.computeMusicGainWithDuck(),
+        this.context.currentTime + fadeDuration,
+      );
+    }
+  }
+
+  private hasActiveSpeechAudio(): boolean {
+    for (const active of this.activeAudioEvents.values()) {
+      if ((active.affectMask & AudioAffect.AudioAffect_Speech) !== 0 && !active.paused) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private computeMusicGainWithDuck(): number {
+    const enabled = this.audioEnabled[AudioAffect.AudioAffect_Music];
+    const systemVol = this.systemVolumes[AudioAffect.AudioAffect_Music];
+    const scriptVol = this.scriptVolumes[AudioAffect.AudioAffect_Music];
+    return enabled ? clamp01(systemVol * scriptVol * this.musicDuckTargetGain) : 0;
+  }
+
+  // ──── Crossfade cleanup ───────────────────────────────────────────────────
+
+  private cleanupCompletedCrossfades(): void {
+    if (this.crossfadingMusicHandles.length === 0) {
+      return;
+    }
+
+    const remaining: AudioHandle[] = [];
+    for (const handle of this.crossfadingMusicHandles) {
+      const node = this.playbackNodes.get(handle);
+      if (!node) {
+        // Already cleaned up
+        continue;
+      }
+      if (node.gainNode.gain.value <= 0.001) {
+        this.stopPlaybackNode(handle);
+        this.activeAudioEvents.delete(handle);
+      } else {
+        remaining.push(handle);
+      }
+    }
+    this.crossfadingMusicHandles = remaining;
+  }
+
+  private resolveEventVolumeForHandle(handle: AudioHandle): number {
+    const active = this.activeAudioEvents.get(handle);
+    if (!active) {
+      return 1;
+    }
+    return active.resolvedVolume;
+  }
+
+  // ──── Node pooling ────────────────────────────────────────────────────────
+
+  private acquireGainNode(): GainNode | null {
+    const ctx = this.context;
+    if (!ctx) return null;
+    const pooled = this.gainNodePool.pop();
+    if (pooled) {
+      pooled.gain.value = 1;
+      return pooled;
+    }
+    return ctx.createGain();
+  }
+
+  private releaseGainNode(node: GainNode): void {
+    try { node.disconnect(); } catch { /* already disconnected */ }
+    if (this.gainNodePool.length < PLAYBACK_NODE_POOL_MAX) {
+      this.gainNodePool.push(node);
+    }
+  }
+
+  private acquirePannerNode(): PannerNode | null {
+    const ctx = this.context;
+    if (!ctx) return null;
+    const pooled = this.pannerNodePool.pop();
+    if (pooled) {
+      return pooled;
+    }
+    return ctx.createPanner();
+  }
+
+  private releasePannerNode(node: PannerNode): void {
+    try { node.disconnect(); } catch { /* already disconnected */ }
+    if (this.pannerNodePool.length < PLAYBACK_NODE_POOL_MAX) {
+      this.pannerNodePool.push(node);
+    }
+  }
 }
 
 export function initializeAudioContext(): void {
@@ -2079,10 +2564,30 @@ export interface AudioEventInfo {
   /** Source parity: AudioEventInfo::m_loopCount (0 = loop forever, >0 = total play count). */
   loopCount?: number;
   volume?: number;
+  /** Source parity: AudioEventInfo::m_volumeShift — random shift range (0..1). */
+  volumeShift?: number;
   minVolume?: number;
   limit?: number;
   minRange?: number;
   maxRange?: number;
+  /**
+   * Source parity: AudioEventInfo::m_sounds — list of sound file basenames.
+   * When AC_RANDOM is set, a random entry is selected; otherwise sequential.
+   * If empty, `filename` or `audioName` is used as the single sound.
+   */
+  sounds?: string[];
+  /**
+   * Source parity: AudioEventInfo::m_pitchShiftMin/Max — multiplier range.
+   * Values are stored as 1.0 + (percentage / 100), e.g., -10..10 becomes 0.9..1.1.
+   * A random value in [pitchShiftMin, pitchShiftMax] is applied to playbackRate.
+   */
+  pitchShiftMin?: number;
+  pitchShiftMax?: number;
+  /**
+   * Source parity: AudioEventInfo::m_delayMin/Max — ms delay before replay.
+   */
+  delayMin?: number;
+  delayMax?: number;
 }
 
 export interface AudioEventRTS {
@@ -2124,4 +2629,8 @@ export interface AudioManagerOptions {
   preferredSpeakerType?: string | null;
   /** Optional callback to load raw audio file data for playback. */
   audioBufferLoader?: AudioBufferLoader;
+  /** Source parity: AudioSettings zoom volume parameters. */
+  zoomMinDistance?: number;
+  zoomMaxDistance?: number;
+  zoomVolumePercent?: number;
 }

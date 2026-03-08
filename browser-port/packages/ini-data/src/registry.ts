@@ -192,6 +192,12 @@ export interface AudioSettingsConfig {
   default3DSoundVolume?: number;
   defaultSpeechVolume?: number;
   defaultMusicVolume?: number;
+  /** Source parity: AudioSettings::m_zoomMinDistance */
+  zoomMinDistance?: number;
+  /** Source parity: AudioSettings::m_zoomMaxDistance */
+  zoomMaxDistance?: number;
+  /** Source parity: AudioSettings::m_zoomSoundVolumePercentageAmount */
+  zoomSoundVolumePercent?: number;
 }
 
 export interface IniDataBundle {
