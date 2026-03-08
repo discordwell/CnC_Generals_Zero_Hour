@@ -894,6 +894,8 @@ interface AttackWeaponProfile {
   projectileArcSecondPercentIndent: number;
   /** Source parity: Weapon::m_leechRangeWeapon — unlimited range after first shot connects. */
   leechRangeWeapon: boolean;
+  /** Source parity: WeaponTemplate::m_fireSound — AudioEvent name for weapon fire. */
+  fireSoundEvent: string | null;
 }
 
 interface WeaponTemplateSetProfile {
@@ -6804,7 +6806,33 @@ export class GameLogicSubsystem implements Subsystem {
       toppleDirZ: entity.toppleDirZ,
       /** Turret rotation angles (one per turret module), in radians relative to body. */
       turretAngles: entity.turretStates.map(ts => ts.currentAngle),
+      statusEffects: this.resolveEntityStatusEffects(entity),
     };
+  }
+
+  /** Status flags that produce visual effect icons on the unit overlay. */
+  private static readonly VISUAL_STATUS_FLAGS = [
+    'POISONED',
+    'POISONED_BETA',
+    'BURNING',
+    'DISABLED_EMP',
+    'DISABLED_UNDERPOWERED',
+    'DISABLED_HELD',
+  ] as const;
+
+  private resolveEntityStatusEffects(entity: MapEntity): string[] {
+    const effects: string[] = [];
+    for (const flag of GameLogicSubsystem.VISUAL_STATUS_FLAGS) {
+      if (entity.objectStatusFlags.has(flag)) {
+        effects.push(flag);
+      }
+    }
+    if (entity.poisonDamageAmount > 0) {
+      if (!effects.includes('POISONED')) {
+        effects.push('POISONED');
+      }
+    }
+    return effects;
   }
 
   private resolveEntityAmbientSoundEventName(entity: MapEntity): string | null {
@@ -28988,6 +29016,7 @@ export class GameLogicSubsystem implements Subsystem {
       projectileArcFirstPercentIndent: bezierArc?.firstPercentIndent ?? 0,
       projectileArcSecondPercentIndent: bezierArc?.secondPercentIndent ?? 0,
       leechRangeWeapon,
+      fireSoundEvent: readStringField(weaponDef.fields, ['FireSound'])?.trim() || null,
     };
   }
 
@@ -51795,6 +51824,7 @@ export class GameLogicSubsystem implements Subsystem {
       radius: 0,
       sourceEntityId: attacker.id,
       projectileType: this.classifyWeaponVisualType(weapon),
+      fireSoundEvent: weapon.fireSoundEvent ?? undefined,
     };
     if (target) {
       event.targetX = target.x;

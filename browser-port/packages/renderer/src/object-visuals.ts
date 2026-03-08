@@ -46,6 +46,8 @@ export interface RenderableEntityState {
   shadowType?: string;
   shadowSizeX?: number;
   shadowSizeY?: number;
+  /** Active status effects for overlay icons (poisoned, burning, EMP'd, etc.). */
+  statusEffects?: readonly string[];
 }
 
 export interface LoadedModelAsset {
@@ -83,6 +85,10 @@ interface VisualAssetState {
    * Source parity: W3DModelDraw::handleClientTurretRotation.
    */
   turretBones: THREE.Object3D[];
+  /** Status effect icon group (poisoned, burning, EMP'd). */
+  statusEffectGroup: THREE.Group | null;
+  /** Tracks which effects are currently shown (for diffing). */
+  activeStatusEffects: readonly string[];
 }
 
 export interface ObjectVisualManagerConfig {
@@ -162,6 +168,7 @@ export class ObjectVisualManager {
       this.syncSelectionRing(visual, state);
       this.syncScriptFlashRing(visual, state);
       this.syncVeterancyBadge(visual, state);
+      this.syncStatusEffects(visual, state);
       this.syncStealthOpacity(visual, state);
       this.syncTurretBones(visual, state);
       this.applyAnimationState(visual, state.animationState);
@@ -266,6 +273,8 @@ export class ObjectVisualManager {
       shadowDecal: null,
       shadowType: null,
       turretBones: [],
+      statusEffectGroup: null,
+      activeStatusEffects: [],
     };
   }
 
@@ -533,6 +542,11 @@ export class ObjectVisualManager {
     }
     visual.veterancyBadge = null;
     visual.currentVeterancyLevel = 0;
+    if (visual.statusEffectGroup) {
+      this.disposeObject3D(visual.statusEffectGroup);
+      visual.statusEffectGroup = null;
+      visual.activeStatusEffects = [];
+    }
     if (visual.shadowDecal) {
       this.disposeObject3D(visual.shadowDecal);
       visual.shadowDecal = null;
@@ -988,6 +1002,96 @@ export class ObjectVisualManager {
     if (visual.veterancyBadge) {
       visual.veterancyBadge.rotation.y = -visual.root.rotation.y;
     }
+  }
+
+  /**
+   * Status effect icon color mapping.
+   * Source parity: InGameUI draws small colored diamonds above affected units.
+   */
+  private static readonly STATUS_EFFECT_COLORS: Record<string, number> = {
+    POISONED: 0x44ff44,
+    POISONED_BETA: 0x88ff00,
+    BURNING: 0xff4400,
+    DISABLED_EMP: 0x4488ff,
+    DISABLED_UNDERPOWERED: 0xffcc00,
+    DISABLED_HELD: 0xcc44cc,
+  };
+
+  /** Known status effects that get visual indicators. */
+  private static readonly VISIBLE_STATUS_EFFECTS = new Set(
+    Object.keys(ObjectVisualManager.STATUS_EFFECT_COLORS),
+  );
+
+  private static statusEffectIconGeometry: THREE.BufferGeometry | null = null;
+  private static getStatusEffectIconGeometry(): THREE.BufferGeometry {
+    if (!ObjectVisualManager.statusEffectIconGeometry) {
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0.08);
+      shape.lineTo(0.06, 0);
+      shape.lineTo(0, -0.08);
+      shape.lineTo(-0.06, 0);
+      shape.closePath();
+      ObjectVisualManager.statusEffectIconGeometry = new THREE.ShapeGeometry(shape);
+    }
+    return ObjectVisualManager.statusEffectIconGeometry;
+  }
+
+  private syncStatusEffects(visual: VisualAssetState, state: RenderableEntityState): void {
+    const effects = state.statusEffects ?? [];
+    const visible = effects.filter(e => ObjectVisualManager.VISIBLE_STATUS_EFFECTS.has(e));
+
+    if (visible.length === 0) {
+      if (visual.statusEffectGroup) {
+        visual.statusEffectGroup.visible = false;
+      }
+      return;
+    }
+
+    // Rebuild if the set of active effects changed.
+    const changed =
+      visual.activeStatusEffects.length !== visible.length ||
+      visual.activeStatusEffects.some((e, i) => e !== visible[i]);
+
+    if (changed) {
+      if (visual.statusEffectGroup) {
+        this.disposeObject3D(visual.statusEffectGroup);
+        visual.root.remove(visual.statusEffectGroup);
+        visual.statusEffectGroup = null;
+      }
+      visual.activeStatusEffects = visible;
+    }
+
+    if (!visual.statusEffectGroup) {
+      const group = new THREE.Group();
+      group.name = 'status-effects';
+      const geo = ObjectVisualManager.getStatusEffectIconGeometry();
+      const spacing = 0.16;
+      const startX = -(visible.length - 1) * spacing * 0.5;
+
+      for (let i = 0; i < visible.length; i++) {
+        const color =
+          ObjectVisualManager.STATUS_EFFECT_COLORS[visible[i]!] ?? 0xffffff;
+        const material = new THREE.MeshBasicMaterial({
+          color,
+          side: THREE.DoubleSide,
+          depthTest: false,
+        });
+        const icon = new THREE.Mesh(geo, material);
+        icon.position.x = startX + i * spacing;
+        group.add(icon);
+      }
+
+      // Position above health bar / veterancy.
+      group.position.y = 2.2;
+      group.renderOrder = 1002;
+      visual.statusEffectGroup = group;
+      visual.root.add(group);
+      this.applyGuardBandFrustumPolicy(group);
+    }
+
+    visual.statusEffectGroup.visible = true;
+    // Billboard effect.
+    visual.statusEffectGroup.rotation.y = -visual.root.rotation.y;
   }
 
   /**

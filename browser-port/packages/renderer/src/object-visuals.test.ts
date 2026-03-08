@@ -610,4 +610,60 @@ describe('ObjectVisualManager', () => {
     // Should remain at identity rotation since no turretAngles provided.
     expect(turretBone!.quaternion.w).toBeCloseTo(1, 5);
   });
+
+  it('shows status effect icons when statusEffects are present', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync(
+      [makeMeshState({ id: 30, statusEffects: ['POISONED', 'BURNING'] })],
+      1 / 30,
+    );
+
+    const root = manager.getVisualRoot(30)!;
+    const effectGroup = root.getObjectByName('status-effects');
+    expect(effectGroup).toBeTruthy();
+    expect(effectGroup!.visible).toBe(true);
+    // Should have 2 icon meshes.
+    expect(effectGroup!.children).toHaveLength(2);
+  });
+
+  it('hides status effect icons when no effects active', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    // First sync with effects.
+    manager.sync(
+      [makeMeshState({ id: 31, statusEffects: ['DISABLED_EMP'] })],
+      1 / 30,
+    );
+    const root = manager.getVisualRoot(31)!;
+    expect(root.getObjectByName('status-effects')!.visible).toBe(true);
+
+    // Second sync without effects.
+    manager.sync([makeMeshState({ id: 31, statusEffects: [] })], 1 / 30);
+    expect(root.getObjectByName('status-effects')!.visible).toBe(false);
+  });
+
+  it('ignores unknown status effect flags', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync(
+      [makeMeshState({ id: 32, statusEffects: ['UNKNOWN_FLAG', 'POISONED'] })],
+      1 / 30,
+    );
+
+    const root = manager.getVisualRoot(32)!;
+    const effectGroup = root.getObjectByName('status-effects');
+    expect(effectGroup).toBeTruthy();
+    // Only POISONED should show (UNKNOWN_FLAG filtered out).
+    expect(effectGroup!.children).toHaveLength(1);
+  });
 });

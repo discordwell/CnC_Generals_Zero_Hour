@@ -125,6 +125,8 @@ export interface VisualEvent {
   targetX?: number;
   targetY?: number;
   targetZ?: number;
+  /** Weapon fire sound AudioEvent name (from INI FireSound field). */
+  fireSoundEvent?: string;
 }
 
 /**

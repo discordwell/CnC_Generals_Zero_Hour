@@ -57,9 +57,45 @@ function normalizeSideName(side: string | null | undefined): string | null {
   return normalized || null;
 }
 
-function resolveEvaAudioEventName(event: EvaEvent): string {
-  return `EVA_${event.type}`;
+/**
+ * Resolve faction-specific EVA audio event name.
+ * Source parity: Eva.cpp maps Eva event types to per-faction AudioEvent names
+ * like EvaUSA_LowPower, EvaChina_UnitLost, EvaGLA_UpgradeComplete.
+ */
+function resolveEvaAudioEventName(event: EvaEvent, side: string): string {
+  const prefix = resolveEvaFactionPrefix(side);
+  const suffix = EVA_AUDIO_SUFFIX_MAP[event.type];
+  if (suffix) {
+    return `${prefix}_${suffix}`;
+  }
+  return `${prefix}_${event.type}`;
 }
+
+function resolveEvaFactionPrefix(side: string): string {
+  const upper = side.toUpperCase();
+  if (upper.includes('CHINA')) return 'EvaChina';
+  if (upper.includes('GLA')) return 'EvaGLA';
+  return 'EvaUSA';
+}
+
+const EVA_AUDIO_SUFFIX_MAP: Record<EvaEventType, string> = {
+  LOW_POWER: 'LowPower',
+  INSUFFICIENT_FUNDS: 'InsufficientFunds',
+  BUILDING_LOST: 'BuildingLost',
+  UNIT_LOST: 'UnitLost',
+  BASE_UNDER_ATTACK: 'BaseUnderAttack',
+  ALLY_UNDER_ATTACK: 'AllyUnderAttack',
+  UPGRADE_COMPLETE: 'UpgradeComplete',
+  GENERAL_LEVEL_UP: 'GeneralPromotion',
+  VEHICLE_STOLEN: 'VehicleStolen',
+  BUILDING_STOLEN: 'BuildingStolen',
+  SUPERWEAPON_DETECTED: 'SuperweaponDetected',
+  SUPERWEAPON_LAUNCHED: 'SuperweaponLaunched',
+  SUPERWEAPON_READY: 'SuperweaponReady',
+  CONSTRUCTION_COMPLETE: 'ConstructionComplete',
+  UNIT_READY: 'UnitReady',
+  BEACON_DETECTED: 'BeaconDetected',
+};
 
 function formatEvaMessage(event: EvaEvent): string {
   switch (event.type) {
@@ -115,6 +151,18 @@ function selectHighestPriorityEvent(events: readonly EvaEvent[]): EvaEvent | nul
   return selected;
 }
 
+/** Per-event-type cooldown (ms) to prevent spamming. */
+const EVA_COOLDOWN_MS: Partial<Record<EvaEventType, number>> = {
+  BASE_UNDER_ATTACK: 10000,
+  ALLY_UNDER_ATTACK: 10000,
+  UNIT_LOST: 5000,
+  BUILDING_LOST: 5000,
+  LOW_POWER: 15000,
+  INSUFFICIENT_FUNDS: 8000,
+};
+
+const DEFAULT_EVA_COOLDOWN_MS = 3000;
+
 export function createScriptEvaRuntimeBridge(
   options: CreateScriptEvaRuntimeBridgeOptions,
 ): ScriptEvaRuntimeBridge {
@@ -126,10 +174,15 @@ export function createScriptEvaRuntimeBridge(
     logger = console,
   } = options;
 
+  /** Track last play time per EVA event type for cooldown enforcement. */
+  const lastPlayedByType = new Map<EvaEventType, number>();
+
   return {
     syncAfterSimulationStep(): void {
       const localPlayerSide = normalizeSideName(resolveLocalPlayerSide());
       if (!localPlayerSide) {
+        // Still drain events to prevent buffer buildup.
+        gameLogic.drainEvaEvents();
         return;
       }
 
@@ -140,15 +193,26 @@ export function createScriptEvaRuntimeBridge(
         return;
       }
 
-      const selectedEvent = selectHighestPriorityEvent(relevantEvents);
+      // Filter by cooldown — skip events played too recently.
+      const now = performance.now();
+      const cooledDown = relevantEvents.filter((event) => {
+        const lastPlayed = lastPlayedByType.get(event.type);
+        if (lastPlayed === undefined) return true; // Never played before.
+        const cooldown = EVA_COOLDOWN_MS[event.type] ?? DEFAULT_EVA_COOLDOWN_MS;
+        return now - lastPlayed >= cooldown;
+      });
+
+      const selectedEvent = selectHighestPriorityEvent(cooledDown);
       if (!selectedEvent) {
         return;
       }
 
+      lastPlayedByType.set(selectedEvent.type, now);
+
       const message = formatEvaMessage(selectedEvent);
       uiRuntime.showMessage(message, DEFAULT_EVA_MESSAGE_MS);
 
-      const audioEventName = resolveEvaAudioEventName(selectedEvent);
+      const audioEventName = resolveEvaAudioEventName(selectedEvent, localPlayerSide);
       audioManager?.addAudioEvent(audioEventName);
 
       logger.debug(

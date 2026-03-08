@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createScriptEvaRuntimeBridge,
@@ -95,7 +95,8 @@ describe('script EVA runtime bridge', () => {
     expect(uiRuntime.shownMessages).toEqual([
       { message: 'Base under attack.', durationMs: 3500 },
     ]);
-    expect(audioManager.playedEvents).toEqual(['EVA_BASE_UNDER_ATTACK']);
+    // Faction-specific EVA audio event name for America side.
+    expect(audioManager.playedEvents).toEqual(['EvaUSA_BaseUnderAttack']);
   });
 
   it('formats detail-aware EVA messages for superweapon/unit/completion events', () => {
@@ -111,6 +112,10 @@ describe('script EVA runtime bridge', () => {
       logger: { debug: () => {} },
     });
 
+    // Advance time between sync steps to bypass cooldown.
+    let mockTime = 100000;
+    vi.spyOn(performance, 'now').mockImplementation(() => mockTime);
+
     gameLogic.queueEvent({
       type: 'SUPERWEAPON_DETECTED',
       side: 'America',
@@ -120,6 +125,7 @@ describe('script EVA runtime bridge', () => {
     });
     bridge.syncAfterSimulationStep();
 
+    mockTime += 4000; // Past cooldown.
     gameLogic.queueEvent({
       type: 'CONSTRUCTION_COMPLETE',
       side: 'America',
@@ -129,6 +135,7 @@ describe('script EVA runtime bridge', () => {
     });
     bridge.syncAfterSimulationStep();
 
+    mockTime += 4000;
     gameLogic.queueEvent({
       type: 'UNIT_READY',
       side: 'America',
@@ -138,15 +145,17 @@ describe('script EVA runtime bridge', () => {
     });
     bridge.syncAfterSimulationStep();
 
+    vi.restoreAllMocks();
+
     expect(uiRuntime.shownMessages).toEqual([
       { message: 'Enemy superweapon detected: Particle Cannon.', durationMs: 3500 },
       { message: 'War Factory construction complete.', durationMs: 3500 },
       { message: 'Paladin Tank ready.', durationMs: 3500 },
     ]);
     expect(audioManager.playedEvents).toEqual([
-      'EVA_SUPERWEAPON_DETECTED',
-      'EVA_CONSTRUCTION_COMPLETE',
-      'EVA_UNIT_READY',
+      'EvaUSA_SuperweaponDetected',
+      'EvaUSA_ConstructionComplete',
+      'EvaUSA_UnitReady',
     ]);
   });
 
@@ -175,5 +184,85 @@ describe('script EVA runtime bridge', () => {
 
     expect(uiRuntime.shownMessages).toEqual([]);
     expect(audioManager.playedEvents).toEqual([]);
+  });
+
+  it('uses faction-specific EVA audio names for China side', () => {
+    const gameLogic = new RecordingGameLogic();
+    const uiRuntime = new RecordingUiRuntime();
+    const audioManager = new RecordingAudioManager();
+
+    const bridge = createScriptEvaRuntimeBridge({
+      gameLogic,
+      uiRuntime,
+      audioManager,
+      resolveLocalPlayerSide: () => 'China',
+      logger: { debug: () => {} },
+    });
+
+    gameLogic.queueEvent({
+      type: 'LOW_POWER',
+      side: 'China',
+      relationship: 'own',
+      entityId: null,
+      detail: null,
+    });
+
+    bridge.syncAfterSimulationStep();
+
+    expect(audioManager.playedEvents).toEqual(['EvaChina_LowPower']);
+  });
+
+  it('enforces cooldown per event type', () => {
+    const gameLogic = new RecordingGameLogic();
+    const uiRuntime = new RecordingUiRuntime();
+    const audioManager = new RecordingAudioManager();
+
+    const bridge = createScriptEvaRuntimeBridge({
+      gameLogic,
+      uiRuntime,
+      audioManager,
+      resolveLocalPlayerSide: () => 'America',
+      logger: { debug: () => {} },
+    });
+
+    let mockTime = 100000;
+    vi.spyOn(performance, 'now').mockImplementation(() => mockTime);
+
+    // First LOW_POWER should play.
+    gameLogic.queueEvent({
+      type: 'LOW_POWER',
+      side: 'America',
+      relationship: 'own',
+      entityId: null,
+      detail: null,
+    });
+    bridge.syncAfterSimulationStep();
+    expect(uiRuntime.shownMessages).toHaveLength(1);
+
+    // Second LOW_POWER within cooldown should be suppressed.
+    mockTime += 5000; // Within 15s cooldown.
+    gameLogic.queueEvent({
+      type: 'LOW_POWER',
+      side: 'America',
+      relationship: 'own',
+      entityId: null,
+      detail: null,
+    });
+    bridge.syncAfterSimulationStep();
+    expect(uiRuntime.shownMessages).toHaveLength(1); // Still just 1.
+
+    // After cooldown expires, should play again.
+    mockTime += 20000;
+    gameLogic.queueEvent({
+      type: 'LOW_POWER',
+      side: 'America',
+      relationship: 'own',
+      entityId: null,
+      detail: null,
+    });
+    bridge.syncAfterSimulationStep();
+    expect(uiRuntime.shownMessages).toHaveLength(2);
+
+    vi.restoreAllMocks();
   });
 });

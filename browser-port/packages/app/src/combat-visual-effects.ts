@@ -30,11 +30,13 @@ export function planCombatVisualEffects(event: VisualEvent): CombatVisualEffectA
       ];
     }
     case 'WEAPON_FIRED': {
-      const audioEventName = event.projectileType === 'MISSILE'
-        ? 'CombatMissileLaunch'
-        : event.projectileType === 'ARTILLERY'
-          ? 'CombatArtilleryFire'
-          : 'CombatGunshot';
+      // Use weapon-specific FireSound if available, else generic fallback.
+      const audioEventName = event.fireSoundEvent
+        ?? (event.projectileType === 'MISSILE'
+          ? 'CombatMissileLaunch'
+          : event.projectileType === 'ARTILLERY'
+            ? 'CombatArtilleryFire'
+            : 'CombatGunshot');
       return [
         { type: 'spawnMuzzleFlash' },
         { type: 'playAudio', eventName: audioEventName },

@@ -32,6 +32,7 @@ import {
   TerrainRoadRenderer,
 } from '@generals/renderer';
 import type { MapDataJSON } from '@generals/renderer';
+import { ShroudRenderer } from '@generals/renderer';
 import { InputManager, RTSCamera, type InputState } from '@generals/input';
 import {
   AudioAffect,
@@ -60,6 +61,8 @@ import {
   isObjectTargetRelationshipAllowed,
 } from './control-bar-targeting.js';
 import { planCombatVisualEffects } from './combat-visual-effects.js';
+import { VoiceAudioBridge } from './voice-audio-bridge.js';
+import { MusicManager } from './music-manager.js';
 import { collectShortcutSpecialPowerReadyFrames } from './shortcut-special-power-sources.js';
 import { resolveSfxVolumesFromAudioSettings } from './audio-settings.js';
 import {
@@ -954,77 +957,10 @@ async function startGame(
   // Fog of war overlay
   // ========================================================================
 
-  let fogOverlayMesh: THREE.Mesh | null = null;
-  let fogTexture: THREE.DataTexture | null = null;
-  const FOG_UPDATE_INTERVAL = 5; // Update every N frames for performance.
-  let fogUpdateCounter = 0;
-
-  // Lazy-create fog overlay on first visibility data.
-  const createFogOverlay = (cellsWide: number, cellsDeep: number): void => {
-    const texData = new Uint8Array(cellsWide * cellsDeep * 4);
-    // Initialize fully black (shrouded).
-    for (let i = 0; i < cellsWide * cellsDeep; i++) {
-      texData[i * 4] = 0;
-      texData[i * 4 + 1] = 0;
-      texData[i * 4 + 2] = 0;
-      texData[i * 4 + 3] = 255;
-    }
-    fogTexture = new THREE.DataTexture(texData, cellsWide, cellsDeep);
-    fogTexture.magFilter = THREE.LinearFilter;
-    fogTexture.minFilter = THREE.LinearFilter;
-    fogTexture.needsUpdate = true;
-
-    const fogGeometry = new THREE.PlaneGeometry(heightmap.worldWidth, heightmap.worldDepth);
-    const fogMaterial = new THREE.MeshBasicMaterial({
-      map: fogTexture,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    fogOverlayMesh = new THREE.Mesh(fogGeometry, fogMaterial);
-    fogOverlayMesh.rotation.x = -Math.PI / 2;
-    fogOverlayMesh.position.set(heightmap.worldWidth / 2, 0.5, heightmap.worldDepth / 2);
-    fogOverlayMesh.renderOrder = 500;
-    fogOverlayMesh.name = 'fog-of-war-overlay';
-    scene.add(fogOverlayMesh);
-  };
-
-  const updateFogOverlay = (): void => {
-    const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
-    if (!localSide) return;
-
-    const fogData = gameLogic.getFogOfWarTextureData(localSide);
-    if (!fogData) return;
-
-    if (!fogOverlayMesh) {
-      createFogOverlay(fogData.cellsWide, fogData.cellsDeep);
-    }
-
-    if (!fogTexture) return;
-
-    const texData = fogTexture.image.data as Uint8Array;
-    for (let i = 0; i < fogData.data.length; i++) {
-      const vis = fogData.data[i]!;
-      // 0=SHROUDED → black opaque, 1=FOGGED → dark semi-transparent, 2=CLEAR → fully transparent
-      if (vis === 0) {
-        texData[i * 4] = 0;
-        texData[i * 4 + 1] = 0;
-        texData[i * 4 + 2] = 0;
-        texData[i * 4 + 3] = 230;
-      } else if (vis === 1) {
-        texData[i * 4] = 0;
-        texData[i * 4 + 1] = 0;
-        texData[i * 4 + 2] = 0;
-        texData[i * 4 + 3] = 140;
-      } else {
-        texData[i * 4] = 0;
-        texData[i * 4 + 1] = 0;
-        texData[i * 4 + 2] = 0;
-        texData[i * 4 + 3] = 0;
-      }
-    }
-    fogTexture.needsUpdate = true;
-  };
+  const shroudRenderer = new ShroudRenderer(scene, {
+    worldWidth: heightmap.worldWidth,
+    worldDepth: heightmap.worldDepth,
+  });
 
   // ========================================================================
   // Debug info & keyboard shortcuts
@@ -1770,10 +1706,10 @@ async function startGame(
   // Data-driven particle & FX system (replaces inline particle effects)
   // ========================================================================
 
-  const gameLODManager = new GameLODManager(iniRegistry);
+  const gameLODManager = new GameLODManager(iniDataRegistry);
   gameLODManager.init();
   const particleSystemManager = new ParticleSystemManager(scene, gameLODManager);
-  particleSystemManager.loadFromRegistry(iniRegistry);
+  particleSystemManager.loadFromRegistry(iniDataRegistry);
   particleSystemManager.init();
   const decalManager = new DecalManager(scene, 256, 128);
   decalManager.init();
@@ -1783,7 +1719,7 @@ async function startGame(
   const dynamicLightManager = new DynamicLightManager(scene);
   const tracerRenderer = new TracerRenderer(scene);
   const debrisRenderer = new DebrisRenderer(scene);
-  fxListManager.loadFromRegistry(iniRegistry);
+  fxListManager.loadFromRegistry(iniDataRegistry);
   fxListManager.setCallbacks({
     onSound: (name, position) => {
       audioManager.addAudioEvent(name, [position.x, position.y, position.z]);
@@ -1794,10 +1730,20 @@ async function startGame(
   });
   fxListManager.init();
 
+  // Voice and music bridges.
+  const voiceBridge = new VoiceAudioBridge(iniDataRegistry, audioManager, gameLogic);
+  const musicManager = new MusicManager(audioManager);
+  musicManager.setAmbientMusic();
+
   const processVisualEvents = (): void => {
     const events = gameLogic.drainVisualEvents();
     for (const event of events) {
       const pos = new THREE.Vector3(event.x, event.y, event.z);
+
+      // Combat events trigger battle music.
+      if (event.type === 'WEAPON_IMPACT' || event.type === 'ENTITY_DESTROYED') {
+        musicManager.notifyCombat();
+      }
 
       // Spawn directed weapon visuals using target endpoint.
       if (
@@ -1946,6 +1892,7 @@ async function startGame(
   const controlGroups = new Map<number, number[]>();
   const lastGroupTapTime = new Map<number, number>();
   const DOUBLE_TAP_MS = 400;
+  let previousSelectionSnapshot: readonly number[] = [];
 
   window.addEventListener('keydown', (e) => {
     const digit = parseInt(e.key, 10);
@@ -2403,16 +2350,44 @@ async function startGame(
         buildingGhostMesh.visible = false;
       }
 
-      // Spawn move indicator on right-click command.
+      // Spawn move indicator and play voice on right-click command.
       if (inputStateForGameLogic.rightMouseClick && gameLogic.getLocalPlayerSelectionIds().length > 0) {
+        const selIds = gameLogic.getLocalPlayerSelectionIds();
         const target = gameLogic.resolveMoveTargetFromInput(inputStateForGameLogic, camera);
         if (target) {
           const isAttackMode = inputState.keysDown.has('a');
           spawnMoveIndicator(target.x, target.z, isAttackMode);
+
+          // Play voice for the command — attack voice if targeting enemy, move voice otherwise.
+          const targetEntityId = gameLogic.resolveObjectTargetFromInput(inputStateForGameLogic, camera);
+          const isAttackCommand = isAttackMode || (
+            targetEntityId !== null &&
+            gameLogic.getEntityRelationship(selIds[0]!, targetEntityId) === 'enemies'
+          );
+          voiceBridge.playGroupVoice(
+            selIds as unknown as number[],
+            isAttackCommand ? 'attack' : 'move',
+          );
+          // Notify music manager of combat.
+          if (isAttackCommand) {
+            musicManager.notifyCombat();
+          }
         }
       }
 
       gameLogic.handlePointerInput(inputStateForGameLogic, camera);
+
+      // Detect selection changes and play select voice.
+      const currentSelectionIds = gameLogic.getLocalPlayerSelectionIds();
+      if (currentSelectionIds !== previousSelectionSnapshot && currentSelectionIds.length > 0) {
+        const changed = currentSelectionIds.length !== previousSelectionSnapshot.length
+          || currentSelectionIds.some((id, i) => previousSelectionSnapshot[i] !== id);
+        if (changed) {
+          voiceBridge.playGroupVoice(currentSelectionIds as unknown as number[], 'select');
+        }
+      }
+      previousSelectionSnapshot = currentSelectionIds;
+
       if (!missionInputLocked) {
         dispatchIssuedControlBarCommands(
           uiRuntime.consumeIssuedCommands(),
@@ -2524,13 +2499,11 @@ async function startGame(
       tracerRenderer.update();
       debrisRenderer.update();
       decalManager.update(dt);
+      musicManager.update();
 
-      // Update fog of war overlay at reduced frequency.
-      fogUpdateCounter++;
-      if (fogUpdateCounter >= FOG_UPDATE_INTERVAL) {
-        fogUpdateCounter = 0;
-        updateFogOverlay();
-      }
+      // Update fog of war overlay (internally throttled).
+      const localSideForFog = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
+      shroudRenderer.update(localSideForFog ? gameLogic.getFogOfWarTextureData(localSideForFog) : null);
 
       // Update cursor state
       if (cursorManager.isReady) {
@@ -2916,7 +2889,10 @@ async function startGame(
     tracerRenderer.dispose();
     debrisRenderer.dispose();
     terrainRoadRenderer.dispose();
+    voiceBridge.dispose();
+    musicManager.dispose();
     cursorManager.dispose();
+    shroudRenderer.dispose();
     delete (globalThis as Record<string, unknown>)['__GENERALS_E2E__'];
   };
 
