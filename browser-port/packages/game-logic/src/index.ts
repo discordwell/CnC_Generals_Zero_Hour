@@ -8948,7 +8948,7 @@ export class GameLogicSubsystem implements Subsystem {
       }
       if (mapGroup.active) {
         executeWithInheritedCallingContext(() => {
-          this.executeMapScriptGroup(mapGroup, true);
+          this.executeMapScriptGroup(mapGroup, false);
         });
       }
       return true;
@@ -49266,6 +49266,14 @@ export class GameLogicSubsystem implements Subsystem {
         continue;
       }
 
+      // Source parity: disabled producers (EMP, hacked, underpowered, subdued) skip production tick.
+      if (producer.objectStatusFlags.has('DISABLED_EMP') ||
+          producer.objectStatusFlags.has('DISABLED_HACKED') ||
+          producer.objectStatusFlags.has('DISABLED_UNDERPOWERED') ||
+          producer.objectStatusFlags.has('DISABLED_SUBDUED')) {
+        continue;
+      }
+
       this.updateQueueExitGate(producer);
 
       const production = producer.productionQueue[0];
@@ -49286,6 +49294,30 @@ export class GameLogicSubsystem implements Subsystem {
           productionRate = Math.max(0.2, 1 - energyShort * 0.4);
         }
       }
+
+      // Source parity: ThingTemplate::calcTimeToBuild — multiple factories of the same
+      // type speed up production. Computed per-frame so building/losing factories mid-
+      // production immediately adjusts the rate (matching C++ ProductionUpdate behavior).
+      // MultipleFactory multiplier = 0.85 per extra factory (from GlobalData).
+      if (production.type === 'UNIT') {
+        let sameTypeCount = 0;
+        for (const entity of this.spawnedEntities.values()) {
+          if (
+            entity.id !== producer.id
+            && !entity.destroyed
+            && entity.templateName === producer.templateName
+            && this.normalizeSide(entity.side) === producerSide
+            && entity.productionProfile !== null
+          ) {
+            sameTypeCount++;
+          }
+        }
+        // Each extra factory divides the effective build time by 0.85, i.e. multiplies rate.
+        for (let i = 0; i < sameTypeCount; i++) {
+          productionRate /= 0.85;
+        }
+      }
+
       production.framesUnderConstruction += productionRate;
       if (production.totalProductionFrames <= 0) {
         production.percentComplete = 100;
@@ -54058,7 +54090,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity: Body::applyDamageScalar — multiply by battle plan armor scalar.
-    if (target.battlePlanDamageScalar !== 1.0) {
+    // UNRESISTABLE damage bypasses all damage scalars (source: DamageInfo flags).
+    if (target.battlePlanDamageScalar !== 1.0 && damageType.toUpperCase() !== 'UNRESISTABLE') {
       adjustedDamage = Math.max(0, adjustedDamage * target.battlePlanDamageScalar);
     }
 

@@ -126,6 +126,8 @@ export interface WeaponSlotProfile {
   autoChooseSourceMask: number;
   /** Source parity: PreferredAgainst KindOf mask for this slot. */
   preferredAgainstKindOf: ReadonlySet<string>;
+  /** Source parity: Weapon auto-reloads its clip (e.g. after AutoReloadWhenIdle). */
+  autoReloadsClip?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,17 +308,20 @@ export function adjustDamageByArmor(
  * Source parity: Weapon::estimateWeaponDamage.
  * Returns estimated damage this weapon would deal to a target with
  * the given armor coefficients. Used for weapon selection.
+ * The optional damageBonus multiplier accounts for external bonuses
+ * (e.g. veterancy, upgrades) so weapon selection picks the true best.
  */
 export function estimateWeaponDamage(
   weaponProfile: WeaponSlotProfile,
   armorCoefficients: ReadonlyMap<string, number> | null,
+  damageBonus?: number,
 ): number {
   const adjustedPrimary = adjustDamageByArmor(
     armorCoefficients,
     weaponProfile.primaryDamage,
     weaponProfile.damageType,
   );
-  return adjustedPrimary;
+  return adjustedPrimary * (damageBonus ?? 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +539,8 @@ export interface ChooseBestWeaponContext {
   commandSourceBit: number;
   /** Frame counter for status evaluation. */
   frameCounter: number;
+  /** Multiplicative damage bonus applied to all weapon damage estimates (default 1). */
+  damageBonus?: number;
 }
 
 /**
@@ -586,9 +593,11 @@ export function chooseBestWeaponForTarget(
     }
 
     // Source parity: ammo check.
+    // Weapons that auto-reload their clip should still be considered when
+    // OUT_OF_AMMO because they will reload by the time they're needed.
     const slotState = state.weaponSlots[slotIdx];
     const status: WeaponStatus = getWeaponSlotStatus(slotState, profile, ctx.frameCounter);
-    if (status === 'OUT_OF_AMMO') {
+    if (status === 'OUT_OF_AMMO' && !profile.autoReloadsClip) {
       continue;
     }
 
@@ -597,7 +606,7 @@ export function chooseBestWeaponForTarget(
       continue;
     }
 
-    let damage = estimateWeaponDamage(profile, ctx.victimArmorCoefficients);
+    let damage = estimateWeaponDamage(profile, ctx.victimArmorCoefficients, ctx.damageBonus);
     let attackRange = profile.attackRange;
     let weaponIsReady = (status === 'READY_TO_FIRE');
 

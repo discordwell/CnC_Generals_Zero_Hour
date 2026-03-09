@@ -23,14 +23,21 @@ export interface LaserBeamConfig {
   fullIntensityMs?: number;
   /** Duration the beam fades out (ms). Default 300. */
   fadeMs?: number;
+  /** Number of concentric beam layers (W3DLaserDraw NumBeams). Default 2. */
+  numBeams?: number;
+  /** Number of segments to tessellate the beam into (W3DLaserDraw Segments). Default 1. */
+  segments?: number;
+  /** Arc height for segmented beams (W3DLaserDraw ArcHeight). Default 0. */
+  arcHeight?: number;
 }
 
 interface ActiveBeam {
-  innerMesh: THREE.Mesh;
-  outerMesh: THREE.Mesh;
+  meshes: THREE.Mesh[];
   createdAt: number;
   fullIntensityMs: number;
   fadeMs: number;
+  /** Original opacity for each mesh, used as base during fade. */
+  baseOpacities: number[];
 }
 
 const DEFAULT_INNER_WIDTH = 0.15;
@@ -94,6 +101,48 @@ function positionBeamMesh(
   mesh.visible = true;
 }
 
+/** Linearly interpolate between two values. */
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+/** Linearly interpolate between two hex colors (component-wise). */
+function lerpColor(colorA: number, colorB: number, t: number): number {
+  const rA = (colorA >> 16) & 0xff;
+  const gA = (colorA >> 8) & 0xff;
+  const bA = colorA & 0xff;
+  const rB = (colorB >> 16) & 0xff;
+  const gB = (colorB >> 8) & 0xff;
+  const bB = colorB & 0xff;
+  const r = Math.round(lerp(rA, rB, t));
+  const g = Math.round(lerp(gA, gB, t));
+  const b = Math.round(lerp(bA, bB, t));
+  return (r << 16) | (g << 8) | b;
+}
+
+/**
+ * Compute segment endpoints along the beam path, optionally with arc offset.
+ * Returns (segments + 1) points from start to end.
+ */
+function computeSegmentPoints(
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  segments: number,
+  arcHeight: number,
+): THREE.Vector3[] {
+  const points: THREE.Vector3[] = [];
+  for (let s = 0; s <= segments; s++) {
+    const t = s / segments;
+    const point = new THREE.Vector3().lerpVectors(start, end, t);
+    if (arcHeight !== 0) {
+      // sin(π * t) peaks at 0.5, giving smooth upward arc
+      point.y += arcHeight * Math.sin(Math.PI * t);
+    }
+    points.push(point);
+  }
+  return points;
+}
+
 export class LaserBeamRenderer {
   private readonly scene: THREE.Scene;
   private readonly activeBeams: ActiveBeam[] = [];
@@ -116,28 +165,43 @@ export class LaserBeamRenderer {
     const outerColor = config.outerColor ?? DEFAULT_OUTER_COLOR;
     const fullIntensityMs = config.fullIntensityMs ?? DEFAULT_FULL_INTENSITY_MS;
     const fadeMs = config.fadeMs ?? DEFAULT_FADE_MS;
+    const numBeams = config.numBeams ?? 2;
+    const segments = config.segments ?? 1;
+    const arcHeight = config.arcHeight ?? 0;
 
     const start = new THREE.Vector3(startX, startY, startZ);
     const end = new THREE.Vector3(endX, endY, endZ);
 
-    const innerMesh = createBeamMesh(innerColor, 1.0);
-    const outerMesh = createBeamMesh(outerColor, 0.5);
+    // Compute segment points (for arcing / tessellation).
+    const segmentPoints = computeSegmentPoints(start, end, segments, arcHeight);
 
-    positionBeamMesh(innerMesh, start, end, innerWidth);
-    positionBeamMesh(outerMesh, start, end, outerWidth);
+    const meshes: THREE.Mesh[] = [];
+    const baseOpacities: number[] = [];
 
-    innerMesh.name = 'laser-beam-inner';
-    outerMesh.name = 'laser-beam-outer';
+    // Create N concentric beam layers, interpolated from inner to outer.
+    for (let layer = 0; layer < numBeams; layer++) {
+      const t = numBeams > 1 ? layer / (numBeams - 1) : 0;
+      const width = lerp(innerWidth, outerWidth, t);
+      const color = lerpColor(innerColor, outerColor, t);
+      const opacity = lerp(1.0, 0.5, t);
 
-    this.scene.add(innerMesh);
-    this.scene.add(outerMesh);
+      // Create a mesh for each segment in this layer.
+      for (let s = 0; s < segments; s++) {
+        const mesh = createBeamMesh(color, opacity);
+        positionBeamMesh(mesh, segmentPoints[s]!, segmentPoints[s + 1]!, width);
+        mesh.name = `laser-beam-layer-${layer}`;
+        this.scene.add(mesh);
+        meshes.push(mesh);
+        baseOpacities.push(opacity);
+      }
+    }
 
     this.activeBeams.push({
-      innerMesh,
-      outerMesh,
+      meshes,
       createdAt: performance.now(),
       fullIntensityMs,
       fadeMs,
+      baseOpacities,
     });
   }
 
@@ -155,19 +219,21 @@ export class LaserBeamRenderer {
 
       if (elapsed >= totalLifetime) {
         // Remove expired beam.
-        this.scene.remove(beam.innerMesh);
-        this.scene.remove(beam.outerMesh);
-        this.disposeMesh(beam.innerMesh);
-        this.disposeMesh(beam.outerMesh);
+        for (const mesh of beam.meshes) {
+          this.scene.remove(mesh);
+          this.disposeMesh(mesh);
+        }
         continue;
       }
 
       if (elapsed > beam.fullIntensityMs) {
         // Fading phase.
         const fadeProgress = (elapsed - beam.fullIntensityMs) / Math.max(1, beam.fadeMs);
-        const opacity = 1 - fadeProgress;
-        (beam.innerMesh.material as THREE.MeshBasicMaterial).opacity = opacity;
-        (beam.outerMesh.material as THREE.MeshBasicMaterial).opacity = opacity * 0.5;
+        const fadeMul = 1 - fadeProgress;
+        for (let m = 0; m < beam.meshes.length; m++) {
+          (beam.meshes[m]!.material as THREE.MeshBasicMaterial).opacity =
+            beam.baseOpacities[m]! * fadeMul;
+        }
       }
 
       this.activeBeams[writeIdx++] = beam;
@@ -185,10 +251,10 @@ export class LaserBeamRenderer {
 
   dispose(): void {
     for (const beam of this.activeBeams) {
-      this.scene.remove(beam.innerMesh);
-      this.scene.remove(beam.outerMesh);
-      this.disposeMesh(beam.innerMesh);
-      this.disposeMesh(beam.outerMesh);
+      for (const mesh of beam.meshes) {
+        this.scene.remove(mesh);
+        this.disposeMesh(mesh);
+      }
     }
     this.activeBeams.length = 0;
   }

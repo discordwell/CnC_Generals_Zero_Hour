@@ -1908,32 +1908,24 @@ export class AudioManager implements Subsystem {
       this.localPlayerIndex,
     );
 
-    // Source behavior: player ownership filters are OR'ed; composite bitmasks can
-    // target multiple audiences (for example, PLAYER|ENEMIES).
-    let hasScopedAudience = false;
+    // Source behavior: player ownership filters use first-match-returns semantics.
+    // When ST_PLAYER is set, the result is determined solely by the player ownership
+    // check — it does not fall through to ST_ENEMIES or ST_ALLIES.
     if ((soundTypeMask & SoundType.ST_PLAYER) !== 0) {
-      hasScopedAudience = true;
-      if (event.playerIndex === this.localPlayerIndex) {
-        return true;
-      }
+      return event.playerIndex === this.localPlayerIndex;
     }
 
     if ((soundTypeMask & SoundType.ST_ALLIES) !== 0) {
-      hasScopedAudience = true;
       // Source behavior: ALLIES does not include the local player themselves.
-      if (event.playerIndex !== this.localPlayerIndex && relationship === 'allies') {
-        return true;
-      }
+      return event.playerIndex !== this.localPlayerIndex && relationship === 'allies';
     }
 
     if ((soundTypeMask & SoundType.ST_ENEMIES) !== 0) {
-      hasScopedAudience = true;
-      if (relationship === 'enemies') {
-        return true;
-      }
+      return relationship === 'enemies';
     }
 
-    return hasScopedAudience ? false : true;
+    // No scoped audience flags matched — treat as globally audible.
+    return true;
   }
 
   private resolvePlayerRelationship(

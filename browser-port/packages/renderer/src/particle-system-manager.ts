@@ -32,25 +32,31 @@ import {
 //   [14]    angularRate
 //   [15]    sizeRate
 //   [16]    sizeRateDamping
+//   [17]    velocityDamping (sampled once at emission)
+//   [18]    angularDamping (sampled once at emission)
+//   [19]    alphaFactor (per-particle random [0,1] for alpha keyframe lerp)
 
-const PARTICLE_STRIDE = 17;
-const POS_X = 0;
-const POS_Y = 1;
-const POS_Z = 2;
-const VEL_X = 3;
-const VEL_Y = 4;
-const VEL_Z = 5;
-const ALPHA = 6;
-const COL_R = 7;
-const COL_G = 8;
-const COL_B = 9;
-const SIZE = 10;
-const AGE = 11;
-const MAX_AGE = 12;
-const ROTATION = 13;
-const ANG_RATE = 14;
-const SIZE_RATE = 15;
-const SIZE_RATE_DAMP = 16;
+export const PARTICLE_STRIDE = 20;
+export const POS_X = 0;
+export const POS_Y = 1;
+export const POS_Z = 2;
+export const VEL_X = 3;
+export const VEL_Y = 4;
+export const VEL_Z = 5;
+export const ALPHA = 6;
+export const COL_R = 7;
+export const COL_G = 8;
+export const COL_B = 9;
+export const SIZE = 10;
+export const AGE = 11;
+export const MAX_AGE = 12;
+export const ROTATION = 13;
+export const ANG_RATE = 14;
+export const SIZE_RATE = 15;
+export const SIZE_RATE_DAMP = 16;
+export const VEL_DAMP = 17;
+export const ANG_DAMP = 18;
+export const ALPHA_FACTOR = 19;
 
 // ---------------------------------------------------------------------------
 // Live system instance
@@ -229,6 +235,13 @@ export class ParticleSystemManager implements Subsystem {
     return this.totalParticleCount;
   }
 
+  /** @internal — exposes raw particle data for testing */
+  _getSystemParticleData(id: number): { data: Float32Array; count: number } | null {
+    const system = this.systems.get(id);
+    if (!system) return null;
+    return { data: system.particles, count: system.particleCount };
+  }
+
   // -------------------------------------------------------------------------
   // Update loop
   // -------------------------------------------------------------------------
@@ -318,6 +331,9 @@ export class ParticleSystemManager implements Subsystem {
       data[offset + ANG_RATE] = randomInRange(template.angularRateZ);
       data[offset + SIZE_RATE] = randomInRange(template.sizeRate);
       data[offset + SIZE_RATE_DAMP] = randomInRange(template.sizeRateDamping);
+      data[offset + VEL_DAMP] = randomInRange(template.velocityDamping);
+      data[offset + ANG_DAMP] = randomInRange(template.angularDamping);
+      data[offset + ALPHA_FACTOR] = Math.random();
 
       system.particleCount++;
       this.totalParticleCount++;
@@ -348,14 +364,14 @@ export class ParticleSystemManager implements Subsystem {
       // Update age
       data[wOff + AGE] = age;
 
-      // Velocity damping
-      const vdamp = randomInRange(template.velocityDamping);
+      // Gravity (applied to Y velocity) — C++ applies gravity first
+      data[wOff + VEL_Y] = data[wOff + VEL_Y]! - template.gravity;
+
+      // Velocity damping — use per-particle value sampled at emission
+      const vdamp = data[wOff + VEL_DAMP]!;
       data[wOff + VEL_X] = data[wOff + VEL_X]! * vdamp;
       data[wOff + VEL_Y] = data[wOff + VEL_Y]! * vdamp;
       data[wOff + VEL_Z] = data[wOff + VEL_Z]! * vdamp;
-
-      // Gravity (applied to Y velocity)
-      data[wOff + VEL_Y] = data[wOff + VEL_Y]! - template.gravity;
 
       // Drift velocity
       data[wOff + VEL_X] = data[wOff + VEL_X]! + template.driftVelocity.x;
@@ -369,15 +385,15 @@ export class ParticleSystemManager implements Subsystem {
 
       // Update rotation
       data[wOff + ROTATION] = data[wOff + ROTATION]! + data[wOff + ANG_RATE]!;
-      const angDamp = randomInRange(template.angularDamping);
+      const angDamp = data[wOff + ANG_DAMP]!;
       data[wOff + ANG_RATE] = data[wOff + ANG_RATE]! * angDamp;
 
       // Update size
       data[wOff + SIZE] = Math.max(0, data[wOff + SIZE]! + data[wOff + SIZE_RATE]!);
       data[wOff + SIZE_RATE] = data[wOff + SIZE_RATE]! * data[wOff + SIZE_RATE_DAMP]!;
 
-      // Keyframe interpolation
-      data[wOff + ALPHA] = interpolateAlphaKeyframes(template.alphaKeyframes, age);
+      // Keyframe interpolation — use per-particle alpha factor for min/max lerp
+      data[wOff + ALPHA] = interpolateAlphaKeyframes(template.alphaKeyframes, age, data[wOff + ALPHA_FACTOR]!);
       interpolateColorKeyframes(template.colorKeyframes, age, data, wOff);
 
       writeIdx++;
@@ -636,10 +652,11 @@ function randomInRange(range: RandomRange): number {
   return range.min + Math.random() * (range.max - range.min);
 }
 
-function interpolateAlphaKeyframes(keyframes: readonly AlphaKeyframe[], age: number): number {
+function interpolateAlphaKeyframes(keyframes: readonly AlphaKeyframe[], age: number, alphaFactor: number): number {
   if (keyframes.length === 0) return 1.0;
   if (keyframes.length === 1) {
-    return (keyframes[0]!.alphaMin + keyframes[0]!.alphaMax) / 2;
+    const k = keyframes[0]!;
+    return k.alphaMin + alphaFactor * (k.alphaMax - k.alphaMin);
   }
 
   // Find bounding keyframes
@@ -648,17 +665,17 @@ function interpolateAlphaKeyframes(keyframes: readonly AlphaKeyframe[], age: num
     const k1 = keyframes[i + 1]!;
     if (age >= k0.frame && age <= k1.frame) {
       const span = k1.frame - k0.frame;
-      if (span <= 0) return (k0.alphaMin + k0.alphaMax) / 2;
+      if (span <= 0) return k0.alphaMin + alphaFactor * (k0.alphaMax - k0.alphaMin);
       const t = (age - k0.frame) / span;
-      const a0 = (k0.alphaMin + k0.alphaMax) / 2;
-      const a1 = (k1.alphaMin + k1.alphaMax) / 2;
+      const a0 = k0.alphaMin + alphaFactor * (k0.alphaMax - k0.alphaMin);
+      const a1 = k1.alphaMin + alphaFactor * (k1.alphaMax - k1.alphaMin);
       return a0 + t * (a1 - a0);
     }
   }
 
   // Past the last keyframe: use last value
   const last = keyframes[keyframes.length - 1]!;
-  return (last.alphaMin + last.alphaMax) / 2;
+  return last.alphaMin + alphaFactor * (last.alphaMax - last.alphaMin);
 }
 
 function interpolateColorKeyframes(

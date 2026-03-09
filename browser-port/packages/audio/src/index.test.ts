@@ -723,7 +723,7 @@ describe('AudioManager', () => {
     ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
   });
 
-  it('treats composite ownership filters as OR-scoped audiences', () => {
+  it('uses first-match-returns semantics for composite ownership filters', () => {
     const manager = new AudioManager({
       localPlayerIndex: 1,
       eventInfos: [
@@ -738,18 +738,21 @@ describe('AudioManager', () => {
     manager.setPlayerRelationship(2, 1, 'allies');
     manager.setPlayerRelationship(3, 1, 'enemies');
 
+    // ST_PLAYER is checked first: local player owns event → true
     expect(
       manager.addAudioEvent({
         eventName: 'PlayerOrEnemyScoped',
         playerIndex: 1,
       }),
     ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    // ST_PLAYER is checked first: enemy owns event → false (first-match, not OR)
     expect(
       manager.addAudioEvent({
         eventName: 'PlayerOrEnemyScoped',
         playerIndex: 3,
       }),
-    ).toBeGreaterThanOrEqual(AudioHandleSpecialValues.AHSV_FirstHandle);
+    ).toBe(AudioHandleSpecialValues.AHSV_NotForLocal);
+    // ST_PLAYER is checked first: ally owns event → false
     expect(
       manager.addAudioEvent({
         eventName: 'PlayerOrEnemyScoped',

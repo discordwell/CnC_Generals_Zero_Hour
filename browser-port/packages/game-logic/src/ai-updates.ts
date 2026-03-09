@@ -120,6 +120,9 @@ export interface DozerAIContext {
   /** Complete construction of a building. */
   completeConstruction(buildingId: number): void;
 
+  /** Source parity: increment building health during construction. */
+  addConstructionHealth(buildingId: number, healthAmount: number): void;
+
   /** Attempt healing from sole benefactor (returns false if another healer owns the target). */
   attemptHealingFromSoleBenefactor(buildingId: number, healAmount: number, healerId: number, lockFrames: number): boolean;
 
@@ -197,13 +200,18 @@ export function updateDozerConstruction(
   const percentPerFrame = 100.0 / totalFrames;
   const newPercent = building.constructionPercent + percentPerFrame;
 
+  // Source parity: health += maxHealth / framesToBuild each frame.
+  const healthPerFrame = building.maxHealth / totalFrames;
+
   if (newPercent >= 100.0) {
     context.setConstructionPercent(building.id, 100.0);
+    context.addConstructionHealth(building.id, building.maxHealth - building.health);
     context.completeConstruction(building.id);
     state.currentTask = DozerTask.INVALID;
     state.targetBuildingId = null;
   } else {
     context.setConstructionPercent(building.id, newPercent);
+    context.addConstructionHealth(building.id, healthPerFrame);
   }
 }
 

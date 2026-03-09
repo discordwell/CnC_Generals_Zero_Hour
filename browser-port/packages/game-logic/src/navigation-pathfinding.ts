@@ -670,23 +670,21 @@ export function findPath<TEntity extends NavigationEntityLike>(
         && parentCellX !== undefined
         && parentCellZ !== undefined
       ) {
-        const grandParentIndex = parent[parentCellIndex];
-        if (grandParentIndex !== undefined && grandParentIndex >= 0) {
-          const [grandCellX, grandCellZ] = context.gridFromIndex(grandParentIndex);
-          const prevDirX = parentCellX - currentCellX;
-          const prevDirZ = parentCellZ - currentCellZ;
-          const nextDirX = grandCellX - parentCellX;
-          const nextDirZ = grandCellZ - parentCellZ;
+        // Turn penalty: compare direction into current cell (parent→current)
+        // with direction out to neighbor (current→neighbor), matching pathfinding.ts
+        const prevDirX = currentCellX - parentCellX;
+        const prevDirZ = currentCellZ - parentCellZ;
+        const nextDirX = neighborX - currentCellX;
+        const nextDirZ = neighborZ - currentCellZ;
 
-          if (prevDirX !== nextDirX || prevDirZ !== nextDirZ) {
-            const dot = prevDirX * nextDirX + prevDirZ * nextDirZ;
-            if (dot > 0) {
-              stepCost += 4;
-            } else if (dot === 0) {
-              stepCost += 8;
-            } else {
-              stepCost += 16;
-            }
+        if (prevDirX !== nextDirX || prevDirZ !== nextDirZ) {
+          const dot = prevDirX * nextDirX + prevDirZ * nextDirZ;
+          if (dot > 0) {
+            stepCost += 4;
+          } else if (dot === 0) {
+            stepCost += 8;
+          } else {
+            stepCost += 16;
           }
         }
       }

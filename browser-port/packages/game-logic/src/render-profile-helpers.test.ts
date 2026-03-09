@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { IniBlock, IniValue } from '@generals/core';
 import type { ObjectDef } from '@generals/ini-data';
 
-import { collectModelConditionInfos, collectTransitionInfos, resolveRenderAssetProfile } from './render-profile-helpers.js';
+import { collectModelConditionInfos, collectTransitionInfos, collectIgnoreConditionStates, resolveRenderAssetProfile } from './render-profile-helpers.js';
 
 /**
  * Helper to build a minimal ObjectDef with the given ModelConditionState blocks.
@@ -437,5 +437,112 @@ describe('collectTransitionInfos', () => {
     expect(infos[0].modelName).toBe('DeployModel');
     expect(infos[0].hideSubObjects).toEqual(['Turret']);
     expect(infos[0].showSubObjects).toEqual(['Legs']);
+  });
+});
+
+describe('IgnoreConditionStates parsing', () => {
+  it('collects IgnoreConditionStates from a draw module block', () => {
+    const drawModule: IniBlock = {
+      type: 'Draw',
+      name: 'W3DModelDraw',
+      fields: {
+        IgnoreConditionStates: 'NIGHT',
+      },
+      blocks: [
+        makeModelConditionStateBlock('', { Model: 'BaseModel' }),
+      ],
+    };
+    const ignored = collectIgnoreConditionStates(makeObjectDef([drawModule]));
+    expect(ignored).toEqual(['NIGHT']);
+  });
+
+  it('collects multiple IgnoreConditionStates tokens', () => {
+    const drawModule: IniBlock = {
+      type: 'Draw',
+      name: 'W3DModelDraw',
+      fields: {
+        IgnoreConditionStates: 'NIGHT SNOW',
+      },
+      blocks: [
+        makeModelConditionStateBlock('', {}),
+      ],
+    };
+    const ignored = collectIgnoreConditionStates(makeObjectDef([drawModule]));
+    expect(ignored).toEqual(['NIGHT', 'SNOW']);
+  });
+
+  it('returns empty array when no IgnoreConditionStates is present', () => {
+    const drawModule: IniBlock = {
+      type: 'Draw',
+      name: 'W3DModelDraw',
+      fields: {},
+      blocks: [
+        makeModelConditionStateBlock('', {}),
+      ],
+    };
+    const ignored = collectIgnoreConditionStates(makeObjectDef([drawModule]));
+    expect(ignored).toEqual([]);
+  });
+
+  it('does not collect IgnoreConditionStates from blocks without ModelConditionState children', () => {
+    const otherBlock: IniBlock = {
+      type: 'Body',
+      name: 'SomeBody',
+      fields: {
+        IgnoreConditionStates: 'NIGHT',
+      },
+      blocks: [],
+    };
+    const ignored = collectIgnoreConditionStates(makeObjectDef([otherBlock]));
+    expect(ignored).toEqual([]);
+  });
+
+  it('populates ignoreConditionStates on ResolvedRenderAssetProfile', () => {
+    const drawModule: IniBlock = {
+      type: 'Draw',
+      name: 'W3DModelDraw',
+      fields: {
+        IgnoreConditionStates: 'NIGHT',
+      },
+      blocks: [
+        makeModelConditionStateBlock('', { Model: 'BaseModel' }),
+      ],
+    };
+    const profile = resolveRenderAssetProfile(makeObjectDef([drawModule]));
+    expect(profile.ignoreConditionStates).toEqual(['NIGHT']);
+  });
+});
+
+describe('ONCE_BACKWARDS and LOOP_BACKWARDS animation modes', () => {
+  it('parses AnimationMode = ONCE_BACKWARDS', () => {
+    const block = makeModelConditionStateBlock('', {
+      AnimationMode: 'ONCE_BACKWARDS',
+    });
+    const infos = collectModelConditionInfos(makeObjectDef([block]));
+    expect(infos[0].animationMode).toBe('ONCE_BACKWARDS');
+  });
+
+  it('parses AnimationMode = LOOP_BACKWARDS', () => {
+    const block = makeModelConditionStateBlock('', {
+      AnimationMode: 'LOOP_BACKWARDS',
+    });
+    const infos = collectModelConditionInfos(makeObjectDef([block]));
+    expect(infos[0].animationMode).toBe('LOOP_BACKWARDS');
+  });
+
+  it('handles case-insensitive ONCE_BACKWARDS', () => {
+    const block = makeModelConditionStateBlock('', {
+      AnimationMode: 'once_backwards',
+    });
+    const infos = collectModelConditionInfos(makeObjectDef([block]));
+    expect(infos[0].animationMode).toBe('ONCE_BACKWARDS');
+  });
+
+  it('handles case-insensitive LOOP_BACKWARDS', () => {
+    const block = makeModelConditionStateBlock('', {
+      AnimationMode: 'loop_backwards',
+    });
+    const infos = collectModelConditionInfos(makeObjectDef([block]));
+    expect(infos[0].animationMode).toBe('LOOP_BACKWARDS');
   });
 });

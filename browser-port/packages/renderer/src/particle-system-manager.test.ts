@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as THREE from 'three';
-import { ParticleSystemManager } from './particle-system-manager.js';
+import {
+  ParticleSystemManager,
+  PARTICLE_STRIDE,
+  VEL_X,
+  VEL_Y,
+  VEL_Z,
+  ALPHA,
+  VEL_DAMP,
+  ANG_DAMP,
+  ALPHA_FACTOR,
+} from './particle-system-manager.js';
 import { IniDataRegistry } from '@generals/ini-data';
 import type { IniBlock, IniValue } from '@generals/core';
 
@@ -123,5 +133,157 @@ describe('ParticleSystemManager', () => {
     }
 
     expect(manager.getTotalParticleCount()).toBeLessThanOrEqual(3000);
+  });
+
+  it('damping value is constant per-particle across frames', () => {
+    // Use a template with a damping range so the per-particle value matters
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'DampTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '100 100',
+        SystemLifetime: '1',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        VelocityDamping: '0.5 0.9',
+        AngularDamping: '0.3 0.7',
+        VelocityType: 'ORTHO',
+        VelOrthoX: '1 1',
+        VelOrthoY: '1 1',
+        VelOrthoZ: '1 1',
+        VolumeType: 'POINT',
+      }),
+    ]);
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const id = mgr.createSystem('DampTest', new THREE.Vector3(0, 0, 0))!;
+    expect(id).not.toBeNull();
+
+    // First update emits the particle
+    mgr.update(1 / 30);
+    const info1 = mgr._getSystemParticleData(id)!;
+    expect(info1.count).toBe(1);
+
+    // Read damping values after frame 1
+    const velDamp1 = info1.data[0 * PARTICLE_STRIDE + VEL_DAMP]!;
+    const angDamp1 = info1.data[0 * PARTICLE_STRIDE + ANG_DAMP]!;
+
+    // Second update
+    mgr.update(1 / 30);
+    const info2 = mgr._getSystemParticleData(id)!;
+    expect(info2.count).toBe(1);
+
+    // Read damping values after frame 2 — should be identical
+    const velDamp2 = info2.data[0 * PARTICLE_STRIDE + VEL_DAMP]!;
+    const angDamp2 = info2.data[0 * PARTICLE_STRIDE + ANG_DAMP]!;
+
+    expect(velDamp2).toBe(velDamp1);
+    expect(angDamp2).toBe(angDamp1);
+
+    // Also verify damping is within the configured range
+    expect(velDamp1).toBeGreaterThanOrEqual(0.5);
+    expect(velDamp1).toBeLessThanOrEqual(0.9);
+    expect(angDamp1).toBeGreaterThanOrEqual(0.3);
+    expect(angDamp1).toBeLessThanOrEqual(0.7);
+  });
+
+  it('alpha varies between particles with same keyframes', () => {
+    // Use a template with distinct alphaMin/alphaMax ranges
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'AlphaVaryTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '100 100',
+        SystemLifetime: '2',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '20 20',
+        Alpha1: '0.00 1.00 0',     // wide alphaMin/alphaMax range
+        Alpha2: '0.00 1.00 100',
+        VelocityType: 'ORTHO',
+        VolumeType: 'POINT',
+      }),
+    ]);
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const id = mgr.createSystem('AlphaVaryTest', new THREE.Vector3(0, 0, 0))!;
+    mgr.update(1 / 30); // emit particles
+
+    const info = mgr._getSystemParticleData(id)!;
+    expect(info.count).toBeGreaterThanOrEqual(2);
+
+    // Collect per-particle alpha factors
+    const factors = new Set<number>();
+    for (let i = 0; i < info.count; i++) {
+      factors.add(info.data[i * PARTICLE_STRIDE + ALPHA_FACTOR]!);
+    }
+
+    // With 20 particles, alpha factors should not all be the same
+    expect(factors.size).toBeGreaterThan(1);
+
+    // Verify alpha values also differ (since factors differ and range is 0..1)
+    const alphas = new Set<number>();
+    for (let i = 0; i < info.count; i++) {
+      alphas.add(info.data[i * PARTICLE_STRIDE + ALPHA]!);
+    }
+    expect(alphas.size).toBeGreaterThan(1);
+  });
+
+  it('physics order: gravity applied before damping', () => {
+    // Gravity should be added to velocity BEFORE damping multiplies it.
+    // If order is: vel_y = (vel_y - gravity) * damp
+    // Then with vel_y=0, gravity=10, damp=0.5: result = (0-10)*0.5 = -5
+    // Wrong order (damp then gravity): result = 0*0.5 - 10 = -10
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'PhysicsOrderTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '100 100',
+        SystemLifetime: '2',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        Gravity: '10',
+        VelocityDamping: '0.5 0.5',  // Fixed damping (no range)
+        VelocityType: 'ORTHO',
+        VelOrthoX: '0 0',
+        VelOrthoY: '0 0',
+        VelOrthoZ: '0 0',
+        VolumeType: 'POINT',
+      }),
+    ]);
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const id = mgr.createSystem('PhysicsOrderTest', new THREE.Vector3(0, 0, 0))!;
+    // First update: emit particle with vel_y = 0
+    mgr.update(1 / 30);
+
+    const info = mgr._getSystemParticleData(id)!;
+    expect(info.count).toBe(1);
+
+    // After first update tick, the particle has been updated:
+    // Correct order: vel_y = (0 - 10) * 0.5 = -5
+    // Wrong order:   vel_y = (0 * 0.5) - 10 = -10
+    const velY = info.data[0 * PARTICLE_STRIDE + VEL_Y]!;
+    expect(velY).toBeCloseTo(-5, 5);
   });
 });

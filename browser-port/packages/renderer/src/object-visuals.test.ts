@@ -1550,4 +1550,130 @@ describe('ObjectVisualManager', () => {
     expect(clone).not.toBeNull();
     expect(loadCount).toBe(loadCountAfterSync);
   });
+
+  // =========================================================================
+  // IgnoreConditionStates — strips ignored flags before condition matching
+  // =========================================================================
+
+  it('IgnoreConditionStates strips NIGHT flag from condition matching', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['DayIdle', 'NightIdle']),
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'DayIdle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+      {
+        conditionFlags: ['NIGHT'],
+        modelName: null,
+        animationName: 'NightIdle',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'LOOP' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+    ];
+
+    // First sync to load the model.
+    manager.sync([makeMeshState({
+      id: 300,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+
+    // Sync with default state to establish the baseline condition key.
+    manager.sync([makeMeshState({
+      id: 300,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    const vsBeforeNight = manager.getVisualState(300);
+    const keyBeforeNight = vsBeforeNight?.activeConditionKey;
+
+    // Now set NIGHT flag WITH ignoreConditionStates = ['NIGHT'].
+    // The NIGHT flag should be stripped, so it should still match the
+    // default (empty) condition state, not the NIGHT one.
+    manager.sync([makeMeshState({
+      id: 300,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: ['NIGHT'],
+      ignoreConditionStates: ['NIGHT'],
+    })], 1 / 30);
+
+    const vsAfterIgnoredNight = manager.getVisualState(300);
+    // The condition key should remain the same as the default state
+    // because NIGHT was stripped before matching.
+    expect(vsAfterIgnoredNight?.activeConditionKey).toBe(keyBeforeNight);
+  });
+
+  // =========================================================================
+  // ONCE_BACKWARDS — plays animation with negative timeScale
+  // =========================================================================
+
+  it('ONCE_BACKWARDS plays animation with negative timeScale', async () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(['DeployReverse']),
+    });
+
+    const conditionInfos = [
+      {
+        conditionFlags: [] as string[],
+        modelName: null,
+        animationName: 'DeployReverse',
+        idleAnimationName: null,
+        hideSubObjects: [] as string[],
+        showSubObjects: [] as string[],
+        animationMode: 'ONCE_BACKWARDS' as const,
+        transitionKey: null,
+        animSpeedFactorMin: 1.0,
+        animSpeedFactorMax: 1.0,
+        idleAnimations: [],
+      },
+    ];
+
+    manager.sync([makeMeshState({
+      id: 301,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+    await flushModelLoadQueue();
+
+    // Second sync to trigger condition animation.
+    manager.sync([makeMeshState({
+      id: 301,
+      modelConditionInfos: conditionInfos,
+      modelConditionFlags: [],
+    })], 1 / 30);
+
+    const vs = manager.getVisualState(301);
+    expect(vs).not.toBeNull();
+    // The condition action should be playing with negative timeScale.
+    const action = vs?.conditionAction;
+    expect(action).not.toBeNull();
+    expect(action!.timeScale).toBeLessThan(0);
+    // After one frame of backwards playback, time should be near clip end
+    // (clip.duration minus one dt tick).
+    const clipDuration = action!.getClip().duration;
+    expect(action!.time).toBeGreaterThan(clipDuration * 0.5);
+    expect(action!.time).toBeLessThanOrEqual(clipDuration);
+  });
 });

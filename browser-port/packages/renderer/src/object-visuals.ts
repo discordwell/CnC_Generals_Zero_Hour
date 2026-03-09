@@ -46,7 +46,7 @@ export interface ModelConditionInfo {
   idleAnimationName: string | null;
   hideSubObjects: string[];
   showSubObjects: string[];
-  animationMode: 'LOOP' | 'ONCE' | 'MANUAL';
+  animationMode: 'LOOP' | 'ONCE' | 'MANUAL' | 'ONCE_BACKWARDS' | 'LOOP_BACKWARDS';
   transitionKey: string | null;
   animSpeedFactorMin: number;
   animSpeedFactorMax: number;
@@ -66,6 +66,11 @@ export interface RenderableEntityState {
   renderAnimationStateClips?: Partial<Record<RenderableAnimationState, string[]>>;
   modelConditionInfos?: ModelConditionInfo[];
   transitionInfos?: TransitionInfo[];
+  /**
+   * Source parity: IgnoreConditionStates — condition flags to strip before
+   * matching ModelConditionStates.
+   */
+  ignoreConditionStates?: readonly string[];
   modelConditionFlags?: readonly string[];
   currentSpeed?: number;
   maxSpeed?: number;
@@ -161,6 +166,9 @@ interface VisualAssetState {
   cachedActiveFlags: Set<string>;
   /** Serialised key of cached flags (for change detection). */
   cachedActiveFlagsKey: string;
+  /** Cached filtered flags with IgnoreConditionStates applied (avoids per-frame allocation). */
+  cachedFilteredFlags: Set<string>;
+  cachedFilteredFlagsKey: string;
   // --- Transition state system (source parity: W3DModelDraw::setModelState) ---
   /** True when a transition animation is currently playing. */
   isInTransition: boolean;
@@ -359,6 +367,7 @@ export class ObjectVisualManager {
     conditionAnimSpeedFactor: number;
     idleVariantIndex: number;
     currentModelName: string | null;
+    conditionAction: THREE.AnimationAction | null;
   } | null {
     const visual = this.visuals.get(entityId);
     if (!visual) {
@@ -373,6 +382,7 @@ export class ObjectVisualManager {
       conditionAnimSpeedFactor: visual.conditionAnimSpeedFactor,
       idleVariantIndex: visual.idleVariantIndex,
       currentModelName: visual.currentModelName,
+      conditionAction: visual.conditionAction,
     };
   }
 
@@ -475,6 +485,8 @@ export class ObjectVisualManager {
       treadUVOffset: 0,
       cachedActiveFlags: new Set(),
       cachedActiveFlagsKey: '',
+      cachedFilteredFlags: new Set(),
+      cachedFilteredFlagsKey: '',
       isInTransition: false,
       transitionTargetConditionKey: null,
       transitionFromKey: null,
@@ -799,6 +811,8 @@ export class ObjectVisualManager {
     visual.treadUVOffset = 0;
     visual.cachedActiveFlags.clear();
     visual.cachedActiveFlagsKey = '';
+    visual.cachedFilteredFlags.clear();
+    visual.cachedFilteredFlagsKey = '';
     visual.isInTransition = false;
     visual.transitionTargetConditionKey = null;
     visual.transitionFromKey = null;
@@ -1523,7 +1537,21 @@ export class ObjectVisualManager {
       for (const f of flags) visual.cachedActiveFlags.add(f);
       visual.cachedActiveFlagsKey = flagsKey;
     }
-    const activeFlags = visual.cachedActiveFlags;
+
+    // Source parity: strip IgnoreConditionStates before matching.
+    // Cached to avoid per-frame Set allocation.
+    let activeFlags: ReadonlySet<string> = visual.cachedActiveFlags;
+    const ignored = state.ignoreConditionStates;
+    if (ignored && ignored.length > 0) {
+      if (flagsKey !== visual.cachedFilteredFlagsKey) {
+        visual.cachedFilteredFlags.clear();
+        for (const f of flags) visual.cachedFilteredFlags.add(f);
+        for (const ig of ignored) visual.cachedFilteredFlags.delete(ig);
+        visual.cachedFilteredFlagsKey = flagsKey;
+      }
+      activeFlags = visual.cachedFilteredFlags;
+    }
+
     const match = findBestConditionMatch(infos, activeFlags);
     if (!match) {
       return;
@@ -1677,7 +1705,7 @@ export class ObjectVisualManager {
   private playConditionClip(
     visual: VisualAssetState,
     clipName: string,
-    mode: 'LOOP' | 'ONCE' | 'MANUAL',
+    mode: 'LOOP' | 'ONCE' | 'MANUAL' | 'ONCE_BACKWARDS' | 'LOOP_BACKWARDS',
   ): void {
     if (!visual.mixer) return;
 
@@ -1709,15 +1737,28 @@ export class ObjectVisualManager {
       visual.activeState = null;
     }
 
+    // Source parity: resolve backwards modes to their base loop type.
+    const isBackwards = mode === 'ONCE_BACKWARDS' || mode === 'LOOP_BACKWARDS';
+    const baseMode = isBackwards
+      ? (mode === 'ONCE_BACKWARDS' ? 'ONCE' : 'LOOP')
+      : mode;
+
     action.reset();
     action.enabled = true;
-    const loop = mode === 'ONCE' ? THREE.LoopOnce : THREE.LoopRepeat;
+    const loop = baseMode === 'ONCE' ? THREE.LoopOnce : THREE.LoopRepeat;
     action.setLoop(loop, loop === THREE.LoopOnce ? 1 : Infinity);
-    if (mode === 'ONCE') {
+    if (baseMode === 'ONCE') {
       action.clampWhenFinished = true;
     }
     // Apply per-entity randomised speed factor.
     action.timeScale = visual.conditionAnimSpeedFactor;
+
+    // Source parity: backwards playback — negate timeScale and start at clip end.
+    if (isBackwards) {
+      action.timeScale = -Math.abs(action.timeScale);
+      action.time = action.getClip().duration;
+    }
+
     action.play();
     if (prev && prev !== action) {
       action.crossFadeFrom(prev, 0.15, true);
@@ -1916,10 +1957,13 @@ export class ObjectVisualManager {
     // Base speed factor from AnimationSpeedFactorRange (set per condition change).
     const baseFactor = visual.conditionAnimSpeedFactor;
 
+    // Preserve backwards playback direction (negative timeScale from ONCE_BACKWARDS / LOOP_BACKWARDS).
+    const sign = action.timeScale < 0 ? -1 : 1;
+
     if (isMoving && maxSpeed > 0) {
-      action.timeScale = Math.max(0.3, Math.min(2.0, currentSpeed / maxSpeed)) * baseFactor;
+      action.timeScale = sign * Math.max(0.3, Math.min(2.0, currentSpeed / maxSpeed)) * baseFactor;
     } else {
-      action.timeScale = baseFactor;
+      action.timeScale = sign * baseFactor;
     }
   }
 

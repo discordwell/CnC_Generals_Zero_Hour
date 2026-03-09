@@ -34718,6 +34718,112 @@ describe('Map script execution', () => {
     expect(logic.getEntityState(1)?.alive).toBe(false);
   });
 
+  it('does not execute inner subroutines when a group is called via CALL_SUBROUTINE', () => {
+    const bundle = makeBundle({
+      objects: [],
+      factions: [{
+        name: 'FactionAmerica',
+        side: 'America',
+        fields: {},
+      }],
+    });
+
+    const map = makeMap([]);
+    map.sidesList = {
+      sides: [{
+        dict: {
+          playerName: 'Player_1',
+          playerFaction: 'FactionAmerica',
+        },
+        buildList: [],
+        scripts: {
+          scripts: [],
+          groups: [{
+            name: 'OuterGroup',
+            active: true,
+            subroutine: true,
+            scripts: [
+              {
+                name: 'NonSubroutineScript',
+                comment: '',
+                conditionComment: '',
+                actionComment: '',
+                active: true,
+                oneShot: false,
+                easy: true,
+                normal: true,
+                hard: true,
+                subroutine: false,
+                delayEvaluationSeconds: 0,
+                conditions: [{
+                  conditions: [{
+                    conditionType: 3, // CONDITION_TRUE
+                    params: [],
+                  }],
+                }],
+                actions: [{
+                  actionType: 1, // SET_FLAG
+                  params: [
+                    { type: 5, intValue: 0, realValue: 0, stringValue: 'NonSubFlag' },
+                    { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+                  ],
+                }],
+                falseActions: [],
+              },
+              {
+                name: 'InnerSubroutineScript',
+                comment: '',
+                conditionComment: '',
+                actionComment: '',
+                active: true,
+                oneShot: false,
+                easy: true,
+                normal: true,
+                hard: true,
+                subroutine: true,
+                delayEvaluationSeconds: 0,
+                conditions: [{
+                  conditions: [{
+                    conditionType: 3, // CONDITION_TRUE
+                    params: [],
+                  }],
+                }],
+                actions: [{
+                  actionType: 1, // SET_FLAG
+                  params: [
+                    { type: 5, intValue: 0, realValue: 0, stringValue: 'InnerSubFlag' },
+                    { type: 8, intValue: 1, realValue: 0, stringValue: '' },
+                  ],
+                }],
+                falseActions: [],
+              },
+            ],
+          }],
+        },
+      }],
+      teams: [],
+    };
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+
+    expect(logic.executeScriptAction({
+      actionType: 10, // CALL_SUBROUTINE
+      params: ['OuterGroup'],
+    })).toBe(true);
+
+    // Source parity: when a group is called as a subroutine, inner subroutine
+    // scripts within that group are NOT recursively executed.
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['NonSubFlag', true],
+    })).toBe(true);
+    expect(logic.evaluateScriptCondition({
+      conditionType: 'FLAG',
+      params: ['InnerSubFlag', true],
+    })).toBe(false);
+  });
+
   it('iterates non-singleton condition-team instances for one-shot map script execution', () => {
     const bundle = makeBundle({
       objects: [
@@ -64418,5 +64524,157 @@ describe('Script condition/action numeric-id dispatch parity', () => {
     expect(logic.executeScriptAction({ actionType: 5 })).toBe(true);
     // Action 3 = VICTORY
     expect(logic.executeScriptAction({ actionType: 3 })).toBe(true);
+  });
+});
+
+// ── Multiple factory speed bonus ─────────────────────────────────────────────
+
+describe('multiple factory production speed bonus', () => {
+  it('two factories of the same type produce faster than one', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 3,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [12, 0, 0],
+            NaturalRallyPoint: [28, 0, 0],
+            ExitDelay: 0,
+            InitialBurst: 0,
+          }),
+        ]),
+        makeObjectDef('Tank', 'America', ['VEHICLE'], [], { BuildTime: 1.0, BuildCost: 100 }),
+      ],
+    });
+
+    // --- Single factory baseline ---
+    const scene1 = new THREE.Scene();
+    const logic1 = new GameLogicSubsystem(scene1);
+    logic1.loadMapObjects(
+      makeMap([makeMapObject('WarFactory', 40, 40)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic1.submitCommand({ type: 'setSideCredits', side: 'America', amount: 5000 });
+    logic1.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'Tank' });
+    // Tick several frames to accumulate production progress
+    for (let i = 0; i < 5; i++) logic1.update(1 / 30);
+    const singlePercent = logic1.getProductionState(1)!.queue[0]!.percentComplete;
+
+    // --- Two factories ---
+    const scene2 = new THREE.Scene();
+    const logic2 = new GameLogicSubsystem(scene2);
+    logic2.loadMapObjects(
+      makeMap([
+        makeMapObject('WarFactory', 40, 40),
+        makeMapObject('WarFactory', 80, 40),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic2.submitCommand({ type: 'setSideCredits', side: 'America', amount: 5000 });
+    logic2.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'Tank' });
+    for (let i = 0; i < 5; i++) logic2.update(1 / 30);
+    const dualPercent = logic2.getProductionState(1)!.queue[0]!.percentComplete;
+
+    // Two factories: per-frame rate is divided by 0.85 per extra factory,
+    // so production progresses faster (higher percent after same number of frames).
+    expect(dualPercent).toBeGreaterThan(singlePercent);
+  });
+});
+
+// ── EMP disabled factory pauses production ───────────────────────────────────
+
+describe('disabled factory pauses production', () => {
+  it('EMP-disabled factory does not advance its production queue', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Factory', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+            MaxQueueEntries: 3,
+          }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_Exit', {
+            UnitCreatePoint: [12, 0, 0],
+            ExitDelay: 0,
+            InitialBurst: 0,
+          }),
+        ]),
+        makeObjectDef('Infantry', 'America', ['INFANTRY'], [], { BuildTime: 1.0, BuildCost: 100 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Factory', 40, 40)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 5000 });
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'Infantry' });
+
+    // Advance a few frames so production starts.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const beforeDisable = logic.getProductionState(1)!.queue[0]!.framesUnderConstruction;
+    expect(beforeDisable).toBeGreaterThan(0);
+
+    // Manually set DISABLED_EMP on the factory entity.
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { objectStatusFlags: Set<string> }>;
+    };
+    priv.spawnedEntities.get(1)!.objectStatusFlags.add('DISABLED_EMP');
+
+    // Advance more frames — production should NOT advance.
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    const afterDisable = logic.getProductionState(1)!.queue[0]!.framesUnderConstruction;
+    expect(afterDisable).toBe(beforeDisable);
+
+    // Remove the flag — production should resume.
+    priv.spawnedEntities.get(1)!.objectStatusFlags.delete('DISABLED_EMP');
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const afterResume = logic.getProductionState(1)!.queue[0]!.framesUnderConstruction;
+    expect(afterResume).toBeGreaterThan(afterDisable);
+  });
+});
+
+// ── UNRESISTABLE damage ignores battle plan scalar ───────────────────────────
+
+describe('UNRESISTABLE damage bypasses battle plan scalar', () => {
+  it('applies full UNRESISTABLE damage even with battle plan armor reduction', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Target', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Target', 40, 40)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.update(1 / 30);
+
+    // Set a battle plan damage scalar of 0.5 (halves incoming damage).
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { battlePlanDamageScalar: number; health: number }>;
+      applyWeaponDamageAmount: (id: number | null, target: unknown, amount: number, type: string) => void;
+    };
+    const target = priv.spawnedEntities.get(1)!;
+    target.battlePlanDamageScalar = 0.5;
+
+    // Apply 100 EXPLOSION damage — should be halved to 50.
+    priv.applyWeaponDamageAmount(null, target, 100, 'EXPLOSION');
+    expect(target.health).toBe(950);
+
+    // Apply 100 UNRESISTABLE damage — should NOT be halved; full 100.
+    priv.applyWeaponDamageAmount(null, target, 100, 'UNRESISTABLE');
+    expect(target.health).toBe(850);
   });
 });

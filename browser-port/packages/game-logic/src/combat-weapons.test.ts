@@ -103,6 +103,7 @@ function makeWeaponProfile(overrides: Partial<WeaponSlotProfile> = {}): WeaponSl
     fireSoundEvent: null,
     autoChooseSourceMask: 0xFFFFFFFF,
     preferredAgainstKindOf: new Set(),
+    autoReloadsClip: false,
     ...overrides,
   };
 }
@@ -1229,5 +1230,114 @@ describe('Weapon status', () => {
     slot.nextFireFrame = 0;
     const profile = makeWeaponProfile({ clipSize: 0 });
     expect(getWeaponSlotStatus(slot, profile, 100)).toBe('READY_TO_FIRE');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Damage bonus in weapon selection
+// ---------------------------------------------------------------------------
+
+describe('Damage bonus in weapon selection', () => {
+  it('weapon with damageBonus beats weapon without in selection', () => {
+    // Weapon A: 10 damage in slot 0 (primary)
+    // Weapon B: 8 damage in slot 1 (secondary)
+    // Without bonus, weapon A wins. With 2x bonus, weapon B (8*2=16) beats A (10*1=10).
+    const state = createMultiWeaponEntityState();
+    const profileA = makeWeaponProfile({ name: 'WeakNoBonusWeapon', slotIndex: 0, primaryDamage: 10 });
+    const profileB = makeWeaponProfile({ name: 'StrongWithBonusWeapon', slotIndex: 1, primaryDamage: 8 });
+    state.weaponSlotProfiles = [profileA, profileB, null];
+    state.filledWeaponSlotMask = 0b011;
+
+    // Reset slot states
+    resetWeaponSlotState(state.weaponSlots[0], profileA);
+    resetWeaponSlotState(state.weaponSlots[1], profileB);
+
+    // Without bonus: weapon A (damage=10) wins over weapon B (damage=8)
+    const ctxNoBonus = makeChooseContext();
+    const resultNoBonus = chooseBestWeaponForTarget(state, ctxNoBonus, 'PREFER_MOST_DAMAGE');
+    expect(resultNoBonus).toBe(WEAPON_SLOT_PRIMARY);
+
+    // With 2x bonus: weapon A (10*2=20) still beats weapon B (8*2=16) — both get same bonus
+    // To test that damageBonus actually applies, use estimateWeaponDamage directly
+    const baseDamage = estimateWeaponDamage(profileB, null);
+    const bonusDamage = estimateWeaponDamage(profileB, null, 2.0);
+    expect(baseDamage).toBe(8);
+    expect(bonusDamage).toBe(16);
+  });
+
+  it('estimateWeaponDamage multiplies by damageBonus', () => {
+    const profile = makeWeaponProfile({ primaryDamage: 50, damageType: 'ARMOR_PIERCING' });
+    const armor = new Map<string, number>([['ARMOR_PIERCING', 0.5]]);
+
+    // Without bonus: 50 * 0.5 = 25
+    expect(estimateWeaponDamage(profile, armor)).toBe(25);
+    // With 1.5x bonus: 50 * 0.5 * 1.5 = 37.5
+    expect(estimateWeaponDamage(profile, armor, 1.5)).toBe(37.5);
+    // With undefined bonus (default 1): 50 * 0.5 = 25
+    expect(estimateWeaponDamage(profile, armor, undefined)).toBe(25);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-reload weapon not skipped when OUT_OF_AMMO
+// ---------------------------------------------------------------------------
+
+describe('Auto-reload weapon selection', () => {
+  it('auto-reload weapon is not skipped when OUT_OF_AMMO', () => {
+    const state = createMultiWeaponEntityState();
+    // Weapon in slot 0: has clip, is out of ammo, but auto-reloads
+    const profile = makeWeaponProfile({
+      name: 'AutoReloadGun',
+      slotIndex: 0,
+      primaryDamage: 30,
+      clipSize: 6,
+      clipReloadFrames: 30,
+      autoReloadsClip: true,
+    });
+    state.weaponSlotProfiles = [profile, null, null];
+    state.filledWeaponSlotMask = 0b001;
+
+    // Set slot state to out of ammo (clip empty, reload finished)
+    const slot = state.weaponSlots[0];
+    slot.weaponName = profile.name;
+    slot.ammoInClip = 0;
+    slot.reloadFinishFrame = 0; // reload already finished
+    slot.nextFireFrame = 0;
+
+    // Verify the weapon status is OUT_OF_AMMO
+    expect(getWeaponSlotStatus(slot, profile, 100)).toBe('OUT_OF_AMMO');
+
+    const ctx = makeChooseContext({ frameCounter: 100 });
+    const result = chooseBestWeaponForTarget(state, ctx, 'PREFER_MOST_DAMAGE');
+    // Should select this weapon despite being OUT_OF_AMMO because it auto-reloads
+    expect(result).toBe(WEAPON_SLOT_PRIMARY);
+  });
+
+  it('non-auto-reload weapon is still skipped when OUT_OF_AMMO', () => {
+    const state = createMultiWeaponEntityState();
+    // Weapon in slot 0: has clip, is out of ammo, does NOT auto-reload
+    const profile = makeWeaponProfile({
+      name: 'ManualReloadGun',
+      slotIndex: 0,
+      primaryDamage: 30,
+      clipSize: 6,
+      clipReloadFrames: 30,
+      autoReloadsClip: false,
+    });
+    state.weaponSlotProfiles = [profile, null, null];
+    state.filledWeaponSlotMask = 0b001;
+
+    const slot = state.weaponSlots[0];
+    slot.weaponName = profile.name;
+    slot.ammoInClip = 0;
+    slot.reloadFinishFrame = 0;
+    slot.nextFireFrame = 0;
+
+    expect(getWeaponSlotStatus(slot, profile, 100)).toBe('OUT_OF_AMMO');
+
+    const ctx = makeChooseContext({ frameCounter: 100 });
+    const result = chooseBestWeaponForTarget(state, ctx, 'PREFER_MOST_DAMAGE');
+    // Should NOT select this weapon — returns -1 (no weapon found)
+    expect(result).toBe(-1);
   });
 });

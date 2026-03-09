@@ -32,7 +32,7 @@ export interface ModelConditionInfo {
   idleAnimationName: string | null;
   hideSubObjects: string[];
   showSubObjects: string[];
-  animationMode: 'LOOP' | 'ONCE' | 'MANUAL';
+  animationMode: 'LOOP' | 'ONCE' | 'MANUAL' | 'ONCE_BACKWARDS' | 'LOOP_BACKWARDS';
   /**
    * Source parity: TransitionKey — lowercase key used to look up transition
    * animations between states (e.g. "trans_open", "trans_close").
@@ -83,6 +83,12 @@ export interface ResolvedRenderAssetProfile {
    * "fromKey→toKey" signature string.
    */
   transitionInfos: TransitionInfo[];
+  /**
+   * Source parity: IgnoreConditionStates — condition flags that should be
+   * stripped before matching ModelConditionStates.  Parsed from draw module
+   * blocks (e.g. W3DModelDraw) rather than individual ModelConditionState blocks.
+   */
+  ignoreConditionStates: string[];
 }
 
 export function resolveRenderAssetProfile(
@@ -97,6 +103,7 @@ export function resolveRenderAssetProfile(
     renderAnimationStateClips: collectRenderAnimationStateClips(objectDef),
     modelConditionInfos: collectModelConditionInfos(objectDef),
     transitionInfos: collectTransitionInfos(objectDef),
+    ignoreConditionStates: collectIgnoreConditionStates(objectDef),
   };
 }
 
@@ -301,13 +308,17 @@ function parseModelConditionStateBlock(block: IniBlock): ModelConditionInfo {
   const showSubObjects = collectAllStringTokens(block.fields, 'ShowSubObject');
 
   const animationModeRaw = readFirstStringToken(block.fields, 'AnimationMode');
-  let animationMode: 'LOOP' | 'ONCE' | 'MANUAL' = 'LOOP';
+  let animationMode: 'LOOP' | 'ONCE' | 'MANUAL' | 'ONCE_BACKWARDS' | 'LOOP_BACKWARDS' = 'LOOP';
   if (animationModeRaw) {
     const normalized = animationModeRaw.toUpperCase();
     if (normalized === 'ONCE') {
       animationMode = 'ONCE';
     } else if (normalized === 'MANUAL') {
       animationMode = 'MANUAL';
+    } else if (normalized === 'ONCE_BACKWARDS') {
+      animationMode = 'ONCE_BACKWARDS';
+    } else if (normalized === 'LOOP_BACKWARDS') {
+      animationMode = 'LOOP_BACKWARDS';
     }
   }
 
@@ -505,6 +516,46 @@ function parseTransitionStateBlock(block: IniBlock): TransitionInfo | null {
     hideSubObjects,
     showSubObjects,
   };
+}
+
+/**
+ * Collect IgnoreConditionStates from draw module blocks.
+ * Source parity: W3DModelDrawModuleData stores IgnoreConditionStates at the
+ * draw module level (not inside individual ModelConditionState blocks).
+ * These flags are stripped from the active condition set before matching.
+ */
+export function collectIgnoreConditionStates(objectDef: ObjectDef | undefined): string[] {
+  if (!objectDef) {
+    return [];
+  }
+
+  const ignored: string[] = [];
+
+  const visitBlock = (block: IniBlock): void => {
+    // IgnoreConditionStates lives on draw module blocks (the parent blocks
+    // containing ModelConditionState children), not on ModelConditionState itself.
+    const hasChildModelConditionState = block.blocks.some(
+      child => child.type.toUpperCase() === 'MODELCONDITIONSTATE',
+    );
+    if (hasChildModelConditionState) {
+      const tokens = collectAllStringTokens(block.fields, 'IgnoreConditionStates');
+      for (const token of tokens) {
+        if (!ignored.includes(token)) {
+          ignored.push(token);
+        }
+      }
+    }
+
+    for (const childBlock of block.blocks) {
+      visitBlock(childBlock);
+    }
+  };
+
+  for (const block of objectDef.blocks) {
+    visitBlock(block);
+  }
+
+  return ignored;
 }
 
 function collectRenderAnimationStateClips(objectDef: ObjectDef | undefined): RenderAnimationStateClipCandidates {

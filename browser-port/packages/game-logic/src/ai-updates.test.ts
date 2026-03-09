@@ -97,6 +97,7 @@ function makeDozerContext(overrides: Partial<DozerAIContext> = {}): DozerAIConte
     issueAttackCommand: vi.fn(),
     setConstructionPercent: vi.fn(),
     completeConstruction: vi.fn(),
+    addConstructionHealth: vi.fn(),
     attemptHealingFromSoleBenefactor: vi.fn().mockReturnValue(true),
     onRepairComplete: vi.fn(),
     cancelConstructionTask: vi.fn(),
@@ -350,6 +351,78 @@ describe('DozerAIUpdate', () => {
 
       expect(context.cancelConstructionTask).toHaveBeenCalledWith(1);
       expect(state.currentTask).toBe(DozerTask.INVALID);
+    });
+
+    it('increments building health proportionally during construction', () => {
+      const entity = makeEntity();
+      const state = createDozerAIState(0);
+      state.currentTask = DozerTask.BUILD;
+      state.targetBuildingId = 10;
+
+      const maxHealth = 500;
+      const totalFrames = 10;
+      const healthPerFrame = maxHealth / totalFrames; // 50 per frame
+      let currentPercent = 0;
+      let currentHealth = 1; // starts at 1 (the bug: health wasn't incrementing)
+
+      const context = makeDozerContext({
+        getBuildingInfo: vi.fn().mockImplementation(() => makeBuildingInfo({
+          constructionPercent: currentPercent,
+          buildTotalFrames: totalFrames,
+          maxHealth,
+          health: currentHealth,
+        })),
+        setConstructionPercent: vi.fn().mockImplementation((_id: number, pct: number) => {
+          currentPercent = pct;
+        }),
+        addConstructionHealth: vi.fn().mockImplementation((_id: number, amount: number) => {
+          currentHealth = Math.min(maxHealth, currentHealth + amount);
+        }),
+      });
+
+      // Run 5 frames: should advance to 50% and health should increase proportionally.
+      for (let i = 0; i < 5; i++) {
+        updateDozerConstruction(entity, state, context);
+      }
+      expect(currentPercent).toBeCloseTo(50.0);
+      expect(context.addConstructionHealth).toHaveBeenCalledTimes(5);
+      // Each call should add healthPerFrame (50)
+      for (let i = 0; i < 5; i++) {
+        expect((context.addConstructionHealth as ReturnType<typeof vi.fn>).mock.calls[i][1]).toBeCloseTo(healthPerFrame);
+      }
+      expect(currentHealth).toBeCloseTo(1 + 5 * healthPerFrame);
+      expect(context.completeConstruction).not.toHaveBeenCalled();
+
+      // Run 5 more frames: should complete and set health to max.
+      for (let i = 0; i < 5; i++) {
+        updateDozerConstruction(entity, state, context);
+      }
+      expect(context.completeConstruction).toHaveBeenCalledWith(10);
+      // On completion, addConstructionHealth fills remaining health to maxHealth.
+      expect(currentHealth).toBeCloseTo(maxHealth);
+    });
+
+    it('sets health to maxHealth on construction completion', () => {
+      const entity = makeEntity();
+      const state = createDozerAIState(0);
+      state.currentTask = DozerTask.BUILD;
+      state.targetBuildingId = 10;
+
+      const maxHealth = 600;
+      const context = makeDozerContext({
+        getBuildingInfo: vi.fn().mockReturnValue(makeBuildingInfo({
+          constructionPercent: 99.9,
+          buildTotalFrames: 300,
+          maxHealth,
+          health: 400, // partially healed
+        })),
+      });
+
+      updateDozerConstruction(entity, state, context);
+
+      expect(context.completeConstruction).toHaveBeenCalledWith(10);
+      // Should add remaining health (600 - 400 = 200) to reach maxHealth.
+      expect(context.addConstructionHealth).toHaveBeenCalledWith(10, 200);
     });
   });
 

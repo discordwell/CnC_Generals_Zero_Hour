@@ -1,5 +1,20 @@
 # Session Summaries
 
+## 2026-03-09T13:45Z — Fix 14 P0 Source Parity Bugs (8 Agents, 2 Batches)
+Fixed all 14 P0 critical behavioral differences identified in 5-domain C++ parity review:
+- **Pathfinding**: Turn cost direction vectors corrected (parent→current vs current→neighbor, removed unnecessary grandparent lookup). 8 new tests.
+- **Construction Health**: Buildings now gain health proportionally during construction via `addConstructionHealth` context method. 2 new tests.
+- **Production**: Multiple factory bonus now computed per-frame (not snapshotted at queue time), disabled factories (EMP/hacked/underpowered/subdued) skip production tick. 2 new tests.
+- **Damage**: UNRESISTABLE damage now bypasses battle plan scalar. 1 new test.
+- **Combat Weapons**: `estimateWeaponDamage` now applies `damageBonus` multiplier; `OUT_OF_AMMO` no longer skips `autoReloadsClip` weapons. 2 new tests.
+- **Scripts**: `CALL_SUBROUTINE` on group passes `false` to prevent inner subroutine execution. 1 new test.
+- **Audio**: `shouldPlayLocally` changed to first-match-returns semantics (ST_PLAYER takes priority over ST_ENEMIES). 1 test updated.
+- **Condition States**: `IgnoreConditionStates` parsed from draw modules and stripped before matching. `ONCE_BACKWARDS`/`LOOP_BACKWARDS` animation modes supported. 11 new tests.
+- **Particles**: Velocity/angular damping sampled once at emission (stored per-particle, stride 17→20). Per-particle alpha factor replaces averaged min/max. Physics order corrected (gravity→damping→drift→position). 3 new tests.
+- **Laser Beams**: NumBeams creates N interpolated concentric layers. Segments + ArcHeight produce segmented arcing beams. 6 new tests.
+- **Code review fixes**: Per-frame Set allocation for ignoreConditionStates cached, production bonus moved from queue-time to per-frame.
+- **Total**: 3034 tests pass (21 new), 130 test files. No new TS errors.
+
 ## 2026-03-08T15:30Z — P1/P2 Code Review Fixes (5 Tasks)
 Fixed remaining items from 8-agent sprint code review:
 1. **Pathfinding heuristic** — `/ 2` → `>> 1` for C++ integer division parity in both `heuristic()` and `pathHeuristic()`
