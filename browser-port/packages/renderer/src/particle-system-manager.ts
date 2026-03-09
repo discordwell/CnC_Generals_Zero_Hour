@@ -59,6 +59,14 @@ export const ANG_DAMP = 18;
 export const ALPHA_FACTOR = 19;
 
 // ---------------------------------------------------------------------------
+// Wind constants
+// Source parity: C++ uses 2.0 * m_windRandomness where m_windRandomness ∈ [0.7, 1.3]
+// giving an effective strength per particle of ~1.4–2.6.  We use a fixed 2.0 (midpoint).
+// ---------------------------------------------------------------------------
+
+const WIND_STRENGTH = 2.0;
+
+// ---------------------------------------------------------------------------
 // Live system instance
 // ---------------------------------------------------------------------------
 
@@ -75,10 +83,22 @@ interface ParticleSystemInstance {
   initialDelayRemaining: number;
   alive: boolean;
   // Rendering
-  mesh: THREE.InstancedMesh | null;
+  mesh: THREE.Object3D | null;
   instanceMatrix: THREE.InstancedBufferAttribute | null;
   instanceColor: THREE.InstancedBufferAttribute | null;
   instanceAlpha: THREE.InstancedBufferAttribute | null;
+  // Slave/Attached systems (Fix #1)
+  slaveSystemId?: number;
+  attachedParticleSystems?: Map<number, number>;
+  // Wind motion state (Fix #2)
+  // Source parity: ParticleSys.cpp:2205-2289
+  windAngle: number;
+  windAngleChange: number;
+  windMotionMovingToEnd: boolean;
+  /** Stable target angle for current PingPong swing direction. */
+  windPingPongTargetAngle: number;
+  // STREAK previous positions (Fix #3)
+  prevPositions?: Float32Array;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,9 +234,48 @@ export class ParticleSystemManager implements Subsystem {
       instanceMatrix: null,
       instanceColor: null,
       instanceAlpha: null,
+      // Wind motion state
+      windAngle: randomInRange({
+        min: template.windPingPongStartAngleMin,
+        max: template.windPingPongStartAngleMax,
+      }),
+      windAngleChange: randomInRange({
+        min: template.windAngleChangeMin,
+        max: template.windAngleChangeMax,
+      }),
+      windMotionMovingToEnd: true,
+      windPingPongTargetAngle: randomInRange({
+        min: template.windPingPongEndAngleMin,
+        max: template.windPingPongEndAngleMax,
+      }),
     };
 
+    // STREAK systems need a separate prevPositions buffer
+    if (template.type === 'STREAK') {
+      system.prevPositions = new Float32Array(maxParticles * 3);
+    }
+
+    // Attached systems need a mapping of particle index → child system ID
+    if (template.attachedSystemName) {
+      system.attachedParticleSystems = new Map();
+    }
+
     this.systems.set(id, system);
+
+    // Create slave system if template specifies one
+    if (template.slaveSystemName) {
+      const slavePos = position.clone();
+      if (template.slavePosOffset) {
+        slavePos.x += template.slavePosOffset.x;
+        slavePos.y += template.slavePosOffset.y;
+        slavePos.z += template.slavePosOffset.z;
+      }
+      const slaveId = this.createSystem(template.slaveSystemName, slavePos, orientation);
+      if (slaveId !== null) {
+        system.slaveSystemId = slaveId;
+      }
+    }
+
     return id;
   }
 
@@ -224,6 +283,17 @@ export class ParticleSystemManager implements Subsystem {
     const system = this.systems.get(id);
     if (system) {
       system.alive = false;
+      // Cascade destroy slave system
+      if (system.slaveSystemId !== undefined) {
+        this.destroySystem(system.slaveSystemId);
+      }
+      // Cascade destroy attached particle systems
+      if (system.attachedParticleSystems) {
+        for (const childId of system.attachedParticleSystems.values()) {
+          this.destroySystem(childId);
+        }
+        system.attachedParticleSystems.clear();
+      }
     }
   }
 
@@ -242,6 +312,31 @@ export class ParticleSystemManager implements Subsystem {
     return { data: system.particles, count: system.particleCount };
   }
 
+  /** @internal — exposes system instance details for testing */
+  _getSystemInfo(id: number): {
+    slaveSystemId?: number;
+    attachedParticleSystems?: Map<number, number>;
+    windAngle: number;
+    windAngleChange: number;
+    windMotionMovingToEnd: boolean;
+    mesh: THREE.Object3D | null;
+    alive: boolean;
+    prevPositions?: Float32Array;
+  } | null {
+    const system = this.systems.get(id);
+    if (!system) return null;
+    return {
+      slaveSystemId: system.slaveSystemId,
+      attachedParticleSystems: system.attachedParticleSystems,
+      windAngle: system.windAngle,
+      windAngleChange: system.windAngleChange,
+      windMotionMovingToEnd: system.windMotionMovingToEnd,
+      mesh: system.mesh,
+      alive: system.alive,
+      prevPositions: system.prevPositions,
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Update loop
   // -------------------------------------------------------------------------
@@ -256,6 +351,11 @@ export class ParticleSystemManager implements Subsystem {
         system.alive = false;
         return;
       }
+    }
+
+    // Update wind motion before particle update
+    if (template.windMotion !== 'Unused') {
+      this.updateWindMotion(system);
     }
 
     // Handle initial delay
@@ -278,6 +378,18 @@ export class ParticleSystemManager implements Subsystem {
 
     // Update existing particles
     this.updateExistingParticles(system, template);
+
+    // Update attached child system positions to track parent particles
+    if (system.attachedParticleSystems && system.attachedParticleSystems.size > 0) {
+      const data = system.particles;
+      for (const [particleIdx, childId] of system.attachedParticleSystems) {
+        const childSystem = this.systems.get(childId);
+        if (childSystem) {
+          const off = particleIdx * PARTICLE_STRIDE;
+          childSystem.position.set(data[off + POS_X]!, data[off + POS_Y]!, data[off + POS_Z]!);
+        }
+      }
+    }
   }
 
   private emitParticles(
@@ -335,13 +447,36 @@ export class ParticleSystemManager implements Subsystem {
       data[offset + ANG_DAMP] = randomInRange(template.angularDamping);
       data[offset + ALPHA_FACTOR] = Math.random();
 
+      // Initialize STREAK previous position to current position
+      if (system.prevPositions) {
+        const pOff = system.particleCount * 3;
+        system.prevPositions[pOff] = data[offset + POS_X]!;
+        system.prevPositions[pOff + 1] = data[offset + POS_Y]!;
+        system.prevPositions[pOff + 2] = data[offset + POS_Z]!;
+      }
+
       system.particleCount++;
       this.totalParticleCount++;
+
+      // Create attached child system at particle's position
+      if (template.attachedSystemName && system.attachedParticleSystems) {
+        const particlePos = new THREE.Vector3(
+          data[offset + POS_X]!,
+          data[offset + POS_Y]!,
+          data[offset + POS_Z]!,
+        );
+        const childId = this.createSystem(template.attachedSystemName, particlePos);
+        if (childId !== null) {
+          system.attachedParticleSystems.set(system.particleCount - 1, childId);
+        }
+      }
     }
   }
 
   private updateExistingParticles(system: ParticleSystemInstance, template: ParticleSystemTemplate): void {
     const data = system.particles;
+    const prevPos = system.prevPositions;
+    const attachedMap = system.attachedParticleSystems;
     let writeIdx = 0;
 
     for (let readIdx = 0; readIdx < system.particleCount; readIdx++) {
@@ -350,7 +485,11 @@ export class ParticleSystemManager implements Subsystem {
       const maxAge = data[rOff + MAX_AGE]!;
 
       if (age > maxAge) {
-        // Particle died
+        // Particle died — destroy attached child system if any
+        if (attachedMap && attachedMap.has(readIdx)) {
+          this.destroySystem(attachedMap.get(readIdx)!);
+          attachedMap.delete(readIdx);
+        }
         this.totalParticleCount--;
         continue;
       }
@@ -359,6 +498,20 @@ export class ParticleSystemManager implements Subsystem {
       const wOff = writeIdx * PARTICLE_STRIDE;
       if (readIdx !== writeIdx) {
         data.copyWithin(wOff, rOff, rOff + PARTICLE_STRIDE);
+        // Compact STREAK prevPositions
+        if (prevPos) {
+          const srcP = readIdx * 3;
+          const dstP = writeIdx * 3;
+          prevPos[dstP] = prevPos[srcP]!;
+          prevPos[dstP + 1] = prevPos[srcP + 1]!;
+          prevPos[dstP + 2] = prevPos[srcP + 2]!;
+        }
+        // Remap attached system map keys
+        if (attachedMap && attachedMap.has(readIdx)) {
+          const childId = attachedMap.get(readIdx)!;
+          attachedMap.delete(readIdx);
+          attachedMap.set(writeIdx, childId);
+        }
       }
 
       // Update age
@@ -378,10 +531,25 @@ export class ParticleSystemManager implements Subsystem {
       data[wOff + VEL_Y] = data[wOff + VEL_Y]! + template.driftVelocity.y;
       data[wOff + VEL_Z] = data[wOff + VEL_Z]! + template.driftVelocity.z;
 
+      // Save current position for STREAK rendering before position update
+      if (prevPos) {
+        const pOff = writeIdx * 3;
+        prevPos[pOff] = data[wOff + POS_X]!;
+        prevPos[pOff + 1] = data[wOff + POS_Y]!;
+        prevPos[pOff + 2] = data[wOff + POS_Z]!;
+      }
+
       // Update position
       data[wOff + POS_X] = data[wOff + POS_X]! + data[wOff + VEL_X]!;
       data[wOff + POS_Y] = data[wOff + POS_Y]! + data[wOff + VEL_Y]!;
       data[wOff + POS_Z] = data[wOff + POS_Z]! + data[wOff + VEL_Z]!;
+
+      // Wind motion — apply as position nudge (not velocity).
+      // Source parity: C++ ParticleSys.cpp:633-634 modifies m_pos directly.
+      if (template.windMotion !== 'Unused') {
+        data[wOff + POS_X] = data[wOff + POS_X]! + Math.cos(system.windAngle) * WIND_STRENGTH;
+        data[wOff + POS_Z] = data[wOff + POS_Z]! + Math.sin(system.windAngle) * WIND_STRENGTH;
+      }
 
       // Update rotation
       data[wOff + ROTATION] = data[wOff + ROTATION]! + data[wOff + ANG_RATE]!;
@@ -523,25 +691,99 @@ export class ParticleSystemManager implements Subsystem {
   }
 
   // -------------------------------------------------------------------------
+  // Wind motion
+  // -------------------------------------------------------------------------
+
+  /**
+   * Source parity: ParticleSys.cpp:2205-2289 — doWindMotion().
+   * PingPong: angle oscillates between start and end targets with speed
+   * proportional to distance from the center of the span (soft swing).
+   * Circular: angle increments monotonically, wrapped to [0, 2π].
+   */
+  private updateWindMotion(system: ParticleSystemInstance): void {
+    const template = system.template;
+
+    if (template.windMotion === 'PingPong') {
+      // C++ distance-based speed scaling: change is slower at extremes,
+      // faster near center of the angle span.
+      const halfSpan = Math.abs(system.windPingPongTargetAngle - (system.windMotionMovingToEnd
+        ? randomInRange({ min: template.windPingPongStartAngleMin, max: template.windPingPongStartAngleMax })
+        : system.windPingPongTargetAngle)) / 2;
+      const center = system.windMotionMovingToEnd
+        ? (template.windPingPongStartAngleMin + system.windPingPongTargetAngle) / 2
+        : (system.windPingPongTargetAngle + template.windPingPongEndAngleMax) / 2;
+      const diffFromCenter = Math.abs(system.windAngle - center);
+      const speedScale = halfSpan > 0 ? Math.max(0.1, 1.0 - diffFromCenter / halfSpan) : 1.0;
+      const change = system.windAngleChange * speedScale;
+
+      if (system.windMotionMovingToEnd) {
+        system.windAngle += change;
+        if (system.windAngle >= system.windPingPongTargetAngle) {
+          system.windMotionMovingToEnd = false;
+          system.windAngleChange = randomInRange({
+            min: template.windAngleChangeMin,
+            max: template.windAngleChangeMax,
+          });
+          // Re-randomize target for the return swing
+          system.windPingPongTargetAngle = randomInRange({
+            min: template.windPingPongStartAngleMin,
+            max: template.windPingPongStartAngleMax,
+          });
+        }
+      } else {
+        system.windAngle -= change;
+        if (system.windAngle <= system.windPingPongTargetAngle) {
+          system.windMotionMovingToEnd = true;
+          system.windAngleChange = randomInRange({
+            min: template.windAngleChangeMin,
+            max: template.windAngleChangeMax,
+          });
+          // Re-randomize target for the forward swing
+          system.windPingPongTargetAngle = randomInRange({
+            min: template.windPingPongEndAngleMin,
+            max: template.windPingPongEndAngleMax,
+          });
+        }
+      }
+    } else if (template.windMotion === 'Circular') {
+      system.windAngle += system.windAngleChange;
+      // Source parity: C++ wraps to [0, 2π] range
+      const TWO_PI = Math.PI * 2;
+      if (system.windAngle >= TWO_PI) {
+        system.windAngle -= TWO_PI;
+      } else if (system.windAngle < 0) {
+        system.windAngle += TWO_PI;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Rendering — InstancedMesh sync
   // -------------------------------------------------------------------------
 
   private syncInstancedMesh(system: ParticleSystemInstance): void {
+    // STREAK particles use line segment rendering
+    if (system.template.type === 'STREAK') {
+      this.syncStreakMesh(system);
+      return;
+    }
+
     const count = system.particleCount;
     if (count === 0) {
       if (system.mesh) {
         this.scene.remove(system.mesh);
-        system.mesh.dispose();
+        this.disposeMesh(system.mesh);
         system.mesh = null;
       }
       return;
     }
 
     // Create or resize instanced mesh
-    if (!system.mesh || system.mesh.count < count) {
+    const existingMesh = system.mesh as THREE.InstancedMesh | null;
+    if (!existingMesh || existingMesh.count < count) {
       if (system.mesh) {
         this.scene.remove(system.mesh);
-        system.mesh.dispose();
+        this.disposeMesh(system.mesh);
       }
       const material = this.getMaterial(system.template.shader);
       const capacity = Math.max(count, 32);
@@ -556,7 +798,7 @@ export class ParticleSystemManager implements Subsystem {
       this.scene.add(mesh);
     }
 
-    const mesh = system.mesh;
+    const mesh = system.mesh as THREE.InstancedMesh;
     mesh.count = count;
 
     const data = system.particles;
@@ -583,6 +825,111 @@ export class ParticleSystemManager implements Subsystem {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     if (system.instanceAlpha) system.instanceAlpha.needsUpdate = true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Rendering — STREAK line segments
+  // -------------------------------------------------------------------------
+
+  private syncStreakMesh(system: ParticleSystemInstance): void {
+    const count = system.particleCount;
+    const prevPos = system.prevPositions;
+
+    if (count === 0 || !prevPos) {
+      if (system.mesh) {
+        this.scene.remove(system.mesh);
+        this.disposeMesh(system.mesh);
+        system.mesh = null;
+      }
+      return;
+    }
+
+    const data = system.particles;
+    const vertexCount = count * 2; // 2 vertices per segment
+
+    // Reuse existing LineSegments geometry if possible; only reallocate on capacity change.
+    let lineSegments = system.mesh as THREE.LineSegments | null;
+    let posAttr = lineSegments?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    let colAttr = lineSegments?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+
+    if (!lineSegments || !posAttr || posAttr.count < vertexCount) {
+      // Need to (re-)create geometry with sufficient capacity.
+      if (system.mesh) {
+        this.scene.remove(system.mesh);
+        // Only dispose geometry — material is cached.
+        if (system.mesh instanceof THREE.LineSegments) {
+          system.mesh.geometry.dispose();
+        }
+        system.mesh = null;
+      }
+
+      const capacity = Math.max(vertexCount, 64);
+      const geometry = new THREE.BufferGeometry();
+      posAttr = new THREE.BufferAttribute(new Float32Array(capacity * 3), 3);
+      posAttr.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute('position', posAttr);
+      colAttr = new THREE.BufferAttribute(new Float32Array(capacity * 4), 4);
+      colAttr.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute('color', colAttr);
+
+      const material = this.getStreakMaterial();
+      lineSegments = new THREE.LineSegments(geometry, material);
+      lineSegments.frustumCulled = false;
+      lineSegments.name = `streak-${system.template.name}-${system.id}`;
+      system.mesh = lineSegments;
+      this.scene.add(lineSegments);
+    }
+
+    // Update vertex data in-place.
+    const positions = posAttr!.array as Float32Array;
+    const colors = colAttr!.array as Float32Array;
+
+    for (let i = 0; i < count; i++) {
+      const off = i * PARTICLE_STRIDE;
+      const pOff = i * 3;
+      const vIdx = i * 6;
+      const cIdx = i * 8;
+
+      // First vertex: previous position (trailing edge — faded)
+      positions[vIdx]     = prevPos[pOff]!;
+      positions[vIdx + 1] = prevPos[pOff + 1]!;
+      positions[vIdx + 2] = prevPos[pOff + 2]!;
+
+      // Second vertex: current position
+      positions[vIdx + 3] = data[off + POS_X]!;
+      positions[vIdx + 4] = data[off + POS_Y]!;
+      positions[vIdx + 5] = data[off + POS_Z]!;
+
+      const r = data[off + COL_R]!;
+      const g = data[off + COL_G]!;
+      const b = data[off + COL_B]!;
+      const alpha = data[off + ALPHA]!;
+
+      // First point: alpha = 0 (fade trailing edge)
+      colors[cIdx]     = r;
+      colors[cIdx + 1] = g;
+      colors[cIdx + 2] = b;
+      colors[cIdx + 3] = 0;
+
+      // Second point: full alpha
+      colors[cIdx + 4] = r;
+      colors[cIdx + 5] = g;
+      colors[cIdx + 6] = b;
+      colors[cIdx + 7] = alpha;
+    }
+
+    lineSegments.geometry.setDrawRange(0, vertexCount);
+    posAttr!.needsUpdate = true;
+    colAttr!.needsUpdate = true;
+  }
+
+  private disposeMesh(mesh: THREE.Object3D): void {
+    if (mesh instanceof THREE.InstancedMesh) {
+      mesh.dispose();
+    } else if (mesh instanceof THREE.LineSegments) {
+      mesh.geometry.dispose();
+      // Material is cached via getStreakMaterial() — do NOT dispose here.
+    }
   }
 
   private getMaterial(shaderType: string): THREE.Material {
@@ -631,13 +978,28 @@ export class ParticleSystemManager implements Subsystem {
     return material;
   }
 
+  /** Cached LineBasicMaterial for STREAK particle rendering. */
+  private getStreakMaterial(): THREE.LineBasicMaterial {
+    const key = '__STREAK__';
+    const cached = this.materialCache.get(key);
+    if (cached) return cached as THREE.LineBasicMaterial;
+
+    const material = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+    });
+    this.materialCache.set(key, material);
+    return material;
+  }
+
   private removeSystem(id: number): void {
     const system = this.systems.get(id);
     if (!system) return;
     this.totalParticleCount -= system.particleCount;
     if (system.mesh) {
       this.scene.remove(system.mesh);
-      system.mesh.dispose();
+      this.disposeMesh(system.mesh);
     }
     this.systems.delete(id);
   }

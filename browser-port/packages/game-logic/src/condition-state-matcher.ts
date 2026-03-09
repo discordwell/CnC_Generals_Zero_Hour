@@ -75,6 +75,11 @@ export function findBestConditionMatch<T extends ConditionMatchable>(
   return result;
 }
 
+/** Compute a stable condition key from a flags array. */
+export function computeConditionKey(flags: readonly string[]): string {
+  return flags.slice().sort().join('|');
+}
+
 /**
  * Serialise a flag set into a stable cache key.
  */

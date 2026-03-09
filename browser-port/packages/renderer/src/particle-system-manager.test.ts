@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import {
   ParticleSystemManager,
   PARTICLE_STRIDE,
+  POS_X,
+  POS_Z,
   VEL_X,
   VEL_Y,
   VEL_Z,
@@ -285,5 +287,380 @@ describe('ParticleSystemManager', () => {
     // Wrong order:   vel_y = (0 * 0.5) - 10 = -10
     const velY = info.data[0 * PARTICLE_STRIDE + VEL_Y]!;
     expect(velY).toBeCloseTo(-5, 5);
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix #1: Slave/Attached Particle Systems
+  // -------------------------------------------------------------------------
+
+  it('creates slave system when template has SlaveSystem', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'ParentSmoke', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '30 30',
+        SystemLifetime: '5',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        VelocityType: 'ORTHO',
+        VolumeType: 'POINT',
+        SlaveSystem: 'ChildSmoke',
+        SlavePosOffset: 'X:5.0 Y:10.0 Z:0.0',
+      }),
+      makeBlock('ParticleSystem', 'ChildSmoke', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '30 30',
+        SystemLifetime: '5',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        VelocityType: 'ORTHO',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const parentId = mgr.createSystem('ParentSmoke', new THREE.Vector3(0, 0, 0))!;
+    expect(parentId).not.toBeNull();
+
+    // Parent + slave = 2 active systems
+    expect(mgr.getActiveSystemCount()).toBe(2);
+
+    // Check slave system ID is stored
+    const info = mgr._getSystemInfo(parentId)!;
+    expect(info.slaveSystemId).toBeDefined();
+    expect(info.slaveSystemId).not.toBeNull();
+
+    // Destroy parent should cascade to slave
+    mgr.destroySystem(parentId);
+    mgr.update(1 / 30);
+
+    // Both systems removed after update
+    expect(mgr.getActiveSystemCount()).toBe(0);
+  });
+
+  it('creates and destroys attached particle systems per-particle', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'ParentTrail', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '30 30',
+        SystemLifetime: '5',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '2 2',
+        VelocityType: 'ORTHO',
+        VolumeType: 'POINT',
+        AttachedSystem: 'TrailSmoke',
+      }),
+      makeBlock('ParticleSystem', 'TrailSmoke', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '30 30',
+        SystemLifetime: '50',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        VelocityType: 'ORTHO',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const parentId = mgr.createSystem('ParentTrail', new THREE.Vector3(0, 0, 0))!;
+    expect(parentId).not.toBeNull();
+
+    // Before first update, only the parent exists (no attached yet)
+    expect(mgr.getActiveSystemCount()).toBe(1);
+
+    // First update emits 2 particles, each gets an attached system
+    mgr.update(1 / 30);
+
+    const info = mgr._getSystemInfo(parentId)!;
+    expect(info.attachedParticleSystems).toBeDefined();
+    // 2 particles emitted = 2 attached child systems
+    expect(info.attachedParticleSystems!.size).toBe(2);
+
+    // Parent + 2 attached = 3 active systems
+    expect(mgr.getActiveSystemCount()).toBe(3);
+
+    // Cascade destroy: destroying parent should destroy attached children
+    mgr.destroySystem(parentId);
+    mgr.update(1 / 30);
+
+    expect(mgr.getActiveSystemCount()).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix #2: Wind Motion
+  // -------------------------------------------------------------------------
+
+  it('wind PingPong causes lateral drift vs non-wind baseline', () => {
+    // Create two registries: one with wind, one without
+    const registryNoWind = new IniDataRegistry();
+    registryNoWind.loadBlocks([
+      makeBlock('ParticleSystem', 'NoWindTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '100 100',
+        SystemLifetime: '50',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        VelocityDamping: '1.0 1.0',
+        VelocityType: 'ORTHO',
+        VelOrthoX: '0 0',
+        VelOrthoY: '1 1',
+        VelOrthoZ: '0 0',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const registryWithWind = new IniDataRegistry();
+    registryWithWind.loadBlocks([
+      makeBlock('ParticleSystem', 'WindTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '100 100',
+        SystemLifetime: '50',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        VelocityDamping: '1.0 1.0',
+        WindMotion: 'PingPong',
+        WindAngleChangeMin: '0.3',
+        WindAngleChangeMax: '0.3',
+        WindPingPongStartAngleMin: '0',
+        WindPingPongStartAngleMax: '0',
+        WindPingPongEndAngleMin: '6.28',
+        WindPingPongEndAngleMax: '6.28',
+        VelocityType: 'ORTHO',
+        VelOrthoX: '0 0',
+        VelOrthoY: '1 1',
+        VelOrthoZ: '0 0',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    // Non-wind system
+    const scene1 = new THREE.Scene();
+    const mgr1 = new ParticleSystemManager(scene1);
+    mgr1.loadFromRegistry(registryNoWind);
+    mgr1.init();
+    const id1 = mgr1.createSystem('NoWindTest', new THREE.Vector3(0, 0, 0))!;
+
+    // Wind system
+    const scene2 = new THREE.Scene();
+    const mgr2 = new ParticleSystemManager(scene2);
+    mgr2.loadFromRegistry(registryWithWind);
+    mgr2.init();
+    const id2 = mgr2.createSystem('WindTest', new THREE.Vector3(0, 0, 0))!;
+
+    // Run several frames
+    for (let i = 0; i < 10; i++) {
+      mgr1.update(1 / 30);
+      mgr2.update(1 / 30);
+    }
+
+    const info1 = mgr1._getSystemParticleData(id1)!;
+    const info2 = mgr2._getSystemParticleData(id2)!;
+
+    expect(info1.count).toBeGreaterThanOrEqual(1);
+    expect(info2.count).toBeGreaterThanOrEqual(1);
+
+    // Non-wind: vel_x should remain 0 (only vertical velocity)
+    const noWindVelX = info1.data[0 * PARTICLE_STRIDE + VEL_X]!;
+    expect(noWindVelX).toBeCloseTo(0, 5);
+
+    // Wind: check the first particle's position — it should have lateral drift
+    // Sum lateral position displacement across all particles for a robust check
+    const windPosX = info2.data[0 * PARTICLE_STRIDE + POS_X]!;
+    const windPosZ = info2.data[0 * PARTICLE_STRIDE + POS_Z]!;
+    const lateralPos = Math.sqrt(windPosX * windPosX + windPosZ * windPosZ);
+    expect(lateralPos).toBeGreaterThan(0.1);
+
+    // Also verify wind system info has wind state
+    const windInfo = mgr2._getSystemInfo(id2)!;
+    expect(windInfo.windAngle).toBeDefined();
+    expect(typeof windInfo.windAngleChange).toBe('number');
+  });
+
+  it('wind Circular continuously increments wind angle', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'CircularWindTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'PARTICLE',
+        Lifetime: '100 100',
+        SystemLifetime: '50',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '1 1',
+        VelocityDamping: '1.0 1.0',
+        WindMotion: 'Circular',
+        WindAngleChangeMin: '0.5',
+        WindAngleChangeMax: '0.5',
+        VelocityType: 'ORTHO',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const id = mgr.createSystem('CircularWindTest', new THREE.Vector3(0, 0, 0))!;
+    const info0 = mgr._getSystemInfo(id)!;
+    const initialAngle = info0.windAngle;
+
+    // Run a few frames
+    for (let i = 0; i < 5; i++) {
+      mgr.update(1 / 30);
+    }
+
+    const info1 = mgr._getSystemInfo(id)!;
+    // windAngle should have increased by approximately 5 * 0.5 = 2.5
+    expect(info1.windAngle).toBeGreaterThan(initialAngle);
+    expect(info1.windAngle).toBeCloseTo(initialAngle + 5 * 0.5, 1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix #3: STREAK Particle Rendering
+  // -------------------------------------------------------------------------
+
+  it('STREAK type renders as LineSegments instead of InstancedMesh', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'StreakTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'STREAK',
+        Lifetime: '30 30',
+        SystemLifetime: '5',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '3 3',
+        VelocityType: 'SPHERICAL',
+        VelSpherical: '0.5 1.0',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const id = mgr.createSystem('StreakTest', new THREE.Vector3(0, 0, 0))!;
+    expect(id).not.toBeNull();
+
+    // Verify prevPositions buffer was allocated
+    const info = mgr._getSystemInfo(id)!;
+    expect(info.prevPositions).toBeDefined();
+    expect(info.prevPositions).toBeInstanceOf(Float32Array);
+
+    // Run an update to emit and render particles
+    mgr.update(1 / 30);
+
+    // Verify scene contains LineSegments, not InstancedMesh
+    const lineSegments = scene2.children.filter((c) => c instanceof THREE.LineSegments);
+    const instancedMeshes = scene2.children.filter((c) => c instanceof THREE.InstancedMesh);
+
+    expect(lineSegments.length).toBeGreaterThan(0);
+    expect(instancedMeshes.length).toBe(0);
+
+    // Verify LineSegments has position and color attributes
+    const ls = lineSegments[0] as THREE.LineSegments;
+    expect(ls.geometry.getAttribute('position')).toBeDefined();
+    expect(ls.geometry.getAttribute('color')).toBeDefined();
+
+    // Verify color attribute has 4 components (RGBA) for trailing edge fade
+    const colorAttr = ls.geometry.getAttribute('color');
+    expect(colorAttr.itemSize).toBe(4);
+
+    // Check trailing edge alpha (first vertex of first segment should be 0)
+    const colorArray = (colorAttr as THREE.BufferAttribute).array as Float32Array;
+    // First vertex alpha (index 3 in RGBA) should be 0
+    expect(colorArray[3]).toBe(0);
+  });
+
+  it('STREAK prevPositions are compacted when particles die', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'StreakCompactTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA',
+        Type: 'STREAK',
+        Lifetime: '3 3',       // Short lifetime so particles die quickly
+        SystemLifetime: '2',   // Stop emitting after 2 frames
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '2 2',
+        VelocityType: 'ORTHO',
+        VelOrthoX: '1 1',
+        VelOrthoY: '0 0',
+        VelOrthoZ: '0 0',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    const id = mgr.createSystem('StreakCompactTest', new THREE.Vector3(0, 0, 0))!;
+
+    // First update: emit 2 particles
+    mgr.update(1 / 30);
+    const data1 = mgr._getSystemParticleData(id)!;
+    expect(data1.count).toBe(2);
+
+    // Run until particles die (lifetime = 3 frames)
+    for (let i = 0; i < 5; i++) {
+      mgr.update(1 / 30);
+    }
+
+    // All particles should have expired
+    const data2 = mgr._getSystemParticleData(id);
+    // System may be removed entirely or have 0 particles
+    if (data2) {
+      expect(data2.count).toBe(0);
+    }
+  });
+
+  it('non-STREAK systems do not allocate prevPositions', () => {
+    const id = manager.createSystem('SmokePuff', new THREE.Vector3(0, 0, 0))!;
+    const info = manager._getSystemInfo(id)!;
+    expect(info.prevPositions).toBeUndefined();
   });
 });

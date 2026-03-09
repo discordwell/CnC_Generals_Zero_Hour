@@ -263,6 +263,12 @@ export * from './campaign-manager.js';
 export { resolveRenderAssetProfile } from './render-profile-helpers.js';
 export type { ResolvedRenderAssetProfile } from './render-profile-helpers.js';
 export {
+  computeConditionKey,
+  findBestConditionMatch,
+  createConditionMatcher,
+} from './condition-state-matcher.js';
+export type { ConditionMatchable } from './condition-state-matcher.js';
+export {
   adjustDamageByArmor,
   applyScatterOffset,
   chooseBestWeaponForTarget,
@@ -982,6 +988,14 @@ interface AttackWeaponProfile {
   leechRangeWeapon: boolean;
   /** Source parity: WeaponTemplate::m_fireSound — AudioEvent name for weapon fire. */
   fireSoundEvent: string | null;
+  /** Source parity: WeaponTemplate::m_historicBonusCount — hits needed to trigger bonus weapon. */
+  historicBonusCount: number;
+  /** Source parity: WeaponTemplate::m_historicBonusRadius — radius within which hits count. */
+  historicBonusRadius: number;
+  /** Source parity: WeaponTemplate::m_historicBonusTime — time window (ms) for hit tracking. */
+  historicBonusTime: number;
+  /** Source parity: WeaponTemplate::m_historicBonusWeapon — bonus weapon template name. */
+  historicBonusWeapon: string | null;
 }
 
 interface WeaponTemplateSetProfile {
@@ -2605,6 +2619,12 @@ interface MapEntity {
   currentSubdualDamage: number;
   /** Runtime: SubdualDamageHelper countdown timer. 0 = time to heal. */
   subdualHealingCountdown: number;
+  /** Source parity: cheer animation timer — decremented each frame, flag active while > 0. */
+  cheerTimerFrames: number;
+  /** Source parity: flag-raising animation timer — decremented each frame, flag active while > 0. */
+  raisingFlagTimerFrames: number;
+  /** Source parity: ragdoll explosion state for EXPLODED_FLAILING / EXPLODED_BOUNCING / SPLATTED flags. */
+  explodedState: 'NONE' | 'FLAILING' | 'BOUNCING' | 'SPLATTED';
 }
 
 /**
@@ -5913,6 +5933,8 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: ScriptEngine::m_namedObjects (name → last-known entity id). */
   private readonly scriptNamedEntitiesByName = new Map<string, number>();
   private readonly pendingWeaponDamageEvents: PendingWeaponDamageEvent[] = [];
+  /** Source parity: WeaponTemplate HistoricBonus — tracks recent hits per attacker+weapon for bonus trigger. */
+  private readonly historicDamageLog = new Map<string, Array<{ frame: number; x: number; z: number }>>();
   /** Source parity bridge: lightweight runtime projectile objects for weapon-delivered projectiles. */
   private readonly activeWeaponProjectileStateByVisualId = new Map<number, ActiveWeaponProjectileState>();
   private readonly missileAIProfileByProjectileTemplate = new Map<string, MissileAIProfile | null>();
@@ -28250,6 +28272,10 @@ export class GameLogicSubsystem implements Subsystem {
       subdualDamageHealAmount: bodyStats.subdualDamageHealAmount,
       currentSubdualDamage: 0,
       subdualHealingCountdown: 0,
+      // ModelConditionFlags entity state
+      cheerTimerFrames: 0,
+      raisingFlagTimerFrames: 0,
+      explodedState: 'NONE' as const,
     };
 
     this.applyMapObjectCoreProperties(entity, mapObject);
@@ -28914,15 +28940,39 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // FLAGS WITH TODO (entity state not yet available)
+    // SPECIAL_CHEERING — active while cheer timer is positive.
     // ════════════════════════════════════════════════════════════════════════
-    // FLOODED — TODO: No explicit flood-zone tracking exists yet.
-    // SPECIAL_CHEERING — TODO: No cheer timer/trigger exists yet.
-    // RAISING_FLAG — TODO: No flag-raising state exists yet.
-    // EXPLODED_FLAILING / EXPLODED_BOUNCING / SPLATTED — TODO: physics ragdoll integration.
+    if (entity.cheerTimerFrames > 0) {
+      entity.cheerTimerFrames--;
+      flags.add('SPECIAL_CHEERING');
+    } else {
+      flags.delete('SPECIAL_CHEERING');
+    }
+
+    // RAISING_FLAG — active while flag-raising timer is positive.
+    if (entity.raisingFlagTimerFrames > 0) {
+      entity.raisingFlagTimerFrames--;
+      flags.add('RAISING_FLAG');
+    } else {
+      flags.delete('RAISING_FLAG');
+    }
+
+    // EXPLODED_FLAILING / EXPLODED_BOUNCING / SPLATTED — ragdoll state machine.
+    flags.delete('EXPLODED_FLAILING');
+    flags.delete('EXPLODED_BOUNCING');
+    flags.delete('SPLATTED');
+    switch (entity.explodedState) {
+      case 'FLAILING': flags.add('EXPLODED_FLAILING'); break;
+      case 'BOUNCING': flags.add('EXPLODED_BOUNCING'); break;
+      case 'SPLATTED': flags.add('SPLATTED'); break;
+    }
+
+    // FLOODED — entity below water level.
+    // TODO: Wire when water level lookup is available.
+    // CLIMBING — locomotor cliff-transition state.
+    // TODO: Wire when locomotor Y velocity is tracked.
     // SURRENDER — gated behind ALLOW_SURRENDER #ifdef, not in retail.
     // PREORDER — promotional flag, not gameplay relevant.
-    // CLIMBING — TODO: locomotor cliff-transition state needs to be surfaced.
     //
     // Flags managed elsewhere (NOT touched here):
     // POST_COLLAPSE, FREEFALL — tensile/topple system
@@ -29562,6 +29612,10 @@ export class GameLogicSubsystem implements Subsystem {
       projectileArcSecondPercentIndent: bezierArc?.secondPercentIndent ?? 0,
       leechRangeWeapon,
       fireSoundEvent: readStringField(weaponDef.fields, ['FireSound'])?.trim() || null,
+      historicBonusCount: readNumericField(weaponDef.fields, ['HistoricBonusCount']) ?? 0,
+      historicBonusRadius: readNumericField(weaponDef.fields, ['HistoricBonusRadius']) ?? 0,
+      historicBonusTime: readNumericField(weaponDef.fields, ['HistoricBonusTime']) ?? 0,
+      historicBonusWeapon: readStringField(weaponDef.fields, ['HistoricBonusWeapon'])?.trim() || null,
     };
   }
 
@@ -52538,6 +52592,74 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.pendingWeaponDamageEvents.push(event);
+
+    // Source parity: HistoricBonus — track hit location for bonus weapon triggering.
+    this.checkHistoricBonus(bonusedWeapon, impactX, impactZ, attacker.id);
+  }
+
+  /**
+   * Source parity: Weapon.cpp:1090-1130 — per-WeaponTemplate historic damage tracking.
+   * C++ tracks hits on the WeaponTemplate (shared across ALL units using that weapon),
+   * counts hits within radius and time window, and fires bonus weapon at threshold.
+   * Entry is added only when bonus does NOT fire (C++ line 1126).
+   * Count uses `>= historicBonusCount - 1` (C++ line 1112) to implicitly include current hit.
+   */
+  private checkHistoricBonus(weapon: AttackWeaponProfile, targetX: number, targetZ: number, attackerId: number): void {
+    if (weapon.historicBonusCount <= 0 || !weapon.historicBonusWeapon) return;
+
+    // Source parity: keyed by weapon template name, shared across all units.
+    const key = weapon.name;
+    let log = this.historicDamageLog.get(key);
+    if (!log) {
+      log = [];
+      this.historicDamageLog.set(key, log);
+    }
+
+    // Trim old entries (outside time window).
+    // Source parity: C++ trimOldHistoricDamage uses GlobalData::m_historicDamageLimit;
+    // we approximate with the per-weapon time window.
+    const timeWindowFrames = Math.ceil(weapon.historicBonusTime * 30 / 1000);
+    const oldestThatWillCount = this.frameCounter - timeWindowFrames;
+    while (log.length > 0 && log[0]!.frame <= oldestThatWillCount) {
+      log.shift();
+    }
+
+    // Count hits within radius and time window.
+    const radiusSq = weapon.historicBonusRadius * weapon.historicBonusRadius;
+    let hitsInRadius = 0;
+    for (const entry of log) {
+      if (entry.frame >= oldestThatWillCount) {
+        const dx = entry.x - targetX;
+        const dz = entry.z - targetZ;
+        if (dx * dx + dz * dz <= radiusSq) {
+          hitsInRadius++;
+        }
+      }
+    }
+
+    // Source parity: count >= m_historicBonusCount - 1 (includes current hit implicitly).
+    if (hitsInRadius >= weapon.historicBonusCount - 1) {
+      // Clear the log to prevent retriggering (C++ line 1119).
+      log.length = 0;
+      // Fire the bonus weapon at the target location.
+      this.fireHistoricBonusWeapon(weapon.historicBonusWeapon, targetX, targetZ, attackerId);
+    } else {
+      // Source parity: add AFTER checking (C++ line 1126).
+      log.push({ frame: this.frameCounter, x: targetX, z: targetZ });
+    }
+  }
+
+  /**
+   * Source parity: Fire a HistoricBonus weapon at the given position.
+   * Looks up the weapon template by name and applies area damage using the
+   * existing fireTemporaryWeaponAtPosition infrastructure.
+   */
+  private fireHistoricBonusWeapon(weaponName: string, targetX: number, targetZ: number, attackerId: number): void {
+    const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
+    if (!weaponDef) return;
+    const source = this.spawnedEntities.get(attackerId);
+    if (!source || source.destroyed) return;
+    this.fireTemporaryWeaponAtPosition(source, weaponDef, targetX, targetZ);
   }
 
   /**
@@ -57404,8 +57526,14 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Find the special power ready frame.
       // Source parity: check if the special power is ready via shortcut source tracking.
-      // TODO: Wire per-entity special power ready frames when SpecialPowerUpdate is fully ported.
-      const isReady = false;
+      let isReady = false;
+      for (const [powerName] of entity.specialPowerModules) {
+        const readyFrame = this.sharedShortcutSpecialPowerReadyFrames.get(powerName) ?? 0;
+        if (readyFrame > 0 && this.frameCounter >= readyFrame) {
+          isReady = true;
+          break;
+        }
+      }
 
       // Handle timeout transitions.
       if (st.timeoutFrame > 0 && this.frameCounter > st.timeoutFrame) {
@@ -57425,8 +57553,21 @@ export class GameLogicSubsystem implements Subsystem {
         st.timeoutFrame = 0;
         st.timeoutState = 'OPEN';
       }
-      // Start opening before power is ready — requires per-entity readyFrame from SpecialPowerUpdate.
-      // TODO: Wire when SpecialPowerUpdate is fully ported.
+      // Start opening before power is ready (pre-open animation).
+      if (st.doorState === 'CLOSED') {
+        for (const [powerName] of entity.specialPowerModules) {
+          const readyFrame = this.sharedShortcutSpecialPowerReadyFrames.get(powerName) ?? 0;
+          if (readyFrame > 0 && readyFrame > this.frameCounter) {
+            const framesUntilReady = readyFrame - this.frameCounter;
+            if (framesUntilReady <= prof.doorOpenTimeFrames) {
+              st.doorState = 'OPENING';
+              st.timeoutFrame = this.frameCounter + prof.doorOpenTimeFrames;
+              st.timeoutState = 'OPEN';
+              break;
+            }
+          }
+        }
+      }
 
       // Update model conditions based on door state.
       entity.modelConditionFlags.delete('DOOR_1_OPENING');
@@ -62481,6 +62622,7 @@ export class GameLogicSubsystem implements Subsystem {
   private clearSpawnedObjects(): void {
     this.commandQueue.length = 0;
     this.pendingWeaponDamageEvents.length = 0;
+    this.historicDamageLog.clear();
     this.activeWeaponProjectileStateByVisualId.clear();
     this.missileAIProfileByProjectileTemplate.clear();
     this.visualEventBuffer.length = 0;

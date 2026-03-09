@@ -64677,4 +64677,450 @@ describe('UNRESISTABLE damage bypasses battle plan scalar', () => {
     priv.applyWeaponDamageAmount(null, target, 100, 'UNRESISTABLE');
     expect(target.health).toBe(850);
   });
+
+  it('awards cash bounty on kill based on victim buildCost and attacker bounty percent', () => {
+    // Set up an attacker with enough damage to one-shot the victim.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('BountyAttacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'BountyGun'] }),
+        ]),
+        makeObjectDef('BountyVictim', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 30, InitialHealth: 30 }),
+        ], { BuildCost: 1000 }),
+      ],
+      weapons: [
+        makeWeaponDef('BountyGun', {
+          AttackRange: 120,
+          PrimaryDamage: 200,
+          DelayBetweenShots: 100,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BountyAttacker', 10, 10),
+        makeMapObject('BountyVictim', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    // Set initial credits to 0 for America.
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
+    // Make them enemies.
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Set cash bounty percentage on America's side via private field.
+    const priv = logic as unknown as {
+      sideCashBountyPercent: Map<string, number>;
+    };
+    priv.sideCashBountyPercent.set('america', 0.2);
+
+    // Order the attack.
+    logic.submitCommand({ type: 'attackEntity', entityId: 1, targetEntityId: 2 });
+
+    // Run enough frames for the victim to die (one-shot weapon).
+    for (let frame = 0; frame < 10; frame += 1) {
+      logic.update(1 / 30);
+    }
+
+    // Victim should be dead.
+    const victimState = logic.getEntityState(2);
+    expect(victimState === null || victimState.health <= 0).toBe(true);
+
+    // Bounty = ceil(1000 * 0.2) = 200.
+    const credits = logic.getSideCredits('America');
+    expect(credits).toBe(200);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #4: SpecialPowerUpdate Ready Frames
+// ────────────────────────────────────────────────────────────────────────────
+describe('MissileLauncherBuildingUpdate door transitions via SpecialPowerReadyFrames', () => {
+  it('transitions CLOSED→OPENING→OPEN when special power becomes ready', () => {
+    const building = makeObjectDef('GLAScudStorm', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+      makeBlock('Behavior', 'MissileLauncherBuildingUpdate ModuleTag_MLBU', {
+        SpecialPowerTemplate: 'SuperweaponScudStorm',
+        DoorOpenTime: 3000,  // 90 frames at 30fps
+        DoorWaitOpenTime: 2000,
+        DoorCloseTime: 3000,
+      }),
+      makeBlock('Behavior', 'SpecialPowerModule ModuleTag_SP', {
+        SpecialPowerTemplate: 'SuperweaponScudStorm',
+      }),
+    ]);
+    const bundle = makeBundle({
+      objects: [building],
+      specialPowers: [makeSpecialPowerDef('SuperweaponScudStorm', { RechargeTime: 10000 })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('GLAScudStorm', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        missileLauncherBuildingState: { doorState: string; timeoutFrame: number; timeoutState: string } | null;
+        missileLauncherBuildingProfile: { doorOpenTimeFrames: number } | null;
+        specialPowerModules: Map<string, unknown>;
+        modelConditionFlags: Set<string>;
+      }>;
+      sharedShortcutSpecialPowerReadyFrames: Map<string, number>;
+      frameCounter: number;
+    };
+
+    // Tick once to init the door state.
+    logic.update(1 / 30);
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.missileLauncherBuildingState).not.toBeNull();
+    expect(entity.missileLauncherBuildingState!.doorState).toBe('CLOSED');
+
+    // Set the power ready at frame 50 (in the future).
+    const normalizedPowerName = 'SUPERWEAPONSCUDSTORM';
+    expect(entity.specialPowerModules.has(normalizedPowerName)).toBe(true);
+    priv.sharedShortcutSpecialPowerReadyFrames.set(normalizedPowerName, 50);
+
+    // Advance to a frame where pre-open should start.
+    // doorOpenTimeFrames = 90 frames. Power ready at frame 50.
+    // Pre-open starts when framesUntilReady <= doorOpenTimeFrames, i.e., immediately
+    // since 50 - current < 90.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    // Door should have started opening.
+    expect(entity.missileLauncherBuildingState!.doorState).toBe('OPENING');
+
+    // Now set power ready at current frame (make it ready now).
+    priv.sharedShortcutSpecialPowerReadyFrames.set(normalizedPowerName, priv.frameCounter);
+
+    // Advance frames — it should force-open when ready.
+    logic.update(1 / 30);
+    expect(entity.missileLauncherBuildingState!.doorState).toBe('OPEN');
+    expect(entity.modelConditionFlags.has('DOOR_1_WAITING_OPEN')).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #5: HistoricBonus Weapons
+// ────────────────────────────────────────────────────────────────────────────
+describe('HistoricBonus weapon trigger', () => {
+  it('fires bonus weapon after enough hits within radius and time window', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'HistoricCannon'] }),
+        ]),
+        makeObjectDef('Target', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('HistoricCannon', {
+          AttackRange: 120,
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 5,
+          DelayBetweenShots: 100,
+          HistoricBonusCount: 3,
+          HistoricBonusRadius: 50,
+          HistoricBonusTime: 5000,
+          HistoricBonusWeapon: 'TestBonusWeapon',
+        }),
+        makeWeaponDef('TestBonusWeapon', {
+          PrimaryDamage: 100,
+          PrimaryDamageRadius: 30,
+          AttackRange: 200,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Attacker', 10, 10),
+        makeMapObject('Target', 30, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    // Use private access to call checkHistoricBonus directly.
+    const priv = logic as unknown as {
+      checkHistoricBonus: (weapon: { historicBonusCount: number; historicBonusRadius: number; historicBonusTime: number; historicBonusWeapon: string | null; name: string }, targetX: number, targetZ: number, attackerId: number) => void;
+      historicDamageLog: Map<string, Array<{ frame: number; x: number; z: number }>>;
+      frameCounter: number;
+      spawnedEntities: Map<number, { health: number }>;
+    };
+
+    // Tick once to initialize.
+    logic.update(1 / 30);
+
+    const weapon = {
+      historicBonusCount: 3,
+      historicBonusRadius: 50,
+      historicBonusTime: 5000,
+      historicBonusWeapon: 'TestBonusWeapon',
+      name: 'HistoricCannon',
+    };
+
+    const targetBefore = priv.spawnedEntities.get(2)!;
+    const healthBefore = targetBefore.health;
+
+    // Target is at world position (30, 10). Fire near the target.
+    // Fire 2 shots — should not trigger bonus.
+    priv.checkHistoricBonus(weapon as never, 30, 10, 1);
+    priv.checkHistoricBonus(weapon as never, 31, 10, 1);
+    const target1 = priv.spawnedEntities.get(2)!;
+    expect(target1.health).toBe(healthBefore); // No bonus weapon fired yet.
+
+    // Fire 3rd shot in radius — should trigger bonus.
+    priv.checkHistoricBonus(weapon as never, 32, 10, 1);
+
+    // The bonus weapon fires at position (32,10) via fireTemporaryWeaponAtPosition.
+    // Target is at world position (30,10). Distance = ~2 which is within
+    // PrimaryDamageRadius=30, so the target should take 100 damage.
+    const targetAfter = priv.spawnedEntities.get(2)!;
+    // After bonus weapon fires, target should have taken bonus damage (100).
+    expect(targetAfter.health).toBeLessThan(healthBefore);
+
+    // Verify the log was cleared after triggering (keyed by weapon name, not attacker).
+    const log = priv.historicDamageLog.get('HistoricCannon');
+    expect(log?.length ?? 0).toBe(0);
+  });
+
+  it('does not trigger bonus when hits are outside time window', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'TimedCannon'] }),
+        ]),
+        makeObjectDef('Target', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TimedCannon', {
+          AttackRange: 120,
+          PrimaryDamage: 10,
+          PrimaryDamageRadius: 5,
+          DelayBetweenShots: 100,
+          HistoricBonusCount: 3,
+          HistoricBonusRadius: 50,
+          HistoricBonusTime: 1000, // Only 30 frames at 30fps
+          HistoricBonusWeapon: 'TimedBonusWeapon',
+        }),
+        makeWeaponDef('TimedBonusWeapon', {
+          PrimaryDamage: 100,
+          PrimaryDamageRadius: 30,
+          AttackRange: 200,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Attacker', 10, 10),
+        makeMapObject('Target', 30, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+
+    const priv = logic as unknown as {
+      checkHistoricBonus: (weapon: never, targetX: number, targetZ: number, attackerId: number) => void;
+      historicDamageLog: Map<string, Array<{ frame: number; x: number; z: number }>>;
+      frameCounter: number;
+      spawnedEntities: Map<number, { health: number }>;
+    };
+
+    // Tick once.
+    logic.update(1 / 30);
+
+    const weapon = {
+      historicBonusCount: 3,
+      historicBonusRadius: 50,
+      historicBonusTime: 1000, // 30 frames
+      historicBonusWeapon: 'TimedBonusWeapon',
+      name: 'TimedCannon',
+    } as never;
+
+    // Fire 2 shots at frame 1 near the target at (30, 10).
+    priv.checkHistoricBonus(weapon, 30, 10, 1);
+    priv.checkHistoricBonus(weapon, 31, 10, 1);
+
+    // Advance past the time window (31+ frames).
+    for (let i = 0; i < 35; i++) logic.update(1 / 30);
+
+    const healthBefore = priv.spawnedEntities.get(2)!.health;
+
+    // Fire 3rd shot — but first two should have expired.
+    priv.checkHistoricBonus(weapon, 32, 10, 1);
+
+    // No bonus should fire because the first two hits are outside the time window.
+    expect(priv.spawnedEntities.get(2)!.health).toBe(healthBefore);
+  });
+
+  it('does not trigger bonus when hits are outside radius', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+      weapons: [],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Attacker', 10, 10)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const priv = logic as unknown as {
+      checkHistoricBonus: (weapon: never, targetX: number, targetZ: number, attackerId: number) => void;
+      historicDamageLog: Map<string, Array<{ frame: number; x: number; z: number }>>;
+      frameCounter: number;
+    };
+
+    logic.update(1 / 30);
+
+    const weapon = {
+      historicBonusCount: 3,
+      historicBonusRadius: 10,
+      historicBonusTime: 5000,
+      historicBonusWeapon: 'SomeBonusWeapon',
+      name: 'SmallRadiusCannon',
+    } as never;
+
+    // Fire 3 shots at positions far apart (> radius=10).
+    priv.checkHistoricBonus(weapon, 0, 0, 1);
+    priv.checkHistoricBonus(weapon, 100, 100, 1);
+    priv.checkHistoricBonus(weapon, 200, 200, 1);
+
+    // Should NOT have cleared the log (bonus didn't fire — keyed by weapon name).
+    const log = priv.historicDamageLog.get('SmallRadiusCannon');
+    expect(log).toBeDefined();
+    expect(log!.length).toBe(3);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #6: ModelConditionFlags — cheer, flag-raising, exploded state
+// ────────────────────────────────────────────────────────────────────────────
+describe('ModelConditionFlags entity state flags', () => {
+  function createLogicWithEntity() {
+    const building = makeObjectDef('TestUnit', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [building] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestUnit', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+        cheerTimerFrames: number;
+        raisingFlagTimerFrames: number;
+        explodedState: 'NONE' | 'FLAILING' | 'BOUNCING' | 'SPLATTED';
+      }>;
+    };
+    return { logic, entity: priv.spawnedEntities.get(1)! };
+  }
+
+  it('SPECIAL_CHEERING flag is set while cheerTimerFrames > 0 and clears when timer expires', () => {
+    const { logic, entity } = createLogicWithEntity();
+    entity.cheerTimerFrames = 3;
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('SPECIAL_CHEERING')).toBe(true);
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('SPECIAL_CHEERING')).toBe(true);
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('SPECIAL_CHEERING')).toBe(true);
+
+    // After 3 decrements the timer should be 0, next tick clears the flag.
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('SPECIAL_CHEERING')).toBe(false);
+  });
+
+  it('RAISING_FLAG flag is set while raisingFlagTimerFrames > 0', () => {
+    const { logic, entity } = createLogicWithEntity();
+    entity.raisingFlagTimerFrames = 2;
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('RAISING_FLAG')).toBe(true);
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('RAISING_FLAG')).toBe(true);
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('RAISING_FLAG')).toBe(false);
+  });
+
+  it('EXPLODED_FLAILING flag is set when explodedState is FLAILING', () => {
+    const { logic, entity } = createLogicWithEntity();
+    entity.explodedState = 'FLAILING';
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('EXPLODED_FLAILING')).toBe(true);
+    expect(entity.modelConditionFlags.has('EXPLODED_BOUNCING')).toBe(false);
+    expect(entity.modelConditionFlags.has('SPLATTED')).toBe(false);
+  });
+
+  it('EXPLODED_BOUNCING flag is set when explodedState is BOUNCING', () => {
+    const { logic, entity } = createLogicWithEntity();
+    entity.explodedState = 'BOUNCING';
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('EXPLODED_BOUNCING')).toBe(true);
+    expect(entity.modelConditionFlags.has('EXPLODED_FLAILING')).toBe(false);
+  });
+
+  it('SPLATTED flag is set when explodedState is SPLATTED', () => {
+    const { logic, entity } = createLogicWithEntity();
+    entity.explodedState = 'SPLATTED';
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('SPLATTED')).toBe(true);
+    expect(entity.modelConditionFlags.has('EXPLODED_FLAILING')).toBe(false);
+    expect(entity.modelConditionFlags.has('EXPLODED_BOUNCING')).toBe(false);
+  });
+
+  it('clears exploded flags when state returns to NONE', () => {
+    const { logic, entity } = createLogicWithEntity();
+    entity.explodedState = 'FLAILING';
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('EXPLODED_FLAILING')).toBe(true);
+
+    entity.explodedState = 'NONE';
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('EXPLODED_FLAILING')).toBe(false);
+    expect(entity.modelConditionFlags.has('EXPLODED_BOUNCING')).toBe(false);
+    expect(entity.modelConditionFlags.has('SPLATTED')).toBe(false);
+  });
 });

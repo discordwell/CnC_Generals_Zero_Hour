@@ -168,16 +168,19 @@ export class MinimapRenderer {
   /**
    * Plot entity dots onto the current composited canvas.
    *
-   * Colours:
-   *   own units   -> bright green (#00cc00)
-   *   enemy units -> red (#cc3333)
-   *
-   * TODO: Per-player radar colors and ally detection for full source parity
-   * (C++ Radar uses player->getPlayerColor() per dot).
+   * Source parity: C++ Radar uses player->getPlayerColor() per dot.
+   * When `sideColors` is provided, each side's units are rendered in
+   * the mapped color. Allies (via `allySides`) without an explicit color
+   * fall back to green; non-allied unknowns fall back to red.
    *
    * Buildings get slightly larger dots (5x5) vs. units (3x3).
    */
-  renderUnits(entities: readonly MinimapEntity[], localSide: string): void {
+  renderUnits(
+    entities: readonly MinimapEntity[],
+    localSide: string,
+    sideColors?: ReadonlyMap<string, string>,
+    allySides?: ReadonlySet<string>,
+  ): void {
     if (this.worldWidth <= 0 || this.worldDepth <= 0) return;
 
     const ctx = this.ctx;
@@ -190,14 +193,25 @@ export class MinimapRenderer {
       const normalizedLocalSide = localSide.toUpperCase();
 
       const isOwn = normalizedEntitySide === normalizedLocalSide;
+      const isAlly = allySides ? allySides.has(normalizedEntitySide) : false;
 
       // Determine dot color.
-      if (isOwn) {
-        ctx.fillStyle = '#00cc00'; // bright green
+      if (sideColors) {
+        const sideColor = sideColors.get(normalizedEntitySide);
+        if (sideColor) {
+          ctx.fillStyle = sideColor;
+        } else if (isOwn || isAlly) {
+          ctx.fillStyle = '#00cc00'; // bright green
+        } else {
+          ctx.fillStyle = '#cc3333'; // red
+        }
       } else {
-        // For now treat all non-own as enemy (alliance detection can be
-        // layered in later without changing the public API).
-        ctx.fillStyle = '#cc3333'; // red
+        // Legacy behavior — no color map provided.
+        if (isOwn || isAlly) {
+          ctx.fillStyle = '#00cc00'; // bright green
+        } else {
+          ctx.fillStyle = '#cc3333'; // red
+        }
       }
 
       // Buildings render as slightly larger blips.
@@ -310,6 +324,8 @@ export class MinimapRenderer {
     fogData: MinimapFogData | null,
     cameraBounds: MinimapCameraBounds,
     localSide: string,
+    sideColors?: ReadonlyMap<string, string>,
+    allySides?: ReadonlySet<string>,
   ): void {
     // Ensure we have cached world dimensions even if renderTerrain was
     // not explicitly called (lazy terrain render on first update).
@@ -322,7 +338,7 @@ export class MinimapRenderer {
 
     // Draw entity dots BEFORE fog so shrouded units are hidden.
     // Source parity: C++ Radar only draws units in visible cells.
-    this.renderUnits(entities, localSide);
+    this.renderUnits(entities, localSide, sideColors, allySides);
 
     // Apply fog-of-war overlay (darkens both terrain and unit dots).
     if (fogData) {

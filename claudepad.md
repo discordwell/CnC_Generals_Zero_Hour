@@ -1,5 +1,13 @@
 # Session Summaries
 
+## 2026-03-09T17:00Z — Fix 9 P1/P2 Source Parity Gaps (3 Parallel Batches)
+Fixed 9 verified remaining gaps from 3-domain C++ source audit. 3 batches ran in parallel with worktree isolation:
+- **Batch A (Particle System)**: (1) Slave/attached particle systems — recursive creation at slavePosOffset, cascade destroy, per-particle attached systems with position tracking. (2) Wind motion — PingPong with distance-based speed scaling (C++ ParticleSys.cpp:2205-2289), Circular with angle wrapping. Wind applies as position nudge (not velocity). (3) STREAK rendering — LineSegments geometry with in-place buffer updates, cached material, trailing edge alpha=0.
+- **Batch B (Game Logic)**: (4) SpecialPowerUpdate ready frames — door state now driven by actual sharedShortcutSpecialPowerReadyFrames, pre-open animation when power approaches readiness. (5) HistoricBonus weapons — per-WeaponTemplate tracking (shared across units), add-after-check pattern (C++ line 1126), count >= count-1 (implicit current hit), ms-to-frames via ceil(time*30/1000). (6) ModelConditionFlags TODOs — wired SPECIAL_CHEERING/RAISING_FLAG timers, EXPLODED_FLAILING/BOUNCING/SPLATTED state machine.
+- **Batch C (UI + Refactoring)**: (7) Minimap per-player radar colors — sideColors map + allySides set with green/red fallback. (8) CashBounty integration test. (9) Interface deduplication — ModelConditionInfo/findBestConditionMatch/computeConditionKey consolidated to condition-state-matcher.ts, removed duplicates from object-visuals.ts.
+- **Code review fixes**: Wind position-vs-velocity (HIGH), wind strength 0.3→2.0 (HIGH), PingPong distance-based scaling (HIGH), HistoricBonus per-template keying (HIGH), add-after-check ordering (HIGH), STREAK material caching (MED), ms-to-frames formula (MED).
+- **Total**: 3055 tests pass (21+ new), 130 test files. No new TS errors.
+
 ## 2026-03-09T13:45Z — Fix 14 P0 Source Parity Bugs (8 Agents, 2 Batches)
 Fixed all 14 P0 critical behavioral differences identified in 5-domain C++ parity review:
 - **Pathfinding**: Turn cost direction vectors corrected (parent→current vs current→neighbor, removed unnecessary grandparent lookup). 8 new tests.

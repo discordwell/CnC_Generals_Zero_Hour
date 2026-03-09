@@ -353,6 +353,54 @@ describe('MinimapRenderer', () => {
       expect(gEnemy).toBe(51);  // 0x33 = 51
     });
 
+    it('uses per-side colors when sideColors map is provided', () => {
+      const hm = makeFlatHeightmap(10);
+      const entity = makeEntity({ id: 1, x: 250, z: 250, side: 'CHINA' });
+      const sideColors = new Map([['CHINA', '#ff8800']]);
+
+      renderer.renderTerrain(hm);
+      renderer.update(hm, [entity], null, defaultCamera(), 'USA', sideColors);
+
+      const ctx = renderer.getContext();
+      const [r, g, b] = getPixel(ctx, 50, 50, SIZE);
+      expect(r).toBe(255);
+      expect(g).toBe(136); // 0x88
+      expect(b).toBe(0);
+    });
+
+    it('renders ally units using green fallback instead of enemy red', () => {
+      const hm = makeFlatHeightmap(10);
+      const allyUnit = makeEntity({ id: 1, x: 250, z: 250, side: 'CHINA' });
+      const allySides = new Set(['CHINA']);
+
+      renderer.renderTerrain(hm);
+      renderer.update(hm, [allyUnit], null, defaultCamera(), 'USA', undefined, allySides);
+
+      const ctx = renderer.getContext();
+      const [r, g, b] = getPixel(ctx, 50, 50, SIZE);
+      // Ally without explicit color falls back to green
+      expect(r).toBe(0);
+      expect(g).toBe(204);
+      expect(b).toBe(0);
+    });
+
+    it('prefers sideColors over ally fallback when both are provided', () => {
+      const hm = makeFlatHeightmap(10);
+      const allyUnit = makeEntity({ id: 1, x: 250, z: 250, side: 'CHINA' });
+      const sideColors = new Map([['CHINA', '#0000ff']]);
+      const allySides = new Set(['CHINA']);
+
+      renderer.renderTerrain(hm);
+      renderer.update(hm, [allyUnit], null, defaultCamera(), 'USA', sideColors, allySides);
+
+      const ctx = renderer.getContext();
+      const [r, g, b] = getPixel(ctx, 50, 50, SIZE);
+      // sideColors takes priority over ally fallback
+      expect(r).toBe(0);
+      expect(g).toBe(0);
+      expect(b).toBe(255);
+    });
+
     it('renders buildings as larger dots than vehicles', () => {
       const hm = makeFlatHeightmap(10);
       const vehicle = makeEntity({ id: 1, x: 100, z: 250, side: 'USA', category: 'vehicle' });

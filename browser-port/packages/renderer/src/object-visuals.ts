@@ -9,54 +9,27 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { AssetManager } from '@generals/assets';
 import {
+  computeConditionKey,
+  findBestConditionMatch,
+} from '@generals/game-logic';
+import type {
+  IdleAnimationVariant,
+  ModelConditionInfo,
+  TransitionInfo,
+} from '@generals/game-logic';
+import {
   parseObjectShadowType,
   shouldCastShadowMap,
   shouldCreateShadowDecal,
   createShadowDecalMesh,
 } from './shadow-decal.js';
 
+// Re-export types and computeConditionKey so existing consumers of
+// @generals/renderer that import these from object-visuals keep working.
+export { computeConditionKey };
+export type { IdleAnimationVariant, ModelConditionInfo, TransitionInfo };
+
 export type RenderableAnimationState = 'IDLE' | 'MOVE' | 'ATTACK' | 'DIE' | 'PRONE';
-
-export interface IdleAnimationVariant {
-  animationName: string;
-  randomWeight: number;
-}
-
-export interface TransitionInfo {
-  fromKey: string;
-  toKey: string;
-  modelName: string | null;
-  animationName: string | null;
-  animationMode: 'ONCE';
-  hideSubObjects: string[];
-  showSubObjects: string[];
-}
-
-export interface ModelConditionInfo {
-  conditionFlags: string[];
-  /** Pre-computed sorted key for O(1) comparison. Set at creation time by INI parser. */
-  conditionKey?: string;
-  /**
-   * Source parity: m_conditionsYesVec — alternative condition flag arrays.
-   * When present, the match loop iterates all sets.
-   */
-  conditionFlagSets?: string[][];
-  modelName: string | null;
-  animationName: string | null;
-  idleAnimationName: string | null;
-  hideSubObjects: string[];
-  showSubObjects: string[];
-  animationMode: 'LOOP' | 'ONCE' | 'MANUAL' | 'ONCE_BACKWARDS' | 'LOOP_BACKWARDS';
-  transitionKey: string | null;
-  animSpeedFactorMin: number;
-  animSpeedFactorMax: number;
-  idleAnimations: IdleAnimationVariant[];
-}
-
-/** Compute a stable condition key from a flags array. */
-export function computeConditionKey(flags: readonly string[]): string {
-  return flags.slice().sort().join('|');
-}
 
 export interface RenderableEntityState {
   id: number;
@@ -214,51 +187,6 @@ const CLIP_HINTS_BY_STATE: Record<RenderableAnimationState, string[]> = {
   DIE: ['Die', 'Death', 'DeathLoop', 'Dead'],
   PRONE: ['Prone', 'ProneIdle', 'Crawl', 'CrawlLoop'],
 };
-
-/**
- * Port of SparseMatchFinder::findBestInfoSlow() — finds the best-matching
- * ModelConditionInfo for a set of active entity flags.
- *
- * Source parity: inner loop over m_conditionsYesVec (multiple ConditionsYes
- * per ModelConditionState). Each flag set is scored independently and the
- * best score across all sets of all infos wins.
- */
-function findBestConditionMatch(
-  infos: readonly ModelConditionInfo[],
-  activeFlags: ReadonlySet<string>,
-): ModelConditionInfo | null {
-  let result: ModelConditionInfo | null = null;
-  let bestYesMatch = 0;
-  let bestYesExtraneousBits = Infinity;
-
-  for (const info of infos) {
-    // Iterate all alternative flag sets (conditionFlagSets), falling back to
-    // the single conditionFlags array for backward compatibility.
-    const flagSets: readonly (readonly string[])[] =
-      info.conditionFlagSets ?? [info.conditionFlags];
-
-    for (const flags of flagSets) {
-      let yesMatch = 0;
-      let yesExtraneousBits = 0;
-      for (const flag of flags) {
-        if (activeFlags.has(flag)) {
-          yesMatch++;
-        } else {
-          yesExtraneousBits++;
-        }
-      }
-      if (
-        yesMatch > bestYesMatch ||
-        (yesMatch >= bestYesMatch && yesExtraneousBits < bestYesExtraneousBits)
-      ) {
-        result = info;
-        bestYesMatch = yesMatch;
-        bestYesExtraneousBits = yesExtraneousBits;
-      }
-    }
-  }
-  return result;
-}
 
 /**
  * Random float in [min, max].
