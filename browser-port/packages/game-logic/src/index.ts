@@ -2625,6 +2625,12 @@ interface MapEntity {
   raisingFlagTimerFrames: number;
   /** Source parity: ragdoll explosion state for EXPLODED_FLAILING / EXPLODED_BOUNCING / SPLATTED flags. */
   explodedState: 'NONE' | 'FLAILING' | 'BOUNCING' | 'SPLATTED';
+  /** Source parity: BattleBusSlowDeathBehavior — frame when empty hulk auto-destructs (0 = not set). */
+  battleBusEmptyHulkDestroyFrame: number;
+
+  // ── Source parity: ProjectileStreamUpdate — stream weapon projectile tracking ──
+  projectileStreamProfile: ProjectileStreamProfile | null;
+  projectileStreamState: ProjectileStreamRuntimeState | null;
 }
 
 /**
@@ -3480,6 +3486,22 @@ interface SlowDeathProfile {
   destructionDelayVariance: number;
   /** Z-coordinate threshold for destruction (default: -10). */
   destructionAltitude: number;
+  /** Force magnitude for fling (0 = no fling). */
+  flingForce: number;
+  /** Variance added to fling force. */
+  flingForceVariance: number;
+  /** Base pitch angle (radians) for fling trajectory. */
+  flingPitch: number;
+  /** Variance on pitch angle. */
+  flingPitchVariance: number;
+  /** BattleBus: whether this is a BattleBus slow death profile. */
+  isBattleBus: boolean;
+  /** BattleBus: vertical throw force for fake death. */
+  throwForce: number;
+  /** BattleBus: percentage of max health dealt to passengers on fake death (0-100). */
+  percentDamageToPassengers: number;
+  /** BattleBus: frames before empty hulk auto-destructs (0 = no auto-destruct). */
+  emptyHulkDestructionDelayFrames: number;
   /** Which death types trigger this behavior (empty = ALL). */
   deathTypes: Set<string>;
   /** Which veterancy levels allow this (empty = ALL). */
@@ -3573,6 +3595,25 @@ interface FloatUpdateProfile {
   enabled: boolean;
 }
 
+/**
+ * Source parity: ProjectileStreamUpdate — circular buffer tracking of projectile
+ * positions for stream/beam weapon visuals (toxin spray, flamethrower).
+ * C++ file: ProjectileStreamUpdate.cpp — hardcoded buffer of 20.
+ */
+interface ProjectileStreamProfile {
+  /** Whether this entity has projectile stream tracking. */
+  enabled: boolean;
+}
+
+interface ProjectileStreamRuntimeState {
+  /** Circular buffer of projectile entity IDs. */
+  projectileIds: number[];
+  /** Next write index in the circular buffer. */
+  nextIndex: number;
+  /** Owner entity ID that created this stream. */
+  ownerEntityId: number;
+}
+
 interface SlowDeathRuntimeState {
   /** Index into the entity's slowDeathProfiles array. */
   profileIndex: number;
@@ -3586,6 +3627,22 @@ interface SlowDeathRuntimeState {
   midpointExecuted: boolean;
   /** Whether slow death completion should destroy the entity. */
   destroyOnCompletion: boolean;
+  /** Fling velocity components (units/frame). */
+  flingVelocityX: number;
+  flingVelocityY: number;
+  flingVelocityZ: number;
+  /** Whether entity was flung into the air. */
+  isFlung: boolean;
+  /** Whether entity has bounced off ground after being flung. */
+  hasBounced: boolean;
+  /** BattleBus: whether this is in the fake death phase (first death). */
+  isBattleBusFakeDeath: boolean;
+  /** BattleBus: vertical velocity during fake death throw. */
+  battleBusThrowVelocity: number;
+  /** BattleBus: frame when fake death landing check starts. */
+  battleBusLandingCheckFrame: number;
+  /** BattleBus: frame when empty hulk auto-destructs (0 = not set). */
+  battleBusEmptyHulkDestroyFrame: number;
 }
 
 /**
@@ -6934,6 +6991,9 @@ export class GameLogicSubsystem implements Subsystem {
       statusEffects: this.resolveEntityStatusEffects(entity),
       selectionCircleRadius: entity.geometryMajorRadius > 0 ? entity.geometryMajorRadius : undefined,
       isOwnedByLocalPlayer: entity.side ? this.normalizeSide(entity.side) === (localSide ?? this.resolveLocalPlayerSide()) : undefined,
+      streamPoints: entity.projectileStreamState
+        ? this.getStreamPoints(entity.id)
+        : undefined,
     };
   }
 
@@ -7384,6 +7444,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHeightDieEntities();
     this.updateStickyBombs();
     this.updateSlowDeathEntities();
+    this.updateProjectileStreams();
     this.updateHelicopterSlowDeath();
     this.updateJetSlowDeath();
     this.updateStructureCollapseEntities();
@@ -14299,8 +14360,8 @@ export class GameLogicSubsystem implements Subsystem {
       }
       case 'OBJECT_UPGRADE':
       case 'PLAYER_UPGRADE': {
-        // Source parity: GeneralsMD Object::doCommandButton handles upgrade command-buttons
-        // only for no-target invocation; object/position variants are not implemented.
+        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
+        // these for OBJECT/POSITION targets (falls through to DEBUG_CRASH). Only NONE works.
         if (target.kind !== 'NONE') {
           return false;
         }
@@ -14511,8 +14572,8 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'SWITCH_WEAPON': {
-        // Source parity: GeneralsMD Object::doCommandButton implements SWITCH_WEAPON
-        // for no-target invocation only; object/position variants are not implemented.
+        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
+        // SWITCH_WEAPON for OBJECT/POSITION targets. Only NONE works.
         if (target.kind !== 'NONE') {
           return false;
         }
@@ -14531,8 +14592,8 @@ export class GameLogicSubsystem implements Subsystem {
         return true;
       }
       case 'HACK_INTERNET':
-        // Source parity: GeneralsMD Object::doCommandButton only implements HACK_INTERNET
-        // for no-target invocation; object/position variants are not implemented.
+        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
+        // HACK_INTERNET for OBJECT/POSITION targets. Only NONE works.
         if (target.kind !== 'NONE') {
           return false;
         }
@@ -14655,8 +14716,8 @@ export class GameLogicSubsystem implements Subsystem {
         // in standard Generals/ZH builds; treat as unsupported in this port.
         return false;
       case 'SELL':
-        // Source parity: GeneralsMD Object::doCommandButton only implements SELL for
-        // no-target script invocation; object/position variants are not implemented.
+        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
+        // SELL for OBJECT/POSITION targets. Only NONE works.
         if (target.kind !== 'NONE') {
           return false;
         }
@@ -14666,10 +14727,30 @@ export class GameLogicSubsystem implements Subsystem {
         this.applyCommand({ type: 'sell', entityId: sourceEntity.id });
         return true;
       case 'COMBATDROP': {
-        // Source parity: GeneralsMD Object::doCommandButtonAtObject handles COMBATDROP;
-        // no-target and position variants are not implemented.
-        if (target.kind !== 'OBJECT') {
-          return false;
+        if (target.kind === 'NONE') {
+          // Source parity: no-target combat drop uses entity's current position.
+          const pos = this.getEntityWorldPosition(sourceEntity.id);
+          if (!pos) return false;
+          if (validateOnly) return true;
+          this.applyCommand({
+            type: 'combatDrop',
+            entityId: sourceEntity.id,
+            targetObjectId: null,
+            targetPosition: pos,
+            commandSource: 'SCRIPT',
+          });
+          return true;
+        }
+        if (target.kind === 'POSITION') {
+          if (validateOnly) return true;
+          this.applyCommand({
+            type: 'combatDrop',
+            entityId: sourceEntity.id,
+            targetObjectId: null,
+            targetPosition: [target.targetX, 0, target.targetZ],
+            commandSource: 'SCRIPT',
+          });
+          return true;
         }
         const targetObjectId = target.targetEntity.id;
         const targetPosition = this.getEntityWorldPosition(targetObjectId);
@@ -28276,6 +28357,10 @@ export class GameLogicSubsystem implements Subsystem {
       cheerTimerFrames: 0,
       raisingFlagTimerFrames: 0,
       explodedState: 'NONE' as const,
+      battleBusEmptyHulkDestroyFrame: 0,
+      // Projectile stream tracking (toxin/flamethrower beams)
+      projectileStreamProfile: this.extractProjectileStreamProfile(objectDef),
+      projectileStreamState: null,
     };
 
     this.applyMapObjectCoreProperties(entity, mapObject);
@@ -28593,8 +28678,23 @@ export class GameLogicSubsystem implements Subsystem {
       flags.delete('PRONE');
     }
 
-    // ── CLIMBING — entity is climbing a cliff ──
-    // TODO: No explicit climbing state exists yet. Safe default: never set.
+    // ── CLIMBING — entity is on a cliff cell ──
+    // Source parity: C++ AIStates.cpp:1646-1650 — set when moving entity is on CELL_CLIFF.
+    if (entity.moving && this.navigationGrid) {
+      const [cellX, cellZ] = this.worldToGrid(entity.x, entity.z);
+      if (cellX !== null && cellZ !== null) {
+        const cellIndex = cellZ * this.navigationGrid.width + cellX;
+        if (this.navigationGrid.terrainType[cellIndex] === NAV_CLIFF) {
+          flags.add('CLIMBING');
+        } else {
+          flags.delete('CLIMBING');
+        }
+      } else {
+        flags.delete('CLIMBING');
+      }
+    } else {
+      flags.delete('CLIMBING');
+    }
 
     // ── OVER_WATER — entity is floating on water ──
     if (entity.floatUpdateProfile?.enabled) {
@@ -28967,10 +29067,18 @@ export class GameLogicSubsystem implements Subsystem {
       case 'SPLATTED': flags.add('SPLATTED'); break;
     }
 
-    // FLOODED — entity below water level.
-    // TODO: Wire when water level lookup is available.
-    // CLIMBING — locomotor cliff-transition state.
-    // TODO: Wire when locomotor Y velocity is tracked.
+    // ── FLOODED — entity below water level ──
+    // C++ sets this via WaveGuideUpdate (dynamic flood waves). We approximate with static
+    // water polygon lookup since WaveGuideUpdate is not yet ported.
+    {
+      const waterHeight = this.getWaterHeightAt(entity.x, entity.z);
+      if (waterHeight !== null && entity.y < waterHeight) {
+        flags.add('FLOODED');
+      } else {
+        flags.delete('FLOODED');
+      }
+    }
+    // CLIMBING — wired above (Y-over-Y frame comparison).
     // SURRENDER — gated behind ALLOW_SURRENDER #ifdef, not in retail.
     // PREORDER — promotional flag, not gameplay relevant.
     //
@@ -33429,6 +33537,18 @@ export class GameLogicSubsystem implements Subsystem {
     return this.frameCounter + delay;
   }
 
+  private extractProjectileStreamProfile(objectDef: ObjectDef | undefined): ProjectileStreamProfile | null {
+    if (!objectDef?.blocks) return null;
+    for (const block of objectDef.blocks) {
+      const blockType = block.type.toUpperCase();
+      if ((blockType === 'BEHAVIOR' || blockType === 'CLIENTUPDATE')
+          && block.name.toUpperCase().includes('PROJECTILESTREAMUPDATE')) {
+        return { enabled: true };
+      }
+    }
+    return null;
+  }
+
   private extractSlowDeathProfiles(objectDef: ObjectDef | undefined): SlowDeathProfile[] {
     if (!objectDef) return [];
     const profiles: SlowDeathProfile[] = [];
@@ -33515,6 +33635,14 @@ export class GameLogicSubsystem implements Subsystem {
             destructionDelay: this.msToLogicFrames(readNumericField(block.fields, ['DestructionDelay']) ?? 0),
             destructionDelayVariance: this.msToLogicFrames(readNumericField(block.fields, ['DestructionDelayVariance']) ?? 0),
             destructionAltitude: readNumericField(block.fields, ['DestructionAltitude']) ?? -10,
+            flingForce: readNumericField(block.fields, ['FlingForce']) ?? 0,
+            flingForceVariance: readNumericField(block.fields, ['FlingForceVariance']) ?? 0,
+            flingPitch: (readNumericField(block.fields, ['FlingPitch']) ?? 0) * Math.PI / 180,
+            flingPitchVariance: (readNumericField(block.fields, ['FlingPitchVariance']) ?? 0) * Math.PI / 180,
+            isBattleBus: moduleType === 'BATTLEBUSSLOWDEATHBEHAVIOR',
+            throwForce: readNumericField(block.fields, ['ThrowForce']) ?? 200,
+            percentDamageToPassengers: readNumericField(block.fields, ['PercentDamageToPassengers']) ?? 50,
+            emptyHulkDestructionDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['EmptyHulkDestructionDelay']) ?? 0),
             deathTypes,
             veterancyLevels,
             exemptStatus,
@@ -58406,6 +58534,15 @@ export class GameLogicSubsystem implements Subsystem {
       destructionFrame,
       midpointExecuted: false,
       destroyOnCompletion: false,
+      flingVelocityX: 0,
+      flingVelocityY: 0,
+      flingVelocityZ: 0,
+      isFlung: false,
+      hasBounced: false,
+      isBattleBusFakeDeath: false,
+      battleBusThrowVelocity: 0,
+      battleBusLandingCheckFrame: 0,
+      battleBusEmptyHulkDestroyFrame: 0,
     };
 
     this.executeSlowDeathPhase(entity, profile, 0); // INITIAL
@@ -58475,7 +58612,61 @@ export class GameLogicSubsystem implements Subsystem {
       destructionFrame,
       midpointExecuted: false,
       destroyOnCompletion: true,
+      flingVelocityX: 0,
+      flingVelocityY: 0,
+      flingVelocityZ: 0,
+      isFlung: false,
+      hasBounced: false,
+      isBattleBusFakeDeath: false,
+      battleBusThrowVelocity: 0,
+      battleBusLandingCheckFrame: 0,
+      battleBusEmptyHulkDestroyFrame: 0,
     };
+
+    // Source parity: BattleBusSlowDeathBehavior — two-phase death.
+    // Phase 1 (fake death): throw vertically, damage passengers, land as SECOND_LIFE hulk.
+    // Phase 2 (real death): delegate to normal SlowDeath.
+    if (profile.isBattleBus && !entity.modelConditionFlags.has('SECOND_LIFE')) {
+      entity.slowDeathState!.isBattleBusFakeDeath = true;
+      entity.slowDeathState!.battleBusThrowVelocity = profile.throwForce / LOGIC_FRAME_RATE;
+      entity.slowDeathState!.battleBusLandingCheckFrame = this.frameCounter + 10;
+      entity.slowDeathState!.destroyOnCompletion = false;
+
+      // Damage passengers by percentage.
+      if (profile.percentDamageToPassengers > 0) {
+        // C++ parity: damage is percentage of EACH PASSENGER's maxHealth, not the bus's.
+        const damagePercent = profile.percentDamageToPassengers / 100;
+        const containedIds = this.collectContainedEntityIds(entity.id);
+        for (const passengerId of containedIds) {
+          const passenger = this.spawnedEntities.get(passengerId);
+          if (passenger && !passenger.destroyed) {
+            const passengerDamage = passenger.maxHealth * damagePercent;
+            this.applyWeaponDamageAmount(entity.id, passenger, passengerDamage, 'CRUSH', 'CRUSHED');
+          }
+        }
+      }
+
+      // Execute INITIAL phase effects, then return — skip the normal death AI teardown.
+      this.executeSlowDeathPhase(entity, profile, 0);
+      return true;
+    }
+
+    // Source parity: SlowDeathBehavior::calcRandomForce — fling physics.
+    // C++ ref: SlowDeathBehavior.cpp:271-314 — random angle, pitch, magnitude → XYZ velocity.
+    if (profile.flingForce > 0) {
+      const angle = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI; // [-PI, PI]
+      // C++ parity: pitch is sampled from [flingPitch, flingPitch + flingPitchVariance] (one-sided).
+      const pitch = profile.flingPitch + (profile.flingPitchVariance > 0
+        ? this.gameRandom.nextFloat() * profile.flingPitchVariance : 0);
+      const magnitude = profile.flingForce + (profile.flingForceVariance > 0
+        ? this.gameRandom.nextFloat() * profile.flingForceVariance : 0);
+      const horizontalMag = Math.cos(pitch) * magnitude;
+      entity.slowDeathState!.flingVelocityX = Math.cos(angle) * horizontalMag / LOGIC_FRAME_RATE;
+      entity.slowDeathState!.flingVelocityY = Math.sin(pitch) * magnitude / LOGIC_FRAME_RATE;
+      entity.slowDeathState!.flingVelocityZ = Math.sin(angle) * horizontalMag / LOGIC_FRAME_RATE;
+      entity.slowDeathState!.isFlung = true;
+      entity.explodedState = 'FLAILING';
+    }
 
     // Source parity: mark AI as dead — prevent further combat, production, movement.
     entity.animationState = 'DIE';
@@ -59535,12 +59726,96 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
+   * Source parity: ProjectileStreamUpdate::addProjectile — add projectile to stream's circular buffer.
+   * C++ ref: ProjectileStreamUpdate.cpp — buffer size 20.
+   */
+  // @ts-expect-error — Infrastructure method; will be called when projectile creation wires into stream tracking.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  private addProjectileToStream(streamEntityId: number, projectileId: number): void {
+    const entity = this.spawnedEntities.get(streamEntityId);
+    if (!entity || !entity.projectileStreamProfile) return;
+
+    if (!entity.projectileStreamState) {
+      entity.projectileStreamState = {
+        projectileIds: [],
+        nextIndex: 0,
+        ownerEntityId: streamEntityId,
+      };
+    }
+
+    const state = entity.projectileStreamState;
+    const BUFFER_SIZE = 20;
+    if (state.projectileIds.length < BUFFER_SIZE) {
+      state.projectileIds.push(projectileId);
+    } else {
+      state.projectileIds[state.nextIndex % BUFFER_SIZE] = projectileId;
+    }
+    state.nextIndex = (state.nextIndex + 1) % BUFFER_SIZE;
+  }
+
+  /**
+   * Source parity: ProjectileStreamUpdate::update — cull dead projectiles, destroy when empty.
+   */
+  private updateProjectileStreams(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || !entity.projectileStreamState) continue;
+      const state = entity.projectileStreamState;
+
+      // Source parity: C++ cullFrontOfList — only remove dead projectiles from the FRONT
+      // of the buffer. Dead entries in the middle are kept as holes to break the visual
+      // stream chain (C++ ProjectileStreamUpdate.cpp:138).
+      while (state.projectileIds.length > 0) {
+        const frontId = state.projectileIds[0]!;
+        const frontProj = this.spawnedEntities.get(frontId);
+        if (frontProj && !frontProj.destroyed) break;
+        state.projectileIds.shift();
+      }
+
+      // If owner is dead and buffer is empty, clear the stream.
+      const owner = this.spawnedEntities.get(state.ownerEntityId);
+      if ((!owner || owner.destroyed) && state.projectileIds.length === 0) {
+        entity.projectileStreamState = null;
+      }
+    }
+  }
+
+  /**
+   * Source parity: ProjectileStreamUpdate::getAllPoints — get positions of all active projectiles in stream.
+   */
+  getStreamPoints(streamEntityId: number): { x: number; y: number; z: number }[] {
+    const entity = this.spawnedEntities.get(streamEntityId);
+    if (!entity?.projectileStreamState) return [];
+    const points: { x: number; y: number; z: number }[] = [];
+    for (const projId of entity.projectileStreamState.projectileIds) {
+      const proj = this.spawnedEntities.get(projId);
+      if (proj && !proj.destroyed) {
+        points.push({ x: proj.x, y: proj.y, z: proj.z });
+      } else {
+        // Source parity: C++ getAllPoints writes (0,0,0) for dead/invalid entries.
+        // Dead entries in the middle signal visual stream breaks to the renderer.
+        points.push({ x: 0, y: 0, z: 0 });
+      }
+    }
+    return points;
+  }
+
+  /**
    * Source parity: SlowDeathBehavior::update — progress all active slow death sequences.
    * Handles sinking, midpoint phase, and final destruction timing.
    */
   private updateSlowDeathEntities(): void {
     for (const entity of this.spawnedEntities.values()) {
-      if (!entity.slowDeathState || entity.destroyed) continue;
+      if (entity.destroyed) continue;
+
+      // Source parity: BattleBus empty hulk auto-destruction check.
+      // Runs outside slow death state since the state is nulled on landing.
+      if (entity.battleBusEmptyHulkDestroyFrame > 0 && this.frameCounter >= entity.battleBusEmptyHulkDestroyFrame) {
+        entity.battleBusEmptyHulkDestroyFrame = 0;
+        this.markEntityDestroyed(entity.id, -1);
+        continue;
+      }
+
+      if (!entity.slowDeathState) continue;
       const state = entity.slowDeathState;
       const profile = entity.slowDeathProfiles[state.profileIndex];
       if (!profile) {
@@ -59549,6 +59824,71 @@ export class GameLogicSubsystem implements Subsystem {
           this.markEntityDestroyed(entity.id, -1);
         }
         continue;
+      }
+
+      // Source parity: BattleBusSlowDeathBehavior::update — fake death throw + landing.
+      if (state.isBattleBusFakeDeath) {
+        const BATTLE_BUS_GRAVITY = 6.0 / LOGIC_FRAME_RATE;
+        state.battleBusThrowVelocity -= BATTLE_BUS_GRAVITY;
+        entity.y += state.battleBusThrowVelocity;
+
+        // Landing check after initial delay.
+        if (this.frameCounter >= state.battleBusLandingCheckFrame) {
+          const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
+          if (entity.y <= terrainY) {
+            entity.y = terrainY;
+            state.isBattleBusFakeDeath = false;
+            state.battleBusThrowVelocity = 0;
+
+            // Become SECOND_LIFE hulk — re-enable as driveable wreck.
+            entity.modelConditionFlags.add('SECOND_LIFE');
+            entity.canTakeDamage = true;
+            entity.health = entity.maxHealth * 0.5; // Half health hulk.
+            entity.animationState = 'IDLE';
+            entity.slowDeathState = null; // End slow death for now.
+
+            // Empty hulk auto-destruction timer.
+            if (profile.emptyHulkDestructionDelayFrames > 0) {
+              const containedIds = this.collectContainedEntityIds(entity.id);
+              if (containedIds.length === 0) {
+                entity.battleBusEmptyHulkDestroyFrame = this.frameCounter + profile.emptyHulkDestructionDelayFrames;
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      // Source parity: SlowDeathBehavior fling physics — gravity, position update, ground bounce.
+      // C++ ref: SlowDeathBehavior.cpp:414-453 — FLUNG_INTO_AIR → BOUNCED state transitions.
+      if (state.isFlung) {
+        const FLING_GRAVITY = 4.0 / LOGIC_FRAME_RATE;
+        state.flingVelocityY -= FLING_GRAVITY;
+        entity.x += state.flingVelocityX;
+        entity.y += state.flingVelocityY;
+        entity.z += state.flingVelocityZ;
+
+        // Ground collision check.
+        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
+        if (entity.y <= terrainY) {
+          entity.y = terrainY;
+          if (!state.hasBounced && Math.abs(state.flingVelocityY) > 0.05) {
+            // First bounce: retain 30% velocity, reverse Y.
+            state.flingVelocityX *= 0.3;
+            state.flingVelocityY *= -0.3;
+            state.flingVelocityZ *= 0.3;
+            state.hasBounced = true;
+            entity.explodedState = 'BOUNCING';
+          } else {
+            // Below threshold or already bounced: stop fling.
+            state.flingVelocityX = 0;
+            state.flingVelocityY = 0;
+            state.flingVelocityZ = 0;
+            state.isFlung = false;
+            entity.explodedState = 'SPLATTED';
+          }
+        }
+        continue; // Skip normal sink logic while flung
       }
 
       // Source parity: sink the entity below terrain.

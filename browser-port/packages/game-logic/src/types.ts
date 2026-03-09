@@ -71,6 +71,8 @@ export interface RenderableEntityState {
   selectionCircleRadius?: number;
   /** True when this entity belongs to the local player's side. */
   isOwnedByLocalPlayer?: boolean;
+  /** Source parity: ProjectileStreamUpdate — positions of active projectiles in stream. */
+  streamPoints?: { x: number; y: number; z: number }[];
 }
 
 export interface ScriptObjectAmbientSoundState {

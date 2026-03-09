@@ -48373,10 +48373,12 @@ describe('Script condition groundwork', () => {
 
     logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 0 });
 
+    // Source parity: C++ does NOT implement SELL for OBJECT target (DEBUG_CRASH).
     expect(logic.executeScriptAction({
       actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
       params: [1, 'Command_SellSelf', 2],
     })).toBe(false);
+    // Source parity: POSITION target variant not supported for SELL.
     expect(logic.executeScriptAction({
       actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
       params: [1, 'Command_SellSelf', 'SellWaypoint'],
@@ -48443,14 +48445,16 @@ describe('Script condition groundwork', () => {
       makeHeightmap(128, 128),
     );
 
+    // Source parity: NONE target variant now uses entity's current position.
     expect(logic.executeScriptAction({
       actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
       params: [1, 'Command_CombatDrop'],
-    })).toBe(false);
+    })).toBe(true);
+    // Source parity: POSITION target variant now supported.
     expect(logic.executeScriptAction({
       actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
       params: [1, 'Command_CombatDrop', 'DropWaypoint'],
-    })).toBe(false);
+    })).toBe(true);
     expect(logic.executeScriptAction({
       actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
       params: [1, 'Command_CombatDrop', 2],
@@ -48509,10 +48513,12 @@ describe('Script condition groundwork', () => {
 
     logic.submitCommand({ type: 'setSideCredits', side: 'China', amount: 0 });
 
+    // Source parity: C++ does NOT implement HACK_INTERNET for OBJECT target (DEBUG_CRASH).
     expect(logic.executeScriptAction({
       actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
       params: [1, 'Command_HackInternet', 2],
     })).toBe(false);
+    // Source parity: POSITION target variant not supported for HACK_INTERNET.
     expect(logic.executeScriptAction({
       actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
       params: [1, 'Command_HackInternet', 'HackWaypoint'],
@@ -48970,10 +48976,12 @@ describe('Script condition groundwork', () => {
     })).toBe(true);
     expect(privateApi.spawnedEntities.get(1)?.forcedWeaponSlot).toBe(1);
 
+    // Source parity: C++ does NOT implement SWITCH_WEAPON for OBJECT target (DEBUG_CRASH).
     expect(logic.executeScriptAction({
       actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
       params: [1, 'Command_SwitchSecondary', 2],
     })).toBe(false);
+    // Source parity: POSITION target variant not supported for SWITCH_WEAPON.
     expect(logic.executeScriptAction({
       actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
       params: [1, 'Command_SwitchSecondary', 'SwitchWaypoint'],
@@ -49039,10 +49047,12 @@ describe('Script condition groundwork', () => {
     logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 500 });
     logic.update(1 / 30);
 
+    // Source parity: C++ does NOT implement OBJECT_UPGRADE for OBJECT target (DEBUG_CRASH).
     expect(logic.executeScriptAction({
       actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
       params: [1, 'Command_ResearchScriptUpgrade', 2],
     })).toBe(false);
+    // Source parity: POSITION target variant not supported for upgrades.
     expect(logic.executeScriptAction({
       actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
       params: [1, 'Command_ResearchScriptUpgrade', 'UpgradeWaypoint'],
@@ -65122,5 +65132,874 @@ describe('ModelConditionFlags entity state flags', () => {
     expect(entity.modelConditionFlags.has('EXPLODED_FLAILING')).toBe(false);
     expect(entity.modelConditionFlags.has('EXPLODED_BOUNCING')).toBe(false);
     expect(entity.modelConditionFlags.has('SPLATTED')).toBe(false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #1: SlowDeath Fling Physics
+// ────────────────────────────────────────────────────────────────────────────
+describe('SlowDeath fling physics', () => {
+  function makeFlingBundle(flingFields: Record<string, unknown> = {}) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('FlingUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'SlowDeathBehavior ModuleTag_SlowDeath', {
+            DestructionDelay: 5000,
+            ProbabilityModifier: 10,
+            FlingForce: 100,
+            FlingPitch: 45,
+            ...flingFields,
+          }),
+        ]),
+        makeObjectDef('Killer', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'OHKGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('OHKGun', {
+          AttackRange: 220,
+          PrimaryDamage: 500,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+  }
+
+  it('flings entity upward on first update with flingForce > 0', () => {
+    const bundle = makeFlingBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FlingUnit', 50, 50),
+        makeMapObject('Killer', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the unit — it should enter slow death and be flung.
+    let initialY = 0;
+    let enteredSlowDeath = false;
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0 && s.animationState === 'DIE') {
+        initialY = s.y;
+        enteredSlowDeath = true;
+        break;
+      }
+    }
+    expect(enteredSlowDeath).toBe(true);
+
+    // After a few frames, entity Y should increase (thrown upward).
+    logic.update(1 / 30);
+    const afterFling = logic.getEntityState(1);
+    expect(afterFling).not.toBeNull();
+    expect(afterFling!.y).toBeGreaterThan(initialY);
+  });
+
+  it('entity bounces on ground contact and velocity is reduced', () => {
+    const bundle = makeFlingBundle({ FlingForce: 100, FlingPitch: 45 });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FlingUnit', 50, 50),
+        makeMapObject('Killer', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the unit.
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0 && s.animationState === 'DIE') break;
+    }
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        slowDeathState: {
+          isFlung: boolean;
+          hasBounced: boolean;
+          flingVelocityY: number;
+        } | null;
+        explodedState: string;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.slowDeathState).not.toBeNull();
+    expect(entity.slowDeathState!.isFlung).toBe(true);
+
+    // Run many frames until the entity hits the ground and bounces.
+    let bounced = false;
+    for (let i = 0; i < 200; i++) {
+      logic.update(1 / 30);
+      if (entity.slowDeathState && entity.slowDeathState.hasBounced) {
+        bounced = true;
+        break;
+      }
+    }
+    expect(bounced).toBe(true);
+  });
+
+  it('transitions explodedState through FLAILING → BOUNCING → SPLATTED', () => {
+    const bundle = makeFlingBundle({ FlingForce: 100, FlingPitch: 45 });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FlingUnit', 50, 50),
+        makeMapObject('Killer', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('America', 'China', 0);
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the unit.
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0 && s.animationState === 'DIE') break;
+    }
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        slowDeathState: {
+          isFlung: boolean;
+          hasBounced: boolean;
+        } | null;
+        explodedState: string;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Immediately after fling starts, state should be FLAILING.
+    expect(entity.explodedState).toBe('FLAILING');
+
+    // Run until bounced.
+    let sawBouncing = false;
+    let sawSplatted = false;
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      if (entity.explodedState === 'BOUNCING') sawBouncing = true;
+      if (entity.explodedState === 'SPLATTED') {
+        sawSplatted = true;
+        break;
+      }
+    }
+    expect(sawBouncing).toBe(true);
+    expect(sawSplatted).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #3: BattleBusSlowDeathBehavior
+// ────────────────────────────────────────────────────────────────────────────
+describe('BattleBusSlowDeathBehavior', () => {
+  function makeBattleBusBundle(busFields: Record<string, unknown> = {}) {
+    return makeBundle({
+      objects: [
+        makeObjectDef('BattleBus', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('Behavior', 'BattleBusSlowDeathBehavior ModuleTag_SlowDeath', {
+            DestructionDelay: 5000,
+            ProbabilityModifier: 10,
+            ThrowForce: 200,
+            PercentDamageToPassengers: 50,
+            EmptyHulkDestructionDelay: 1000, // 30 frames
+            ...busFields,
+          }),
+        ]),
+        makeObjectDef('Passenger', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('Killer', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'OHKGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('OHKGun', {
+          AttackRange: 220,
+          PrimaryDamage: 1000,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+  }
+
+  it('fake death throws bus vertically and lands as SECOND_LIFE hulk', () => {
+    const bundle = makeBattleBusBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BattleBus', 50, 50),
+        makeMapObject('Killer', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the bus.
+    let initialY = 0;
+    let enteredSlowDeath = false;
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+      const s = logic.getEntityState(1);
+      if (s && s.health <= 0) {
+        initialY = s.y;
+        enteredSlowDeath = true;
+        break;
+      }
+    }
+    expect(enteredSlowDeath).toBe(true);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        slowDeathState: {
+          isBattleBusFakeDeath: boolean;
+          battleBusThrowVelocity: number;
+        } | null;
+        modelConditionFlags: Set<string>;
+        health: number;
+        maxHealth: number;
+        canTakeDamage: boolean;
+        y: number;
+      }>;
+    };
+    const busEntity = priv.spawnedEntities.get(1)!;
+
+    // Should be in fake death phase.
+    expect(busEntity.slowDeathState).not.toBeNull();
+    expect(busEntity.slowDeathState!.isBattleBusFakeDeath).toBe(true);
+
+    // Bus should go up initially.
+    logic.update(1 / 30);
+    expect(busEntity.y).toBeGreaterThan(initialY);
+
+    // Run until the bus lands and becomes SECOND_LIFE.
+    let landedAsSecondLife = false;
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      if (busEntity.modelConditionFlags.has('SECOND_LIFE')) {
+        landedAsSecondLife = true;
+        break;
+      }
+    }
+    expect(landedAsSecondLife).toBe(true);
+    expect(busEntity.canTakeDamage).toBe(true);
+    expect(busEntity.health).toBe(busEntity.maxHealth * 0.5);
+    expect(busEntity.slowDeathState).toBeNull();
+  });
+
+  it('empty hulk auto-destructs after EmptyHulkDestructionDelay', () => {
+    const bundle = makeBattleBusBundle({ EmptyHulkDestructionDelay: 500 }); // 15 frames
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BattleBus', 50, 50),
+        makeMapObject('Killer', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the bus — no passengers, so empty hulk timer should start.
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+        battleBusEmptyHulkDestroyFrame: number;
+        destroyed: boolean;
+      }>;
+    };
+
+    // Run until it becomes SECOND_LIFE.
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      const entity = priv.spawnedEntities.get(1);
+      if (entity?.modelConditionFlags.has('SECOND_LIFE')) break;
+    }
+
+    const busEntity = priv.spawnedEntities.get(1)!;
+    expect(busEntity.modelConditionFlags.has('SECOND_LIFE')).toBe(true);
+    expect(busEntity.battleBusEmptyHulkDestroyFrame).toBeGreaterThan(0);
+
+    // Advance past the empty hulk timer.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Bus should be destroyed.
+    expect(busEntity.destroyed).toBe(true);
+  });
+
+  it('real death with SECOND_LIFE already set goes through normal SlowDeath', () => {
+    const bundle = makeBattleBusBundle({ EmptyHulkDestructionDelay: 0 });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('BattleBus', 50, 50),
+        makeMapObject('Killer', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Kill the bus — first death (fake death).
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+        slowDeathState: { isBattleBusFakeDeath: boolean; destroyOnCompletion: boolean } | null;
+        health: number;
+        maxHealth: number;
+        canTakeDamage: boolean;
+        destroyed: boolean;
+        animationState: string;
+      }>;
+    };
+
+    // Run until SECOND_LIFE.
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      if (priv.spawnedEntities.get(1)?.modelConditionFlags.has('SECOND_LIFE')) break;
+    }
+
+    const busEntity = priv.spawnedEntities.get(1)!;
+    expect(busEntity.modelConditionFlags.has('SECOND_LIFE')).toBe(true);
+    expect(busEntity.canTakeDamage).toBe(true);
+
+    // Now attack it again — second (real) death.
+    // Attacker may still be on cooldown from the first shot (DelayBetweenShots: 5000ms = 150 frames).
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+
+    // Run until the bus enters slow death again (real death this time).
+    let enteredRealSlowDeath = false;
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      if (busEntity.slowDeathState) {
+        enteredRealSlowDeath = true;
+        break;
+      }
+    }
+    expect(enteredRealSlowDeath).toBe(true);
+
+    // Should be in normal slow death (not fake death) because SECOND_LIFE is set.
+    expect(busEntity.slowDeathState!.isBattleBusFakeDeath).toBe(false);
+    expect(busEntity.slowDeathState!.destroyOnCompletion).toBe(true);
+
+    // Run until destroyed.
+    for (let i = 0; i < 300; i++) {
+      logic.update(1 / 30);
+      if (busEntity.destroyed) break;
+    }
+    expect(busEntity.destroyed).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #2: ProjectileStreamUpdate
+// ────────────────────────────────────────────────────────────────────────────
+describe('ProjectileStreamUpdate', () => {
+  function makeStreamBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('ToxinTruck', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('ClientUpdate', 'ProjectileStreamUpdate ModuleTag_Stream', {}),
+        ]),
+        makeObjectDef('Projectile', 'GLA', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+        ]),
+      ],
+    });
+  }
+
+  it('extractProjectileStreamProfile returns non-null for entities with ProjectileStreamUpdate', () => {
+    const bundle = makeStreamBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ToxinTruck', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        projectileStreamProfile: { enabled: boolean } | null;
+        projectileStreamState: unknown;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.projectileStreamProfile).not.toBeNull();
+    expect(entity.projectileStreamProfile!.enabled).toBe(true);
+    expect(entity.projectileStreamState).toBeNull();
+  });
+
+  it('addProjectileToStream fills circular buffer and getStreamPoints returns positions', () => {
+    const bundle = makeStreamBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ToxinTruck', 5, 5),
+        makeMapObject('Projectile', 10, 10),
+        makeMapObject('Projectile', 15, 15),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        projectileStreamProfile: { enabled: boolean } | null;
+        projectileStreamState: {
+          projectileIds: number[];
+          nextIndex: number;
+          ownerEntityId: number;
+        } | null;
+      }>;
+      addProjectileToStream(streamEntityId: number, projectileId: number): void;
+    };
+
+    // Add two projectiles to the stream.
+    priv.addProjectileToStream(1, 2);
+    priv.addProjectileToStream(1, 3);
+
+    const state = priv.spawnedEntities.get(1)!.projectileStreamState!;
+    expect(state).not.toBeNull();
+    expect(state.projectileIds).toEqual([2, 3]);
+    expect(state.nextIndex).toBe(2);
+
+    // getStreamPoints should return positions.
+    const points = logic.getStreamPoints(1);
+    expect(points.length).toBe(2);
+  });
+
+  it('updateProjectileStreams culls destroyed projectiles', () => {
+    const bundle = makeStreamBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ToxinTruck', 5, 5),
+        makeMapObject('Projectile', 10, 10),
+        makeMapObject('Projectile', 15, 15),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        projectileStreamProfile: { enabled: boolean } | null;
+        projectileStreamState: {
+          projectileIds: number[];
+          nextIndex: number;
+          ownerEntityId: number;
+        } | null;
+        destroyed: boolean;
+      }>;
+      addProjectileToStream(streamEntityId: number, projectileId: number): void;
+    };
+
+    priv.addProjectileToStream(1, 2);
+    priv.addProjectileToStream(1, 3);
+
+    // Destroy one projectile.
+    priv.spawnedEntities.get(2)!.destroyed = true;
+
+    logic.update(1 / 30);
+
+    const state = priv.spawnedEntities.get(1)!.projectileStreamState!;
+    expect(state.projectileIds).toEqual([3]);
+    expect(logic.getStreamPoints(1).length).toBe(1);
+  });
+
+  it('circular buffer wraps around after reaching capacity of 20', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('StreamEntity', 'GLA', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('ClientUpdate', 'ProjectileStreamUpdate ModuleTag_Stream', {}),
+        ]),
+        ...Array.from({ length: 22 }, (_, i) =>
+          makeObjectDef(`Proj${i}`, 'GLA', ['PROJECTILE'], [
+            makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 10, InitialHealth: 10 }),
+          ]),
+        ),
+      ],
+    });
+    const mapObjects = [
+      makeMapObject('StreamEntity', 5, 5),
+      ...Array.from({ length: 22 }, (_, i) =>
+        makeMapObject(`Proj${i}`, 10 + i, 10),
+      ),
+    ];
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap(mapObjects, 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        projectileStreamState: {
+          projectileIds: number[];
+          nextIndex: number;
+        } | null;
+      }>;
+      addProjectileToStream(streamEntityId: number, projectileId: number): void;
+    };
+
+    // Add 22 projectiles (buffer size 20 should wrap).
+    for (let i = 2; i <= 23; i++) {
+      priv.addProjectileToStream(1, i);
+    }
+
+    const state = priv.spawnedEntities.get(1)!.projectileStreamState!;
+    expect(state.projectileIds.length).toBe(20);
+    // After wrapping, first two entries should be overwritten with 22, 23.
+    expect(state.projectileIds[0]).toBe(22);
+    expect(state.projectileIds[1]).toBe(23);
+  });
+
+  it('streamPoints appears in RenderableEntityState when stream is active', () => {
+    const bundle = makeStreamBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('ToxinTruck', 5, 5),
+        makeMapObject('Projectile', 10, 10),
+      ]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      addProjectileToStream(streamEntityId: number, projectileId: number): void;
+    };
+
+    priv.addProjectileToStream(1, 2);
+    logic.update(1 / 30);
+
+    // Verify stream points are accessible via public API.
+    const points = logic.getStreamPoints(1);
+    expect(points.length).toBe(1);
+    // Verify that the entity's projectileStreamState is populated.
+    const privEntities = logic as unknown as {
+      spawnedEntities: Map<number, {
+        projectileStreamState: { projectileIds: number[] } | null;
+      }>;
+    };
+    expect(privEntities.spawnedEntities.get(1)!.projectileStreamState).not.toBeNull();
+  });
+
+  it('returns null projectileStreamProfile for entities without ProjectileStreamUpdate', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('PlainUnit', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('PlainUnit', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        projectileStreamProfile: { enabled: boolean } | null;
+      }>;
+    };
+    expect(priv.spawnedEntities.get(1)!.projectileStreamProfile).toBeNull();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #4: Script Action Targeting Variants
+// ────────────────────────────────────────────────────────────────────────────
+describe('Script action targeting variants', () => {
+  function makeTargetingBundle() {
+    return makeBundle({
+      objects: [
+        makeObjectDef('SourceUnit', 'America', ['VEHICLE', 'CAN_ATTACK', 'TRANSPORT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', {
+            Weapon: [['PRIMARY', 'TestGun'], ['SECONDARY', 'TestGun2']],
+          }),
+        ], {
+          CommandSet: 'TestCommandSet',
+          BuildCost: 500,
+        }),
+        makeObjectDef('TargetUnit', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('TestGun', { AttackRange: 120, PrimaryDamage: 10, DelayBetweenShots: 100 }),
+        makeWeaponDef('TestGun2', { AttackRange: 120, PrimaryDamage: 20, DelayBetweenShots: 100 }),
+      ],
+      commandButtons: [
+        makeCommandButtonDef('Command_SwitchWeapon', { Command: 'SWITCH_WEAPON', WeaponSlot: 'SECONDARY' }),
+        makeCommandButtonDef('Command_Sell', { Command: 'SELL' }),
+        makeCommandButtonDef('Command_CombatDrop', { Command: 'COMBATDROP' }),
+      ],
+      commandSets: [
+        makeCommandSetDef('TestCommandSet', {
+          1: 'Command_SwitchWeapon',
+          2: 'Command_Sell',
+          3: 'Command_CombatDrop',
+        }),
+      ],
+    });
+  }
+
+  it('SWITCH_WEAPON with OBJECT target returns false (C++ not implemented)', () => {
+    const bundle = makeTargetingBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SourceUnit', 10, 10),
+        makeMapObject('TargetUnit', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    // Source parity: C++ doCommandButtonAtObject does NOT implement SWITCH_WEAPON.
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_SwitchWeapon', 2],
+    })).toBe(false);
+  });
+
+  it('SWITCH_WEAPON with POSITION target returns false', () => {
+    const bundle = makeTargetingBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const map = makeMap([
+      makeMapObject('SourceUnit', 10, 10),
+    ], 64, 64);
+    map.waypoints = { nodes: [{ id: 1, name: 'WP', position: { x: 20, y: 20, z: 0 } }], links: [] };
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(64, 64));
+
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_SwitchWeapon', 'WP'],
+    })).toBe(false);
+  });
+
+  it('SELL with OBJECT target returns false (C++ not implemented)', () => {
+    const bundle = makeTargetingBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SourceUnit', 10, 10),
+        makeMapObject('TargetUnit', 30, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    // Source parity: C++ doCommandButtonAtObject does NOT implement SELL.
+    expect(logic.executeScriptAction({
+      actionType: 403, // NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED
+      params: [1, 'Command_Sell', 2],
+    })).toBe(false);
+  });
+
+  it('COMBATDROP with NONE target uses entity current position', () => {
+    const bundle = makeTargetingBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('SourceUnit', 10, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    expect(logic.executeScriptAction({
+      actionType: 445, // NAMED_USE_COMMANDBUTTON_ABILITY
+      params: [1, 'Command_CombatDrop'],
+    })).toBe(true);
+  });
+
+  it('COMBATDROP with POSITION target uses waypoint position', () => {
+    const bundle = makeTargetingBundle();
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const map = makeMap([
+      makeMapObject('SourceUnit', 10, 10),
+    ], 64, 64);
+    map.waypoints = { nodes: [{ id: 1, name: 'DropWP', position: { x: 30, y: 30, z: 0 } }], links: [] };
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(64, 64));
+
+    expect(logic.executeScriptAction({
+      actionType: 404, // NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT
+      params: [1, 'Command_CombatDrop', 'DropWP'],
+    })).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fix #5: CLIMBING and FLOODED Condition Flags
+// ────────────────────────────────────────────────────────────────────────────
+describe('CLIMBING and FLOODED condition flags', () => {
+  it('CLIMBING flag is set when entity is moving on a cliff cell', () => {
+    const unit = makeObjectDef('ClimbUnit', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [unit] });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ClimbUnit', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+        moving: boolean;
+        x: number;
+        z: number;
+      }>;
+      navigationGrid: { terrainType: Uint8Array; width: number; height: number } | null;
+      worldToGrid: (x: number, z: number) => [number | null, number | null];
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Set entity moving on a cliff cell.
+    entity.moving = true;
+    if (priv.navigationGrid) {
+      const [cellX, cellZ] = priv.worldToGrid(entity.x, entity.z);
+      if (cellX !== null && cellZ !== null) {
+        const idx = cellZ * priv.navigationGrid.width + cellX;
+        priv.navigationGrid.terrainType[idx] = 2; // NAV_CLIFF
+      }
+    }
+
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('CLIMBING')).toBe(true);
+
+    // Stop moving — CLIMBING should clear.
+    entity.moving = false;
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('CLIMBING')).toBe(false);
+  });
+
+  it('CLIMBING flag is not set on non-cliff terrain', () => {
+    const unit = makeObjectDef('ClimbUnit2', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [unit] });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ClimbUnit2', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+        moving: boolean;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Moving on normal terrain (not cliff) — CLIMBING should not be set.
+    entity.moving = true;
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('CLIMBING')).toBe(false);
+  });
+
+  it('FLOODED flag is set when entity Y is below water height', () => {
+    const building = makeObjectDef('FloodUnit', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [building] });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('FloodUnit', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+        y: number;
+      }>;
+      getWaterHeightAt(worldX: number, worldZ: number): number | null;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    // Mock water height by overriding getWaterHeightAt.
+    const origWater = priv.getWaterHeightAt.bind(priv);
+    (logic as any).getWaterHeightAt = (_x: number, _z: number) => 10;
+
+    entity.y = 5; // Below water level (10).
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('FLOODED')).toBe(true);
+
+    // Entity above water level.
+    entity.y = 15;
+    logic.update(1 / 30);
+    expect(entity.modelConditionFlags.has('FLOODED')).toBe(false);
+
+    // Restore.
+    (logic as any).getWaterHeightAt = origWater;
+  });
+
+  it('FLOODED flag is not set when no water is present', () => {
+    const building = makeObjectDef('DryUnit', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+    const bundle = makeBundle({ objects: [building] });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([makeMapObject('DryUnit', 5, 5)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        modelConditionFlags: Set<string>;
+        y: number;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1)!;
+
+    entity.y = 0;
+    logic.update(1 / 30);
+    // No water polygons in the default heightmap, so FLOODED should not be set.
+    expect(entity.modelConditionFlags.has('FLOODED')).toBe(false);
   });
 });
