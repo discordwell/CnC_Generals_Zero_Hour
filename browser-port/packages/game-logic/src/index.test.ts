@@ -66615,6 +66615,23 @@ describe('BoneFXUpdate', () => {
       },
       health: 100,
     });
+
+    const entity = (logic as any).spawnedEntities.values().next().value;
+    expect(entity.boneFXState).not.toBeNull();
+    expect(entity.boneFXState!.currentBodyState).toBe(0); // PRISTINE
+
+    // Trigger damage via the game logic damage system to properly fire boneFXChangeBodyDamageState
+    const priv = logic as unknown as {
+      applyWeaponDamageAmount: (sourceId: number | null, target: any, amount: number, damageType: string) => void;
+    };
+    priv.applyWeaponDamageAmount(null, entity, 60, 'EXPLOSION');
+    logic.update(1 / 30);
+
+    // After damage transition, the body state should be DAMAGED (1)
+    expect(entity.boneFXState!.currentBodyState).toBe(1);
+  });
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Bridge System Tests
 // ══════════════════════════════════════════════════════════════════════════════
@@ -66830,6 +66847,7 @@ describe('Bridge System', () => {
           currentBodyState: number;
           pendingVisualEvents: Array<{ type: string; effectName: string }>;
           nextFXFrame: number[][];
+        } | null;
         destroyed: boolean;
         bridgeBehaviorState: {
           towerIds: number[];
@@ -66901,51 +66919,6 @@ describe('Bridge System', () => {
     };
 
     const entity = priv.spawnedEntities.get(1)!;
-    expect(entity.boneFXState).not.toBeNull();
-
-    // Initially in PRISTINE state (0).
-    logic.update(1 / 30);
-    expect(entity.boneFXState!.currentBodyState).toBe(0);
-
-    // Damage entity to transition to DAMAGED state.
-    // DAMAGED threshold is health < maxHealth * 0.66 (UNIT_DAMAGED_THRESH).
-    // Set health to just below threshold.
-    entity.health = Math.floor(entity.maxHealth * 0.5);
-
-    // Run frames — the damage state change should be detected and BoneFX timers reinitialize.
-    // We need to trigger the body damage state tracking code path.
-    // The simplest way: apply damage through the public damage path.
-    // But since we directly modified health, the BoneFX state transition happens in the
-    // damage application code. Let's trigger via applyDamage-like mechanism.
-    // For testing purposes, we can directly call the damage handler by issuing a weapon hit.
-    // Instead, let's just check that the BoneFXState timers for DAMAGED state are initialized
-    // after the state changes via the updateBoneFX path.
-
-    // Actually, the body damage state change is tracked in the damage application code,
-    // not in the update loop. Since we directly set health, the boneFX state won't auto-update.
-    // The correct approach: simulate damage via the game logic damage system.
-    // Reset health to full first, then use an attack to cause the transition.
-    entity.health = entity.maxHealth;
-
-    // Create an attack weapon and apply damage through game commands.
-    // Simpler approach: directly test the boneFXChangeBodyDamageState integration.
-    // Access the method through the private API.
-    const privLogic = logic as unknown as {
-      boneFXChangeBodyDamageState: (e: typeof entity, old: number, newS: number) => void;
-    };
-
-    // Simulate transition from PRISTINE(0) to DAMAGED(1).
-    privLogic.boneFXChangeBodyDamageState(entity as never, 0, 1);
-
-    expect(entity.boneFXState!.currentBodyState).toBe(1);
-    // DAMAGED state FXList slot 0 should now have a valid next frame (not -1).
-    expect(entity.boneFXState!.nextFXFrame[1]![0]).not.toBe(-1);
-
-    // Run a frame — should fire DAMAGED FX events.
-    logic.update(1 / 30);
-    const events = entity.boneFXState!.pendingVisualEvents;
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events[0]!.effectName).toBe('FXDamaged');
 
     // Manually set up scaffold state (STM_RISE=1).
     entity.bridgeScaffoldState = {
@@ -67079,6 +67052,9 @@ describe('Bridge System', () => {
 
     // Bridge should also be destroyed (tower death kills bridge).
     expect(bridge.destroyed).toBe(true);
+  });
+});
+
 // ── FlightDeckBehavior Tests ──────────────────────────────────────────────────
 
 function makeFlightDeckCarrierDef(): ObjectDef {
@@ -67587,5 +67563,388 @@ describe('FlightDeckBehavior', () => {
     const tank = priv.spawnedEntities.get(1)!;
     expect(tank.flightDeckProfile).toBeNull();
     expect(tank.flightDeckState).toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SpectreGunship Tests (Phase 3)
+// ══════════════════════════════════════════════════════════════════════════════
+
+describe('SpectreGunshipUpdate', () => {
+  function makeGunshipDef(): ObjectDef {
+    return makeObjectDef('TestGunship', 'America', ['VEHICLE', 'AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+      makeBlock('Behavior', 'SpectreGunshipUpdate ModuleTag_Spectre', {
+        SpecialPowerTemplate: 'SPECIAL_SPECTRE_GUNSHIP',
+        AttackAreaRadius: 200,
+        TargetingReticleRadius: 25,
+        GunshipOrbitRadius: 100,
+        StrafingIncrement: 20,
+        OrbitInsertionSlope: 0.7,
+        HowitzerFiringRate: 100,
+        HowitzerFollowLag: 0,
+        RandomOffsetForHowitzer: 10,
+        OrbitTime: 3000,
+        HowitzerWeaponTemplate: 'TestHowitzer',
+        GattlingTemplateName: 'TestGattling',
+      }),
+    ], { Speed: 5 });
+  }
+
+  function makeCommandCenterDef(): ObjectDef {
+    return makeObjectDef('TestCommandCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+      makeBlock('Behavior', 'SpectreGunshipDeploymentUpdate ModuleTag_Deploy', {
+        SpecialPowerTemplate: 'SPECIAL_SPECTRE_GUNSHIP',
+        GunshipTemplateName: 'TestGunship',
+        AttackAreaRadius: 200,
+        GunshipOrbitRadius: 100,
+        CreateLocation: 'CREATE_AT_EDGE_FARTHEST_FROM_TARGET',
+      }),
+    ]);
+  }
+
+  it('extracts SpectreGunshipUpdate profile from INI', () => {
+    const bundle = makeBundle({ objects: [makeGunshipDef()] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const entity = (logic as any).spawnedEntities.get(1)!;
+    expect(entity.spectreGunshipProfile).not.toBeNull();
+    expect(entity.spectreGunshipProfile!.attackAreaRadius).toBe(200);
+    expect(entity.spectreGunshipProfile!.targetingReticleRadius).toBe(25);
+    expect(entity.spectreGunshipProfile!.gunshipOrbitRadius).toBe(100);
+    expect(entity.spectreGunshipProfile!.strafingIncrement).toBe(20);
+    expect(entity.spectreGunshipProfile!.howitzerWeaponTemplate).toBe('TestHowitzer');
+    expect(entity.spectreGunshipProfile!.gattlingTemplateName).toBe('TestGattling');
+  });
+
+  it('extracts SpectreGunshipDeployment profile from INI', () => {
+    const bundle = makeBundle({ objects: [makeCommandCenterDef(), makeGunshipDef()] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestCommandCenter', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const entity = (logic as any).spawnedEntities.get(1)!;
+    expect(entity.spectreGunshipDeploymentProfile).not.toBeNull();
+    expect(entity.spectreGunshipDeploymentProfile!.gunshipTemplateName).toBe('TestGunship');
+    expect(entity.spectreGunshipDeploymentProfile!.attackAreaRadius).toBe(200);
+    expect(entity.spectreGunshipDeploymentProfile!.createLocation).toBe('FARTHEST_FROM_TARGET');
+  });
+
+  it('transitions gunship through INSERTING -> ORBITING -> DEPARTING lifecycle', () => {
+    const bundle = makeBundle({
+      objects: [makeGunshipDef()],
+      weapons: [makeWeaponDef('TestHowitzer', { Damage: 50, DamageRadius: 20, DamageType: 'EXPLOSION' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        x: number; z: number;
+        destroyed: boolean;
+        spectreGunshipProfile: { gunshipOrbitRadius: number; orbitFrames: number };
+        spectreGunshipState: {
+          status: string;
+          initialTargetX: number;
+          initialTargetZ: number;
+          orbitEscapeFrame: number;
+          okToFireHowitzerCounter: number;
+        } | null;
+      }>;
+    };
+
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.spectreGunshipState).toBeNull();
+
+    // Manually activate the gunship state
+    const profile = entity.spectreGunshipProfile;
+    (entity as any).spectreGunshipState = {
+      status: 'INSERTING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 640,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 0,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+
+    // Entity starts far from target — should be INSERTING
+    expect(entity.spectreGunshipState!.status).toBe('INSERTING');
+
+    // Run frames until it reaches orbit radius
+    for (let i = 0; i < 500; i++) {
+      logic.update(1 / 30);
+      if (entity.spectreGunshipState!.status !== 'INSERTING') break;
+    }
+
+    // Should transition to ORBITING once within orbit radius
+    expect(entity.spectreGunshipState!.status).toBe('ORBITING');
+    expect(entity.spectreGunshipState!.orbitEscapeFrame).toBeGreaterThan(0);
+
+    // Run past orbit escape frame
+    const escapeFrame = entity.spectreGunshipState!.orbitEscapeFrame;
+    for (let i = 0; i < 1000; i++) {
+      logic.update(1 / 30);
+      if (entity.spectreGunshipState!.status === 'DEPARTING') break;
+    }
+
+    // Should transition to DEPARTING
+    expect(entity.spectreGunshipState!.status).toBe('DEPARTING');
+
+    // Run until off map and destroyed
+    for (let i = 0; i < 2000; i++) {
+      if (entity.destroyed) break;
+      logic.update(1 / 30);
+    }
+    expect(entity.destroyed).toBe(true);
+  });
+
+  it('constrains override target within attack area radius', () => {
+    const bundle = makeBundle({ objects: [makeGunshipDef()] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const entity = (logic as any).spawnedEntities.get(1)!;
+
+    // Activate with target at center
+    entity.spectreGunshipState = {
+      status: 'INSERTING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 9999, // Way outside attack area
+      overrideTargetZ: 9999,
+      satelliteX: 640,
+      satelliteZ: 640,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 0,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+
+    logic.update(1 / 30);
+
+    // Override should be constrained to within (attackAreaRadius - targetingReticleRadius)
+    const constraintRadius = 200 - 25; // 175
+    const dx = entity.spectreGunshipState.overrideTargetX - 640;
+    const dz = entity.spectreGunshipState.overrideTargetZ - 640;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    expect(dist).toBeLessThanOrEqual(constraintRadius + 1); // +1 for float tolerance
+  });
+
+  it('gattling strafing increments toward target position', () => {
+    const bundle = makeBundle({ objects: [makeGunshipDef()] });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const entity = (logic as any).spawnedEntities.get(1)!;
+    entity.x = 640;
+    entity.z = 540; // Within orbit radius of target
+
+    // Set up ORBITING state with gattling aiming far from target
+    entity.spectreGunshipState = {
+      status: 'ORBITING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 540,
+      gattlingTargetX: 600, // Offset from target
+      gattlingTargetZ: 600,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 999999,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+
+    const initialGattlingX = entity.spectreGunshipState.gattlingTargetX;
+    const initialGattlingZ = entity.spectreGunshipState.gattlingTargetZ;
+
+    logic.update(1 / 30);
+
+    // Gattling target should have moved toward positionToShootAt
+    const movedDX = entity.spectreGunshipState.gattlingTargetX - initialGattlingX;
+    const movedDZ = entity.spectreGunshipState.gattlingTargetZ - initialGattlingZ;
+    const movedDist = Math.sqrt(movedDX * movedDX + movedDZ * movedDZ);
+    // Should move by strafingIncrement (20) per frame
+    expect(movedDist).toBeCloseTo(20, 0);
+  });
+
+  it('howitzer fires after gattling converges for howitzerFollowLag cycles', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TestGunship2', 'America', ['VEHICLE', 'AIRCRAFT'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+          makeBlock('Behavior', 'SpectreGunshipUpdate ModuleTag_Spectre', {
+            SpecialPowerTemplate: 'SPECIAL_SPECTRE_GUNSHIP',
+            AttackAreaRadius: 200,
+            TargetingReticleRadius: 25,
+            GunshipOrbitRadius: 100,
+            StrafingIncrement: 999, // Very large so gattling converges instantly
+            OrbitInsertionSlope: 0.7,
+            HowitzerFiringRate: 1, // Fire every frame
+            HowitzerFollowLag: 100, // 3 frames lag
+            RandomOffsetForHowitzer: 0,
+            OrbitTime: 90000,
+            HowitzerWeaponTemplate: 'TestHowitzer',
+            GattlingTemplateName: 'TestGattling',
+          }),
+        ], { Speed: 5 }),
+        makeObjectDef('Target', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+      weapons: [makeWeaponDef('TestHowitzer', { Damage: 100, DamageRadius: 50, DamageType: 'EXPLOSION' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestGunship2', 50, 50),
+        makeMapObject('Target', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const gunship = priv.spawnedEntities.get(1)!;
+    const target = priv.spawnedEntities.get(2)!;
+
+    // Position target at center of attack area
+    target.x = 640;
+    target.z = 640;
+
+    // Position gunship in orbit
+    gunship.x = 640;
+    gunship.z = 540;
+
+    gunship.spectreGunshipState = {
+      status: 'ORBITING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 540,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 999999,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+
+    const initialHealth = target.health;
+
+    // Run frames — gattling converges immediately (strafingIncrement=999) so
+    // okToFireHowitzerCounter increments each frame. After howitzerFollowLag frames,
+    // howitzer should fire and deal damage to the target.
+    for (let i = 0; i < 200; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Target should have taken damage from howitzer
+    expect(target.health).toBeLessThan(initialHealth);
+  });
+
+  it('deployment spawns gunship at map edge far from target', () => {
+    const bundle = makeBundle({
+      objects: [makeCommandCenterDef(), makeGunshipDef()],
+      specialPowers: [makeSpecialPowerDef('SPECIAL_SPECTRE_GUNSHIP', {
+        ReloadTime: 0,
+        Enum: 'SPECIAL_SPECTRE_GUNSHIP',
+      })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestCommandCenter', 64, 64)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const cmdCenter = priv.spawnedEntities.get(1)!;
+
+    // Issue special power at target position (center of map)
+    const targetX = 640;
+    const targetZ = 640;
+
+    const deployed = priv.initiateSpectreGunshipDeployment(1, targetX, targetZ);
+    expect(deployed).toBe(true);
+
+    // Should have spawned a new entity
+    expect(priv.spawnedEntities.size).toBe(2);
+
+    // The spawned gunship should be at the map edge (far from target)
+    let gunship: any = null;
+    for (const [id, ent] of priv.spawnedEntities) {
+      if (id !== 1) gunship = ent;
+    }
+    expect(gunship).not.toBeNull();
+    expect(gunship.spectreGunshipProfile).not.toBeNull();
+    expect(gunship.spectreGunshipState).not.toBeNull();
+    expect(gunship.spectreGunshipState.status).toBe('INSERTING');
+    expect(gunship.spectreGunshipState.initialTargetX).toBe(targetX);
+    expect(gunship.spectreGunshipState.initialTargetZ).toBe(targetZ);
+  });
+
+  it('gunship with no spectreGunshipProfile gets null profile', () => {
+    const bundle = makeBundle({
+      objects: [makeObjectDef('Tank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      ])],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Tank', 50, 50)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+
+    const entity = (logic as any).spawnedEntities.get(1)!;
+    expect(entity.spectreGunshipProfile).toBeNull();
+    expect(entity.spectreGunshipState).toBeNull();
+    expect(entity.spectreGunshipDeploymentProfile).toBeNull();
   });
 });

@@ -1,5 +1,13 @@
 # Session Summaries
 
+## 2026-03-09T23:20Z — Waterfall Plan Phases 1-5 + Code Review Fixes
+Implemented all 5 phases of the remaining C++ module port waterfall plan, plus Phase 3 SpectreGunship:
+- **Phases 1,2,4,5** (from previous session): MobMemberSlavedUpdate, BoneFXUpdate, RadiusDecalUpdate, Bridge System (3 modules), FlightDeckBehavior — merged from 4 parallel worktree branches with post-merge structural fixes.
+- **Phase 3 — SpectreGunshipUpdate + SpectreGunshipDeploymentUpdate**: Orbital gunship state machine (INSERTING→ORBITING→DEPARTING→IDLE), dual weapon system (gattling strafing + howitzer area damage), deployment from command center spawns gunship at map edge, target override constraint within attack radius, special power routing integration. 8 new tests.
+- **Code review fixes (11 findings applied)**: (1) noNeedToCatchUpRadius hysteresis zone added to mob member update. (2) Dead `_effectPrefix` parameter removed from parseBoneFXFieldValue. (3) Duplicate block iteration in extractBridgeBehaviorProfile removed (merge artifact). (4) Dead `_entity` parameter removed from boneFXInitTimes. (5) BoneFX onlyOnce default fixed (true→false, matching C++). (6) Vacuous BoneFX damage transition test fixed (uses applyWeaponDamageAmount + checks currentBodyState as number). (7) Math.random() replaced with gameRandom.nextFloat() for determinism. (8) Unused totalSpaces variable removed from FlightDeck init.
+- **Post-merge fixes**: 4 structural issues from worktree merge (unclosed test blocks, BoneFX test body mixed into Bridge test, missing describe/it closings).
+- **Total**: 3115 tests pass, 130 test files. Only pre-existing TS errors in other packages.
+
 ## 2026-03-09T20:00Z — Fix 5 Verified Source Parity Gaps (Final P1/P2 Tranche)
 Fixed 5 confirmed remaining gaps from thorough re-audit. 2 agents ran in parallel:
 - **Agent A (Death Physics)**: (1) SlowDeath fling physics — flingForce/flingPitch/variance parsed from INI, random 3D velocity decomposition, gravity (4.0/30 per frame), ground bounce with 30% velocity retention, explodedState transitions FLAILING→BOUNCING→SPLATTED. (3) BattleBusSlowDeathBehavior — two-phase death: fake death throws vertically with gravity, damages passengers by percentage, lands as SECOND_LIFE hulk with 50% health; empty hulk auto-destruction timer; real death (SECOND_LIFE already set) delegates to normal SlowDeath.

@@ -1089,6 +1089,8 @@ const SPECIAL_POWER_BEHAVIOR_MODULE_TYPES = new Set<string>([
   'FIREWEAPONPOWER',
   'DEMORALIZESPECIALPOWER',
   'EMPSPECIALPOWER',
+  'SPECTREGUNSHIPUPDATE',
+  'SPECTREGUNSHIPDEPLOYMENTUPDATE',
 ]);
 
 /**
@@ -1371,6 +1373,85 @@ interface FlightDeckState {
   rampUp: boolean[];
   /** Whether initial buildInfo has been completed. */
   initialized: boolean;
+}
+
+/**
+ * Source parity: SpectreGunshipUpdateModuleData — gunship orbital flight + dual-weapon system.
+ * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/SpectreGunshipUpdate.cpp)
+ */
+interface SpectreGunshipUpdateProfile {
+  /** Source parity: m_specialPowerTemplate — special power name that triggers this update. */
+  specialPowerTemplate: string;
+  /** Source parity: m_attackAreaRadius — outer attack area circle radius. Default 200. */
+  attackAreaRadius: number;
+  /** Source parity: m_targetingReticleRadius — inner targeting reticle radius. Default 25. */
+  targetingReticleRadius: number;
+  /** Source parity: m_gunshipOrbitRadius — orbital radius around target. Default 250. */
+  gunshipOrbitRadius: number;
+  /** Source parity: m_strafingIncrement — gattling gun strafe step per fire cycle. Default 20. */
+  strafingIncrement: number;
+  /** Source parity: m_orbitInsertionSlope — orbital insertion declination slope. Default 0.7. */
+  orbitInsertionSlope: number;
+  /** Source parity: m_howitzerFiringRate — frames between howitzer evaluation cycles. Default 10. */
+  howitzerFiringRate: number;
+  /** Source parity: m_howitzerFollowLag — gattling strafe cycles before howitzer follows. Default 0. */
+  howitzerFollowLag: number;
+  /** Source parity: m_randomOffsetForHowitzer — random scatter for howitzer impacts. Default 20. */
+  randomOffsetForHowitzer: number;
+  /** Source parity: m_orbitFrames — total frames the gunship orbits before departing. */
+  orbitFrames: number;
+  /** Source parity: m_howitzerWeaponTemplate — weapon template name for howitzer fire. */
+  howitzerWeaponTemplate: string;
+  /** Source parity: m_gattlingTemplateName — template name for the gattling gun entity. */
+  gattlingTemplateName: string;
+}
+
+/** Source parity: GunshipStatus enum from SpectreGunshipUpdate.h */
+type SpectreGunshipStatus = 'IDLE' | 'INSERTING' | 'ORBITING' | 'DEPARTING';
+
+/**
+ * Source parity: SpectreGunshipUpdate runtime state — orbital position, weapon targeting, timers.
+ */
+interface SpectreGunshipState {
+  status: SpectreGunshipStatus;
+  /** Source parity: m_initialTargetPosition — center of attack area (set on activation). */
+  initialTargetX: number;
+  initialTargetZ: number;
+  /** Source parity: m_overrideTargetDestination — player-redirectable targeting reticle position. */
+  overrideTargetX: number;
+  overrideTargetZ: number;
+  /** Source parity: m_satellitePosition — computed orbital waypoint the gunship flies toward. */
+  satelliteX: number;
+  satelliteZ: number;
+  /** Source parity: m_gattlingTargetPosition — position the gattling gun is currently strafing toward. */
+  gattlingTargetX: number;
+  gattlingTargetZ: number;
+  /** Source parity: m_positionToShootAt — current howitzer aim position. */
+  positionToShootAtX: number;
+  positionToShootAtZ: number;
+  /** Source parity: m_orbitEscapeFrame — frame at which the gunship departs. */
+  orbitEscapeFrame: number;
+  /** Source parity: m_okToFireHowitzerCounter — gattling strafe convergence counter for howitzer. */
+  okToFireHowitzerCounter: number;
+  /** Source parity: m_gattlingID — entity ID of the contained gattling gun entity. */
+  gattlingEntityId: number;
+}
+
+/**
+ * Source parity: SpectreGunshipDeploymentUpdateModuleData — command center deployment side.
+ * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/SpectreGunshipDeploymentUpdate.cpp)
+ */
+interface SpectreGunshipDeploymentProfile {
+  /** Source parity: m_specialPowerTemplate — special power name that triggers deployment. */
+  specialPowerTemplate: string;
+  /** Source parity: m_gunshipTemplateName — template name of the gunship to spawn. */
+  gunshipTemplateName: string;
+  /** Source parity: m_attackAreaRadius — radius of the attack area circle. Default 200. */
+  attackAreaRadius: number;
+  /** Source parity: m_gunshipOrbitRadius — extra offset distance for spawn point beyond map edge. */
+  gunshipOrbitRadius: number;
+  /** Source parity: m_createLoc — edge selection strategy for gunship spawn. */
+  createLocation: 'NEAR_SOURCE' | 'FARTHEST_FROM_SOURCE' | 'NEAR_TARGET' | 'FARTHEST_FROM_TARGET';
 }
 
 type ContainModuleType = 'OPEN' | 'TRANSPORT' | 'OVERLORD' | 'HELIX' | 'PARACHUTE' | 'GARRISON' | 'TUNNEL' | 'CAVE' | 'HEAL' | 'INTERNET_HACK';
@@ -2751,6 +2832,11 @@ interface MapEntity {
   // ── Source parity: FlightDeckBehavior — aircraft carrier flight deck system ──
   flightDeckProfile: FlightDeckProfile | null;
   flightDeckState: FlightDeckState | null;
+  // ── Source parity: SpectreGunshipUpdate — gunship orbital flight + weapons ──
+  spectreGunshipProfile: SpectreGunshipUpdateProfile | null;
+  spectreGunshipState: SpectreGunshipState | null;
+  // ── Source parity: SpectreGunshipDeploymentUpdate — command center deployment ──
+  spectreGunshipDeploymentProfile: SpectreGunshipDeploymentProfile | null;
 }
 
 /**
@@ -3521,10 +3607,6 @@ interface MobMemberSlavedState {
   mobState: number;
 }
 
-/** Source parity: MobMemberSlavedUpdate constants from header. */
-const MOB_MEMBER_CLOSE_ENOUGH = 15.0;
-const MOB_MEMBER_CLOSE_ENOUGH_SQR = MOB_MEMBER_CLOSE_ENOUGH * MOB_MEMBER_CLOSE_ENOUGH;
-
 /** Source parity: SlavedUpdate constants. */
 const SLAVED_UPDATE_RATE = 8; // LOGICFRAMES_PER_SECOND / 4 ≈ 7.5, round to 8
 const STRAY_MULTIPLIER = 2.0;
@@ -3820,6 +3902,9 @@ interface RadiusDecalState {
   radius: number;
   visible: boolean;
   killWhenNoLongerAttacking: boolean;
+}
+
+/**
  * Source parity: BridgeBehaviorModuleData — bridge lifecycle INI profile.
  * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/BridgeBehavior.cpp)
  */
@@ -7692,6 +7777,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateHealing();
     this.updateParkingPlaceHealing();
     this.updateFlightDeck();
+    this.updateSpectreGunship();
     this.updateMineBehavior();
     this.updateMineCollisions();
     this.updateDemoTraps();
@@ -28681,6 +28767,11 @@ export class GameLogicSubsystem implements Subsystem {
       // Flight deck (aircraft carrier)
       flightDeckProfile,
       flightDeckState: null,
+      // SpectreGunship (gunship orbital flight + weapons)
+      spectreGunshipProfile: this.extractSpectreGunshipUpdateProfile(objectDef),
+      spectreGunshipState: null,
+      // SpectreGunshipDeployment (command center deployment)
+      spectreGunshipDeploymentProfile: this.extractSpectreGunshipDeploymentProfile(objectDef),
     };
 
     this.applyMapObjectCoreProperties(entity, mapObject);
@@ -28912,6 +29003,9 @@ export class GameLogicSubsystem implements Subsystem {
         nextParticleFrame: makeFrameGrid(),
         activeParticleIds: [],
         pendingVisualEvents: [],
+      };
+    }
+
     // Source parity: BridgeBehavior — initialize bridge behavior state.
     if (entity.bridgeBehaviorProfile) {
       entity.bridgeBehaviorState = {
@@ -31123,6 +31217,50 @@ export class GameLogicSubsystem implements Subsystem {
       runwayTaxi,
       runwayCreation,
     };
+  }
+
+  private extractSpectreGunshipUpdateProfile(objectDef: ObjectDef | undefined): SpectreGunshipUpdateProfile | null {
+    if (!objectDef) return null;
+    for (const block of objectDef.blocks) {
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'SPECTREGUNSHIPUPDATE') continue;
+      return {
+        specialPowerTemplate: readStringField(block.fields, ['SpecialPowerTemplate']) ?? '',
+        attackAreaRadius: readNumericField(block.fields, ['AttackAreaRadius']) ?? 200,
+        targetingReticleRadius: readNumericField(block.fields, ['TargetingReticleRadius']) ?? 25,
+        gunshipOrbitRadius: readNumericField(block.fields, ['GunshipOrbitRadius']) ?? 250,
+        strafingIncrement: readNumericField(block.fields, ['StrafingIncrement']) ?? 20,
+        orbitInsertionSlope: readNumericField(block.fields, ['OrbitInsertionSlope']) ?? 0.7,
+        howitzerFiringRate: this.msToLogicFrames(readNumericField(block.fields, ['HowitzerFiringRate']) ?? 333),
+        howitzerFollowLag: this.msToLogicFrames(readNumericField(block.fields, ['HowitzerFollowLag']) ?? 0),
+        randomOffsetForHowitzer: readNumericField(block.fields, ['RandomOffsetForHowitzer']) ?? 20,
+        orbitFrames: this.msToLogicFrames(readNumericField(block.fields, ['OrbitTime']) ?? 0),
+        howitzerWeaponTemplate: readStringField(block.fields, ['HowitzerWeaponTemplate']) ?? '',
+        gattlingTemplateName: readStringField(block.fields, ['GattlingTemplateName']) ?? '',
+      };
+    }
+    return null;
+  }
+
+  private extractSpectreGunshipDeploymentProfile(objectDef: ObjectDef | undefined): SpectreGunshipDeploymentProfile | null {
+    if (!objectDef) return null;
+    for (const block of objectDef.blocks) {
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'SPECTREGUNSHIPDEPLOYMENTUPDATE') continue;
+      const createLocStr = (readStringField(block.fields, ['CreateLocation']) ?? 'CREATE_AT_EDGE_FARTHEST_FROM_TARGET').toUpperCase();
+      let createLocation: SpectreGunshipDeploymentProfile['createLocation'] = 'FARTHEST_FROM_TARGET';
+      if (createLocStr.includes('NEAR_SOURCE')) createLocation = 'NEAR_SOURCE';
+      else if (createLocStr.includes('FARTHEST_FROM_SOURCE')) createLocation = 'FARTHEST_FROM_SOURCE';
+      else if (createLocStr.includes('NEAR_TARGET')) createLocation = 'NEAR_TARGET';
+      return {
+        specialPowerTemplate: readStringField(block.fields, ['SpecialPowerTemplate']) ?? '',
+        gunshipTemplateName: readStringField(block.fields, ['GunshipTemplateName']) ?? '',
+        attackAreaRadius: readNumericField(block.fields, ['AttackAreaRadius']) ?? 200,
+        gunshipOrbitRadius: readNumericField(block.fields, ['GunshipOrbitRadius']) ?? 250,
+        createLocation,
+      };
+    }
+    return null;
   }
 
   private extractContainProfile(objectDef: ObjectDef | undefined): ContainProfile | null {
@@ -34161,7 +34299,7 @@ export class GameLogicSubsystem implements Subsystem {
                   const boneIndex = parseInt(indexStr, 10) - 1; // 1-based → 0-based
                   if (boneIndex < 0 || boneIndex >= numBones || isNaN(boneIndex)) continue;
 
-                  const entry = this.parseBoneFXFieldValue(fieldValue, eff.prefix);
+                  const entry = this.parseBoneFXFieldValue(fieldValue);
                   if (entry) {
                     const target =
                       eff.target === 'fxLists' ? fxLists :
@@ -34190,7 +34328,17 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
       }
+    };
 
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) {
+        visitBlock(block);
+      }
+    }
+    return profile;
+  }
+
+  /**
    * Source parity: BridgeBehavior — parse bridge behavior module from INI.
    * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/BridgeBehavior.cpp)
    */
@@ -34217,10 +34365,6 @@ export class GameLogicSubsystem implements Subsystem {
     for (const block of objectDef.blocks) {
       visitBlock(block);
     }
-
-    for (const block of objectDef.blocks) {
-      visitBlock(block);
-    }
     return profile;
   }
 
@@ -34228,7 +34372,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Parse a single BoneFX field value string.
    * Format: Bone:{boneName} OnlyOnce:{Yes|No} {minDelayMs} {maxDelayMs} {FXList:|OCL:|PSys:}{effectName}
    */
-  private parseBoneFXFieldValue(value: string, _effectPrefix: string): BoneFXEntry | null {
+  private parseBoneFXFieldValue(value: string): BoneFXEntry | null {
     // Tokenize by whitespace, but respect colon-separated key:value pairs.
     const tokens = value.split(/\s+/).filter(Boolean);
     if (tokens.length < 5) return null;
@@ -34247,8 +34391,8 @@ export class GameLogicSubsystem implements Subsystem {
     }
     if (!boneName) return null;
 
-    // Parse OnlyOnce:{Yes|No}
-    let onlyOnce = true;
+    // Parse OnlyOnce:{Yes|No} — Source parity: C++ defaults m_onlyOnce to false
+    let onlyOnce = false;
     while (tokenIdx < tokens.length) {
       const parts = tokens[tokenIdx]!.split(':');
       if (parts[0]?.toUpperCase() === 'ONLYONCE' && parts.length >= 2) {
@@ -34290,6 +34434,9 @@ export class GameLogicSubsystem implements Subsystem {
       delayMinFrames,
       delayMaxFrames,
     };
+  }
+
+  /**
    * Source parity: BridgeTowerBehavior — parse bridge tower behavior module from INI.
    * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/BridgeTowerBehavior.cpp)
    */
@@ -40566,6 +40713,11 @@ export class GameLogicSubsystem implements Subsystem {
       return true;
     }
 
+    // Source parity: SpectreGunshipDeploymentUpdate — spawn gunship and fire its power.
+    if (module.moduleType === 'SPECTREGUNSHIPDEPLOYMENTUPDATE') {
+      return this.initiateSpectreGunshipDeployment(sourceEntityId, targetX, targetZ);
+    }
+
     const effectCategory = resolveEffectCategoryImpl(module.moduleType);
     const effectContext = this.createSpecialPowerEffectContext();
     const sourceSide = source.side ?? '';
@@ -46455,7 +46607,6 @@ export class GameLogicSubsystem implements Subsystem {
    * C++ interleaves spaces row-first: R1S1, R2S1, R1S2, R2S2, etc.
    */
   private initializeFlightDeckState(entity: MapEntity, profile: FlightDeckProfile): void {
-    const totalSpaces = profile.numRunways * profile.numSpacesPerRunway;
     const parkingSpaces: FlightDeckParkingSpace[] = [];
 
     // Source parity: interleave spaces — for row in 0..numSpacesPerRunway, for col in 0..numRunways
@@ -46509,7 +46660,6 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Don't produce initial payload on map-placed objects (they get populated separately).
     // C++ buildInfo creates units only when createUnits=true (default), which happens on first update.
-    void totalSpaces;
   }
 
   /**
@@ -46913,6 +47063,337 @@ export class GameLogicSubsystem implements Subsystem {
     }
     state.healeeEntityIds.clear();
     state.nextHealFrame = Number.POSITIVE_INFINITY;
+  }
+
+  // ── Source parity: SpectreGunshipUpdate — orbital gunship update system ──────────────
+
+  /**
+   * Source parity: SpectreGunshipDeploymentUpdate::initiateIntentToDoSpecialPower —
+   * spawns the gunship at a map edge and fires its special power toward the target.
+   */
+  private initiateSpectreGunshipDeployment(
+    sourceEntityId: number,
+    targetX: number,
+    targetZ: number,
+  ): boolean {
+    const source = this.spawnedEntities.get(sourceEntityId);
+    if (!source) return false;
+    const profile = source.spectreGunshipDeploymentProfile;
+    if (!profile || !profile.gunshipTemplateName) return false;
+
+    // Resolve the gunship template
+    const iniDataRegistry = this.iniDataRegistry;
+    if (!iniDataRegistry) return false;
+    const gunshipDef = iniDataRegistry.getObject(profile.gunshipTemplateName);
+    if (!gunshipDef) return false;
+
+    // Source parity: find creation point at map edge based on createLocation strategy
+    const mapWidth = this.mapHeightmap ? this.mapHeightmap.worldWidth : 1000;
+    const mapHeight = this.mapHeightmap ? this.mapHeightmap.worldDepth : 1000;
+
+    let referenceX: number;
+    let referenceZ: number;
+    let findFarthest: boolean;
+    switch (profile.createLocation) {
+      case 'NEAR_SOURCE':
+        referenceX = source.x;
+        referenceZ = source.z;
+        findFarthest = false;
+        break;
+      case 'FARTHEST_FROM_SOURCE':
+        referenceX = source.x;
+        referenceZ = source.z;
+        findFarthest = true;
+        break;
+      case 'NEAR_TARGET':
+        referenceX = targetX;
+        referenceZ = targetZ;
+        findFarthest = false;
+        break;
+      case 'FARTHEST_FROM_TARGET':
+      default:
+        referenceX = targetX;
+        referenceZ = targetZ;
+        findFarthest = true;
+        break;
+    }
+
+    // Source parity: TerrainLogic::findClosestEdgePoint / findFarthestEdgePoint
+    // Projects reference point to each map edge and selects closest/farthest
+    const edgeCandidates = [
+      { x: 0, z: referenceZ },                // left edge
+      { x: mapWidth, z: referenceZ },          // right edge
+      { x: referenceX, z: 0 },                // top edge
+      { x: referenceX, z: mapHeight },         // bottom edge
+    ];
+    let bestEdge = edgeCandidates[0]!;
+    let bestDist = findFarthest ? -1 : Number.POSITIVE_INFINITY;
+    for (const edge of edgeCandidates) {
+      const dx = edge.x - referenceX;
+      const dz = edge.z - referenceZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (findFarthest ? dist > bestDist : dist < bestDist) {
+        bestDist = dist;
+        bestEdge = edge;
+      }
+    }
+
+    // Source parity: push creation point further off-map by orbit radius
+    const dxToEdge = targetX - bestEdge.x;
+    const dzToEdge = targetZ - bestEdge.z;
+    const distToTarget = Math.sqrt(dxToEdge * dxToEdge + dzToEdge * dzToEdge);
+    if (distToTarget > 0.001) {
+      const normX = dxToEdge / distToTarget;
+      const normZ = dzToEdge / distToTarget;
+      const extendedDist = distToTarget + (profile.gunshipOrbitRadius || 250);
+      bestEdge.x = targetX - normX * extendedDist;
+      bestEdge.z = targetZ - normZ * extendedDist;
+    }
+
+    // Spawn the gunship entity
+    const orientation = Math.atan2(targetZ - bestEdge.z, targetX - bestEdge.x);
+    const gunshipEntity = this.spawnEntityFromTemplate(
+      profile.gunshipTemplateName,
+      bestEdge.x,
+      bestEdge.z,
+      orientation,
+      source.side ?? '',
+    );
+    if (!gunshipEntity) return false;
+
+    // Source parity: fire the gunship's own special power at the target location
+    const gunshipProfile = gunshipEntity.spectreGunshipProfile;
+    if (gunshipProfile) {
+      // Initialize the gunship state machine
+      gunshipEntity.spectreGunshipState = {
+        status: 'INSERTING',
+        initialTargetX: targetX,
+        initialTargetZ: targetZ,
+        overrideTargetX: targetX,
+        overrideTargetZ: targetZ,
+        satelliteX: targetX,
+        satelliteZ: targetZ,
+        gattlingTargetX: targetX,
+        gattlingTargetZ: targetZ,
+        positionToShootAtX: targetX,
+        positionToShootAtZ: targetZ,
+        orbitEscapeFrame: 0,
+        okToFireHowitzerCounter: 0,
+        gattlingEntityId: -1,
+      };
+    }
+
+    return true;
+  }
+
+  /**
+   * Source parity: SpectreGunshipUpdate::update — orbital flight state machine + weapon firing.
+   */
+  private updateSpectreGunship(): void {
+    const ORBIT_INSERTION_SLOPE_MAX = 0.8;
+    const ORBIT_INSERTION_SLOPE_MIN = 0.5;
+
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed) continue;
+      const profile = entity.spectreGunshipProfile;
+      const state = entity.spectreGunshipState;
+      if (!profile || !state) continue;
+
+      if (state.status === 'IDLE') continue;
+
+      // Source parity: INSERTING or ORBITING — compute orbital waypoint
+      if (state.status === 'INSERTING' || state.status === 'ORBITING') {
+        // Source parity: perigee — normalized direction from target to gunship
+        const perigeeX = entity.x - state.initialTargetX;
+        const perigeeZ = entity.z - state.initialTargetZ;
+        const distanceToTarget = Math.sqrt(perigeeX * perigeeX + perigeeZ * perigeeZ);
+        const pLen = distanceToTarget > 0.001 ? distanceToTarget : 1;
+        const normPX = perigeeX / pLen;
+        const normPZ = perigeeZ / pLen;
+
+        // Source parity: apogee — 90° counterclockwise rotation of perigee
+        const apogeeX = -normPZ;
+        const apogeeZ = normPX;
+
+        // Source parity: declination — blend perigee and apogee by insertion slope
+        const n1 = Math.min(ORBIT_INSERTION_SLOPE_MAX, Math.max(ORBIT_INSERTION_SLOPE_MIN, profile.orbitInsertionSlope));
+        const n2 = 1.0 - n1;
+        const declX = normPX * n1 + apogeeX * n2;
+        const declZ = normPZ * n1 + apogeeZ * n2;
+
+        // Scale to orbital radius
+        const orbitalRadius = profile.gunshipOrbitRadius;
+        state.satelliteX = state.initialTargetX + declX * orbitalRadius;
+        state.satelliteZ = state.initialTargetZ + declZ * orbitalRadius;
+
+        // Move toward satellite position (simplified — source uses locomotor AI)
+        const moveSpeed = entity.speed > 0 ? entity.speed : 3.0;
+        const dxMove = state.satelliteX - entity.x;
+        const dzMove = state.satelliteZ - entity.z;
+        const moveDist = Math.sqrt(dxMove * dxMove + dzMove * dzMove);
+        if (moveDist > moveSpeed) {
+          entity.x += (dxMove / moveDist) * moveSpeed;
+          entity.z += (dzMove / moveDist) * moveSpeed;
+        } else {
+          entity.x = state.satelliteX;
+          entity.z = state.satelliteZ;
+        }
+        entity.rotationY = Math.atan2(dzMove, dxMove);
+
+        // Source parity: constrain target override within attack radius
+        const constraintRadius = profile.attackAreaRadius - profile.targetingReticleRadius;
+        const overrideDX = state.initialTargetX - state.overrideTargetX;
+        const overrideDZ = state.initialTargetZ - state.overrideTargetZ;
+        const overrideDist = Math.sqrt(overrideDX * overrideDX + overrideDZ * overrideDZ);
+        if (overrideDist > constraintRadius && overrideDist > 0.001) {
+          const normOX = overrideDX / overrideDist;
+          const normOZ = overrideDZ / overrideDist;
+          state.overrideTargetX = state.initialTargetX - normOX * constraintRadius;
+          state.overrideTargetZ = state.initialTargetZ - normOZ * constraintRadius;
+        }
+
+        // Source parity: transition from INSERTING to ORBITING when within orbit radius
+        if (state.status === 'INSERTING' && distanceToTarget < orbitalRadius) {
+          state.status = 'ORBITING';
+          state.orbitEscapeFrame = this.frameCounter + profile.orbitFrames;
+        }
+      }
+
+      // Source parity: ORBITING — weapon firing logic
+      if (state.status === 'ORBITING') {
+        // Check departure
+        if (this.frameCounter >= state.orbitEscapeFrame) {
+          state.status = 'DEPARTING';
+          // Source parity: disengage — fly in current facing direction off map
+          continue;
+        }
+
+        // Source parity: howitzer evaluation every N frames
+        if (profile.howitzerFiringRate > 0 && this.frameCounter % profile.howitzerFiringRate === 0) {
+          state.positionToShootAtX = state.overrideTargetX;
+          state.positionToShootAtZ = state.overrideTargetZ;
+
+          // Find nearest enemy in targeting reticle
+          let targetEntity: MapEntity | null = null;
+          let closestDist = profile.targetingReticleRadius;
+          for (const other of this.spawnedEntities.values()) {
+            if (other.destroyed || other.health <= 0) continue;
+            if (other.side === entity.side) continue;
+            if (other.side === '') continue;
+            const edx = other.x - state.overrideTargetX;
+            const edz = other.z - state.overrideTargetZ;
+            const eDist = Math.sqrt(edx * edx + edz * edz);
+            if (eDist < closestDist) {
+              // Source parity: isFairDistanceFromShip — target must be > 75% orbit radius from ship
+              const shipDx = other.x - entity.x;
+              const shipDz = other.z - entity.z;
+              const shipDist = Math.sqrt(shipDx * shipDx + shipDz * shipDz);
+              if (shipDist > profile.gunshipOrbitRadius * 0.75) {
+                closestDist = eDist;
+                targetEntity = other;
+              }
+            }
+          }
+
+          // Source parity: AI players auto-acquire targets in the full attack area
+          if (!targetEntity) {
+            for (const other of this.spawnedEntities.values()) {
+              if (other.destroyed || other.health <= 0) continue;
+              if (other.side === entity.side) continue;
+              if (other.side === '') continue;
+              const edx = other.x - state.initialTargetX;
+              const edz = other.z - state.initialTargetZ;
+              const eDist = Math.sqrt(edx * edx + edz * edz);
+              if (eDist < profile.attackAreaRadius) {
+                const shipDx = other.x - entity.x;
+                const shipDz = other.z - entity.z;
+                const shipDist = Math.sqrt(shipDx * shipDx + shipDz * shipDz);
+                if (shipDist > profile.gunshipOrbitRadius * 0.75) {
+                  state.positionToShootAtX = other.x;
+                  state.positionToShootAtZ = other.z;
+                  targetEntity = other;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Source parity: howitzer fires after gattling has converged for long enough
+          if (state.okToFireHowitzerCounter > profile.howitzerFollowLag) {
+            if (profile.howitzerWeaponTemplate) {
+              const offs = profile.randomOffsetForHowitzer;
+              const attackX = state.gattlingTargetX + (this.gameRandom.nextFloat() * 2 - 1) * offs;
+              const attackZ = state.gattlingTargetZ + (this.gameRandom.nextFloat() * 2 - 1) * offs;
+              // Apply area damage at howitzer impact point
+              this.applySpectreHowitzerDamageAt(entity, attackX, attackZ, profile.howitzerWeaponTemplate);
+            }
+          }
+        }
+
+        // Source parity: gattling strafing — move toward positionToShootAt incrementally
+        const strafeDX = state.positionToShootAtX - state.gattlingTargetX;
+        const strafeDZ = state.positionToShootAtZ - state.gattlingTargetZ;
+        const strafeDist = Math.sqrt(strafeDX * strafeDX + strafeDZ * strafeDZ);
+        if (strafeDist < profile.strafingIncrement) {
+          state.gattlingTargetX = state.positionToShootAtX;
+          state.gattlingTargetZ = state.positionToShootAtZ;
+          state.okToFireHowitzerCounter++;
+        } else {
+          state.okToFireHowitzerCounter = 0;
+          const normSX = strafeDX / strafeDist;
+          const normSZ = strafeDZ / strafeDist;
+          state.gattlingTargetX += normSX * profile.strafingIncrement;
+          state.gattlingTargetZ += normSZ * profile.strafingIncrement;
+        }
+      }
+
+      // Source parity: DEPARTING — fly off map, then destroy self
+      if (state.status === 'DEPARTING') {
+        const exitSpeed = entity.speed > 0 ? entity.speed : 3.0;
+        const dirX = Math.cos(entity.rotationY);
+        const dirZ = Math.sin(entity.rotationY);
+        entity.x += dirX * exitSpeed;
+        entity.z += dirZ * exitSpeed;
+
+        // Source parity: destroy when off map
+        const mapWidth = this.mapHeightmap ? this.mapHeightmap.worldWidth : 1000;
+        const mapHeight = this.mapHeightmap ? this.mapHeightmap.worldDepth : 1000;
+        if (entity.x < -100 || entity.x > mapWidth + 100 || entity.z < -100 || entity.z > mapHeight + 100) {
+          this.markEntityDestroyed(entity.id, -1);
+          state.status = 'IDLE';
+        }
+      }
+    }
+  }
+
+  /**
+   * Source parity: apply area damage at a position using a named weapon template.
+   * Simplified version for howitzer impacts.
+   */
+  private applySpectreHowitzerDamageAt(source: MapEntity, targetX: number, targetZ: number, weaponTemplateName: string): void {
+    const iniDataRegistry = this.iniDataRegistry;
+    if (!iniDataRegistry) return;
+    const weaponDef = iniDataRegistry.getWeapon(weaponTemplateName);
+    const damage = weaponDef
+      ? (readNumericField(weaponDef.fields, ['Damage']) ?? 50)
+      : 50;
+    const radius = weaponDef
+      ? (readNumericField(weaponDef.fields, ['DamageRadius', 'AttackRange']) ?? 30)
+      : 30;
+    const damageType = weaponDef
+      ? (readStringField(weaponDef.fields, ['DamageType']) ?? 'EXPLOSION')
+      : 'EXPLOSION';
+
+    for (const other of this.spawnedEntities.values()) {
+      if (other.destroyed || other.health <= 0) continue;
+      if (other.side === source.side && other.side !== '') continue;
+      const dx = other.x - targetX;
+      const dz = other.z - targetZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist <= radius) {
+        this.applyWeaponDamageAmount(source.id, other, damage, damageType);
+      }
+    }
   }
 
   // ── Source parity: MinefieldBehavior — mine collision system ──────────────
@@ -57583,6 +58064,7 @@ export class GameLogicSubsystem implements Subsystem {
       const dz = entity.z - master.z;
       const distSqr = dx * dx + dz * dz;
       const mustCatchUpRadiusSqr = profile.mustCatchUpRadius * profile.mustCatchUpRadius;
+      const noNeedToCatchUpRadiusSqr = profile.noNeedToCatchUpRadius * profile.noNeedToCatchUpRadius;
 
       if (distSqr > mustCatchUpRadiusSqr) {
         // ── CATCH-UP MODE ──
@@ -57650,8 +58132,8 @@ export class GameLogicSubsystem implements Subsystem {
         }
 
         state.mobState = 1; // MOB_STATE_CATCHING_UP
-      } else if (entity.moving) {
-        // ── ON THE MOVE WITH MASTER (within catch-up radius) ──
+      } else if (entity.moving && distSqr > noNeedToCatchUpRadiusSqr) {
+        // ── ON THE MOVE WITH MASTER (within catch-up radius but outside no-need zone) ──
         state.catchUpCrisisTimer = 0;
 
         // Source parity: randomly vary locomotor speed for visual variety.
@@ -57662,10 +58144,10 @@ export class GameLogicSubsystem implements Subsystem {
           entity.speed = Math.max(1, entity.speed * 1.5); // PANIC
         } else if (seed === 3) {
           // NORMAL — restore base speed.
-          const baseDef = this.resolveObjectDef(entity.templateName);
-          if (baseDef) {
-            const baseSpeed = this.extractBaseSpeed(baseDef);
-            if (baseSpeed > 0) entity.speed = baseSpeed;
+          // Restore base speed from active locomotor set
+          const normalLoco = entity.locomotorSets.get('NORMAL');
+          if (normalLoco && normalLoco.movementSpeed > 0) {
+            entity.speed = normalLoco.movementSpeed;
           }
         }
       } else {
@@ -57727,20 +58209,6 @@ export class GameLogicSubsystem implements Subsystem {
         state.mobState = 2; // MOB_STATE_IDLE
       }
     }
-  }
-
-  /**
-   * Source parity: helper to extract base movement speed from an object definition.
-   * Used by MobMemberSlavedUpdate to restore normal speed.
-   */
-  private extractBaseSpeed(objectDef: ObjectDef): number {
-    for (const block of objectDef.blocks) {
-      if (block.type.toUpperCase() === 'LOCOMOTOR') {
-        const speed = readNumericField(block.fields, ['Speed']);
-        if (speed !== null && speed > 0) return speed;
-      }
-    }
-    return 0;
   }
 
   // ── Source parity: CountermeasuresBehavior ──
@@ -61709,7 +62177,7 @@ export class GameLogicSubsystem implements Subsystem {
 
       // Source parity: if not active, initTimes and set active.
       if (!state.active) {
-        this.boneFXInitTimes(entity, profile, state);
+        this.boneFXInitTimes(profile, state);
         state.active = true;
       }
 
@@ -61800,7 +62268,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: BoneFXUpdate::initTimes — schedule initial fire times for current damage state.
    * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/BoneFXUpdate.cpp:321-343)
    */
-  private boneFXInitTimes(_entity: MapEntity, profile: BoneFXProfile, state: BoneFXState): void {
+  private boneFXInitTimes(profile: BoneFXProfile, state: BoneFXState): void {
     const now = this.frameCounter;
     const bodyState = state.currentBodyState;
     const numBones = 8;
@@ -61854,7 +62322,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.boneFXState.currentBodyState = newState;
     entity.boneFXState.activeParticleIds.length = 0; // killRunningParticleSystems
     if (entity.boneFXProfile) {
-      this.boneFXInitTimes(entity, entity.boneFXProfile, entity.boneFXState);
+      this.boneFXInitTimes(entity.boneFXProfile, entity.boneFXState);
     }
   }
 
