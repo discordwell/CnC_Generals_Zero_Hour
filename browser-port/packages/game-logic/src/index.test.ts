@@ -66003,3 +66003,344 @@ describe('CLIMBING and FLOODED condition flags', () => {
     expect(entity.modelConditionFlags.has('FLOODED')).toBe(false);
   });
 });
+
+describe('MobMemberSlavedUpdate', () => {
+  function makeMobSetup(opts?: {
+    mustCatchUpRadius?: number;
+    noNeedToCatchUpRadius?: number;
+    squirrelliness?: number;
+    catchUpCrisisBailTime?: number;
+    spawnNumber?: number;
+  }) {
+    const mustCatchUp = opts?.mustCatchUpRadius ?? 50;
+    const noNeedToCatchUp = opts?.noNeedToCatchUpRadius ?? 25;
+    const squirrelliness = opts?.squirrelliness ?? 0.5;
+    const crisisBail = opts?.catchUpCrisisBailTime ?? 10;
+    const spawnCount = opts?.spawnNumber ?? 1;
+    const sz = 256;
+
+    const objects = [
+      // Master (angry mob nexus) with SpawnBehavior
+      makeObjectDef('AngryMobNexus', 'GLA', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        makeBlock('Behavior', 'SpawnBehavior ModuleTag_Spawn', {
+          SpawnNumber: spawnCount,
+          SpawnReplaceDelay: 3000,
+          SpawnTemplateName: 'MobMember',
+          SpawnedRequireSpawner: 'Yes',
+          InitialBurst: spawnCount,
+        }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'NexusGun'] }),
+      ]),
+      // Mob member slave with MobMemberSlavedUpdate
+      makeObjectDef('MobMember', 'GLA', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        makeBlock('Behavior', 'MobMemberSlavedUpdate ModuleTag_MobSlaved', {
+          MustCatchUpRadius: mustCatchUp,
+          NoNeedToCatchUpRadius: noNeedToCatchUp,
+          Squirrelliness: squirrelliness,
+          CatchUpCrisisBailTime: crisisBail,
+        }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'MobGun'] }),
+      ]),
+      // Enemy for targeting
+      makeObjectDef('EnemyInfantry', 'America', ['INFANTRY'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'EnemyGun'] }),
+      ]),
+    ];
+
+    const mapObjects: MapObjectJSON[] = [
+      makeMapObject('AngryMobNexus', 100, 100),
+    ];
+
+    const bundle = makeBundle({
+      objects,
+      weapons: [
+        makeWeaponDef('NexusGun', {
+          AttackRange: 100,
+          PrimaryDamage: 20,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+        }),
+        makeWeaponDef('MobGun', {
+          AttackRange: 80,
+          PrimaryDamage: 5,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 300,
+        }),
+        makeWeaponDef('EnemyGun', {
+          AttackRange: 100,
+          PrimaryDamage: 30,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+        }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const registry = makeRegistry(bundle);
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(makeMap(mapObjects, sz, sz), registry, makeHeightmap(sz, sz));
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('gla', 'HUMAN');
+    (logic as unknown as { sidePlayerTypes: Map<string, string> }).sidePlayerTypes.set('america', 'COMPUTER');
+
+    return { logic, sz, registry };
+  }
+
+  interface MobEntity {
+    id: number;
+    slaverEntityId: number | null;
+    destroyed: boolean;
+    health: number;
+    maxHealth: number;
+    x: number;
+    z: number;
+    moveTarget: { x: number; z: number } | null;
+    attackTargetEntityId: number | null;
+    attackTargetPosition: { x: number; z: number } | null;
+    moving: boolean;
+    speed: number;
+    mobMemberProfile: {
+      mustCatchUpRadius: number;
+      noNeedToCatchUpRadius: number;
+      squirrellinessRatio: number;
+      catchUpCrisisBailTime: number;
+    } | null;
+    mobMemberState: {
+      framesToWait: number;
+      catchUpCrisisTimer: number;
+      primaryVictimId: number;
+      isSelfTasking: boolean;
+      mobState: number;
+    } | null;
+    objectStatusFlags: Set<string>;
+    spawnBehaviorState: {
+      slaveIds: number[];
+    } | null;
+  }
+
+  function getEntity(logic: GameLogicSubsystem, id: number): MobEntity {
+    const priv = logic as unknown as { spawnedEntities: Map<number, MobEntity> };
+    return priv.spawnedEntities.get(id)!;
+  }
+
+  function addEnemy(logic: GameLogicSubsystem, x: number, z: number): void {
+    const priv = logic as unknown as {
+      spawnEntityFromTemplate(name: string, x: number, z: number, rot: number, side: string): MobEntity | null;
+    };
+    priv.spawnEntityFromTemplate('EnemyInfantry', x, z, 0, 'America');
+  }
+
+  it('extracts MobMemberSlavedUpdateProfile from INI data', () => {
+    const { logic } = makeMobSetup({
+      mustCatchUpRadius: 80,
+      noNeedToCatchUpRadius: 30,
+      squirrelliness: 0.75,
+      catchUpCrisisBailTime: 20,
+    });
+
+    // After loading, the spawner creates a slave immediately (InitialBurst).
+    // Run a few frames to let the spawn happen.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const master = getEntity(logic, 1);
+    expect(master.spawnBehaviorState).not.toBeNull();
+    expect(master.spawnBehaviorState!.slaveIds.length).toBe(1);
+
+    const slaveId = master.spawnBehaviorState!.slaveIds[0]!;
+    const slave = getEntity(logic, slaveId);
+
+    expect(slave.mobMemberProfile).not.toBeNull();
+    expect(slave.mobMemberProfile!.mustCatchUpRadius).toBe(80);
+    expect(slave.mobMemberProfile!.noNeedToCatchUpRadius).toBe(30);
+    expect(slave.mobMemberProfile!.squirrellinessRatio).toBe(0.75);
+    expect(slave.mobMemberProfile!.catchUpCrisisBailTime).toBe(20);
+
+    // State should be initialized when enslaved.
+    expect(slave.mobMemberState).not.toBeNull();
+    expect(slave.mobMemberState!.catchUpCrisisTimer).toBe(0);
+    expect(slave.mobMemberState!.primaryVictimId).toBe(-1);
+    expect(slave.mobMemberState!.isSelfTasking).toBe(false);
+    expect(slave.mobMemberState!.mobState).toBe(0);
+  });
+
+  it('mob member follows master when distant (catch-up mode)', () => {
+    const { logic } = makeMobSetup({ mustCatchUpRadius: 20 });
+
+    // Let spawn happen.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const master = getEntity(logic, 1);
+    const slaveId = master.spawnBehaviorState!.slaveIds[0]!;
+    const slave = getEntity(logic, slaveId);
+
+    // Move slave far from master beyond mustCatchUpRadius.
+    slave.x = master.x + 80;
+    slave.z = master.z + 80;
+
+    // Run enough frames for the 16-frame throttle to fire (run 30 frames).
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Slave should have a moveTarget set (trying to catch up).
+    expect(slave.moveTarget).not.toBeNull();
+    // mobState should be 1 (CATCHING_UP).
+    expect(slave.mobMemberState!.mobState).toBe(1);
+  });
+
+  it('crisis timer increments when critically far from master', () => {
+    const { logic } = makeMobSetup({ mustCatchUpRadius: 10, catchUpCrisisBailTime: 100 });
+
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const master = getEntity(logic, 1);
+    const slaveId = master.spawnBehaviorState!.slaveIds[0]!;
+    const slave = getEntity(logic, slaveId);
+
+    // Move slave critically far: > mustCatchUpRadius * 3 = 30.
+    slave.x = master.x + 200;
+    slave.z = master.z + 200;
+
+    // Reset the framesToWait so the update fires soon.
+    slave.mobMemberState!.framesToWait = 15;
+
+    // Run 20 frames to trigger a few 16-frame cycles.
+    for (let i = 0; i < 50; i++) logic.update(1 / 30);
+
+    // Crisis timer should have incremented.
+    expect(slave.mobMemberState!.catchUpCrisisTimer).toBeGreaterThan(0);
+  });
+
+  it('mob member killed when crisis timer exceeds bail time', () => {
+    const { logic } = makeMobSetup({ mustCatchUpRadius: 10, catchUpCrisisBailTime: 2 });
+
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const master = getEntity(logic, 1);
+    const slaveId = master.spawnBehaviorState!.slaveIds[0]!;
+    const slave = getEntity(logic, slaveId);
+
+    // Move slave critically far from master.
+    slave.x = master.x + 200;
+    slave.z = master.z + 200;
+
+    // Run enough frames for multiple 16-frame cycles to trigger bail.
+    // With bailTime=2, need 3 cycles while critically far.
+    for (let i = 0; i < 100; i++) logic.update(1 / 30);
+
+    // Slave should be dead (health <= 0 or destroyed).
+    expect(slave.health <= 0 || slave.destroyed).toBe(true);
+  });
+
+  it('attack mirroring from master target', () => {
+    const { logic } = makeMobSetup({ squirrelliness: 0 });
+
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const master = getEntity(logic, 1);
+    const slaveId = master.spawnBehaviorState!.slaveIds[0]!;
+    const slave = getEntity(logic, slaveId);
+
+    // Add an enemy near the mob.
+    addEnemy(logic, 105, 105);
+    // Find the enemy entity ID.
+    const priv = logic as unknown as { spawnedEntities: Map<number, MobEntity> };
+    let enemyId = -1;
+    for (const [id, e] of priv.spawnedEntities) {
+      if (id !== 1 && id !== slaveId && !e.destroyed) {
+        enemyId = id;
+        break;
+      }
+    }
+    expect(enemyId).not.toBe(-1);
+
+    // Set master to attack the enemy.
+    master.attackTargetEntityId = enemyId;
+
+    // Ensure slave is idle and near master.
+    slave.x = master.x + 5;
+    slave.z = master.z + 5;
+    slave.moving = false;
+    slave.attackTargetEntityId = null;
+    slave.mobMemberState!.framesToWait = 15;
+
+    // Run frames for mob update to fire.
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // Slave should remember master's victim.
+    expect(slave.mobMemberState!.primaryVictimId).toBe(enemyId);
+  });
+
+  it('idle self-tasking with squirrelliness check', () => {
+    // With squirrelliness=1.0 (always self-tasks), and enemy nearby,
+    // the mob member should find and attack the enemy.
+    const { logic } = makeMobSetup({ squirrelliness: 1.0, mustCatchUpRadius: 200 });
+
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const master = getEntity(logic, 1);
+    const slaveId = master.spawnBehaviorState!.slaveIds[0]!;
+    const slave = getEntity(logic, slaveId);
+
+    // Add an enemy near the mob.
+    addEnemy(logic, 110, 110);
+    const priv = logic as unknown as { spawnedEntities: Map<number, MobEntity> };
+    let enemyId = -1;
+    for (const [id, e] of priv.spawnedEntities) {
+      if (id !== 1 && id !== slaveId && !e.destroyed) {
+        enemyId = id;
+        break;
+      }
+    }
+    expect(enemyId).not.toBe(-1);
+
+    // Master is attacking the enemy (not idle, so slave won't go fully idle).
+    // The slave is idle and not moving, so it enters the idle branch of the mob update.
+    master.attackTargetEntityId = enemyId;
+    master.moveTarget = null;
+    master.moving = false;
+
+    // Place slave near master, idle (within mustCatchUpRadius).
+    slave.x = master.x + 2;
+    slave.z = master.z + 2;
+    slave.moving = false;
+    slave.attackTargetEntityId = null;
+    slave.mobMemberState!.framesToWait = 15;
+
+    // Run enough frames for multiple 16-frame cycles.
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+
+    // With squirrelliness=1.0, the mob member should have attempted self-tasking
+    // or mirrored the master's target. Either attackTarget or primaryVictim should be set.
+    const hasTarget = slave.attackTargetEntityId !== null || slave.mobMemberState!.primaryVictimId >= 0;
+    expect(hasTarget).toBe(true);
+  });
+
+  it('mob member killed when master dies', () => {
+    const { logic } = makeMobSetup();
+
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const master = getEntity(logic, 1);
+    expect(master.spawnBehaviorState!.slaveIds.length).toBe(1);
+    const slaveId = master.spawnBehaviorState!.slaveIds[0]!;
+    const slave = getEntity(logic, slaveId);
+    expect(slave.destroyed).toBe(false);
+
+    // Kill master.
+    master.health = 0;
+    master.destroyed = true;
+
+    // Run enough frames for mob update to detect dead master.
+    slave.mobMemberState!.framesToWait = 15;
+    for (let i = 0; i < 20; i++) logic.update(1 / 30);
+
+    // Slave should be dead since master died.
+    expect(slave.health <= 0 || slave.destroyed).toBe(true);
+  });
+});

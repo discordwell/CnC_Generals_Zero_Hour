@@ -2631,6 +2631,10 @@ interface MapEntity {
   // ── Source parity: ProjectileStreamUpdate — stream weapon projectile tracking ──
   projectileStreamProfile: ProjectileStreamProfile | null;
   projectileStreamState: ProjectileStreamRuntimeState | null;
+
+  // ── Source parity: MobMemberSlavedUpdate — angry mob member slave behavior ──
+  mobMemberProfile: MobMemberSlavedUpdateProfile | null;
+  mobMemberState: MobMemberSlavedState | null;
 }
 
 /**
@@ -3371,6 +3375,39 @@ interface PilotFindVehicleProfile {
   /** Min health ratio (0..1) — vehicles below this ratio are rejected as too damaged. */
   minHealth: number;
 }
+
+/**
+ * Source parity: MobMemberSlavedUpdateModuleData — angry mob member slave behavior.
+ * (GeneralsMD/Code/GameEngine/Include/GameLogic/Module/MobMemberSlavedUpdate.h)
+ */
+interface MobMemberSlavedUpdateProfile {
+  /** Distance from master triggering catch-up mode. C++ m_mustCatchUpRadius (default 50). */
+  mustCatchUpRadius: number;
+  /** Allowable wander distance from master while guarding. C++ m_noNeedToCatchUpRadius (default 25). */
+  noNeedToCatchUpRadius: number;
+  /** Chance to self-task (0.0-1.0, clamped to MAX_SQUIRRELLINESS=1.0). C++ m_squirrellinessRatio. */
+  squirrellinessRatio: number;
+  /** Consecutive 16-frame ticks at critical distance before death. C++ m_catchUpCrisisBailTime (default 999999). */
+  catchUpCrisisBailTime: number;
+}
+
+/** Source parity: MobMemberSlavedUpdate runtime state per mob member entity. */
+interface MobMemberSlavedState {
+  /** Update throttle counter (init random 0-20). C++ m_framesToWait. */
+  framesToWait: number;
+  /** Consecutive 16-frame ticks spent critically far from master. C++ m_catchUpCrisisTimer. */
+  catchUpCrisisTimer: number;
+  /** Last known master's target entity ID. C++ m_primaryVictimID. */
+  primaryVictimId: number;
+  /** Currently self-assigned target. C++ m_isSelfTasking. */
+  isSelfTasking: boolean;
+  /** 0=NONE, 1=CATCHING_UP, 2=IDLE. C++ MobStates enum. */
+  mobState: number;
+}
+
+/** Source parity: MobMemberSlavedUpdate constants from header. */
+const MOB_MEMBER_CLOSE_ENOUGH = 15.0;
+const MOB_MEMBER_CLOSE_ENOUGH_SQR = MOB_MEMBER_CLOSE_ENOUGH * MOB_MEMBER_CLOSE_ENOUGH;
 
 /** Source parity: SlavedUpdate constants. */
 const SLAVED_UPDATE_RATE = 8; // LOGICFRAMES_PER_SECOND / 4 ≈ 7.5, round to 8
@@ -7350,6 +7387,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateProduction();
     this.updateSpawnBehaviors();
     this.updateSlavedEntities();
+    this.updateMobMemberSlaved();
     this.updateDeployStyleEntities();
     this.updateTurretAI();
     this.updateCombat();
@@ -28361,6 +28399,9 @@ export class GameLogicSubsystem implements Subsystem {
       // Projectile stream tracking (toxin/flamethrower beams)
       projectileStreamProfile: this.extractProjectileStreamProfile(objectDef),
       projectileStreamState: null,
+      // MobMemberSlavedUpdate (angry mob member behavior)
+      mobMemberProfile: this.extractMobMemberSlavedUpdateProfile(objectDef),
+      mobMemberState: null,
     };
 
     this.applyMapObjectCoreProperties(entity, mapObject);
@@ -32863,6 +32904,49 @@ export class GameLogicSubsystem implements Subsystem {
             repairRatePerSecond: readNumericField(block.fields, ['RepairRatePerSecond']) ?? 0,
             repairWhenBelowHealthPercent: readNumericField(block.fields, ['RepairWhenBelowHealth%']) ?? 0,
             stayOnSameLayerAsMaster: readStringField(block.fields, ['StayOnSameLayerAsMaster'])?.toUpperCase() === 'YES',
+          };
+        }
+      }
+      if (block.blocks) {
+        for (const child of block.blocks) visitBlock(child);
+      }
+    };
+    if (objectDef.blocks) {
+      for (const block of objectDef.blocks) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: MobMemberSlavedUpdate — extract mob member slave config from INI.
+   * (GeneralsMD/Code/GameEngine/Include/GameLogic/Module/MobMemberSlavedUpdate.h)
+   * Defaults match C++ MobMemberSlavedUpdateModuleData constructor.
+   */
+  private extractMobMemberSlavedUpdateProfile(objectDef: ObjectDef | undefined): MobMemberSlavedUpdateProfile | null {
+    if (!objectDef) return null;
+    let profile: MobMemberSlavedUpdateProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType === 'BEHAVIOR') {
+        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+        if (moduleType === 'MOBMEMBERSLAVEDUPDATE') {
+          // Source parity: C++ defaults from MobMemberSlavedUpdateModuleData constructor:
+          //   m_mustCatchUpRadius = DEFAULT_MUST_CATCH_UP_RADIUS (50)
+          //   m_noNeedToCatchUpRadius = DEFAULT_NO_NEED_TO_CATCH_UP_RADIUS (25)
+          //   m_squirrellinessRatio = 0
+          //   m_catchUpCrisisBailTime = 999999
+          const mustCatchUpRadius = readNumericField(block.fields, ['MustCatchUpRadius']) ?? 50;
+          const noNeedToCatchUpRadius = readNumericField(block.fields, ['NoNeedToCatchUpRadius']) ?? 25;
+          const squirrellinessRaw = readNumericField(block.fields, ['Squirrelliness']) ?? 0;
+          // Source parity: onObjectCreated clamps to [0, MAX_SQUIRRELLINESS=1.0].
+          const squirrellinessRatio = Math.min(1.0, Math.max(0, squirrellinessRaw));
+          const catchUpCrisisBailTime = readNumericField(block.fields, ['CatchUpCrisisBailTime']) ?? 999999;
+          profile = {
+            mustCatchUpRadius,
+            noNeedToCatchUpRadius,
+            squirrellinessRatio,
+            catchUpCrisisBailTime,
           };
         }
       }
@@ -53777,6 +53861,18 @@ export class GameLogicSubsystem implements Subsystem {
       slave.slaveGuardOffsetX = Math.cos(angle) * guardRange;
       slave.slaveGuardOffsetZ = Math.sin(angle) * guardRange;
     }
+
+    // Source parity: MobMemberSlavedUpdate — initialize mob member runtime state on enslave.
+    // C++ constructor: m_framesToWait = GameLogicRandomValue(0,20), onObjectCreated clamps squirrelliness.
+    if (slave.mobMemberProfile) {
+      slave.mobMemberState = {
+        framesToWait: this.gameRandom.nextRange(0, 20),
+        catchUpCrisisTimer: 0,
+        primaryVictimId: -1,
+        isSelfTasking: false,
+        mobState: 0, // MOB_STATE_NONE
+      };
+    }
   }
 
   /**
@@ -56268,6 +56364,221 @@ export class GameLogicSubsystem implements Subsystem {
       slave.attackTargetPosition = null;
     }
   }
+  // ── Source parity: MobMemberSlavedUpdate — angry mob member slave behavior ──
+
+  /**
+   * Source parity: MobMemberSlavedUpdate::update() — mob members follow master, self-task, mirror attacks.
+   * Runs every 16 frames per entity (C++ m_framesToWait counter).
+   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/MobMemberSlavedUpdate.cpp:134-355)
+   */
+  private updateMobMemberSlaved(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
+      if (!entity.mobMemberProfile || !entity.mobMemberState) continue;
+      if (entity.slaverEntityId === null) continue;
+
+      const state = entity.mobMemberState;
+      const profile = entity.mobMemberProfile;
+
+      // Source parity: C++ increments m_framesToWait each frame, skips until >= 16.
+      state.framesToWait += 1;
+      if (state.framesToWait < 16) continue;
+      state.framesToWait = 0;
+
+      // Source parity: find master. If dead, kill self.
+      const master = this.spawnedEntities.get(entity.slaverEntityId);
+      if (!master || master.destroyed) {
+        // Source parity: stopSlavedEffects() + me->kill().
+        entity.slaverEntityId = null;
+        entity.objectStatusFlags.delete('UNSELECTABLE');
+        this.applyWeaponDamageAmount(null, entity, entity.health, 'UNRESISTABLE');
+        continue;
+      }
+
+      // Source parity: need master's spawn behavior for self-tasking permission check.
+      const masterSpawnState = master.spawnBehaviorState;
+      if (!masterSpawnState) continue;
+
+      // Source parity: track master's current victim.
+      const masterVictimId = master.attackTargetEntityId;
+      if (masterVictimId !== null) {
+        state.primaryVictimId = masterVictimId;
+      }
+      const primaryVictim = state.primaryVictimId >= 0
+        ? (this.spawnedEntities.get(state.primaryVictimId) ?? null)
+        : null;
+      const primaryVictimAlive = primaryVictim !== null && !primaryVictim.destroyed;
+
+      // Source parity: current victim of the mob member.
+      const myVictimId = entity.attackTargetEntityId;
+      const myVictim = myVictimId !== null ? (this.spawnedEntities.get(myVictimId) ?? null) : null;
+      const myVictimAlive = myVictim !== null && !myVictim.destroyed;
+
+      // Source parity: distance from me to master (squared).
+      const dx = entity.x - master.x;
+      const dz = entity.z - master.z;
+      const distSqr = dx * dx + dz * dz;
+      const mustCatchUpRadiusSqr = profile.mustCatchUpRadius * profile.mustCatchUpRadius;
+
+      if (distSqr > mustCatchUpRadiusSqr) {
+        // ── CATCH-UP MODE ──
+        // Source parity: master moving → check if mob member is ahead or behind.
+        if (master.moving) {
+          const masterGoal = master.moveTarget;
+          if (masterGoal) {
+            const masterDistToGoalDx = masterGoal.x - master.x;
+            const masterDistToGoalDz = masterGoal.z - master.z;
+            const masterDistToGoal = Math.sqrt(masterDistToGoalDx * masterDistToGoalDx + masterDistToGoalDz * masterDistToGoalDz);
+            const myDistToGoalDx = masterGoal.x - entity.x;
+            const myDistToGoalDz = masterGoal.z - entity.z;
+            const myDistToGoal = Math.sqrt(myDistToGoalDx * myDistToGoalDx + myDistToGoalDz * myDistToGoalDz);
+
+            if (masterDistToGoal > myDistToGoal) {
+              // Source parity: I'm ahead of master, slow down (WANDER speed).
+              entity.speed = Math.max(1, entity.speed * 0.6);
+            } else {
+              // Source parity: I'm behind, speed up (PANIC speed).
+              entity.speed = Math.max(1, entity.speed * 1.5);
+            }
+
+            // Source parity: move toward master's goal unless it's at origin (error case).
+            const goalLen = Math.sqrt(masterGoal.x * masterGoal.x + masterGoal.z * masterGoal.z);
+            if (goalLen < 1.0) {
+              // Source parity: nasty error → move directly to master.
+              entity.moveTarget = { x: master.x, z: master.z };
+            } else {
+              // Source parity: only redirect if not already heading close enough.
+              const currentGoal = entity.moveTarget;
+              if (currentGoal) {
+                const goalDeltaX = currentGoal.x - masterGoal.x;
+                const goalDeltaZ = currentGoal.z - masterGoal.z;
+                const goalDeltaDist = Math.sqrt(goalDeltaX * goalDeltaX + goalDeltaZ * goalDeltaZ);
+                if (goalDeltaDist > 5.0 * PATHFIND_CELL_SIZE) {
+                  entity.moveTarget = { x: masterGoal.x, z: masterGoal.z };
+                }
+              } else {
+                entity.moveTarget = { x: masterGoal.x, z: masterGoal.z };
+              }
+            }
+          } else {
+            // Master moving but no goal → move directly to master.
+            entity.moveTarget = { x: master.x, z: master.z };
+          }
+        } else {
+          // Source parity: master is still → regroup in a hurry (PANIC speed).
+          entity.speed = Math.max(1, entity.speed * 1.5);
+          entity.moveTarget = { x: master.x, z: master.z };
+        }
+
+        // Source parity: crisis check — critically far (> mustCatchUpRadius * 3).
+        const criticalRadiusSqr = mustCatchUpRadiusSqr * 9; // (radius*3)^2 = radius^2 * 9
+        if (distSqr > criticalRadiusSqr) {
+          state.catchUpCrisisTimer += 1;
+
+          if (state.catchUpCrisisTimer > profile.catchUpCrisisBailTime) {
+            // Source parity: me->kill() — too far for too long.
+            this.applyWeaponDamageAmount(null, entity, entity.health, 'UNRESISTABLE');
+            continue;
+          } else if (state.catchUpCrisisTimer > Math.trunc(profile.catchUpCrisisBailTime / 3)) {
+            // Source parity: move directly to master (emergency).
+            entity.moveTarget = { x: master.x, z: master.z };
+          }
+        }
+
+        state.mobState = 1; // MOB_STATE_CATCHING_UP
+      } else if (entity.moving) {
+        // ── ON THE MOVE WITH MASTER (within catch-up radius) ──
+        state.catchUpCrisisTimer = 0;
+
+        // Source parity: randomly vary locomotor speed for visual variety.
+        const seed = this.gameRandom.nextRange(0, 10);
+        if (seed === 1) {
+          entity.speed = Math.max(1, entity.speed * 0.6); // WANDER
+        } else if (seed === 2) {
+          entity.speed = Math.max(1, entity.speed * 1.5); // PANIC
+        } else if (seed === 3) {
+          // NORMAL — restore base speed.
+          const baseDef = this.resolveObjectDef(entity.templateName);
+          if (baseDef) {
+            const baseSpeed = this.extractBaseSpeed(baseDef);
+            if (baseSpeed > 0) entity.speed = baseSpeed;
+          }
+        }
+      } else {
+        // ── IDLE ──
+        state.catchUpCrisisTimer = 0;
+
+        if (masterSpawnState) {
+          // Source parity: if master is idle → go idle, clear targets.
+          if (!master.moving && master.attackTargetEntityId === null && master.attackTargetPosition === null) {
+            entity.attackTargetEntityId = null;
+            entity.attackTargetPosition = null;
+            entity.moveTarget = null;
+            entity.moving = false;
+            state.primaryVictimId = -1;
+            state.isSelfTasking = false;
+            state.mobState = 2; // MOB_STATE_IDLE
+            continue;
+          }
+
+          // Source parity: maySpawnSelfTaskAI — check squirrelliness probability.
+          // C++ SpawnBehaviorInterface::maySpawnSelfTaskAI(ratio) → GameLogicRandomValueReal(0,1) < ratio.
+          if (profile.squirrellinessRatio > 0 && this.gameRandom.nextFloat() < profile.squirrellinessRatio) {
+            // Source parity: find nearby enemy to self-task attack.
+            const scanRange = entity.visionRange > 0 ? entity.visionRange : (entity.attackWeapon?.attackRange ?? 100);
+            const scanRangeSqr = scanRange * scanRange;
+            let bestTarget: MapEntity | null = null;
+            let bestDistSqr = Number.POSITIVE_INFINITY;
+
+            for (const candidate of this.spawnedEntities.values()) {
+              if (candidate.destroyed || !candidate.canTakeDamage) continue;
+              if (candidate.id === entity.id) continue;
+              if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) continue;
+              if (candidate.objectStatusFlags.has('STEALTHED') && !candidate.objectStatusFlags.has('DETECTED')) continue;
+              const cdx = candidate.x - entity.x;
+              const cdz = candidate.z - entity.z;
+              const cdistSqr = cdx * cdx + cdz * cdz;
+              if (cdistSqr > scanRangeSqr) continue;
+              if (cdistSqr < bestDistSqr) {
+                bestTarget = candidate;
+                bestDistSqr = cdistSqr;
+              }
+            }
+
+            if (bestTarget && (!myVictimAlive || bestTarget.id !== myVictimId)) {
+              this.issueAttackEntity(entity.id, bestTarget.id, 'AI');
+              state.isSelfTasking = true;
+            }
+          }
+
+          // Source parity: if still no victim → try remembered primary victim.
+          if (!myVictimAlive) {
+            if (primaryVictimAlive) {
+              this.issueAttackEntity(entity.id, primaryVictim!.id, 'AI');
+            }
+            state.isSelfTasking = false;
+          }
+        }
+
+        state.mobState = 2; // MOB_STATE_IDLE
+      }
+    }
+  }
+
+  /**
+   * Source parity: helper to extract base movement speed from an object definition.
+   * Used by MobMemberSlavedUpdate to restore normal speed.
+   */
+  private extractBaseSpeed(objectDef: ObjectDef): number {
+    for (const block of objectDef.blocks) {
+      if (block.type.toUpperCase() === 'LOCOMOTOR') {
+        const speed = readNumericField(block.fields, ['Speed']);
+        if (speed !== null && speed > 0) return speed;
+      }
+    }
+    return 0;
+  }
+
   // ── Source parity: CountermeasuresBehavior ──
 
   /**
