@@ -2541,6 +2541,10 @@ interface MapEntity {
   dynamicGeometryProfile: DynamicGeometryInfoUpdateProfile | null;
   dynamicGeometryState: DynamicGeometryInfoUpdateState | null;
 
+  // ── Source parity: FirestormDynamicGeometryInfoUpdate — FLAME damage pulse ──
+  firestormDamageProfile: FirestormDamageProfile | null;
+  firestormDamageState: { lastDamageFrame: number } | null;
+
   // ── Source parity: FireOCLAfterWeaponCooldownUpdate — fire OCL after weapon stops ──
   fireOCLAfterCooldownProfiles: FireOCLAfterWeaponCooldownProfile[];
   fireOCLAfterCooldownStates: FireOCLAfterWeaponCooldownState[];
@@ -4361,6 +4365,16 @@ interface DynamicGeometryInfoUpdateState {
   finalMinorRadius: number;
   /** Whether reverse has been triggered (only once). */
   reverseAtTransitionTime: boolean;
+}
+
+/**
+ * Source parity: FirestormDynamicGeometryInfoUpdate — damage pulse parameters.
+ * C++ file: FirestormDynamicGeometryInfoUpdate.h (ModuleData fields).
+ */
+interface FirestormDamageProfile {
+  damageAmount: number;
+  delayBetweenDamageFrames: number;
+  maxHeightForDamage: number;
 }
 
 /**
@@ -7837,6 +7851,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updateSmartBombHoming();
     this.updateBunkerBusterTracking();
     this.updateDynamicGeometry();
+    this.updateFirestormDamage();
     this.updateFireOCLAfterCooldown();
     this.updateEmpEntities();
     this.updateLeafletDropEntities();
@@ -28198,7 +28213,12 @@ export class GameLogicSubsystem implements Subsystem {
     // Source parity: mines don't block pathfinding but still need collision geometry
     // for MinefieldBehavior::onCollide. Crushers need geometry for crush overlap detection.
     // Crates need geometry for CrateCollide::onCollide collection radius.
-    const needsGeometry = blocksPath || normalizedKindOf.has('MINE') || normalizedKindOf.has('CRATE') || combatProfile.crusherLevel > 0;
+    // DynamicGeometryInfoUpdate / FirestormDynamicGeometryInfoUpdate morph obstacle geometry at runtime.
+    const hasDynamicGeometryModule = objectDef?.blocks.some(b => {
+      const mt = b.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      return mt === 'DYNAMICGEOMETRYINFOUPDATE' || mt === 'FIRESTORMDYNAMICGEOMETRYINFOUPDATE';
+    }) ?? false;
+    const needsGeometry = blocksPath || normalizedKindOf.has('MINE') || normalizedKindOf.has('CRATE') || combatProfile.crusherLevel > 0 || hasDynamicGeometryModule;
     const obstacleGeometry = needsGeometry ? this.resolveObstacleGeometry(objectDef) : null;
     const obstacleFootprint = blocksPath ? this.footprintInCells(category, objectDef, obstacleGeometry) : 0;
     const { pathDiameter, pathfindCenterInCell } = this.resolvePathRadiusAndCenter(category, objectDef, obstacleGeometry);
@@ -28545,6 +28565,9 @@ export class GameLogicSubsystem implements Subsystem {
       // Dynamic geometry (collision shape morphing)
       dynamicGeometryProfile: this.extractDynamicGeometryProfile(objectDef),
       dynamicGeometryState: null,
+      // Firestorm damage pulse (extends DynamicGeometryInfoUpdate)
+      firestormDamageProfile: this.extractFirestormDamageProfile(objectDef),
+      firestormDamageState: null,
       // Fire OCL after weapon cooldown
       fireOCLAfterCooldownProfiles: this.extractFireOCLAfterCooldownProfiles(objectDef),
       fireOCLAfterCooldownStates: [],
@@ -35038,7 +35061,7 @@ export class GameLogicSubsystem implements Subsystem {
       const blockType = block.type.toUpperCase();
       if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
       const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-      if (moduleType !== 'DYNAMICGEOMETRYINFOUPDATE') return;
+      if (moduleType !== 'DYNAMICGEOMETRYINFOUPDATE' && moduleType !== 'FIRESTORMDYNAMICGEOMETRYINFOUPDATE') return;
       profile = {
         initialDelayFrames: this.msToLogicFrames(readNumericField(block.fields, ['InitialDelay']) ?? 0),
         initialHeight: readNumericField(block.fields, ['InitialHeight']) ?? 0,
@@ -35053,6 +35076,32 @@ export class GameLogicSubsystem implements Subsystem {
     };
     for (const block of objectDef.blocks) visitBlock(block);
     if (this.resolveObjectDefParent(objectDef)) {
+      for (const block of this.resolveObjectDefParent(objectDef)?.blocks ?? []) visitBlock(block);
+    }
+    return profile;
+  }
+
+  /**
+   * Source parity: FirestormDynamicGeometryInfoUpdate — extract firestorm damage profile from INI.
+   * C++ file: FirestormDynamicGeometryInfoUpdate.cpp (buildFieldParse).
+   */
+  private extractFirestormDamageProfile(objectDef: ObjectDef | undefined): FirestormDamageProfile | null {
+    if (!objectDef) return null;
+    let profile: FirestormDamageProfile | null = null;
+    const visitBlock = (block: IniBlock): void => {
+      if (profile) return;
+      const blockType = block.type.toUpperCase();
+      if (blockType !== 'BEHAVIOR' && blockType !== 'UPDATE') return;
+      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
+      if (moduleType !== 'FIRESTORMDYNAMICGEOMETRYINFOUPDATE') return;
+      profile = {
+        damageAmount: readNumericField(block.fields, ['DamageAmount']) ?? 0,
+        delayBetweenDamageFrames: this.msToLogicFrames(readNumericField(block.fields, ['DelayBetweenDamageFrames']) ?? 0),
+        maxHeightForDamage: readNumericField(block.fields, ['MaxHeightForDamage']) ?? 20.0,
+      };
+    };
+    for (const block of objectDef.blocks) visitBlock(block);
+    if (!profile && this.resolveObjectDefParent(objectDef)) {
       for (const block of this.resolveObjectDefParent(objectDef)?.blocks ?? []) visitBlock(block);
     }
     return profile;
@@ -61628,6 +61677,51 @@ export class GameLogicSubsystem implements Subsystem {
         } else {
           state.finished = true;
         }
+      }
+    }
+  }
+
+  /**
+   * Source parity: FirestormDynamicGeometryInfoUpdate::update + doDamageScan —
+   * pulse DAMAGE_FLAME within expanding geometry radius at configured interval.
+   * C++ file: FirestormDynamicGeometryInfoUpdate.cpp lines 214-270.
+   */
+  private updateFirestormDamage(): void {
+    for (const entity of this.spawnedEntities.values()) {
+      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
+      const profile = entity.firestormDamageProfile;
+      if (!profile) continue;
+      // Must have active dynamic geometry (parent module).
+      const geoState = entity.dynamicGeometryState;
+      if (!geoState || !geoState.started) continue;
+
+      // Lazy-init firestorm damage state.
+      if (!entity.firestormDamageState) {
+        entity.firestormDamageState = { lastDamageFrame: 0 };
+      }
+
+      const state = entity.firestormDamageState;
+
+      // Source parity: damage scan at interval.
+      if (this.frameCounter - state.lastDamageFrame >= profile.delayBetweenDamageFrames) {
+        // Source parity: doDamageScan — iterate entities within bounding circle radius.
+        const boundingCircle = entity.obstacleGeometry?.majorRadius ?? 0;
+        if (boundingCircle > 0) {
+          for (const other of this.spawnedEntities.values()) {
+            if (other.destroyed) continue;
+            if (other.id === entity.id) continue;
+            // 2D distance check.
+            const dx = other.x - entity.x;
+            const dz = other.z - entity.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist > boundingCircle) continue;
+            // Source parity: height check — skip targets above maxHeightForDamage.
+            if (other.y > entity.y + profile.maxHeightForDamage) continue;
+            // Apply DAMAGE_FLAME.
+            this.applyWeaponDamageAmount(entity.id, other, profile.damageAmount, 'FLAME', 'BURNED');
+          }
+        }
+        state.lastDamageFrame = this.frameCounter;
       }
     }
   }

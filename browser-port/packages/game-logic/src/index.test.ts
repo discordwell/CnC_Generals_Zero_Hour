@@ -27787,6 +27787,224 @@ describe('DynamicGeometryInfoUpdate', () => {
   });
 });
 
+// ─── FirestormDynamicGeometryInfoUpdate ──────────────────────────────────────
+describe('FirestormDynamicGeometryInfoUpdate', () => {
+  it('expands geometry via parent DynamicGeometryInfoUpdate', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('FirestormSmall', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'FirestormDynamicGeometryInfoUpdate ModuleTag_Firestorm', {
+            InitialDelay: 0,
+            InitialHeight: 5,
+            InitialMajorRadius: 10,
+            InitialMinorRadius: 10,
+            FinalHeight: 20,
+            FinalMajorRadius: 50,
+            FinalMinorRadius: 50,
+            TransitionTime: 300, // 300ms = 9 frames at 30fps
+            DamageAmount: 10,
+            DelayBetweenDamageFrames: 500,
+            MaxHeightForDamage: 20,
+          }),
+        ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10, GeometryHeight: 10 }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('FirestormSmall', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        dynamicGeometryProfile: { initialMajorRadius: number; finalMajorRadius: number } | null;
+        firestormDamageProfile: { damageAmount: number } | null;
+        dynamicGeometryState: { started: boolean; finished: boolean } | null;
+        obstacleGeometry: { majorRadius: number } | null;
+      }>;
+    };
+
+    const entity = priv.spawnedEntities.get(1)!;
+    expect(entity.dynamicGeometryProfile).not.toBeNull();
+    expect(entity.firestormDamageProfile).not.toBeNull();
+    expect(entity.firestormDamageProfile!.damageAmount).toBe(10);
+
+    // Run a frame to start geometry expansion.
+    logic.update(1 / 30);
+    expect(entity.dynamicGeometryState?.started).toBe(true);
+
+    // Run more frames — major radius should increase toward final value.
+    const initialRadius = entity.obstacleGeometry?.majorRadius ?? 0;
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    const newRadius = entity.obstacleGeometry?.majorRadius ?? 0;
+    expect(newRadius).toBeGreaterThan(initialRadius);
+  });
+
+  it('deals DAMAGE_FLAME to entities within radius', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('FirestormSmall', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'FirestormDynamicGeometryInfoUpdate ModuleTag_Firestorm', {
+            InitialDelay: 0,
+            InitialHeight: 5,
+            InitialMajorRadius: 50,
+            InitialMinorRadius: 50,
+            FinalHeight: 20,
+            FinalMajorRadius: 60,
+            FinalMinorRadius: 60,
+            TransitionTime: 300,
+            DamageAmount: 15,
+            DelayBetweenDamageFrames: 0,
+            MaxHeightForDamage: 100,
+          }),
+        ], { GeometryMajorRadius: 50, GeometryMinorRadius: 50, GeometryHeight: 5 }),
+        makeObjectDef('Victim', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    // Place victim at (70, 50), firestorm at (50, 50) — distance 20, within radius 50.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FirestormSmall', 50, 50),
+        makeMapObject('Victim', 70, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; templateName: string }>;
+    };
+
+    // Run several frames: geometry starts + damage scan fires.
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    const victim = [...priv.spawnedEntities.values()].find(e => e.templateName === 'Victim')!;
+    expect(victim.health).toBeLessThan(200);
+  });
+
+  it('respects maxHeightForDamage — skips targets above threshold', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('FirestormSmall', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'FirestormDynamicGeometryInfoUpdate ModuleTag_Firestorm', {
+            InitialDelay: 0,
+            InitialHeight: 5,
+            InitialMajorRadius: 50,
+            InitialMinorRadius: 50,
+            FinalHeight: 20,
+            FinalMajorRadius: 60,
+            FinalMinorRadius: 60,
+            TransitionTime: 300,
+            DamageAmount: 15,
+            DelayBetweenDamageFrames: 0,
+            MaxHeightForDamage: 5,
+          }),
+        ], { GeometryMajorRadius: 50, GeometryMinorRadius: 50, GeometryHeight: 5 }),
+        makeObjectDef('HighFlyer', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FirestormSmall', 50, 50),
+        makeMapObject('HighFlyer', 70, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; y: number; templateName: string }>;
+    };
+
+    // Move the high-flyer above maxHeightForDamage (firestorm y + 5).
+    const firestorm = [...priv.spawnedEntities.values()].find(e => e.templateName === 'FirestormSmall')!;
+    const highFlyer = [...priv.spawnedEntities.values()].find(e => e.templateName === 'HighFlyer')!;
+    highFlyer.y = firestorm.y + 100; // Well above threshold of 5 (survives ground snap)
+
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Should take NO damage since it's above maxHeightForDamage.
+    expect(highFlyer.health).toBe(200);
+  });
+
+  it('pulses damage at delayBetweenDamageFrames interval', () => {
+    // DelayBetweenDamageFrames: 500ms → msToLogicFrames(500) = ceil(500/33.33) = 15 frames.
+    // First damage pulse occurs when frameCounter - lastDamageFrame(0) >= 15, i.e. frame 15.
+    // Geometry starts on frame 1 (delay=0 → delayCountdown=1, started after 1 tick).
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('FirestormSmall', 'America', ['PROJECTILE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'FirestormDynamicGeometryInfoUpdate ModuleTag_Firestorm', {
+            InitialDelay: 0,
+            InitialHeight: 5,
+            InitialMajorRadius: 50,
+            InitialMinorRadius: 50,
+            FinalHeight: 20,
+            FinalMajorRadius: 60,
+            FinalMinorRadius: 60,
+            TransitionTime: 30000, // long transition so geometry stays active
+            DamageAmount: 10,
+            DelayBetweenDamageFrames: 500, // 15 frames
+            MaxHeightForDamage: 100,
+          }),
+        ], { GeometryMajorRadius: 50, GeometryMinorRadius: 50, GeometryHeight: 5 }),
+        makeObjectDef('Victim', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
+        ]),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('FirestormSmall', 50, 50),
+        makeMapObject('Victim', 70, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, { health: number; templateName: string }>;
+    };
+
+    const victim = () => [...priv.spawnedEntities.values()].find(e => e.templateName === 'Victim')!;
+
+    // Run 10 frames — geometry is started but first damage pulse hasn't fired yet
+    // (need frameCounter >= 15 for first pulse since lastDamageFrame starts at 0).
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+    expect(victim().health).toBe(500); // No damage yet
+
+    // Run 6 more frames (total 16) — first pulse should fire at frame 15.
+    for (let i = 0; i < 6; i++) logic.update(1 / 30);
+    const healthAfterFirstPulse = victim().health;
+    expect(healthAfterFirstPulse).toBeLessThan(500);
+
+    // Run 5 more frames — should NOT get another damage pulse (need 15 frames since last pulse).
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+    expect(victim().health).toBe(healthAfterFirstPulse);
+
+    // Run 15 more frames to reach the next pulse interval.
+    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    const healthAfterSecondPulse = victim().health;
+    expect(healthAfterSecondPulse).toBeLessThan(healthAfterFirstPulse);
+  });
+});
+
 // ─── FireOCLAfterWeaponCooldownUpdate ────────────────────────────────────────
 describe('FireOCLAfterWeaponCooldownUpdate', () => {
   it('fires OCL when entity stops attacking after enough shots', () => {
