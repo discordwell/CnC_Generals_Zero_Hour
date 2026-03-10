@@ -47181,9 +47181,70 @@ export class GameLogicSubsystem implements Subsystem {
         okToFireHowitzerCounter: 0,
         gattlingEntityId: -1,
       };
+
+      // Source parity: SpectreGunshipUpdate::initiateIntentToDoSpecialPower —
+      // spawn a gattling entity, add it to the gunship's contain module, and disable it
+      // until orbit insertion is complete. C++ creates the entity from m_gattlingTemplateName,
+      // calls shipContain->addToContain(newGattling), then gattling->setDisabled(DISABLED_PARALYZED).
+      this.spawnSpectreGattlingEntity(gunshipEntity, gunshipProfile, gunshipEntity.spectreGunshipState);
     }
 
     return true;
+  }
+
+  /**
+   * Source parity: SpectreGunshipUpdate::initiateIntentToDoSpecialPower —
+   * spawn the gattling gun entity, add it to the gunship's contain, and set it DISABLED_PARALYZED.
+   * C++ creates via TheThingFactory->newObject(gattlingTemplate, getObject()->getTeam()),
+   * calls shipContain->addToContain(newGattling), stores m_gattlingID, then
+   * gattling->setDisabled(DISABLED_PARALYZED).
+   */
+  private spawnSpectreGattlingEntity(
+    gunship: MapEntity,
+    profile: SpectreGunshipUpdateProfile,
+    state: SpectreGunshipState,
+  ): void {
+    if (!profile.gattlingTemplateName) return;
+
+    // Destroy any pre-existing gattling entity (C++ nulls m_gattlingID if entity already exists)
+    if (state.gattlingEntityId !== -1) {
+      const existing = this.spawnedEntities.get(state.gattlingEntityId);
+      if (existing && !existing.destroyed) {
+        this.markEntityDestroyed(existing.id, -1);
+      }
+      state.gattlingEntityId = -1;
+    }
+
+    const gattling = this.spawnEntityFromTemplate(
+      profile.gattlingTemplateName,
+      gunship.x,
+      gunship.z,
+      gunship.rotationY,
+      gunship.side ?? '',
+    );
+    if (!gattling) return;
+
+    // Source parity: shipContain->addToContain(newGattling) — track as contained by gunship.
+    gattling.transportContainerId = gunship.id;
+
+    // Source parity: gattling->setDisabled(DISABLED_PARALYZED) — hold fire until orbit insertion.
+    gattling.objectStatusFlags.add('DISABLED_PARALYZED');
+
+    state.gattlingEntityId = gattling.id;
+  }
+
+  /**
+   * Source parity: SpectreGunshipUpdate::cleanUp — destroy the gattling entity and reset state.
+   * C++ calls TheGameLogic->destroyObject(gattling) for the contained gattling gun.
+   */
+  private cleanUpSpectreGunship(state: SpectreGunshipState): void {
+    if (state.gattlingEntityId !== -1) {
+      const gattling = this.spawnedEntities.get(state.gattlingEntityId);
+      if (gattling && !gattling.destroyed) {
+        this.markEntityDestroyed(gattling.id, -1);
+      }
+      state.gattlingEntityId = -1;
+    }
   }
 
   /**
@@ -47256,6 +47317,21 @@ export class GameLogicSubsystem implements Subsystem {
         if (state.status === 'INSERTING' && distanceToTarget < orbitalRadius) {
           state.status = 'ORBITING';
           state.orbitEscapeFrame = this.frameCounter + profile.orbitFrames;
+
+          // Source parity: gattling->clearDisabled(DISABLED_PARALYZED) — enable the gattling gun
+          // on orbit insertion. C++ SpectreGunshipUpdate.cpp line 478.
+          const gattlingInsert = this.spawnedEntities.get(state.gattlingEntityId);
+          if (gattlingInsert && !gattlingInsert.destroyed) {
+            gattlingInsert.objectStatusFlags.delete('DISABLED_PARALYZED');
+          }
+        }
+
+        // Source parity: gattling entity tracks gunship position (it's contained aboard).
+        const gattlingFollow = this.spawnedEntities.get(state.gattlingEntityId);
+        if (gattlingFollow && !gattlingFollow.destroyed) {
+          gattlingFollow.x = entity.x;
+          gattlingFollow.z = entity.z;
+          gattlingFollow.y = entity.y;
         }
       }
 
@@ -47264,6 +47340,15 @@ export class GameLogicSubsystem implements Subsystem {
         // Check departure
         if (this.frameCounter >= state.orbitEscapeFrame) {
           state.status = 'DEPARTING';
+
+          // Source parity: disengageAndDepartAO — gattling->setDisabled(DISABLED_PARALYZED)
+          // and cleanUp() destroys the gattling entity. C++ SpectreGunshipUpdate.cpp line 812/828.
+          const gattlingDepart = this.spawnedEntities.get(state.gattlingEntityId);
+          if (gattlingDepart && !gattlingDepart.destroyed) {
+            gattlingDepart.objectStatusFlags.add('DISABLED_PARALYZED');
+          }
+          this.cleanUpSpectreGunship(state);
+
           // Source parity: disengage — fly in current facing direction off map
           continue;
         }
@@ -47318,6 +47403,20 @@ export class GameLogicSubsystem implements Subsystem {
             }
           }
 
+          // Source parity: gattlingAI->aiAttackObject / aiAttackPosition —
+          // direct the gattling entity to attack the found target or strafe position.
+          // C++ SpectreGunshipUpdate.cpp lines 585-591.
+          const gattlingOrbit = this.spawnedEntities.get(state.gattlingEntityId);
+          if (gattlingOrbit && !gattlingOrbit.destroyed) {
+            if (targetEntity) {
+              gattlingOrbit.attackTargetEntityId = targetEntity.id;
+              gattlingOrbit.attackTargetPosition = null;
+            } else {
+              gattlingOrbit.attackTargetEntityId = null;
+              gattlingOrbit.attackTargetPosition = { x: state.gattlingTargetX, z: state.gattlingTargetZ };
+            }
+          }
+
           // Source parity: howitzer fires after gattling has converged for long enough
           if (state.okToFireHowitzerCounter > profile.howitzerFollowLag) {
             if (profile.howitzerWeaponTemplate) {
@@ -47359,6 +47458,7 @@ export class GameLogicSubsystem implements Subsystem {
         const mapWidth = this.mapHeightmap ? this.mapHeightmap.worldWidth : 1000;
         const mapHeight = this.mapHeightmap ? this.mapHeightmap.worldDepth : 1000;
         if (entity.x < -100 || entity.x > mapWidth + 100 || entity.z < -100 || entity.z > mapHeight + 100) {
+          this.cleanUpSpectreGunship(state);
           this.markEntityDestroyed(entity.id, -1);
           state.status = 'IDLE';
         }
@@ -53609,6 +53709,17 @@ export class GameLogicSubsystem implements Subsystem {
         case 'PARKED': {
           // If there's a pending command, take off.
           if (js.pendingCommand) {
+            // Source parity: JetAwaitingRunwayState — must reserve runway before takeoff.
+            // For flight deck carriers, attempt to reserve a takeoff runway first.
+            const parkedProducer = this.spawnedEntities.get(entity.producerEntityId);
+            const fdProfileParked = parkedProducer?.flightDeckProfile;
+            const fdStateParked = parkedProducer?.flightDeckState;
+            if (fdProfileParked && fdStateParked) {
+              if (!this.flightDeckReserveRunway(fdStateParked, fdProfileParked, entity.id, false)) {
+                // Can't get a runway yet — stay PARKED and wait.
+                break;
+              }
+            }
             this.jetAITransition(entity, js, 'TAKING_OFF');
             entity.objectStatusFlags.add('AIRBORNE_TARGET');
             js.allowAirLoco = false; // not yet airborne for movement
@@ -53629,6 +53740,17 @@ export class GameLogicSubsystem implements Subsystem {
           if (framesInState >= TAKEOFF_FRAMES) {
             js.allowAirLoco = true;
             this.jetAITransition(entity, js, 'AIRBORNE');
+
+            // Source parity: JetTakeoffOrLandingState::onExit — release runway and
+            // optionally release parking space when takeoff completes.
+            const takeoffProducer = this.spawnedEntities.get(entity.producerEntityId);
+            const fdStateTakeoff = takeoffProducer?.flightDeckState;
+            if (fdStateTakeoff) {
+              if (!profile.keepsParkingSpaceWhenAirborne) {
+                this.flightDeckReleaseSpace(fdStateTakeoff, entity.id);
+              }
+              this.flightDeckReleaseRunway(fdStateTakeoff, entity.id);
+            }
 
             // Execute pending command.
             if (js.pendingCommand) {
@@ -63017,6 +63139,14 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: FlightDeckBehavior::onDie — kill all parked aircraft when carrier dies.
     this.onFlightDeckDie(entity);
+
+    // Source parity: SpectreGunshipUpdate — if the gunship is shot down, destroy the
+    // contained gattling entity. C++ SpectreGunshipUpdate.cpp update() line 693-696:
+    // "THE GUNSHIP MUST HAVE GOTTEN SHOT DOWN!" → cleanUp() destroys gattling.
+    if (entity.spectreGunshipState && entity.spectreGunshipState.gattlingEntityId !== -1) {
+      this.cleanUpSpectreGunship(entity.spectreGunshipState);
+      entity.spectreGunshipState.status = 'IDLE';
+    }
 
     // Source parity: SpawnBehavior::onDie — handle slaver death (orphan/kill slaves).
     this.onSlaverDeath(entity);

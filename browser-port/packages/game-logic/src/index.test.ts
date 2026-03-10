@@ -67511,33 +67511,42 @@ describe('FlightDeckBehavior', () => {
   });
 
   it('sets NO_ATTACK status when no aircraft are parked', () => {
-    const bundle = makeBundle({ objects: [makeFlightDeckCarrierDef()] });
+    const bundle = makeBundle({
+      objects: [makeFlightDeckCarrierDef(), makeCarrierJetDef()],
+    });
     const scene = new THREE.Scene();
     const logic = new GameLogicSubsystem(scene);
     logic.loadMapObjects(
-      makeMap([makeMapObject('AircraftCarrier', 50, 50)], 128, 128),
+      makeMap([
+        makeMapObject('AircraftCarrier', 50, 50),
+        makeMapObject('CarrierJet', 60, 60),
+      ], 128, 128),
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
     const priv = logic as unknown as {
       spawnedEntities: Map<number, {
         objectStatusFlags: Set<string>;
+        destroyed: boolean;
         flightDeckState: {
           parkingSpaces: Array<{ occupantId: number }>;
         } | null;
       }>;
     };
     const carrier = priv.spawnedEntities.get(1)!;
-    // All spaces empty
+    // All spaces empty — NO_ATTACK should be set
     logic.update(1 / 30);
     expect(carrier.objectStatusFlags.has('NO_ATTACK')).toBe(true);
-    // Add an aircraft to a space
-    carrier.flightDeckState!.parkingSpaces[0]!.occupantId = 999;
-    // We need to also create the entity for purgeDead not to remove it
-    // Since entity 999 doesn't exist, purgeDead will clear it back to -1.
-    // So instead, let's just verify the logic is correct by observing
-    // that with all empty spaces, NO_ATTACK is set.
+    // Park a real jet in a space
+    carrier.flightDeckState!.parkingSpaces[0]!.occupantId = 2;
     logic.update(1 / 30);
+    // With a live aircraft parked, NO_ATTACK should be cleared
+    expect(carrier.objectStatusFlags.has('NO_ATTACK')).toBe(false);
+    // Destroy the jet — purgeDead should clear the space
+    const jet = priv.spawnedEntities.get(2)!;
+    jet.destroyed = true;
+    logic.update(1 / 30);
+    // No live aircraft parked, NO_ATTACK should be set again
     expect(carrier.objectStatusFlags.has('NO_ATTACK')).toBe(true);
   });
 
@@ -67946,5 +67955,321 @@ describe('SpectreGunshipUpdate', () => {
     expect(entity.spectreGunshipProfile).toBeNull();
     expect(entity.spectreGunshipState).toBeNull();
     expect(entity.spectreGunshipDeploymentProfile).toBeNull();
+  });
+
+  // ── Gattling entity lifecycle tests ──
+
+  function makeGattlingDef(): ObjectDef {
+    return makeObjectDef('TestGattling', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ]);
+  }
+
+  it('deployment spawns gattling entity inside gunship and sets it DISABLED_PARALYZED', () => {
+    const bundle = makeBundle({
+      objects: [makeCommandCenterDef(), makeGunshipDef(), makeGattlingDef()],
+      specialPowers: [makeSpecialPowerDef('SPECIAL_SPECTRE_GUNSHIP', {
+        ReloadTime: 0,
+        Enum: 'SPECIAL_SPECTRE_GUNSHIP',
+      })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestCommandCenter', 64, 64)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const deployed = priv.initiateSpectreGunshipDeployment(1, 640, 640);
+    expect(deployed).toBe(true);
+
+    // Find the spawned gunship (not the command center)
+    let gunship: any = null;
+    for (const [id, ent] of priv.spawnedEntities) {
+      if (id !== 1 && ent.spectreGunshipProfile) gunship = ent;
+    }
+    expect(gunship).not.toBeNull();
+    expect(gunship.spectreGunshipState).not.toBeNull();
+    expect(gunship.spectreGunshipState.gattlingEntityId).not.toBe(-1);
+
+    // The gattling entity should exist and be DISABLED_PARALYZED
+    const gattlingId = gunship.spectreGunshipState.gattlingEntityId;
+    const gattling = priv.spawnedEntities.get(gattlingId);
+    expect(gattling).toBeDefined();
+    expect(gattling.destroyed).toBe(false);
+    expect(gattling.objectStatusFlags.has('DISABLED_PARALYZED')).toBe(true);
+
+    // Gattling should be contained by the gunship
+    expect(gattling.transportContainerId).toBe(gunship.id);
+  });
+
+  it('gattling entity is enabled (DISABLED_PARALYZED cleared) on transition to ORBITING', () => {
+    const bundle = makeBundle({
+      objects: [makeGunshipDef(), makeGattlingDef()],
+      weapons: [makeWeaponDef('TestHowitzer', { Damage: 50, DamageRadius: 20, DamageType: 'EXPLOSION' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const gunship = priv.spawnedEntities.get(1)!;
+
+    // Spawn gattling manually via the private method
+    gunship.spectreGunshipState = {
+      status: 'INSERTING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 640,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 0,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+    priv.spawnSpectreGattlingEntity(gunship, gunship.spectreGunshipProfile, gunship.spectreGunshipState);
+    const gattlingId = gunship.spectreGunshipState.gattlingEntityId;
+    expect(gattlingId).not.toBe(-1);
+
+    const gattling = priv.spawnedEntities.get(gattlingId);
+    expect(gattling.objectStatusFlags.has('DISABLED_PARALYZED')).toBe(true);
+
+    // Run frames until ORBITING
+    for (let i = 0; i < 500; i++) {
+      logic.update(1 / 30);
+      if (gunship.spectreGunshipState.status !== 'INSERTING') break;
+    }
+    expect(gunship.spectreGunshipState.status).toBe('ORBITING');
+
+    // Gattling should no longer be paralyzed
+    expect(gattling.objectStatusFlags.has('DISABLED_PARALYZED')).toBe(false);
+  });
+
+  it('gattling entity is destroyed on transition to DEPARTING (cleanUp)', () => {
+    const bundle = makeBundle({
+      objects: [makeGunshipDef(), makeGattlingDef()],
+      weapons: [makeWeaponDef('TestHowitzer', { Damage: 50, DamageRadius: 20, DamageType: 'EXPLOSION' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const gunship = priv.spawnedEntities.get(1)!;
+
+    // Set up in ORBITING with gattling
+    gunship.x = 640;
+    gunship.z = 540;
+    gunship.spectreGunshipState = {
+      status: 'ORBITING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 540,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 5, // Will depart very soon
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+    priv.spawnSpectreGattlingEntity(gunship, gunship.spectreGunshipProfile, gunship.spectreGunshipState);
+    // Manually clear DISABLED_PARALYZED since we're simulating post-orbit-insertion
+    const gattlingId = gunship.spectreGunshipState.gattlingEntityId;
+    const gattling = priv.spawnedEntities.get(gattlingId);
+    gattling.objectStatusFlags.delete('DISABLED_PARALYZED');
+
+    // Advance past orbit escape frame to trigger departure
+    for (let i = 0; i < 20; i++) {
+      logic.update(1 / 30);
+      if (gunship.spectreGunshipState.status === 'DEPARTING') break;
+    }
+    expect(gunship.spectreGunshipState.status).toBe('DEPARTING');
+
+    // Gattling entity should be destroyed by cleanUp
+    expect(gattling.destroyed).toBe(true);
+    expect(gunship.spectreGunshipState.gattlingEntityId).toBe(-1);
+  });
+
+  it('gattling entity is destroyed when gunship is killed (shot down)', () => {
+    const bundle = makeBundle({
+      objects: [makeGunshipDef(), makeGattlingDef()],
+      weapons: [makeWeaponDef('TestHowitzer', { Damage: 50, DamageRadius: 20, DamageType: 'EXPLOSION' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const gunship = priv.spawnedEntities.get(1)!;
+
+    // Set up ORBITING state with gattling
+    gunship.x = 640;
+    gunship.z = 540;
+    gunship.spectreGunshipState = {
+      status: 'ORBITING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 540,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 999999,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+    priv.spawnSpectreGattlingEntity(gunship, gunship.spectreGunshipProfile, gunship.spectreGunshipState);
+    const gattlingId = gunship.spectreGunshipState.gattlingEntityId;
+    const gattling = priv.spawnedEntities.get(gattlingId);
+    expect(gattling.destroyed).toBe(false);
+
+    // Kill the gunship (simulating being shot down)
+    priv.markEntityDestroyed(gunship.id, -1);
+
+    // Gattling should be destroyed as part of gunship death cleanup
+    expect(gattling.destroyed).toBe(true);
+    expect(gunship.spectreGunshipState.gattlingEntityId).toBe(-1);
+    expect(gunship.spectreGunshipState.status).toBe('IDLE');
+  });
+
+  it('gattling entity follows gunship position during flight', () => {
+    const bundle = makeBundle({
+      objects: [makeGunshipDef(), makeGattlingDef()],
+      weapons: [makeWeaponDef('TestHowitzer', { Damage: 50, DamageRadius: 20, DamageType: 'EXPLOSION' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestGunship', 10, 10)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const gunship = priv.spawnedEntities.get(1)!;
+
+    // Set up INSERTING state with gattling
+    gunship.spectreGunshipState = {
+      status: 'INSERTING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 640,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 0,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+    priv.spawnSpectreGattlingEntity(gunship, gunship.spectreGunshipProfile, gunship.spectreGunshipState);
+    const gattlingId = gunship.spectreGunshipState.gattlingEntityId;
+    const gattling = priv.spawnedEntities.get(gattlingId);
+
+    // Run a few frames so the gunship moves
+    for (let i = 0; i < 5; i++) {
+      logic.update(1 / 30);
+    }
+
+    // Gattling should track gunship position
+    expect(gattling.x).toBe(gunship.x);
+    expect(gattling.z).toBe(gunship.z);
+  });
+
+  it('gattling entity is directed to attack target during ORBITING', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeGunshipDef(),
+        makeGattlingDef(),
+        makeObjectDef('EnemyUnit', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+        ]),
+      ],
+      weapons: [makeWeaponDef('TestHowitzer', { Damage: 50, DamageRadius: 20, DamageType: 'EXPLOSION' })],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('TestGunship', 50, 50),
+        makeMapObject('EnemyUnit', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+
+    const priv = logic as any;
+    const gunship = priv.spawnedEntities.get(1)!;
+    const enemy = priv.spawnedEntities.get(2)!;
+
+    // Position enemy near the targeting reticle center
+    enemy.x = 640;
+    enemy.z = 640;
+
+    // Set up ORBITING state with gattling
+    gunship.x = 640;
+    gunship.z = 540;
+    gunship.spectreGunshipState = {
+      status: 'ORBITING',
+      initialTargetX: 640,
+      initialTargetZ: 640,
+      overrideTargetX: 640,
+      overrideTargetZ: 640,
+      satelliteX: 640,
+      satelliteZ: 540,
+      gattlingTargetX: 640,
+      gattlingTargetZ: 640,
+      positionToShootAtX: 640,
+      positionToShootAtZ: 640,
+      orbitEscapeFrame: 999999,
+      okToFireHowitzerCounter: 0,
+      gattlingEntityId: -1,
+    };
+    priv.spawnSpectreGattlingEntity(gunship, gunship.spectreGunshipProfile, gunship.spectreGunshipState);
+    const gattlingId = gunship.spectreGunshipState.gattlingEntityId;
+    const gattling = priv.spawnedEntities.get(gattlingId);
+    // Clear paralysis for orbiting
+    gattling.objectStatusFlags.delete('DISABLED_PARALYZED');
+
+    // Run enough frames for the howitzer evaluation cycle (HowitzerFiringRate=100)
+    // We need frame % 100 === 0 to trigger
+    for (let i = 0; i < 200; i++) {
+      logic.update(1 / 30);
+    }
+
+    // The gattling should be directed to attack the enemy entity
+    // (attackTargetEntityId set or attackTargetPosition set)
+    const hasTarget = gattling.attackTargetEntityId === enemy.id
+      || (gattling.attackTargetPosition !== null);
+    expect(hasTarget).toBe(true);
   });
 });
