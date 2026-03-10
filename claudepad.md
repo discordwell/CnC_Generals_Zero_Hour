@@ -1,5 +1,23 @@
 # Session Summaries
 
+## 2026-03-10T04:45Z — Locomotor Surface Mask Fix + Cliff Expansion Fix + Control Harness
+Two critical pathfinding bugs fixed, enabling unit movement and building placement on real maps:
+- **BUG #1 — Cliff expansion flood-fill** (from previous session): Second expansion loop cascaded, marking 95.5% of Tournament Desert as cliff. Fixed: single-round expansion matching C++ `classifyMap`. Result: 51.3% cliff (correct).
+- **BUG #2 — locomotorSurfaceMask = 0**: INI bundle stores Locomotor as `["SET_NORMAL", "LocomotorName"]`. `parseLocomotorEntries` recursed into each array element, creating empty locomotor sets. Fix: treat flat string arrays as single entry tokens.
+- **Control harness TS fixes**: Fixed `guardPosition` (missing guardMode), `constructBuilding` (wrong fields), `setRallyPoint` (extra commandSource), `attack` (used wrong command type).
+- **Unused import cleanup**: Removed `GeneralPersona` from `game-shell.ts`.
+- Wet test confirmed: dozer pathfinds, moves 160 units along A* path, builds Power Plant, all on Tournament Desert.
+- 2 regression tests added. All 3146 tests pass.
+
+## 2026-03-10T05:15Z — Skirmish Startup Fixes: Starting Entities & Victory Guard
+Fixed two critical skirmish bugs:
+- **Immediate DEFEAT bug**: Skirmish maps have zero player-owned entities; victory check fired on frame 1 declaring all sides defeated. Root cause: C++ loads `SkirmishScripts.scb` to spawn starting units, which browser port lacked.
+- **Fix 1 — `spawnSkirmishStartingEntities()`**: Reads `StartingBuilding` + `StartingUnit0` from PlayerTemplate.ini `FactionDef` blocks, spawns at `Player_N_Start` waypoints. Called from `main.ts` after `loadMapObjects`.
+- **Fix 2 — Victory condition grace**: `checkVictoryConditions()` now skips when `newlyDefeated.length === activeSides.size` (all sides simultaneously defeated = startup race).
+- **Fix 3 — player-side-sync null guard**: `syncPlayerSidesFromNetwork` skips null sides to prevent overwriting skirmish-setup sides.
+- 3 new tests, all 3143 tests pass. Deployed to generals.discordwell.com and wet-tested: credits show $10,000, entities spawn on minimap, no instant defeat.
+- Commit 918729e3, pushed to origin/main.
+
 ## 2026-03-10T00:32Z — Previously Out-of-Scope Module Ports (Phases A-C)
 Ported 3 modules previously classified as out-of-scope:
 - **Phase A: FirestormDynamicGeometryInfoUpdate** — DAMAGE_FLAME pulses within expanding radius (4 tests)

@@ -8177,6 +8177,118 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America').length).toBe(1);
   });
 
+  it('cliff expansion does not flood-fill clear interior via cliffStateData', () => {
+    // Regression: the cliff expansion algorithm must do only one round of
+    // 1-cell expansion (matching C++ classifyMap).  A previous bug did a
+    // cascading second pass that converted the entire playable area to cliff.
+    const sz = 32;
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Dozer', 'America', ['VEHICLE', 'DOZER'], [], {
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+        makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [], {
+          BuildCost: 200,
+          GeometryMajorRadius: 3,
+          GeometryMinorRadius: 3,
+        }),
+      ],
+    });
+
+    // Build cliff-state data: set border cells (rows 0-2 and 29-31) as cliff bits.
+    const stride = Math.floor((sz + 7) / 8); // 4 bytes per row
+    const cliffBytes = new Uint8Array(sz * stride);
+    for (let z = 0; z < sz; z++) {
+      if (z <= 2 || z >= 29) {
+        // Set all bits in these rows (cliff border).
+        for (let b = 0; b < stride; b++) {
+          cliffBytes[z * stride + b] = 0xFF;
+        }
+      }
+    }
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    const mapData: MapDataJSON = {
+      heightmap: {
+        width: sz,
+        height: sz,
+        borderSize: 0,
+        data: uint8ArrayToBase64(new Uint8Array(sz * sz).fill(0)),
+      },
+      objects: [makeMapObject('Dozer', 16, 16)],
+      triggers: [],
+      textureClasses: [],
+      blendTileCount: 0,
+      cliffStateData: uint8ArrayToBase64(cliffBytes),
+      cliffStateStride: stride,
+    };
+
+    const heightmap = HeightmapGrid.fromJSON(mapData.heightmap);
+    logic.loadMapObjects(mapData, makeRegistry(bundle), heightmap);
+
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 1000 });
+    // Build in the clear interior (cell 16,16 → world 160,160).
+    logic.submitCommand({
+      type: 'constructBuilding',
+      entityId: 1,
+      templateName: 'PowerPlant',
+      targetPosition: [160, 0, 160],
+      angle: 0,
+      lineEndPosition: null,
+    });
+
+    logic.update(1 / 30);
+
+    // Interior should remain buildable despite cliff borders.
+    expect(logic.getSideCredits('America')).toBe(800);
+    expect(logic.getEntityIdsByTemplateAndSide('PowerPlant', 'America').length).toBe(1);
+  });
+
+  it('resolves locomotorSurfaceMask from array-format Locomotor field', () => {
+    // Regression: INI bundle stores Locomotor as ["SET_NORMAL", "LocomotorName"].
+    // A bug in parseLocomotorEntries treated each array element as a separate entry,
+    // yielding an empty locomotor list for SET_NORMAL and surfaceMask = 0,
+    // causing the pathfinder to immediately return empty paths for all units.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Mover', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          // Array format matching the INI bundle representation.
+          Locomotor: ['SET_NORMAL', 'TestLoco'],
+          GeometryMajorRadius: 2,
+          GeometryMinorRadius: 2,
+        }),
+      ],
+      locomotors: [makeLocomotorDef('TestLoco', 60)],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('Mover', 20, 20)]),
+      makeRegistry(bundle),
+      makeHeightmap(),
+    );
+
+    const startX = logic.getEntityState(1)!.x;
+    // Issue a move command — if surfaceMask were 0, pathfinder returns no path.
+    logic.submitCommand({
+      type: 'moveTo',
+      entityId: 1,
+      targetX: 60,
+      targetZ: 20,
+      commandSource: 'PLAYER',
+    });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    const endX = logic.getEntityState(1)!.x;
+    // Entity must have moved — proves surfaceMask was resolved correctly.
+    expect(endX).toBeGreaterThan(startX);
+  });
+
   it('continues line-building after blocked first tile', () => {
     const bundle = makeBundle({
       objects: [

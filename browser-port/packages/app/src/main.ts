@@ -76,6 +76,7 @@ import {
   resolveScriptRadarVisibility,
 } from './script-radar-visibility.js';
 import { syncPlayerSidesFromNetwork } from './player-side-sync.js';
+import { createControlHarness } from './control-harness.js';
 import { createScriptAudioRuntimeBridge } from './script-audio-runtime.js';
 import { createScriptCameraEffectsRuntimeBridge } from './script-camera-effects-runtime.js';
 import { createScriptCameraRuntimeBridge } from './script-camera-runtime.js';
@@ -2438,6 +2439,14 @@ async function startGame(
   const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
   let currentLogicFrame = 0;
   let missionInputLocked = false;
+
+  // Control harness for automated play-testing via browser console.
+  const localPlayerId = networkManager.getLocalPlayerID();
+  (window as unknown as Record<string, unknown>).__harness = createControlHarness(
+    gameLogic,
+    rtsCamera,
+    localPlayerId,
+  );
 
   gameLoop.start({
     onSimulationStep(_frameNumber: number, dt: number) {

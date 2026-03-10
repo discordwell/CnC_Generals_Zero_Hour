@@ -13,7 +13,7 @@
  *   MAIN_MENU → SINGLE_PLAYER → CHALLENGE_SELECT → (game loads)
  */
 
-import { DEFAULT_PERSONAS, type GeneralPersona } from './challenge-generals.js';
+import { DEFAULT_PERSONAS } from './challenge-generals.js';
 
 // ──── Types ─────────────────────────────────────────────────────────────────
 

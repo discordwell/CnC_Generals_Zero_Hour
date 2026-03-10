@@ -39538,6 +39538,14 @@ export class GameLogicSubsystem implements Subsystem {
         return [];
       }
       if (Array.isArray(value)) {
+        // INI bundle stores Locomotor as a flat string array: ["SET_NORMAL", "LocomotorName", ...]
+        // If all elements are strings, treat them as tokens of a single entry.
+        const allStrings = value.every((v) => typeof v === 'string');
+        if (allStrings) {
+          const parsed = parseTokens(value as string[]);
+          return parsed ? [parsed] : [];
+        }
+        // Nested arrays: each sub-element is a separate entry.
         return value.flatMap((entry) => parseLocomotorEntries(entry as IniValue));
       }
       const parsed = parseTokens(parseIniScalarTokens(value));
@@ -52407,10 +52415,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // Expand cliff zones one cell to mark adjacent passable cells as pinched, then
-    // convert those pinched clear cells to cliff and add a second pinched border around
-    // every cliff cell, matching the source pathfinder's classifyMap sequence.
-    const expand1 = new Uint8Array(total);
+    // Source parity: AIPathfind::classifyMap — expand all cliff cells one step,
+    // marking adjacent clear cells as pinched and converting them to cliff.
+    // The C++ pathfinder does exactly one round of unconditional 1-cell expansion.
     for (let z = 0; z < cellHeight; z++) {
       for (let x = 0; x < cellWidth; x++) {
         const index = z * cellWidth + x;
@@ -52424,40 +52431,15 @@ export class GameLogicSubsystem implements Subsystem {
             }
             const nIndex = kz * cellWidth + kx;
             if (terrainType[nIndex] === NAV_CLEAR) {
-              expand1[nIndex] = 1;
+              pinched[nIndex] = 1;
             }
           }
         }
-      }
-    }
-    for (let i = 0; i < total; i++) {
-      if (terrainType[i] === NAV_CLEAR && expand1[i] === 1) {
-        pinched[i] = 1;
       }
     }
     for (let i = 0; i < total; i++) {
       if (pinched[i] === 1 && terrainType[i] === NAV_CLEAR) {
         terrainType[i] = NAV_CLIFF;
-      }
-    }
-    for (let z = 0; z < cellHeight; z++) {
-      for (let x = 0; x < cellWidth; x++) {
-        const index = z * cellWidth + x;
-        if (!pinched[index]) {
-          continue;
-        }
-        terrainType[index] = NAV_CLIFF;
-        for (let kx = x - 1; kx <= x + 1; kx++) {
-          for (let kz = z - 1; kz <= z + 1; kz++) {
-            if (!this.isMapCellInBounds(kx, kz)) {
-              continue;
-            }
-            const nIndex = kz * cellWidth + kx;
-            if (terrainType[nIndex] === NAV_CLEAR) {
-              pinched[nIndex] = 1;
-            }
-          }
-        }
       }
     }
 
