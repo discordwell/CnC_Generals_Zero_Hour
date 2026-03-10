@@ -113,6 +113,29 @@ npx playwright test      # E2E tests
 
 Key dependencies: Three.js (rendering), Vite (build), Vitest (tests), Playwright (E2E).
 
+## Visual Oracle (Parity Testing)
+
+```
+tools/visual-oracle/
+├── qemu/                # QEMU VM control via QMP protocol
+│   ├── QemuController.ts    # Boot, input, screenshot, snapshot management
+│   ├── generals-config.ts   # VM paths, resolution, QEMU flags
+│   └── input-sequences.ts   # Generals menu navigation sequences
+├── oracle/              # Game automation
+│   └── GeneralsOracle.ts    # Claude vision menu nav + scripted actions
+├── compare/             # Side-by-side comparison
+│   ├── ScenarioRunner.ts    # Run same scenario in both games
+│   └── LlmJudge.ts         # Claude vision screenshot comparison
+├── scenarios/           # JSON scenario definitions
+├── vm/                  # VM disk images + setup scripts
+└── cli.ts               # CLI entry point
+```
+
+Runs original C&C Generals ZH in a headless QEMU Windows VM, captures screenshots
+via QMP `screendump`, and compares them with browser port screenshots using Claude
+vision. Two-device mouse approach (USB-tablet + HMP mouse_button) for DirectInput
+compatibility.
+
 ## C++ Source Mapping
 
 | C++ Module | Browser Port |

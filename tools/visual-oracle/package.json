@@ -1,0 +1,23 @@
+{
+  "name": "@generals/visual-oracle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "oracle": "tsx cli.ts",
+    "oracle:setup": "bash vm/setup-vm.sh",
+    "oracle:capture": "tsx cli.ts capture",
+    "oracle:compare": "tsx cli.ts compare",
+    "oracle:screenshot": "tsx cli.ts screenshot"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "@types/pngjs": "^6.0.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

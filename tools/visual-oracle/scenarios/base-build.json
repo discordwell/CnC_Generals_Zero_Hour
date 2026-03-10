@@ -1,0 +1,52 @@
+{
+  "id": "base-build",
+  "name": "USA Base Build — First 2 Minutes",
+  "description": "Start a skirmish as USA. Build power plant, barracks, supply depot. Capture screenshots at key moments: initial base, after power plant, after supply depot.",
+  "faction": "USA",
+  "originalActions": [
+    { "type": "screenshot", "label": "initial-base", "comment": "Starting base view" },
+    { "type": "wait", "ms": 5000, "comment": "Let game settle" },
+
+    { "type": "click", "x": 400, "y": 300, "comment": "Select dozer (approximate)" },
+    { "type": "wait", "ms": 500 },
+
+    { "type": "screenshot", "label": "dozer-selected", "comment": "Dozer selected" },
+
+    { "type": "key", "keys": ["b"], "comment": "Open build menu" },
+    { "type": "wait", "ms": 500 },
+
+    { "type": "screenshot", "label": "build-menu", "comment": "Build menu open" },
+
+    { "type": "wait", "ms": 60000, "comment": "Wait 60s for some building to complete" },
+
+    { "type": "screenshot", "label": "after-build", "comment": "After first build cycle" },
+
+    { "type": "wait", "ms": 60000, "comment": "Wait another 60s" },
+
+    { "type": "screenshot", "label": "two-minutes", "comment": "~2 minutes into game" }
+  ],
+  "portCommands": [
+    "h.screenshot('initial-base')",
+    "h.advance(150)",
+    "h.selectByTemplate('AmericaDozer')",
+    "h.screenshot('dozer-selected')",
+    "h.advance(150)",
+    "h.screenshot('build-menu')",
+    "h.advance(1800)",
+    "h.screenshot('after-build')",
+    "h.advance(1800)",
+    "h.screenshot('two-minutes')"
+  ],
+  "judgeConfig": {
+    "aspects": [
+      "terrain rendering",
+      "building placement and scale",
+      "command center appearance",
+      "supply depot appearance",
+      "dozer unit appearance",
+      "UI layout (command bar, minimap)",
+      "color palette and lighting"
+    ],
+    "minimumScore": 4
+  }
+}

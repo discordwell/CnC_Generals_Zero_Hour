@@ -1,0 +1,18 @@
+# VM disk images (too large for git)
+vm/*.qcow2
+vm/*.iso
+vm/*.img
+
+# Node modules
+node_modules/
+
+# Build output
+dist/
+
+# Captured screenshots (regenerable)
+/artifacts/
+
+# Temporary files
+*.ppm
+screenshot.png
+connected.png

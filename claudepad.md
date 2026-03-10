@@ -1,5 +1,15 @@
 # Session Summaries
 
+## 2026-03-10T08:30Z — Visual Oracle: QEMU-based Original Game Comparison Tool
+Built `tools/visual-oracle/` — a QEMU-based tool for running the original C&C Generals Zero Hour in a headless Windows VM and comparing screenshots with the browser port.
+- **QemuController**: QMP protocol for VM lifecycle, input injection (USB-tablet + HMP two-device mouse for DirectInput), PPM→PNG screendump. Adapted from Emperor BFD project.
+- **GeneralsOracle**: Claude vision-based menu navigation (30-step loop), scripted action execution (click, key, drag, screenshot), connects to running or fresh VM.
+- **ScenarioRunner + LlmJudge**: Runs same scenario in both games, captures labeled screenshots, Claude vision comparison with aspect scoring (1-10 scale).
+- **VM setup script**: Auto-detects Emperor BFD Win7/Win10 images for overlay clone, or fresh install from ISO. 3-step setup (create VM → install game → configure+snapshot).
+- **CLI**: `screenshot`, `capture`, `compare`, `navigate`, `connect` commands.
+- TypeScript clean build. Dependencies: pngjs, @anthropic-ai/sdk. QEMU 10.2.1 already installed.
+- **Blocker**: No Generals ZH CD images found on machine. VM setup ready once ISOs are provided.
+
 ## 2026-03-10T04:45Z — Locomotor Surface Mask Fix + Cliff Expansion Fix + Control Harness
 Two critical pathfinding bugs fixed, enabling unit movement and building placement on real maps:
 - **BUG #1 — Cliff expansion flood-fill** (from previous session): Second expansion loop cascaded, marking 95.5% of Tournament Desert as cliff. Fixed: single-round expansion matching C++ `classifyMap`. Result: 51.3% cliff (correct).
