@@ -46812,8 +46812,6 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: FlightDeckBehavior::reserveSpace — assign aircraft to a parking space.
    */
-  // @ts-expect-error — Infrastructure method; will be called when production/JetAI wires into flight deck.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private flightDeckReserveSpace(state: FlightDeckState, entityId: number): boolean {
     // Check if already reserved.
     for (const space of state.parkingSpaces) {
@@ -46829,8 +46827,6 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: FlightDeckBehavior::releaseSpace — free a parking space.
    */
-  // @ts-expect-error — Infrastructure method; will be called when JetAI takeoff/landing wires into flight deck.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private flightDeckReleaseSpace(state: FlightDeckState, entityId: number): void {
     for (const space of state.parkingSpaces) {
       if (space.occupantId === entityId) {
@@ -46844,8 +46840,6 @@ export class GameLogicSubsystem implements Subsystem {
    * For takeoff, only checks front spaces (first numRunways spaces).
    * For landing, checks all spaces.
    */
-  // @ts-expect-error — Infrastructure method; will be called when JetAI takeoff/landing wires into flight deck.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private flightDeckReserveRunway(
     state: FlightDeckState, profile: FlightDeckProfile, entityId: number, forLanding: boolean,
   ): boolean {
@@ -46890,8 +46884,6 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: FlightDeckBehavior::releaseRunway — free runway reservation.
    */
-  // @ts-expect-error — Infrastructure method; will be called when JetAI takeoff/landing wires into flight deck.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private flightDeckReleaseRunway(state: FlightDeckState, entityId: number): void {
     for (let i = 0; i < state.runwayTakeoffReservation.length; i++) {
       if (state.runwayTakeoffReservation[i] === entityId) {
@@ -46907,8 +46899,6 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: FlightDeckBehavior::hasAvailableSpaceFor — check if any space is available.
    * Peeks at dead occupants without modifying state (const method in C++).
    */
-  // @ts-expect-error — Infrastructure method; will be called when production system checks capacity.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private flightDeckHasAvailableSpace(state: FlightDeckState): boolean {
     for (const space of state.parkingSpaces) {
       let id = space.occupantId;
@@ -51783,6 +51773,11 @@ export class GameLogicSubsystem implements Subsystem {
       producedUnit.jetAIState.producerZ = producer.z;
       producedUnit.producerEntityId = producer.id;
       producedUnit.objectStatusFlags.delete('AIRBORNE_TARGET');
+      // Source parity: for flight deck carriers, reserve a parking space on production.
+      const fdState = producer.flightDeckState;
+      if (fdState) {
+        this.flightDeckReserveSpace(fdState, producedUnit.id);
+      }
       return;
     }
 
@@ -53832,7 +53827,11 @@ export class GameLogicSubsystem implements Subsystem {
     let bestAirfield: MapEntity | null = null;
     for (const candidate of this.spawnedEntities.values()) {
       if (candidate.destroyed) continue;
-      if (!candidate.kindOf.has('FS_AIRFIELD')) continue;
+      // Source parity: C++ checks ParkingPlaceBehaviorInterface — both FS_AIRFIELD
+      // (ParkingPlaceBehavior) and FlightDeckBehavior implement this interface.
+      const isAirfield = candidate.kindOf.has('FS_AIRFIELD');
+      const hasFlightDeck = candidate.flightDeckState && this.flightDeckHasAvailableSpace(candidate.flightDeckState);
+      if (!isAirfield && !hasFlightDeck) continue;
       // Source parity: C++ uses PartitionFilterRelationship(jet, ALLOW_ALLIES).
       if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ALLIES) continue;
       // Skip airfields that are under construction or being sold.
@@ -54090,6 +54089,16 @@ export class GameLogicSubsystem implements Subsystem {
             }
             // If a command is pending, go straight to takeoff.
             if (js.pendingCommand) {
+              // Source parity: must reserve runway before takeoff (same as PARKED → TAKING_OFF).
+              const reloadProducer = this.spawnedEntities.get(entity.producerEntityId);
+              const fdProfileReload = reloadProducer?.flightDeckProfile;
+              const fdStateReload = reloadProducer?.flightDeckState;
+              if (fdProfileReload && fdStateReload) {
+                if (!this.flightDeckReserveRunway(fdStateReload, fdProfileReload, entity.id, false)) {
+                  // Runway busy — stay in RELOAD_AMMO with pending command to retry next frame.
+                  break;
+                }
+              }
               this.jetAITransition(entity, js, 'TAKING_OFF');
               entity.objectStatusFlags.add('AIRBORNE_TARGET');
               js.allowAirLoco = false;
@@ -54142,6 +54151,10 @@ export class GameLogicSubsystem implements Subsystem {
         } else {
           this.setParkingPlaceHealee(airfield, entity, !js.allowAirLoco);
         }
+      } else if (airfield?.flightDeckState) {
+        // Source parity: FlightDeckBehavior healing — grounded jets at carriers get healed.
+        const isGrounded = !js.allowAirLoco;
+        this.flightDeckSetHealee(airfield.flightDeckState, entity.id, isGrounded);
       } else {
         this.clearParkingPlaceHealee(entity);
       }

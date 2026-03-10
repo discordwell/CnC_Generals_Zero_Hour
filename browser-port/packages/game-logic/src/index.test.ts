@@ -67791,6 +67791,350 @@ describe('FlightDeckBehavior', () => {
     expect(tank.flightDeckProfile).toBeNull();
     expect(tank.flightDeckState).toBeNull();
   });
+
+  // ── FlightDeck ↔ JetAI integration tests ──
+
+  function makeCarrierJetWithJetAIDef(): ObjectDef {
+    return makeObjectDef('CarrierJetAI', 'America', ['VEHICLE', 'AIRCRAFT'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'JetGun'] }),
+      makeBlock('LocomotorSet', 'SET_NORMAL JetLoco', {}),
+      makeBlock('Behavior', 'JetAIUpdate ModuleTag_JetAI', {
+        SneakyOffsetWhenAttacking: 0,
+        AttackersMissPersistTime: 0,
+        MinHeight: 80,
+        OutOfAmmoDamagePerSecond: 0,
+        ReturnToBaseIdleTime: 0,
+        NeedsRunway: true,
+        KeepsParkingSpaceWhenAirborne: true,
+        TakeoffPause: 0,
+        TakeoffDistForMaxLift: 0,
+      }),
+    ]);
+  }
+
+  function makeFlightDeckJetBundle() {
+    return makeBundle({
+      objects: [
+        makeFlightDeckCarrierDef(),
+        makeCarrierJetWithJetAIDef(),
+      ],
+      weapons: [
+        makeWeaponDef('JetGun', {
+          AttackRange: 300,
+          PrimaryDamage: 20,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+          ClipSize: 4,
+          ClipReloadTime: 3000,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('JetLoco', 300),
+      ],
+    });
+  }
+
+  it('JetAI takeoff from flight deck reserves and releases runway', () => {
+    const bundle = makeFlightDeckJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AircraftCarrier', 50, 50),
+        makeMapObject('CarrierJetAI', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const priv = logic as any;
+    const carrier = priv.spawnedEntities.get(1)!;
+    const jet = priv.spawnedEntities.get(2)!;
+    const fdState = carrier.flightDeckState!;
+
+    // Park jet in front space (runway 0)
+    fdState.parkingSpaces[0]!.occupantId = 2;
+    jet.jetAIState.state = 'PARKED';
+    jet.jetAIState.allowAirLoco = false;
+    jet.jetAIState.producerX = carrier.x;
+    jet.jetAIState.producerZ = carrier.z;
+    jet.producerEntityId = carrier.id;
+    jet.objectStatusFlags.delete('AIRBORNE_TARGET');
+
+    // Give jet a move command to trigger takeoff
+    logic.submitCommand({ type: 'moveTo', entityId: 2, targetX: 200, targetZ: 200 });
+    logic.update(1 / 30);
+
+    // Should be TAKING_OFF with runway reserved
+    expect(jet.jetAIState.state).toBe('TAKING_OFF');
+    expect(fdState.runwayTakeoffReservation[0]).toBe(2);
+
+    // Run through takeoff (30 frames)
+    for (let i = 0; i < 35; i++) logic.update(1 / 30);
+
+    // Should be AIRBORNE with runway released
+    expect(jet.jetAIState.state).toBe('AIRBORNE');
+    expect(fdState.runwayTakeoffReservation[0]).toBe(-1);
+    // keepsParkingSpaceWhenAirborne=true, so space stays reserved
+    expect(fdState.parkingSpaces[0]!.occupantId).toBe(2);
+  });
+
+  it('JetAI cannot takeoff from non-front flight deck space', () => {
+    const bundle = makeFlightDeckJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AircraftCarrier', 50, 50),
+        makeMapObject('CarrierJetAI', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const priv = logic as any;
+    const carrier = priv.spawnedEntities.get(1)!;
+    const jet = priv.spawnedEntities.get(2)!;
+    const fdState = carrier.flightDeckState!;
+
+    // Park jet in back space (index 2 = R1S2, which is NOT in front numRunways slots)
+    fdState.parkingSpaces[2]!.occupantId = 2;
+    jet.jetAIState.state = 'PARKED';
+    jet.jetAIState.allowAirLoco = false;
+    jet.jetAIState.producerX = carrier.x;
+    jet.jetAIState.producerZ = carrier.z;
+    jet.producerEntityId = carrier.id;
+    jet.objectStatusFlags.delete('AIRBORNE_TARGET');
+
+    // Give jet a command
+    logic.submitCommand({ type: 'moveTo', entityId: 2, targetX: 200, targetZ: 200 });
+    logic.update(1 / 30);
+
+    // Should stay PARKED because non-front space can't reserve runway for takeoff
+    expect(jet.jetAIState.state).toBe('PARKED');
+    expect(fdState.runwayTakeoffReservation[0]).toBe(-1);
+    expect(fdState.runwayTakeoffReservation[1]).toBe(-1);
+  });
+
+  it('JetAI landing reserves space and runway on flight deck', () => {
+    const bundle = makeFlightDeckJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AircraftCarrier', 50, 50),
+        makeMapObject('CarrierJetAI', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const priv = logic as any;
+    const carrier = priv.spawnedEntities.get(1)!;
+    const jet = priv.spawnedEntities.get(2)!;
+    const fdState = carrier.flightDeckState!;
+
+    // Set jet to RETURNING_FOR_LANDING near the carrier
+    jet.jetAIState.state = 'RETURNING_FOR_LANDING';
+    jet.jetAIState.allowAirLoco = true;
+    jet.jetAIState.producerX = carrier.x;
+    jet.jetAIState.producerZ = carrier.z;
+    jet.jetAIState.cruiseHeight = 80;
+    jet.producerEntityId = carrier.id;
+    jet.x = carrier.x; // Already near
+    jet.z = carrier.z;
+    jet.objectStatusFlags.add('AIRBORNE_TARGET');
+
+    logic.update(1 / 30);
+
+    // Should transition to LANDING with space and runway reserved
+    expect(jet.jetAIState.state).toBe('LANDING');
+    // Space should be reserved
+    const hasSpace = fdState.parkingSpaces.some((s: any) => s.occupantId === 2);
+    expect(hasSpace).toBe(true);
+    // Landing runway should be reserved
+    const reservedRunway = fdState.parkingSpaces.find((s: any) => s.occupantId === 2)!.runway;
+    expect(fdState.runwayLandingReservation[reservedRunway]).toBe(2);
+
+    // Run through landing (30 frames)
+    for (let i = 0; i < 35; i++) logic.update(1 / 30);
+
+    // Landing runway should be released
+    expect(fdState.runwayLandingReservation[reservedRunway]).toBe(-1);
+  });
+
+  it('JetAI landing blocked when runway busy on flight deck', () => {
+    const bundle = makeFlightDeckJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AircraftCarrier', 50, 50),
+        makeMapObject('CarrierJetAI', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const priv = logic as any;
+    const carrier = priv.spawnedEntities.get(1)!;
+    const jet = priv.spawnedEntities.get(2)!;
+    const fdState = carrier.flightDeckState!;
+
+    // Set jet to RETURNING near carrier
+    jet.jetAIState.state = 'RETURNING_FOR_LANDING';
+    jet.jetAIState.allowAirLoco = true;
+    jet.jetAIState.producerX = carrier.x;
+    jet.jetAIState.producerZ = carrier.z;
+    jet.jetAIState.cruiseHeight = 80;
+    jet.producerEntityId = carrier.id;
+    jet.x = carrier.x;
+    jet.z = carrier.z;
+
+    // Block both landing runways with other entity IDs
+    fdState.runwayLandingReservation[0] = 999;
+    fdState.runwayLandingReservation[1] = 998;
+
+    logic.update(1 / 30);
+
+    // Should still be RETURNING — couldn't get a runway
+    // (it may get a space but the runway reservation will fail)
+    expect(jet.jetAIState.state).toBe('RETURNING_FOR_LANDING');
+  });
+
+  it('flight deck heals grounded jets via flightDeckSetHealee', () => {
+    const bundle = makeFlightDeckJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AircraftCarrier', 50, 50),
+        makeMapObject('CarrierJetAI', 50, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const priv = logic as any;
+    const carrier = priv.spawnedEntities.get(1)!;
+    const jet = priv.spawnedEntities.get(2)!;
+    const fdState = carrier.flightDeckState!;
+
+    // Park jet at carrier, grounded (allowAirLoco=false)
+    fdState.parkingSpaces[0]!.occupantId = 2;
+    jet.jetAIState.state = 'PARKED';
+    jet.jetAIState.allowAirLoco = false;
+    jet.jetAIState.producerX = carrier.x;
+    jet.jetAIState.producerZ = carrier.z;
+    jet.producerEntityId = carrier.id;
+    jet.objectStatusFlags.delete('AIRBORNE_TARGET');
+
+    // Damage the jet
+    jet.health = 50;
+    const startHealth = jet.health;
+
+    // Run several frames — healing should occur
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    expect(jet.health).toBeGreaterThan(startHealth);
+  });
+
+  it('findSuitableAirfield finds flight deck carriers with available space', () => {
+    const bundle = makeFlightDeckJetBundle();
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AircraftCarrier', 50, 50),
+        makeMapObject('CarrierJetAI', 200, 200),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const priv = logic as any;
+    const jet = priv.spawnedEntities.get(2)!;
+
+    // Simulate destroyed original producer by setting it to non-existent ID
+    jet.producerEntityId = 999;
+
+    // Call findSuitableAirfield — should find the carrier
+    const result = priv.findSuitableAirfield.call(logic, jet);
+    expect(result).not.toBeNull();
+    expect(result.templateName).toBe('AircraftCarrier');
+  });
+
+  it('production on flight deck reserves parking space', () => {
+    const bundle = makeBundle({
+      objects: [
+        // Carrier with production capability
+        makeObjectDef('ProdCarrier', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'ProductionUpdate ModuleTag_Prod', { MaxQueueEntries: 6 }),
+          makeBlock('Behavior', 'QueueProductionExitUpdate ModuleTag_QExit', {}),
+          makeBlock('Behavior', 'FlightDeckBehavior ModuleTag_FlightDeck', {
+            NumRunways: 1,
+            NumSpacesPerRunway: 3,
+            HealAmountPerSecond: 30,
+            ApproachHeight: 50,
+            LandingDeckHeightOffset: 45,
+            ParkingCleanupPeriod: 500,
+            HumanFollowPeriod: 333,
+            ReplacementDelay: 4000,
+            DockAnimationDelay: 3000,
+            LaunchWaveDelay: 3000,
+            LaunchRampDelay: 667,
+            LowerRampDelay: 600,
+            CatapultFireDelay: 750,
+            PayloadTemplate: 'CarrierJetAI',
+            Runway1Spaces: ['R1S1', 'R1S2', 'R1S3'],
+            Runway1Takeoff: ['R1TakeoffStart', 'R1TakeoffEnd'],
+            Runway1Landing: ['R1LandStart', 'R1LandEnd'],
+            Runway1Taxi: ['Taxi1', 'Taxi2'],
+            Runway1Creation: ['Hanger1'],
+          }),
+        ]),
+        makeCarrierJetWithJetAIDef(),
+      ],
+      weapons: [
+        makeWeaponDef('JetGun', {
+          AttackRange: 300,
+          PrimaryDamage: 20,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 500,
+          ClipSize: 4,
+          ClipReloadTime: 3000,
+        }),
+      ],
+      locomotors: [
+        makeLocomotorDef('JetLoco', 300),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([makeMapObject('ProdCarrier', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    const priv = logic as any;
+
+    // Give credits and queue production
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 50000 });
+    logic.submitCommand({ type: 'queueUnitProduction', entityId: 1, unitTemplateName: 'CarrierJetAI' });
+
+    // Run enough frames for production to complete
+    for (let i = 0; i < 60; i++) logic.update(1 / 30);
+
+    const carrier = priv.spawnedEntities.get(1)!;
+    const fdState = carrier.flightDeckState!;
+
+    // Find the produced jet
+    const jetIds = logic.getEntityIdsByTemplate('CarrierJetAI');
+    expect(jetIds.length).toBe(1);
+
+    // The jet should have a parking space reserved
+    const jetId = jetIds[0]!;
+    const hasReservedSpace = fdState.parkingSpaces.some((s: any) => s.occupantId === jetId);
+    expect(hasReservedSpace).toBe(true);
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
