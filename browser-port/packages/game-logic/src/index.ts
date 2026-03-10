@@ -64811,11 +64811,9 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
 
-    // Source parity: In C++ starting entities exist before the first frame update
-    // (created by SkirmishScripts.scb during init). If ALL active sides have zero
-    // entities simultaneously, this is a startup race condition — skip until entities
-    // have been spawned and had at least one frame to register.
-    if (newlyDefeated.length === activeSides.size) {
+    // Source parity: VictoryConditions.cpp line 192 — `if (TheGameLogic->getFrame() > 1)`
+    // guards defeat processing on early frames while SkirmishScripts.scb spawns entities.
+    if (newlyDefeated.length === activeSides.size && this.frameCounter <= 1) {
       return;
     }
 

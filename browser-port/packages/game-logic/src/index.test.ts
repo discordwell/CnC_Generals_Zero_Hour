@@ -25832,12 +25832,39 @@ describe('skirmish starting entities', () => {
     logic.setPlayerSide(0, 'America');
     logic.setPlayerSide(1, 'China');
 
-    // Run a frame — both sides have zero entities.
+    // Run first frame — both sides have zero entities, frame <= 1.
     logic.update(1 / 30);
 
-    // Game should NOT end as a draw — the grace period should prevent it.
+    // Game should NOT end as a draw — the early-frame guard should prevent it.
     const endState = logic.getGameEndState();
     expect(endState).toBeNull();
+  });
+
+  it('triggers simultaneous defeat after the startup grace period', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TankA', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+        makeObjectDef('TankC', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const map = makeMap([], 128, 128);
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setPlayerSide(0, 'America');
+    logic.setPlayerSide(1, 'China');
+
+    // Advance past the grace period (frame > 1) with no entities.
+    logic.update(1 / 30); // frame 1 — grace still active
+    logic.update(1 / 30); // frame 2 — grace expired, both sides have 0 entities
+
+    // Both sides defeated after grace period — game SHOULD end.
+    const endState = logic.getGameEndState();
+    expect(endState).not.toBeNull();
   });
 });
 
