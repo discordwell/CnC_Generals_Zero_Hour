@@ -17,6 +17,10 @@ export class RuntimeManifest {
   private readonly byBasenameLower = new Map<string, ManifestEntry>();
 
   constructor(public readonly raw: ConversionManifest) {
+    // Track W3D base-name candidates for second-pass prefix fallback.
+    // Key = base name (before last _SUFFIX), value = { entry, isSkeleton }.
+    const baseNameCandidates = new Map<string, { entry: ManifestEntry; isSkeleton: boolean }>();
+
     for (const entry of raw.entries) {
       this.byOutputPath.set(entry.outputPath, entry);
       this.bySourcePath.set(entry.sourcePath, entry);
@@ -31,6 +35,26 @@ export class RuntimeManifest {
         if (basename && !this.byBasenameLower.has(basename)) {
           this.byBasenameLower.set(basename, entry);
         }
+
+        // W3D prefix fallback: "PTDogwod01_S" → also index as "ptdogwod01".
+        // Prefer _S (skeleton/base model) over other suffixes like _D, _DS, _E.
+        const underscoreIdx = basename.lastIndexOf('_');
+        if (underscoreIdx > 0) {
+          const baseName = basename.slice(0, underscoreIdx);
+          const suffix = basename.slice(underscoreIdx + 1);
+          const isSkeleton = suffix === 's';
+          const existing = baseNameCandidates.get(baseName);
+          if (!existing || (isSkeleton && !existing.isSkeleton)) {
+            baseNameCandidates.set(baseName, { entry, isSkeleton });
+          }
+        }
+      }
+    }
+
+    // Second pass: add W3D base-name fallbacks for names not already indexed.
+    for (const [baseName, candidate] of baseNameCandidates) {
+      if (!this.byBasenameLower.has(baseName)) {
+        this.byBasenameLower.set(baseName, candidate.entry);
       }
     }
   }

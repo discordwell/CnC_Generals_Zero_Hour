@@ -104,7 +104,10 @@ export class AssetManager implements Subsystem {
     // Strip extension if present (e.g. "model.w3d" → "model")
     const dotIdx = bareName.lastIndexOf('.');
     const stripped = dotIdx > 0 ? bareName.slice(0, dotIdx) : bareName;
-    const entry = this.manifest.getByBasenameLower(stripped);
+    // Extract just the filename (no directory) for basename lookup.
+    const slashIdx = stripped.lastIndexOf('/');
+    const filename = slashIdx >= 0 ? stripped.slice(slashIdx + 1) : stripped;
+    const entry = this.manifest.getByBasenameLower(filename);
     return entry?.outputPath ?? null;
   }
 

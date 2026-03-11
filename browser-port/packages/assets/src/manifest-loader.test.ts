@@ -6,7 +6,7 @@ import type { ConversionManifest } from '@generals/core';
 const VALID_MANIFEST: ConversionManifest = {
   version: 1,
   generatedAt: '2025-01-01T00:00:00.000Z',
-  entryCount: 4,
+  entryCount: 6,
   entries: [
     {
       sourcePath: 'maps/Alpine.map',
@@ -40,6 +40,24 @@ const VALID_MANIFEST: ConversionManifest = {
       sourceHash: 'ggg777',
       outputPath: 'models/W3DZH/Art/W3D/ABBarracks.glb',
       outputHash: 'hhh888',
+      converter: 'w3d-converter',
+      converterVersion: '1.0.0',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      sourcePath: 'Art/W3D/PTDogwod01_S.w3d',
+      sourceHash: 'iii999',
+      outputPath: 'models/W3DZH/Art/W3D/PTDogwod01_S.glb',
+      outputHash: 'jjj000',
+      converter: 'w3d-converter',
+      converterVersion: '1.0.0',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      sourcePath: 'Art/W3D/PTDogwod01_D.w3d',
+      sourceHash: 'kkk111',
+      outputPath: 'models/W3DZH/Art/W3D/PTDogwod01_D.glb',
+      outputHash: 'lll222',
       converter: 'w3d-converter',
       converterVersion: '1.0.0',
       timestamp: '2025-01-01T00:00:00.000Z',
@@ -222,7 +240,7 @@ describe('RuntimeManifest', () => {
 
   it('lists all output paths', () => {
     const paths = manifest.getOutputPaths();
-    expect(paths).toHaveLength(4);
+    expect(paths).toHaveLength(6);
     expect(paths).toContain('maps/Alpine.json');
     expect(paths).toContain('textures/grass.png');
     expect(paths).toContain('models/W3DZH/Art/W3D/AVThundrblt_d1.glb');
@@ -230,7 +248,7 @@ describe('RuntimeManifest', () => {
   });
 
   it('reports correct size', () => {
-    expect(manifest.size).toBe(4);
+    expect(manifest.size).toBe(6);
   });
 
   it('exposes raw manifest', () => {
@@ -264,6 +282,31 @@ describe('RuntimeManifest', () => {
     it('returns undefined for missing entries', () => {
       expect(manifest.getByBasenameLower('nonexistent_model')).toBeUndefined();
     });
+
+    it('resolves W3D base name to _S (skeleton) variant via prefix fallback', () => {
+      // INI says "PTDogwod01" but only "PTDogwod01_S.glb" and "PTDogwod01_D.glb" exist.
+      // Should prefer the _S variant as the skeleton/base model.
+      const entry = manifest.getByBasenameLower('PTDogwod01');
+      expect(entry).toBeDefined();
+      expect(entry!.outputPath).toBe('models/W3DZH/Art/W3D/PTDogwod01_S.glb');
+    });
+
+    it('still resolves exact suffixed names directly', () => {
+      const entryS = manifest.getByBasenameLower('PTDogwod01_S');
+      expect(entryS).toBeDefined();
+      expect(entryS!.outputPath).toBe('models/W3DZH/Art/W3D/PTDogwod01_S.glb');
+
+      const entryD = manifest.getByBasenameLower('PTDogwod01_D');
+      expect(entryD).toBeDefined();
+      expect(entryD!.outputPath).toBe('models/W3DZH/Art/W3D/PTDogwod01_D.glb');
+    });
+
+    it('does not create prefix fallback when exact basename already exists', () => {
+      // ABBarracks.glb exists as an exact match — prefix fallback should not override it.
+      const entry = manifest.getByBasenameLower('ABBarracks');
+      expect(entry).toBeDefined();
+      expect(entry!.outputPath).toBe('models/W3DZH/Art/W3D/ABBarracks.glb');
+    });
   });
 });
 
@@ -287,7 +330,7 @@ describe('loadManifest', () => {
 
     const result = await loadManifest('/assets/manifest.json');
     expect(result).toBeInstanceOf(RuntimeManifest);
-    expect(result!.size).toBe(4);
+    expect(result!.size).toBe(6);
   });
 
   it('returns null on 404', async () => {
