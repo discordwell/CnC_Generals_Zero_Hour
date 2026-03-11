@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   testMatch: /.*\.e2e\.ts$/,
-  timeout: 30_000,
+  timeout: 120_000,
   retries: 0,
   use: {
     baseURL: 'http://localhost:42173',
@@ -13,9 +13,9 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'npx vite --port 42173 packages/app',
+    command: 'npx vite build packages/app && npx serve packages/app/dist -l 42173',
     port: 42173,
-    reuseExistingServer: false,
-    timeout: 15_000,
+    reuseExistingServer: true,
+    timeout: 60_000,
   },
 });

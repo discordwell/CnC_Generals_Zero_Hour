@@ -197,6 +197,46 @@ function randomInRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
+/**
+ * W3D condition-state suffix pattern: one or more uppercase letters after the
+ * last underscore in the model name (e.g. _D, _S, _AD, _DNS, _ACE).
+ * Matches against the filename portion only (no directory, no extension).
+ */
+const CONDITION_SUFFIX_RE = /^(.+)_[A-Z]+$/;
+
+/**
+ * Strip a W3D condition-state suffix from a model path/name.
+ * Returns the base name (with directory/extension preserved) if a suffix was
+ * found, or null if the name doesn't end with a condition suffix.
+ *
+ * Examples:
+ *   "PMgaldrum_D"       → "PMgaldrum"
+ *   "AVCONSTDOZ_AD"     → "AVCONSTDOZ"
+ *   "models/foo_DNS"    → "models/foo"
+ *   "ABBarracks"        → null  (no suffix)
+ *   "AVThundrblt_d1"    → null  (suffix contains digit, not a condition suffix)
+ */
+export function stripConditionStateSuffix(modelPath: string): string | null {
+  // Separate extension if present.
+  const dotIdx = modelPath.lastIndexOf('.');
+  const slashIdx = modelPath.lastIndexOf('/');
+  const hasExtension = dotIdx > 0 && dotIdx > slashIdx;
+  const pathWithoutExt = hasExtension ? modelPath.slice(0, dotIdx) : modelPath;
+  const extension = hasExtension ? modelPath.slice(dotIdx) : '';
+
+  // Work on just the filename portion to avoid matching directory separators.
+  const lastSlash = pathWithoutExt.lastIndexOf('/');
+  const dirPrefix = lastSlash >= 0 ? pathWithoutExt.slice(0, lastSlash + 1) : '';
+  const filename = lastSlash >= 0 ? pathWithoutExt.slice(lastSlash + 1) : pathWithoutExt;
+
+  const match = CONDITION_SUFFIX_RE.exec(filename);
+  if (!match) {
+    return null;
+  }
+
+  return `${dirPrefix}${match[1]}${extension}`;
+}
+
 export class ObjectVisualManager {
   private readonly scene: THREE.Scene;
   private readonly assetManager: AssetManager | null;
@@ -590,8 +630,8 @@ export class ObjectVisualManager {
           this.unresolvedEntityIds.delete(entityId);
           this.updatePlaceholderVisibility(entityId, false);
           return;
-        } catch (err) {
-          console.warn(`ObjectVisualManager: failed to load model "${candidate}"`, err);
+        } catch {
+          // Model load failed for this candidate — try next.
         }
       }
 
@@ -895,11 +935,33 @@ export class ObjectVisualManager {
       if (resolved) {
         push(resolved);
       }
+
+      // Condition-state suffix fallback: when the exact name (e.g. "PMgaldrum_D")
+      // is not in the manifest, strip the W3D condition suffix (uppercase letters
+      // after the last underscore, e.g. _D, _AD, _DNS, _ACE) and try the base
+      // model name. This mirrors the original C++ engine behaviour which falls
+      // back to the base model when a specific condition variant doesn't exist.
+      if (candidates.length === 0) {
+        const baseName = stripConditionStateSuffix(normalized);
+        if (baseName !== null) {
+          const fallback = this.assetManager.resolveModelPath(baseName);
+          if (fallback) {
+            push(fallback);
+          }
+        }
+      }
     }
 
     if (!extension) {
       for (const ext of this.config.modelExtensions) {
         push(`${normalized}${ext}`);
+      }
+      // Condition-state suffix fallback for extension-based candidates.
+      const baseName = stripConditionStateSuffix(normalized);
+      if (baseName !== null) {
+        for (const ext of this.config.modelExtensions) {
+          push(`${baseName}${ext}`);
+        }
       }
       return candidates;
     }

@@ -326,7 +326,7 @@ function writePivot(
   translation: [number, number, number],
   rotation: [number, number, number, number],
 ): void {
-  w.writeString(name, 32);
+  w.writeString(name, 16);
   w.writeUint32(parent);
   w.writeFloat32(translation[0]);
   w.writeFloat32(translation[1]);

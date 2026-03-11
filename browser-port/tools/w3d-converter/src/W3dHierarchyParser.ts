@@ -7,7 +7,7 @@
  *   PIVOT_FIXUPS     (0x103) – optional fixup table (ignored here)
  *
  * Each pivot record is 60 bytes:
- *   char     Name[32]
+ *   char     Name[16]         (W3D_NAME_LEN = 16)
  *   uint32   ParentIdx        (0xFFFFFFFF = root → stored as -1)
  *   float32  Translation[3]
  *   float32  EulerAngles[3]   (unused – we use the quaternion instead)
@@ -31,9 +31,9 @@ export interface W3dHierarchy {
 
 /**
  * Size of a single pivot record in bytes:
- *   32 (name) + 4 (parent) + 12 (translation) + 12 (euler) + 16 (quat) = 76
+ *   16 (name) + 4 (parent) + 12 (translation) + 12 (euler) + 16 (quat) = 60
  */
-const PIVOT_RECORD_SIZE = 76;
+const PIVOT_RECORD_SIZE = 60;
 
 export function parseHierarchyChunk(
   reader: W3dChunkReader,
@@ -70,19 +70,19 @@ export function parseHierarchyChunk(
 
         for (let i = 0; i < pivotsToRead; i++) {
           const base = sub.dataOffset + i * PIVOT_RECORD_SIZE;
-          const pivotName = reader.readString(base, 32);
-          const rawParent = reader.readUint32(base + 32);
+          const pivotName = reader.readString(base, 16);
+          const rawParent = reader.readUint32(base + 16);
           const parentIndex = rawParent === 0xffffffff ? -1 : rawParent;
 
-          const tx = reader.readFloat32(base + 36);
-          const ty = reader.readFloat32(base + 40);
-          const tz = reader.readFloat32(base + 44);
+          const tx = reader.readFloat32(base + 20);
+          const ty = reader.readFloat32(base + 24);
+          const tz = reader.readFloat32(base + 28);
 
-          // Skip Euler angles (12 bytes at base + 48).
-          const qx = reader.readFloat32(base + 60);
-          const qy = reader.readFloat32(base + 64);
-          const qz = reader.readFloat32(base + 68);
-          const qw = reader.readFloat32(base + 72);
+          // Skip Euler angles (12 bytes at base + 32).
+          const qx = reader.readFloat32(base + 44);
+          const qy = reader.readFloat32(base + 48);
+          const qz = reader.readFloat32(base + 52);
+          const qw = reader.readFloat32(base + 56);
 
           pivots.push({
             name: pivotName,

@@ -1,5 +1,14 @@
 # Session Summaries
 
+## 2026-03-11T08:50Z — Fix Model Visibility (Fog-of-War Shroud Bug)
+Root cause found and fixed: all 784 entities were invisible because `syncShroudVisibility` hid SHROUDED entities, and fog-of-war grid had no lookers during the initial visual sync (before `updateFogOfWar()` ever ran).
+- **Fix 1**: Moved initial `objectVisualManager.sync()` call to AFTER `spawnSkirmishStartingEntities()` and added `gameLogic.update(0)` beforehand so fog-of-war registers entity lookers before first sync.
+- **Fix 2**: Added try-catch in `GameLoop.tick()` so `onSimulationStep` errors log to console instead of silently killing the render loop.
+- **Cleanup**: Removed all DIAG_LOAD_OK/DIAG_LOAD_FAIL/DIAG_VISUAL_SUMMARY diagnostic code from object-visuals.ts.
+- **Tests**: 3 new fog-of-war shroud status tests (SHROUDED before update, CLEAR after update near own building, own entities always CLEAR). 1 new game loop error resilience test.
+- **Pending**: Deploy blocked — ovh2 SSH port 22 is refusing connections. Need user to restore SSH access.
+- **Bundle**: `index-Dn0TIAvY.js` ready in dist/
+
 ## 2026-03-11T01:45Z — W3D Model Rendering Pipeline Complete
 Implemented full W3D model rendering pipeline across 4 phases:
 - **Phase 1 (Path Resolution)**: Added case-insensitive basename index to RuntimeManifest so bare model names like "AVThundrblt_D1" resolve to full manifest paths. Added resolveModelPath() to AssetManager. Updated ObjectVisualManager to use manifest-based resolution — magenta placeholder boxes should now load as geometry.

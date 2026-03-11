@@ -74,6 +74,32 @@ describe('GameLoop', () => {
     expect(scheduler.getQueuedCallbackCount()).toBe(0);
   });
 
+  it('continues rendering even if onSimulationStep throws', () => {
+    const scheduler = new ManualScheduler();
+    const loop = new GameLoop(10, scheduler);
+
+    let simCount = 0;
+    let renderCount = 0;
+
+    loop.start({
+      onSimulationStep: () => {
+        simCount += 1;
+        throw new Error('simulation error');
+      },
+      onRender: () => {
+        renderCount += 1;
+      },
+    });
+
+    // Advance past one simulation step — should throw but still render.
+    scheduler.step(200);
+    expect(simCount).toBe(2);
+    expect(renderCount).toBe(2); // one from start, one from this step
+    expect(loop.isRunning()).toBe(true);
+
+    loop.stop();
+  });
+
   it('skips simulation updates while paused and resumes cleanly', () => {
     const scheduler = new ManualScheduler();
     const loop = new GameLoop(30, scheduler);

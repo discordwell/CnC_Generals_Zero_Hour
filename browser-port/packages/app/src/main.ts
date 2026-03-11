@@ -1055,7 +1055,6 @@ async function startGame(
       `Object resolve summary: ${objectPlacement.resolvedObjects}/${objectPlacement.spawnedObjects} objects resolved`,
     );
   }
-  objectVisualManager.sync(gameLogic.getRenderableEntityStates());
   const objectStatus = ` | Objects: ${objectPlacement.spawnedObjects}/${objectPlacement.totalObjects} ` +
     `(unresolved: ${objectPlacement.unresolvedObjects})`;
 
@@ -1086,6 +1085,12 @@ async function startGame(
     }
   }
 
+  // Run one update cycle so fog-of-war registers entity lookers before
+  // the initial visual sync.  Without this, every entity starts SHROUDED
+  // because the fog grid has no lookers yet.
+  gameLogic.update(0);
+  objectVisualManager.sync(gameLogic.getRenderableEntityStates());
+
   // ========================================================================
   // Camera setup
   // ========================================================================
@@ -1109,6 +1114,16 @@ async function startGame(
     worldWidth: heightmap.worldWidth,
     worldDepth: heightmap.worldDepth,
   });
+
+  // Initial shroud overlay update so the fog state matches the fog-of-war
+  // grid (cleared around player's starting entities) even if the game loop
+  // has not yet run.
+  {
+    const localSideForFogInit = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
+    shroudRenderer.update(
+      localSideForFogInit ? gameLogic.getFogOfWarTextureData(localSideForFogInit) : null,
+    );
+  }
 
   // ========================================================================
   // Debug info & keyboard shortcuts

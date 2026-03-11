@@ -48,7 +48,7 @@ export class XferLoad extends Xfer {
     this.offset += dataSize;
   }
 
-  xferByte(value: number): number {
+  xferByte(_value: number): number {
     this.assertRemaining(1);
     const result = this.view.getUint8(this.offset);
     this.offset += 1;

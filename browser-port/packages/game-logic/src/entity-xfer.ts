@@ -193,12 +193,6 @@ function xferJsonObjectWithCollections<T>(xfer: Xfer, value: T): T {
   return value;
 }
 
-function xferNullableJsonObjectWithCollections<T>(xfer: Xfer, value: T | null): T | null {
-  const hasValue = xfer.xferBool(value !== null);
-  if (!hasValue) return null;
-  return xferJsonObjectWithCollections(xfer, value!);
-}
-
 /**
  * Main entity serialization function.
  *
@@ -210,7 +204,9 @@ function xferNullableJsonObjectWithCollections<T>(xfer: Xfer, value: T | null): 
  * @returns The (possibly mutated) entity
  */
 export function xferMapEntity(xfer: Xfer, e: Record<string, unknown>): void {
-  const version = xfer.xferVersion(ENTITY_XFER_VERSION);
+  // Read version from stream (will be used for conditional field loading
+  // when ENTITY_XFER_VERSION is incremented).
+  xfer.xferVersion(ENTITY_XFER_VERSION);
 
   // ── Identity ──
   e.id = xfer.xferUnsignedInt(e.id as number);

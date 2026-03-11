@@ -113,7 +113,11 @@ export class GameLoop {
       this.accumulator += elapsed;
 
       while (this.accumulator >= this.simulationDt) {
-        callbacks.onSimulationStep(this.frameNumber, this.simulationDt / 1000);
+        try {
+          callbacks.onSimulationStep(this.frameNumber, this.simulationDt / 1000);
+        } catch (err) {
+          console.error(`Game loop error on frame ${this.frameNumber}:`, err);
+        }
         this.frameNumber += 1;
         this.accumulator -= this.simulationDt;
       }

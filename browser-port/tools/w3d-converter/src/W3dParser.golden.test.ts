@@ -83,7 +83,7 @@ function writePivot(
   w: BinaryWriter, name: string, parent: number,
   trans: [number, number, number], rot: [number, number, number, number],
 ): void {
-  w.writeString(name, 32);
+  w.writeString(name, 16);
   w.writeUint32(parent);
   w.writeFloat32(trans[0]); w.writeFloat32(trans[1]); w.writeFloat32(trans[2]);
   w.writeFloat32(0); w.writeFloat32(0); w.writeFloat32(0); // euler

@@ -69535,3 +69535,103 @@ describe('SpawnPointProductionExitUpdate', () => {
     expect(logic.getProductionState(1)?.queueEntryCount).toBe(1);
   });
 });
+
+describe('Fog of war shroud status resolution', () => {
+  it('entities start SHROUDED before first fog-of-war update when player side is set', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const neutralProp = makeObjectDef('NeutralProp', '', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      ShroudClearingRange: 0,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [neutralProp],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([makeMapObject('NeutralProp', 400, 400)], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setPlayerSide(0, 'America');
+
+    const states = logic.getRenderableEntityStates();
+    const prop = states.find(s => s.templateName === 'NeutralProp');
+    expect(prop).toBeDefined();
+    expect(prop!.shroudStatus).toBe('SHROUDED');
+  });
+
+  it('entities near own buildings become CLEAR after update', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const commandCenter = makeObjectDef('AmericaCommandCenter', 'America', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 300,
+      ShroudClearingRange: 300,
+    });
+
+    const neutralProp = makeObjectDef('NeutralProp', '', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      ShroudClearingRange: 0,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [commandCenter, neutralProp],
+    }));
+
+    // Place the neutral prop within 300 units of the command center.
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('AmericaCommandCenter', 500, 500),
+        makeMapObject('NeutralProp', 550, 500),
+      ], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setPlayerSide(0, 'America');
+
+    // Before update, the neutral prop should be SHROUDED.
+    const statesBefore = logic.getRenderableEntityStates();
+    const propBefore = statesBefore.find(s => s.templateName === 'NeutralProp');
+    expect(propBefore!.shroudStatus).toBe('SHROUDED');
+
+    // After update(0), the command center's shroud-clearing range should reveal nearby cells.
+    logic.update(0);
+
+    const statesAfter = logic.getRenderableEntityStates();
+    const propAfter = statesAfter.find(s => s.templateName === 'NeutralProp');
+    expect(propAfter!.shroudStatus).toBe('CLEAR');
+  });
+
+  it('own entities are always CLEAR regardless of fog state', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const ownUnit = makeObjectDef('AmericaDozer', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+    ], {
+      VisionRange: 10,
+      ShroudClearingRange: 10,
+    });
+
+    const registry = makeRegistry(makeBundle({
+      objects: [ownUnit],
+    }));
+
+    logic.loadMapObjects(
+      makeMap([makeMapObject('AmericaDozer', 500, 500)], 128, 128),
+      registry,
+      makeHeightmap(128, 128),
+    );
+    logic.setPlayerSide(0, 'America');
+
+    // Even before update(), own entities should report CLEAR shroud status.
+    const states = logic.getRenderableEntityStates();
+    const dozer = states.find(s => s.templateName === 'AmericaDozer');
+    expect(dozer).toBeDefined();
+    expect(dozer!.shroudStatus).toBe('CLEAR');
+  });
+});

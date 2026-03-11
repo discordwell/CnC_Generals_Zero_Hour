@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { LoadedModelAsset } from './object-visuals.js';
-import { ObjectVisualManager, type RenderableEntityState } from './object-visuals.js';
+import { ObjectVisualManager, stripConditionStateSuffix, type RenderableEntityState } from './object-visuals.js';
 
 function flushModelLoadQueue(): Promise<void> {
   return new Promise((resolve) => {
@@ -1675,5 +1675,183 @@ describe('ObjectVisualManager', () => {
     const clipDuration = action!.getClip().duration;
     expect(action!.time).toBeGreaterThan(clipDuration * 0.5);
     expect(action!.time).toBeLessThanOrEqual(clipDuration);
+  });
+});
+
+describe('stripConditionStateSuffix', () => {
+  it('strips single-letter condition suffix (_D)', () => {
+    expect(stripConditionStateSuffix('PMgaldrum_D')).toBe('PMgaldrum');
+  });
+
+  it('strips two-letter condition suffix (_AD)', () => {
+    expect(stripConditionStateSuffix('AVCONSTDOZ_AD')).toBe('AVCONSTDOZ');
+  });
+
+  it('strips three-letter condition suffix (_DNS)', () => {
+    expect(stripConditionStateSuffix('SomeModel_DNS')).toBe('SomeModel');
+  });
+
+  it('strips longer condition suffix (_ACE)', () => {
+    expect(stripConditionStateSuffix('ABBarracks_ACE')).toBe('ABBarracks');
+  });
+
+  it('returns null for names without an underscore', () => {
+    expect(stripConditionStateSuffix('ABBarracks')).toBeNull();
+  });
+
+  it('returns null when suffix contains digits (not a condition suffix)', () => {
+    expect(stripConditionStateSuffix('AVThundrblt_D1')).toBeNull();
+  });
+
+  it('returns null when suffix contains lowercase letters', () => {
+    expect(stripConditionStateSuffix('SomeModel_abc')).toBeNull();
+  });
+
+  it('preserves directory prefix', () => {
+    expect(stripConditionStateSuffix('models/foo_DNS')).toBe('models/foo');
+  });
+
+  it('preserves file extension', () => {
+    expect(stripConditionStateSuffix('PMgaldrum_D.w3d')).toBe('PMgaldrum.w3d');
+  });
+
+  it('preserves directory prefix and extension together', () => {
+    expect(stripConditionStateSuffix('Art/W3D/PMgaldrum_D.w3d')).toBe('Art/W3D/PMgaldrum.w3d');
+  });
+
+  it('returns null for empty string', () => {
+    expect(stripConditionStateSuffix('')).toBeNull();
+  });
+
+  it('returns null when underscore is the first character', () => {
+    // "_D" has nothing before the underscore so base name would be empty
+    expect(stripConditionStateSuffix('_D')).toBeNull();
+  });
+
+  it('strips only the last underscore suffix', () => {
+    // "AB_Barracks_D" → "AB_Barracks"
+    expect(stripConditionStateSuffix('AB_Barracks_D')).toBe('AB_Barracks');
+  });
+
+  it('returns null for _S suffix (treated same as any condition suffix)', () => {
+    // _S is also a valid condition suffix pattern (skeleton/base model)
+    expect(stripConditionStateSuffix('PTDogwod01_S')).toBe('PTDogwod01');
+  });
+});
+
+describe('condition-state model fallback resolution', () => {
+  it('falls back to base model when condition variant is not found via asset manager', async () => {
+    const scene = new THREE.Scene();
+    const modelsRequested: string[] = [];
+    const modelLoader = async (assetPath: string): Promise<LoadedModelAsset> => {
+      modelsRequested.push(assetPath);
+      return modelWithAnimationClips();
+    };
+
+    // Create a mock AssetManager that only knows about the base model
+    const mockAssetManager = {
+      resolveModelPath: (bareName: string): string | null => {
+        // Strip extension for lookup
+        const dotIdx = bareName.lastIndexOf('.');
+        const stripped = dotIdx > 0 ? bareName.slice(0, dotIdx) : bareName;
+        const slashIdx = stripped.lastIndexOf('/');
+        const filename = slashIdx >= 0 ? stripped.slice(slashIdx + 1) : stripped;
+        const lower = filename.toLowerCase();
+        // Only "pmgaldrum" exists, not "pmgaldrum_d"
+        if (lower === 'pmgaldrum') {
+          return 'models/W3DZH/Art/W3D/PMgaldrum_S.glb';
+        }
+        return null;
+      },
+    } as unknown as import('@generals/assets').AssetManager;
+
+    const manager = new ObjectVisualManager(scene, mockAssetManager, { modelLoader });
+
+    // Simulate a condition-state path like "PMgaldrum_D" that doesn't exist
+    const state = makeMeshState({
+      renderAssetPath: 'PMgaldrum_D',
+      renderAssetResolved: true,
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+
+    // The manager should have resolved the fallback path via base model name
+    expect(modelsRequested).toContain('models/W3DZH/Art/W3D/PMgaldrum_S.glb');
+  });
+
+  it('prefers exact match over fallback when condition variant exists', async () => {
+    const scene = new THREE.Scene();
+    const modelsRequested: string[] = [];
+    const modelLoader = async (assetPath: string): Promise<LoadedModelAsset> => {
+      modelsRequested.push(assetPath);
+      return modelWithAnimationClips();
+    };
+
+    const mockAssetManager = {
+      resolveModelPath: (bareName: string): string | null => {
+        const dotIdx = bareName.lastIndexOf('.');
+        const stripped = dotIdx > 0 ? bareName.slice(0, dotIdx) : bareName;
+        const slashIdx = stripped.lastIndexOf('/');
+        const filename = slashIdx >= 0 ? stripped.slice(slashIdx + 1) : stripped;
+        const lower = filename.toLowerCase();
+        if (lower === 'avconstdoz_ad') {
+          return 'models/W3DZH/Art/W3D/AVCONSTDOZ_AD.glb';
+        }
+        if (lower === 'avconstdoz') {
+          return 'models/W3DZH/Art/W3D/AVCONSTDOZ_S.glb';
+        }
+        return null;
+      },
+    } as unknown as import('@generals/assets').AssetManager;
+
+    const manager = new ObjectVisualManager(scene, mockAssetManager, { modelLoader });
+
+    const state = makeMeshState({
+      renderAssetPath: 'AVCONSTDOZ_AD',
+      renderAssetResolved: true,
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+
+    // Should use exact match, not fallback
+    expect(modelsRequested[0]).toBe('models/W3DZH/Art/W3D/AVCONSTDOZ_AD.glb');
+  });
+
+  it('does not attempt fallback for names with digit suffixes', async () => {
+    const scene = new THREE.Scene();
+    const modelsRequested: string[] = [];
+    const modelLoader = async (assetPath: string): Promise<LoadedModelAsset> => {
+      modelsRequested.push(assetPath);
+      return modelWithAnimationClips();
+    };
+
+    const resolveCallArgs: string[] = [];
+    const mockAssetManager = {
+      resolveModelPath: (bareName: string): string | null => {
+        resolveCallArgs.push(bareName);
+        const dotIdx = bareName.lastIndexOf('.');
+        const stripped = dotIdx > 0 ? bareName.slice(0, dotIdx) : bareName;
+        const slashIdx = stripped.lastIndexOf('/');
+        const filename = slashIdx >= 0 ? stripped.slice(slashIdx + 1) : stripped;
+        const lower = filename.toLowerCase();
+        if (lower === 'avthundrblt_d1') {
+          return 'models/W3DZH/Art/W3D/AVThundrblt_d1.glb';
+        }
+        return null;
+      },
+    } as unknown as import('@generals/assets').AssetManager;
+
+    const manager = new ObjectVisualManager(scene, mockAssetManager, { modelLoader });
+
+    const state = makeMeshState({
+      renderAssetPath: 'AVThundrblt_D1',
+      renderAssetResolved: true,
+    });
+    manager.sync([state], 1 / 30);
+    await flushModelLoadQueue();
+
+    // _D1 contains a digit, so stripConditionStateSuffix returns null.
+    // resolveModelPath should only be called once (no fallback attempt).
+    expect(resolveCallArgs).toEqual(['AVThundrblt_D1']);
   });
 });
