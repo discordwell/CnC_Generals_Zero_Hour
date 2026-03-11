@@ -25970,9 +25970,11 @@ describe('skirmish starting entities', () => {
     logic.setPlayerSide(0, 'America');
     logic.setPlayerSide(1, 'China');
 
-    // Advance past the grace period (frame > 1) with no entities.
+    // Advance past the grace period (frame > 2) with no entities.
+    // Guard is <= 2 because main.ts calls gameLogic.update(0) pre-init for fog-of-war.
     logic.update(1 / 30); // frame 1 — grace still active
-    logic.update(1 / 30); // frame 2 — grace expired, both sides have 0 entities
+    logic.update(1 / 30); // frame 2 — grace still active
+    logic.update(1 / 30); // frame 3 — grace expired, both sides have 0 entities
 
     // Both sides defeated after grace period — game SHOULD end.
     const endState = logic.getGameEndState();

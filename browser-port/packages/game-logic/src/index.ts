@@ -64818,7 +64818,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: VictoryConditions.cpp line 192 — `if (TheGameLogic->getFrame() > 1)`
     // guards defeat processing on early frames while SkirmishScripts.scb spawns entities.
-    if (newlyDefeated.length === activeSides.size && this.frameCounter <= 1) {
+    // Guard is <= 2 (not <= 1) because the pre-init gameLogic.update(0) call in main.ts
+    // consumes one frame to register fog-of-war lookers before the game loop starts.
+    if (newlyDefeated.length === activeSides.size && this.frameCounter <= 2) {
       return;
     }
 
