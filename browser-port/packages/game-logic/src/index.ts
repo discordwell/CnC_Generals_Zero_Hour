@@ -27,7 +27,6 @@ import {
   type WeaponDef,
 } from '@generals/ini-data';
 import {
-  MAP_HEIGHT_SCALE,
   MAP_XY_FACTOR,
   base64ToUint8Array,
   type HeightmapGrid,
@@ -161,7 +160,6 @@ import {
   applyHealthBonusForLevelChange as applyHealthBonusForLevelChangeImpl,
   createExperienceState as createExperienceStateImpl,
   DEFAULT_VETERANCY_CONFIG,
-  getExperienceValue as getExperienceValueImpl,
   LEVEL_ELITE,
   LEVEL_HEROIC,
   LEVEL_REGULAR,
@@ -521,6 +519,47 @@ import {
   isPassengerAllowedToFireFromContainingObject as isPassengerAllowedToFireFromContainingObjectImpl,
   processDamageToContained as processDamageToContainedImpl,
 } from './containment-system.js';
+import {
+  createCraterInTerrain as createCraterInTerrainImpl,
+  onObjectDestroyed as onObjectDestroyedImpl,
+  addEntityDestroyedScore as addEntityDestroyedScoreImpl,
+  recordDestroyedBuildingBySource as recordDestroyedBuildingBySourceImpl,
+  executeUpgradeDieModules as executeUpgradeDieModulesImpl,
+  tryCreateRebuildHoleOnDeath as tryCreateRebuildHoleOnDeathImpl,
+  tryGenerateMinefieldOnDeath as tryGenerateMinefieldOnDeathImpl,
+  trySpawnCrateOnDeath as trySpawnCrateOnDeathImpl,
+  tryBeginUndeadSecondLifeSlowDeathVisual as tryBeginUndeadSecondLifeSlowDeathVisualImpl,
+  tryBeginSlowDeath as tryBeginSlowDeathImpl,
+  isSlowDeathApplicable as isSlowDeathApplicableImpl,
+  executeSlowDeathPhase as executeSlowDeathPhaseImpl,
+  updateLifetimeEntities as updateLifetimeEntitiesImpl,
+  updateDeletionEntities as updateDeletionEntitiesImpl,
+  updateHeightDieEntities as updateHeightDieEntitiesImpl,
+  updateStickyBombs as updateStickyBombsImpl,
+  silentDestroyEntity as silentDestroyEntityImpl,
+  updateSlowDeathEntities as updateSlowDeathEntitiesImpl,
+  updateHelicopterSlowDeath as updateHelicopterSlowDeathImpl,
+  updateJetSlowDeath as updateJetSlowDeathImpl,
+  markEntityDestroyed as markEntityDestroyedImpl,
+  tryEjectPilotOnDeath as tryEjectPilotOnDeathImpl,
+  hasKeepObjectDie as hasKeepObjectDieImpl,
+  extractDeathOCLEntries as extractDeathOCLEntriesImpl,
+  executeDeathOCLs as executeDeathOCLsImpl,
+  executeInstantDeathModules as executeInstantDeathModulesImpl,
+  executeFXListDieModules as executeFXListDieModulesImpl,
+  executeCrushDie as executeCrushDieImpl,
+  executeDamDieModules as executeDamDieModulesImpl,
+  executeSpecialPowerCompletionDieModules as executeSpecialPowerCompletionDieModulesImpl,
+  isDieModuleApplicable as isDieModuleApplicableImpl,
+  isAnyDestroyDieProfileApplicable as isAnyDestroyDieProfileApplicableImpl,
+  awardExperienceOnKill as awardExperienceOnKillImpl,
+  awardCashBountyOnKill as awardCashBountyOnKillImpl,
+  cancelAndRefundAllProductionOnDeath as cancelAndRefundAllProductionOnDeathImpl,
+  finalizeDestroyedEntities as finalizeDestroyedEntitiesImpl,
+  cleanupDyingRenderableStates as cleanupDyingRenderableStatesImpl,
+  checkVictoryConditions as checkVictoryConditionsImpl,
+  killRemainingEntitiesForSide as killRemainingEntitiesForSideImpl,
+} from './entity-lifecycle.js';
 
 export * from './types.js';
 export * from './campaign-manager.js';
@@ -4453,8 +4492,8 @@ interface AssistedTargetingProfile {
 }
 
 /** Source parity: SlowDeathBehavior midpoint is randomly placed between 35-65% of destruction time. */
-const SLOW_DEATH_BEGIN_MIDPOINT_RATIO = 0.35;
-const SLOW_DEATH_END_MIDPOINT_RATIO = 0.65;
+export const SLOW_DEATH_BEGIN_MIDPOINT_RATIO = 0.35;
+export const SLOW_DEATH_END_MIDPOINT_RATIO = 0.65;
 
 /**
  * Source parity: StructureCollapseUpdate — building collapse die module with gravity-based
@@ -4507,7 +4546,7 @@ const SOURCE_DEFAULT_GRAVITY = -1.0;
 const STRUCTURE_COLLAPSE_GRAVITY = SOURCE_DEFAULT_GRAVITY;
 
 /** Source parity: gravity for helicopter slow death fall. */
-const HELICOPTER_GRAVITY = SOURCE_DEFAULT_GRAVITY;
+export const HELICOPTER_GRAVITY = SOURCE_DEFAULT_GRAVITY;
 
 /** Source parity: ChinookAIUpdateModuleData constructor default for m_rappelSpeed. */
 const DEFAULT_CHINOOK_RAPPEL_SPEED = Math.abs(SOURCE_DEFAULT_GRAVITY) * LOGIC_FRAME_RATE * 0.5;
@@ -6587,15 +6626,15 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity: Radar::m_lastRadarEvent (excluding beacon pulse events). */
   private scriptLastRadarEventState: ScriptRadarEventState | null = null;
   /** Source parity bridge: TacticalView camera lock target for script tether actions. */
-  private scriptCameraTetherState: ScriptCameraTetherState | null = null;
+  /* @internal */ scriptCameraTetherState: ScriptCameraTetherState | null = null;
   /** Source parity bridge: TacticalView lock-follow target from CAMERA_FOLLOW_NAMED actions. */
-  private scriptCameraFollowState: ScriptCameraFollowState | null = null;
+  /* @internal */ scriptCameraFollowState: ScriptCameraFollowState | null = null;
   /** Source parity bridge: TacticalView camera slave mode state from scripts. */
   /* @internal */ scriptCameraSlaveModeState: ScriptCameraSlaveModeState | null = null;
   /** Source parity bridge: TacticalView default camera values set by scripts. */
   /* @internal */ scriptCameraDefaultViewState: ScriptCameraDefaultViewState | null = null;
   /** Source parity bridge: TacticalView rotateCameraTowardObject request from scripts. */
-  private scriptCameraLookTowardObjectState: ScriptCameraLookTowardObjectState | null = null;
+  /* @internal */ scriptCameraLookTowardObjectState: ScriptCameraLookTowardObjectState | null = null;
   /** Source parity bridge: TacticalView rotateCameraTowardPosition request from scripts. */
   /* @internal */ scriptCameraLookTowardWaypointState: ScriptCameraLookTowardWaypointState | null = null;
   /** Source parity bridge: TacticalView camera action requests consumed by renderer integration. */
@@ -6666,7 +6705,7 @@ export class GameLogicSubsystem implements Subsystem {
     expireFrame: number;
   }>();
   /** Source parity: Object::m_hasDiedAlready — prevents re-entrant death pipeline. */
-  private readonly dyingEntityIds = new Set<number>();
+  /* @internal */ readonly dyingEntityIds = new Set<number>();
   private readonly sellingEntities = new Map<number, SellingEntityState>();
   private readonly hackInternetStateByEntityId = new Map<number, HackInternetRuntimeState>();
   private readonly hackInternetPendingCommandByEntityId = new Map<number, HackInternetPendingCommandState>();
@@ -9568,6 +9607,48 @@ export class GameLogicSubsystem implements Subsystem {
   private updateScriptSequentialScripts(...args: any[]) { return (updateScriptSequentialScriptsImpl as any)(this, ...args); }
   private updateScriptWanderInPlace(...args: any[]) { return (updateScriptWanderInPlaceImpl as any)(this, ...args); }
 
+  // ---- Entity lifecycle facades (delegate to entity-lifecycle.ts) ----
+
+  /* @internal */ createCraterInTerrain(...args: any[]) { return (createCraterInTerrainImpl as any)(this, ...args); }
+  onObjectDestroyed(...args: any[]) { return (onObjectDestroyedImpl as any)(this, ...args); }
+  /* @internal */ addEntityDestroyedScore(...args: any[]) { return (addEntityDestroyedScoreImpl as any)(this, ...args); }
+  /* @internal */ recordDestroyedBuildingBySource(...args: any[]) { return (recordDestroyedBuildingBySourceImpl as any)(this, ...args); }
+  /* @internal */ executeUpgradeDieModules(...args: any[]) { return (executeUpgradeDieModulesImpl as any)(this, ...args); }
+  /* @internal */ tryCreateRebuildHoleOnDeath(...args: any[]) { return (tryCreateRebuildHoleOnDeathImpl as any)(this, ...args); }
+  /* @internal */ tryGenerateMinefieldOnDeath(...args: any[]) { return (tryGenerateMinefieldOnDeathImpl as any)(this, ...args); }
+  /* @internal */ trySpawnCrateOnDeath(...args: any[]) { return (trySpawnCrateOnDeathImpl as any)(this, ...args); }
+  private tryBeginUndeadSecondLifeSlowDeathVisual(...args: any[]) { return (tryBeginUndeadSecondLifeSlowDeathVisualImpl as any)(this, ...args); }
+  private tryBeginSlowDeath(...args: any[]) { return (tryBeginSlowDeathImpl as any)(this, ...args); }
+  /* @internal */ isSlowDeathApplicable(...args: any[]) { return (isSlowDeathApplicableImpl as any)(this, ...args); }
+  /* @internal */ executeSlowDeathPhase(...args: any[]) { return (executeSlowDeathPhaseImpl as any)(this, ...args); }
+  private updateLifetimeEntities(...args: any[]) { return (updateLifetimeEntitiesImpl as any)(this, ...args); }
+  private updateDeletionEntities(...args: any[]) { return (updateDeletionEntitiesImpl as any)(this, ...args); }
+  private updateHeightDieEntities(...args: any[]) { return (updateHeightDieEntitiesImpl as any)(this, ...args); }
+  private updateStickyBombs(...args: any[]) { return (updateStickyBombsImpl as any)(this, ...args); }
+  private silentDestroyEntity(...args: any[]) { return (silentDestroyEntityImpl as any)(this, ...args); }
+  private updateSlowDeathEntities(...args: any[]) { return (updateSlowDeathEntitiesImpl as any)(this, ...args); }
+  private updateHelicopterSlowDeath(...args: any[]) { return (updateHelicopterSlowDeathImpl as any)(this, ...args); }
+  private updateJetSlowDeath(...args: any[]) { return (updateJetSlowDeathImpl as any)(this, ...args); }
+  private markEntityDestroyed(...args: any[]) { return (markEntityDestroyedImpl as any)(this, ...args); }
+  /* @internal */ tryEjectPilotOnDeath(...args: any[]) { return (tryEjectPilotOnDeathImpl as any)(this, ...args); }
+  private hasKeepObjectDie(...args: any[]) { return (hasKeepObjectDieImpl as any)(this, ...args); }
+  private extractDeathOCLEntries(...args: any[]) { return (extractDeathOCLEntriesImpl as any)(this, ...args); }
+  /* @internal */ executeDeathOCLs(...args: any[]) { return (executeDeathOCLsImpl as any)(this, ...args); }
+  /* @internal */ executeInstantDeathModules(...args: any[]) { return (executeInstantDeathModulesImpl as any)(this, ...args); }
+  /* @internal */ executeFXListDieModules(...args: any[]) { return (executeFXListDieModulesImpl as any)(this, ...args); }
+  /* @internal */ executeCrushDie(...args: any[]) { return (executeCrushDieImpl as any)(this, ...args); }
+  /* @internal */ executeDamDieModules(...args: any[]) { return (executeDamDieModulesImpl as any)(this, ...args); }
+  /* @internal */ executeSpecialPowerCompletionDieModules(...args: any[]) { return (executeSpecialPowerCompletionDieModulesImpl as any)(this, ...args); }
+  private isDieModuleApplicable(...args: any[]) { return (isDieModuleApplicableImpl as any)(this, ...args); }
+  /* @internal */ isAnyDestroyDieProfileApplicable(...args: any[]) { return (isAnyDestroyDieProfileApplicableImpl as any)(this, ...args); }
+  /* @internal */ awardExperienceOnKill(...args: any[]) { return (awardExperienceOnKillImpl as any)(this, ...args); }
+  /* @internal */ awardCashBountyOnKill(...args: any[]) { return (awardCashBountyOnKillImpl as any)(this, ...args); }
+  private cancelAndRefundAllProductionOnDeath(...args: any[]) { return (cancelAndRefundAllProductionOnDeathImpl as any)(this, ...args); }
+  private finalizeDestroyedEntities(...args: any[]) { return (finalizeDestroyedEntitiesImpl as any)(this, ...args); }
+  private cleanupDyingRenderableStates(...args: any[]) { return (cleanupDyingRenderableStatesImpl as any)(this, ...args); }
+  private checkVictoryConditions(...args: any[]) { return (checkVictoryConditionsImpl as any)(this, ...args); }
+  /* @internal */ killRemainingEntitiesForSide(...args: any[]) { return (killRemainingEntitiesForSideImpl as any)(this, ...args); }
+
   // ---- Containment facades (delegate to containment-system.ts) ----
 
   private resolveRailedTransportWaypointData(...args: any[]) { return (resolveRailedTransportWaypointDataImpl as any)(this, ...args); }
@@ -9619,7 +9700,7 @@ export class GameLogicSubsystem implements Subsystem {
   private resolveProjectileLauncherContainer(...args: any[]) { return (resolveProjectileLauncherContainerImpl as any)(this, ...args); }
   private resolveEntityContainingObject(...args: any[]) { return (resolveEntityContainingObjectImpl as any)(this, ...args); }
   private isPassengerAllowedToFireFromContainingObject(...args: any[]) { return (isPassengerAllowedToFireFromContainingObjectImpl as any)(this, ...args); }
-  private processDamageToContained(...args: any[]) { return (processDamageToContainedImpl as any)(this, ...args); }
+  /* @internal */ processDamageToContained(...args: any[]) { return (processDamageToContainedImpl as any)(this, ...args); }
 
   // ---- Script camera/media facades (delegate to script-camera.ts) ----
 
@@ -9758,7 +9839,7 @@ export class GameLogicSubsystem implements Subsystem {
   private getScriptScienceSetForPlayerToken(...args: any[]) { return (getScriptScienceSetForPlayerTokenImpl as any)(this, ...args); }
   private getScriptSciencePurchasePointsForPlayerInput(...args: any[]) { return (getScriptSciencePurchasePointsForPlayerInputImpl as any)(this, ...args); }
   private recordScriptTriggeredSpecialPowerEvent(...args: any[]) { return (recordScriptTriggeredSpecialPowerEventImpl as any)(this, ...args); }
-  private recordScriptCompletedSpecialPowerEvent(...args: any[]) { return (recordScriptCompletedSpecialPowerEventImpl as any)(this, ...args); }
+  /* @internal */ recordScriptCompletedSpecialPowerEvent(...args: any[]) { return (recordScriptCompletedSpecialPowerEventImpl as any)(this, ...args); }
   private recordScriptCompletedUpgradeEvent(...args: any[]) { return (recordScriptCompletedUpgradeEventImpl as any)(this, ...args); }
   private getScriptScienceAcquiredSet(...args: any[]) { return (getScriptScienceAcquiredSetImpl as any)(this, ...args); }
   private resolveScriptObjectStatusMaskFromInput(...args: any[]) { return (resolveScriptObjectStatusMaskFromInputImpl as any)(this, ...args); }
@@ -10209,7 +10290,7 @@ export class GameLogicSubsystem implements Subsystem {
     return state;
   }
 
-  private removeAllSequentialScriptsForEntity(entityId: number): void {
+  /* @internal */ removeAllSequentialScriptsForEntity(entityId: number): void {
     for (let index = this.scriptSequentialScripts.length - 1; index >= 0; index -= 1) {
       const seqScript = this.scriptSequentialScripts[index];
       if (seqScript && seqScript.objectId === entityId) {
@@ -10830,54 +10911,6 @@ export class GameLogicSubsystem implements Subsystem {
     };
     this.scriptAttackPrioritySetsByName.set(normalizedSetName, created);
     return created;
-  }
-
-  /**
-   * Source parity: TerrainLogic::createCraterInTerrain (GeneralsMD).
-   * Digs a circular crater beneath BLAST_CRATER objects by lowering raw map
-   * height samples and clamping to at least 1.
-   */
-  /* @internal */ createCraterInTerrain(entity: MapEntity): void {
-    const heightmap = this.mapHeightmap;
-    if (!heightmap) {
-      return;
-    }
-    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
-    if (objectDef && this.isSmallGeometry(objectDef.fields)) {
-      return;
-    }
-
-    const radius = entity.geometryMajorRadius;
-    if (!(radius > 0)) {
-      return;
-    }
-
-    const minCellX = Math.floor((entity.x - radius) / MAP_XY_FACTOR);
-    const maxCellX = Math.floor((entity.x + radius) / MAP_XY_FACTOR);
-    const maxCellZ = Math.floor((entity.z + radius) / MAP_XY_FACTOR);
-
-    for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
-      // Source parity: C++ currently iterates 0..maxY here (not minY..maxY).
-      for (let cellZ = 0; cellZ <= maxCellZ; cellZ += 1) {
-        if (cellX < 0 || cellX >= heightmap.width || cellZ < 0 || cellZ >= heightmap.height) {
-          continue;
-        }
-
-        const deltaX = (cellX * MAP_XY_FACTOR) - entity.x;
-        const deltaZ = (cellZ * MAP_XY_FACTOR) - entity.z;
-        const distance = Math.sqrt((deltaX * deltaX) + (deltaZ * deltaZ));
-        if (distance >= radius) {
-          continue;
-        }
-
-        const displacementAmount = radius * (1 - distance / radius);
-        const index = cellZ * heightmap.width + cellX;
-        const currentRawHeight = heightmap.rawData[index] ?? 0;
-        const targetRawHeight = Math.max(1, Math.trunc(currentRawHeight - displacementAmount));
-        heightmap.rawData[index] = targetRawHeight;
-        heightmap.worldHeights[index] = targetRawHeight * MAP_HEIGHT_SCALE;
-      }
-    }
   }
 
   private positionEntityAtWorldXZ(entity: MapEntity, worldX: number, worldZ: number): void {
@@ -14710,7 +14743,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: Player::addSkillPoints — award player-level skill points from kills.
    * Returns true if a rank level-up occurred.
    */
-  private addPlayerSkillPoints(side: string, delta: number): boolean {
+  /* @internal */ addPlayerSkillPoints(side: string, delta: number): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
       return false;
@@ -14868,14 +14901,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
       this.bridgeDamageStateByControlEntity.set(entityId, passable);
     }
-  }
-
-  onObjectDestroyed(entityId: number): boolean {
-    const segmentId = this.bridgeSegmentByControlEntity.get(entityId);
-    if (segmentId === undefined) {
-      return false;
-    }
-    return this.setBridgeSegmentPassable(segmentId, false);
   }
 
   onObjectRepaired(entityId: number): boolean {
@@ -28964,7 +28989,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.notifyScriptObjectCreationOrDestruction();
   }
 
-  private removeEntityFromWorld(entityId: number): void {
+  /* @internal */ removeEntityFromWorld(entityId: number): void {
     if (this.spawnedEntities.delete(entityId)) {
       this.scriptToppleDirectionByEntityId.delete(entityId);
       this.caveTrackerIndexByEntityId.delete(entityId);
@@ -29035,37 +29060,6 @@ export class GameLogicSubsystem implements Subsystem {
     const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
     if (objectDef) {
       score.moneySpent += this.resolveObjectBuildCost(objectDef, side);
-    }
-  }
-
-  /**
-   * Source parity: ScoreKeeper — track entity destruction (lost + destroyed counts).
-   */
-  private addEntityDestroyedScore(victim: MapEntity, attackerId: number): void {
-    if (!this.scriptScoringEnabled) return;
-    const victimSide = this.normalizeSide(victim.side);
-    const isBuilding = victim.kindOf.has('STRUCTURE');
-
-    // Victim side: lost
-    if (victimSide && !this.sideScoreScreenExcluded.has(victimSide)) {
-      const victimScore = this.getOrCreateSideScoreState(victimSide);
-      if (isBuilding) {
-        victimScore.structuresLost += 1;
-      } else {
-        victimScore.unitsLost += 1;
-      }
-    }
-
-    // Attacker side: destroyed
-    const attacker = attackerId > 0 ? this.spawnedEntities.get(attackerId) : null;
-    const attackerSide = attacker ? this.normalizeSide(attacker.side) : null;
-    if (attackerSide && attackerSide !== victimSide && !this.sideScoreScreenExcluded.has(attackerSide)) {
-      const attackerScore = this.getOrCreateSideScoreState(attackerSide);
-      if (isBuilding) {
-        attackerScore.structuresDestroyed += 1;
-      } else {
-        attackerScore.unitsDestroyed += 1;
-      }
     }
   }
 
@@ -32092,7 +32086,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: FlightDeckBehavior::onDie — kill all non-airborne parked aircraft.
    * C++ file: FlightDeckBehavior.cpp lines 1045-1077.
    */
-  private onFlightDeckDie(entity: MapEntity): void {
+  /* @internal */ onFlightDeckDie(entity: MapEntity): void {
     const state = entity.flightDeckState;
     if (!state) return;
 
@@ -33531,7 +33525,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: TunnelTracker::onTunnelDestroyed — handle tunnel death.
    * If last tunnel: cave-in kills all passengers. Otherwise: reassign passengers to another tunnel.
    */
-  private handleTunnelDestroyed(entity: MapEntity): void {
+  /* @internal */ handleTunnelDestroyed(entity: MapEntity): void {
     const tracker = this.unregisterTunnelEntity(entity);
     if (!tracker) return;
     this.removeTunnelNodeFromTracker(entity, tracker);
@@ -34645,7 +34639,7 @@ export class GameLogicSubsystem implements Subsystem {
    * TerrainLogic::getLayerHeight for bridge layers used by HeightDieUpdate.
    * Returns null when destination resolves to ground.
    */
-  private resolveHighestBridgeLayerHeightForDestination(worldX: number, worldZ: number, worldY: number): number | null {
+  /* @internal */ resolveHighestBridgeLayerHeightForDestination(worldX: number, worldZ: number, worldY: number): number | null {
     const layer = this.resolveHighestBridgeLayerForDestination(worldX, worldZ, worldY);
     return layer ? layer.layerHeight : null;
   }
@@ -40067,7 +40061,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Otherwise, slaves become orphaned (slaverEntityId = null).
    * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/SpawnBehavior.cpp:142-197)
    */
-  private onSlaverDeath(slaver: MapEntity): void {
+  /* @internal */ onSlaverDeath(slaver: MapEntity): void {
     const state = slaver.spawnBehaviorState;
     if (!state) {
       return;
@@ -40100,7 +40094,7 @@ export class GameLogicSubsystem implements Subsystem {
    * schedule replacement, and check aggregate health destruction.
    * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/SpawnBehavior.cpp:754-783)
    */
-  private onSlaveDeath(slave: MapEntity): void {
+  /* @internal */ onSlaveDeath(slave: MapEntity): void {
     const slaverId = slave.slaverEntityId;
     if (slaverId === null) {
       return;
@@ -40760,42 +40754,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  /**
-   * Source parity bridge: track destroyed-structure counts by attacker/victim
-   * for ScriptConditions::evaluatePlayerDestroyedNOrMoreBuildings.
-   */
-  private recordDestroyedBuildingBySource(victim: MapEntity, attackerId: number): void {
-    if (!victim.kindOf.has('STRUCTURE')) {
-      return;
-    }
-    if (!Number.isFinite(attackerId) || attackerId <= 0) {
-      return;
-    }
-    const attacker = this.spawnedEntities.get(Math.trunc(attackerId));
-    if (!attacker || attacker.destroyed) {
-      return;
-    }
-
-    const victimSide = this.normalizeSide(victim.side);
-    const attackerSide = this.normalizeSide(attacker.side);
-    if (!victimSide || !attackerSide) {
-      return;
-    }
-    this.incrementNestedScriptCounter(this.sideDestroyedBuildingsByAttacker, attackerSide, victimSide);
-
-    const attackerToken = this.resolveEntityControllingPlayerTokenForAffiliation(attacker);
-    const victimToken = this.resolveEntityControllingPlayerTokenForAffiliation(victim);
-    if (!attackerToken || !victimToken) {
-      return;
-    }
-    this.incrementNestedScriptCounter(
-      this.controllingPlayerDestroyedBuildingsByAttacker,
-      attackerToken,
-      victimToken,
-    );
-  }
-
-  private incrementNestedScriptCounter(
+  /* @internal */ incrementNestedScriptCounter(
     counters: Map<string, Map<string, number>>,
     sourceKey: string,
     targetKey: string,
@@ -41613,39 +41572,6 @@ export class GameLogicSubsystem implements Subsystem {
     entity.completedUpgrades.add(normalizedUpgrade);
   }
 
-  /**
-   * Source parity: UpgradeDie::onDie — remove upgrade from producer when this entity dies.
-   * C++ file: UpgradeDie.cpp lines 58-87.
-   */
-  private executeUpgradeDieModules(entity: MapEntity): void {
-    for (const prof of entity.upgradeDieProfiles) {
-      // Apply DieMuxData filtering.
-      if (prof.deathTypes !== null && prof.deathTypes.size > 0) {
-        if (!prof.deathTypes.has(entity.pendingDeathType)) continue;
-      }
-      // ExemptStatus — entity must NOT have any of these flags.
-      let exempt = false;
-      for (const status of prof.exemptStatus) {
-        if (entity.objectStatusFlags.has(status)) { exempt = true; break; }
-      }
-      if (exempt) continue;
-      // RequiredStatus — entity must have ALL of these flags.
-      let missingRequired = false;
-      for (const status of prof.requiredStatus) {
-        if (!entity.objectStatusFlags.has(status)) { missingRequired = true; break; }
-      }
-      if (missingRequired) continue;
-
-      // Find producer and remove upgrade.
-      if (entity.producerEntityId === 0) continue;
-      const producer = this.spawnedEntities.get(entity.producerEntityId);
-      if (!producer || producer.destroyed) continue;
-      if (producer.completedUpgrades.has(prof.upgradeName)) {
-        this.removeEntityUpgrade(producer, prof.upgradeName);
-      }
-    }
-  }
-
   private updateHorde(): void {
     for (const entity of this.spawnedEntities.values()) {
       if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
@@ -41868,73 +41794,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   // ── RebuildHoleBehavior implementation ──────────────────────────────────────
-
-  /**
-   * Source parity: RebuildHoleExposeDie::onDie — create a rebuild hole when a building
-   * with the RebuildHoleExposeDie module is destroyed.
-   */
-  private tryCreateRebuildHoleOnDeath(entity: MapEntity, _attackerId: number): void {
-    const profile = entity.rebuildHoleExposeDieProfile;
-    if (!profile) return;
-
-    // Source parity: no hole if building was still under construction.
-    if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) return;
-    // Source parity: no hole if player is neutral or inactive.
-    if (!entity.side) return;
-    const side = this.normalizeSide(entity.side);
-    const controllingPlayerToken = this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined);
-    const playerType = (
-      controllingPlayerToken != null
-        ? this.sidePlayerTypes.get(controllingPlayerToken)
-        : undefined
-    ) ?? (side ? this.sidePlayerTypes.get(side) : undefined);
-    if (!playerType) return;
-
-    const registry = this.iniDataRegistry;
-    if (!registry) return;
-
-    // Spawn the hole object at the building's position with the building's orientation.
-    const hole = this.spawnEntityFromTemplate(
-      profile.holeName,
-      entity.x,
-      entity.z,
-      entity.rotationY,
-      entity.side,
-    );
-    if (!hole) return;
-
-    // Source parity: set hole max health from profile.
-    if (profile.holeMaxHealth > 0) {
-      hole.maxHealth = profile.holeMaxHealth;
-      hole.initialHealth = profile.holeMaxHealth;
-      hole.health = profile.holeMaxHealth;
-      hole.canTakeDamage = true;
-    }
-
-    // Source parity: copy geometry info from building to hole (preserves pathfinding footprint).
-    if (entity.obstacleGeometry) {
-      hole.obstacleGeometry = { ...entity.obstacleGeometry };
-    }
-
-    // Source parity: RebuildHoleBehavior::startRebuildProcess — store rebuild template
-    // and start the worker respawn timer.
-    if (hole.rebuildHoleProfile) {
-      hole.rebuildHoleSpawnerEntityId = entity.id;
-      hole.rebuildHoleRebuildTemplateName = entity.templateName;
-      // Start worker respawn countdown.
-      hole.rebuildHoleWorkerWaitCounter = hole.rebuildHoleProfile.workerRespawnDelay;
-    }
-
-    // Source parity: TransferAttackers — redirect all AI attacks from building to hole.
-    if (profile.transferAttackers) {
-      for (const other of this.spawnedEntities.values()) {
-        if (other.destroyed || other.id === entity.id) continue;
-        if (other.attackTargetEntityId === entity.id) {
-          other.attackTargetEntityId = hole.id;
-        }
-      }
-    }
-  }
 
   /**
    * Source parity: RebuildHoleBehavior::update() — per-frame lifecycle management
@@ -43987,7 +43846,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: BridgeBehavior::onDie — kill towers, handle objects on bridge, mark destroyed.
    * Called when the bridge entity dies.
    */
-  private bridgeBehaviorOnDie(bridge: MapEntity): void {
+  /* @internal */ bridgeBehaviorOnDie(bridge: MapEntity): void {
     const state = bridge.bridgeBehaviorState;
     if (!state) return;
 
@@ -44136,7 +43995,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: BridgeTowerBehavior::onDie — kill the parent bridge entity.
    */
-  private bridgeTowerOnDie(tower: MapEntity): void {
+  /* @internal */ bridgeTowerOnDie(tower: MapEntity): void {
     const state = tower.bridgeTowerState;
     if (!state) return;
 
@@ -45069,401 +44928,6 @@ export class GameLogicSubsystem implements Subsystem {
     entity.deployFrameToWait = this.frameCounter + (totalFrames - framesLeft);
   }
 
-  /**
-   * Source parity: GenerateMinefieldBehavior::onDie — spawn mines around entity on death.
-   * Implements border-only circular placement (most common use case).
-   */
-  private tryGenerateMinefieldOnDeath(entity: MapEntity): void {
-    const profile = entity.generateMinefieldProfile;
-    if (!profile || entity.generateMinefieldDone) return;
-    if (!profile.generateOnlyOnDeath) return;
-    entity.generateMinefieldDone = true;
-
-    const registry = this.iniDataRegistry;
-    if (!registry) return;
-    const mineObjDef = findObjectDefByName(registry, profile.mineName);
-    if (!mineObjDef) return;
-
-    // Source parity: get mine radius from geometry for spacing.
-    const mineGeom = this.resolveObstacleGeometry(mineObjDef);
-    const mineRadius = mineGeom
-      ? Math.max(mineGeom.majorRadius, mineGeom.minorRadius)
-      : MAP_XY_FACTOR * 0.5;
-    const mineDiameter = Math.max(1, mineRadius * 2);
-
-    const radius = profile.distanceAroundObject;
-    if (radius <= 0) return;
-
-    // Source parity: circular border placement.
-    const circumference = 2 * Math.PI * radius;
-    const numMines = Math.max(1, Math.ceil(circumference / mineDiameter));
-    const angleInc = (2 * Math.PI) / numMines;
-
-    for (let i = 0; i < numMines; i++) {
-      const angle = i * angleInc;
-      const mineX = entity.x + radius * Math.cos(angle);
-      const mineZ = entity.z + radius * Math.sin(angle);
-      const rotation = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
-      this.spawnEntityFromTemplate(profile.mineName, mineX, mineZ, rotation, entity.side);
-    }
-  }
-
-  /**
-   * Source parity: CreateCrateDie::onDie — spawn a salvage crate near the dying entity.
-   * C++ uses CrateSystem template lookup with weighted chance selection; we simplify
-   * to spawning the CrateData template directly within 5 units of the death location.
-   */
-  private trySpawnCrateOnDeath(entity: MapEntity, attackerId: number): void {
-    const profile = entity.createCrateDieProfile;
-    if (!profile) return;
-
-    // Source parity: no crate for killing allies.
-    if (attackerId >= 0) {
-      const attacker = this.spawnedEntities.get(attackerId);
-      if (attacker && this.getEntityRelationship(attacker.id, entity.id) === 'allies') {
-        return;
-      }
-    }
-
-    // Source parity: findPositionAround with maxRadius=5 (circular distribution).
-    const angle = this.gameRandom.nextFloat() * Math.PI * 2;
-    const radius = this.gameRandom.nextFloat() * 5;
-    const offsetX = Math.cos(angle) * radius;
-    const offsetZ = Math.sin(angle) * radius;
-    const crateX = entity.x + offsetX;
-    const crateZ = entity.z + offsetZ;
-    const rotation = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
-
-    this.spawnEntityFromTemplate(profile.crateTemplateName, crateX, crateZ, rotation, entity.side);
-  }
-
-  /**
-   * Source parity: UndeadBody::startSecondLife invokes SlowDeathBehavior::beginSlowDeath.
-   * Unlike SlowDeathBehavior::onDie, this path is visual-only and does not destroy the entity.
-   */
-  private tryBeginUndeadSecondLifeSlowDeathVisual(entity: MapEntity): boolean {
-    if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) {
-      return false;
-    }
-    if (entity.slowDeathProfiles.length === 0) {
-      return false;
-    }
-
-    const candidates: { index: number; weight: number }[] = [];
-    for (let i = 0; i < entity.slowDeathProfiles.length; i += 1) {
-      const profile = entity.slowDeathProfiles[i]!;
-      if (!this.isSlowDeathApplicable(entity, profile)) {
-        continue;
-      }
-      candidates.push({
-        index: i,
-        weight: Math.max(1, profile.probabilityModifier),
-      });
-    }
-    if (candidates.length === 0) {
-      return false;
-    }
-
-    const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
-    let roll = this.gameRandom.nextRange(1, totalWeight);
-    let selectedIndex = candidates[0]!.index;
-    for (const candidate of candidates) {
-      roll -= candidate.weight;
-      if (roll <= 0) {
-        selectedIndex = candidate.index;
-        break;
-      }
-    }
-
-    const profile = entity.slowDeathProfiles[selectedIndex]!;
-    const sinkDelay = profile.sinkDelay + (profile.sinkDelayVariance > 0
-      ? this.gameRandom.nextRange(0, profile.sinkDelayVariance) : 0);
-    const destructionDelay = profile.destructionDelay + (profile.destructionDelayVariance > 0
-      ? this.gameRandom.nextRange(0, profile.destructionDelayVariance) : 0);
-    const sinkFrame = this.frameCounter + sinkDelay;
-    const destructionFrame = this.frameCounter + Math.max(1, destructionDelay);
-    const midpointBegin = Math.floor(destructionDelay * SLOW_DEATH_BEGIN_MIDPOINT_RATIO);
-    const midpointEnd = Math.floor(destructionDelay * SLOW_DEATH_END_MIDPOINT_RATIO);
-    const midpointFrame = this.frameCounter + (midpointBegin < midpointEnd
-      ? this.gameRandom.nextRange(midpointBegin, midpointEnd)
-      : midpointBegin);
-
-    entity.slowDeathState = {
-      profileIndex: selectedIndex,
-      sinkFrame,
-      midpointFrame,
-      destructionFrame,
-      midpointExecuted: false,
-      destroyOnCompletion: false,
-      flingVelocityX: 0,
-      flingVelocityY: 0,
-      flingVelocityZ: 0,
-      isFlung: false,
-      hasBounced: false,
-      isBattleBusFakeDeath: false,
-      battleBusThrowVelocity: 0,
-      battleBusLandingCheckFrame: 0,
-      battleBusEmptyHulkDestroyFrame: 0,
-    };
-
-    this.executeSlowDeathPhase(entity, profile, 0); // INITIAL
-    return true;
-  }
-
-  private tryBeginSlowDeath(entity: MapEntity, _attackerId: number): boolean {
-    if (entity.slowDeathProfiles.length === 0) return false;
-
-    // Collect applicable profiles with their weights.
-    const candidates: { index: number; weight: number }[] = [];
-    for (let i = 0; i < entity.slowDeathProfiles.length; i++) {
-      const profile = entity.slowDeathProfiles[i]!;
-      if (!this.isSlowDeathApplicable(entity, profile)) continue;
-      // Source parity: overkill bonus = (overkillDamage / maxHealth) * bonusPerOverkillPercent.
-      // C++ uses fraction (0.0–1.0+), not percentage. Simplified: overkill = -health.
-      const overkillFraction = entity.maxHealth > 0 ? -entity.health / entity.maxHealth : 0;
-      const overkillBonus = Math.floor(overkillFraction * profile.modifierBonusPerOverkillPercent);
-      const weight = Math.max(1, profile.probabilityModifier + overkillBonus);
-      candidates.push({ index: i, weight });
-    }
-    if (candidates.length === 0) return false;
-
-    // Source parity: weighted random selection among applicable profiles.
-    const totalWeight = candidates.reduce((sum, c) => sum + c.weight, 0);
-    let roll = this.gameRandom.nextRange(1, totalWeight);
-    let selectedIndex = candidates[0]!.index;
-    for (const candidate of candidates) {
-      roll -= candidate.weight;
-      if (roll <= 0) {
-        selectedIndex = candidate.index;
-        break;
-      }
-    }
-
-    const profile = entity.slowDeathProfiles[selectedIndex]!;
-
-    // Calculate frame timings.
-    const hulkOverrideActive = entity.kindOf.has('HULK') && this.scriptHulkLifetimeOverrideFrames !== -1;
-    let sinkFrame: number;
-    let midpointFrame: number;
-    let destructionFrame: number;
-    if (hulkOverrideActive) {
-      // Source parity: SlowDeathBehavior::onDie uses fixed rapid timing when hulk override is active.
-      sinkFrame = this.frameCounter + 1;
-      midpointFrame = this.frameCounter + Math.floor(LOGIC_FRAME_RATE / 2) + 1;
-      destructionFrame = this.frameCounter + LOGIC_FRAME_RATE + 1;
-    } else {
-      const sinkDelay = profile.sinkDelay + (profile.sinkDelayVariance > 0
-        ? this.gameRandom.nextRange(0, profile.sinkDelayVariance) : 0);
-      const destructionDelay = profile.destructionDelay + (profile.destructionDelayVariance > 0
-        ? this.gameRandom.nextRange(0, profile.destructionDelayVariance) : 0);
-      sinkFrame = this.frameCounter + sinkDelay;
-      destructionFrame = this.frameCounter + Math.max(1, destructionDelay);
-
-      // Source parity: midpoint is randomly placed between 35-65% of destruction time.
-      const midpointBegin = Math.floor(destructionDelay * SLOW_DEATH_BEGIN_MIDPOINT_RATIO);
-      const midpointEnd = Math.floor(destructionDelay * SLOW_DEATH_END_MIDPOINT_RATIO);
-      midpointFrame = this.frameCounter + (midpointBegin < midpointEnd
-        ? this.gameRandom.nextRange(midpointBegin, midpointEnd) : midpointBegin);
-    }
-
-    entity.slowDeathState = {
-      profileIndex: selectedIndex,
-      sinkFrame,
-      midpointFrame,
-      destructionFrame,
-      midpointExecuted: false,
-      destroyOnCompletion: true,
-      flingVelocityX: 0,
-      flingVelocityY: 0,
-      flingVelocityZ: 0,
-      isFlung: false,
-      hasBounced: false,
-      isBattleBusFakeDeath: false,
-      battleBusThrowVelocity: 0,
-      battleBusLandingCheckFrame: 0,
-      battleBusEmptyHulkDestroyFrame: 0,
-    };
-
-    // Source parity: BattleBusSlowDeathBehavior — two-phase death.
-    // Phase 1 (fake death): throw vertically, damage passengers, land as SECOND_LIFE hulk.
-    // Phase 2 (real death): delegate to normal SlowDeath.
-    if (profile.isBattleBus && !entity.modelConditionFlags.has('SECOND_LIFE')) {
-      entity.slowDeathState!.isBattleBusFakeDeath = true;
-      entity.slowDeathState!.battleBusThrowVelocity = profile.throwForce / LOGIC_FRAME_RATE;
-      entity.slowDeathState!.battleBusLandingCheckFrame = this.frameCounter + 10;
-      entity.slowDeathState!.destroyOnCompletion = false;
-
-      // Damage passengers by percentage.
-      if (profile.percentDamageToPassengers > 0) {
-        // C++ parity: damage is percentage of EACH PASSENGER's maxHealth, not the bus's.
-        const damagePercent = profile.percentDamageToPassengers / 100;
-        const containedIds = this.collectContainedEntityIds(entity.id);
-        for (const passengerId of containedIds) {
-          const passenger = this.spawnedEntities.get(passengerId);
-          if (passenger && !passenger.destroyed) {
-            const passengerDamage = passenger.maxHealth * damagePercent;
-            this.applyWeaponDamageAmount(entity.id, passenger, passengerDamage, 'CRUSH', 'CRUSHED');
-          }
-        }
-      }
-
-      // Execute INITIAL phase effects, then return — skip the normal death AI teardown.
-      this.executeSlowDeathPhase(entity, profile, 0);
-      return true;
-    }
-
-    // Source parity: SlowDeathBehavior::calcRandomForce — fling physics.
-    // C++ ref: SlowDeathBehavior.cpp:271-314 — random angle, pitch, magnitude → XYZ velocity.
-    if (profile.flingForce > 0) {
-      const angle = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI; // [-PI, PI]
-      // C++ parity: pitch is sampled from [flingPitch, flingPitch + flingPitchVariance] (one-sided).
-      const pitch = profile.flingPitch + (profile.flingPitchVariance > 0
-        ? this.gameRandom.nextFloat() * profile.flingPitchVariance : 0);
-      const magnitude = profile.flingForce + (profile.flingForceVariance > 0
-        ? this.gameRandom.nextFloat() * profile.flingForceVariance : 0);
-      const horizontalMag = Math.cos(pitch) * magnitude;
-      entity.slowDeathState!.flingVelocityX = Math.cos(angle) * horizontalMag / LOGIC_FRAME_RATE;
-      entity.slowDeathState!.flingVelocityY = Math.sin(pitch) * magnitude / LOGIC_FRAME_RATE;
-      entity.slowDeathState!.flingVelocityZ = Math.sin(angle) * horizontalMag / LOGIC_FRAME_RATE;
-      entity.slowDeathState!.isFlung = true;
-      entity.explodedState = 'FLAILING';
-    }
-
-    // Source parity: mark AI as dead — prevent further combat, production, movement.
-    entity.animationState = 'DIE';
-    entity.canTakeDamage = false;
-    entity.attackTargetEntityId = null;
-    entity.attackTargetPosition = null;
-    entity.attackOriginalVictimPosition = null;
-    entity.attackCommandSource = 'AI';
-    entity.attackSubState = 'IDLE';
-    entity.moving = false;
-    entity.moveTarget = null;
-    entity.movePath = [];
-    entity.pathIndex = 0;
-    entity.pathfindGoalCell = null;
-
-    // Unregister energy while dying.
-    this.unregisterEntityEnergy(entity);
-    // Cancel production and pending actions.
-    this.cancelEntityCommandPathActions(entity.id);
-    this.cancelAndRefundAllProductionOnDeath(entity);
-
-    // Source parity: deselect for all players.
-    entity.selected = false;
-
-    // Execute INITIAL phase.
-    this.executeSlowDeathPhase(entity, profile, 0);
-
-    // Source parity: NeutronMissileSlowDeathBehavior — initialize blast state when slow death activates.
-    if (entity.neutronMissileSlowDeathProfile) {
-      const nmProfile = entity.neutronMissileSlowDeathProfile;
-      entity.neutronMissileSlowDeathState = {
-        activationFrame: 0, // Will be set to actual frame on first update tick.
-        completedBlasts: nmProfile.blasts.map(() => false),
-        completedScorchBlasts: nmProfile.blasts.map(() => false),
-      };
-    }
-
-    // Source parity: HelicopterSlowDeathBehavior — initialize spiral crash state.
-    if (entity.helicopterSlowDeathProfiles.length > 0) {
-      // Find first applicable helicopter death profile.
-      for (let hpi = 0; hpi < entity.helicopterSlowDeathProfiles.length; hpi++) {
-        const heliProfile = entity.helicopterSlowDeathProfiles[hpi]!;
-        if (!this.isDieModuleApplicable(entity, heliProfile)) continue;
-        entity.helicopterSlowDeathState = {
-          forwardAngle: entity.rotationY,
-          forwardSpeed: heliProfile.spiralOrbitForwardSpeed,
-          verticalVelocity: 0,
-          selfSpin: heliProfile.minSelfSpin,
-          selfSpinTowardsMax: true,
-          lastSelfSpinUpdateFrame: this.frameCounter,
-          orbitDirection: 1, // Always left (C++ line 213).
-          hitGroundFrame: 0,
-          profileIndex: hpi,
-        };
-        break;
-      }
-    }
-
-    // Source parity: JetSlowDeathBehavior — initialize jet crash state.
-    // C++ onDie: if on ground → instant destroy with ground OCL; if airborne → slow death.
-    if (entity.jetSlowDeathProfiles.length > 0) {
-      for (let jpi = 0; jpi < entity.jetSlowDeathProfiles.length; jpi++) {
-        const jetProfile = entity.jetSlowDeathProfiles[jpi]!;
-        if (!this.isDieModuleApplicable(entity, jetProfile)) continue;
-
-        // C++ parity: isSignificantlyAboveTerrain check (height > 9.0).
-        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
-        const heightAbove = entity.y - terrainY;
-
-        if (heightAbove <= 9.0) {
-          // On ground: instant destroy with ground OCL (C++ line 157-169).
-          // C++ calls destroyObject directly — does NOT go through SlowDeathBehavior.
-          for (const oclName of jetProfile.oclOnGroundDeath) {
-            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
-          }
-          // Immediate destruction — C++ parity: TheGameLogic->destroyObject(us).
-          entity.slowDeathState = null;
-          this.markEntityDestroyed(entity.id, -1);
-        } else {
-          // Airborne: initialize jet slow death state (C++ beginSlowDeath lines 185-221).
-          entity.jetSlowDeathState = {
-            deathFrame: this.frameCounter,
-            groundFrame: 0,
-            rollRate: jetProfile.rollRate,
-            rollAngle: 0,
-            pitchAngle: 0,
-            forwardSpeed: entity.currentSpeed > 0 ? entity.currentSpeed / LOGIC_FRAME_RATE : entity.speed / LOGIC_FRAME_RATE,
-            forwardAngle: entity.rotationY,
-            verticalVelocity: 0,
-            secondaryExecuted: false,
-            profileIndex: jpi,
-          };
-
-          // Execute initial death OCLs (C++ line 193-194).
-          for (const oclName of jetProfile.oclInitialDeath) {
-            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
-          }
-        }
-        break;
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: DieMuxData::isDieApplicable — check if a slow death profile matches.
-   */
-  private isSlowDeathApplicable(entity: MapEntity, profile: SlowDeathProfile): boolean {
-    return this.isDieModuleApplicable(entity, profile);
-  }
-
-  /**
-   * Source parity: SlowDeathBehavior::doPhaseStuff — execute OCLs and weapons for a death phase.
-   * @param phaseIndex 0=INITIAL, 1=MIDPOINT, 2=FINAL
-   */
-  private executeSlowDeathPhase(entity: MapEntity, profile: SlowDeathProfile, phaseIndex: number): void {
-    // Execute ONE random OCL from this phase's list.
-    const oclList = profile.phaseOCLs[phaseIndex as 0 | 1 | 2];
-    if (oclList && oclList.length > 0) {
-      const idx = oclList.length === 1 ? 0 : this.gameRandom.nextRange(0, oclList.length - 1);
-      this.executeOCL(oclList[idx]!, entity);
-    }
-
-    // Fire ONE random weapon from this phase's list.
-    const weaponList = profile.phaseWeapons[phaseIndex as 0 | 1 | 2];
-    if (weaponList && weaponList.length > 0) {
-      const idx = weaponList.length === 1 ? 0 : this.gameRandom.nextRange(0, weaponList.length - 1);
-      const weaponName = weaponList[idx]!;
-      const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
-      if (weaponDef) {
-        this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
-      }
-    }
-  }
-
   // ── StructureCollapseUpdate implementation ────────────────────────────────
 
   /**
@@ -46045,21 +45509,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: LifetimeUpdate::update — destroy entities when their lifetime expires.
-   * C++ calls object->kill() which applies unresistable damage equal to maxHealth.
-   */
-  private updateLifetimeEntities(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
-      if (entity.lifetimeDieFrame === null) continue;
-      if (this.frameCounter < entity.lifetimeDieFrame) continue;
-      // Source parity: kill() applies DAMAGE_UNRESISTABLE at maxHealth amount.
-      // This triggers the normal death pipeline (SlowDeath, death OCLs, etc.).
-      this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
-    }
-  }
-
-  /**
    * Source parity: SpyVisionSpecialPower — expire temporary fog-of-war reveals.
    * When a spy vision reveal expires, remove the looker from the fog grid.
    */
@@ -46111,150 +45560,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: DeletionUpdate::update — silently remove entities when their deletion
-   * timer expires. Unlike LifetimeUpdate, this calls destroyObject (instant removal,
-   * no death pipeline, no death OCLs, no score tracking).
-   */
-  private updateDeletionEntities(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (entity.deletionDieFrame === null) continue;
-      if (this.frameCounter < entity.deletionDieFrame) continue;
-      // Source parity: destroyObject — instant silent removal (NOT kill).
-      this.silentDestroyEntity(entity.id);
-    }
-  }
-
-  /**
-   * Source parity: HeightDieUpdate::update — kill entities that fall below
-   * targetHeight above terrain. Used for aircraft crashing, projectile cleanup.
-   * C++ checks object.z < terrainHeight + targetHeightAboveTerrain.
-   */
-  private updateHeightDieEntities(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
-      const prof = entity.heightDieProfile;
-      if (!prof) continue;
-
-      // Source parity: skip if contained (inside transport).
-      // C++ line 131: m_lastPosition is still updated while contained.
-      if (this.isEntityContained(entity)) {
-        entity.heightDieLastY = entity.y;
-        continue;
-      }
-
-      // Source parity: InitialDelay — don't check until delay expires.
-      if (entity.heightDieActiveFrame === 0) {
-        entity.heightDieActiveFrame = this.frameCounter + prof.initialDelayFrames;
-        entity.heightDieLastY = entity.y;
-      }
-      if (this.frameCounter < entity.heightDieActiveFrame) continue;
-
-      // Source parity: HeightDieUpdate.cpp:144-154 — OnlyWhenMovingDown check.
-      // If entity is not moving downward, skip the height-death check but NOT the lastY update.
-      const currentY = entity.y;
-      let directionOK = true;
-      if (prof.onlyWhenMovingDown && currentY >= entity.heightDieLastY) {
-        directionOK = false;
-      }
-
-      // Source parity: calculate height above terrain/layer.
-      let terrainY = this.resolveGroundHeight(entity.x, entity.z);
-      let targetHeight = terrainY + prof.targetHeight;
-
-      // Source parity: HeightDieUpdate.cpp:160-221 — TargetHeightIncludesStructures
-      // raises targetHeight based on bridge layers and nearby STRUCTURE entities.
-      if (prof.targetHeightIncludesStructures) {
-        // Source parity: HeightDieUpdate.cpp lines 160-169
-        // TerrainLogic::getHighestLayerForDestination + getLayerHeight.
-        const layerHeight = this.resolveHighestBridgeLayerHeightForDestination(
-          entity.x,
-          entity.z,
-          entity.y,
-        );
-        if (layerHeight !== null && layerHeight > terrainY) {
-          terrainY = layerHeight;
-          targetHeight = terrainY + prof.targetHeight;
-        }
-
-        // Scan nearby structures and raise target height above the tallest one.
-        // C++ uses getBoundingCircleRadius(): SPHERE/CYLINDER=majorRadius, BOX=sqrt(major²+minor²).
-        const geom = entity.obstacleGeometry;
-        let scanRange: number;
-        if (!geom) {
-          scanRange = entity.baseHeight;
-        } else if (geom.shape === 'box') {
-          scanRange = Math.sqrt(geom.majorRadius * geom.majorRadius + geom.minorRadius * geom.minorRadius);
-        } else {
-          scanRange = geom.majorRadius;
-        }
-        const scanRangeSqr = scanRange * scanRange;
-        let tallestStructureHeight = 0;
-        for (const candidate of this.spawnedEntities.values()) {
-          if (candidate.id === entity.id || candidate.destroyed) continue;
-          if (!candidate.kindOf.has('STRUCTURE')) continue;
-          const dx = candidate.x - entity.x;
-          const dz = candidate.z - entity.z;
-          if (dx * dx + dz * dz > scanRangeSqr) continue;
-          const structHeight = candidate.obstacleGeometry?.height ?? 0;
-          if (structHeight > tallestStructureHeight) {
-            tallestStructureHeight = structHeight;
-          }
-        }
-        if (tallestStructureHeight > prof.targetHeight) {
-          targetHeight = tallestStructureHeight + terrainY;
-        }
-      }
-
-      // Source parity: C++ line 224 — death check gated on directionOK.
-      if (directionOK) {
-        // Source parity: C++ uses raw pos->z (entity.y), not adjusted by baseHeight.
-        if (entity.y < targetHeight) {
-          // Source parity: C++ line 229 — snap if configured, or if entity position is below terrain.
-          // C++ compares pos->z (raw entity position) against terrainHeightAtPos (not minus baseHeight).
-          if (prof.snapToGroundOnDeath || entity.y < terrainY) {
-            entity.y = terrainY + entity.baseHeight;
-          }
-          // Source parity: kill via UNRESISTABLE damage (same as LifetimeUpdate).
-          this.applyWeaponDamageAmount(null, entity, entity.maxHealth, 'UNRESISTABLE');
-        }
-      }
-
-      // Source parity: C++ line 266 — always update lastPosition at end of update.
-      entity.heightDieLastY = currentY;
-    }
-  }
-
-  /**
-   * Source parity: StickyBombUpdate::update — track sticky bomb positions and handle
-   * target death. C++ file: StickyBombUpdate.cpp lines 166-216.
-   */
-  private updateStickyBombs(): void {
-    for (const bomb of this.spawnedEntities.values()) {
-      if (bomb.destroyed || !bomb.stickyBombProfile || bomb.stickyBombTargetId === 0) continue;
-
-      const target = this.spawnedEntities.get(bomb.stickyBombTargetId);
-      if (!target || target.destroyed) {
-        // C++ parity: if target dies, destroy bomb silently (detonation handled
-        // by checkAndDetonateBoobyTrap in the target's death path).
-        this.silentDestroyEntity(bomb.id);
-        continue;
-      }
-
-      // Track target position.
-      if (target.kindOf.has('IMMOBILE')) {
-        // Buildings: keep bomb at current XZ, ground level (for mine-clearing units).
-        // Z is unchanged — stays where initially placed.
-      } else {
-        // Mobile targets: follow target position + offsetZ.
-        bomb.x = target.x;
-        bomb.z = target.z;
-        // bomb.y would be target.y + offsetZ if we had vertical positioning.
-      }
-    }
-  }
-
-  /**
    * Source parity: StickyBombUpdate::detonate — fire geometry-scaled damage and kill bomb.
    * C++ file: StickyBombUpdate.cpp lines 231-286.
    * Called from checkAndDetonateBoobyTrap (target dies) or directly for remote detonation.
@@ -46274,7 +45579,7 @@ export class GameLogicSubsystem implements Subsystem {
    * so it fires both when the bomb is explicitly detonated and when it dies from
    * LifetimeUpdate. C++ file: StickyBombUpdate.cpp lines 231-286.
    */
-  private executeStickyBombDetonationDamage(bomb: MapEntity): void {
+  /* @internal */ executeStickyBombDetonationDamage(bomb: MapEntity): void {
     const prof = bomb.stickyBombProfile;
     if (!prof || bomb.stickyBombTargetId === 0) return;
 
@@ -46319,7 +45624,7 @@ export class GameLogicSubsystem implements Subsystem {
    * attached to a target entity. Called when target dies, enters container, etc.
    * C++ file: Object.cpp lines 934-975.
    */
-  private checkAndDetonateBoobyTrap(targetId: number): void {
+  /* @internal */ checkAndDetonateBoobyTrap(targetId: number): void {
     const target = this.spawnedEntities.get(targetId);
     if (!target?.objectStatusFlags.has('BOOBY_TRAPPED')) return;
 
@@ -46337,103 +45642,6 @@ export class GameLogicSubsystem implements Subsystem {
       this.detonateStickyBomb(bomb.id);
       break; // One detonation per call.
     }
-  }
-
-  /**
-   * Source parity: TheGameLogic::destroyObject — silently remove an entity without
-   * triggering the death pipeline. No visual events, EVA, XP, crates, death OCLs, etc.
-   * Used by DeletionUpdate for transient objects (debris, particle emitters, trails).
-   */
-  private silentDestroyEntity(entityId: number): void {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) return;
-
-    // Still unregister energy and clean up references.
-    this.unregisterEntityEnergy(entity);
-    this.cancelEntityCommandPathActions(entityId);
-    this.railedTransportStateByEntityId.delete(entityId);
-    this.supplyWarehouseStates.delete(entityId);
-    this.supplyTruckStates.delete(entityId);
-    this.disableOverchargeForEntity(entity);
-    this.sellingEntities.delete(entityId);
-    this.disabledHackedStatusByEntityId.delete(entityId);
-    this.disabledEmpStatusByEntityId.delete(entityId);
-    this.battlePlanParalyzedUntilFrame.delete(entityId);
-
-    // Clean up pending actions referencing this entity.
-    for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
-      if (pendingAction.targetObjectId === entityId) {
-        this.pendingEnterObjectActions.delete(sourceId);
-      }
-    }
-    for (const [dockerId, pendingAction] of this.pendingRepairDockActions.entries()) {
-      if (pendingAction.dockObjectId === entityId || dockerId === entityId) {
-        this.pendingRepairDockActions.delete(dockerId);
-      }
-    }
-    for (const [sourceId, targetBuildingId] of this.pendingGarrisonActions.entries()) {
-      if (targetBuildingId === entityId) {
-        this.pendingGarrisonActions.delete(sourceId);
-      }
-    }
-    for (const [sourceId, targetTransportId] of this.pendingTransportActions.entries()) {
-      if (targetTransportId === entityId) {
-        this.pendingTransportActions.delete(sourceId);
-      }
-    }
-    for (const [sourceId, targetTunnelId] of this.pendingTunnelActions.entries()) {
-      if (targetTunnelId === entityId) {
-        this.pendingTunnelActions.delete(sourceId);
-      }
-    }
-    for (const [sourceId, pendingAction] of this.pendingCombatDropActions.entries()) {
-      if (sourceId === entityId) {
-        this.clearChinookCombatDropIgnoredObstacle(sourceId);
-        this.pendingCombatDropActions.delete(sourceId);
-        this.abortPendingChinookRappels(sourceId);
-        this.clearPendingChinookCommands(sourceId);
-        continue;
-      }
-      if (pendingAction.targetObjectId === entityId) {
-        pendingAction.targetObjectId = null;
-        this.clearChinookCombatDropIgnoredObstacle(sourceId);
-      }
-    }
-    for (const [passengerId, pendingRappel] of this.pendingChinookRappels.entries()) {
-      if (passengerId === entityId || pendingRappel.sourceEntityId === entityId) {
-        this.pendingChinookRappels.delete(passengerId);
-        continue;
-      }
-      if (pendingRappel.targetObjectId === entityId) {
-        pendingRappel.targetObjectId = null;
-      }
-    }
-    for (const [dozerId, targetBuildingId] of this.pendingConstructionActions.entries()) {
-      if (targetBuildingId === entityId) {
-        this.pendingConstructionActions.delete(dozerId);
-      }
-    }
-
-    // Remove upgrades (cleans up side state like radar/power counts).
-    const completedUpgradeNames = Array.from(entity.completedUpgrades.values());
-    for (const completedUpgradeName of completedUpgradeNames) {
-      this.removeEntityUpgrade(entity, completedUpgradeName);
-    }
-
-    // Mark as destroyed — no death animation, no dying renderable state.
-    entity.destroyed = true;
-    entity.moving = false;
-    entity.moveTarget = null;
-    entity.movePath = [];
-    entity.pathIndex = 0;
-    entity.pathfindGoalCell = null;
-    entity.attackTargetEntityId = null;
-    entity.attackTargetPosition = null;
-    entity.attackOriginalVictimPosition = null;
-    entity.attackCommandSource = 'AI';
-    entity.attackSubState = 'IDLE';
-    entity.lastAttackerEntityId = null;
-    this.onObjectDestroyed(entityId);
   }
 
   /**
@@ -46709,164 +45917,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: SlowDeathBehavior::update — progress all active slow death sequences.
-   * Handles sinking, midpoint phase, and final destruction timing.
-   */
-  private updateSlowDeathEntities(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-
-      // Source parity: BattleBus empty hulk auto-destruction check.
-      // Runs outside slow death state since the state is nulled on landing.
-      if (entity.battleBusEmptyHulkDestroyFrame > 0 && this.frameCounter >= entity.battleBusEmptyHulkDestroyFrame) {
-        entity.battleBusEmptyHulkDestroyFrame = 0;
-        this.markEntityDestroyed(entity.id, -1);
-        continue;
-      }
-
-      if (!entity.slowDeathState) continue;
-      const state = entity.slowDeathState;
-      const profile = entity.slowDeathProfiles[state.profileIndex];
-      if (!profile) {
-        entity.slowDeathState = null;
-        if (state.destroyOnCompletion) {
-          this.markEntityDestroyed(entity.id, -1);
-        }
-        continue;
-      }
-
-      // Source parity: BattleBusSlowDeathBehavior::update — fake death throw + landing.
-      if (state.isBattleBusFakeDeath) {
-        const BATTLE_BUS_GRAVITY = 6.0 / LOGIC_FRAME_RATE;
-        state.battleBusThrowVelocity -= BATTLE_BUS_GRAVITY;
-        entity.y += state.battleBusThrowVelocity;
-
-        // Landing check after initial delay.
-        if (this.frameCounter >= state.battleBusLandingCheckFrame) {
-          const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
-          if (entity.y <= terrainY) {
-            entity.y = terrainY;
-            state.isBattleBusFakeDeath = false;
-            state.battleBusThrowVelocity = 0;
-
-            // Become SECOND_LIFE hulk — re-enable as driveable wreck.
-            entity.modelConditionFlags.add('SECOND_LIFE');
-            entity.canTakeDamage = true;
-            entity.health = entity.maxHealth * 0.5; // Half health hulk.
-            entity.animationState = 'IDLE';
-            entity.slowDeathState = null; // End slow death for now.
-
-            // Empty hulk auto-destruction timer.
-            if (profile.emptyHulkDestructionDelayFrames > 0) {
-              const containedIds = this.collectContainedEntityIds(entity.id);
-              if (containedIds.length === 0) {
-                entity.battleBusEmptyHulkDestroyFrame = this.frameCounter + profile.emptyHulkDestructionDelayFrames;
-              }
-            }
-          }
-        }
-        continue;
-      }
-
-      // Source parity: SlowDeathBehavior fling physics — gravity, position update, ground bounce.
-      // C++ ref: SlowDeathBehavior.cpp:414-453 — FLUNG_INTO_AIR → BOUNCED state transitions.
-      if (state.isFlung) {
-        const FLING_GRAVITY = 4.0 / LOGIC_FRAME_RATE;
-        state.flingVelocityY -= FLING_GRAVITY;
-        entity.x += state.flingVelocityX;
-        entity.y += state.flingVelocityY;
-        entity.z += state.flingVelocityZ;
-
-        // Ground collision check.
-        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
-        if (entity.y <= terrainY) {
-          entity.y = terrainY;
-          if (!state.hasBounced && Math.abs(state.flingVelocityY) > 0.05) {
-            // First bounce: retain 30% velocity, reverse Y.
-            state.flingVelocityX *= 0.3;
-            state.flingVelocityY *= -0.3;
-            state.flingVelocityZ *= 0.3;
-            state.hasBounced = true;
-            entity.explodedState = 'BOUNCING';
-          } else {
-            // Below threshold or already bounced: stop fling.
-            state.flingVelocityX = 0;
-            state.flingVelocityY = 0;
-            state.flingVelocityZ = 0;
-            state.isFlung = false;
-            entity.explodedState = 'SPLATTED';
-          }
-        }
-        continue; // Skip normal sink logic while flung
-      }
-
-      // Source parity: sink the entity below terrain.
-      if (profile.sinkRate > 0 && this.frameCounter >= state.sinkFrame) {
-        entity.y -= profile.sinkRate;
-        // Altitude check: destroy when sunk below threshold.
-        if (entity.y <= profile.destructionAltitude) {
-          this.executeSlowDeathPhase(entity, profile, 2); // FINAL
-          entity.slowDeathState = null;
-          if (state.destroyOnCompletion) {
-            this.markEntityDestroyed(entity.id, -1);
-          }
-          continue;
-        }
-      }
-
-      // Source parity: midpoint phase — execute once at the midpoint frame.
-      if (!state.midpointExecuted && this.frameCounter >= state.midpointFrame) {
-        this.executeSlowDeathPhase(entity, profile, 1); // MIDPOINT
-        state.midpointExecuted = true;
-      }
-
-      // Source parity: destruction frame — execute final phase and destroy.
-      // C++ parity: helicopter/jet slow death behaviors call base SlowDeathBehavior::update() for
-      // FX/OCL phases but override the destruction timing with their own ground-hit + delay logic.
-      // Skip the base timer destruction when these sub-behaviors are actively managing the death.
-      if (this.frameCounter >= state.destructionFrame
-        && !entity.helicopterSlowDeathState && !entity.jetSlowDeathState) {
-        this.executeSlowDeathPhase(entity, profile, 2); // FINAL
-        entity.slowDeathState = null;
-        if (state.destroyOnCompletion) {
-          this.markEntityDestroyed(entity.id, -1);
-        }
-        continue;
-      }
-
-      // Source parity: NeutronMissileSlowDeathBehavior::update — timed blast waves.
-      // Runs after base SlowDeathBehavior logic, only while slow death is activated.
-      const nmState = entity.neutronMissileSlowDeathState;
-      const nmProfile = entity.neutronMissileSlowDeathProfile;
-      if (nmState && nmProfile) {
-        // Record activation frame on first tick (C++ m_activationFrame set once).
-        if (nmState.activationFrame === 0) {
-          nmState.activationFrame = this.frameCounter;
-        }
-        const elapsed = this.frameCounter - nmState.activationFrame;
-        for (let bi = 0; bi < nmProfile.blasts.length; bi++) {
-          const blast = nmProfile.blasts[bi]!;
-          if (!blast.enabled) continue;
-          // Fire damage blast if delay has elapsed.
-          if (!nmState.completedBlasts[bi] && elapsed > blast.delay) {
-            this.doNeutronMissileBlast(entity, blast);
-            nmState.completedBlasts[bi] = true;
-          }
-          // Fire scorch blast (visual burned condition) if scorch delay has elapsed.
-          if (!nmState.completedScorchBlasts[bi] && elapsed > blast.scorchDelay) {
-            this.doNeutronMissileScorchBlast(entity, blast);
-            nmState.completedScorchBlasts[bi] = true;
-          }
-        }
-      }
-    }
-  }
-
-  /**
    * Source parity: NeutronMissileSlowDeathBehavior::doBlast — fire a single blast wave.
    * Scans entities in outerRadius, applies damage with inner/outer falloff, and topples.
    */
-  private doNeutronMissileBlast(missile: MapEntity, blast: NeutronMissileBlastInfo): void {
+  /* @internal */ doNeutronMissileBlast(missile: MapEntity, blast: NeutronMissileBlastInfo): void {
     if (blast.outerRadius <= 0) return;
     const outerSqr = blast.outerRadius * blast.outerRadius;
     for (const other of this.spawnedEntities.values()) {
@@ -46905,7 +45959,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: NeutronMissileSlowDeathBehavior::doScorchBlast — visual burning effect.
    * Scans entities in outerRadius and sets MODELCONDITION_BURNED (visual only in our port).
    */
-  private doNeutronMissileScorchBlast(missile: MapEntity, blast: NeutronMissileBlastInfo): void {
+  /* @internal */ doNeutronMissileScorchBlast(missile: MapEntity, blast: NeutronMissileBlastInfo): void {
     if (blast.outerRadius <= 0) return;
     const outerSqr = blast.outerRadius * blast.outerRadius;
     for (const other of this.spawnedEntities.values()) {
@@ -46917,178 +45971,6 @@ export class GameLogicSubsystem implements Subsystem {
       // Source parity: set MODELCONDITION_BURNED on affected entities.
       // In the original, this visually chars trees/structures.
       other.objectStatusFlags.add('BURNED');
-    }
-  }
-
-  /**
-   * Source parity: HelicopterSlowDeathBehavior::update — per-frame spiral orbit,
-   * self-spin, gravity descent, ground hit detection, and final explosion.
-   * C++ file: HelicopterSlowDeathUpdate.cpp lines 285-498.
-   */
-  private updateHelicopterSlowDeath(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      const hs = entity.helicopterSlowDeathState;
-      if (!hs) continue;
-
-      // Look up the profile that was selected at init time.
-      const profile = entity.helicopterSlowDeathProfiles[hs.profileIndex];
-      if (!profile) continue;
-
-      // ── Still airborne ──
-      if (hs.hitGroundFrame === 0) {
-        // Self-spin: rotate the entity body (visual rotation).
-        entity.rotationY += hs.selfSpin * hs.orbitDirection;
-
-        // Self-spin rate oscillation: ping-pong between minSelfSpin and maxSelfSpin.
-        if (profile.selfSpinUpdateDelay > 0
-          && this.frameCounter - hs.lastSelfSpinUpdateFrame > profile.selfSpinUpdateDelay) {
-          const spinIncrement = profile.selfSpinUpdateAmount / LOGIC_FRAME_RATE;
-          if (hs.selfSpinTowardsMax) {
-            hs.selfSpin += spinIncrement;
-            if (hs.selfSpin >= profile.maxSelfSpin) {
-              hs.selfSpin = profile.maxSelfSpin;
-              hs.selfSpinTowardsMax = false;
-            }
-          } else {
-            hs.selfSpin -= spinIncrement;
-            if (hs.selfSpin <= profile.minSelfSpin) {
-              hs.selfSpin = profile.minSelfSpin;
-              hs.selfSpinTowardsMax = true;
-            }
-          }
-          hs.lastSelfSpinUpdateFrame = this.frameCounter;
-        }
-
-        // Forward motion along spiral orbit direction.
-        entity.x += Math.cos(hs.forwardAngle) * hs.forwardSpeed;
-        entity.z += Math.sin(hs.forwardAngle) * hs.forwardSpeed;
-
-        // Turn the spiral orbit angle.
-        hs.forwardAngle += profile.spiralOrbitTurnRate * hs.orbitDirection;
-
-        // Damp forward speed.
-        hs.forwardSpeed *= profile.spiralOrbitForwardSpeedDamping;
-
-        // Gravity-based descent.
-        // C++: locomotor maxLift = -gravity * (1 - fallHowFast).
-        // Simplified: apply downward velocity proportional to fallHowFast.
-        hs.verticalVelocity += HELICOPTER_GRAVITY * profile.fallHowFast;
-        entity.y += hs.verticalVelocity;
-
-        // Ground hit detection.
-        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
-        if (entity.y <= terrainY + 1.0) {
-          entity.y = terrainY;
-          hs.hitGroundFrame = this.frameCounter;
-
-          // Execute ground hit OCLs.
-          for (const oclName of profile.oclHitGround) {
-            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
-          }
-
-          // C++ parity: copter->setDisabled(DISABLED_HELD) — freeze the entity on ground.
-          entity.moving = false;
-          entity.moveTarget = null;
-          entity.movePath = [];
-          entity.objectStatusFlags.add('DISABLED_HELD');
-        }
-      }
-
-      // ── On the ground: wait for final explosion ──
-      if (hs.hitGroundFrame > 0
-        && this.frameCounter - hs.hitGroundFrame > profile.delayFromGroundToFinalDeath) {
-        // Execute final explosion OCLs.
-        for (const oclName of profile.oclFinalBlowUp) {
-          this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
-        }
-
-        // Spawn rubble object.
-        if (profile.finalRubbleObject) {
-          this.spawnEntityFromTemplate(
-            profile.finalRubbleObject, entity.x, entity.z, entity.rotationY, entity.side);
-        }
-
-        // Destroy the helicopter.
-        entity.helicopterSlowDeathState = null;
-        entity.slowDeathState = null;
-        this.markEntityDestroyed(entity.id, -1);
-      }
-    }
-  }
-
-  /**
-   * Source parity: JetSlowDeathBehavior::update — jet crash with roll, forward motion,
-   * multi-stage FX timeline. C++ file: JetSlowDeathBehavior.cpp lines 226-310.
-   */
-  private updateJetSlowDeath(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      const js = entity.jetSlowDeathState;
-      if (!js) continue;
-
-      const profile = entity.jetSlowDeathProfiles[js.profileIndex];
-      if (!profile) continue;
-
-      // C++ parity: roll rate application and decay happen unconditionally (outside if/else).
-      // Roll continues even after ground impact, creating a tumbling effect.
-      js.rollAngle += js.rollRate;
-      js.rollRate *= profile.rollRateDelta;
-
-      // ── Still airborne ──
-      if (js.groundFrame === 0) {
-        // Forward motion: jet keeps flying in the direction it was headed at death.
-        entity.x += Math.cos(js.forwardAngle) * js.forwardSpeed;
-        entity.z += Math.sin(js.forwardAngle) * js.forwardSpeed;
-
-        // Gravity descent (C++ setMaxLift(-gravity * (1 - fallHowFast))).
-        // fallHowFast=1 → full fall, fallHowFast=0 → slow fall.
-        js.verticalVelocity += HELICOPTER_GRAVITY * profile.fallHowFast;
-        entity.y += js.verticalVelocity;
-
-        // Secondary OCL timer (C++ line 292-301). Delay of 0 fires on first frame.
-        if (!js.secondaryExecuted
-          && this.frameCounter - js.deathFrame >= profile.delaySecondaryFromInitialDeath) {
-          for (const oclName of profile.oclSecondary) {
-            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
-          }
-          js.secondaryExecuted = true;
-        }
-
-        // Ground hit detection.
-        const terrainY = this.resolveGroundHeight(entity.x, entity.z) + entity.baseHeight;
-        if (entity.y <= terrainY + 1.0) {
-          entity.y = terrainY;
-          js.groundFrame = this.frameCounter;
-
-          // Execute ground hit OCLs (C++ line 276-277).
-          for (const oclName of profile.oclHitGround) {
-            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
-          }
-
-          // C++ parity: freeze the entity on ground (DISABLED_HELD).
-          entity.moving = false;
-          entity.moveTarget = null;
-          entity.movePath = [];
-          entity.objectStatusFlags.add('DISABLED_HELD');
-        }
-      } else {
-        // ── On the ground: wait for final explosion (C++ if/else with airborne) ──
-        // Apply pitch rotation after ground impact (C++ physics->setPitchRate).
-        js.pitchAngle += profile.pitchRate;
-
-        if (this.frameCounter - js.groundFrame >= profile.delayFinalBlowUpFromHitGround) {
-          // Execute final explosion OCLs (C++ line 306-307).
-          for (const oclName of profile.oclFinalBlowUp) {
-            this.executeOCL(oclName, entity, undefined, entity.x, entity.z);
-          }
-
-          // Destroy the jet.
-          entity.jetSlowDeathState = null;
-          entity.slowDeathState = null;
-          this.markEntityDestroyed(entity.id, -1);
-        }
-      }
     }
   }
 
@@ -47242,427 +46124,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.issueAttackEntity(entity.id, target.id, 'AI');
   }
 
-  private markEntityDestroyed(entityId: number, attackerId: number): void {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return;
-    }
-
-    // Source parity: Object::m_hasDiedAlready — prevent re-entrant death pipeline.
-    // Death effects (sticky bomb detonation, InstantDeathBehavior weapons) can kill other
-    // entities, which may cascade back. Guard against processing the same entity twice.
-    if (this.dyingEntityIds.has(entityId)) {
-      return;
-    }
-    this.dyingEntityIds.add(entityId);
-
-    // Source parity: TechBuildingBehavior::onDie — revert to neutral team instead of destroying.
-    // C++ sets team to ThePlayerList->getNeutralPlayer()->getDefaultTeam() and clears MODELCONDITION_CAPTURED.
-    // C++ does NOT restore health, but our engine would re-trigger death at 0 HP, so we restore to maxHealth.
-    if (entity.techBuildingProfile) {
-      this.dyingEntityIds.delete(entityId);
-      // Unregister energy from current side.
-      this.unregisterEntityEnergy(entity);
-      // Revert to civilian/neutral side.
-      entity.side = 'civilian';
-      entity.controllingPlayerToken = this.normalizeControllingPlayerToken('civilian');
-      // Restore full health to prevent re-death loop (pragmatic deviation from C++).
-      entity.health = entity.maxHealth;
-      return;
-    }
-
-    // Source parity: Object::onDie calls checkAndDetonateBoobyTrap before die modules.
-    // C++ file: Object.cpp line 4575.
-    this.checkAndDetonateBoobyTrap(entityId);
-
-    // Source parity: StickyBombUpdate die module — if this entity IS a sticky bomb,
-    // execute its detonation damage before the bomb is marked destroyed.
-    // In C++, a die module calls StickyBombUpdate::detonate() on bomb death.
-    if (entity.stickyBombProfile && entity.stickyBombTargetId !== 0) {
-      this.executeStickyBombDetonationDamage(entity);
-    }
-
-    // Source parity: BridgeBehavior::onDie — kill towers, mark cells impassable.
-    if (entity.bridgeBehaviorState) {
-      this.bridgeBehaviorOnDie(entity);
-    }
-
-    // Source parity: BridgeTowerBehavior::onDie — kill the parent bridge.
-    if (entity.bridgeTowerState) {
-      this.bridgeTowerOnDie(entity);
-    }
-
-    // Emit entity destroyed visual event.
-    this.visualEventBuffer.push({
-      type: 'ENTITY_DESTROYED',
-      x: entity.x,
-      y: entity.y,
-      z: entity.z,
-      radius: entity.category === 'building' ? 8 : 3,
-      sourceEntityId: entityId,
-      projectileType: 'BULLET',
-    });
-
-    // Source parity: EVA — announce building/unit loss.
-    if (entity.side) {
-      if (entity.kindOf.has('STRUCTURE') && entity.kindOf.has('MP_COUNT_FOR_VICTORY')) {
-        this.emitEvaEvent('BUILDING_LOST', entity.side, 'own', entityId);
-      } else if (entity.category === 'infantry' || entity.category === 'vehicle') {
-        this.emitEvaEvent('UNIT_LOST', entity.side, 'own', entityId);
-      }
-    }
-
-    // Source parity: ScoreKeeper — track entity destruction stats.
-    this.addEntityDestroyedScore(entity, attackerId);
-
-    // Unregister energy contribution before destruction.
-    this.unregisterEntityEnergy(entity);
-
-    // Source parity: award XP to killer on victim death.
-    this.awardExperienceOnKill(entityId, attackerId);
-    this.recordDestroyedBuildingBySource(entity, attackerId);
-
-    // Source parity: Player::addCashBounty — if the killer's player has cash bounty active,
-    // award a percentage of the victim's build cost as credits.
-    this.awardCashBountyOnKill(entity, attackerId);
-
-    // Source parity: RebuildHoleExposeDie::onDie — create rebuild hole on building death.
-    this.tryCreateRebuildHoleOnDeath(entity, attackerId);
-
-    // Source parity: EjectPilotDie — eject pilot unit for VETERAN+ vehicles on death.
-    this.tryEjectPilotOnDeath(entity);
-
-    // Source parity: GenerateMinefieldBehavior::onDie — spawn mines on death.
-    this.tryGenerateMinefieldOnDeath(entity);
-
-    // Source parity: CreateObjectDie / SlowDeathBehavior — execute death OCLs.
-    this.executeDeathOCLs(entity);
-
-    // Source parity: InstantDeathBehavior::onDie — fire matching die module effects.
-    this.executeInstantDeathModules(entity);
-
-    // Source parity: FireWeaponWhenDeadBehavior::onDie — fire weapon on death with upgrade control.
-    this.executeFireWeaponWhenDeadModules(entity);
-
-    // Source parity: NeutronBlastBehavior::onDie — radius neutron blast on death.
-    this.executeNeutronBlast(entity);
-
-    // Source parity: BunkerBusterBehavior::onDie — kill garrisoned units in victim building.
-    this.executeBunkerBuster(entity);
-
-    // Source parity: FXListDie::onDie — trigger death FX for matching profiles.
-    this.executeFXListDieModules(entity);
-
-    // Source parity: CrushDie::onDie — set FRONTCRUSHED/BACKCRUSHED model conditions.
-    this.executeCrushDie(entity, attackerId);
-
-    // Source parity: DamDie::onDie — enable all WAVEGUIDE objects for flood wave.
-    this.executeDamDieModules(entity);
-
-    // Source parity: SpecialPowerCompletionDie::onDie — notify script engine of completion.
-    this.executeSpecialPowerCompletionDieModules(entity);
-
-    // Source parity: UpgradeDie::onDie — remove upgrade from producer on death.
-    this.executeUpgradeDieModules(entity);
-
-    // Source parity: CreateCrateDie::onDie — spawn salvage crate on death.
-    this.trySpawnCrateOnDeath(entity, attackerId);
-
-    // Source parity: FlightDeckBehavior::onDie — kill all parked aircraft when carrier dies.
-    this.onFlightDeckDie(entity);
-
-    // Source parity: SpectreGunshipUpdate — if the gunship is shot down, destroy the
-    // contained gattling entity. C++ SpectreGunshipUpdate.cpp update() line 693-696:
-    // "THE GUNSHIP MUST HAVE GOTTEN SHOT DOWN!" → cleanUp() destroys gattling.
-    if (entity.spectreGunshipState && entity.spectreGunshipState.gattlingEntityId !== -1) {
-      this.cleanUpSpectreGunship(entity.spectreGunshipState);
-      entity.spectreGunshipState.status = 'IDLE';
-    }
-
-    // Source parity: SpawnBehavior::onDie — handle slaver death (orphan/kill slaves).
-    this.onSlaverDeath(entity);
-    // Source parity: Object::onDie → SpawnBehavior::onSpawnDeath — notify slaver of slave death.
-    this.onSlaveDeath(entity);
-
-    // Source parity: RebuildHoleBehavior::onDie — if a hole dies, destroy its worker.
-    if (entity.rebuildHoleProfile && entity.rebuildHoleWorkerEntityId !== 0) {
-      const worker = this.spawnedEntities.get(entity.rebuildHoleWorkerEntityId);
-      if (worker && !worker.destroyed) {
-        this.markEntityDestroyed(worker.id, -1);
-      }
-      entity.rebuildHoleWorkerEntityId = 0;
-    }
-
-    this.cancelEntityCommandPathActions(entityId);
-    this.railedTransportStateByEntityId.delete(entityId);
-    this.supplyWarehouseStates.delete(entityId);
-    this.supplyTruckStates.delete(entityId);
-    this.disableOverchargeForEntity(entity);
-    this.sellingEntities.delete(entityId);
-    this.disabledHackedStatusByEntityId.delete(entityId);
-    this.disabledEmpStatusByEntityId.delete(entityId);
-    this.battlePlanParalyzedUntilFrame.delete(entityId);
-    // Source parity: if a Strategy Center is destroyed while a battle plan is active,
-    // remove its bonuses from all entities on the side.
-    if (entity.battlePlanState?.activePlan !== 'NONE' && entity.battlePlanState?.transitionStatus === 'ACTIVE') {
-      this.applyBattlePlanBonuses(entity, entity.battlePlanState.activePlan, false);
-    }
-    for (const [sourceId, pendingAction] of this.pendingEnterObjectActions.entries()) {
-      if (pendingAction.targetObjectId === entityId) {
-        this.pendingEnterObjectActions.delete(sourceId);
-      }
-    }
-    for (const [dockerId, pendingAction] of this.pendingRepairDockActions.entries()) {
-      if (pendingAction.dockObjectId === entityId || dockerId === entityId) {
-        this.pendingRepairDockActions.delete(dockerId);
-      }
-    }
-    for (const [sourceId, targetBuildingId] of this.pendingGarrisonActions.entries()) {
-      if (targetBuildingId === entityId) {
-        this.pendingGarrisonActions.delete(sourceId);
-      }
-    }
-    for (const [sourceId, targetTransportId] of this.pendingTransportActions.entries()) {
-      if (targetTransportId === entityId) {
-        this.pendingTransportActions.delete(sourceId);
-      }
-    }
-    for (const [sourceId, targetTunnelId] of this.pendingTunnelActions.entries()) {
-      if (targetTunnelId === entityId) {
-        this.pendingTunnelActions.delete(sourceId);
-      }
-    }
-    for (const [sourceId, pendingAction] of this.pendingCombatDropActions.entries()) {
-      if (sourceId === entityId) {
-        this.clearChinookCombatDropIgnoredObstacle(sourceId);
-        this.pendingCombatDropActions.delete(sourceId);
-        this.abortPendingChinookRappels(sourceId);
-        this.clearPendingChinookCommands(sourceId);
-        continue;
-      }
-      if (pendingAction.targetObjectId === entityId) {
-        pendingAction.targetObjectId = null;
-        this.clearChinookCombatDropIgnoredObstacle(sourceId);
-      }
-    }
-    for (const [passengerId, pendingRappel] of this.pendingChinookRappels.entries()) {
-      if (passengerId === entityId || pendingRappel.sourceEntityId === entityId) {
-        this.pendingChinookRappels.delete(passengerId);
-        continue;
-      }
-      if (pendingRappel.targetObjectId === entityId) {
-        pendingRappel.targetObjectId = null;
-      }
-    }
-    // Clear dozer construction tasks targeting this building.
-    for (const [dozerId, targetBuildingId] of this.pendingConstructionActions.entries()) {
-      if (targetBuildingId === entityId) {
-        this.pendingConstructionActions.delete(dozerId);
-      }
-    }
-
-    // Source parity: TunnelTracker::onTunnelDestroyed — cave-in if last tunnel.
-    if (entity.containProfile?.moduleType === 'TUNNEL' || entity.containProfile?.moduleType === 'CAVE') {
-      this.handleTunnelDestroyed(entity);
-    }
-
-    // Source parity: OpenContain::onDie — apply damage to contained units before releasing (C++ line 862-866).
-    // processDamageToContained: percentDamage * maxHealth as UNRESISTABLE, deathType BURNED or NORMAL.
-    if (entity.containProfile && entity.containProfile.moduleType !== 'TUNNEL'
-        && entity.containProfile.moduleType !== 'CAVE'
-        && entity.containProfile.damagePercentToUnits > 0) {
-      this.processDamageToContained(entity);
-    }
-
-    // Source parity: Contain::onDie — release contained entities on container death.
-    // Garrison, transport, helix, and overlord passengers are ejected at the container position.
-    if (entity.containProfile
-        && entity.containProfile.moduleType !== 'TUNNEL'
-        && entity.containProfile.moduleType !== 'CAVE') {
-      const passengerIds = this.collectContainedEntityIds(entityId);
-      for (const passengerId of passengerIds) {
-        const passenger = this.spawnedEntities.get(passengerId);
-        if (passenger && !passenger.destroyed) {
-          this.releaseEntityFromContainer(passenger);
-        }
-      }
-    }
-
-    const completedUpgradeNames = Array.from(entity.completedUpgrades.values());
-    for (const completedUpgradeName of completedUpgradeNames) {
-      this.removeEntityUpgrade(entity, completedUpgradeName);
-    }
-    this.cancelAndRefundAllProductionOnDeath(entity);
-    this.removeAllSequentialScriptsForEntity(entityId);
-    entity.animationState = 'DIE';
-    // Source parity: upgrade modules clean up side state via removeEntityUpgrade/onDelete parity.
-    entity.destroyed = true;
-    this.dyingEntityIds.delete(entityId);
-    entity.moving = false;
-    entity.moveTarget = null;
-    entity.movePath = [];
-    entity.pathIndex = 0;
-    entity.pathfindGoalCell = null;
-    entity.attackTargetEntityId = null;
-    entity.attackTargetPosition = null;
-    entity.attackOriginalVictimPosition = null;
-    entity.attackCommandSource = 'AI';
-    entity.attackSubState = 'IDLE';
-    entity.leechRangeActive = false;
-    entity.lastAttackerEntityId = null;
-    entity.continuousFireState = 'NONE';
-    entity.continuousFireCooldownFrame = 0;
-    entity.objectStatusFlags.delete('CONTINUOUS_FIRE_SLOW');
-    entity.objectStatusFlags.delete('CONTINUOUS_FIRE_MEAN');
-    entity.objectStatusFlags.delete('CONTINUOUS_FIRE_FAST');
-    this.pendingDyingRenderableStates.set(entityId, {
-      state: this.makeRenderableEntityState(entity),
-      expireFrame: this.frameCounter + 1,
-    });
-    this.onObjectDestroyed(entityId);
-  }
-
-  /**
-   * Source parity: EjectPilotDie — eject a pilot unit when VETERAN+ vehicle is destroyed.
-   * Only vehicle/air categories with the ejectPilotTemplateName set will eject.
-   * The pilot inherits the vehicle's veterancy level.
-   */
-  private tryEjectPilotOnDeath(entity: MapEntity): void {
-    if (!entity.ejectPilotTemplateName) return;
-    if (entity.category !== 'vehicle' && entity.category !== 'air') return;
-
-    // Source parity: Only VETERAN or higher eject a pilot.
-    const vetLevel = entity.experienceState.currentLevel;
-    if (vetLevel < entity.ejectPilotMinVeterancy) return;
-
-    // Try to resolve the pilot unit template. The ejectPilotTemplateName
-    // may be an OCL name rather than a direct unit template. Try to find
-    // a matching infantry template first, falling back to a side-specific pilot.
-    const registry = this.iniDataRegistry;
-    if (!registry) return;
-
-    // Convention: look for the OCL name as an object template first.
-    // If not found, try side-prefixed variants (e.g., AmericaPilot, ChinaPilot).
-    let pilotTemplateName = entity.ejectPilotTemplateName;
-    let pilotDef = findObjectDefByName(registry, pilotTemplateName);
-    if (!pilotDef && entity.side) {
-      // Try conventional pilot name: <Side>Pilot (e.g., AmericaPilot)
-      const sidePilot = entity.side + 'Pilot';
-      pilotDef = findObjectDefByName(registry, sidePilot);
-      if (pilotDef) pilotTemplateName = sidePilot;
-    }
-    if (!pilotDef) {
-      // Try generic Pilot template
-      pilotDef = findObjectDefByName(registry, 'Pilot');
-      if (pilotDef) pilotTemplateName = 'Pilot';
-    }
-    if (!pilotDef) return;
-
-    // Spawn the pilot at the vehicle's position.
-    const pilotEntity = this.spawnEntityFromTemplate(
-      pilotTemplateName,
-      entity.x,
-      entity.z,
-      entity.rotationY,
-      entity.side,
-    );
-    if (!pilotEntity) return;
-
-    // Inherit veterancy.
-    if (pilotEntity.experienceProfile) {
-      pilotEntity.experienceState.currentLevel = vetLevel;
-    }
-  }
-
-  /**
-   * Source parity: CreateObjectDie / SlowDeathBehavior — extract death OCL entries from INI.
-   * Scans modules for CreationList, GroundCreationList, or OCL fields that reference
-   * ObjectCreationList definitions. Each entry includes DieMuxData fields for filtering.
-   * C++ file: CreateObjectDie.cpp + DieModule.cpp (DieMuxData).
-   */
-  /**
-   * Source parity: KeepObjectDie — check if object has a KeepObjectDie module.
-   * When present, the object persists as wreckage after death instead of being removed.
-   */
-  private hasKeepObjectDie(objectDef: ObjectDef | undefined): boolean {
-    if (!objectDef) return false;
-    for (const block of objectDef.blocks) {
-      if (block.type.toUpperCase() === 'BEHAVIOR') {
-        const moduleName = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-        if (moduleName === 'KEEPOBJECTDIE') return true;
-      }
-    }
-    return false;
-  }
-
-  private extractDeathOCLEntries(objectDef: ObjectDef | undefined): DeathOCLEntry[] {
-    if (!objectDef) return [];
-    const entries: DeathOCLEntry[] = [];
-    const moduleBlocks = objectDef.blocks ?? [];
-    for (const block of moduleBlocks) {
-      const blockType = block.type.toUpperCase();
-      if (blockType !== 'DIE' && blockType !== 'BEHAVIOR') continue;
-      const moduleType = block.name.split(/\s+/)[0] ?? '';
-      const upperModuleType = moduleType.toUpperCase();
-      // CreateObjectDie, SlowDeathBehavior
-      if (upperModuleType.includes('CREATEOBJECTDIE') || upperModuleType.includes('SLOWDEATH')) {
-        // Parse DieMuxData fields.
-        const deathTypes = new Set<string>();
-        const deathTypesStr = readStringField(block.fields, ['DeathTypes']);
-        if (deathTypesStr) {
-          for (const token of deathTypesStr.toUpperCase().split(/\s+/)) {
-            if (token) deathTypes.add(token);
-          }
-        }
-        const veterancyLevels = new Set<string>();
-        const vetStr = readStringField(block.fields, ['VeterancyLevels']);
-        if (vetStr) {
-          for (const token of vetStr.toUpperCase().split(/\s+/)) {
-            if (token) veterancyLevels.add(token);
-          }
-        }
-        const exemptStatus = new Set<string>();
-        const exemptStr = readStringField(block.fields, ['ExemptStatus']);
-        if (exemptStr) {
-          for (const token of exemptStr.toUpperCase().split(/\s+/)) {
-            if (token) exemptStatus.add(token);
-          }
-        }
-        const requiredStatus = new Set<string>();
-        const reqStr = readStringField(block.fields, ['RequiredStatus']);
-        if (reqStr) {
-          for (const token of reqStr.toUpperCase().split(/\s+/)) {
-            if (token) requiredStatus.add(token);
-          }
-        }
-
-        const oclName = readStringField(block.fields, [
-          'CreationList', 'GroundCreationList', 'AirCreationList',
-        ]);
-        if (oclName) {
-          entries.push({
-            oclName: oclName.trim(),
-            deathTypes, veterancyLevels, exemptStatus, requiredStatus,
-          });
-        }
-        // SlowDeathBehavior can have OCL fields with phase names.
-        // e.g., "OCL INITIAL OCLDestroyDebris"
-        const oclFieldRaw = readStringField(block.fields, ['OCL']);
-        if (oclFieldRaw) {
-          const parts = oclFieldRaw.trim().split(/\s+/);
-          const oclPart = parts.length > 1 ? parts[parts.length - 1]! : parts[0]!;
-          if (oclPart) {
-            entries.push({
-              oclName: oclPart,
-              deathTypes, veterancyLevels, exemptStatus, requiredStatus,
-            });
-          }
-        }
-      }
-    }
-    return entries;
-  }
-
   /**
    * Source parity: ObjectCreationList::create — execute an OCL by name.
    * Resolves CreateObject nuggets and spawns entities.
@@ -47786,57 +46247,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: Execute all death OCLs for an entity.
-   */
-  private executeDeathOCLs(entity: MapEntity): void {
-    for (const entry of entity.deathOCLEntries) {
-      // Source parity: DieMuxData filtering for each CreateObjectDie module.
-      if (!this.isDieModuleApplicable(entity, entry)) continue;
-      this.executeOCL(entry.oclName, entity);
-    }
-  }
-
-  /**
-   * Source parity: InstantDeathBehavior::onDie — execute all matching die module effects.
-   * Each profile checks DieMuxData filters (DeathTypes, VeterancyLevels, ExemptStatus,
-   * RequiredStatus). Matching profiles fire one random OCL and one random Weapon.
-   * C++ file: InstantDeathBehavior.cpp lines 123-175.
-   */
-  private executeInstantDeathModules(entity: MapEntity): void {
-    for (const profile of entity.instantDeathProfiles) {
-      if (!this.isDieModuleApplicable(entity, profile)) continue;
-
-      // Fire one random OCL from the list.
-      if (profile.oclNames.length > 0) {
-        const idx = profile.oclNames.length === 1 ? 0
-          : this.gameRandom.nextRange(0, profile.oclNames.length - 1);
-        const oclName = profile.oclNames[idx];
-        if (oclName) {
-          this.executeOCL(oclName, entity);
-        }
-      }
-
-      // Fire one random weapon from the list.
-      if (profile.weaponNames.length > 0) {
-        const idx = profile.weaponNames.length === 1 ? 0
-          : this.gameRandom.nextRange(0, profile.weaponNames.length - 1);
-        const weaponName = profile.weaponNames[idx];
-        if (weaponName) {
-          const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
-          if (weaponDef) {
-            this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
-          }
-        }
-      }
-    }
-  }
-
-  /**
    * Source parity: FireWeaponWhenDeadBehavior::onDie — fire death weapon with
    * DieMuxData filtering and upgrade activation control.
    * C++ file: FireWeaponWhenDeadBehavior.cpp lines 84-118.
    */
-  private executeFireWeaponWhenDeadModules(entity: MapEntity): void {
+  /* @internal */ executeFireWeaponWhenDeadModules(entity: MapEntity): void {
     for (const profile of entity.fireWeaponWhenDeadProfiles) {
       // Source parity: UpgradeMux — check if module is active.
       // StartsActive=Yes means active by default; TriggeredBy activates via upgrade.
@@ -47879,7 +46294,7 @@ export class GameLogicSubsystem implements Subsystem {
    * - Make other vehicles unmanned (DISABLED_UNMANNED + transfer to neutral team)
    * C++ file: NeutronBlastBehavior.cpp lines 66-162.
    */
-  private executeNeutronBlast(entity: MapEntity): void {
+  /* @internal */ executeNeutronBlast(entity: MapEntity): void {
     const profile = entity.neutronBlastProfile;
     if (!profile) return;
 
@@ -47979,7 +46394,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private executeBunkerBuster(entity: MapEntity): void {
+  /* @internal */ executeBunkerBuster(entity: MapEntity): void {
     const profile = entity.bunkerBusterProfile;
     if (!profile) return;
 
@@ -48055,129 +46470,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: FXListDie::onDie — trigger death FX for matching FXListDie profiles.
-   * C++ file: FXListDie.cpp — plays death effects with isDieApplicable filtering.
-   * Emits visual events for the renderer to display particle/sound effects.
-   */
-  private executeFXListDieModules(entity: MapEntity): void {
-    for (const profile of entity.fxListDieProfiles) {
-      if (!this.isDieModuleApplicable(entity, profile)) continue;
-      // Emit a death FX visual event for the renderer.
-      // Source parity: C++ triggers FXList::doFXObj or FXList::doFXPos based on orientToObject.
-      this.visualEventBuffer.push({
-        type: 'ENTITY_DESTROYED',
-        x: entity.x,
-        y: entity.y,
-        z: entity.z,
-        radius: 0,
-        sourceEntityId: entity.id,
-        projectileType: 'BULLET',
-      });
-    }
-  }
-
-  /**
-   * Source parity: CrushDie::onDie — compute crush location and set model conditions.
-   * C++ file: CrushDie.cpp lines 163-208.
-   */
-  private executeCrushDie(entity: MapEntity, attackerId: number): void {
-    if (entity.crushDieProfiles.length === 0) return;
-
-    for (const profile of entity.crushDieProfiles) {
-      if (!this.isDieModuleApplicable(entity, profile)) continue;
-
-      // Source parity: CrushDie.cpp line 169 — only for CRUSH damage type.
-      if (entity.pendingDeathType !== 'CRUSHED') continue;
-
-      const crusher = this.spawnedEntities.get(attackerId);
-      // Source parity: CrushDie.cpp line 175 — if no crusher found, use TOTAL_CRUSH.
-      const crushType = crusher
-        ? this.crushLocationCheck(crusher, entity)
-        : 'TOTAL';
-
-      if (crushType === 'NONE') continue;
-
-      // Source parity: CrushDie.cpp lines 195-204.
-      entity.frontCrushed = crushType === 'TOTAL' || crushType === 'FRONT';
-      entity.backCrushed = crushType === 'TOTAL' || crushType === 'BACK';
-
-      if (entity.frontCrushed) entity.modelConditionFlags.add('FRONTCRUSHED');
-      if (entity.backCrushed) entity.modelConditionFlags.add('BACKCRUSHED');
-    }
-  }
-
-  /**
-   * Source parity: DamDie::onDie — enable all WAVEGUIDE objects when dam dies.
-   * C++ file: DamDie.cpp lines 91-106.
-   */
-  private executeDamDieModules(entity: MapEntity): void {
-    if (entity.damDieProfiles.length === 0) {
-      return;
-    }
-
-    const matchedProfiles: DamDieProfile[] = [];
-    for (const profile of entity.damDieProfiles) {
-      if (this.isDieModuleApplicable(entity, profile)) {
-        matchedProfiles.push(profile);
-      }
-    }
-    if (matchedProfiles.length === 0) {
-      return;
-    }
-
-    for (const profile of matchedProfiles) {
-      if (!profile.oclName) {
-        continue;
-      }
-      this.executeOCL(profile.oclName, entity, undefined, entity.x, entity.z);
-    }
-
-    for (const candidate of this.spawnedEntities.values()) {
-      if (!candidate.kindOf.has('WAVEGUIDE')) {
-        continue;
-      }
-      candidate.objectStatusFlags.delete('DISABLED_DEFAULT');
-    }
-  }
-
-  /**
-   * Source parity: SpecialPowerCompletionDie::onDie — notify ScriptEngine special-power completion list.
-   * C++ file: SpecialPowerCompletionDie.cpp lines 56-74.
-   */
-  private executeSpecialPowerCompletionDieModules(entity: MapEntity): void {
-    if (entity.specialPowerCompletionDieProfiles.length === 0) {
-      return;
-    }
-
-    const normalizedSide = this.normalizeSide(entity.side);
-    if (!normalizedSide) {
-      return;
-    }
-
-    const creatorId = entity.specialPowerCompletionCreatorId;
-    if (!Number.isFinite(creatorId) || Math.trunc(creatorId) <= 0) {
-      return;
-    }
-    const normalizedCreatorId = Math.trunc(creatorId);
-
-    for (const profile of entity.specialPowerCompletionDieProfiles) {
-      if (!this.isDieModuleApplicable(entity, profile)) {
-        continue;
-      }
-      this.recordScriptCompletedSpecialPowerEvent(
-        normalizedSide,
-        profile.specialPowerTemplateName,
-        normalizedCreatorId,
-      );
-    }
-  }
-
-  /**
    * Source parity: crushLocationCheck — determine which end of the victim was closest to the crusher.
    * C++ file: CrushDie.cpp lines 49-145.
    * Returns 'TOTAL' | 'FRONT' | 'BACK' | 'NONE'.
    */
-  private crushLocationCheck(crusher: MapEntity, victim: MapEntity): 'TOTAL' | 'FRONT' | 'BACK' | 'NONE' {
+  /* @internal */ crushLocationCheck(crusher: MapEntity, victim: MapEntity): 'TOTAL' | 'FRONT' | 'BACK' | 'NONE' {
     // Source parity: victim's forward direction vector.
     // C++ uses getUnitDirectionVector2D(); our convention: dirX = cos(rotationY - PI/2), dirZ = sin(rotationY - PI/2).
     const dirX = Math.cos(victim.rotationY - Math.PI / 2);
@@ -48232,63 +46529,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return result;
-  }
-
-  /**
-   * Source parity: DieMuxData::isDieApplicable — check if a die module should fire
-   * based on death type, veterancy level, exempt/required status.
-   * C++ file: DieModule.cpp lines 71-91.
-   */
-  private isDieModuleApplicable(entity: MapEntity, profile: {
-    deathTypes: Set<string>;
-    veterancyLevels: Set<string>;
-    exemptStatus: Set<string>;
-    requiredStatus: Set<string>;
-  }): boolean {
-    // Source parity: DieModule.cpp line 76 — wrong death type? punt.
-    // C++ checks: getDeathTypeFlag(m_deathTypes, damageInfo->in.m_deathType).
-    // If profile has DeathTypes, entity's actual death cause must be in the set.
-    // Empty deathTypes set = ALL_DEATH_TYPES (accepts everything).
-    if (profile.deathTypes.size > 0) {
-      if (profile.deathTypes.has('NONE') && profile.deathTypes.size === 1) {
-        return false; // Explicitly set to NONE — never fires.
-      }
-      // Source parity: ALL = all death types accepted (bitmask with all bits set in C++).
-      if (!profile.deathTypes.has('ALL') && !profile.deathTypes.has(entity.pendingDeathType)) {
-        return false;
-      }
-    }
-
-    // VeterancyLevels filter (empty = all levels accepted).
-    if (profile.veterancyLevels.size > 0) {
-      const levelNames = ['REGULAR', 'VETERAN', 'ELITE', 'HEROIC'] as const;
-      const entityLevel = levelNames[entity.experienceState.currentLevel] ?? 'REGULAR';
-      if (!profile.veterancyLevels.has(entityLevel)) return false;
-    }
-
-    // ExemptStatus — entity must NOT have any of these flags.
-    for (const status of profile.exemptStatus) {
-      if (entity.objectStatusFlags.has(status)) return false;
-    }
-
-    // RequiredStatus — entity must have ALL of these flags.
-    for (const status of profile.requiredStatus) {
-      if (!entity.objectStatusFlags.has(status)) return false;
-    }
-
-    return true;
-  }
-
-  private isAnyDestroyDieProfileApplicable(entity: MapEntity): boolean {
-    if (entity.destroyDieProfiles.length === 0) {
-      return false;
-    }
-    for (const profile of entity.destroyDieProfiles) {
-      if (this.isDieModuleApplicable(entity, profile)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   // ── EVA Announcer system ──
@@ -48356,111 +46596,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  /**
-   * Source parity: ExperienceTracker::addExperiencePoints on killer,
-   * using victim's ExperienceValue for their current level.
-   * ActiveBody::onVeterancyLevelChanged applies health and armor bonuses.
-   */
-  private awardExperienceOnKill(victimId: number, attackerId: number): void {
-    if (attackerId < 0) {
-      return;
-    }
-
-    const victim = this.spawnedEntities.get(victimId);
-    const attacker = this.spawnedEntities.get(attackerId);
-    if (!victim || !attacker || attacker.destroyed) {
-      return;
-    }
-
-    const victimProfile = victim.experienceProfile;
-    if (!victimProfile) {
-      return;
-    }
-
-    const attackerProfile = attacker.experienceProfile;
-    if (!attackerProfile) {
-      return;
-    }
-
-    // Source parity: no XP for killing allies.
-    const victimSide = this.normalizeSide(victim.side);
-    const attackerSide = this.normalizeSide(attacker.side);
-    if (victimSide && attackerSide && victimSide === attackerSide) {
-      return;
-    }
-
-    const xpGain = getExperienceValueImpl(victimProfile, victim.experienceState.currentLevel);
-    if (xpGain <= 0) {
-      return;
-    }
-
-    // Source parity: unit-level veterancy XP.
-    const result = addExperiencePointsImpl(
-      attacker.experienceState,
-      attackerProfile,
-      xpGain,
-      true,
-    );
-
-    if (result.didLevelUp) {
-      this.onEntityLevelUp(attacker, result.oldLevel, result.newLevel);
-    }
-
-    // Source parity: Player::addSkillPointsForKill — also award player-level rank points.
-    // SkillPointValue defaults to ExperienceValue when not set in INI (USE_EXP_VALUE_FOR_SKILL_VALUE sentinel).
-    if (attackerSide) {
-      // No skill points for killing units under construction.
-      if (!victim.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
-        this.addPlayerSkillPoints(attackerSide, xpGain);
-      }
-    }
-  }
-
-  /**
-   * Source parity: Player::addCashBounty — award credits to the killer's side
-   * based on the victim's build cost multiplied by the side's cash bounty percentage.
-   */
-  private awardCashBountyOnKill(victim: MapEntity, attackerId: number): void {
-    if (attackerId < 0) {
-      return;
-    }
-    const attacker = this.spawnedEntities.get(attackerId);
-    if (!attacker || attacker.destroyed) {
-      return;
-    }
-    const attackerSide = this.normalizeSide(attacker.side);
-    if (!attackerSide) {
-      return;
-    }
-    // Source parity: no bounty for killing allies or own units.
-    const victimSide = this.normalizeSide(victim.side);
-    if (victimSide && victimSide === attackerSide) {
-      return;
-    }
-    // Source parity: no bounty for partially-built structures.
-    if (victim.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
-      return;
-    }
-    const bountyPercent = this.sideCashBountyPercent.get(attackerSide) ?? 0;
-    if (bountyPercent <= 0) {
-      return;
-    }
-    // Resolve the victim's build cost from its template.
-    const objectDef = this.resolveObjectDefByTemplateName(victim.templateName);
-    if (!objectDef) {
-      return;
-    }
-    const buildCost = this.resolveObjectBuildCost(objectDef, victim.side ?? '');
-    if (buildCost <= 0) {
-      return;
-    }
-    // Source parity: REAL_TO_INT_CEIL rounding.
-    const bountyAmount = Math.ceil(buildCost * bountyPercent);
-    if (bountyAmount > 0) {
-      this.depositSideCredits(attackerSide, bountyAmount);
-    }
-  }
-
   private onEntityLevelUp(entity: MapEntity, oldLevel: VeterancyLevel, newLevel: VeterancyLevel): void {
     // Source parity: apply health bonus (ActiveBody.cpp:1126-1134).
     const config = DEFAULT_VETERANCY_CONFIG;
@@ -48507,221 +46642,12 @@ export class GameLogicSubsystem implements Subsystem {
     this.refreshEntityCombatProfiles(entity);
   }
 
-  private cancelAndRefundAllProductionOnDeath(producer: MapEntity): void {
-    if (producer.productionQueue.length === 0) {
-      return;
-    }
-
-    // Source parity: ProductionUpdate::onDie() calls cancelAndRefundAllProduction(),
-    // which iterates queue entries through cancel paths to restore player money/state.
-    const productionLimit = 100;
-    for (let i = 0; i < productionLimit && producer.productionQueue.length > 0; i += 1) {
-      const producerSide = this.resolveEntityOwnerSide(producer);
-      const production = producer.productionQueue[0];
-      if (!production) {
-        break;
-      }
-
-      if (producerSide && production.type === 'UPGRADE' && production.upgradeType === 'PLAYER') {
-        this.setSideUpgradeInProduction(producerSide, production.upgradeName, false);
-      }
-      if (production.type === 'UNIT') {
-        this.releaseParkingDoorReservationForProduction(producer, production.productionId);
-      }
-
-      if (producerSide) {
-        this.depositSideCredits(producerSide, production.buildCost);
-      }
-      producer.productionQueue.shift();
-    }
-  }
-
-  private finalizeDestroyedEntities(): void {
-    const destroyedEntityIds: number[] = [];
-    for (const entity of this.spawnedEntities.values()) {
-      const destroyDieMatched = this.isAnyDestroyDieProfileApplicable(entity);
-      if (entity.destroyed && (!entity.keepObjectOnDeath || destroyDieMatched)) {
-        destroyedEntityIds.push(entity.id);
-      }
-    }
-
-    if (destroyedEntityIds.length === 0) {
-      return;
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.attackTargetEntityId !== null && destroyedEntityIds.includes(entity.attackTargetEntityId)) {
-        entity.attackTargetEntityId = null;
-        entity.attackOriginalVictimPosition = null;
-        entity.attackTargetPosition = null;
-        entity.attackCommandSource = 'AI';
-      }
-    }
-
-    for (const entityId of destroyedEntityIds) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity) {
-        continue;
-      }
-      if (this.scriptCameraTetherState?.entityId === entityId) {
-        this.scriptCameraTetherState = null;
-      }
-      if (this.scriptCameraFollowState?.entityId === entityId) {
-        this.scriptCameraFollowState = null;
-      }
-      if (this.scriptCameraLookTowardObjectState?.entityId === entityId) {
-        this.scriptCameraLookTowardObjectState = null;
-      }
-      if (entity.parkingSpaceProducerId !== null) {
-        const producer = this.spawnedEntities.get(entity.parkingSpaceProducerId);
-        if (producer?.parkingPlaceProfile) {
-          producer.parkingPlaceProfile.occupiedSpaceEntityIds.delete(entity.id);
-        }
-        entity.parkingSpaceProducerId = null;
-      }
-      if (entity.helixCarrierId !== null) {
-        const carrier = this.spawnedEntities.get(entity.helixCarrierId);
-        if (carrier?.helixPortableRiderId === entity.id) {
-          carrier.helixPortableRiderId = null;
-        }
-        entity.helixCarrierId = null;
-      }
-      if (entity.helixPortableRiderId !== null) {
-        entity.helixPortableRiderId = null;
-      }
-      if (entity.garrisonContainerId !== null) {
-        entity.garrisonContainerId = null;
-      }
-      if (entity.transportContainerId !== null) {
-        entity.transportContainerId = null;
-      }
-      if (entity.tunnelContainerId !== null) {
-        // Remove from tunnel tracker passenger list on final cleanup.
-        const tunnel = this.spawnedEntities.get(entity.tunnelContainerId);
-        if (tunnel) {
-          const tracker = this.resolveTunnelTrackerForContainer(tunnel);
-          if (tracker) tracker.passengerIds.delete(entity.id);
-        }
-        entity.tunnelContainerId = null;
-      }
-      if (entity.chinookHealingAirfieldId !== 0) {
-        this.setChinookAirfieldForHealing(entity, 0);
-      }
-      this.clearParkingPlaceHealee(entity);
-      this.pendingChinookCommandByEntityId.delete(entityId);
-      this.pendingCombatDropActions.delete(entityId);
-      this.abortPendingChinookRappels(entityId);
-      this.removeEntityFromWorld(entityId);
-      this.removeEntityFromSelection(entityId);
-    }
-  }
-
-  private cleanupDyingRenderableStates(): void {
-    for (const [entityId, pending] of this.pendingDyingRenderableStates.entries()) {
-      if (this.frameCounter > pending.expireFrame) {
-        this.pendingDyingRenderableStates.delete(entityId);
-      }
-    }
-  }
-
-  /**
-   * Source parity: VictoryConditions.cpp — checks for defeat & victory.
-   * Default skirmish mode: a side is defeated when it has zero non-excluded
-   * entities remaining. C++ hasAnyObjects() counts ALL objects on the team
-   * except projectiles, mines, and inert objects.
-   */
-  private checkVictoryConditions(): void {
-    if (this.gameEndFrame !== null) {
-      return; // Game already ended.
-    }
-
-    // Collect all active sides from playerSideByIndex.
-    const activeSides = new Set<string>();
-    for (const [, side] of this.playerSideByIndex) {
-      if (!this.defeatedSides.has(side)) {
-        activeSides.add(side);
-      }
-    }
-
-    if (activeSides.size < 2) {
-      return; // Need at least 2 sides for victory conditions.
-    }
-
-    // Check each active side for defeat — source parity: hasSinglePlayerBeenDefeated.
-    const newlyDefeated: string[] = [];
-    for (const side of activeSides) {
-      if (this.hasSingleSideBeenDefeated(side)) {
-        newlyDefeated.push(side);
-      }
-    }
-
-    // Source parity: VictoryConditions.cpp line 192 — `if (TheGameLogic->getFrame() > 1)`
-    // guards defeat processing on early frames while SkirmishScripts.scb spawns entities.
-    // Guard is <= 2 (not <= 1) because the pre-init gameLogic.update(0) call in main.ts
-    // consumes one frame to register fog-of-war lookers before the game loop starts.
-    if (newlyDefeated.length === activeSides.size && this.frameCounter <= 2) {
-      return;
-    }
-
-    // Source parity: VictoryConditions::update() — on defeat: reveal map, kill remaining units.
-    for (const side of newlyDefeated) {
-      this.defeatedSides.add(side);
-      this.setMapRevealEntirePermanentlyForSide(side, true);
-      this.killRemainingEntitiesForSide(side);
-    }
-
-    // Source parity: Check if only one alliance remains.
-    // Build alliance groups — two sides are in the same alliance if both
-    // consider each other ALLIES (mutual relationship, like C++ areAllies).
-    const remainingSides: string[] = [];
-    for (const [, side] of this.playerSideByIndex) {
-      if (!this.defeatedSides.has(side) && !remainingSides.includes(side)) {
-        remainingSides.push(side);
-      }
-    }
-
-    if (remainingSides.length === 0) {
-      // Source parity: all sides eliminated simultaneously — game ends as draw.
-      if (this.defeatedSides.size > 0) {
-        this.gameEndFrame = this.frameCounter;
-      }
-      return;
-    }
-
-    // Group remaining sides by alliance: two sides are allied if both
-    // have RELATIONSHIP_ALLIES toward each other (mutual).
-    const allianceGroups: string[][] = [];
-    const assigned = new Set<string>();
-
-    for (const side of remainingSides) {
-      if (assigned.has(side)) continue;
-      const group = [side];
-      assigned.add(side);
-
-      for (const other of remainingSides) {
-        if (assigned.has(other)) continue;
-        // Mutual alliance check (source parity: areAllies helper in VictoryConditions.cpp).
-        if (this.getTeamRelationshipBySides(side, other) === RELATIONSHIP_ALLIES
-            && this.getTeamRelationshipBySides(other, side) === RELATIONSHIP_ALLIES) {
-          group.push(other);
-          assigned.add(other);
-        }
-      }
-      allianceGroups.push(group);
-    }
-
-    // Game ends when only one alliance group remains.
-    if (allianceGroups.length <= 1 && this.defeatedSides.size > 0) {
-      this.gameEndFrame = this.frameCounter;
-    }
-  }
-
   /**
    * Source parity: VictoryConditions::hasSinglePlayerBeenDefeated — check if a
    * single side has lost all surviving objects. C++ hasAnyObjects() counts ALL
    * non-excluded entities (excludes PROJECTILE, MINE, INERT kindOf).
    */
-  private hasSingleSideBeenDefeated(side: string): boolean {
+  /* @internal */ hasSingleSideBeenDefeated(side: string): boolean {
     // Source parity: VictoryConditions.cpp — both VICTORY_NOUNITS and VICTORY_NOBUILDINGS
     // are set by default. C++ hasAnyObjects() counts ALL non-excluded entities regardless
     // of MP_COUNT_FOR_VICTORY. Defeat occurs only when a side has zero eligible entities.
@@ -48740,34 +46666,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return true;
-  }
-
-  /**
-   * Source parity: Player::killPlayer — destroy all remaining entities for a defeated side.
-   * C++ iterates the player's object list and calls kill() on each.
-   */
-  private killRemainingEntitiesForSide(side: string): void {
-    // Source parity: evacuate containers before killing, so contained entities
-    // are released and can be killed individually (prevents orphaned passengers).
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (this.normalizeSide(entity.side) !== side) continue;
-      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
-        this.evacuateContainedEntities(entity, entity.x, entity.z, null);
-      }
-    }
-
-    const toKill: number[] = [];
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (this.normalizeSide(entity.side) !== side) continue;
-      // Don't kill projectiles/mines — they'll clean up naturally.
-      if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('MINE')) continue;
-      toKill.push(entity.id);
-    }
-    for (const entityId of toKill) {
-      this.markEntityDestroyed(entityId, -1);
-    }
   }
 
   private updateEntityVerticalPosition(entity: MapEntity, dt: number): void {
