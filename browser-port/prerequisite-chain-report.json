@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-03-05T04:02:19.510Z",
+  "generatedAt": "2026-03-12T15:13:29.882Z",
   "bundlePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/app/public/assets/data/ini-bundle.json",
   "summary": {
     "objectPrerequisiteEdges": 0,
-    "sciencePrerequisiteEdges": 0,
+    "sciencePrerequisiteEdges": 161,
     "upgradePrerequisiteEdges": 0,
-    "commandButtonPrerequisiteEdges": 5,
+    "commandButtonPrerequisiteEdges": 583,
     "missingReferences": 0,
     "objectCycles": 0,
     "scienceCycles": 0

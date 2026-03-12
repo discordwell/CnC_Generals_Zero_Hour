@@ -6101,6 +6101,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [30, 'CAMERA_MOD_SET_ROLLING_AVERAGE'],
   [31, 'CAMERA_MOD_FINAL_LOOK_TOWARD'],
   [32, 'TEAM_ATTACK_TEAM'],
+  [33, 'TEAM_ATTACK_TEAM'],
   [34, 'MOVE_CAMERA_TO_SELECTION'],
   [36, 'TEAM_FOLLOW_WAYPOINTS'],
   [37, 'TEAM_SET_STATE'],
@@ -6378,6 +6379,7 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [306, 'TEAM_FACE_WAYPOINT'],
   [307, 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE'],
   [308, 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT'],
+  [309, 'UNIT_SPAWN_NAMED_LOCATION_ORIENTATION'],
   [310, 'PLAYER_AFFECT_RECEIVING_EXPERIENCE'],
   [311, 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN'],
   [312, 'TEAM_GUARD_SUPPLY_CENTER'],
@@ -10073,7 +10075,9 @@ export class GameLogicSubsystem implements Subsystem {
   // ---- Entity factory facades (delegate to entity-factory.ts) ----
 
   private createMapEntity(...args: any[]) { return (createMapEntityImpl as any)(this, ...args); }
-  private extractIniValueTokens(...args: any[]) { return (extractIniValueTokensImpl as any)(this, ...args); }
+  private extractIniValueTokens(value: IniValue | undefined): string[][] {
+    return (extractIniValueTokensImpl as typeof extractIniValueTokensImpl)(this, value);
+  }
   /* @internal */ extractDynamicAudioEventName(...args: any[]) { return (extractDynamicAudioEventNameImpl as any)(this, ...args); }
   /* @internal */ extractAmbientSoundProfile(...args: any[]) { return (extractAmbientSoundProfileImpl as any)(this, ...args); }
   private extractWeaponNamesFromTokens(...args: any[]) { return (extractWeaponNamesFromTokensImpl as any)(this, ...args); }

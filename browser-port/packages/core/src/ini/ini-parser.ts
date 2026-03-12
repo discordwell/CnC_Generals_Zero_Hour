@@ -374,7 +374,7 @@ function parseBlock(
     const equalsIndex = lineTokens.indexOf('=');
     if (equalsIndex !== -1) {
       const key = lineTokens.slice(0, equalsIndex).join(' ');
-      const valueParts = lineTokens.slice(equalsIndex + 1);
+      const valueParts = normalizeFieldValueTokens(lineTokens.slice(equalsIndex + 1));
       block.fields[key] = parseFieldValue(valueParts);
     } else if (lineTokens.length === 1 && hasNestedSubBlockBody(lines, cursor)) {
       // Standalone keyword that opens a block (e.g. Prerequisites, Turret).
@@ -600,6 +600,14 @@ function parseFieldValue(tokens: string[]): IniValue {
   return tokens;
 }
 
+function normalizeFieldValueTokens(tokens: string[]): string[] {
+  let start = 0;
+  while (start < tokens.length && tokens[start] === '=') {
+    start += 1;
+  }
+  return tokens.slice(start);
+}
+
 function parseSingleValue(token: string): IniValue {
   // Boolean
   const lower = token.toLowerCase();
@@ -630,6 +638,12 @@ function tokenizeLine(line: string): string[] {
   const tokens: string[] = [];
   let current = '';
   let inQuotes = false;
+  const pushCurrent = (): void => {
+    if (current.length > 0) {
+      tokens.push(current);
+      current = '';
+    }
+  };
 
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]!;
@@ -639,20 +653,28 @@ function tokenizeLine(line: string): string[] {
       continue;
     }
 
+    if (!inQuotes && ch === '+' && line[i + 1] === '=') {
+      pushCurrent();
+      tokens.push('+=');
+      i += 1;
+      continue;
+    }
+
+    if (!inQuotes && ch === '=') {
+      pushCurrent();
+      tokens.push('=');
+      continue;
+    }
+
     if (!inQuotes && /\s/.test(ch)) {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = '';
-      }
+      pushCurrent();
       continue;
     }
 
     current += ch;
   }
 
-  if (current.length > 0) {
-    tokens.push(current);
-  }
+  pushCurrent();
 
   return tokens;
 }

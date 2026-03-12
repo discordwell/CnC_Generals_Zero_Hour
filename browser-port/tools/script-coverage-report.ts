@@ -26,6 +26,8 @@ interface ScriptCoverageRow {
 interface ScriptCoverageReport {
   generatedAt: string;
   gameLogicSourcePath: string;
+  scriptActionsSourcePath: string;
+  scriptConditionsSourcePath: string;
   mapsRootPath: string;
   summary: {
     mapsScanned: number;
@@ -555,6 +557,14 @@ async function main(): Promise<void> {
     projectRoot,
     args.gameLogicSource ?? path.join('packages', 'game-logic', 'src', 'index.ts'),
   );
+  const scriptActionsSourcePath = path.resolve(
+    projectRoot,
+    path.join('packages', 'game-logic', 'src', 'script-actions.ts'),
+  );
+  const scriptConditionsSourcePath = path.resolve(
+    projectRoot,
+    path.join('packages', 'game-logic', 'src', 'script-conditions.ts'),
+  );
   const mapsRootPath = path.resolve(
     projectRoot,
     args.mapsRoot ?? path.join('packages', 'app', 'public', 'assets', 'maps'),
@@ -565,17 +575,19 @@ async function main(): Promise<void> {
   );
 
   const source = await fs.readFile(gameLogicSourcePath, 'utf8');
+  const scriptActionsSource = await fs.readFile(scriptActionsSourcePath, 'utf8');
+  const scriptConditionsSource = await fs.readFile(scriptConditionsSourcePath, 'utf8');
 
   const actionNameById = parseActionNameById(source);
   const conditionNameById = parseConditionNameById(source);
 
   const implementedActionNames = new Set(
-    extractTopLevelSwitchCaseExpressions(source, 'switch (actionType)')
+    extractTopLevelSwitchCaseExpressions(scriptActionsSource, 'switch (actionType)')
       .map((expr) => extractCaseStringLiteral(expr))
       .filter((name): name is string => !!name),
   );
   const implementedConditionNames = new Set(
-    extractTopLevelSwitchCaseExpressions(source, 'switch (conditionType)')
+    extractTopLevelSwitchCaseExpressions(scriptConditionsSource, 'switch (conditionType)')
       .map((expr) => extractCaseStringLiteral(expr))
       .filter((name): name is string => !!name),
   );
@@ -636,6 +648,8 @@ async function main(): Promise<void> {
   const report: ScriptCoverageReport = {
     generatedAt: new Date().toISOString(),
     gameLogicSourcePath,
+    scriptActionsSourcePath,
+    scriptConditionsSourcePath,
     mapsRootPath,
     summary: {
       mapsScanned,

@@ -20804,6 +20804,19 @@ describe('Script condition groundwork', () => {
     expect(team!.memberEntityIds.has(1)).toBe(true);
 
     expect(logic.executeScriptAction({
+      actionType: 309, // UNIT_SPAWN_NAMED_LOCATION_ORIENTATION (retail enum id)
+      params: ['SpawnedGuyRaw', 'SpawnTemplate', 'SpawnTeam', { x: 10, y: 12, z: 0 }, 0.5],
+    })).toBe(true);
+    const rawEntity = privateApi.spawnedEntities.get(2);
+    expect(rawEntity).toBeDefined();
+    expect(rawEntity!.x).toBeCloseTo(10);
+    expect(rawEntity!.z).toBeCloseTo(12);
+    expect(rawEntity!.rotationY).toBeCloseTo(0.5);
+    expect(rawEntity!.scriptName).toBe('SpawnedGuyRaw');
+    expect(privateApi.scriptNamedEntitiesByName.get('SpawnedGuyRaw')).toBe(2);
+    expect(team!.memberEntityIds.has(2)).toBe(true);
+
+    expect(logic.executeScriptAction({
       actionType: 514,
       params: ['SpawnedGuy2', 'MissingTemplate', 'SpawnTeam', { x: 1, y: 2, z: 0 }, 0],
     })).toBe(false);
@@ -33343,6 +33356,14 @@ describe('Script condition groundwork', () => {
     privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
     privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
     expect(logic.executeScriptAction({
+      actionType: 33, // TEAM_ATTACK_TEAM (retail enum id)
+      params: ['Attackers', 'Victims'],
+    })).toBe(true);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(1)?.attackTargetEntityId);
+    expect([3, 4]).toContain(privateApi.spawnedEntities.get(2)?.attackTargetEntityId);
+    privateApi.spawnedEntities.get(1)!.attackTargetEntityId = null;
+    privateApi.spawnedEntities.get(2)!.attackTargetEntityId = null;
+    expect(logic.executeScriptAction({
       actionType: 32,
       params: ['AttackersProto', 'VictimsProto'],
     })).toBe(true);
@@ -44016,4 +44037,3 @@ describe('Script action targeting variants', () => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── FlightDeckBehavior Tests ──────────────────────────────────────────────────
-

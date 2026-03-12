@@ -1,6 +1,8 @@
 {
-  "generatedAt": "2026-03-08T01:05:50.099Z",
+  "generatedAt": "2026-03-12T15:27:28.464Z",
   "gameLogicSourcePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/game-logic/src/index.ts",
+  "scriptActionsSourcePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/game-logic/src/script-actions.ts",
+  "scriptConditionsSourcePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/game-logic/src/script-conditions.ts",
   "mapsRootPath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/app/public/assets/maps",
   "summary": {
     "mapsScanned": 101,
@@ -8,13 +10,13 @@
     "scriptsScanned": 16259,
     "distinctActionTypesUsed": 259,
     "distinctConditionTypesUsed": 79,
-    "implementedActionTypesUsed": 257,
+    "implementedActionTypesUsed": 259,
     "missingActionTypesUsed": 0,
-    "unknownActionTypeIdsUsed": 2,
+    "unknownActionTypeIdsUsed": 0,
     "implementedConditionTypesUsed": 79,
     "missingConditionTypesUsed": 0,
     "unknownConditionTypeIdsUsed": 0,
-    "knownActionTypeIdsInEngine": 508,
+    "knownActionTypeIdsInEngine": 510,
     "knownConditionTypeIdsInEngine": 109,
     "knownActionTypeIdsMissingImplementation": 0,
     "knownConditionTypeIdsMissingImplementation": 0,
@@ -1314,8 +1316,8 @@
     },
     {
       "id": 33,
-      "name": null,
-      "status": "unknown_id",
+      "name": "TEAM_ATTACK_TEAM",
+      "status": "implemented",
       "usageCount": 20,
       "mapCount": 10,
       "maps": [
@@ -8828,8 +8830,8 @@
     },
     {
       "id": 309,
-      "name": null,
-      "status": "unknown_id",
+      "name": "UNIT_SPAWN_NAMED_LOCATION_ORIENTATION",
+      "status": "implemented",
       "usageCount": 115,
       "mapCount": 20,
       "maps": [

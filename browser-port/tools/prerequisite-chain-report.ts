@@ -36,6 +36,10 @@ function normalizeToken(value: string | null | undefined): string {
   return value?.trim().toUpperCase() ?? '';
 }
 
+function isMeaningfulReferenceToken(token: string): boolean {
+  return token.length > 0 && token !== 'NONE';
+}
+
 function extractTokens(value: unknown): string[] {
   if (typeof value === 'string') {
     return value
@@ -155,7 +159,7 @@ function parsePrerequisiteBlock(block: IniBlock): { type: ReferenceType | null; 
   } else if (typeToken === 'UPGRADE') {
     type = 'Upgrade';
   }
-  const names = tokens.slice(1).map((token) => normalizeToken(token)).filter(Boolean);
+  const names = tokens.slice(1).map((token) => normalizeToken(token)).filter(isMeaningfulReferenceToken);
   return { type, names };
 }
 
@@ -242,7 +246,7 @@ async function main(): Promise<void> {
     }
     const prerequisites = extractTokens(scienceDef.fields['PrerequisiteSciences'])
       .map((token) => normalizeToken(token))
-      .filter(Boolean);
+      .filter(isMeaningfulReferenceToken);
     for (const prerequisite of prerequisites) {
       sciencePrerequisiteEdges += 1;
       addGraphEdge(scienceGraph, ownerName, prerequisite);
@@ -261,7 +265,7 @@ async function main(): Promise<void> {
   for (const upgradeDef of bundle.upgrades) {
     const prerequisiteSciences = extractTokens(upgradeDef.fields['PrerequisiteSciences'])
       .map((token) => normalizeToken(token))
-      .filter(Boolean);
+      .filter(isMeaningfulReferenceToken);
     for (const prerequisite of prerequisiteSciences) {
       upgradePrerequisiteEdges += 1;
       if (!scienceNames.has(prerequisite)) {

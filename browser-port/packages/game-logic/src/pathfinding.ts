@@ -274,17 +274,6 @@ const DELTA_X = [1, 0, -1, 0, 1, -1, -1, 1] as const;
 const DELTA_Z = [0, 1, 0, -1, 1, 1, -1, -1] as const;
 const FIRST_DIAGONAL = 4;
 /**
- * Maps diagonal index (4..7) -> pair of orthogonal neighbor indices that
- * must be passable to allow corner-cutting.
- * Diagonal 4 (1,1)  requires orthogonal 0 (1,0) and 1 (0,1)
- * Diagonal 5 (-1,1) requires orthogonal 2 (-1,0) and 1 (0,1)
- * Diagonal 6 (-1,-1) requires orthogonal 2 (-1,0) and 3 (0,-1)
- * Diagonal 7 (1,-1)  requires orthogonal 0 (1,0) and 3 (0,-1)
- */
-const DIAGONAL_ADJ_A = [0, 1, 2, 3] as const; // adjacent[i-4]
-const DIAGONAL_ADJ_B = [1, 2, 3, 0] as const; // adjacent[i-3]
-
-/**
  * A* pathfinding on a grid.
  *
  * Matches the C++ Pathfinder::internalFindPath / examineNeighboringCells
@@ -311,6 +300,10 @@ export function findPath(
   const total = width * height;
   const maxSearch = options.maxSearchNodes ?? 500_000;
   const canPassObstacle = options.canPassObstacle ?? false;
+  const acceptableSurfaces = options.acceptableSurfaces;
+  const isPassable = options.isPassable;
+  const extraCost = options.extraCost;
+  const getTerrainHeight = options.getTerrainHeight;
 
   // Validate bounds
   if (startX < 0 || startX >= width || startZ < 0 || startZ >= height
@@ -331,12 +324,9 @@ export function findPath(
   const fCost = new Float64Array(total);
   const parent = new Int32Array(total);
   const inClosed = new Uint8Array(total);
-
-  for (let i = 0; i < total; i++) {
-    gCost[i] = Number.POSITIVE_INFINITY;
-    fCost[i] = Number.POSITIVE_INFINITY;
-    parent[i] = -1;
-  }
+  gCost.fill(MAX_PATH_COST);
+  fCost.fill(MAX_PATH_COST);
+  parent.fill(-1);
 
   gCost[startIndex] = 0;
   fCost[startIndex] = heuristic(startX, startZ, goalX, goalZ);
@@ -344,9 +334,6 @@ export function findPath(
   // Binary heap open set
   const openSet = new BinaryHeap(total, fCost);
   openSet.push(startIndex);
-
-  // Per-neighbor passability flags (for diagonal corner-cutting check)
-  const neighborPassable = new Uint8Array(8);
 
   let searched = 0;
 
@@ -386,8 +373,6 @@ export function findPath(
     }
 
     // Examine 8 neighbors
-    neighborPassable.fill(0);
-
     for (let i = 0; i < 8; i++) {
       const nx = currentX + DELTA_X[i]!;
       const nz = currentZ + DELTA_Z[i]!;
@@ -400,31 +385,16 @@ export function findPath(
       // Skip if already fully processed
       if (inClosed[neighborIndex] === 1) continue;
 
-      // Diagonal corner-cutting restriction: both adjacent orthogonals must be passable.
-      // Note: C++ has this check inside #if 0 (compiled out). We keep it as an intentional
-      // improvement — prevents units from clipping through diagonal wall corners.
-      if (i >= FIRST_DIAGONAL) {
-        const adjIdx = i - FIRST_DIAGONAL;
-        if (!neighborPassable[DIAGONAL_ADJ_A[adjIdx]!] && !neighborPassable[DIAGONAL_ADJ_B[adjIdx]!]) {
-          continue;
-        }
-      }
-
       // Surface passability check
       const cellTerrain = terrainType[neighborIndex]!;
       const cellSurfaces = surfacesForCellType(cellTerrain);
-      if ((options.acceptableSurfaces & cellSurfaces) === 0) continue;
+      if ((acceptableSurfaces & cellSurfaces) === 0) continue;
 
       // Obstacle check
       if (blocked[neighborIndex] === 1 && !canPassObstacle) continue;
 
       // Custom passability callback
-      if (options.isPassable && !options.isPassable(nx, nz)) continue;
-
-      // Mark orthogonal as passable for diagonal corner-cutting
-      if (i < FIRST_DIAGONAL) {
-        neighborPassable[i] = 1;
-      }
+      if (isPassable && !isPassable(nx, nz)) continue;
 
       // Compute step cost (orthogonal vs diagonal)
       const isDiagonal = i >= FIRST_DIAGONAL;
@@ -436,9 +406,9 @@ export function findPath(
       }
 
       // Cliff cost (matching C++: if CELL_CLIFF and height diff < cell size, add 7*COST_DIAGONAL)
-      if (cellTerrain === CellType.Cliff && pinched[neighborIndex] !== 1 && options.getTerrainHeight) {
-        const fromH = options.getTerrainHeight(currentX, currentZ);
-        const toH = options.getTerrainHeight(nx, nz);
+      if (cellTerrain === CellType.Cliff && pinched[neighborIndex] !== 1 && getTerrainHeight) {
+        const fromH = getTerrainHeight(currentX, currentZ);
+        const toH = getTerrainHeight(nx, nz);
         if (Math.abs(fromH - toH) < 10) { // PATHFIND_CELL_SIZE equivalent
           stepCost += 7 * COST_DIAGONAL;
         }
@@ -461,8 +431,8 @@ export function findPath(
       }
 
       // Extra cost callback
-      if (options.extraCost) {
-        stepCost += options.extraCost(nx, nz);
+      if (extraCost) {
+        stepCost += extraCost(nx, nz);
       }
 
       const tentativeG = currentG + stepCost;

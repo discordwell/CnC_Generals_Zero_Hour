@@ -22,6 +22,30 @@ End
     expect(obj.fields['MaxHealth']).toBe(300.0);
   });
 
+  it('parses field assignments without spaces around "="', () => {
+    const source = `
+Object TestLod
+  MinimumFPS=10
+  UseShadowVolumes=No
+End
+`;
+    const result = parseIni(source);
+    expect(result.errors).toHaveLength(0);
+    expect(result.blocks[0]!.fields['MinimumFPS']).toBe(10);
+    expect(result.blocks[0]!.fields['UseShadowVolumes']).toBe(false);
+  });
+
+  it('treats repeated "=" separators like the retail loader', () => {
+    const source = `
+Object GLADemoTrap
+  CommandSet = = GLADemoTrapCommandSet
+End
+`;
+    const result = parseIni(source);
+    expect(result.errors).toHaveLength(0);
+    expect(result.blocks[0]!.fields['CommandSet']).toBe('GLADemoTrapCommandSet');
+  });
+
   it('parses boolean fields', () => {
     const source = `
 Object TestUnit

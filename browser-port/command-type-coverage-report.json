@@ -1,52 +1,1079 @@
 {
-  "generatedAt": "2026-03-05T04:02:18.943Z",
+  "generatedAt": "2026-03-12T14:59:51.947Z",
   "bundlePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/app/public/assets/data/ini-bundle.json",
   "dispatchSourcePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/app/src/control-bar-dispatch.ts",
   "summary": {
-    "totalCommandButtons": 6,
-    "distinctBundleCommandTypes": 4,
-    "supportedBundleCommandTypes": 4,
+    "totalCommandButtons": 816,
+    "distinctBundleCommandTypes": 32,
+    "supportedBundleCommandTypes": 32,
     "unsupportedBundleCommandTypes": 0,
     "unknownBundleCommandTypes": 0,
     "dispatchHandledCommandTypes": 37
   },
   "bundleCommandTypeCoverage": [
     {
-      "sourceCommandName": "DOZER_CONSTRUCT",
-      "enumName": "GUI_COMMAND_DOZER_CONSTRUCT",
+      "sourceCommandName": "ATTACK_MOVE",
+      "enumName": "GUI_COMMAND_ATTACK_MOVE",
       "status": "supported",
       "buttonCount": 1,
       "buttonIds": [
-        "Command_ConstructRuntimePowerPlant"
+        "Command_AttackMove"
+      ]
+    },
+    {
+      "sourceCommandName": "CANCEL_UNIT_BUILD",
+      "enumName": "GUI_COMMAND_CANCEL_UNIT_BUILD",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_CancelUnitCreate"
+      ]
+    },
+    {
+      "sourceCommandName": "CANCEL_UPGRADE",
+      "enumName": "GUI_COMMAND_CANCEL_UPGRADE",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_CancelUpgradeCreate"
+      ]
+    },
+    {
+      "sourceCommandName": "COMBATDROP",
+      "enumName": "GUI_COMMAND_COMBATDROP",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_CombatDrop"
+      ]
+    },
+    {
+      "sourceCommandName": "CONVERT_TO_CARBOMB",
+      "enumName": "GUICOMMANDMODE_CONVERT_TO_CARBOMB",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_GLAInfantryTerroristMakeCarBomb"
+      ]
+    },
+    {
+      "sourceCommandName": "DOZER_CONSTRUCT",
+      "enumName": "GUI_COMMAND_DOZER_CONSTRUCT",
+      "status": "supported",
+      "buttonCount": 192,
+      "buttonIds": [
+        "AirF_Command_ConstructAmericaAirfield",
+        "AirF_Command_ConstructAmericaBarracks",
+        "AirF_Command_ConstructAmericaCommandCenter",
+        "AirF_Command_ConstructAmericaFireBase",
+        "AirF_Command_ConstructAmericaParticleCannonUplink",
+        "AirF_Command_ConstructAmericaPatriotBattery",
+        "AirF_Command_ConstructAmericaPowerPlant",
+        "AirF_Command_ConstructAmericaStrategyCenter",
+        "AirF_Command_ConstructAmericaSupplyCenter",
+        "AirF_Command_ConstructAmericaSupplyDropZone",
+        "AirF_Command_ConstructAmericaWarFactory",
+        "Boss_Command_ConstructAmericaParticleCannonUplink",
+        "Boss_Command_ConstructAmericaPatriotBattery",
+        "Boss_Command_ConstructAmericaPowerPlant",
+        "Boss_Command_ConstructChinaAirfield",
+        "Boss_Command_ConstructChinaBarracks",
+        "Boss_Command_ConstructChinaBunker",
+        "Boss_Command_ConstructChinaCommandCenter",
+        "Boss_Command_ConstructChinaGattlingCannon",
+        "Boss_Command_ConstructChinaNuclearMissileLauncher",
+        "Boss_Command_ConstructChinaSpeakerTower",
+        "Boss_Command_ConstructChinaSupplyCenter",
+        "Boss_Command_ConstructChinaWarFactory",
+        "Boss_Command_ConstructGLAScudStorm",
+        "Boss_Command_ConstructGLATunnelNetwork",
+        "Chem_Command_ConstructFakeGLAArmsDealer",
+        "Chem_Command_ConstructFakeGLABarracks",
+        "Chem_Command_ConstructFakeGLABlackMarket",
+        "Chem_Command_ConstructFakeGLACommandCenter",
+        "Chem_Command_ConstructFakeGLASupplyStash",
+        "Chem_Command_ConstructGLAArmsDealer",
+        "Chem_Command_ConstructGLABarracks",
+        "Chem_Command_ConstructGLABlackMarket",
+        "Chem_Command_ConstructGLACommandCenter",
+        "Chem_Command_ConstructGLADemoTrap",
+        "Chem_Command_ConstructGLAPalace",
+        "Chem_Command_ConstructGLAScudStorm",
+        "Chem_Command_ConstructGLAStingerSite",
+        "Chem_Command_ConstructGLASupplyStash",
+        "Chem_Command_ConstructGLATunnelNetwork",
+        "Command_ConstructAmericaAirfield",
+        "Command_ConstructAmericaBarracks",
+        "Command_ConstructAmericaCommandCenter",
+        "Command_ConstructAmericaFireBase",
+        "Command_ConstructAmericaParticleCannonUplink",
+        "Command_ConstructAmericaPatriotBattery",
+        "Command_ConstructAmericaPowerPlant",
+        "Command_ConstructAmericaStrategyCenter",
+        "Command_ConstructAmericaSupplyCenter",
+        "Command_ConstructAmericaSupplyDropZone",
+        "Command_ConstructAmericaWall",
+        "Command_ConstructAmericaWarFactory",
+        "Command_ConstructChinaAirfield",
+        "Command_ConstructChinaBarracks",
+        "Command_ConstructChinaBunker",
+        "Command_ConstructChinaCommandCenter",
+        "Command_ConstructChinaConcreteWall",
+        "Command_ConstructChinaGattlingCannon",
+        "Command_ConstructChinaInternetCenter",
+        "Command_ConstructChinaNuclearMissileLauncher",
+        "Command_ConstructChinaPowerPlant",
+        "Command_ConstructChinaPropagandaCenter",
+        "Command_ConstructChinaSpeakerTower",
+        "Command_ConstructChinaSupplyCenter",
+        "Command_ConstructChinaWarFactory",
+        "Command_ConstructFakeGLAArmsDealer",
+        "Command_ConstructFakeGLABarracks",
+        "Command_ConstructFakeGLABlackMarket",
+        "Command_ConstructFakeGLACommandCenter",
+        "Command_ConstructFakeGLASupplyStash",
+        "Command_ConstructGLAArmsDealer",
+        "Command_ConstructGLABarracks",
+        "Command_ConstructGLABlackMarket",
+        "Command_ConstructGLABurningBarricade",
+        "Command_ConstructGLACommandCenter",
+        "Command_ConstructGLADemoTrap",
+        "Command_ConstructGLAPalace",
+        "Command_ConstructGLAScudStorm",
+        "Command_ConstructGLAStingerSite",
+        "Command_ConstructGLASupplyStash",
+        "Command_ConstructGLATunnelNetwork",
+        "Demo_Command_ConstructFakeGLAArmsDealer",
+        "Demo_Command_ConstructFakeGLABarracks",
+        "Demo_Command_ConstructFakeGLABlackMarket",
+        "Demo_Command_ConstructFakeGLACommandCenter",
+        "Demo_Command_ConstructFakeGLASupplyStash",
+        "Demo_Command_ConstructGLAArmsDealer",
+        "Demo_Command_ConstructGLABarracks",
+        "Demo_Command_ConstructGLABlackMarket",
+        "Demo_Command_ConstructGLACommandCenter",
+        "Demo_Command_ConstructGLADemoTrap",
+        "Demo_Command_ConstructGLAPalace",
+        "Demo_Command_ConstructGLAScudStorm",
+        "Demo_Command_ConstructGLAStingerSite",
+        "Demo_Command_ConstructGLASupplyStash",
+        "Demo_Command_ConstructGLATunnelNetwork",
+        "GC_Chem_Command_ConstructGLAArmsDealer",
+        "GC_Chem_Command_ConstructGLABarracks",
+        "GC_Chem_Command_ConstructGLABlackMarket",
+        "GC_Chem_Command_ConstructGLACommandCenter",
+        "GC_Chem_Command_ConstructGLADemoTrap",
+        "GC_Chem_Command_ConstructGLAPalace",
+        "GC_Chem_Command_ConstructGLAScudStorm",
+        "GC_Chem_Command_ConstructGLAStingerSite",
+        "GC_Chem_Command_ConstructGLASupplyStash",
+        "GC_Chem_Command_ConstructGLATunnelNetwork",
+        "GC_Slth_Command_ConstructGLAArmsDealer",
+        "GC_Slth_Command_ConstructGLABarracks",
+        "GC_Slth_Command_ConstructGLABlackMarket",
+        "GC_Slth_Command_ConstructGLACommandCenter",
+        "GC_Slth_Command_ConstructGLADemoTrap",
+        "GC_Slth_Command_ConstructGLAPalace",
+        "GC_Slth_Command_ConstructGLAScudStorm",
+        "GC_Slth_Command_ConstructGLAStingerSite",
+        "GC_Slth_Command_ConstructGLASupplyStash",
+        "GC_Slth_Command_ConstructGLATunnelNetwork",
+        "Infa_Command_ConstructChinaAirfield",
+        "Infa_Command_ConstructChinaBarracks",
+        "Infa_Command_ConstructChinaBunker",
+        "Infa_Command_ConstructChinaCommandCenter",
+        "Infa_Command_ConstructChinaGattlingCannon",
+        "Infa_Command_ConstructChinaInternetCenter",
+        "Infa_Command_ConstructChinaNuclearMissileLauncher",
+        "Infa_Command_ConstructChinaPowerPlant",
+        "Infa_Command_ConstructChinaPropagandaCenter",
+        "Infa_Command_ConstructChinaSpeakerTower",
+        "Infa_Command_ConstructChinaSupplyCenter",
+        "Infa_Command_ConstructChinaWarFactory",
+        "Lazr_Command_ConstructAmericaAirfield",
+        "Lazr_Command_ConstructAmericaBarracks",
+        "Lazr_Command_ConstructAmericaCommandCenter",
+        "Lazr_Command_ConstructAmericaFireBase",
+        "Lazr_Command_ConstructAmericaParticleCannonUplink",
+        "Lazr_Command_ConstructAmericaPatriotBattery",
+        "Lazr_Command_ConstructAmericaPowerPlant",
+        "Lazr_Command_ConstructAmericaStrategyCenter",
+        "Lazr_Command_ConstructAmericaSupplyCenter",
+        "Lazr_Command_ConstructAmericaSupplyDropZone",
+        "Lazr_Command_ConstructAmericaWarFactory",
+        "Lazr_Command_ConstructLaserCannon",
+        "Nuke_Command_ConstructChinaAirfield",
+        "Nuke_Command_ConstructChinaBarracks",
+        "Nuke_Command_ConstructChinaBunker",
+        "Nuke_Command_ConstructChinaCommandCenter",
+        "Nuke_Command_ConstructChinaGattlingCannon",
+        "Nuke_Command_ConstructChinaInternetCenter",
+        "Nuke_Command_ConstructChinaNuclearMissileLauncher",
+        "Nuke_Command_ConstructChinaPowerPlant",
+        "Nuke_Command_ConstructChinaPropagandaCenter",
+        "Nuke_Command_ConstructChinaSpeakerTower",
+        "Nuke_Command_ConstructChinaSupplyCenter",
+        "Nuke_Command_ConstructChinaWarFactory",
+        "Slth_Command_ConstructFakeGLAArmsDealer",
+        "Slth_Command_ConstructFakeGLABarracks",
+        "Slth_Command_ConstructFakeGLABlackMarket",
+        "Slth_Command_ConstructFakeGLACommandCenter",
+        "Slth_Command_ConstructFakeGLASupplyStash",
+        "Slth_Command_ConstructGLAArmsDealer",
+        "Slth_Command_ConstructGLABarracks",
+        "Slth_Command_ConstructGLABlackMarket",
+        "Slth_Command_ConstructGLACommandCenter",
+        "Slth_Command_ConstructGLADemoTrap",
+        "Slth_Command_ConstructGLAPalace",
+        "Slth_Command_ConstructGLAScudStorm",
+        "Slth_Command_ConstructGLAStingerSite",
+        "Slth_Command_ConstructGLASupplyStash",
+        "Slth_Command_ConstructGLATunnelNetwork",
+        "SupW_Command_ConstructAmericaAirfield",
+        "SupW_Command_ConstructAmericaBarracks",
+        "SupW_Command_ConstructAmericaCommandCenter",
+        "SupW_Command_ConstructAmericaCruiseMissileLauncher",
+        "SupW_Command_ConstructAmericaFireBase",
+        "SupW_Command_ConstructAmericaNuclearMissileLauncher",
+        "SupW_Command_ConstructAmericaParticleCannonUplink",
+        "SupW_Command_ConstructAmericaPatriotBattery",
+        "SupW_Command_ConstructAmericaPowerPlant",
+        "SupW_Command_ConstructAmericaStrategyCenter",
+        "SupW_Command_ConstructAmericaSupplyCenter",
+        "SupW_Command_ConstructAmericaSupplyDropZone",
+        "SupW_Command_ConstructAmericaWarFactory",
+        "Tank_Command_ConstructChinaAirfield",
+        "Tank_Command_ConstructChinaBarracks",
+        "Tank_Command_ConstructChinaBunker",
+        "Tank_Command_ConstructChinaCommandCenter",
+        "Tank_Command_ConstructChinaGattlingCannon",
+        "Tank_Command_ConstructChinaInternetCenter",
+        "Tank_Command_ConstructChinaNuclearMissileLauncher",
+        "Tank_Command_ConstructChinaPowerPlant",
+        "Tank_Command_ConstructChinaPropagandaCenter",
+        "Tank_Command_ConstructChinaSpeakerTower",
+        "Tank_Command_ConstructChinaSupplyCenter",
+        "Tank_Command_ConstructChinaWarFactory"
+      ]
+    },
+    {
+      "sourceCommandName": "DOZER_CONSTRUCT_CANCEL",
+      "enumName": "GUI_COMMAND_DOZER_CONSTRUCT_CANCEL",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_CancelConstruction"
+      ]
+    },
+    {
+      "sourceCommandName": "EVACUATE",
+      "enumName": "GUI_COMMAND_EVACUATE",
+      "status": "supported",
+      "buttonCount": 4,
+      "buttonIds": [
+        "Command_ChinookUnload",
+        "Command_EmptyCrawler",
+        "Command_Evacuate",
+        "Command_ScuttleCombatBike"
+      ]
+    },
+    {
+      "sourceCommandName": "EXECUTE_RAILED_TRANSPORT",
+      "enumName": "GUI_COMMAND_EXECUTE_RAILED_TRANSPORT",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_ExecuteRailedTransport"
+      ]
+    },
+    {
+      "sourceCommandName": "EXIT_CONTAINER",
+      "enumName": "GUI_COMMAND_EXIT_CONTAINER",
+      "status": "supported",
+      "buttonCount": 4,
+      "buttonIds": [
+        "Command_BunkerExit",
+        "Command_FireBaseExit",
+        "Command_StructureExit",
+        "Command_TransportExit"
+      ]
+    },
+    {
+      "sourceCommandName": "FIRE_WEAPON",
+      "enumName": "GUI_COMMAND_FIRE_WEAPON",
+      "status": "supported",
+      "buttonCount": 15,
+      "buttonIds": [
+        "Command_AircraftCarrierFire",
+        "Command_AmericaVehicleComancheFireRocketPods",
+        "Command_BattleshipFire",
+        "Command_BombTruckDetonateNow",
+        "Command_ChinaDragonTankFireWall",
+        "Command_ChinaJetMIGFireNapalmMissile",
+        "Command_ChinaTankECMDisableVehicle",
+        "Command_ColonelBurtonKnifeAttack",
+        "Command_DetonateConvoyTruckNuke",
+        "Command_DetonateFakeBuilding",
+        "Command_DisarmMinesAtPosition",
+        "Command_GLAInfantryJarmenKellSnipeVehicleAttack",
+        "Command_GLAToxinTractorContaminateGround",
+        "Demo_Command_TertiarySuicide",
+        "Slth_Command_BattleBusBuildSlthTrap"
+      ]
+    },
+    {
+      "sourceCommandName": "GUARD",
+      "enumName": "GUI_COMMAND_GUARD",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_Guard"
+      ]
+    },
+    {
+      "sourceCommandName": "GUARD_FLYING_UNITS_ONLY",
+      "enumName": "GUI_COMMAND_GUARD_FLYING_UNITS_ONLY",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_GuardFlyingUnitsOnly"
+      ]
+    },
+    {
+      "sourceCommandName": "GUARD_WITHOUT_PURSUIT",
+      "enumName": "GUI_COMMAND_GUARD_WITHOUT_PURSUIT",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_GuardWithoutPursuit"
+      ]
+    },
+    {
+      "sourceCommandName": "HACK_INTERNET",
+      "enumName": "GUI_COMMAND_HACK_INTERNET",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_ChinaInfantryHackerInternetHack"
+      ]
+    },
+    {
+      "sourceCommandName": "HIJACK_VEHICLE",
+      "enumName": "GUICOMMANDMODE_HIJACK_VEHICLE",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_GLAInfantryHijack"
+      ]
+    },
+    {
+      "sourceCommandName": "OBJECT_UPGRADE",
+      "enumName": "GUI_COMMAND_OBJECT_UPGRADE",
+      "status": "supported",
+      "buttonCount": 35,
+      "buttonIds": [
+        "Command_BecomeRealGLAArmsDealer",
+        "Command_BecomeRealGLABarracks",
+        "Command_BecomeRealGLABlackMarket",
+        "Command_BecomeRealGLACommandCenter",
+        "Command_BecomeRealGLASupplyStash",
+        "Command_ConstructAmericaVehicleBattleDrone",
+        "Command_ConstructAmericaVehicleHellfireDrone",
+        "Command_ConstructAmericaVehicleScoutDrone",
+        "Command_UpgradeAmericaAdvancedControlRods",
+        "Command_UpgradeCamoNetting",
+        "Command_UpgradeChinaHelixBattleBunker",
+        "Command_UpgradeChinaHelixGattlingCannon",
+        "Command_UpgradeChinaHelixNapalmBomb",
+        "Command_UpgradeChinaHelixPropagandaTower",
+        "Command_UpgradeChinaMines",
+        "Command_UpgradeChinaOverlordBattleBunker",
+        "Command_UpgradeChinaOverlordGattlingCannon",
+        "Command_UpgradeChinaOverlordPropagandaTower",
+        "Command_UpgradeChinaRadar",
+        "Command_UpgradeEMPMines",
+        "Command_UpgradeGLABombTruckBioBomb",
+        "Command_UpgradeGLABombTruckHighExplosiveBomb",
+        "Command_UpgradeGLACamoNetting",
+        "Command_UpgradeGLAWorkerFakeCommandSet",
+        "Command_UpgradeGLAWorkerRealCommandSet",
+        "Lazr_Command_ConstructAmericaVehicleBattleDrone",
+        "Lazr_Command_ConstructAmericaVehicleHellfireDrone",
+        "Lazr_Command_ConstructAmericaVehicleScoutDrone",
+        "Nuke_Command_UpgradeChinaHelixNukeBomb",
+        "SupW_Command_ConstructAmericaVehicleBattleDrone",
+        "SupW_Command_ConstructAmericaVehicleHellfireDrone",
+        "SupW_Command_ConstructAmericaVehiclePointDefenseDrone",
+        "SupW_Command_ConstructAmericaVehicleScoutDrone",
+        "SupW_Command_UpgradeAmericaAdvancedControlRods",
+        "Tank_Command_UpgradeChinaOverlordGattlingCannon"
+      ]
+    },
+    {
+      "sourceCommandName": "PLACE_BEACON",
+      "enumName": "GUICOMMANDMODE_PLACE_BEACON",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_PlaceBeacon"
       ]
     },
     {
       "sourceCommandName": "PLAYER_UPGRADE",
       "enumName": "GUI_COMMAND_PLAYER_UPGRADE",
       "status": "supported",
+      "buttonCount": 58,
+      "buttonIds": [
+        "AirF_Command_UpgradeAmericaSentryDroneGun",
+        "AirF_Command_UpgradeStealthComanche",
+        "Boss_Command_UpgradeChinaNationalism",
+        "Chem_Command_UpgradeGLAAnthraxGamma",
+        "Chem_Command_UpgradeGLAAPBullets",
+        "Command_UpgradeAmericaAdvancedTraining",
+        "Command_UpgradeAmericaBunkerBusters",
+        "Command_UpgradeAmericaChemicalSuits",
+        "Command_UpgradeAmericaCompositeArmor",
+        "Command_UpgradeAmericaCountermeasures",
+        "Command_UpgradeAmericaDroneArmor",
+        "Command_UpgradeAmericaLaserMissiles",
+        "Command_UpgradeAmericaMOAB",
+        "Command_UpgradeAmericaRangerCaptureBuilding",
+        "Command_UpgradeAmericaRangerFlashBangGrenade",
+        "Command_UpgradeAmericaSentryDroneGun",
+        "Command_UpgradeAmericaSupplyLines",
+        "Command_UpgradeAmericaTOWMissile",
+        "Command_UpgradeChinaAircraftArmor",
+        "Command_UpgradeChinaBlackNapalm",
+        "Command_UpgradeChinaChainGuns",
+        "Command_UpgradeChinaFanaticism",
+        "Command_UpgradeChinaNationalism",
+        "Command_UpgradeChinaNeutronShells",
+        "Command_UpgradeChinaNuclearTanks",
+        "Command_UpgradeChinaRedguardCaptureBuilding",
+        "Command_UpgradeChinaSatelliteHackOne",
+        "Command_UpgradeChinaSatelliteHackTwo",
+        "Command_UpgradeChinaSubliminalMessaging",
+        "Command_UpgradeChinaTacticalNukeMig",
+        "Command_UpgradeChinaUraniumShells",
+        "Command_UpgradeComancheRocketPods",
+        "Command_UpgradeGLAAnthraxBeta",
+        "Command_UpgradeGLAAPBullets",
+        "Command_UpgradeGLAAPRockets",
+        "Command_UpgradeGLAArmTheMob",
+        "Command_UpgradeGLABuggyAmmo",
+        "Command_UpgradeGLACamouflage",
+        "Command_UpgradeGLAFortifiedStructure",
+        "Command_UpgradeGLAInfantryRebelBoobyTrapAttack",
+        "Command_UpgradeGLAJunkRepair",
+        "Command_UpgradeGLARadarVanScan",
+        "Command_UpgradeGLARebelCaptureBuilding",
+        "Command_UpgradeGLAScorpionRocket",
+        "Command_UpgradeGLAToxinShells",
+        "Command_UpgradeGLAWorkerShoes",
+        "Demo_Command_UpgradeGLADemoTrapHighExplosiveBomb",
+        "Demo_UpgradeSuicideBomb",
+        "GC_Chem_Command_UpgradeGLAAnthraxGamma",
+        "GC_Slth_Command_UpgradeGLAQuadCannonSnipeGun",
+        "Infa_Command_UpgradeChinaAircraftArmor",
+        "Infa_Command_UpgradeChinaRedguardCaptureBuilding",
+        "Nuke_Command_UpgradeChinaFusionReactors",
+        "Nuke_Command_UpgradeChinaIsotopeStability",
+        "Nuke_Command_UpgradeChinaWGUraniumShells",
+        "Tank_Command_UpgradeChinaAutoLoader",
+        "Tank_Command_UpgradeChinaNuclearTanks",
+        "Tank_Command_UpgradeChinaUraniumShells"
+      ]
+    },
+    {
+      "sourceCommandName": "PURCHASE_SCIENCE",
+      "enumName": "GUI_COMMAND_PURCHASE_SCIENCE",
+      "status": "supported",
+      "buttonCount": 81,
+      "buttonIds": [
+        "AirF_Command_PurchaseScienceA10ThunderboltMissileStrike1",
+        "AirF_Command_PurchaseScienceA10ThunderboltMissileStrike2",
+        "AirF_Command_PurchaseScienceA10ThunderboltMissileStrike3",
+        "Chem_Command_PurchaseScienceMarauderTank",
+        "Chem_Command_PurchaseScienceRebelAmbush1",
+        "Chem_Command_PurchaseScienceRebelAmbush2",
+        "Chem_Command_PurchaseScienceRebelAmbush3",
+        "Chem_Command_PurchaseScienceTechnicalTraining",
+        "Command_FAKECOMMAND_PurchaseScienceMOAB",
+        "Command_PurchaseScienceA10ThunderboltMissileStrike1",
+        "Command_PurchaseScienceA10ThunderboltMissileStrike2",
+        "Command_PurchaseScienceA10ThunderboltMissileStrike3",
+        "Command_PurchaseScienceAnthraxBomb",
+        "Command_PurchaseScienceArtilleryBarrage1",
+        "Command_PurchaseScienceArtilleryBarrage2",
+        "Command_PurchaseScienceArtilleryBarrage3",
+        "Command_PurchaseScienceArtilleryTraining",
+        "Command_PurchaseScienceBattlemasterTraining",
+        "Command_PurchaseScienceCarpetBomb",
+        "Command_PurchaseScienceCashBounty1",
+        "Command_PurchaseScienceCashBounty2",
+        "Command_PurchaseScienceCashBounty3",
+        "Command_PurchaseScienceCashHack1",
+        "Command_PurchaseScienceCashHack2",
+        "Command_PurchaseScienceCashHack3",
+        "Command_PurchaseScienceClusterMines",
+        "Command_PurchaseScienceDaisyCutter",
+        "Command_PurchaseScienceEmergencyRepair1",
+        "Command_PurchaseScienceEmergencyRepair2",
+        "Command_PurchaseScienceEmergencyRepair3",
+        "Command_PurchaseScienceEMPPulse",
+        "Command_PurchaseScienceFrenzy1",
+        "Command_PurchaseScienceFrenzy2",
+        "Command_PurchaseScienceFrenzy3",
+        "Command_PurchaseScienceGPSScrambler",
+        "Command_PurchaseScienceHijacker",
+        "Command_PurchaseScienceLeafletDrop",
+        "Command_PurchaseScienceMarauderTank",
+        "Command_PurchaseScienceNukeLauncher",
+        "Command_PurchaseSciencePaladinTank",
+        "Command_PurchaseScienceParadrop1",
+        "Command_PurchaseScienceParadrop2",
+        "Command_PurchaseScienceParadrop3",
+        "Command_PurchaseSciencePathfinder",
+        "Command_PurchaseScienceRebelAmbush1",
+        "Command_PurchaseScienceRebelAmbush2",
+        "Command_PurchaseScienceRebelAmbush3",
+        "Command_PurchaseScienceRedGuardTraining",
+        "Command_PurchaseScienceScudLauncher",
+        "Command_PurchaseScienceSneakAttack",
+        "Command_PurchaseScienceSpectreGunship",
+        "Command_PurchaseScienceSpectreGunship1",
+        "Command_PurchaseScienceSpectreGunship2",
+        "Command_PurchaseScienceSpectreGunship3",
+        "Command_PurchaseScienceSpyDrone",
+        "Command_PurchaseScienceStealthFighter",
+        "Command_PurchaseScienceTechnicalTraining",
+        "Early_Command_PurchaseScienceCarpetBomb",
+        "Early_Command_PurchaseScienceEmergencyRepair1",
+        "Early_Command_PurchaseScienceEmergencyRepair2",
+        "Early_Command_PurchaseScienceEmergencyRepair3",
+        "Early_Command_PurchaseScienceFrenzy1",
+        "Early_Command_PurchaseScienceFrenzy2",
+        "Early_Command_PurchaseScienceFrenzy3",
+        "Early_Command_PurchaseScienceLeafletDrop",
+        "GC_Chem_Command_PurchaseScienceRebelAmbush1",
+        "GC_Chem_Command_PurchaseScienceRebelAmbush2",
+        "GC_Chem_Command_PurchaseScienceRebelAmbush3",
+        "Infa_Command_PurchaseScienceInfantryParadrop1",
+        "Infa_Command_PurchaseScienceInfantryParadrop2",
+        "Infa_Command_PurchaseScienceInfantryParadrop3",
+        "Infa_Command_PurchaseScienceRedGuardTraining",
+        "Nuke_Command_PurchaseScienceCarpetBomb",
+        "Nuke_Command_PurchaseScienceNukeDrop",
+        "Slth_Command_PurchaseScienceGPSScrambler",
+        "Tank_Command_PurchaseScienceBattlemasterTraining",
+        "Tank_Command_PurchaseScienceGattlingTankTraining",
+        "Tank_Command_PurchaseScienceOverlordTraining",
+        "Tank_Command_PurchaseScienceTankParadrop1",
+        "Tank_Command_PurchaseScienceTankParadrop2",
+        "Tank_Command_PurchaseScienceTankParadrop3"
+      ]
+    },
+    {
+      "sourceCommandName": "SABOTAGE_BUILDING",
+      "enumName": "GUICOMMANDMODE_SABOTAGE_BUILDING",
+      "status": "supported",
       "buttonCount": 1,
       "buttonIds": [
-        "Command_UpgradeRuntimeArmor"
+        "Command_SabotageBuilding"
+      ]
+    },
+    {
+      "sourceCommandName": "SELECT_ALL_UNITS_OF_TYPE",
+      "enumName": "GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_SelectAircraftCarriersFromShortcut"
+      ]
+    },
+    {
+      "sourceCommandName": "SELL",
+      "enumName": "GUI_COMMAND_SELL",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_Sell"
+      ]
+    },
+    {
+      "sourceCommandName": "SET_RALLY_POINT",
+      "enumName": "GUI_COMMAND_SET_RALLY_POINT",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_SetRallyPoint"
       ]
     },
     {
       "sourceCommandName": "SPECIAL_POWER",
       "enumName": "GUI_COMMAND_SPECIAL_POWER",
       "status": "supported",
+      "buttonCount": 83,
+      "buttonIds": [
+        "AirF_Command_A10ThunderboltMissileStrike",
+        "AirF_Command_AmericaMissileDefenderLaserGuidedMissiles",
+        "AirF_Command_CarpetBomb",
+        "AirF_Command_DaisyCutter",
+        "AirF_Command_SpectreGunship",
+        "Chem_Command_Ambush",
+        "Command_A10ThunderboltMissileStrike",
+        "Command_AmbulanceCleanupArea",
+        "Command_Ambush",
+        "Command_AmericaMissileDefenderLaserGuidedMissiles",
+        "Command_AmericaRangerCaptureBuilding",
+        "Command_AmericaTankMicrowaveDisableBuilding",
+        "Command_AnthraxBomb",
+        "Command_ArtilleryBarrage",
+        "Command_BattleshipFireViaSpecialPower",
+        "Command_CarpetBomb",
+        "Command_CashHack",
+        "Command_ChinaCarpetBomb",
+        "Command_ChinaHelixDropNapalmBomb",
+        "Command_ChinaInfantryBlackLotusCaptureHack",
+        "Command_ChinaInfantryBlackLotusCashHack",
+        "Command_ChinaInfantryBlackLotusVehicleHack",
+        "Command_ChinaInfantryHackerDisableBuilding",
+        "Command_ChinaInfantryRedGuardCaptureBuilding",
+        "Command_ChinaInfantryTankHunterTNTAttack",
+        "Command_CIAAgentDetonateCharges",
+        "Command_CIAAgentRemoteDemoCharge",
+        "Command_CIAAgentTimedDemoCharge",
+        "Command_CIAIntelligence",
+        "Command_ClusterMines",
+        "Command_ColonelBurtonDetonateCharges",
+        "Command_ColonelBurtonRemoteDemoCharge",
+        "Command_ColonelBurtonTimedDemoCharge",
+        "Command_CommunicationsDownload",
+        "Command_CrateDrop",
+        "Command_DaisyCutter",
+        "Command_DetonateBaikonurRocketAtLocation",
+        "Command_DisguiseAsVehicle",
+        "Command_EmergencyRepair",
+        "Command_EMPPulse",
+        "Command_FireParticleUplinkCannon",
+        "Command_Frenzy",
+        "Command_GLAInfantryRebelBoobyTrapAttack",
+        "Command_GLAInfantryRebelCaptureBuilding",
+        "Command_GPSScrambler",
+        "Command_InitiateBattlePlanBombardment",
+        "Command_InitiateBattlePlanHoldTheLine",
+        "Command_InitiateBattlePlanSearchAndDestroy",
+        "Command_LaunchBaikonurRocket",
+        "Command_LeafletDrop",
+        "Command_NapalmStrike",
+        "Command_NeutronMissile",
+        "Command_Paradrop",
+        "Command_RadarVanScan",
+        "Command_ScudStorm",
+        "Command_SpectreGunship",
+        "Command_SpyDrone",
+        "Command_SpySatelliteScan",
+        "Command_TerrorCell",
+        "Demo_Command_KellDetonateCharges",
+        "Demo_Command_KellRemoteDemoCharge",
+        "Demo_Command_KellTimedDemoCharge",
+        "Demo_Command_RebelTimedDemoCharge",
+        "Early_Command_ChinaCarpetBomb",
+        "Early_Command_EmergencyRepair",
+        "Early_Command_Frenzy",
+        "Early_Command_LeafletDrop",
+        "GC_Chem_Command_Ambush",
+        "GC_Slth_Command_DisguiseAsVehicle",
+        "Infa_Command_ChinaInfantryHackerVehicleHack",
+        "Infa_Command_Paradrop",
+        "Lazr_Command_AmericaLaserGuidedHowitzer",
+        "Lazr_Command_FireLaserCannon",
+        "Nuke_Command_ChinaCarpetBomb",
+        "Nuke_Command_ChinaHelixDropNukeBomb",
+        "Nuke_Command_NeutronMissile",
+        "Nuke_Command_NukeDrop",
+        "Slth_Command_DisguiseAsVehicle",
+        "Slth_Command_GPSScrambler",
+        "SupW_Command_CruiseMissile",
+        "SupW_Command_FireParticleUplinkCannon",
+        "SupW_Command_NeutronMissile",
+        "Tank_Command_TankParadrop"
+      ]
+    },
+    {
+      "sourceCommandName": "SPECIAL_POWER_CONSTRUCT",
+      "enumName": "GUI_COMMAND_SPECIAL_POWER_CONSTRUCT",
+      "status": "supported",
       "buttonCount": 1,
       "buttonIds": [
-        "Command_UseRuntimeScan"
+        "Command_SneakAttack"
+      ]
+    },
+    {
+      "sourceCommandName": "SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT",
+      "enumName": "GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_SneakAttackFromShortcut"
+      ]
+    },
+    {
+      "sourceCommandName": "SPECIAL_POWER_FROM_SHORTCUT",
+      "enumName": "GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT",
+      "status": "supported",
+      "buttonCount": 47,
+      "buttonIds": [
+        "AirF_Command_A10ThunderboltMissileStrikeFromShortcut",
+        "AirF_Command_CarpetBombFromShortcut",
+        "AirF_Command_DaisyCutterFromShortcut",
+        "AirF_Command_SpectreGunshipFromShortcut",
+        "Chem_Command_AmbushFromShortcut",
+        "Command_A10ThunderboltMissileStrikeFromShortcut",
+        "Command_AmbushFromShortcut",
+        "Command_AnthraxBombFromShortcut",
+        "Command_ArtilleryBarrageFromShortcut",
+        "Command_CarpetBombFromShortcut",
+        "Command_CashHackFromShortcut",
+        "Command_ChinaCarpetBombFromShortcut",
+        "Command_CIAIntelligenceFromShortcut",
+        "Command_ClusterMinesFromShortcut",
+        "Command_CommunicationsDownloadFromShortcut",
+        "Command_CrateDropFromShortcut",
+        "Command_DaisyCutterFromShortcut",
+        "Command_EmergencyRepairFromShortcut",
+        "Command_EMPPulseFromShortcut",
+        "Command_FireParticleUplinkCannonFromShortcut",
+        "Command_FrenzyFromShortcut",
+        "Command_GPSScramblerFromShortcut",
+        "Command_LeafletDropFromShortcut",
+        "Command_NapalmStrikeFromShortcut",
+        "Command_NeutronMissileFromShortcut",
+        "Command_ParadropFromShortcut",
+        "Command_RadarVanScanFromShortcut",
+        "Command_ScudStormFromShortcut",
+        "Command_SelectBattleshipsFromShortcut",
+        "Command_SpectreGunshipFromShortcut",
+        "Command_SpyDroneFromShortcut",
+        "Command_SpySatelliteScanFromShortcut",
+        "Early_Command_ChinaCarpetBombFromShortcut",
+        "Early_Command_EmergencyRepairFromShortcut",
+        "Early_Command_FrenzyFromShortcut",
+        "Early_Command_LeafletDropFromShortcut",
+        "GC_Chem_Command_AmbushFromShortcut",
+        "Infa_Command_ParadropFromShortcut",
+        "Lazr_Command_FireLaserCannonFromShortcut",
+        "Nuke_Command_ChinaCarpetBombFromShortcut",
+        "Nuke_Command_NeutronMissileFromShortcut",
+        "Nuke_Command_NukeDropFromShortcut",
+        "Slth_Command_GPSScramblerFromShortcut",
+        "SupW_Command_CruiseMissileFromShortcut",
+        "SupW_Command_FireParticleUplinkCannonFromShortcut",
+        "SupW_Command_NeutronMissileFromShortcut",
+        "Tank_Command_TankParadropFromShortcut"
+      ]
+    },
+    {
+      "sourceCommandName": "STOP",
+      "enumName": "GUI_COMMAND_STOP",
+      "status": "supported",
+      "buttonCount": 2,
+      "buttonIds": [
+        "Command_Stop",
+        "Command_StrategyCenter_Stop"
+      ]
+    },
+    {
+      "sourceCommandName": "SWITCH_WEAPON",
+      "enumName": "GUI_COMMAND_SWITCH_WEAPON",
+      "status": "supported",
+      "buttonCount": 9,
+      "buttonIds": [
+        "Command_AmericaRangerSwitchToFlagBangGrenades",
+        "Command_AmericaRangerSwitchToMachineGun",
+        "Command_ChinaNeutronWarhead",
+        "Command_ChinaNukeWarhead",
+        "Command_DetonateDemoTrap",
+        "Command_GLAAnthraxWarhead",
+        "Command_GLAExplosiveWarhead",
+        "Command_SetDemoTrapManualDetonation",
+        "Command_SetDemoTrapProximityDetonation"
+      ]
+    },
+    {
+      "sourceCommandName": "TOGGLE_OVERCHARGE",
+      "enumName": "GUI_COMMAND_TOGGLE_OVERCHARGE",
+      "status": "supported",
+      "buttonCount": 1,
+      "buttonIds": [
+        "Command_Overcharge"
       ]
     },
     {
       "sourceCommandName": "UNIT_BUILD",
       "enumName": "GUI_COMMAND_UNIT_BUILD",
       "status": "supported",
-      "buttonCount": 3,
+      "buttonCount": 259,
       "buttonIds": [
-        "Command_BuildRuntimeInfantry",
-        "Command_BuildRuntimeMissileTank",
-        "Command_BuildRuntimeTank"
+        "AirF_Command_ConstructAFGChinook",
+        "AirF_Command_ConstructAmericaDozer",
+        "AirF_Command_ConstructAmericaInfantryColonelBurton",
+        "AirF_Command_ConstructAmericaInfantryMissileDefender",
+        "AirF_Command_ConstructAmericaInfantryPathfinder",
+        "AirF_Command_ConstructAmericaInfantryRanger",
+        "AirF_Command_ConstructAmericaJetAurora",
+        "AirF_Command_ConstructAmericaJetRaptor",
+        "AirF_Command_ConstructAmericaJetStealthFighter",
+        "AirF_Command_ConstructAmericaVehicleAvenger",
+        "AirF_Command_ConstructAmericaVehicleBattleDrone",
+        "AirF_Command_ConstructAmericaVehicleChinook",
+        "AirF_Command_ConstructAmericaVehicleComanche",
+        "AirF_Command_ConstructAmericaVehicleHumvee",
+        "AirF_Command_ConstructAmericaVehicleMedic",
+        "AirF_Command_ConstructAmericaVehicleMicrowave",
+        "AirF_Command_ConstructAmericaVehicleSentryDrone",
+        "AirF_Command_ConstructAmericaVehicleTomahawk",
+        "Boss_Command_ConstructAmericaInfantryColonelBurton",
+        "Boss_Command_ConstructAmericaInfantryPathfinder",
+        "Boss_Command_ConstructAmericaInfantryRanger",
+        "Boss_Command_ConstructAmericaJetAurora",
+        "Boss_Command_ConstructAmericaJetRaptor",
+        "Boss_Command_ConstructAmericaVehicleAvenger",
+        "Boss_Command_ConstructAmericaVehiclePaladin",
+        "Boss_Command_ConstructAmericaVehicleSentryDrone",
+        "Boss_Command_ConstructAmericaVehicleTomahawk",
+        "Boss_Command_ConstructChinaDozer",
+        "Boss_Command_ConstructChinaInfantryBlackLotus",
+        "Boss_Command_ConstructChinaInfantryHacker",
+        "Boss_Command_ConstructChinaInfantryTankHunter",
+        "Boss_Command_ConstructChinaJetMIG",
+        "Boss_Command_ConstructChinaTankDragon",
+        "Boss_Command_ConstructChinaTankGattling",
+        "Boss_Command_ConstructChinaTankOverlord",
+        "Boss_Command_ConstructChinaVehicleHelix",
+        "Boss_Command_ConstructChinaVehicleSupplyTruck",
+        "Boss_Command_ConstructGLAInfantryAngryMob",
+        "Boss_Command_ConstructGLAInfantryJarmenKell",
+        "Boss_Command_ConstructGLAVehicleCombatBikeTerrorist",
+        "Boss_Command_ConstructGLAVehicleRocketBuggy",
+        "Chem_Command_ConstructGLAInfantryAngryMob",
+        "Chem_Command_ConstructGLAInfantryJarmenKell",
+        "Chem_Command_ConstructGLAInfantryRebel",
+        "Chem_Command_ConstructGLAInfantryRPGTrooper",
+        "Chem_Command_ConstructGLAInfantryTerrorist",
+        "Chem_Command_ConstructGLATankMarauder",
+        "Chem_Command_ConstructGLATankScorpion",
+        "Chem_Command_ConstructGLAVehicleBattleBus",
+        "Chem_Command_ConstructGLAVehicleBombTruck",
+        "Chem_Command_ConstructGLAVehicleCombatBike",
+        "Chem_Command_ConstructGLAVehicleQuadCannon",
+        "Chem_Command_ConstructGLAVehicleRadarVan",
+        "Chem_Command_ConstructGLAVehicleRocketBuggy",
+        "Chem_Command_ConstructGLAVehicleScudLauncher",
+        "Chem_Command_ConstructGLAVehicleTechnical",
+        "Chem_Command_ConstructGLAVehicleToxinTruck",
+        "Chem_Command_ConstructGLAWorker",
+        "Command_ConstructAmericaDozer",
+        "Command_ConstructAmericaInfantryBiohazardTech",
+        "Command_ConstructAmericaInfantryColonelBurton",
+        "Command_ConstructAmericaInfantryMissileDefender",
+        "Command_ConstructAmericaInfantryPathfinder",
+        "Command_ConstructAmericaInfantryRanger",
+        "Command_ConstructAmericaJetAurora",
+        "Command_ConstructAmericaJetRaptor",
+        "Command_ConstructAmericaJetStealthFighter",
+        "Command_ConstructAmericaTankCrusader",
+        "Command_ConstructAmericaVehicleAvenger",
+        "Command_ConstructAmericaVehicleChinook",
+        "Command_ConstructAmericaVehicleComanche",
+        "Command_ConstructAmericaVehicleHumvee",
+        "Command_ConstructAmericaVehicleMedic",
+        "Command_ConstructAmericaVehicleMicrowave",
+        "Command_ConstructAmericaVehiclePaladin",
+        "Command_ConstructAmericaVehicleSentryDrone",
+        "Command_ConstructAmericaVehicleTomahawk",
+        "Command_ConstructChinaDozer",
+        "Command_ConstructChinaInfantryBlackLotus",
+        "Command_ConstructChinaInfantryHacker",
+        "Command_ConstructChinaInfantryRedguard",
+        "Command_ConstructChinaInfantryTankHunter",
+        "Command_ConstructChinaJetMIG",
+        "Command_ConstructChinaTankBattleMaster",
+        "Command_ConstructChinaTankDragon",
+        "Command_ConstructChinaTankECM",
+        "Command_ConstructChinaTankGattling",
+        "Command_ConstructChinaTankOverlord",
+        "Command_ConstructChinaVehicleHelix",
+        "Command_ConstructChinaVehicleInfernoCannon",
+        "Command_ConstructChinaVehicleListeningOutpost",
+        "Command_ConstructChinaVehicleNukeLauncher",
+        "Command_ConstructChinaVehicleSupplyTruck",
+        "Command_ConstructChinaVehicleTroopCrawler",
+        "Command_ConstructGLAInfantryAngryMob",
+        "Command_ConstructGLAInfantryHijacker",
+        "Command_ConstructGLAInfantryJarmenKell",
+        "Command_ConstructGLAInfantryRebel",
+        "Command_ConstructGLAInfantryRPGTrooper",
+        "Command_ConstructGLAInfantrySaboteur",
+        "Command_ConstructGLAInfantryTerrorist",
+        "Command_ConstructGLATankMarauder",
+        "Command_ConstructGLATankScorpion",
+        "Command_ConstructGLAVehicleBattleBus",
+        "Command_ConstructGLAVehicleBombTruck",
+        "Command_ConstructGLAVehicleCombatBike",
+        "Command_ConstructGLAVehicleCombatBikeRocket",
+        "Command_ConstructGLAVehicleCombatBikeTerrorist",
+        "Command_ConstructGLAVehicleQuadCannon",
+        "Command_ConstructGLAVehicleRadarVan",
+        "Command_ConstructGLAVehicleRocketBuggy",
+        "Command_ConstructGLAVehicleScudLauncher",
+        "Command_ConstructGLAVehicleTechnical",
+        "Command_ConstructGLAVehicleToxinTruck",
+        "Command_ConstructGLAWorker",
+        "Command_HiddenConstructAmericaJetAircraftCarrierRaptor",
+        "Demo_Command_ConstructGLAInfantryAngryMob",
+        "Demo_Command_ConstructGLAInfantryHijacker",
+        "Demo_Command_ConstructGLAInfantryJarmenKell",
+        "Demo_Command_ConstructGLAInfantryRebel",
+        "Demo_Command_ConstructGLAInfantryRPGTrooper",
+        "Demo_Command_ConstructGLAInfantryTerrorist",
+        "Demo_Command_ConstructGLATankMarauder",
+        "Demo_Command_ConstructGLAVehicleBattleBus",
+        "Demo_Command_ConstructGLAVehicleBombTruck",
+        "Demo_Command_ConstructGLAVehicleCombatBike",
+        "Demo_Command_ConstructGLAVehicleQuadCannon",
+        "Demo_Command_ConstructGLAVehicleRadarVan",
+        "Demo_Command_ConstructGLAVehicleRocketBuggy",
+        "Demo_Command_ConstructGLAVehicleScudLauncher",
+        "Demo_Command_ConstructGLAVehicleTechnical",
+        "Demo_Command_ConstructGLAVehicleToxinTruck",
+        "Demo_Command_ConstructGLAWorker",
+        "Demo_Command_ConsturctGLATankScorpion",
+        "GC_Chem_Command_ConstructGLAInfantryHijacker",
+        "GC_Chem_Command_ConstructGLAInfantryJarmenKell",
+        "GC_Chem_Command_ConstructGLAInfantryRebel",
+        "GC_Chem_Command_ConstructGLAInfantryRPGTrooper",
+        "GC_Chem_Command_ConstructGLAInfantryTerrorist",
+        "GC_Chem_Command_ConstructGLATankScorpion",
+        "GC_Chem_Command_ConstructGLAVehicleBombTruck",
+        "GC_Chem_Command_ConstructGLAVehicleQuadCannon",
+        "GC_Chem_Command_ConstructGLAVehicleRadarVan",
+        "GC_Chem_Command_ConstructGLAVehicleScudLauncher",
+        "GC_Chem_Command_ConstructGLAVehicleToxinTruck",
+        "GC_Chem_Command_ConstructGLAWorker",
+        "GC_Slth_Command_ConstructGLAInfantryHijacker",
+        "GC_Slth_Command_ConstructGLAInfantryJarmenKell",
+        "GC_Slth_Command_ConstructGLAInfantryRebel",
+        "GC_Slth_Command_ConstructGLAInfantryRPGTrooper",
+        "GC_Slth_Command_ConstructGLAInfantrySniper",
+        "GC_Slth_Command_ConstructGLAInfantryTerrorist",
+        "GC_Slth_Command_ConstructGLAVehicleBattleBus",
+        "GC_Slth_Command_ConstructGLAVehicleCombatBike",
+        "GC_Slth_Command_ConstructGLAVehicleCombatBikeRocket",
+        "GC_Slth_Command_ConstructGLAVehicleCombatBikeTerrorist",
+        "GC_Slth_Command_ConstructGLAVehicleQuadCannon",
+        "GC_Slth_Command_ConstructGLAVehicleRadarVan",
+        "GC_Slth_Command_ConstructGLAVehicleTechnical",
+        "GC_Slth_Command_ConstructGLAWorker",
+        "Infa_Command_ConstructChinaDozer",
+        "Infa_Command_ConstructChinaInfantryBlackLotus",
+        "Infa_Command_ConstructChinaInfantryHacker",
+        "Infa_Command_ConstructChinaInfantryMiniGunner",
+        "Infa_Command_ConstructChinaInfantryTankHunter",
+        "Infa_Command_ConstructChinaJetMig",
+        "Infa_Command_ConstructChinaTankDragon",
+        "Infa_Command_ConstructChinaTankECM",
+        "Infa_Command_ConstructChinaTankGattling",
+        "Infa_Command_ConstructChinaVehicleHelix",
+        "Infa_Command_ConstructChinaVehicleInfernoCannon",
+        "Infa_Command_ConstructChinaVehicleListeningOutpost",
+        "Infa_Command_ConstructChinaVehicleNukeLauncher",
+        "Infa_Command_ConstructChinaVehicleSupplyTruck",
+        "Infa_Command_ConstructChinaVehicleTroopCrawler",
+        "Lazr_Command_ConstructAmericaDozer",
+        "Lazr_Command_ConstructAmericaInfantryColonelBurton",
+        "Lazr_Command_ConstructAmericaInfantryMissileDefender",
+        "Lazr_Command_ConstructAmericaInfantryPathfinder",
+        "Lazr_Command_ConstructAmericaInfantryRanger",
+        "Lazr_Command_ConstructAmericaJetAurora",
+        "Lazr_Command_ConstructAmericaJetRaptor",
+        "Lazr_Command_ConstructAmericaJetStealthFighter",
+        "Lazr_Command_ConstructAmericaTankCrusader",
+        "Lazr_Command_ConstructAmericaVehicleAvenger",
+        "Lazr_Command_ConstructAmericaVehicleChinook",
+        "Lazr_Command_ConstructAmericaVehicleComanche",
+        "Lazr_Command_ConstructAmericaVehicleHumvee",
+        "Lazr_Command_ConstructAmericaVehicleMedic",
+        "Lazr_Command_ConstructAmericaVehicleMicrowave",
+        "Lazr_Command_ConstructAmericaVehiclePaladin",
+        "Lazr_Command_ConstructAmericaVehicleSentryDrone",
+        "Nuke_Command_ConstructChinaDozer",
+        "Nuke_Command_ConstructChinaInfantryBlackLotus",
+        "Nuke_Command_ConstructChinaInfantryHacker",
+        "Nuke_Command_ConstructChinaInfantryRedguard",
+        "Nuke_Command_ConstructChinaInfantryTankHunter",
+        "Nuke_Command_ConstructChinaJetMIG",
+        "Nuke_Command_ConstructChinaTankBattleMaster",
+        "Nuke_Command_ConstructChinaTankDragon",
+        "Nuke_Command_ConstructChinaTankECM",
+        "Nuke_Command_ConstructChinaTankGattling",
+        "Nuke_Command_ConstructChinaTankOverlord",
+        "Nuke_Command_ConstructChinaVehicleHelix",
+        "Nuke_Command_ConstructChinaVehicleInfernoCannon",
+        "Nuke_Command_ConstructChinaVehicleListeningOutpost",
+        "Nuke_Command_ConstructChinaVehicleNukeLauncher",
+        "Nuke_Command_ConstructChinaVehicleSupplyTruck",
+        "Nuke_Command_ConstructChinaVehicleTroopCrawler",
+        "Slth_Command_ConstructGLAInfantryAngryMob",
+        "Slth_Command_ConstructGLAInfantryHijacker",
+        "Slth_Command_ConstructGLAInfantryJarmenKell",
+        "Slth_Command_ConstructGLAInfantryRebel",
+        "Slth_Command_ConstructGLAInfantryRPGTrooper",
+        "Slth_Command_ConstructGLAInfantrySaboteur",
+        "Slth_Command_ConstructGLAInfantryTerrorist",
+        "Slth_Command_ConstructGLAVehicleBattleBus",
+        "Slth_Command_ConstructGLAVehicleBombTruck",
+        "Slth_Command_ConstructGLAVehicleCombatBike",
+        "Slth_Command_ConstructGLAVehicleQuadCannon",
+        "Slth_Command_ConstructGLAVehicleRadarVan",
+        "Slth_Command_ConstructGLAVehicleRocketBuggy",
+        "Slth_Command_ConstructGLAVehicleScudLauncher",
+        "Slth_Command_ConstructGLAVehicleTechnical",
+        "Slth_Command_ConstructGLAVehicleToxinTruck",
+        "Slth_Command_ConstructGLAWorker",
+        "SupW_Command_ConstructAmericaDozer",
+        "SupW_Command_ConstructAmericaInfantryColonelBurton",
+        "SupW_Command_ConstructAmericaInfantryMissileDefender",
+        "SupW_Command_ConstructAmericaInfantryPathfinder",
+        "SupW_Command_ConstructAmericaInfantryRanger",
+        "SupW_Command_ConstructAmericaJetAurora",
+        "SupW_Command_ConstructAmericaJetRaptor",
+        "SupW_Command_ConstructAmericaJetStealthFighter",
+        "SupW_Command_ConstructAmericaTankCrusader",
+        "SupW_Command_ConstructAmericaTankPaladin",
+        "SupW_Command_ConstructAmericaVehicleAvenger",
+        "SupW_Command_ConstructAmericaVehicleChinook",
+        "SupW_Command_ConstructAmericaVehicleComanche",
+        "SupW_Command_ConstructAmericaVehicleHumvee",
+        "SupW_Command_ConstructAmericaVehicleMedic",
+        "SupW_Command_ConstructAmericaVehicleMicrowave",
+        "SupW_Command_ConstructAmericaVehicleSentryDrone",
+        "SupW_Command_ConstructAmericaVehicleTomahawk",
+        "Tank_Command_ConstructChinaDozer",
+        "Tank_Command_ConstructChinaInfantryBlackLotus",
+        "Tank_Command_ConstructChinaInfantryHacker",
+        "Tank_Command_ConstructChinaInfantryRedguard",
+        "Tank_Command_ConstructChinaInfantryTankHunter",
+        "Tank_Command_ConstructChinaJetMIG",
+        "Tank_Command_ConstructChinaTankBattleMaster",
+        "Tank_Command_ConstructChinaTankDragon",
+        "Tank_Command_ConstructChinaTankECM",
+        "Tank_Command_ConstructChinaTankEmperor",
+        "Tank_Command_ConstructChinaTankGattling",
+        "Tank_Command_ConstructChinaVehicleHelix",
+        "Tank_Command_ConstructChinaVehicleListeningOutpost",
+        "Tank_Command_ConstructChinaVehicleSupplyTruck",
+        "Tank_Command_ConstructChinaVehicleTroopCrawler"
       ]
     }
   ],
@@ -71,8 +1098,10 @@
       "enumName": "GUI_COMMAND_DOZER_CONSTRUCT_CANCEL",
       "enumValue": 2,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "DOZER_CONSTRUCT_CANCEL"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_UNIT_BUILD",
@@ -87,8 +1116,10 @@
       "enumName": "GUI_COMMAND_CANCEL_UNIT_BUILD",
       "enumValue": 4,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "CANCEL_UNIT_BUILD"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_PLAYER_UPGRADE",
@@ -103,50 +1134,64 @@
       "enumName": "GUI_COMMAND_OBJECT_UPGRADE",
       "enumValue": 6,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "OBJECT_UPGRADE"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_CANCEL_UPGRADE",
       "enumValue": 7,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "CANCEL_UPGRADE"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_ATTACK_MOVE",
       "enumValue": 8,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "ATTACK_MOVE"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_GUARD",
       "enumValue": 9,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "GUARD"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_GUARD_WITHOUT_PURSUIT",
       "enumValue": 10,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "GUARD_WITHOUT_PURSUIT"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_GUARD_FLYING_UNITS_ONLY",
       "enumValue": 11,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "GUARD_FLYING_UNITS_ONLY"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_STOP",
       "enumValue": 12,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "STOP"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_WAYPOINTS",
@@ -159,22 +1204,28 @@
       "enumName": "GUI_COMMAND_EXIT_CONTAINER",
       "enumValue": 14,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "EXIT_CONTAINER"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_EVACUATE",
       "enumValue": 15,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "EVACUATE"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_EXECUTE_RAILED_TRANSPORT",
       "enumValue": 16,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "EXECUTE_RAILED_TRANSPORT"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_BEACON_DELETE",
@@ -187,22 +1238,28 @@
       "enumName": "GUI_COMMAND_SET_RALLY_POINT",
       "enumValue": 18,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SET_RALLY_POINT"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_SELL",
       "enumValue": 19,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SELL"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_FIRE_WEAPON",
       "enumValue": 20,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "FIRE_WEAPON"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_SPECIAL_POWER",
@@ -217,64 +1274,82 @@
       "enumName": "GUI_COMMAND_PURCHASE_SCIENCE",
       "enumValue": 22,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "PURCHASE_SCIENCE"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_HACK_INTERNET",
       "enumValue": 23,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "HACK_INTERNET"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_TOGGLE_OVERCHARGE",
       "enumValue": 24,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "TOGGLE_OVERCHARGE"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_COMBATDROP",
       "enumValue": 25,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "COMBATDROP"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_SWITCH_WEAPON",
       "enumValue": 26,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SWITCH_WEAPON"
+      ]
     },
     {
       "enumName": "GUICOMMANDMODE_HIJACK_VEHICLE",
       "enumValue": 27,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "HIJACK_VEHICLE"
+      ]
     },
     {
       "enumName": "GUICOMMANDMODE_CONVERT_TO_CARBOMB",
       "enumValue": 28,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "CONVERT_TO_CARBOMB"
+      ]
     },
     {
       "enumName": "GUICOMMANDMODE_SABOTAGE_BUILDING",
       "enumValue": 29,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SABOTAGE_BUILDING"
+      ]
     },
     {
       "enumName": "GUICOMMANDMODE_PLACE_BEACON",
       "enumValue": 30,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "PLACE_BEACON"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_SPECIAL_POWER_FROM_COMMAND_CENTER",
@@ -287,29 +1362,37 @@
       "enumName": "GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT",
       "enumValue": 32,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SPECIAL_POWER_FROM_SHORTCUT"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_SPECIAL_POWER_CONSTRUCT",
       "enumValue": 33,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SPECIAL_POWER_CONSTRUCT"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT",
       "enumValue": 34,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE",
       "enumValue": 35,
       "handledByDispatch": true,
-      "referencedByBundle": false,
-      "sourceCommandNames": []
+      "referencedByBundle": true,
+      "sourceCommandNames": [
+        "SELECT_ALL_UNITS_OF_TYPE"
+      ]
     },
     {
       "enumName": "GUI_COMMAND_NUM_COMMANDS",

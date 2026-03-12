@@ -1,17 +1,17 @@
 {
-  "generatedAt": "2026-03-07T20:15:19.034Z",
+  "generatedAt": "2026-03-12T15:27:39.468Z",
   "status": "blocked",
   "summary": {
     "blockerGroups": 1,
-    "blockerItems": 2
+    "blockerItems": 10
   },
   "blockers": [
     {
-      "id": "conversion-missing-references",
+      "id": "conversion-unsupported-block-types",
       "area": "conversion",
-      "count": 2,
+      "count": 10,
       "details": [
-        "Missing reference edges remain in converted data."
+        "Unsupported INI block types were emitted by conversion."
       ]
     }
   ]

@@ -1,33 +1,29 @@
 {
-  "generatedAt": "2026-03-06T23:39:53.638Z",
+  "generatedAt": "2026-03-12T15:21:40.669Z",
   "bundlePath": "/Users/discordwell/Projects/CnC_Generals_Zero_Hour/browser-port/packages/app/public/assets/data/ini-bundle.json",
   "summary": {
-    "objects": 2106,
+    "objects": 2110,
     "commandButtons": 816,
     "commandSets": 471,
     "upgrades": 80,
     "specialPowers": 79,
-    "sciences": 105,
-    "unsupportedBlockTypes": 0,
+    "sciences": 95,
+    "unsupportedBlockTypes": 10,
     "unresolvedRegistryErrors": 0,
-    "missingReferences": 2
+    "missingReferences": 0
   },
   "unresolvedRegistryErrors": [],
-  "unsupportedBlockTypes": [],
-  "missingReferences": [
-    {
-      "ownerType": "Object",
-      "ownerName": "GC_Chem_GLADemoTrap",
-      "referenceType": "CommandSet",
-      "referenceName": "=",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    },
-    {
-      "ownerType": "Object",
-      "ownerName": "GLADemoTrap",
-      "referenceType": "CommandSet",
-      "referenceName": "=",
-      "detail": "Object field CommandSet points to a missing CommandSet."
-    }
-  ]
+  "unsupportedBlockTypes": [
+    "AIData",
+    "ChallengeGenerals",
+    "CommandMap",
+    "Credits",
+    "Mouse",
+    "MouseCursor",
+    "MultiplayerColor",
+    "MultiplayerStartingMoneyChoice",
+    "OnlineChatColors",
+    "WaterTransparency"
+  ],
+  "missingReferences": []
 }
