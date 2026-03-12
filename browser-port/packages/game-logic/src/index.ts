@@ -988,6 +988,64 @@ import {
   resolveEntityShroudStatusForLocalPlayer as resolveEntityShroudStatusForLocalPlayerImpl,
   resolveEntityShroudStatusForSide as resolveEntityShroudStatusForSideImpl,
 } from './render-state-bridge.js';
+import {
+  updateHackInternet as updateHackInternetImpl,
+  updatePendingHackInternetCommands as updatePendingHackInternetCommandsImpl,
+  getOrCreateAssaultTransportState as getOrCreateAssaultTransportStateImpl,
+  updateAssaultTransports as updateAssaultTransportsImpl,
+  updateOvercharge as updateOverchargeImpl,
+  initializeMinefieldState as initializeMinefieldStateImpl,
+  detonateMineOnce as detonateMineOnceImpl,
+  updateMineBehavior as updateMineBehaviorImpl,
+  isEntityClearingMines as isEntityClearingMinesImpl,
+  isCrateCollideEligible as isCrateCollideEligibleImpl,
+  executeGeneralCrateBehavior as executeGeneralCrateBehaviorImpl,
+  executeCrateHeal as executeCrateHealImpl,
+  executeCrateMoney as executeCrateMoneyImpl,
+  executeCrateVeterancy as executeCrateVeterancyImpl,
+  executeCrateShroud as executeCrateShroudImpl,
+  executeCrateUnit as executeCrateUnitImpl,
+  grantVeterancyLevels as grantVeterancyLevelsImpl,
+  clampVeterancyLevel as clampVeterancyLevelImpl,
+  setMinVeterancyLevel as setMinVeterancyLevelImpl,
+  doSalvageMoney as doSalvageMoneyImpl,
+  mineOnDamage as mineOnDamageImpl,
+  setWorkerMineClearingDetail as setWorkerMineClearingDetailImpl,
+  dropWorkerSupplyBoxesIfClearingMines as dropWorkerSupplyBoxesIfClearingMinesImpl,
+  resolveGuardAnchorPosition as resolveGuardAnchorPositionImpl,
+  updateGuardBehavior as updateGuardBehaviorImpl,
+  updateGuardIdle as updateGuardIdleImpl,
+  updateGuardPursuing as updateGuardPursuingImpl,
+  updateGuardReturning as updateGuardReturningImpl,
+  transitionGuardToReturning as transitionGuardToReturningImpl,
+  updateEnemyNear as updateEnemyNearImpl,
+  updateCheckpoints as updateCheckpointsImpl,
+  updateHorde as updateHordeImpl,
+  updateDemoTraps as updateDemoTrapsImpl,
+  detonateDemoTrap as detonateDemoTrapImpl,
+  updateWanderAI as updateWanderAIImpl,
+  initiateSpecialAbility as initiateSpecialAbilityImpl,
+  updateSpecialAbility as updateSpecialAbilityImpl,
+  isWithinSpecialAbilityRange as isWithinSpecialAbilityRangeImpl,
+  approachSpecialAbilityTarget as approachSpecialAbilityTargetImpl,
+  startSpecialAbilityUnpacking as startSpecialAbilityUnpackingImpl,
+  startSpecialAbilityPacking as startSpecialAbilityPackingImpl,
+  continueSpecialAbilityPreparation as continueSpecialAbilityPreparationImpl,
+  triggerSpecialAbilityEffect as triggerSpecialAbilityEffectImpl,
+  finishSpecialAbility as finishSpecialAbilityImpl,
+  updateDeployStyleEntities as updateDeployStyleEntitiesImpl,
+  setDeployState as setDeployStateImpl,
+  reverseDeployTransition as reverseDeployTransitionImpl,
+  updateBoneFX as updateBoneFXImpl,
+  boneFXInitTimes as boneFXInitTimesImpl,
+  updateBattlePlan as updateBattlePlanImpl,
+  requestBattlePlanChange as requestBattlePlanChangeImpl,
+  getBattlePlanAnimationFrames as getBattlePlanAnimationFramesImpl,
+  applyBattlePlanBonuses as applyBattlePlanBonusesImpl,
+  isBattlePlanMember as isBattlePlanMemberImpl,
+  paralyzeBattlePlanTroops as paralyzeBattlePlanTroopsImpl,
+  updateBattlePlanParalysis as updateBattlePlanParalysisImpl,
+} from './update-behaviors.js';
 
 export const TEST_CRUSH_ONLY = 0;
 export const TEST_SQUISH_ONLY = 1;
@@ -1135,7 +1193,7 @@ const WEAPON_SET_FLAG_CRATEUPGRADE_ONE = 1 << 4;
 const WEAPON_SET_FLAG_CRATEUPGRADE_TWO = 1 << 5;
 const WEAPON_SET_FLAG_VEHICLE_HIJACK = 1 << 6;
 const WEAPON_SET_FLAG_CARBOMB = 1 << 7;
-const WEAPON_SET_FLAG_MINE_CLEARING_DETAIL = 1 << 8;
+export const WEAPON_SET_FLAG_MINE_CLEARING_DETAIL = 1 << 8;
 const WEAPON_AFFECTS_SELF = 0x01;
 const WEAPON_AFFECTS_ALLIES = 0x02;
 const WEAPON_AFFECTS_ENEMIES = 0x04;
@@ -1177,22 +1235,22 @@ const ARMOR_SET_FLAG_CRATE_UPGRADE_TWO = 1 << 7;
 
 // Source parity: WeaponBonusConditionType — bitmask flags for active weapon bonus conditions.
 const WEAPON_BONUS_GARRISONED       = 1 << 0;
-const WEAPON_BONUS_HORDE            = 1 << 1;
+export const WEAPON_BONUS_HORDE            = 1 << 1;
 const WEAPON_BONUS_CONTINUOUS_FIRE_MEAN = 1 << 2;
 const WEAPON_BONUS_CONTINUOUS_FIRE_FAST = 1 << 3;
-const WEAPON_BONUS_NATIONALISM      = 1 << 4;
+export const WEAPON_BONUS_NATIONALISM      = 1 << 4;
 const WEAPON_BONUS_PLAYER_UPGRADE   = 1 << 5;
 export const WEAPON_BONUS_DRONE_SPOTTING   = 1 << 6;
 const WEAPON_BONUS_ENTHUSIASTIC     = 1 << 8;
 const WEAPON_BONUS_VETERAN          = 1 << 9;
 const WEAPON_BONUS_ELITE            = 1 << 10;
 const WEAPON_BONUS_HERO             = 1 << 11;
-const WEAPON_BONUS_BOMBARDMENT      = 1 << 12;
-const WEAPON_BONUS_HOLDTHELINE      = 1 << 13;
-const WEAPON_BONUS_SEARCHANDDESTROY = 1 << 14;
+export const WEAPON_BONUS_BOMBARDMENT      = 1 << 12;
+export const WEAPON_BONUS_HOLDTHELINE      = 1 << 13;
+export const WEAPON_BONUS_SEARCHANDDESTROY = 1 << 14;
 const WEAPON_BONUS_SUBLIMINAL       = 1 << 15;
 const WEAPON_BONUS_FAERIE_FIRE      = 1 << 22;
-const WEAPON_BONUS_FANATICISM       = 1 << 23;
+export const WEAPON_BONUS_FANATICISM       = 1 << 23;
 const WEAPON_BONUS_FRENZY_ONE       = 1 << 24;
 const WEAPON_BONUS_FRENZY_TWO       = 1 << 25;
 const WEAPON_BONUS_FRENZY_THREE     = 1 << 26;
@@ -1454,13 +1512,13 @@ const SCRIPT_ATTACK_PRIORITY_DEFAULT = 1;
  * Source parity: TAiData guard parameters. Real values come from AIData.ini;
  * these defaults match the typical Zero Hour configuration.
  */
-const GUARD_ENEMY_SCAN_RATE_FRAMES = Math.trunc(LOGIC_FRAME_RATE / 2); // 15 frames = 0.5s
+export const GUARD_ENEMY_SCAN_RATE_FRAMES = Math.trunc(LOGIC_FRAME_RATE / 2); // 15 frames = 0.5s
 const GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE; // 30 frames = 1s
 const GUARD_INNER_MODIFIER_HUMAN = 1.0;
 const GUARD_OUTER_MODIFIER_HUMAN = 1.5;
 const GUARD_INNER_MODIFIER_AI = 1.0;
 const GUARD_OUTER_MODIFIER_AI = 2.0;
-const GUARD_CHASE_UNIT_FRAMES = LOGIC_FRAME_RATE * 10; // 300 frames = 10s
+export const GUARD_CHASE_UNIT_FRAMES = LOGIC_FRAME_RATE * 10; // 300 frames = 10s
 export const MAX_SCRIPT_RADAR_EVENTS = 64;
 export const SCRIPT_RADAR_EVENT_TTL_FRAMES = LOGIC_FRAME_RATE * 4;
 export const SCRIPT_THIS_TEAM = '<This Team>';
@@ -9850,7 +9908,7 @@ export class GameLogicSubsystem implements Subsystem {
   private findCommandButtonHuntTarget(...args: any[]) { return (findCommandButtonHuntTargetImpl as any)(this, ...args); }
   /* @internal */ isCommandButtonHuntTargetValidForMode(...args: any[]) { return (isCommandButtonHuntTargetValidForModeImpl as any)(this, ...args); }
   private updateIdleAutoTargeting(...args: any[]) { return (updateIdleAutoTargetingImpl as any)(this, ...args); }
-  private findGuardTarget(...args: any[]) { return (findGuardTargetImpl as any)(this, ...args); }
+  /* @internal */ findGuardTarget(...args: any[]) { return (findGuardTargetImpl as any)(this, ...args); }
   private queueWeaponDamageEvent(...args: any[]) { return (queueWeaponDamageEventImpl as any)(this, ...args); }
 
   // ---- Weapon profiles facades (delegate to weapon-profiles.ts) ----
@@ -10485,6 +10543,65 @@ export class GameLogicSubsystem implements Subsystem {
   private makeRenderableEntityState(...args: any[]) { return (makeRenderableEntityStateImpl as any)(this, ...args); }
   /* @internal */ resolveEntityShroudStatusForLocalPlayer(...args: any[]) { return (resolveEntityShroudStatusForLocalPlayerImpl as any)(this, ...args); }
   private resolveEntityShroudStatusForSide(...args: any[]) { return (resolveEntityShroudStatusForSideImpl as any)(this, ...args); }
+
+  // ---- Update behaviors facades (delegate to update-behaviors.ts) ----
+
+  private updateHackInternet(...args: any[]) { return (updateHackInternetImpl as any)(this, ...args); }
+  private updatePendingHackInternetCommands(...args: any[]) { return (updatePendingHackInternetCommandsImpl as any)(this, ...args); }
+  private getOrCreateAssaultTransportState(...args: any[]) { return (getOrCreateAssaultTransportStateImpl as any)(this, ...args); }
+  private updateAssaultTransports(...args: any[]) { return (updateAssaultTransportsImpl as any)(this, ...args); }
+  private updateOvercharge(...args: any[]) { return (updateOverchargeImpl as any)(this, ...args); }
+  private initializeMinefieldState(...args: any[]) { return (initializeMinefieldStateImpl as any)(this, ...args); }
+  /* @internal */ detonateMineOnce(...args: any[]) { return (detonateMineOnceImpl as any)(this, ...args); }
+  private updateMineBehavior(...args: any[]) { return (updateMineBehaviorImpl as any)(this, ...args); }
+  /* @internal */ isEntityClearingMines(...args: any[]) { return (isEntityClearingMinesImpl as any)(this, ...args); }
+  private isCrateCollideEligible(...args: any[]) { return (isCrateCollideEligibleImpl as any)(this, ...args); }
+  private executeGeneralCrateBehavior(...args: any[]) { return (executeGeneralCrateBehaviorImpl as any)(this, ...args); }
+  /* @internal */ executeCrateHeal(...args: any[]) { return (executeCrateHealImpl as any)(this, ...args); }
+  /* @internal */ executeCrateMoney(...args: any[]) { return (executeCrateMoneyImpl as any)(this, ...args); }
+  /* @internal */ executeCrateVeterancy(...args: any[]) { return (executeCrateVeterancyImpl as any)(this, ...args); }
+  /* @internal */ executeCrateShroud(...args: any[]) { return (executeCrateShroudImpl as any)(this, ...args); }
+  /* @internal */ executeCrateUnit(...args: any[]) { return (executeCrateUnitImpl as any)(this, ...args); }
+  /* @internal */ grantVeterancyLevels(...args: any[]) { return (grantVeterancyLevelsImpl as any)(this, ...args); }
+  private clampVeterancyLevel(...args: any[]) { return (clampVeterancyLevelImpl as any)(this, ...args); }
+  private setMinVeterancyLevel(...args: any[]) { return (setMinVeterancyLevelImpl as any)(this, ...args); }
+  private doSalvageMoney(...args: any[]) { return (doSalvageMoneyImpl as any)(this, ...args); }
+  private mineOnDamage(...args: any[]) { return (mineOnDamageImpl as any)(this, ...args); }
+  private setWorkerMineClearingDetail(...args: any[]) { return (setWorkerMineClearingDetailImpl as any)(this, ...args); }
+  private dropWorkerSupplyBoxesIfClearingMines(...args: any[]) { return (dropWorkerSupplyBoxesIfClearingMinesImpl as any)(this, ...args); }
+  /* @internal */ resolveGuardAnchorPosition(...args: any[]) { return (resolveGuardAnchorPositionImpl as any)(this, ...args); }
+  private updateGuardBehavior(...args: any[]) { return (updateGuardBehaviorImpl as any)(this, ...args); }
+  /* @internal */ updateGuardIdle(...args: any[]) { return (updateGuardIdleImpl as any)(this, ...args); }
+  /* @internal */ updateGuardPursuing(...args: any[]) { return (updateGuardPursuingImpl as any)(this, ...args); }
+  /* @internal */ updateGuardReturning(...args: any[]) { return (updateGuardReturningImpl as any)(this, ...args); }
+  /* @internal */ transitionGuardToReturning(...args: any[]) { return (transitionGuardToReturningImpl as any)(this, ...args); }
+  private updateEnemyNear(...args: any[]) { return (updateEnemyNearImpl as any)(this, ...args); }
+  private updateCheckpoints(...args: any[]) { return (updateCheckpointsImpl as any)(this, ...args); }
+  private updateHorde(...args: any[]) { return (updateHordeImpl as any)(this, ...args); }
+  private updateDemoTraps(...args: any[]) { return (updateDemoTrapsImpl as any)(this, ...args); }
+  private detonateDemoTrap(...args: any[]) { return (detonateDemoTrapImpl as any)(this, ...args); }
+  private updateWanderAI(...args: any[]) { return (updateWanderAIImpl as any)(this, ...args); }
+  private initiateSpecialAbility(...args: any[]) { return (initiateSpecialAbilityImpl as any)(this, ...args); }
+  private updateSpecialAbility(...args: any[]) { return (updateSpecialAbilityImpl as any)(this, ...args); }
+  /* @internal */ isWithinSpecialAbilityRange(...args: any[]) { return (isWithinSpecialAbilityRangeImpl as any)(this, ...args); }
+  /* @internal */ approachSpecialAbilityTarget(...args: any[]) { return (approachSpecialAbilityTargetImpl as any)(this, ...args); }
+  /* @internal */ startSpecialAbilityUnpacking(...args: any[]) { return (startSpecialAbilityUnpackingImpl as any)(this, ...args); }
+  /* @internal */ startSpecialAbilityPacking(...args: any[]) { return (startSpecialAbilityPackingImpl as any)(this, ...args); }
+  /* @internal */ continueSpecialAbilityPreparation(...args: any[]) { return (continueSpecialAbilityPreparationImpl as any)(this, ...args); }
+  /* @internal */ triggerSpecialAbilityEffect(...args: any[]) { return (triggerSpecialAbilityEffectImpl as any)(this, ...args); }
+  /* @internal */ finishSpecialAbility(...args: any[]) { return (finishSpecialAbilityImpl as any)(this, ...args); }
+  private updateDeployStyleEntities(...args: any[]) { return (updateDeployStyleEntitiesImpl as any)(this, ...args); }
+  /* @internal */ setDeployState(...args: any[]) { return (setDeployStateImpl as any)(this, ...args); }
+  /* @internal */ reverseDeployTransition(...args: any[]) { return (reverseDeployTransitionImpl as any)(this, ...args); }
+  private updateBoneFX(...args: any[]) { return (updateBoneFXImpl as any)(this, ...args); }
+  private boneFXInitTimes(...args: any[]) { return (boneFXInitTimesImpl as any)(this, ...args); }
+  private updateBattlePlan(...args: any[]) { return (updateBattlePlanImpl as any)(this, ...args); }
+  private requestBattlePlanChange(...args: any[]) { return (requestBattlePlanChangeImpl as any)(this, ...args); }
+  /* @internal */ getBattlePlanAnimationFrames(...args: any[]) { return (getBattlePlanAnimationFramesImpl as any)(this, ...args); }
+  /* @internal */ applyBattlePlanBonuses(...args: any[]) { return (applyBattlePlanBonusesImpl as any)(this, ...args); }
+  /* @internal */ isBattlePlanMember(...args: any[]) { return (isBattlePlanMemberImpl as any)(this, ...args); }
+  /* @internal */ paralyzeBattlePlanTroops(...args: any[]) { return (paralyzeBattlePlanTroopsImpl as any)(this, ...args); }
+  private updateBattlePlanParalysis(...args: any[]) { return (updateBattlePlanParalysisImpl as any)(this, ...args); }
 
   /**
    * Source parity: explicit script-team membership assignment.
@@ -21113,41 +21230,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.issueMoveTo(source.id, dock.x, dock.z);
   }
 
-  private updateHackInternet(): void {
-    for (const [entityId, hackState] of this.hackInternetStateByEntityId.entries()) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed) {
-        this.hackInternetStateByEntityId.delete(entityId);
-        continue;
-      }
-
-      if (this.frameCounter < hackState.nextCashFrame) {
-        continue;
-      }
-
-      this.depositSideCredits(entity.side, hackState.cashAmountPerCycle);
-      const cycleDelay = Math.max(1, hackState.cashUpdateDelayFrames);
-      hackState.nextCashFrame = this.frameCounter + cycleDelay;
-    }
-  }
-
-  private updatePendingHackInternetCommands(): void {
-    for (const [entityId, pending] of this.hackInternetPendingCommandByEntityId.entries()) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed) {
-        this.hackInternetPendingCommandByEntityId.delete(entityId);
-        continue;
-      }
-
-      if (this.frameCounter < pending.executeFrame) {
-        continue;
-      }
-
-      this.hackInternetPendingCommandByEntityId.delete(entityId);
-      this.applyCommand(pending.command);
-    }
-  }
-
   // ── Source parity: AssaultTransportAIUpdate — auto-deploy/recall passengers ──
 
   /* @internal */ beginAssaultTransportAttack(transport: MapEntity, targetEntityId: number, _isAttackMove: boolean): void {
@@ -21191,180 +21273,10 @@ export class GameLogicSubsystem implements Subsystem {
     this.assaultTransportStateByEntityId.delete(entityId);
   }
 
-  private getOrCreateAssaultTransportState(entityId: number): AssaultTransportState {
-    let state = this.assaultTransportStateByEntityId.get(entityId);
-    if (!state) {
-      state = {
-        members: [],
-        designatedTargetId: null,
-        attackMoveGoalX: 0,
-        attackMoveGoalZ: 0,
-        isAttackMove: false,
-        isAttackObject: false,
-        newOccupantsAreNewMembers: false,
-      };
-      this.assaultTransportStateByEntityId.set(entityId, state);
-    }
-    return state;
-  }
-
-  /**
-   * Source parity: AssaultTransportAIUpdate::update() — frame-by-frame member coordination.
-   * C++ file: AssaultTransportAIUpdate.cpp lines 155-370.
-   */
-  private updateAssaultTransports(): void {
-    for (const [transportId, state] of this.assaultTransportStateByEntityId.entries()) {
-      const transport = this.spawnedEntities.get(transportId);
-      if (!transport || transport.destroyed) {
-        // Source parity: giveFinalOrders() — transfer commands to troops when transport dies.
-        this.giveAssaultTransportFinalOrders(state);
-        this.assaultTransportStateByEntityId.delete(transportId);
-        continue;
-      }
-      const profile = transport.assaultTransportProfile;
-      if (!profile) {
-        this.assaultTransportStateByEntityId.delete(transportId);
-        continue;
-      }
-
-      // Source parity: cleanup dead or externally-commanded members.
-      state.members = state.members.filter((member) => {
-        const memberEntity = this.spawnedEntities.get(member.entityId);
-        if (!memberEntity || memberEntity.destroyed) return false;
-        // Source parity: if member received direct player command, release from tracking.
-        if (memberEntity.attackCommandSource === 'PLAYER') return false;
-        return true;
-      });
-
-      // Source parity: add new contained passengers not yet tracked.
-      const containedIds = this.collectContainedEntityIds(transportId);
-      for (const passengerId of containedIds) {
-        if (state.members.some((m) => m.entityId === passengerId)) continue;
-        if (state.members.length >= 10) break; // MAX_TRANSPORT_SLOTS
-        const passenger = this.spawnedEntities.get(passengerId);
-        if (!passenger || passenger.destroyed) continue;
-        const isWounded = profile.membersGetHealedAtLifeRatio > 0
-          && passenger.health / passenger.maxHealth < profile.membersGetHealedAtLifeRatio;
-        state.members.push({
-          entityId: passengerId,
-          isHealing: isWounded,
-          isNew: state.newOccupantsAreNewMembers,
-        });
-      }
-      // After first sync, all future occupants are new members.
-      state.newOccupantsAreNewMembers = true;
-
-      // Source parity: C++ isAttackPointless() (lines 386-408) — abort if all members are
-      // new AND the transport is currently attacking. Calls aiIdle → retrieveMembers + reset.
-      if (this.entityHasObjectStatus(transport, 'IS_ATTACKING')
-        && state.members.length > 0 && state.members.every((m) => m.isNew)) {
-        // Source parity: aiIdle(CMD_FROM_AI) → retrieveMembers + reset.
-        for (const member of state.members) {
-          const memberEntity = this.spawnedEntities.get(member.entityId);
-          if (memberEntity && !memberEntity.destroyed && !this.isEntityContained(memberEntity)) {
-            this.commandQueue.push({
-              type: 'enterTransport',
-              entityId: member.entityId,
-              targetTransportId: transportId,
-              commandSource: 'AI',
-            });
-          }
-        }
-        state.designatedTargetId = null;
-        state.isAttackObject = false;
-        state.isAttackMove = false;
-        continue;
-      }
-
-      // Resolve designated target.
-      let target = state.designatedTargetId !== null
-        ? this.spawnedEntities.get(state.designatedTargetId) ?? null
-        : null;
-      if (target?.destroyed) {
-        target = null;
-        state.designatedTargetId = null;
-      }
-
-      if (target) {
-        // Source parity: coordinate members for attack-object.
-        for (const member of state.members) {
-          const memberEntity = this.spawnedEntities.get(member.entityId);
-          if (!memberEntity || memberEntity.destroyed) continue;
-          const contained = this.isEntityContained(memberEntity);
-          const isHealthy = memberEntity.health >= memberEntity.maxHealth;
-          const isWounded = profile.membersGetHealedAtLifeRatio > 0
-            && memberEntity.health / memberEntity.maxHealth < profile.membersGetHealedAtLifeRatio;
-
-          if (contained && isHealthy && !member.isNew) {
-            // Eject healthy members.
-            this.commandQueue.push({ type: 'exitContainer', entityId: member.entityId });
-          } else if (!contained && isWounded) {
-            // Recall wounded members.
-            member.isHealing = true;
-            this.commandQueue.push({
-              type: 'enterTransport',
-              entityId: member.entityId,
-              targetTransportId: transportId,
-              commandSource: 'AI',
-            });
-          } else if (!contained && !isWounded) {
-            // Order healthy outside members to attack target.
-            member.isHealing = false;
-            if (memberEntity.attackTargetEntityId !== target.id) {
-              this.commandQueue.push({ type: 'attackEntity', entityId: member.entityId, targetEntityId: target.id, commandSource: 'AI' });
-            }
-          }
-        }
-      } else if (state.isAttackMove) {
-        // Source parity: C++ lines 322-327 — re-issue attackMoveTo to continue advancing.
-        // Target died during attack-move: recall members and keep transport moving.
-        for (const member of state.members) {
-          const memberEntity = this.spawnedEntities.get(member.entityId);
-          if (!memberEntity || memberEntity.destroyed) continue;
-          if (!this.isEntityContained(memberEntity)) {
-            this.commandQueue.push({
-              type: 'enterTransport',
-              entityId: member.entityId,
-              targetTransportId: transportId,
-              commandSource: 'AI',
-            });
-          }
-        }
-        state.designatedTargetId = null;
-        // Re-issue attack-move to the transport itself.
-        if (!transport.moving) {
-          this.commandQueue.push({
-            type: 'attackMoveTo',
-            entityId: transportId,
-            targetX: state.attackMoveGoalX,
-            targetZ: state.attackMoveGoalZ,
-            attackDistance: 0,
-          });
-        }
-      } else if (state.isAttackObject) {
-        // Target died — retrieve members.
-        for (const member of state.members) {
-          const memberEntity = this.spawnedEntities.get(member.entityId);
-          if (!memberEntity || memberEntity.destroyed) continue;
-          if (!this.isEntityContained(memberEntity)) {
-            this.commandQueue.push({
-              type: 'enterTransport',
-              entityId: member.entityId,
-              targetTransportId: transportId,
-              commandSource: 'AI',
-            });
-          }
-        }
-        state.isAttackObject = false;
-        state.designatedTargetId = null;
-      }
-    }
-  }
-
   /**
    * Source parity: AssaultTransportAIUpdate::giveFinalOrders() — transfer command to troops.
    */
-  private giveAssaultTransportFinalOrders(state: AssaultTransportState): void {
+  /* @internal */ giveAssaultTransportFinalOrders(state: AssaultTransportState): void {
     for (const member of state.members) {
       const memberEntity = this.spawnedEntities.get(member.entityId);
       if (!memberEntity || memberEntity.destroyed) continue;
@@ -21382,32 +21294,6 @@ export class GameLogicSubsystem implements Subsystem {
           targetZ: state.attackMoveGoalZ,
           attackDistance: 0,
         });
-      }
-    }
-  }
-
-  private updateOvercharge(): void {
-    for (const [entityId, overchargeState] of this.overchargeStateByEntityId.entries()) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed) {
-        this.overchargeStateByEntityId.delete(entityId);
-        continue;
-      }
-
-      const damageAmount = (entity.maxHealth * overchargeState.healthPercentToDrainPerSecond) / LOGIC_FRAME_RATE;
-      if (damageAmount > 0 && entity.canTakeDamage && entity.health > 0) {
-        this.applyWeaponDamageAmount(entity.id, entity, damageAmount, 'PENALTY');
-      }
-
-      const refreshed = this.spawnedEntities.get(entityId);
-      if (!refreshed || refreshed.destroyed) {
-        this.overchargeStateByEntityId.delete(entityId);
-        continue;
-      }
-
-      const minimumAllowedHealth = refreshed.maxHealth * overchargeState.notAllowedWhenHealthBelowPercent;
-      if (minimumAllowedHealth > 0 && refreshed.health < minimumAllowedHealth) {
-        this.disableOverchargeForEntity(refreshed);
       }
     }
   }
@@ -21539,335 +21425,6 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  // ── Source parity: FlightDeckBehavior — aircraft carrier flight deck system ──────────────
-
-  /**
-   * Source parity: FlightDeckBehavior::hasReservedSpace — check if an aircraft has a parking space.
-   */
-
-  // ── Source parity: SpectreGunshipUpdate — orbital gunship update system ──────────────
-
-  // ── Source parity: MinefieldBehavior — mine collision system ──────────────
-
-  /**
-   * Initialize mine runtime state from profile. Called once after entity creation.
-   * Source parity: MinefieldBehavior constructor (MinefieldBehavior.cpp line 107).
-   */
-  private initializeMinefieldState(entity: MapEntity): void {
-    const prof = entity.minefieldProfile;
-    if (!prof) return;
-    entity.mineVirtualMinesRemaining = prof.numVirtualMines;
-    entity.mineRegenerates = prof.regenerates;
-    entity.mineImmunes = [];
-    entity.mineDetonators = [];
-    entity.mineScootFramesLeft = 0;
-    entity.mineDraining = false;
-    entity.mineNextDeathCheckFrame = 0;
-    entity.mineIgnoreDamage = false;
-    // Source parity: mines are not auto-acquirable (OBJECT_STATUS_NO_ATTACK_FROM_AI).
-    entity.objectStatusFlags.add('NO_ATTACK_FROM_AI');
-  }
-
-  /**
-   * Source parity: MinefieldBehavior::detonateOnce (MinefieldBehavior.cpp line 275).
-   * Fires the detonation weapon, decrements virtual mines, destroys if exhausted.
-   */
-  private detonateMineOnce(mine: MapEntity, detX: number, detZ: number): void {
-    const prof = mine.minefieldProfile!;
-
-    // Fire detonation weapon at the detonation point.
-    if (prof.detonationWeaponName) {
-      const weaponDef = this.iniDataRegistry?.getWeapon(prof.detonationWeaponName);
-      if (weaponDef) {
-        this.fireTemporaryWeaponAtPosition(mine, weaponDef, detX, detZ);
-      }
-    }
-
-    if (mine.mineVirtualMinesRemaining > 0) {
-      mine.mineVirtualMinesRemaining--;
-    }
-
-    if (!mine.mineRegenerates && mine.mineVirtualMinesRemaining <= 0) {
-      // Mine exhausted — destroy.
-      this.markEntityDestroyed(mine.id, mine.id);
-    } else {
-      // Adjust health proportional to remaining mines.
-      const percent = mine.mineVirtualMinesRemaining / prof.numVirtualMines;
-      const desired = Math.max(0.1, percent * mine.maxHealth);
-      const healthToRemove = mine.health - desired;
-      if (healthToRemove > 0) {
-        mine.mineIgnoreDamage = true;
-        this.applyWeaponDamageAmount(mine.id, mine, healthToRemove, 'UNRESISTABLE');
-        mine.mineIgnoreDamage = false;
-      }
-    }
-
-    // Source parity: MASKED status when all charges spent (for regenerating mines).
-    if (mine.mineVirtualMinesRemaining <= 0) {
-      mine.objectStatusFlags.add('MASKED');
-    } else {
-      mine.objectStatusFlags.delete('MASKED');
-    }
-  }
-
-  /**
-   * Source parity: MinefieldBehavior::update immunity expiry and creator death drain.
-   * Called per mine per frame from updateMineCollisions.
-   */
-  private updateMineBehavior(): void {
-    for (const mine of this.spawnedEntities.values()) {
-      if (!mine.minefieldProfile || mine.destroyed) continue;
-      const prof = mine.minefieldProfile;
-
-      // Expire immunity entries (C++: 2 frames after last collision).
-      mine.mineImmunes = mine.mineImmunes.filter(immune => {
-        const entity = this.spawnedEntities.get(immune.entityId);
-        if (!entity || entity.destroyed) return false;
-        return this.frameCounter <= immune.collideFrame + 2;
-      });
-
-      // Source parity: MinefieldBehavior creator death check.
-      // When the creator dies and stopsRegenAfterCreatorDies is set, stop regen and start draining.
-      if (mine.mineRegenerates && prof.stopsRegenAfterCreatorDies && this.frameCounter >= mine.mineNextDeathCheckFrame) {
-        mine.mineNextDeathCheckFrame = this.frameCounter + LOGIC_FRAME_RATE; // Check every second.
-        if (mine.mineCreatorId > 0) {
-          const creator = this.spawnedEntities.get(mine.mineCreatorId);
-          if (!creator || creator.destroyed) {
-            mine.mineRegenerates = false;
-            mine.mineDraining = true;
-            // Source parity: stopHealing() on AutoHealBehavior when creator dies.
-            if (mine.autoHealProfile) {
-              mine.autoHealDamageDelayUntilFrame = Number.MAX_SAFE_INTEGER;
-            }
-          }
-        }
-      }
-
-      if (mine.mineDraining && prof.degenPercentPerSecondAfterCreatorDies > 0) {
-        const drainAmount = (mine.maxHealth * prof.degenPercentPerSecondAfterCreatorDies) / LOGIC_FRAME_RATE;
-        this.applyWeaponDamageAmount(mine.id, mine, drainAmount, 'UNRESISTABLE');
-      }
-    }
-  }
-
-  /**
-   * Source parity: Check if an entity is actively clearing mines.
-   * AIUpdate.cpp line 3144: attacking with a WEAPON_ANTI_MINE weapon.
-   */
-  private isEntityClearingMines(entity: MapEntity): boolean {
-    if (!this.entityHasObjectStatus(entity, 'IS_ATTACKING')) return false;
-    const weapon = entity.attackWeapon;
-    if (!weapon) return false;
-    return (weapon.antiMask & WEAPON_ANTI_MINE) !== 0;
-  }
-
-  // ──── Salvage Crate Collision System ─────────────────────────────────────
-
-  /**
-   * Source parity: CrateCollide::isValidToExecute — validate collector eligibility.
-   * Checks KindOf requirements, death ownership, building pickup, human-only, etc.
-   */
-  private isCrateCollideEligible(crate: MapEntity, collector: MapEntity): boolean {
-    const prof = crate.crateCollideProfile!;
-    // Must not be effectively dead.
-    if (collector.health <= 0 || collector.destroyed) return false;
-    // Source parity: neutral units cannot collect crates.
-    if (!collector.side) return false;
-    // Source parity: must have KindOf requirements.
-    if (prof.requiredKindOf.length > 0) {
-      if (!prof.requiredKindOf.every(k => collector.kindOf.has(k))) return false;
-    }
-    // Source parity: must NOT have forbidden KindOf.
-    if (prof.forbiddenKindOf.length > 0) {
-      if (prof.forbiddenKindOf.some(k => collector.kindOf.has(k))) return false;
-    }
-    // Source parity: ForbidOwnerPlayer — dead unit's team cannot collect.
-    if (prof.forbidOwnerPlayer && crate.side) {
-      if (this.normalizeSide(collector.side) === this.normalizeSide(crate.side)) return false;
-    }
-    // Source parity: BuildingPickup — only buildings can bypass AI/movement check.
-    if (!prof.buildingPickup && collector.kindOf.has('STRUCTURE')) return false;
-    // Source parity: non-buildings must be able to move (have AI).
-    if (!collector.kindOf.has('STRUCTURE') && !collector.canMove) return false;
-    return true;
-  }
-
-  /**
-   * Source parity: CrateCollide::onCollide → executeCrateBehavior dispatch.
-   * Routes to the appropriate crate behavior handler based on crateType.
-   */
-  private executeGeneralCrateBehavior(crate: MapEntity, collector: MapEntity): void {
-    const prof = crate.crateCollideProfile!;
-    let success = false;
-    switch (prof.crateType) {
-      case 'HEAL':
-        success = this.executeCrateHeal(collector);
-        break;
-      case 'MONEY':
-        success = this.executeCrateMoney(collector, prof.moneyProvided);
-        break;
-      case 'VETERANCY':
-        success = this.executeCrateVeterancy(crate, collector, prof);
-        break;
-      case 'SHROUD':
-        success = this.executeCrateShroud(collector);
-        break;
-      case 'UNIT':
-        success = this.executeCrateUnit(crate, collector, prof);
-        break;
-    }
-    if (success) {
-      this.markEntityDestroyed(crate.id, collector.id);
-    }
-  }
-
-  /**
-   * Source parity: HealCrateCollide::executeCrateBehavior — heals all units of collector's side.
-   */
-  private executeCrateHeal(collector: MapEntity): boolean {
-    if (!collector.side) return false;
-    const collectorSide = this.normalizeSide(collector.side);
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.health >= entity.maxHealth) continue;
-      if (!entity.side) continue;
-      if (this.normalizeSide(entity.side) !== collectorSide) continue;
-      entity.health = entity.maxHealth;
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: MoneyCrateCollide::executeCrateBehavior — deposits credits.
-   */
-  private executeCrateMoney(collector: MapEntity, amount: number): boolean {
-    if (!collector.side || amount <= 0) return false;
-    depositSideCreditsImpl(this.sideCredits, this.normalizeSide(collector.side), amount);
-    return true;
-  }
-
-  /**
-   * Source parity: VeterancyCrateCollide::executeCrateBehavior — grants veterancy levels.
-   */
-  private executeCrateVeterancy(crate: MapEntity, collector: MapEntity, prof: CrateCollideProfile): boolean {
-    if (!collector.experienceProfile) return false;
-    if (collector.experienceState.currentLevel >= LEVEL_HEROIC) return false;
-
-    if (prof.isPilot) {
-      // Source parity: VeterancyCrateCollide::isValidToExecute / executeCrateBehavior.
-      // Pilot only "enters" same-side, non-airborne targets and only while actively targeting it.
-      const crateSide = crate.side ? this.normalizeSide(crate.side) : null;
-      const collectorSide = collector.side ? this.normalizeSide(collector.side) : null;
-      if (!crateSide || !collectorSide || crateSide !== collectorSide) return false;
-
-      const terrainY = this.resolveGroundHeight(collector.x, collector.z);
-      if ((collector.y - collector.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD) {
-        return false;
-      }
-
-      if (crate.pilotFindVehicleTargetId !== null && crate.pilotFindVehicleTargetId !== collector.id) {
-        return false;
-      }
-    }
-
-    const levelsToGain = prof.addsOwnerVeterancy
-      ? Math.max(1, crate.experienceState.currentLevel)
-      : 1;
-
-    if (prof.veterancyRange <= 0) {
-      // Single unit effect.
-      this.grantVeterancyLevels(collector, levelsToGain);
-    } else {
-      // Area effect — upgrade all nearby same-side units.
-      const collectorSide = this.normalizeSide(collector.side ?? '');
-      const rangeSq = prof.veterancyRange * prof.veterancyRange;
-      for (const entity of this.spawnedEntities.values()) {
-        if (entity.destroyed || !entity.experienceProfile) continue;
-        if (!entity.side || this.normalizeSide(entity.side) !== collectorSide) continue;
-        if (entity.experienceState.currentLevel >= LEVEL_HEROIC) continue;
-        const dx = entity.x - collector.x;
-        const dz = entity.z - collector.z;
-        if (dx * dx + dz * dz <= rangeSq) {
-          this.grantVeterancyLevels(entity, levelsToGain);
-        }
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ShroudCrateCollide::executeCrateBehavior — reveals entire map.
-   */
-  private executeCrateShroud(collector: MapEntity): boolean {
-    if (!collector.side) return false;
-    // Reveal entire map for collector's side by marking all fog-of-war as revealed.
-    const side = this.normalizeSide(collector.side);
-    this.revealEntireMapForSide(side);
-    return true;
-  }
-
-  /**
-   * Source parity: UnitCrateCollide::executeCrateBehavior — spawns N units nearby.
-   */
-  private executeCrateUnit(crate: MapEntity, collector: MapEntity, prof: CrateCollideProfile): boolean {
-    if (!prof.unitType) return false;
-    const count = Math.max(1, prof.unitCount);
-    for (let i = 0; i < count; i++) {
-      // Find position around crate (0-20 unit radius).
-      const angle = this.gameRandom.nextFloat() * Math.PI * 2;
-      const radius = this.gameRandom.nextFloat() * 20;
-      const spawnX = crate.x + Math.cos(angle) * radius;
-      const spawnZ = crate.z + Math.sin(angle) * radius;
-      const rotation = this.gameRandom.nextFloat() * Math.PI * 2 - Math.PI;
-      this.spawnEntityFromTemplate(prof.unitType, spawnX, spawnZ, rotation, collector.side);
-    }
-    return true;
-  }
-
-  /**
-   * Helper: grant N veterancy levels to an entity.
-   */
-  private grantVeterancyLevels(entity: MapEntity, levels: number): void {
-    const profile = entity.experienceProfile;
-    if (!profile) return;
-    for (let i = 0; i < levels; i++) {
-      const currentLevel = entity.experienceState.currentLevel;
-      const targetLevel = Math.min(currentLevel + 1, LEVEL_HEROIC) as VeterancyLevel;
-      if (targetLevel <= currentLevel) break;
-      const xpNeeded = (profile.experienceRequired[targetLevel] ?? 0) - entity.experienceState.currentExperience;
-      if (xpNeeded <= 0) break;
-      const result = addExperiencePointsImpl(entity.experienceState, profile, xpNeeded, true);
-      if (result.didLevelUp) {
-        this.onEntityLevelUp(entity, result.oldLevel, result.newLevel);
-      }
-    }
-  }
-
-  private clampVeterancyLevel(level: number): VeterancyLevel {
-    if (!Number.isFinite(level)) {
-      return LEVEL_REGULAR;
-    }
-    const clamped = Math.max(LEVEL_REGULAR, Math.min(LEVEL_HEROIC, Math.trunc(level)));
-    return clamped as VeterancyLevel;
-  }
-
-  /**
-   * Source parity: ExperienceTracker::setMinVeterancyLevel — raise veterancy to at least
-   * the given level (never lowers). Used by VeterancyGainCreate::onCreate.
-   * C++ file: ExperienceTracker.cpp.
-   */
-  private setMinVeterancyLevel(entity: MapEntity, targetLevel: VeterancyLevel): void {
-    const profile = entity.experienceProfile;
-    if (!profile) return;
-    if (entity.experienceState.currentLevel >= targetLevel) return;
-    // Source parity: C++ ExperienceTracker::setMinVeterancyLevel directly sets level and XP
-    // rather than going through addExperiencePoints. This handles edge cases where
-    // experienceRequired thresholds are 0.
-    const oldLevel = entity.experienceState.currentLevel;
-    entity.experienceState.currentLevel = targetLevel;
-    entity.experienceState.currentExperience = profile.experienceRequired[targetLevel] ?? 0;
-    this.onEntityLevelUp(entity, oldLevel, targetLevel);
-  }
-
   /**
    * Source parity: ExperienceTracker::setVeterancyLevel — set veterancy to an explicit level.
    * Used by map-object property objectVeterancy in Object::updateObjValuesFromMapProperties.
@@ -21886,7 +21443,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: revealMapForPlayer — reveals entire map fog-of-war for a side.
    * Used by shroud crates: marks map explored (FOGGED where no active lookers).
    */
-  private revealEntireMapForSide(side: string): void {
+  /* @internal */ revealEntireMapForSide(side: string): void {
     const grid = this.fogOfWarGrid;
     if (!grid) return;
     const playerIdx = this.resolvePlayerIndexForSide(side);
@@ -22120,75 +21677,6 @@ export class GameLogicSubsystem implements Subsystem {
 
     if (result.didLevelUp) {
       this.onEntityLevelUp(collector, result.oldLevel, result.newLevel);
-    }
-  }
-
-  /**
-   * Source parity: SalvageCrateCollide::doMoney.
-   * Deposits random money in [minMoney, maxMoney] to the collector's side.
-   */
-  private doSalvageMoney(collector: MapEntity, prof: SalvageCrateProfile): void {
-    let money: number;
-    if (prof.minMoney !== prof.maxMoney) {
-      money = this.gameRandom.nextRange(prof.minMoney, prof.maxMoney);
-    } else {
-      money = prof.minMoney;
-    }
-
-    if (money > 0 && collector.side) {
-      depositSideCreditsImpl(this.sideCredits, this.normalizeSide(collector.side), money);
-    }
-  }
-
-  /**
-   * Source parity: MinefieldBehavior::onDamage (MinefieldBehavior.cpp line 453).
-   * Recalculates virtual mines from health ratio. When mines > expected, detonate
-   * sympathetically. When mines < expected (healing), increase mine count.
-   */
-  private mineOnDamage(mine: MapEntity, sourceEntityId: number | null, damageType: string): void {
-    const prof = mine.minefieldProfile!;
-    if (prof.numVirtualMines <= 0) return;
-
-    // Source parity: loop until virtual mines match health-proportional expected count.
-    for (let iterations = 0; iterations < prof.numVirtualMines + 1; iterations++) {
-      const ratio = mine.health / mine.maxHealth;
-      const virtualMinesExpectedF = prof.numVirtualMines * ratio;
-      // Source parity: healing rounds down, damage rounds up.
-      const virtualMinesExpected = Math.min(
-        prof.numVirtualMines,
-        damageType === 'HEALING'
-          ? Math.floor(virtualMinesExpectedF)
-          : Math.ceil(virtualMinesExpectedF),
-      );
-
-      if (mine.mineVirtualMinesRemaining < virtualMinesExpected) {
-        // Healing: increase virtual mine count.
-        mine.mineVirtualMinesRemaining = virtualMinesExpected;
-      } else if (mine.mineVirtualMinesRemaining > virtualMinesExpected) {
-        if (mine.mineDraining
-            && sourceEntityId !== null && sourceEntityId === mine.id
-            && damageType === 'UNRESISTABLE') {
-          // Source parity: self-drain just removes a mine without detonation.
-          mine.mineVirtualMinesRemaining--;
-        } else {
-          // Sympathetic detonation at the mine's own position.
-          this.detonateMineOnce(mine, mine.x, mine.z);
-        }
-      } else {
-        break;
-      }
-
-      if (mine.destroyed) break;
-    }
-
-    // Source parity: MASKED/regen health floor after recalculation.
-    if (mine.mineVirtualMinesRemaining <= 0) {
-      if (mine.mineRegenerates && mine.health < 0.1) {
-        mine.health = 0.1;
-      }
-      mine.objectStatusFlags.add('MASKED');
-    } else {
-      mine.objectStatusFlags.delete('MASKED');
     }
   }
 
@@ -22876,41 +22364,6 @@ export class GameLogicSubsystem implements Subsystem {
         }
         updateSupplyTruckImpl(entity, entity.supplyTruckProfile, supplyChainContext);
       }
-    }
-  }
-
-  private setWorkerMineClearingDetail(entity: MapEntity, enabled: boolean): void {
-    if (!this.isWorkerEntity(entity)) {
-      return;
-    }
-    const hasFlag = (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_MINE_CLEARING_DETAIL) !== 0;
-    if (enabled) {
-      entity.weaponSetFlagsMask |= WEAPON_SET_FLAG_MINE_CLEARING_DETAIL;
-    } else {
-      entity.weaponSetFlagsMask &= ~WEAPON_SET_FLAG_MINE_CLEARING_DETAIL;
-    }
-    const nextHasFlag = (entity.weaponSetFlagsMask & WEAPON_SET_FLAG_MINE_CLEARING_DETAIL) !== 0;
-    if (hasFlag !== nextHasFlag) {
-      this.refreshEntityCombatProfiles(entity);
-    }
-  }
-
-  private dropWorkerSupplyBoxesIfClearingMines(entity: MapEntity): void {
-    if (!this.isWorkerEntity(entity)) {
-      return;
-    }
-    if (!this.isEntityClearingMines(entity)) {
-      return;
-    }
-    const state = this.supplyTruckStates.get(entity.id);
-    if (!state || state.currentBoxes <= 0) {
-      return;
-    }
-    // Source parity: WorkerAIUpdate::aiDoCommand — drop boxes when clearing mines.
-    state.currentBoxes = 0;
-    if (state.aiState === SupplyTruckAIState.APPROACHING_DEPOT || state.aiState === SupplyTruckAIState.DEPOSITING) {
-      state.targetDepotId = null;
-      state.aiState = SupplyTruckAIState.IDLE;
     }
   }
 
@@ -25758,29 +25211,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.issueMoveTo(entityId, centerX, centerZ);
   }
 
-  /**
-   * Resolve the current guard anchor position. For guard-object mode, this
-   * follows the guarded entity. For guard-position, returns the fixed point.
-   */
-  private resolveGuardAnchorPosition(entity: MapEntity): { x: number; z: number } | null {
-    if (entity.guardAreaTriggerIndex >= 0 && !this.mapTriggerRegions[entity.guardAreaTriggerIndex]) {
-      entity.guardAreaTriggerIndex = -1;
-      entity.guardState = 'NONE';
-      return null;
-    }
-    if (entity.guardObjectId !== 0) {
-      const guarded = this.spawnedEntities.get(entity.guardObjectId);
-      if (!guarded || guarded.destroyed) {
-        // Guarded object is gone — drop guard state.
-        entity.guardState = 'NONE';
-        return null;
-      }
-      entity.guardPositionX = guarded.x;
-      entity.guardPositionZ = guarded.z;
-    }
-    return { x: entity.guardPositionX, z: entity.guardPositionZ };
-  }
-
   // ── JetAI helpers ──
 
   /**
@@ -25821,183 +25251,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return bestAirfield;
-  }
-
-  /**
-   * Source parity: AIGuardMachine state updates — runs the guard state machine
-   * for each guarding entity. States: IDLE → PURSUING → RETURNING → IDLE.
-   */
-  private updateGuardBehavior(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.guardState === 'NONE') {
-        continue;
-      }
-
-      const anchor = this.resolveGuardAnchorPosition(entity);
-      if (!anchor) {
-        continue;
-      }
-
-      switch (entity.guardState) {
-        case 'IDLE':
-          this.updateGuardIdle(entity, anchor);
-          break;
-        case 'PURSUING':
-          this.updateGuardPursuing(entity, anchor);
-          break;
-        case 'RETURNING':
-          this.updateGuardReturning(entity, anchor);
-          break;
-      }
-    }
-  }
-
-  /**
-   * Guard IDLE state: entity is at the guard point. Periodically scan for enemies
-   * within the inner guard range. If an enemy is found, engage and transition to PURSUING.
-   * Source parity: AIGuardIdleState — scan rate is m_guardEnemyScanRate (0.5s).
-   */
-  private updateGuardIdle(entity: MapEntity, anchor: { x: number; z: number }): void {
-    // Source parity: if guarding an object that has moved, return to it.
-    if (entity.guardObjectId !== 0) {
-      const dx = entity.x - anchor.x;
-      const dz = entity.z - anchor.z;
-      const followThreshold = PATHFIND_CELL_SIZE * 4;
-      if (dx * dx + dz * dz > followThreshold * followThreshold) {
-        entity.guardState = 'RETURNING';
-        entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
-        this.issueMoveTo(entity.id, anchor.x, anchor.z);
-        return;
-      }
-    }
-
-    // Throttle scanning.
-    if (this.frameCounter < entity.guardNextScanFrame) {
-      return;
-    }
-    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_SCAN_RATE_FRAMES;
-
-    // Source parity: stealthed guarders don't auto-acquire.
-    if (entity.objectStatusFlags.has('STEALTHED')) {
-      return;
-    }
-
-    if (!entity.attackWeapon) {
-      return;
-    }
-
-    const target = this.findGuardTarget(entity, anchor.x, anchor.z, entity.guardInnerRange);
-    if (target) {
-      // Source parity: GUARDMODE_GUARD_WITHOUT_PURSUIT — attack only within inner range, don't chase.
-      entity.guardState = 'PURSUING';
-      entity.guardChaseExpireFrame = this.frameCounter + GUARD_CHASE_UNIT_FRAMES;
-      this.issueAttackEntity(entity.id, target.id, 'AI');
-    }
-  }
-
-  /**
-   * Guard PURSUING state: entity is chasing an enemy. Monitor for:
-   * 1. Target dies/becomes invalid → RETURNING
-   * 2. Target escapes outer range → RETURNING
-   * 3. Chase timer expires → RETURNING
-   * 4. GUARDMODE_GUARD_WITHOUT_PURSUIT — immediately return after inner-range target lost
-   * Source parity: AIGuardOuterState.
-   */
-  private updateGuardPursuing(entity: MapEntity, anchor: { x: number; z: number }): void {
-    const targetId = entity.attackTargetEntityId;
-    const target = targetId !== null ? this.spawnedEntities.get(targetId) ?? null : null;
-
-    // Target gone — return to guard point.
-    if (!target || target.destroyed) {
-      this.transitionGuardToReturning(entity, anchor);
-      return;
-    }
-
-    // GUARD_WITHOUT_PURSUIT: no outer-range chase, return immediately if target escapes inner range.
-    if (entity.guardMode === 1) {
-      const dx = target.x - anchor.x;
-      const dz = target.z - anchor.z;
-      const innerRangeSqr = entity.guardInnerRange * entity.guardInnerRange;
-      if (dx * dx + dz * dz > innerRangeSqr) {
-        this.transitionGuardToReturning(entity, anchor);
-        return;
-      }
-      return;
-    }
-
-    // Source parity: AI_GUARD_INNER fights without a time limit inside inner range.
-    // AI_GUARD_OUTER starts a chase timer when the target is outside inner range.
-    const dx = target.x - anchor.x;
-    const dz = target.z - anchor.z;
-    const targetDistSqr = dx * dx + dz * dz;
-    const innerRangeSqr = entity.guardInnerRange * entity.guardInnerRange;
-    const outerRangeSqr = entity.guardOuterRange * entity.guardOuterRange;
-
-    if (targetDistSqr <= innerRangeSqr) {
-      // Target is in inner range — fight indefinitely, reset chase timer.
-      entity.guardChaseExpireFrame = this.frameCounter + GUARD_CHASE_UNIT_FRAMES;
-      return;
-    }
-
-    // Target is outside inner range — check outer range and chase timer.
-    if (targetDistSqr > outerRangeSqr) {
-      this.transitionGuardToReturning(entity, anchor);
-      return;
-    }
-
-    if (GUARD_CHASE_UNIT_FRAMES > 0 && this.frameCounter >= entity.guardChaseExpireFrame) {
-      this.transitionGuardToReturning(entity, anchor);
-      return;
-    }
-  }
-
-  /**
-   * Guard RETURNING state: entity is walking back to the guard point.
-   * Periodically scan for enemies along the way (source parity: m_guardEnemyReturnScanRate).
-   * Transition to IDLE once arrived.
-   */
-  private updateGuardReturning(entity: MapEntity, anchor: { x: number; z: number }): void {
-    // Check if we've arrived at the guard point.
-    if (!entity.moving) {
-      const dx = entity.x - anchor.x;
-      const dz = entity.z - anchor.z;
-      const arrivalThreshold = PATHFIND_CELL_SIZE * 2;
-      if (dx * dx + dz * dz <= arrivalThreshold * arrivalThreshold) {
-        entity.guardState = 'IDLE';
-        entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_SCAN_RATE_FRAMES;
-        return;
-      }
-      // Not moving but not at guard point — re-issue move.
-      this.issueMoveTo(entity.id, anchor.x, anchor.z);
-    }
-
-    // Source parity: scan for enemies during return at a slower rate.
-    if (this.frameCounter < entity.guardNextScanFrame) {
-      return;
-    }
-    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
-
-    if (entity.objectStatusFlags.has('STEALTHED') || !entity.attackWeapon) {
-      return;
-    }
-
-    const target = this.findGuardTarget(entity, anchor.x, anchor.z, entity.guardInnerRange);
-    if (target) {
-      entity.guardState = 'PURSUING';
-      entity.guardChaseExpireFrame = this.frameCounter + GUARD_CHASE_UNIT_FRAMES;
-      this.issueAttackEntity(entity.id, target.id, 'AI');
-    }
-  }
-
-  /**
-   * Transition a guarding entity back to RETURNING state: clear its attack target,
-   * stop it, and issue a move back to the guard anchor position.
-   */
-  private transitionGuardToReturning(entity: MapEntity, anchor: { x: number; z: number }): void {
-    this.clearAttackTarget(entity.id);
-    entity.guardState = 'RETURNING';
-    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
-    this.issueMoveTo(entity.id, anchor.x, anchor.z);
   }
 
   /**
@@ -28064,124 +27317,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  // ── HordeUpdate implementation ─────────────────────────────────────────
-
-  /**
-   * Source parity: HordeUpdate::update() — periodic spatial scan to detect
-   * nearby matching units. When enough units are grouped, sets HORDE weapon
-   * bonus condition, granting damage/rate bonuses. Also evaluates NATIONALISM
-   * and FANATICISM bonuses if the player has those upgrades.
-   */
-
-  /**
-   * Source parity: EnemyNearUpdate::update — periodic scan for nearby enemies.
-   * Sets/clears entity.enemyNearDetected based on whether an enemy exists within visionRange.
-   * C++ file: EnemyNearUpdate.cpp lines 65-107.
-   */
-  private updateEnemyNear(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (entity.enemyNearScanDelayFrames <= 0) continue;
-
-      // Source parity: countdown-based scan delay (decrements each frame, resets on scan).
-      if (entity.enemyNearNextScanCountdown > 0) {
-        entity.enemyNearNextScanCountdown--;
-        continue;
-      }
-      // Reset countdown for next scan.
-      entity.enemyNearNextScanCountdown = entity.enemyNearScanDelayFrames;
-
-      // Source parity: TheAI->findClosestEnemy(getObject(), visionRange, AI::CAN_SEE).
-      // Simplified: scan for any enemy entity within vision range.
-      const visionRange = entity.visionRange;
-      if (visionRange <= 0) {
-        entity.enemyNearDetected = false;
-        continue;
-      }
-      const rangeSqr = visionRange * visionRange;
-      let foundEnemy = false;
-      for (const candidate of this.spawnedEntities.values()) {
-        if (candidate.id === entity.id || candidate.destroyed) continue;
-        if (!candidate.canTakeDamage) continue;
-        if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) continue;
-        const dx = candidate.x - entity.x;
-        const dz = candidate.z - entity.z;
-        if (dx * dx + dz * dz <= rangeSqr) {
-          foundEnemy = true;
-          break;
-        }
-      }
-      entity.enemyNearDetected = foundEnemy;
-    }
-  }
-
-  /**
-   * Source parity: CheckpointUpdate::update — gate opens for allies, closes for enemies.
-   * C++ file: CheckpointUpdate.cpp lines 107-171.
-   * Scans for allies and enemies within vision range, adjusts geometry to allow/block passage.
-   */
-  private updateCheckpoints(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      const prof = entity.checkpointProfile;
-      if (!prof) continue;
-
-      // Save previous state for change detection.
-      // Source parity: C++ lines 78-95 — temporarily restore full minor radius during scan
-      // to prevent oscillation when the gate is partially open and units are at the boundary.
-      const geom = entity.obstacleGeometry;
-      const savedMinorRadius = geom ? geom.minorRadius : 0;
-      if (geom) {
-        geom.minorRadius = entity.checkpointMaxMinorRadius;
-      }
-
-      // Source parity: C++ line 71 — always scan (delay code effectively disabled with `|| TRUE`).
-      const visionRange = entity.visionRange;
-      if (visionRange > 0) {
-        const rangeSqr = visionRange * visionRange;
-        let foundEnemy = false;
-        let foundAlly = false;
-        for (const candidate of this.spawnedEntities.values()) {
-          if (candidate.id === entity.id || candidate.destroyed) continue;
-          if (!candidate.canTakeDamage) continue;
-          const dx = candidate.x - entity.x;
-          const dz = candidate.z - entity.z;
-          if (dx * dx + dz * dz > rangeSqr) continue;
-          const relationship = this.getTeamRelationship(entity, candidate);
-          if (relationship === RELATIONSHIP_ENEMIES) foundEnemy = true;
-          else if (relationship === RELATIONSHIP_ALLIES) foundAlly = true;
-          if (foundEnemy && foundAlly) break;
-        }
-        entity.checkpointEnemyNear = foundEnemy;
-        entity.checkpointAllyNear = foundAlly;
-      } else {
-        entity.checkpointEnemyNear = false;
-        entity.checkpointAllyNear = false;
-      }
-
-      // Restore the actual minor radius after scan.
-      if (geom) {
-        geom.minorRadius = savedMinorRadius;
-      }
-
-      const open = !entity.checkpointEnemyNear && entity.checkpointAllyNear;
-
-      // Source parity: C++ lines 153-161 — gradually shrink/expand minor radius.
-      // When open: shrink to 0 (units can pass through). When closed: expand to max.
-      if (geom) {
-        if (open) {
-          if (geom.minorRadius > 0) {
-            geom.minorRadius = Math.max(0, geom.minorRadius - 0.333);
-          }
-        } else {
-          if (geom.minorRadius < entity.checkpointMaxMinorRadius) {
-            geom.minorRadius = Math.min(entity.checkpointMaxMinorRadius, geom.minorRadius + 0.333);
-          }
-        }
-      }
-    }
-  }
-
   /**
    * Source parity: GrantUpgradeCreate — apply upgrade to entity or its controlling side.
    * C++ file: GrantUpgradeCreate.cpp lines 93-109 / 124-140.
@@ -28210,227 +27345,6 @@ export class GameLogicSubsystem implements Subsystem {
     // Can't use applyUpgradeToEntity() because entity may not be in spawnedEntities yet.
     const normalizedUpgrade = prof.upgradeName.trim().toUpperCase();
     entity.completedUpgrades.add(normalizedUpgrade);
-  }
-
-  private updateHorde(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
-      const profile = entity.hordeProfile;
-      if (!profile) continue;
-
-      // Source parity: periodic expensive scan (staggered per entity).
-      if (this.frameCounter < entity.hordeNextCheckFrame) continue;
-      entity.hordeNextCheckFrame = this.frameCounter + profile.updateRate;
-
-      let join = false;
-      let trueHordeMember = false;
-
-      // Count nearby matching units (including self count implicitly via >= minCount-1).
-      let nearbyCount = 0;
-      const scanRangeSqr = profile.minDist * profile.minDist;
-      const rubOffRadiusSqr = profile.rubOffRadius * profile.rubOffRadius;
-      let nearbyTrueHordeMember = false;
-
-      for (const candidate of this.spawnedEntities.values()) {
-        if (candidate === entity) continue;
-        if (candidate.destroyed || candidate.slowDeathState || candidate.structureCollapseState) continue;
-
-        // Source parity: PartitionFilterHordeMember checks.
-        // Must have HordeUpdate module.
-        if (!candidate.hordeProfile) continue;
-
-        // Source parity: ExactMatch check — same template name.
-        if (profile.exactMatch && entity.templateName !== candidate.templateName) continue;
-
-        // Source parity: KindOf filter — candidate must match ALL required kindOf flags.
-        // C++ uses isKindOfMulti() with KINDOFMASK_NONE which requires all bits in mustBeSet.
-        if (profile.kindOf.size > 0) {
-          let allMatch = true;
-          for (const k of profile.kindOf) {
-            if (!candidate.kindOf.has(k)) {
-              allMatch = false;
-              break;
-            }
-          }
-          if (!allMatch) continue;
-        }
-
-        // Source parity: AlliesOnly filter.
-        if (profile.alliesOnly) {
-          const rel = this.getTeamRelationshipBySides(
-            entity.side ?? '',
-            candidate.side ?? '',
-          );
-          if (rel !== RELATIONSHIP_ALLIES) continue;
-        }
-
-        // Distance check.
-        const dx = candidate.x - entity.x;
-        const dz = candidate.z - entity.z;
-        const distSqr = dx * dx + dz * dz;
-        if (distSqr > scanRangeSqr) continue;
-
-        nearbyCount++;
-
-        // Source parity: rub-off check — if any nearby matching unit is a true horde member
-        // within rubOffRadius, we inherit horde status even without enough count.
-        if (candidate.isTrueHordeMember && distSqr <= rubOffRadiusSqr) {
-          nearbyTrueHordeMember = true;
-        }
-      }
-
-      // Source parity: minCount includes self, so check >= minCount - 1 neighbors.
-      if (nearbyCount >= profile.minCount - 1) {
-        join = true;
-        trueHordeMember = true;
-      } else if (nearbyTrueHordeMember) {
-        // Source parity: rub-off inheritance — close enough to a true member.
-        join = true;
-      }
-
-      entity.isInHorde = join;
-      entity.isTrueHordeMember = trueHordeMember;
-
-      // Source parity: AIUpdateInterface::evaluateMoraleBonus() — always recalculate
-      // and write the correct flags (C++ is idempotent, not gated on change detection).
-      if (join) {
-        entity.weaponBonusConditionFlags |= WEAPON_BONUS_HORDE;
-      } else {
-        entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_HORDE;
-        entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_NATIONALISM;
-        entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
-      }
-
-      // Source parity: NATIONALISM/FANATICISM bonuses require horde + allowedNationalism + player science.
-      if (join) {
-        if (profile.allowedNationalism) {
-          const sideSciences = this.getSideScienceSet(this.normalizeSide(entity.side ?? ''));
-          const hasNationalism = sideSciences.has('SCIENCE_NATIONALISM')
-            || sideSciences.has('NATIONALISM');
-          const hasFanaticism = sideSciences.has('SCIENCE_FANATICISM')
-            || sideSciences.has('FANATICISM');
-          if (hasNationalism) {
-            entity.weaponBonusConditionFlags |= WEAPON_BONUS_NATIONALISM;
-            if (hasFanaticism) {
-              entity.weaponBonusConditionFlags |= WEAPON_BONUS_FANATICISM;
-            } else {
-              entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
-            }
-          } else {
-            entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_NATIONALISM;
-            entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
-          }
-        } else {
-          // Source parity: allowedNationalism=false forces nationalism/fanaticism off.
-          entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_NATIONALISM;
-          entity.weaponBonusConditionFlags &= ~WEAPON_BONUS_FANATICISM;
-        }
-      }
-    }
-  }
-
-  // ── DemoTrapUpdate implementation ────────────────────────────────────────
-
-  /**
-   * Source parity: DemoTrapUpdate::update() — periodic proximity scan.
-   * In proximity mode, scans nearby entities; detonates when an enemy
-   * enters the trigger range (unless friendlies are blocking).
-   */
-  private updateDemoTraps(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
-      const profile = entity.demoTrapProfile;
-      if (!profile || entity.demoTrapDetonated) continue;
-
-      // Source parity: skip while under construction or sold.
-      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION') ||
-          entity.objectStatusFlags.has('SOLD')) {
-        continue;
-      }
-
-      // Not in proximity mode → dormant, skip scanning.
-      if (!entity.demoTrapProximityMode) continue;
-
-      // Scan throttle.
-      if (this.frameCounter < entity.demoTrapNextScanFrame) continue;
-      entity.demoTrapNextScanFrame = this.frameCounter + Math.max(1, profile.scanFrames);
-
-      // Proximity scan.
-      const rangeSq = profile.triggerDetonationRange * profile.triggerDetonationRange;
-      let shallDetonate = false;
-
-      for (const other of this.spawnedEntities.values()) {
-        if (other === entity) continue;
-        if (other.destroyed || other.slowDeathState || other.structureCollapseState) continue;
-
-        // Source parity: isEffectivelyDead().
-        if (other.health <= 0) continue;
-
-        // IgnoreTargetTypes filter.
-        if (profile.ignoreKindOf.size > 0) {
-          let skip = false;
-          for (const k of profile.ignoreKindOf) {
-            if (other.kindOf.has(k)) { skip = true; break; }
-          }
-          if (skip) continue;
-        }
-
-        // Source parity: partition manager pre-filters by range. Only consider
-        // entities within the trigger range for both detonation and friendly blocking.
-        const dx = entity.x - other.x;
-        const dz = entity.z - other.z;
-        const distSq = dx * dx + dz * dz;
-        if (distSq > rangeSq) continue;
-
-        // Source parity (ZH): dozer with DISARM weapon that is actively attacking → skip.
-        if (other.kindOf.has('DOZER') && other.objectStatusFlags.has('IS_ATTACKING')) {
-          continue;
-        }
-
-        // Relationship check — we want to know if entity considers other to be enemy.
-        const rel = this.getTeamRelationship(entity, other);
-        if (rel !== RELATIONSHIP_ENEMIES) {
-          if (!profile.friendlyDetonation) {
-            // Non-enemy in range blocks detonation entirely.
-            shallDetonate = false;
-            break;
-          }
-          // friendlyDetonation=true → skip non-enemies, keep looking.
-          continue;
-        }
-
-        // Source parity: don't detonate on anything airborne.
-        if (other.kindOf.has('AIRCRAFT') && other.category === 'air') continue;
-
-        shallDetonate = true;
-        if (profile.friendlyDetonation) break; // no need to check for friendlies
-      }
-
-      if (shallDetonate) {
-        this.detonateDemoTrap(entity, profile);
-      }
-    }
-  }
-
-  /**
-   * Source parity: DemoTrapUpdate::detonate() — fire temp weapon, kill self.
-   */
-  private detonateDemoTrap(entity: MapEntity, profile: DemoTrapProfile): void {
-    entity.demoTrapDetonated = true;
-
-    // Fire detonation weapon at own position (if not under construction/sold).
-    if (!entity.objectStatusFlags.has('UNDER_CONSTRUCTION') &&
-        !entity.objectStatusFlags.has('SOLD')) {
-      if (profile.detonationWeaponName) {
-        const weaponDef = this.iniDataRegistry?.getWeapon(profile.detonationWeaponName);
-        if (weaponDef) {
-          this.fireTemporaryWeaponAtPosition(entity, weaponDef, entity.x, entity.z);
-        }
-      }
-    }
-
-    // Kill the trap.
-    this.markEntityDestroyed(entity.id, entity.id);
   }
 
   // ── RebuildHoleBehavior implementation ──────────────────────────────────────
@@ -28583,34 +27497,6 @@ export class GameLogicSubsystem implements Subsystem {
       if (other.attackTargetEntityId === hole.id) {
         other.attackTargetEntityId = reconstructing.id;
       }
-    }
-  }
-
-  /**
-   * Source parity: WanderAIUpdate::update — when idle, move to a random nearby position.
-   * C++ file: WanderAIUpdate.cpp — used by civilian units, animals, etc.
-   * C++ uses GameLogicRandomValue(5, 50) offset for both x and y.
-   */
-  private updateWanderAI(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
-      if (!entity.hasWanderAI) continue;
-      if (!entity.canMove || entity.isImmobile) continue;
-      if (this.isEntityDisabledForMovement(entity)) continue;
-
-      // Source parity: isIdle() — only wander when entity has no current activity.
-      const isIdle = !entity.moving
-        && entity.attackTargetEntityId === null
-        && entity.guardState === 'NONE';
-      if (!isIdle) continue;
-
-      // NOTE: C++ parity bug — offset is always positive, entities drift southeast over time.
-      // C++ source (WanderAIUpdate.cpp:58-59) uses GameLogicRandomValue(5, 50) for both axes.
-      const offsetX = this.gameRandom.nextRange(5, 50);
-      const offsetZ = this.gameRandom.nextRange(5, 50);
-      const destX = entity.x + offsetX;
-      const destZ = entity.z + offsetZ;
-      this.issueMoveTo(entity.id, destX, destZ);
     }
   }
 
@@ -29204,393 +28090,6 @@ export class GameLogicSubsystem implements Subsystem {
   private static readonly TOPPLE_ANGULAR_LIMIT = Math.PI / 2 - Math.PI / 64;
   /** Below this velocity, stop bouncing. */
   private static readonly TOPPLE_VELOCITY_BOUNCE_LIMIT = 0.01;
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // SpecialAbilityUpdate — unit special ability state machine
-  // ═══════════════════════════════════════════════════════════════════════
-
-  /**
-   * Source parity: SpecialAbilityUpdate::initiateIntentToDoSpecialPower —
-   * begins the special ability state machine for an entity.
-   */
-  private initiateSpecialAbility(
-    entityId: number,
-    targetEntityId: number | null,
-    targetX: number | null,
-    targetZ: number | null,
-  ): void {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) return;
-    const profile = entity.specialAbilityProfile;
-    const state = entity.specialAbilityState;
-    if (!profile || !state) return;
-
-    // Stop current movement/combat — ability takes priority.
-    // Must happen before setting active=true so cancelActiveSpecialAbility doesn't cancel the new ability.
-    this.cancelEntityCommandPathActions(entityId);
-
-    // Store target.
-    state.targetEntityId = targetEntityId;
-    state.targetX = targetX;
-    state.targetZ = targetZ;
-    state.noTargetCommand = targetEntityId === null && targetX === null;
-    state.withinStartAbilityRange = false;
-    state.prepFrames = 0;
-    state.animFrames = 0;
-    state.persistentTriggerCount = 0;
-    state.active = true;
-
-    // Source parity: SpecialAbilityUpdate::initiateIntentToDoSpecialPower — always reset
-    // packingState to PACKED, then conditionally advance to UNPACKED.
-    state.packingState = 'PACKED';
-    if (profile.unpackTimeFrames === 0 || (profile.skipPackingWithNoTarget && state.noTargetCommand)) {
-      state.packingState = 'UNPACKED';
-    }
-  }
-
-  /**
-   * Source parity: SpecialAbilityUpdate::update() — per-frame state machine.
-   */
-  private updateSpecialAbility(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      const profile = entity.specialAbilityProfile;
-      const state = entity.specialAbilityState;
-      if (!profile || !state || !state.active) continue;
-
-      // Source parity: isEffectivelyDead check — clean up ability on dying entity.
-      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) {
-        this.finishSpecialAbility(entity, false);
-        continue;
-      }
-
-      // ── Target validation ──
-      if (state.targetEntityId !== null) {
-        const target = this.spawnedEntities.get(state.targetEntityId);
-        if (!target || target.destroyed || target.slowDeathState || target.structureCollapseState) {
-          // Target died — abort.
-          this.finishSpecialAbility(entity, false);
-          continue;
-        }
-      }
-
-      // ── Handle pack/unpack animation timers ──
-      if (state.animFrames > 0) {
-        state.animFrames--;
-        if (state.animFrames <= 0) {
-          if (state.packingState === 'UNPACKING') {
-            state.packingState = 'UNPACKED';
-            if (profile.flipOwnerAfterUnpacking) {
-              entity.rotationY += Math.PI;
-            }
-          } else if (state.packingState === 'PACKING') {
-            state.packingState = 'PACKED';
-            if (profile.flipOwnerAfterPacking) {
-              entity.rotationY += Math.PI;
-            }
-            // Packing complete → finish ability.
-            this.finishSpecialAbility(entity, true);
-            continue;
-          }
-        } else {
-          continue; // Still animating.
-        }
-      }
-
-      // ── Preparation countdown ──
-      if (state.prepFrames > 0) {
-        // Source parity: abort if target moved beyond abort range.
-        if (!this.continueSpecialAbilityPreparation(entity, profile, state)) {
-          this.startSpecialAbilityPacking(entity, profile, state, false);
-          continue;
-        }
-
-        // Source parity: pre-trigger un-stealth.
-        if (profile.loseStealthOnTrigger && profile.preTriggerUnstealthFrames > 0
-          && state.prepFrames <= profile.preTriggerUnstealthFrames) {
-          entity.detectedUntilFrame = Math.max(
-            entity.detectedUntilFrame,
-            this.frameCounter + profile.preTriggerUnstealthFrames,
-          );
-        }
-
-        state.prepFrames--;
-        if (state.prepFrames <= 0) {
-          this.triggerSpecialAbilityEffect(entity, profile, state);
-
-          // Source parity: persistent mode — reset prep for next trigger.
-          if (profile.persistentPrepFrames > 0) {
-            state.prepFrames = profile.persistentPrepFrames;
-            state.persistentTriggerCount++;
-            continue;
-          }
-
-          // Non-persistent: start packing.
-          this.startSpecialAbilityPacking(entity, profile, state, true);
-        }
-        continue;
-      }
-
-      // ── Approach phase: move within StartAbilityRange ──
-      if (!state.withinStartAbilityRange) {
-        if (this.isWithinSpecialAbilityRange(entity, state, profile.startAbilityRange)) {
-          state.withinStartAbilityRange = true;
-        } else {
-          this.approachSpecialAbilityTarget(entity, state);
-          continue;
-        }
-      }
-
-      // ── Unpack phase ──
-      if (state.packingState === 'PACKED') {
-        this.startSpecialAbilityUnpacking(entity, profile, state);
-        continue;
-      }
-
-      // ── Start preparation after unpacked ──
-      if (state.packingState === 'UNPACKED') {
-        // Source parity: IS_USING_ABILITY is set at start of preparation, not initiation.
-        entity.objectStatusFlags.add('IS_USING_ABILITY');
-        state.prepFrames = profile.preparationFrames > 0 ? profile.preparationFrames : 1;
-        continue;
-      }
-    }
-  }
-
-  /**
-   * Source parity: Check if entity is within range of its special ability target.
-   */
-  private isWithinSpecialAbilityRange(
-    entity: MapEntity,
-    state: SpecialAbilityRuntimeState,
-    range: number,
-  ): boolean {
-    if (state.noTargetCommand) return true;
-    let tx: number;
-    let tz: number;
-    if (state.targetEntityId !== null) {
-      const target = this.spawnedEntities.get(state.targetEntityId);
-      if (!target) return true;
-      tx = target.x;
-      tz = target.z;
-    } else if (state.targetX !== null && state.targetZ !== null) {
-      tx = state.targetX;
-      tz = state.targetZ;
-    } else {
-      return true;
-    }
-    const dx = entity.x - tx;
-    const dz = entity.z - tz;
-    return dx * dx + dz * dz <= range * range;
-  }
-
-  /**
-   * Source parity: Move entity toward its special ability target.
-   */
-  private approachSpecialAbilityTarget(
-    entity: MapEntity,
-    state: SpecialAbilityRuntimeState,
-  ): void {
-    if (entity.moving) return; // Already moving.
-    if (state.targetEntityId !== null) {
-      const target = this.spawnedEntities.get(state.targetEntityId);
-      if (target && !target.destroyed) {
-        this.issueMoveTo(entity.id, target.x, target.z);
-      }
-    } else if (state.targetX !== null && state.targetZ !== null) {
-      this.issueMoveTo(entity.id, state.targetX, state.targetZ);
-    }
-  }
-
-  /**
-   * Source parity: Start the unpack animation.
-   */
-  private startSpecialAbilityUnpacking(
-    entity: MapEntity,
-    profile: SpecialAbilityProfile,
-    state: SpecialAbilityRuntimeState,
-  ): void {
-    if (profile.unpackTimeFrames <= 0) {
-      state.packingState = 'UNPACKED';
-      return;
-    }
-    state.packingState = 'UNPACKING';
-    const variation = profile.packUnpackVariationFactor > 0
-      ? 1.0 + (this.gameRandom.nextFloat() * 2 - 1) * profile.packUnpackVariationFactor
-      : 1.0;
-    state.animFrames = Math.max(1, Math.round(profile.unpackTimeFrames * variation));
-    // Stop movement during unpack.
-    entity.moving = false;
-    entity.movePath = [];
-    entity.moveTarget = null;
-  }
-
-  /**
-   * Source parity: Start the pack animation.
-   */
-  private startSpecialAbilityPacking(
-    entity: MapEntity,
-    profile: SpecialAbilityProfile,
-    state: SpecialAbilityRuntimeState,
-    _success: boolean,
-  ): void {
-    if (profile.packTimeFrames <= 0 ||
-        (profile.skipPackingWithNoTarget && state.noTargetCommand)) {
-      // No packing needed — finish immediately.
-      this.finishSpecialAbility(entity, _success);
-      return;
-    }
-    state.packingState = 'PACKING';
-    const variation = profile.packUnpackVariationFactor > 0
-      ? 1.0 + (this.gameRandom.nextFloat() * 2 - 1) * profile.packUnpackVariationFactor
-      : 1.0;
-    state.animFrames = Math.max(1, Math.round(profile.packTimeFrames * variation));
-  }
-
-  /**
-   * Source parity: continuePreparation — check abort conditions during preparation.
-   * Returns false if the ability should be aborted.
-   */
-  private continueSpecialAbilityPreparation(
-    entity: MapEntity,
-    profile: SpecialAbilityProfile,
-    state: SpecialAbilityRuntimeState,
-  ): boolean {
-    const HUGE_DISTANCE = 10000000.0;
-    if (profile.abilityAbortRange < HUGE_DISTANCE) {
-      if (!this.isWithinSpecialAbilityRange(entity, state, profile.abilityAbortRange)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: triggerAbilityEffect — execute the ability's actual effect.
-   * Delegates to the existing special-power-effects infrastructure via lastSpecialPowerDispatch.
-   */
-  private triggerSpecialAbilityEffect(
-    entity: MapEntity,
-    profile: SpecialAbilityProfile,
-    state: SpecialAbilityRuntimeState,
-  ): void {
-    // Source parity: LoseStealthOnTrigger.
-    if (profile.loseStealthOnTrigger) {
-      entity.detectedUntilFrame = Math.max(
-        entity.detectedUntilFrame,
-        this.frameCounter + LOGIC_FRAME_RATE * 2,
-      );
-    }
-
-    // Source parity: award XP for triggering.
-    if (profile.awardXPForTriggering > 0 && entity.experienceProfile) {
-      const xpResult = addExperiencePointsImpl(
-        entity.experienceState,
-        entity.experienceProfile,
-        profile.awardXPForTriggering,
-        false,
-      );
-      if (xpResult.didLevelUp) {
-        this.onEntityLevelUp(entity, xpResult.oldLevel, xpResult.newLevel);
-      }
-    }
-
-    // Execute the effect based on the last dispatch record.
-    const dispatch = entity.lastSpecialPowerDispatch;
-    if (!dispatch) return;
-
-    const effectContext = this.createSpecialPowerEffectContext();
-    const sourceSide = entity.side ?? '';
-
-    if (state.targetEntityId !== null) {
-      // Object-targeted ability: cash hack, defector, etc.
-      const module = entity.specialPowerModules.get(profile.specialPowerTemplateName);
-      if (!module) return;
-      const effectCategory = resolveEffectCategoryImpl(module.moduleType);
-      switch (effectCategory) {
-        case 'CASH_HACK':
-          executeCashHackImpl({
-            sourceEntityId: entity.id,
-            sourceSide,
-            targetEntityId: state.targetEntityId,
-            amountToSteal: module.cashHackMoneyAmount > 0
-              ? module.cashHackMoneyAmount : DEFAULT_CASH_HACK_AMOUNT,
-          }, effectContext);
-          break;
-        case 'DEFECTOR':
-          executeDefectorImpl({
-            sourceEntityId: entity.id,
-            sourceSide,
-            targetEntityId: state.targetEntityId,
-          }, effectContext);
-          break;
-      }
-    } else if (state.targetX !== null && state.targetZ !== null) {
-      // Position-targeted ability.
-      const module = entity.specialPowerModules.get(profile.specialPowerTemplateName);
-      if (!module) return;
-      const effectCategory = resolveEffectCategoryImpl(module.moduleType);
-      switch (effectCategory) {
-        case 'AREA_DAMAGE':
-          executeAreaDamageImpl({
-            sourceEntityId: entity.id,
-            sourceSide,
-            targetX: state.targetX,
-            targetZ: state.targetZ,
-            radius: module.areaDamageRadius > 0 ? module.areaDamageRadius : DEFAULT_AREA_DAMAGE_RADIUS,
-            damage: module.areaDamageAmount > 0 ? module.areaDamageAmount : DEFAULT_AREA_DAMAGE_AMOUNT,
-            damageType: 'EXPLOSION',
-          }, effectContext);
-          break;
-        case 'EMP_PULSE':
-          executeEmpPulseImpl({
-            sourceEntityId: entity.id,
-            sourceSide,
-            targetX: state.targetX,
-            targetZ: state.targetZ,
-            radius: module.areaDamageRadius > 0 ? module.areaDamageRadius : DEFAULT_EMP_RADIUS,
-            damage: module.areaDamageAmount > 0 ? module.areaDamageAmount : DEFAULT_EMP_DAMAGE,
-          }, effectContext);
-          break;
-      }
-    }
-    // No-target abilities have their effects triggered inline (e.g., cash bounty already handled).
-  }
-
-  /**
-   * Source parity: finishAbility + onExit — clean up after ability completion or abort.
-   */
-  private finishSpecialAbility(entity: MapEntity, _success: boolean): void {
-    const profile = entity.specialAbilityProfile;
-    const state = entity.specialAbilityState;
-    if (!state) return;
-
-    state.active = false;
-    state.targetEntityId = null;
-    state.targetX = null;
-    state.targetZ = null;
-    state.prepFrames = 0;
-    state.animFrames = 0;
-    state.withinStartAbilityRange = false;
-    state.noTargetCommand = false;
-    state.persistentTriggerCount = 0;
-
-    // Source parity: onExit sets m_packingState = STATE_NONE.
-    // We use 'PACKED' as the idle representation since initiateSpecialAbility always resets it.
-    state.packingState = 'PACKED';
-
-    entity.objectStatusFlags.delete('IS_USING_ABILITY');
-
-    // Source parity: flee after completion.
-    // C++ uses forward (facing) direction when flip flags are set, backward otherwise.
-    if (_success && profile && profile.fleeRangeAfterCompletion > 0) {
-      const fleeDist = profile.fleeRangeAfterCompletion;
-      const flipped = profile.flipOwnerAfterUnpacking || profile.flipOwnerAfterPacking;
-      const fleeAngle = flipped ? entity.rotationY : entity.rotationY + Math.PI;
-      const fleeX = entity.x + Math.cos(fleeAngle) * fleeDist;
-      const fleeZ = entity.z + Math.sin(fleeAngle) * fleeDist;
-      this.issueMoveTo(entity.id, fleeX, fleeZ);
-    }
-  }
 
   /**
    * Source parity: ToppleUpdate::applyTopplingForce() — initiate topple on an entity.
@@ -30515,112 +29014,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  /**
-   * Source parity: DeployStyleAIUpdate::update() — per-frame deploy state machine.
-   * Transitions: READY_TO_MOVE ↔ DEPLOY ↔ READY_TO_ATTACK ↔ UNDEPLOY ↔ READY_TO_MOVE.
-   * Timer-based: DEPLOY finishes after unpackTime, UNDEPLOY finishes after packTime.
-   * Reversal: mid-deploy/undeploy can be reversed at current progress frame.
-   */
-  private updateDeployStyleEntities(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.slowDeathState || entity.structureCollapseState) continue;
-      const profile = entity.deployStyleProfile;
-      if (!profile) continue;
-
-      const isTryingToAttack = entity.attackTargetEntityId !== null || entity.attackTargetPosition !== null;
-      const isTryingToMove = entity.moving || entity.moveTarget !== null;
-
-      // Check timer expiry for DEPLOY/UNDEPLOY transitions.
-      if (entity.deployFrameToWait !== 0 && this.frameCounter >= entity.deployFrameToWait) {
-        if (entity.deployState === 'DEPLOY') {
-          this.setDeployState(entity, 'READY_TO_ATTACK');
-        } else if (entity.deployState === 'UNDEPLOY') {
-          this.setDeployState(entity, 'READY_TO_MOVE');
-        }
-      }
-
-      // Source parity: If trying to attack (or idle auto-target will engage), deploy.
-      if (isTryingToAttack) {
-        switch (entity.deployState) {
-          case 'READY_TO_MOVE':
-            this.setDeployState(entity, 'DEPLOY');
-            break;
-          case 'READY_TO_ATTACK':
-            // Already deployed — let combat system handle attacking.
-            break;
-          case 'DEPLOY':
-            // Still deploying — wait for timer.
-            break;
-          case 'UNDEPLOY':
-            // Reverse the undeploy.
-            if (entity.deployFrameToWait !== 0) {
-              this.reverseDeployTransition(entity, 'DEPLOY', profile.unpackTimeFrames);
-            }
-            break;
-        }
-      } else if (isTryingToMove) {
-        // Source parity: If trying to move, undeploy.
-        switch (entity.deployState) {
-          case 'READY_TO_MOVE':
-            // Already mobile — movement system handles it.
-            break;
-          case 'READY_TO_ATTACK':
-            this.setDeployState(entity, 'UNDEPLOY');
-            break;
-          case 'DEPLOY':
-            // Reverse the deploy.
-            if (entity.deployFrameToWait !== 0) {
-              // Source parity: C++ setMyState(UNDEPLOY, TRUE) uses getUnpackTime() for both reversal directions.
-              this.reverseDeployTransition(entity, 'UNDEPLOY', profile.unpackTimeFrames);
-            }
-            break;
-          case 'UNDEPLOY':
-            // Still undeploying — wait for timer.
-            break;
-        }
-      }
-
-      // Source parity: Block movement during DEPLOY/UNDEPLOY/READY_TO_ATTACK.
-      if (entity.deployState !== 'READY_TO_MOVE') {
-        entity.moving = false;
-      }
-    }
-  }
-
-  private setDeployState(entity: MapEntity, state: DeployState): void {
-    const profile = entity.deployStyleProfile;
-    if (!profile) return;
-    entity.deployState = state;
-    switch (state) {
-      case 'DEPLOY':
-        entity.deployFrameToWait = this.frameCounter + profile.unpackTimeFrames;
-        entity.objectStatusFlags.delete('DEPLOYED');
-        break;
-      case 'UNDEPLOY':
-        entity.deployFrameToWait = this.frameCounter + profile.packTimeFrames;
-        entity.objectStatusFlags.delete('DEPLOYED');
-        break;
-      case 'READY_TO_ATTACK':
-        entity.deployFrameToWait = 0;
-        entity.objectStatusFlags.add('DEPLOYED');
-        break;
-      case 'READY_TO_MOVE':
-        entity.deployFrameToWait = 0;
-        entity.objectStatusFlags.delete('DEPLOYED');
-        // Source parity: re-enable movement if a pending move target exists.
-        if (entity.moveTarget !== null && entity.movePath.length > 0) {
-          entity.moving = true;
-        }
-        break;
-    }
-  }
-
-  private reverseDeployTransition(entity: MapEntity, newState: DeployState, totalFrames: number): void {
-    const framesLeft = Math.max(0, entity.deployFrameToWait - this.frameCounter);
-    entity.deployState = newState;
-    entity.deployFrameToWait = this.frameCounter + (totalFrames - framesLeft);
-  }
-
   // ── StructureCollapseUpdate implementation ────────────────────────────────
 
   /**
@@ -31409,161 +29802,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return points;
-  }
-
-  /**
-   * Source parity: BoneFXUpdate::update — fire FX/OCL/ParticleSystem effects on named bones
-   * when scheduled frames are reached. Initializes times on first activation.
-   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/BoneFXUpdate.cpp:290-317)
-   */
-  private updateBoneFX(): void {
-    const now = this.frameCounter;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (!entity.boneFXProfile || !entity.boneFXState) continue;
-      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) continue;
-
-      const profile = entity.boneFXProfile;
-      const state = entity.boneFXState;
-
-      // Clear pending visual events from previous frame.
-      state.pendingVisualEvents.length = 0;
-
-      // Source parity: if not active, initTimes and set active.
-      if (!state.active) {
-        this.boneFXInitTimes(profile, state);
-        state.active = true;
-      }
-
-      const bodyState = state.currentBodyState;
-      const numBones = 8;
-
-      for (let i = 0; i < numBones; i++) {
-        const fxRow = state.nextFXFrame[bodyState]!;
-        const oclRow = state.nextOCLFrame[bodyState]!;
-        const psRow = state.nextParticleFrame[bodyState]!;
-
-        // Check FXList
-        if (fxRow[i] !== -1 && fxRow[i]! <= now) {
-          const entry = profile.fxLists[bodyState]?.[i];
-          if (entry) {
-            state.pendingVisualEvents.push({
-              type: 'FX',
-              boneName: entry.boneName,
-              effectName: entry.effectName,
-              positionX: entity.x,
-              positionY: entity.y,
-              positionZ: entity.z,
-              entityId: entity.id,
-            });
-            if (entry.onlyOnce) {
-              fxRow[i] = -1;
-            } else {
-              const delay = entry.delayMinFrames === entry.delayMaxFrames
-                ? entry.delayMinFrames
-                : this.gameRandom.nextRange(entry.delayMinFrames, entry.delayMaxFrames);
-              fxRow[i] = now + delay;
-            }
-          }
-        }
-
-        // Check OCL
-        if (oclRow[i] !== -1 && oclRow[i]! <= now) {
-          const entry = profile.oclLists[bodyState]?.[i];
-          if (entry) {
-            state.pendingVisualEvents.push({
-              type: 'OCL',
-              boneName: entry.boneName,
-              effectName: entry.effectName,
-              positionX: entity.x,
-              positionY: entity.y,
-              positionZ: entity.z,
-              entityId: entity.id,
-            });
-            if (entry.onlyOnce) {
-              oclRow[i] = -1;
-            } else {
-              const delay = entry.delayMinFrames === entry.delayMaxFrames
-                ? entry.delayMinFrames
-                : this.gameRandom.nextRange(entry.delayMinFrames, entry.delayMaxFrames);
-              oclRow[i] = now + delay;
-            }
-          }
-        }
-
-        // Check ParticleSystem
-        if (psRow[i] !== -1 && psRow[i]! <= now) {
-          const entry = profile.particleSystems[bodyState]?.[i];
-          if (entry) {
-            state.pendingVisualEvents.push({
-              type: 'PARTICLE_SYSTEM',
-              boneName: entry.boneName,
-              effectName: entry.effectName,
-              positionX: entity.x,
-              positionY: entity.y,
-              positionZ: entity.z,
-              entityId: entity.id,
-            });
-            if (entry.onlyOnce) {
-              psRow[i] = -1;
-            } else {
-              const delay = entry.delayMinFrames === entry.delayMaxFrames
-                ? entry.delayMinFrames
-                : this.gameRandom.nextRange(entry.delayMinFrames, entry.delayMaxFrames);
-              psRow[i] = now + delay;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * Source parity: BoneFXUpdate::initTimes — schedule initial fire times for current damage state.
-   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/BoneFXUpdate.cpp:321-343)
-   */
-  private boneFXInitTimes(profile: BoneFXProfile, state: BoneFXState): void {
-    const now = this.frameCounter;
-    const bodyState = state.currentBodyState;
-    const numBones = 8;
-    const fxRow = state.nextFXFrame[bodyState]!;
-    const oclRow = state.nextOCLFrame[bodyState]!;
-    const psRow = state.nextParticleFrame[bodyState]!;
-
-    for (let i = 0; i < numBones; i++) {
-      // FXList
-      const fxEntry = profile.fxLists[bodyState]?.[i];
-      if (fxEntry) {
-        const delay = fxEntry.delayMinFrames === fxEntry.delayMaxFrames
-          ? fxEntry.delayMinFrames
-          : this.gameRandom.nextRange(fxEntry.delayMinFrames, fxEntry.delayMaxFrames);
-        fxRow[i] = now + delay;
-      } else {
-        fxRow[i] = -1;
-      }
-
-      // OCL
-      const oclEntry = profile.oclLists[bodyState]?.[i];
-      if (oclEntry) {
-        const delay = oclEntry.delayMinFrames === oclEntry.delayMaxFrames
-          ? oclEntry.delayMinFrames
-          : this.gameRandom.nextRange(oclEntry.delayMinFrames, oclEntry.delayMaxFrames);
-        oclRow[i] = now + delay;
-      } else {
-        oclRow[i] = -1;
-      }
-
-      // ParticleSystem
-      const psEntry = profile.particleSystems[bodyState]?.[i];
-      if (psEntry) {
-        const delay = psEntry.delayMinFrames === psEntry.delayMaxFrames
-          ? psEntry.delayMinFrames
-          : this.gameRandom.nextRange(psEntry.delayMinFrames, psEntry.delayMaxFrames);
-        psRow[i] = now + delay;
-      } else {
-        psRow[i] = -1;
-      }
-    }
   }
 
   /**
@@ -32436,269 +30674,6 @@ export class GameLogicSubsystem implements Subsystem {
     if (!entity.resolved) {
       const bob = (Math.sin(this.animationTime * this.config.terrainSnapSpeed + entity.id) + 1) * 0.04;
       entity.y += bob;
-    }
-  }
-
-  // ── Source parity: Unit collision separation ──────────────────────────────
-
-  // ── BattlePlanUpdate implementation ──────────────────────────────────────
-
-  /**
-   * Source parity: BattlePlanUpdate::update — per-frame state machine for each
-   * Strategy Center's battle plan transition (IDLE → UNPACKING → ACTIVE → PACKING → IDLE).
-   */
-  private updateBattlePlan(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      const profile = entity.battlePlanProfile;
-      const state = entity.battlePlanState;
-      if (!profile || !state) continue;
-
-      switch (state.transitionStatus) {
-        case 'IDLE':
-          // Waiting for cooldown after previous plan change.
-          if (state.desiredPlan !== 'NONE' && this.frameCounter >= state.idleCooldownFinishFrame) {
-            state.transitionStatus = 'UNPACKING';
-            state.transitionFinishFrame = this.frameCounter
-              + this.getBattlePlanAnimationFrames(profile, state.desiredPlan);
-          }
-          break;
-
-        case 'UNPACKING':
-          if (this.frameCounter >= state.transitionFinishFrame) {
-            // Transition to ACTIVE — apply bonuses.
-            state.transitionStatus = 'ACTIVE';
-            state.activePlan = state.desiredPlan;
-            this.applyBattlePlanBonuses(entity, state.activePlan, true);
-          }
-          break;
-
-        case 'ACTIVE':
-          // If desired plan changed, begin packing.
-          // Source parity: BattlePlanUpdate::setStatus(TRANSITIONSTATUS_PACKING) immediately
-          // calls setBattlePlan(PLANSTATUS_NONE) which removes bonuses and paralyzes troops.
-          if (state.desiredPlan !== state.activePlan) {
-            // Remove bonuses immediately at packing start (C++ parity).
-            this.applyBattlePlanBonuses(entity, state.activePlan, false);
-            this.paralyzeBattlePlanTroops(entity, profile);
-            state.activePlan = 'NONE';
-            state.transitionStatus = 'PACKING';
-            state.transitionFinishFrame = this.frameCounter
-              + this.getBattlePlanAnimationFrames(profile, state.desiredPlan);
-          }
-          break;
-
-        case 'PACKING':
-          if (this.frameCounter >= state.transitionFinishFrame) {
-            // Packing animation complete → idle cooldown.
-            state.transitionStatus = 'IDLE';
-            state.idleCooldownFinishFrame = this.frameCounter + profile.transitionIdleFrames;
-          }
-          break;
-      }
-    }
-  }
-
-  private requestBattlePlanChange(entity: MapEntity, desiredPlan: BattlePlanType): void {
-    const state = entity.battlePlanState;
-    if (!state) return;
-
-    if (state.activePlan === desiredPlan && state.transitionStatus === 'ACTIVE') {
-      return; // Already active on requested plan.
-    }
-
-    // Just set desired plan. The state machine in updateBattlePlan handles ACTIVE→PACKING
-    // transition, including immediate bonus removal and paralysis (C++ parity).
-    state.desiredPlan = desiredPlan;
-  }
-
-  private getBattlePlanAnimationFrames(profile: BattlePlanProfile, plan: BattlePlanType): number {
-    switch (plan) {
-      case 'BOMBARDMENT': return profile.bombardmentAnimationFrames;
-      case 'HOLDTHELINE': return profile.holdTheLineAnimationFrames;
-      case 'SEARCHANDDESTROY': return profile.searchAndDestroyAnimationFrames;
-      default: return 0;
-    }
-  }
-
-  /**
-   * Source parity: Player::changeBattlePlan + localApplyBattlePlanBonusesToObject —
-   * Apply or remove battle plan bonuses to all entities on the same side.
-   * @param apply true = apply bonuses, false = remove (invert)
-   */
-  private applyBattlePlanBonuses(source: MapEntity, plan: BattlePlanType, apply: boolean): void {
-    const side = this.normalizeSide(source.side);
-    if (!side) return;
-
-    const profile = source.battlePlanProfile;
-    if (!profile) return;
-
-    // Track per-side counts.
-    let bonuses = this.sideBattlePlanBonuses.get(side);
-    if (!bonuses) {
-      bonuses = { bombardmentCount: 0, holdTheLineCount: 0, searchAndDestroyCount: 0 };
-      this.sideBattlePlanBonuses.set(side, bonuses);
-    }
-
-    const delta = apply ? 1 : -1;
-    let weaponBonusFlag = 0;
-    // Source parity: Player::changeBattlePlan — only apply/remove when count transitions
-    // through 1/0 (first plan of type enables, last plan of type disables). Multiple Strategy
-    // Centers with the same plan don't stack army bonuses; they add redundancy.
-    let shouldModifyArmy = false;
-
-    switch (plan) {
-      case 'BOMBARDMENT':
-        bonuses.bombardmentCount = Math.max(0, bonuses.bombardmentCount + delta);
-        weaponBonusFlag = WEAPON_BONUS_BOMBARDMENT;
-        shouldModifyArmy = (apply && bonuses.bombardmentCount === 1)
-          || (!apply && bonuses.bombardmentCount === 0);
-        break;
-      case 'HOLDTHELINE':
-        bonuses.holdTheLineCount = Math.max(0, bonuses.holdTheLineCount + delta);
-        weaponBonusFlag = WEAPON_BONUS_HOLDTHELINE;
-        shouldModifyArmy = (apply && bonuses.holdTheLineCount === 1)
-          || (!apply && bonuses.holdTheLineCount === 0);
-        break;
-      case 'SEARCHANDDESTROY':
-        bonuses.searchAndDestroyCount = Math.max(0, bonuses.searchAndDestroyCount + delta);
-        weaponBonusFlag = WEAPON_BONUS_SEARCHANDDESTROY;
-        shouldModifyArmy = (apply && bonuses.searchAndDestroyCount === 1)
-          || (!apply && bonuses.searchAndDestroyCount === 0);
-        break;
-    }
-
-    // Source parity: only modify army bonuses on count transitions (0→1 or 1→0).
-    if (shouldModifyArmy) {
-      const armorScalar = plan === 'HOLDTHELINE' ? profile.holdTheLineArmorDamageScalar : 1.0;
-      const sightScalar = plan === 'SEARCHANDDESTROY' ? profile.searchAndDestroySightRangeScalar : 1.0;
-
-      for (const entity of this.spawnedEntities.values()) {
-        if (entity.destroyed) continue;
-        if (this.normalizeSide(entity.side) !== side) continue;
-        if (!this.isBattlePlanMember(entity, profile)) continue;
-
-        // Weapon bonus condition flag.
-        if (apply) {
-          entity.weaponBonusConditionFlags |= weaponBonusFlag;
-        } else {
-          entity.weaponBonusConditionFlags &= ~weaponBonusFlag;
-        }
-
-        // Armor damage scalar.
-        if (apply && armorScalar !== 1.0) {
-          entity.battlePlanDamageScalar = Math.max(0.01, entity.battlePlanDamageScalar * armorScalar);
-        } else if (!apply && plan === 'HOLDTHELINE') {
-          // Restore to 1.0 (undo the armor scalar).
-          entity.battlePlanDamageScalar = 1.0;
-        }
-
-        // Sight range scalar — always use absolute computation from base ranges.
-        if (apply && sightScalar !== 1.0) {
-          entity.visionRange = Math.max(0, entity.baseVisionRange * sightScalar);
-          entity.shroudClearingRange = Math.max(0, entity.baseShroudClearingRange * sightScalar);
-        } else if (!apply && plan === 'SEARCHANDDESTROY') {
-          entity.visionRange = entity.baseVisionRange;
-          entity.shroudClearingRange = entity.baseShroudClearingRange;
-        }
-      }
-    }
-
-    // Strategy Center building-specific bonuses.
-    if (plan === 'HOLDTHELINE') {
-      // Building health scalar — apply to Strategy Center itself.
-      if (profile.strategyCenterHoldTheLineMaxHealthScalar !== 1.0) {
-        const scalar = apply
-          ? profile.strategyCenterHoldTheLineMaxHealthScalar
-          : (1.0 / Math.max(0.01, profile.strategyCenterHoldTheLineMaxHealthScalar));
-        const newMaxHealth = Math.max(1, Math.round(source.maxHealth * scalar));
-        const ratio = source.maxHealth > 0 ? source.health / source.maxHealth : 1;
-        source.maxHealth = newMaxHealth;
-        source.initialHealth = newMaxHealth;
-        source.health = Math.round(newMaxHealth * ratio);
-      }
-    }
-
-    if (plan === 'SEARCHANDDESTROY') {
-      // Building sight range bonus + stealth detection.
-      if (apply && profile.strategyCenterSearchAndDestroySightRangeScalar !== 1.0) {
-        source.visionRange = Math.max(0, source.baseVisionRange * profile.strategyCenterSearchAndDestroySightRangeScalar);
-        source.shroudClearingRange = Math.max(
-          0,
-          source.baseShroudClearingRange * profile.strategyCenterSearchAndDestroySightRangeScalar,
-        );
-      } else if (!apply) {
-        source.visionRange = source.baseVisionRange;
-        source.shroudClearingRange = source.baseShroudClearingRange;
-      }
-      // Stealth detection toggling on the building.
-      if (profile.strategyCenterSearchAndDestroyDetectsStealth) {
-        if (apply && !source.detectorProfile) {
-          // Enable stealth detection on the building.
-          source.detectorProfile = {
-            detectionRange: source.visionRange,
-            detectionRate: 10,
-            canDetectWhileGarrisoned: true,
-            canDetectWhileContained: false,
-            extraRequiredKindOf: new Set(),
-            extraForbiddenKindOf: new Set(),
-          };
-        } else if (!apply) {
-          source.detectorProfile = null;
-        }
-      }
-    }
-  }
-
-  private isBattlePlanMember(entity: MapEntity, profile: BattlePlanProfile): boolean {
-    const kindOf = this.resolveEntityKindOfSet(entity);
-    // If ValidMemberKindOf is non-empty, entity must have at least one matching kind.
-    if (profile.validMemberKindOf.size > 0) {
-      let hasValid = false;
-      for (const k of profile.validMemberKindOf) {
-        if (kindOf.has(k)) { hasValid = true; break; }
-      }
-      if (!hasValid) return false;
-    }
-    // If InvalidMemberKindOf is non-empty, entity must NOT have any matching kind.
-    for (const k of profile.invalidMemberKindOf) {
-      if (kindOf.has(k)) return false;
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: BattlePlanUpdate — paralyze all troops on the side when packing completes.
-   */
-  private paralyzeBattlePlanTroops(source: MapEntity, profile: BattlePlanProfile): void {
-    if (profile.battlePlanParalyzeFrames <= 0) return;
-    const side = this.normalizeSide(source.side);
-    if (!side) return;
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (this.normalizeSide(entity.side) !== side) continue;
-      if (entity.id === source.id) continue; // Don't paralyze the building itself.
-      if (!this.isBattlePlanMember(entity, profile)) continue;
-
-      // Source parity: paralyzeTroop uses a time-limited disable.
-      // We reuse DISABLED_SUBDUED which blocks movement and actions.
-      entity.objectStatusFlags.add('DISABLED_SUBDUED');
-      this.battlePlanParalyzedUntilFrame.set(entity.id, this.frameCounter + profile.battlePlanParalyzeFrames);
-    }
-  }
-
-  /**
-   * Clear battle plan paralysis when duration expires.
-   */
-  private updateBattlePlanParalysis(): void {
-    for (const [entityId, untilFrame] of this.battlePlanParalyzedUntilFrame.entries()) {
-      if (this.frameCounter < untilFrame) continue;
-      const entity = this.spawnedEntities.get(entityId);
-      if (entity && !entity.destroyed) {
-        entity.objectStatusFlags.delete('DISABLED_SUBDUED');
-      }
-      this.battlePlanParalyzedUntilFrame.delete(entityId);
     }
   }
 
